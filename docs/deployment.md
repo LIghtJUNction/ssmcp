@@ -38,9 +38,14 @@ sudo useradd --system --gid ssmcp --no-create-home \
 ```ini
 SSMCP_LISTEN=127.0.0.1:8080
 SSMCP_PUBLIC_URL=https://ssmcp.xxxx.yyy
+# 可选；以下是 0.3.2 的默认值，单位为秒。
+SSMCP_ACCESS_TOKEN_TTL=28800
+SSMCP_REFRESH_TOKEN_IDLE_TTL=2592000
+SSMCP_REFRESH_TOKEN_MAX_TTL=7776000
+SSMCP_CLIENT_REGISTRATION_TTL=31536000
 ```
 
-将域名替换为实际域名。公网 URL 只包含 `https://`、主机名和可选端口，不带用户路径、查询参数或 fragment；服务端根据已认证用户名追加 `/alice`。
+将域名替换为实际域名。公网 URL 只包含 `https://`、主机名和可选端口，不带用户路径、查询参数或 fragment；服务端根据已认证用户名追加 `/alice`。有效期变量由守护进程启动时读取，省略时使用默认值，具体约束见[有效期设置](#oauth-lifetimes)。
 
 ```sh
 sudo systemctl daemon-reload
@@ -144,12 +149,12 @@ ssmcp -t opencode alice@ssmcp.xxxx.yyy
 本机后端握手和目录发现成功后，stdout 输出：
 
 ```json
-{"url":"https://ssmcp.xxxx.yyy/alice","login_code":"本次连接的一次性动态令牌","login_expires_in":600,"client_id":"服务端分配的连接ID","name":"laptop","type":"pi","cwd":"/home/alice/project","hostname":"alice-laptop"}
+{"url":"https://ssmcp.xxxx.yyy/alice","login_code":"本次连接的一次性动态令牌","login_expires_in":1800,"client_id":"服务端分配的连接ID","name":"laptop","type":"pi","cwd":"/home/alice/project","hostname":"alice-laptop"}
 ```
 
 在 MCP 客户端中添加 `url`，启用 OAuth 登录。客户端自动发现授权端点并打开浏览器；页面只有一个动态令牌输入框和提交按钮，同时显示包含用户名的 MCP 资源 URL、客户端名称与回调来源。核对这些信息，把 `login_code` 粘贴到输入框并提交；成功后浏览器返回 MCP 客户端，由客户端取得并保存 OAuth 令牌。随后调用 MCP `tools/list` 确认只有 `list`、`code_mode`，再调用 `list({})` 查看在线客户端，使用 `list({client_id})` 读取目标客户端的原生能力 schema。
 
-动态登录码从签发起有效 600 秒，成功授权一次即消耗，只能在登录页面使用。stdout 的 `login_expires_in` 已扣除本机后端初始化耗时，可能小于 600。它不是 MCP Bearer token。若登录码过期、已经消耗或需要重新授权，先结束本次 ssmcp 连接，再重连取得新码；这也会终止旧后端并撤销旧授权。已取得 refresh token 的客户端正常续期无须再次输入登录码。
+动态登录码从签发起有效 1800 秒，成功授权一次即消耗，只能在登录页面使用。stdout 的 `login_expires_in` 已扣除本机后端初始化耗时，可能小于 1800。MCP 请求使用 OAuth access token 作为 Bearer 凭据。若登录码过期、已经消耗或需要重新授权，可另开一个同账户客户端取得新码，或在当前任务结束后退出并重连；退出会终止该后端并撤销其签发的旧授权。已取得 refresh token 的客户端正常续期无须再次输入登录码。
 
 HTTPS、localhost 和 `127.0.0.1` 回调通常直接跳转。IPv6 等 IP 回调可能先显示无脚本的自动返回页面；浏览器未自动跳转时，可点击“返回客户端”链接。两种路径都返回同一个短时 authorization code，页面不会把动态登录码放进回调 URL。
 
@@ -174,22 +179,52 @@ ssmcpd 同时承担 MCP 资源服务器和 OAuth 授权服务器角色，无须�
 
 当前不支持 Client ID Metadata Documents（CIMD）；仅支持 CIMD 的 MCP 客户端无法连接。MCP 2026-07-28 推荐 CIMD，并保留 DCR 作为兼容路径，本实现采用后者。[MCP 注册选择](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
 
-需要自动续期的客户端应在 DCR 中登记 `grant_types:["authorization_code","refresh_token"]`。省略 `grant_types` 时只登记 `authorization_code`，令牌响应不会包含 refresh token。客户端登记也仅保存在内存，有效期最多 7 天；守护进程重启或登记过期后需要重新注册。若 MCP 客户端仍缓存旧 `client_id` 且不能自动恢复，可删除该 MCP 连接后重新添加。[授权实现](../src/oauth.rs)
+0.3.2 的 DCR 接口在省略 `grant_types` 时默认登记 `["authorization_code","refresh_token"]`，并在注册响应中返回实际登记的授权类型。客户端也可显式请求这两种类型；显式只请求 `["authorization_code"]` 时，令牌响应继续不包含 refresh token。客户端登记及其密钥默认有效 365 天，状态只保存在内存；守护进程重启或登记过期后需要重新注册。若 MCP 客户端仍缓存旧 `client_id` 且不能自动恢复，可删除该 MCP 连接后重新添加。[授权实现](../src/oauth.rs)
+
+客户端实现自动续期时，应保存首次登录和每次刷新返回的最新令牌。在 access token 到期前，或收到 MCP `401` 响应中 `WWW-Authenticate: Bearer` 的 `error="invalid_token"` 后，向 token endpoint 发送 `grant_type=refresh_token`、当前 refresh token、原 `resource`，并按登记的认证方式携带客户端身份。成功后，用返回的新 refresh token 替换旧值，再用新 access token 重试。刷新请求应按授权串行执行；已使用的 refresh token 会失效，重放它会触发授权撤销。服务端提供这条刷新路径，MCP 客户端负责主动调用。[客户端续期步骤](configuration.md#silent-refresh)
 
 授权及令牌请求必须携带 `resource`，其值精确等于完整 MCP URL，例如 `https://ssmcp.xxxx.yyy/alice`。支持的 scope 为 `mcp`，省略时采用该值。令牌绑定用户名路径、OAuth 客户端和签发登录码的 SSH 连接。它可以操作同一账号的其他在线客户端，但不能用于另一个用户；签发连接退出后，原授权不能借重连恢复。token 请求可省略 `redirect_uri`；若携带，必须与授权时的地址一致。[资源元数据协议](https://www.rfc-editor.org/rfc/rfc9728)；[授权实现](../src/oauth.rs)
 
-| 凭据 | 生命周期 |
+<a id="oauth-lifetimes"></a>
+
+### 有效期与服务端参数
+
+| 凭据或状态 | 0.3.2 默认生命周期 |
 | --- | --- |
-| 动态登录码 `login_code` | 600 秒；在网页成功授权一次即消耗 |
+| 动态登录码 `login_code` | 30 分钟；在网页成功授权一次即消耗 |
+| 授权表单事务 | 30 分钟；独立于登录码有效期 |
 | OAuth authorization code | 60 秒；需原客户端携带匹配的 S256 PKCE verifier 兑换 |
-| access token | 最长 1 小时；通过 Bearer 请求头调用 MCP |
-| refresh token | 仅向登记此 grant 的客户端签发；每次刷新轮换，同一授权最长 24 小时，不因刷新延长 |
+| access token | 最长 8 小时；通过 Bearer 请求头调用 MCP |
+| refresh token 闲置期 | 30 天；每次成功刷新后从当前时刻重新计时，并轮换令牌 |
+| 同一授权总期限 | 自首次授权起最长 90 天；成功刷新也不会延长这个期限 |
+| OAuth 客户端登记及密钥 | 最长 365 天 |
+
+令牌实际寿命还受当前授权和客户端登记到期时间约束，MCP 客户端应读取令牌响应中的 `expires_in`。access token 到期后可通过 refresh token 继续访问，无须重新输入登录码。刷新闲置期或授权总期限到期后，需要新登录。[生命周期实现](../src/oauth.rs)
+
+以下四项支持 `ssmcpd serve` 命令行参数和环境变量，命令行参数优先于对应环境变量。systemd 部署在 `/etc/ssmcpd/ssmcpd.env` 设置这些变量；直接启动时也可使用参数：
+
+| 设置 | 命令行参数 | 环境变量 | 默认秒数 |
+| --- | --- | --- | ---: |
+| 访问令牌寿命 | `--access-token-ttl` | `SSMCP_ACCESS_TOKEN_TTL` | 28800 |
+| 刷新令牌闲置期 | `--refresh-token-idle-ttl` | `SSMCP_REFRESH_TOKEN_IDLE_TTL` | 2592000 |
+| 授权总期限 | `--refresh-token-max-ttl` | `SSMCP_REFRESH_TOKEN_MAX_TTL` | 7776000 |
+| 客户端登记寿命 | `--client-registration-ttl` | `SSMCP_CLIENT_REGISTRATION_TTL` | 31536000 |
+
+```sh
+ssmcpd serve --public-url https://ssmcp.example.com \
+  --access-token-ttl 28800 \
+  --refresh-token-idle-ttl 2592000 \
+  --refresh-token-max-ttl 7776000 \
+  --client-registration-ttl 31536000
+```
+
+数值必须为正整数秒，并满足 `access ≤ idle ≤ max ≤ registration ≤ 315360000`；上限为 3650 天。登录码、授权表单与短时 authorization code 使用上表固定期限。配置在守护进程启动时生效；重启服务会清空当前连接、登记和授权，因此应安排好任务，再重新连接并登录。
 
 在客户端身份、resource 和 PKCE 等绑定仍正确的前提下，重放已成功兑换的授权码，或重放已使用的 refresh token，会撤销该授权族。SSH 断开、客户端退出或服务重启会立即使其关联的登录码及全部令牌失效。OAuth 状态仅保存在内存；重新授权时应使用新连接生成的动态登录码。
 
 手工测试 MCP HTTP 时，`Authorization: Bearer <access_token>` 中的令牌必须来自上述 OAuth 流程。把 stdout 中的 `login_code` 填进该请求头会被拒绝。浏览器回调 URL 中出现的是短时、PKCE 绑定的 OAuth authorization code，和用户粘贴的动态登录码是两个不同凭据。
 
-OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项最长 7 天；最多保留 2048 个授权事务，每项最长 10 分钟。其他令牌状态也有容量上限，容量不足时返回 `503`。项目本身没有按请求来源限流；公网部署可根据实际负载在反向代理配置速率和并发限制。[容量定义](../src/oauth.rs)
+OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项默认最长 365 天；最多保留 2048 个授权事务，每项最长 30 分钟。其他令牌状态也有容量上限，容量不足时返回 `503`。项目本身没有按请求来源限流；公网部署可根据实际负载在反向代理配置速率和并发限制。[容量定义](../src/oauth.rs)
 
 ## 6. 检查与升级
 
@@ -202,6 +237,19 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 从 0.2 系列或更早版本升级到 0.3 系列时，先安排现有连接退出，更新两端二进制与安装脚本，重启 `ssmcpd`，再重新连接并完成 OAuth 登录，刷新 MCP 客户端缓存的工具表。原有直接调用原生工具的代码改为经 `code_mode` 的 `call` 调用。内部 wire 版本不匹配会被拒绝；旧凭据和旧事件游标不可用于新连接。
 
 0.3.1 的 SSH Host 别名支持是客户端改进，仍使用 wire v4；已有 0.3.0 服务端可继续配合使用。仅替换客户端不要求重启守护进程，但重启签发授权的客户端连接仍会撤销该连接的旧 OAuth 授权。
+
+<a id="upgrade-032"></a>
+
+### 升级到 0.3.2：重新登记一次，之后按需静默续期
+
+0.3.2 的有效期与默认刷新授权由服务端实现，仍使用 wire v4。更新源码或推送 GitHub 后，还需要把新二进制安装到实际服务器并重启守护进程；只更新仓库不会改变运行中的服务。
+
+1. 安排现有任务与连接退出，在服务器构建并安装 0.3.2；保留现有域名、SSH 账户、公钥及部署配置。
+2. 按需调整 `/etc/ssmcpd/ssmcpd.env` 中的有效期，再重启 `ssmcpd`。用实际服务二进制的 `--version` 确认运行版本。
+3. 本机重新启动 ssmcp，取得新登录码；在 MCP 客户端完成新的动态注册与 OAuth 登录。若应用保留旧 `client_id`，移除原 MCP 连接后用同一 URL 添加。
+4. 确认客户端保存了 refresh token，并能在 access token 到期时调用刷新接口、保存轮换后的新值；调用 `list` 重新选择当前在线客户端。
+
+旧版省略 `grant_types` 的登记没有刷新授权，重新登记可取得 0.3.2 的默认类型。原来 24 小时的授权总期限也已扩展为默认 90 天，并加入 30 天滑动闲置期。签发授权的 SSH 连接仍需在线；服务端状态仍只存于内存，断线和服务重启后的新登录流程保持有效。具体 MCP 应用是否自动发起刷新，需要在该应用中确认。
 
 本仓库的 `scripts/e2e.py` 使用临时本机 sshd 和临时密钥检验认证、MCP、后端转发与撤销行为。实际 DNS、TLS 证书、反向代理和发行版 SSH 策略仍需在你的服务器上验证；示例域名没有预先部署服务。
 

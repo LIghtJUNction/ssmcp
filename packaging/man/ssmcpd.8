@@ -1,4 +1,4 @@
-.TH SSMCPD 8 "2026-11-16" "ssmcp 0.3.1" "System Administration"
+.TH SSMCPD 8 "2026-11-16" "ssmcp 0.3.2" "System Administration"
 .SH NAME
 ssmcpd \- SSH-authenticated MCP gateway for local shells and coding agents
 .SH SYNOPSIS
@@ -6,6 +6,10 @@ ssmcpd \- SSH-authenticated MCP gateway for local shells and coding agents
 .BI \-\-public-url " https://host"
 .RB [ \-\-listen " 127.0.0.1:8080" ]
 .RB [ \-\-socket " path" ]
+.RB [ \-\-access-token-ttl " seconds" ]
+.RB [ \-\-refresh-token-idle-ttl " seconds" ]
+.RB [ \-\-refresh-token-max-ttl " seconds" ]
+.RB [ \-\-client-registration-ttl " seconds" ]
 .PP
 .B ssmcpd attach
 .RB [ \-\-socket " path" ]
@@ -34,6 +38,30 @@ Loopback HTTP socket address. The default is 127.0.0.1:8080.
 .TP
 .BI \-\-socket " path"
 Unix control socket path. The default is /run/ssmcpd/control.sock.
+.TP
+.BI \-\-access-token-ttl " seconds"
+Access-token lifetime. The default is 28800 seconds (8 hours).
+The environment variable is SSMCP_ACCESS_TOKEN_TTL.
+.TP
+.BI \-\-refresh-token-idle-ttl " seconds"
+Refresh-token idle lifetime. Each successful refresh starts a new idle period,
+bounded by the original authorization-family deadline. The default is 2592000
+seconds (30 days). The environment variable is SSMCP_REFRESH_TOKEN_IDLE_TTL.
+.TP
+.BI \-\-refresh-token-max-ttl " seconds"
+Maximum authorization-family lifetime measured from its initial authorization.
+Refreshes do not extend this deadline. The default is 7776000 seconds (90 days).
+The environment variable is SSMCP_REFRESH_TOKEN_MAX_TTL.
+.TP
+.BI \-\-client-registration-ttl " seconds"
+OAuth client-registration and client-secret lifetime. The default is 31536000
+seconds (365 days). The environment variable is SSMCP_CLIENT_REGISTRATION_TTL.
+.PP
+Lifetime options apply to serve. They accept positive integer seconds and require
+access <= idle <= max <= registration <= 315360000 (3650 days).
+Command-line options override their corresponding environment variables.
+The packaged systemd unit reads these variables from /etc/ssmcpd/ssmcpd.env.
+Changes take effect when the daemon starts; restarting clears OAuth state.
 .SH DISCOVERY AND EXECUTION
 The list tool returns clients belonging to the authenticated account, including
 their IDs, names, backend types, hostnames and startup directories. A client_id
@@ -77,13 +105,33 @@ same Linux account while the grant's source SSH connection is live. Client IDs
 do not confer access. Connections and credentials from other accounts cannot
 enumerate or select these clients.
 .PP
-Login codes expire after 600 seconds and are consumed by successful authorization.
-Access tokens last at most one hour. Refresh tokens are issued only to clients
-registered for that grant and rotate on use, with a maximum authorization-family
-lifetime of 24 hours. Disconnecting the source client invalidates its associated
-login code, access tokens and refresh tokens. Other clients remain available
-through their own live grants. Reconnects receive new IDs and login codes.
-Registrations and OAuth state are in memory and end when the daemon exits.
+Login codes and authorization-form transactions expire after 30 minutes.
+Login codes are consumed by successful authorization. The OAuth authorization
+code returned to the client expires after 60 seconds and requires its PKCE verifier.
+Access tokens default to at most 8 hours. Refresh tokens rotate on successful use;
+their default 30-day idle period slides forward on each refresh, within a fixed
+90-day authorization-family lifetime measured from initial authorization.
+Client registrations and secrets default to 365 days. Token lifetimes are also
+bounded by the remaining authorization and registration lifetimes.
+.PP
+Omitting grant_types during registration provisions authorization_code and
+refresh_token and returns both in the registration response. Explicitly
+registering only authorization_code continues to omit refresh tokens.
+.PP
+The MCP client implements silent renewal: before access-token expiry, or after
+a 401 Bearer challenge with error="invalid_token", it sends grant_type=refresh_token,
+its latest refresh token, the original resource URL and its registered client
+authentication to the token endpoint. It must save both newly returned tokens
+and replace its old refresh token before another refresh. Serialize refreshes
+for one grant; replaying an already consumed refresh token revokes that grant.
+Access-token expiry alone does not require interactive login.
+.PP
+Disconnecting the source client invalidates its associated login code, access
+tokens and refresh tokens. Other clients remain available through their own
+live grants. Reconnects receive new IDs and login codes. Registrations and OAuth
+state are in memory and end when the daemon exits. After upgrading from a version
+that omitted refresh-token grants by default, register and authorize the MCP
+client again to receive the new grant types and lifetimes.
 .SH DEPLOYMENT
 Run the daemon as an unprivileged service account. Restrict access to the control
 socket with a dedicated group. Configure OpenSSH AuthenticationMethods publickey,

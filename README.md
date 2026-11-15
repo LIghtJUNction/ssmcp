@@ -41,7 +41,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 {
   "url": "https://ssmcp.example.com/alice",
   "login_code": "本次连接的一次性登录码",
-  "login_expires_in": 600,
+  "login_expires_in": 1800,
   "client_id": "服务端分配的连接 ID",
   "name": "ssmcp-project",
   "type": "codex",
@@ -61,12 +61,15 @@ SSH 用公钥确认这台电脑可以连接服务器账号。OAuth 将一次性�
 | 你做的操作 | 登录状态 |
 | --- | --- |
 | 重新打开 ChatGPT 或其他 MCP 应用，本机 ssmcp 仍在线 | 应用保存的令牌仍有效时可以继续使用；支持 refresh token 的客户端可自动续期 |
+| access token 到期，客户端持有有效 refresh token | 支持刷新的客户端静默换取新令牌并重试，无须输入登录码 |
 | 退出后重新启动签发授权的 ssmcp | 旧授权已撤销，用新连接的登录码重新授权 |
 | 再开一个项目客户端，原授权连接仍在线 | 同一 SSH 账号的现有授权可以发现它 |
 | 重启 `ssmcpd` | 内存中的连接与 OAuth 状态清空，需要重新连接并授权 |
 | 提示 `invalid_grant` 或登录码过期、已使用 | 按[登录恢复步骤](docs/configuration.md#登录恢复)取得新码并重新授权 |
 
-登录码从签发起最多有效 **10 分钟、使用一次**；终端的 `login_expires_in` 已扣除后端启动时间。access token 最长 1 小时；登记了刷新授权的客户端可轮换 refresh token，同一授权最长 24 小时。重开应用、SSH 重连和服务端重启各有不同的生命周期。[OAuth 兼容性与有效期](docs/deployment.md#oauth-兼容性)
+0.3.2 默认将登录码有效期设为 **30 分钟、使用一次**，access token 有效期设为 **8 小时**。refresh token 每次成功刷新都会轮换，并把闲置期限向后延长 **30 天**，同一授权从首次登录起最长 **90 天**。客户端登记默认有效 **365 天**。实际剩余时间受授权和登记到期时间约束；终端的 `login_expires_in` 已扣除后端启动时间。[有效期与服务端配置](docs/deployment.md#oauth-lifetimes)
+
+**访问令牌到期后，MCP 客户端可以用 refresh token 自动续期。** 新注册省略 `grant_types` 时，服务端默认提供刷新授权；客户端需保存每次返回的新 refresh token，并实现刷新请求。服务器返回到期提示与新令牌，自动发起刷新由 MCP 客户端负责。[静默续期流程](docs/configuration.md#silent-refresh)
 
 ## 五种后端，同一个入口
 
@@ -143,7 +146,9 @@ sudo dnf install openssh-server nodejs bubblewrap
 
 `ssmcpd serve` 发布 HTTPS 后面的 MCP 服务；SSH 登录后的 `ssmcpd attach` 转发连接数据。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js 和 bubblewrap。
 
-0.3 系列使用私有桥接协议 v4。跨协议版本升级时同时更新两端；重启服务后重新连接、完成 OAuth 登录并刷新 MCP 工具表。原有直接调用 `terminal.*` 或 Agent 工具的脚本，通过 `code_mode` 的 `call` 调用。当前 SSH 别名改进不改变 wire 协议。
+0.3 系列使用私有桥接协议 v4。跨协议版本升级时同时更新两端；重启服务后重新连接、完成 OAuth 登录并刷新 MCP 工具表。原有直接调用 `terminal.*` 或 Agent 工具的脚本，通过 `code_mode` 的 `call` 调用。
+
+0.3.2 的长期授权与默认刷新支持需要更新 `ssmcpd`。升级重启后，在 MCP 客户端重新注册并登录一次；以后保持签发授权的 SSH 连接在线，由支持刷新的客户端自动续期。服务端重启和 SSH 断线仍会撤销相应授权。[升级步骤](docs/deployment.md#upgrade-032)
 
 ## 验证与贡献
 

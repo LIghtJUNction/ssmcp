@@ -229,7 +229,7 @@ Agent 事件页接受 `cursor`、`max_events` 和 `wait_ms`，返回 `next_curso
 
 通过一条 SSH 连接的登录码完成 OAuth 后，该授权允许访问同一 SSH 账户下当前及后来连接的客户端。每次内部调用都会检查这条授权来源连接；它断开时，关联的 access token 和 refresh token 立即失效，即使其他客户端仍在线。其他 SSH 账户的客户端不会被列出或作为调用目标。[账户隔离实现](../src/broker.rs) · [OAuth 实现](../src/oauth.rs)
 
-登录码从签发起有效 600 秒，成功授权一次即消耗；显示的剩余秒数已扣除后端启动耗时。access token 最长有效 1 小时。只有在动态客户端注册中声明 `refresh_token` grant 的客户端才取得刷新令牌；刷新令牌每次使用都会轮换，同一授权最长持续 24 小时。登录码过期或已使用且需要重新授权时，重连取得新码；正常刷新已有授权不需要再次输入登录码。完整绑定及撤销规则见[OAuth 兼容性](deployment.md#oauth-兼容性)。
+0.3.2 的登录码从签发起有效 30 分钟，成功授权一次即消耗；显示的剩余秒数已扣除后端启动耗时。默认 access token 最长有效 8 小时，refresh token 闲置期为 30 天，每次成功刷新后重新计时并轮换令牌；同一授权从首次登录起最长 90 天，客户端登记默认有效 365 天。新注册省略 `grant_types` 时默认提供刷新授权；显式只申请 `authorization_code` 时不签发 refresh token。MCP 客户端负责保存轮换后的新令牌并主动刷新，访问令牌到期后可静默续期，无须再次输入登录码。需要重新授权时，从新连接取得新码。见[静默续期流程](configuration.md#silent-refresh)与[有效期及撤销规则](deployment.md#oauth-lifetimes)。
 
 JavaScript 的公开编排接口是 `clients`、`call`、`tools` 和日志函数。每次请求使用独立的系统 Node.js 进程，进程环境由 bubblewrap 隔离，不继承服务器凭据；宿主机的工作目录、用户目录和控制 socket 不挂载进该环境。文件及命令操作通过 `call` 交给选定的本机后端，按该本机用户的权限执行。
 

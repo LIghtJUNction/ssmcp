@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1080" height="620" viewBox="0 0 1080 620" role="img" aria-labelledby="title desc">
   <title id="title">ssmcp setup and login: SSH first, OAuth next</title>
-  <desc id="desc">First register the public key in the server account's authorized_keys. Start ssmcp in the local project and keep it running. Add the returned MCP URL to an OAuth-capable MCP client, then enter the one-time login_code on its authorization page. The MCP client uses an access token to call list and code_mode. A login code expires 600 seconds after issue and can be used once. Disconnecting the SSH connection that issued it revokes that connection's OAuth grants.</desc>
+  <desc id="desc">First register the public key in the server account's authorized_keys. Start ssmcp in the local project and keep it running. Add the returned MCP URL to an OAuth-capable MCP client, then enter the one-time login_code on its authorization page. The MCP client uses an access token to call list and code_mode and can renew it using a rotating refresh token. A login code expires 30 minutes after issue and can be used once. Disconnecting the SSH connection that issued it revokes that connection's OAuth grants.</desc>
   <style>
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
     .mono { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; }
@@ -35,9 +35,9 @@
   <circle cx="76" cy="478" r="23" fill="#142033" stroke="#3d5473"/>
   <text x="76" y="485" class="number">4</text>
   <text x="124" y="476" class="step">Discover clients. Call their local tools.</text>
-  <text x="124" y="510" class="detail">MCP uses an access token. Keep the source SSH connection running.</text>
+  <text x="124" y="510" class="detail">MCP uses renewable tokens. Keep the source SSH connection running.</text>
 
   <path d="M48 547H1032" stroke="#263142"/>
-  <text x="48" y="585" fill="#8bbaff" font-size="19"><tspan class="mono">login_code</tspan>: one use · ≤ 600 s</text>
+  <text x="48" y="585" fill="#8bbaff" font-size="19"><tspan class="mono">login_code</tspan>: one use · ≤ 30 min</text>
   <text x="532" y="585" fill="#c5d1e1" font-size="19">Source SSH disconnects → its grant is revoked.</text>
 </svg>
