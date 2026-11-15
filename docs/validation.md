@@ -2,7 +2,9 @@
 
 本次实现包含五种本机后端、SSH 公钥身份验证、一次性动态登录码与 OAuth 登录，内部协议为 wire v3。本机最终完整检查中，格式检查、Clippy 和构建通过，Rust 测试为 **82 个通过、4 个原生 CLI 探针默认忽略**，包含新增的进程清理和启动断线回归。Claude Code、Pi 和 OpenCode 的真实 CLI 无模型探针已单独通过；Codex 的真实命令执行受到当前运行环境限制。
 
-完整 SSH 与 OAuth 端到端脚本已写入 CI，**本版本的最终 CI 结果仍待确认**。当前工作环境禁止绑定 Unix socket，无法在这里启动实际控制 socket；真实浏览器端到端操作也尚未完成。下文分别记录已执行的证据和需要后续环境完成的验证，不沿用旧版本的 CI 结果。
+包含本次 OAuth 与五模式实现的代码已在 **Linux x86_64 和 arm64 两个架构通过完整 CI**：每种架构各 82 项 Rust 测试、106 项 SSH/OAuth/Shell 检查、180 项五模式链路检查，以及 Release 构建和安装检查。[验证运行](https://github.com/LIghtJUNction/ssmcp/actions/runs/43744283386)
+
+当前本机工作环境禁止绑定具名 Unix socket，因此完整跨进程链路以 GitHub Linux CI 为证据。真实浏览器端到端操作和公网 DNS/TLS 部署尚未完成；HTTP 授权流程与浏览器实际交互的验证范围在下文分别记录。
 
 ## 1. 本机 Rust 检查
 
@@ -64,24 +66,33 @@ OAuth 库测试同时检查过期、容量、CSP 与回调输出等边界。生�
 
 实际浏览器尝试无法访问当前环境的本机 HTTP 探针，因此没有完成浏览器提交、回调和 MCP 客户端恢复连接的整段交互，也没有成功交互的截图证据。当前页面证据来自 HTTP、HTML 和响应头测试；正式浏览器兼容性需在可访问的 HTTPS 部署上继续验证。
 
-## 4. 完整 SSH 端到端验证状态
+## 4. 完整 SSH 端到端验证
 
 `scripts/e2e.py` 和 `scripts/e2e_agents.py` 使用真实 OpenSSH、临时 Ed25519 密钥、临时 known_hosts、独立 sshd 配置和随机 loopback 端口。脚本不读取用户已有 SSH 身份，不更改系统 SSH 配置；Agent 模式采用本地协议 fixture，不调用模型。
 
-| 脚本 | 计划执行的完整链路 | 当前本机结果 |
-| --- | --- | --- |
-| [e2e.py](../scripts/e2e.py) | 公钥认证、OAuth、MCP 2025 / 2026、真实 PTY、并发、断线、刷新与重放 | 控制 socket 的 Unix bind 返回 `EPERM`，守护进程健康检查无法通过；完整链路未完成 |
-| [e2e_agents.py](../scripts/e2e_agents.py) | 依次运行 shell / codex / cc / pi / opencode，逐次 OAuth 登录、目录分页、原生调用、实时日志、元数据、请求回复、撤销及子进程退出 | Unix bind 预检查返回 `PermissionError: Operation not permitted`，按此结果停止，未启动完整链路；报告状态为 `blocked` |
+| 脚本 | 已验证完整链路 | 两架构 CI | 本机环境结果 |
+| --- | --- | --- | --- |
+| [e2e.py](../scripts/e2e.py) | 公钥认证、OAuth、MCP 2025 / 2026、真实 PTY、并发、断线、刷新与重放 | 每种架构 106 项通过 | 控制 socket 的 Unix bind 返回 `EPERM`，守护进程健康检查无法通过；完整链路未完成 |
+| [e2e_agents.py](../scripts/e2e_agents.py) | 依次运行 shell / codex / cc / pi / opencode，逐次 OAuth 登录、目录分页、原生调用、实时日志、元数据、请求回复、撤销及子进程退出 | 每种架构 180 项通过 | Unix bind 预检查返回 `PermissionError: Operation not permitted`，按此结果停止，未启动完整链路；报告状态为 `blocked` |
 
-Unix socket pair 在本机可用，因此相关 Rust 协议和路由测试能够执行；创建具名 Unix listener 被环境禁止。这个限制解释了本机单元及集成测试通过与完整 SSH 脚本尚未运行之间的差别。
+Unix socket pair 在本机可用，因此相关 Rust 协议和路由测试能够执行；创建具名 Unix listener 被环境禁止。这个限制解释了本机单元及集成测试可执行、完整 SSH 脚本需要在 CI 环境完成的差别；它不影响上述两架构的成功结果。
 
 OpenCode 端到端 fixture 已先完成本机独立验证：9 项 HTTP、SSE、Basic 认证和 EOF 清理检查通过；真实 Rust 适配器连接该 fixture，成功发现 78 个工具，并确认后端及其子进程退出。其 73 个原生操作加 5 个辅助工具会触发 MCP 的两页目录。[fixture](../tests/fixtures/opencode_http.py)；[五模式断言](../scripts/e2e_agents.py)
 
 ## 5. CI 状态
 
-本版最终 CI **待确认**，不引用此前版本的运行结果。工作流已配置 Linux x86_64（`ubuntu-24.04`）与 arm64（`ubuntu-24.04-arm`），并在每个架构顺序执行格式检查、Clippy、默认 Rust 测试、构建、两份真实 SSH/OAuth 端到端脚本、Release 构建及暂存安装检查。[工作流](../.github/workflows/ci.yml)
+验证对象为提交 [`8a1eff26d6e88d91352430318d14726489096854`](https://github.com/LIghtJUNction/ssmcp/commit/8a1eff26d6e88d91352430318d14726489096854)，包括 OAuth、五种后端、wire v3 和本次生命周期修复。运行 [43744283386](https://github.com/LIghtJUNction/ssmcp/actions/runs/43744283386) 的最终状态为 `completed / success`，两个架构的所有步骤均成功。
 
-最终通过状态应对应包含本次 OAuth、五模式和 wire v3 代码的具体提交及运行记录。可从 [GitHub Actions](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml) 查看当前运行；待该提交完成后，再把运行链接和各架构结果补入本节。
+| 验证项 | [x86_64 作业](https://github.com/LIghtJUNction/ssmcp/actions/runs/43744283386/job/132904040843) | [arm64 作业](https://github.com/LIghtJUNction/ssmcp/actions/runs/43744283386/job/132904040622) |
+| --- | --- | --- |
+| fmt / Clippy 零警告 | 通过 | 通过 |
+| Rust 测试 | 82 通过，4 ignored | 82 通过，4 ignored |
+| SSH、OAuth、HTTP、PTY | 106 项通过 | 106 项通过 |
+| 五模式 SSH/OAuth 链路 | 180 项通过 | 180 项通过 |
+| Release 构建 | 通过 | 通过 |
+| PREFIX / DESTDIR 暂存安装 | 通过 | 通过 |
+
+两份原始日志分别记录了 `Passed 106 end-to-end checks` 与 `Passed 180 checks across 5 modes`。默认 CI 中的 Agent 使用协议 fixture，真实原生 CLI 的独立验证见第 2 节；没有把 fixture 检查写成模型推理测试。后续验收记录和部署说明的文档提交不改变上述已验证 Rust 代码、测试或工作流。[工作流](../.github/workflows/ci.yml)
 
 ## 6. 生命周期与部署边界
 

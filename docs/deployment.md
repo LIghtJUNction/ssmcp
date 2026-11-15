@@ -57,7 +57,9 @@ sudo sshd -t
 sudo sshd -T -C user=alice,host=localhost,addr=127.0.0.1
 ```
 
-确认主配置包含 `Include /etc/ssh/sshd_config.d/*.conf`。上述有效配置输出应至少包含：
+确认主配置包含 `Include /etc/ssh/sshd_config.d/*.conf`。本例使用包含 `Match Group` 的配置片段，建议使用 OpenSSH 8.4 或更新版本，或已包含相应修复的发行版版本；8.4 修复了 `Include` 与后续 `Match` 的解析问题。[OpenSSH 8.4 发布说明](https://www.openssh.org/txt/release-8.4)
+
+上述有效配置输出应至少包含：
 
 ```text
 authenticationmethods publickey
