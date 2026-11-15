@@ -1,39 +1,39 @@
 {
   "actual": {
-    "client_sha256": null,
-    "client_version": null,
-    "daemon_sha256": null,
-    "daemon_version": null,
-    "staged_daemon_version": "0.4.0"
+    "client_sha256": "2dc9eba00836f50582876dcfa647cbdb2ff736ee8f924ba7f0f6e3571376ec92",
+    "client_version": "0.4.0",
+    "daemon_sha256": "93fb97833bac7fc2751f519e6ee22ee74e5e9edb7c94b6f6a488beed567f064c",
+    "daemon_version": "0.4.0",
+    "staged_daemon_version": null
   },
   "checks": {
-    "dev_binary_verified": false,
-    "dev_package_installed": false,
+    "dev_binary_verified": true,
+    "dev_package_installed": true,
     "disconnected_family_rejected": false,
-    "github_client_alive": false,
-    "github_client_ready": false,
+    "github_client_alive": true,
+    "github_client_ready": true,
     "github_schema_denied": false,
     "legacy_inventory_filtered": false,
-    "legacy_smoke_ready": false,
+    "legacy_smoke_ready": true,
     "mcp_initialize": false,
     "mcp_public_tools": false,
     "native_terminal_status": false,
-    "oauth_dcr_refresh_default": false,
-    "oauth_discovery": false,
+    "oauth_dcr_refresh_default": true,
+    "oauth_discovery": true,
     "oauth_pkce_login": false,
     "packages_verified": true,
-    "prepared_report_lease_valid": false,
+    "prepared_report_lease_valid": true,
     "production_smoke_passed": false,
     "refresh_rotated": false,
     "refreshed_token_usable": false,
-    "server_deploy_passed": false,
+    "server_deploy_passed": true,
     "server_rollback_passed": false,
     "server_stage_passed": true,
     "temporary_client_closed": false
   },
-  "client_online": false,
+  "client_online": true,
   "domain": "ssmcp.lmm.best",
-  "error_step": null,
+  "error_step": "oauth_form",
   "expected": {
     "build_sha": "95fa57967c4622705a2aba761ea4bed73663b451",
     "client_sha256": "2dc9eba00836f50582876dcfa647cbdb2ff736ee8f924ba7f0f6e3571376ec92",
@@ -42,11 +42,12 @@
     "rollback_package_sha256": "1b96165c301900fab367aca6ff3249b9c4ce6ec5bf6de434abec4dccd5c4874c",
     "version": "0.4.0"
   },
-  "github_auth_mode": "pending",
-  "state": "prepared",
+  "github_auth_mode": "github",
+  "state": "deployed_with_smoke_failure",
   "timestamps": {
-    "finished_at": "2026-11-15T21:58:57Z",
+    "deployed_at": "2026-11-15T22:00:17Z",
+    "finished_at": "2026-11-15T22:00:25Z",
     "prepared_at": "2026-11-15T21:58:57Z",
-    "started_at": "2026-11-15T21:58:41Z"
+    "started_at": "2026-11-15T22:00:09Z"
   }
 }
