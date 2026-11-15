@@ -7,6 +7,7 @@ ssmcp 直接调用系统 OpenSSH。已经能用公钥登录的服务器，可以
 | 复用现有 SSH 配置、用别名连接 | [SSH 配置](#ssh-config) |
 | 首次安装或更换公钥 | [公钥管理](#public-keys) |
 | 在 ChatGPT 或其他 MCP 客户端完成登录 | [OAuth 登录](#oauth-login) |
+| 用 GitHub 身份控制指定客户端 | [`--allow` 与访问规则](#github-allow) |
 | 了解令牌怎样自动续期 | [静默续期](#silent-refresh) |
 | 判断重新打开后是否要再次授权 | [连接与授权生命周期](#session-lifetime) |
 | 处理 `Permission denied`、过期登录码或 `invalid_grant` | [排查问题](#troubleshooting) |
@@ -19,7 +20,7 @@ ssmcp 直接调用系统 OpenSSH。已经能用公钥登录的服务器，可以
 | SSH 服务器 | 用户公钥、`ssmcpd`、HTTPS 入口 | OpenSSH 验证本机身份，`ssmcpd` 转发 MCP 调用 |
 | MCP 客户端，例如 ChatGPT | MCP URL、OAuth 令牌 | 用户授权后调用 `list` 与 `code_mode` |
 
-SSH 公钥回答“哪台设备能以这个服务器账户接入”。OAuth 授权回答“哪个 MCP 客户端可以使用这个账户的在线设备”。两步各有自己的凭据和有效期。[客户端实现](../src/client.rs) · [授权实现](../src/oauth.rs)
+SSH 公钥确认本机能以哪个服务器账户接入。`--allow` 指定允许操作该连接的 GitHub 身份，浏览器中的 OAuth 流程再取得用户对当前 MCP 客户端的同意。省略 `--allow` 时继续使用同一 SSH 账户下的登录码授权。[客户端实现](../src/client.rs) · [授权实现](../src/oauth.rs)
 
 <a id="ssh-config"></a>
 
@@ -36,7 +37,7 @@ Host my-ssmcp
     IdentitiesOnly yes
 ```
 
-`Host` 是本机别名，`HostName` 是服务器地址，`User` 是服务器上的 Linux 账户。MCP URL 使用服务端实际认证的用户名，例如 `https://ssmcp.example.com/alice`。这里的 `User` 与 GitHub 用户名或 ChatGPT 账号无关。
+`Host` 是本机别名，`HostName` 是服务器地址，`User` 是服务器上的 Linux 账户。GitHub 模式返回统一 MCP URL `https://ssmcp.example.com/mcp`；登录码模式返回服务端实际 SSH 用户路径，例如 `https://ssmcp.example.com/alice`。SSH 配置中的 `User` 与 `--allow` 中的 GitHub 用户名各有用途。
 
 先查看 OpenSSH 解析出的配置。这一步不建立 SSH 连接：
 
@@ -207,14 +208,32 @@ rm -- "$keycheck_config"
 
 ## 3. 完成 MCP 登录
 
-### 本机：启动需要控制的后端
+<a id="authorization-modes"></a>
+
+### 先选择授权方式
+
+| 启动方式 | MCP URL | 谁能访问 |
+| --- | --- | --- |
+| 带 `--allow 用户名@github` | `/mcp` | 经 GitHub 验证、且被目标客户端允许的身份 |
+| 省略 `--allow` | `/SSH用户名` | 使用该 SSH 账号登录码授权的 MCP 客户端；仅覆盖未设置 `--allow` 的连接 |
+
+两种方式都通过原有 SSH 公钥连接服务器。本机 CLI 无须执行 GitHub 登录，也无需改变现有 SSH 配置。服务器要使用 GitHub 模式，需先配置 [GitHub OAuth App](deployment.md#github-oauth)。
+
+<a id="github-allow"></a>
+
+### GitHub 模式：本机声明允许的用户
 
 先在项目目录检查你选择的后端，再建立连接：
 
 ```sh
 ssmcp -t codex --list-tools
-ssmcp --name ssmcp-project -t codex alice@my-ssmcp
+ssmcp --name ssmcp-project -t codex --allow octocat@github my-ssmcp
+
+# 多个用户可以用逗号分隔，也可以重复指定 --allow。
+ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 ```
+
+将示例用户名换成获准访问的 GitHub 用户名。参数采用 `用户名@提供方` 格式，目前提供方只支持 `github`；最多 32 个不同用户，大小写不敏感，重复项会合并。GitHub 用户名使用 1–39 个 ASCII 字母、数字及中间的单个连字符。`--allow` 需要 SSH 连接，不能与仅检查本机工具的 `--list-tools` 同用。[参数校验](../src/client.rs) · [身份格式](../src/wire.rs)
 
 Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent 的安装、模型身份和权限在本机由其原生 CLI 管理，见[后端说明](backends.md)。
 
@@ -222,9 +241,9 @@ Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent �
 
 ```json
 {
-  "url": "https://ssmcp.example.com/alice",
-  "login_code": "本次连接生成的一次性登录码",
-  "login_expires_in": 1800,
+  "url": "https://ssmcp.example.com/mcp",
+  "auth": "github",
+  "allow": ["octocat@github"],
   "client_id": "本次连接的唯一ID",
   "name": "ssmcp-project",
   "type": "codex",
@@ -233,19 +252,33 @@ Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent �
 }
 ```
 
-保持这个进程运行。`login_expires_in` 已扣除本机后端初始化耗时，实际输出可能小于 1800；实时活动显示在 stderr。登录码可以授权对本机的访问，请只在对应 OAuth 登录页输入。[客户端输出与倒计时](../src/client.rs)
+GitHub 模式只输出连接信息与允许列表，不生成登录码。实时活动显示在 stderr；保持进程运行，后端才会在线。不支持 GitHub 策略的旧服务器会使这次启动失败，本机后端不会按旧的登录码方式继续开放。[客户端握手](../src/client.rs)
 
-### MCP 客户端：添加 URL，输入登录码
+### 浏览器：GitHub 登录后，确认当前 MCP 客户端
 
-1. 在 ChatGPT 或其他支持 OAuth 的 MCP 客户端中添加终端输出的完整 `url`，包括 `/alice` 用户路径。
-2. 选择 OAuth 登录或重新连接。MCP 客户端发现授权端点后打开浏览器页面。
-3. 核对页面上的资源 URL、OAuth 客户端名称和回调来源，再填写本次 `login_code` 并提交。
-4. 浏览器返回 MCP 客户端，由客户端保存 access token，并在支持刷新时保存 refresh token。
+1. 在 ChatGPT 或其他支持 OAuth 的 MCP 客户端中添加终端返回的完整 `/mcp` URL，启动 OAuth 连接。
+2. ssmcp 登录页显示 MCP 客户端名称、已登记的回调来源和资源 URL。核对后点击“使用 GitHub 登录”，在 GitHub 页面选择账号并完成授权。
+3. 返回 ssmcp 后，核对已验证的 GitHub 身份、当前可访问会话数量和这次请求的 MCP 客户端，再点击“允许连接”或“取消”。GitHub 登录成功后仍需这一步明确同意。
+4. 同意后浏览器返回 MCP 客户端。客户端保存 ssmcp 签发的 access token 和 refresh token；GitHub 的令牌只供服务端读取身份，随后释放。
 5. 调用 `list`，确认目标客户端的 `name`、`type`、`cwd`；随后用其 `client_id` 读取原生工具 schema，并通过 `code_mode` 调用。
 
-远程 MCP 的工具列表始终只有 `list` 和 `code_mode`。本机 `--list-tools` 展示的是后端的原生工具；远程调用这些工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[两工具接口](../README.md) · [授权流程实现](../src/oauth.rs)
+确认页的同意针对当前 OAuth/MCP 客户端，允许它使用当前以及随后明确允许这个 GitHub 身份的连接。允许列表由本机启动参数管理，页面没有逐个后端的勾选配置。没有获准访问的在线客户端时也可完成登录，`list` 会返回空列表；以后出现匹配的在线客户端即可被发现。[授权页面与令牌](../src/oauth.rs) · [按连接检查访问](../src/broker.rs)
 
-MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册（DCR）。0.3.2 中，注册时省略 `grant_types` 会默认获得 `authorization_code` 与 `refresh_token` 两种授权，注册响应会返回实际登记的类型；客户端也可以显式请求这两种类型。显式只请求 `["authorization_code"]` 的客户端继续只获得访问令牌。注册、资源绑定及回调的协议细节见 [OAuth 兼容性](deployment.md#oauth-兼容性)。
+服务端在每条连接接入时，把允许列表中的 GitHub 用户名解析为稳定用户 ID；后续按 ID 判断权限。用户名在这条连接在线期间改名，已有的 ID 绑定仍有效。重新启动会再次解析参数中的用户名，因此改名后应更新 `--allow`；当前没有跨连接持久保存的用户名与 ID 绑定。[GitHub 身份解析](../src/identity.rs)
+
+### 登录码模式：保留现有使用方法
+
+```sh
+ssmcp --name ssmcp-project -t codex my-ssmcp
+```
+
+省略 `--allow` 后，终端返回 `/SSH用户名` URL、`login_code` 和 `login_expires_in`。将完整 URL 添加到 MCP 客户端，打开 OAuth 页面，核对客户端名称与回调来源，再输入本次登录码。它从签发起最多有效 1800 秒，输出的剩余秒数已扣除本机后端初始化时间，成功使用一次即消耗。[登录码输出](../src/client.rs)
+
+该授权绑定签发登录码的 SSH 连接，只能发现和调用同一 SSH 账号下未设置 `--allow` 的连接。即使使用同一个 SSH 账户，登录码授权也不能访问设置了 `--allow` 的客户端。签发连接退出会撤销对应授权。[授权隔离](../src/broker.rs)
+
+远程 MCP 的工具列表始终只有 `list` 和 `code_mode`。本机 `--list-tools` 展示的是后端的原生工具；远程调用这些工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[两工具接口](../README.md)
+
+两种方式都要求 MCP 客户端支持 Authorization Code、S256 PKCE 和动态客户端注册（DCR）。注册时省略 `grant_types` 默认获得 `authorization_code` 与 `refresh_token`，响应返回实际登记类型；显式只请求 `["authorization_code"]` 的客户端只获得访问令牌。注册、资源绑定及回调细节见 [OAuth 兼容性](deployment.md#oauth-兼容性)。
 
 <a id="silent-refresh"></a>
 
@@ -258,13 +291,13 @@ MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册�
 3. 客户端向发现的 token endpoint 发出 `grant_type=refresh_token` 请求，带上当前 refresh token、原来的完整 `resource` URL，以及登记时约定的客户端身份认证。
 4. 成功响应包含新的 access token 和新的 refresh token。客户端保存整组新令牌，用新 refresh token 替换旧值，再重试需要授权的请求。同一授权的刷新应串行处理，避免多个请求重放同一个旧 refresh token。
 
-默认访问令牌可用 8 小时；每次成功刷新会把 refresh token 的闲置期限向后延长 30 天，同一授权从首次登录起最多延续 90 天。客户端登记与密钥默认可用 365 天。实际到期时间还受客户端登记和原授权剩余寿命约束，客户端应读取每次令牌响应的 `expires_in`。[默认有效期与配置](deployment.md#oauth-lifetimes)
+这些都是 ssmcp 签发的令牌。默认访问令牌可用 8 小时；每次成功刷新会把 refresh token 的闲置期限向后延长 30 天，同一授权从首次登录起最多延续 90 天。客户端登记与密钥默认可用 365 天。实际到期时间还受客户端登记和原授权剩余寿命约束，客户端应读取每次令牌响应的 `expires_in`。[默认有效期与配置](deployment.md#oauth-lifetimes)
 
 旧版容易让刷新令牌显得没有作用：省略 `grant_types` 的注册收不到 refresh token；即使已领取，同一授权也只持续 24 小时。0.3.2 延长了默认期限，并为省略该字段的新注册提供刷新授权。客户端仍需实现刷新请求和轮换令牌的保存；是否静默刷新应以所用 MCP 客户端的实际行为为准。
 
-从旧版升级后，完成一次新的客户端注册与 OAuth 登录，让客户端取得新的刷新授权；若应用一直保留旧登记，可移除原 MCP 连接，再用相同 URL 添加。更换登记或登录前先安排好正在进行的任务。升级过程和服务器重启的影响见[升级步骤](deployment.md#upgrade-032)。
+从旧版升级后，完成一次新的客户端注册与 OAuth 登录，让客户端取得新的授权；若应用一直保留旧登记，可移除原 MCP 连接，再添加目标 URL。切换到 GitHub 模式时使用 `/mcp`。升级过程和服务器重启的影响见[升级步骤](deployment.md#upgrade-040)。
 
-### 登录码过期或已使用
+### 登录码模式：码过期或已使用
 
 登录码签发后 30 分钟内可成功授权一次。已经登录的 MCP 客户端用 OAuth 令牌继续访问，正常刷新无须再填登录码。重新授权需要一枚新码：可以在同一账户下另启动一个客户端取得新码，或确认当前后端可停止后，退出并重启当前 ssmcp 进程。
 
@@ -276,40 +309,40 @@ MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册�
 
 单独的 access token 到期应先走上述静默刷新；刷新返回 `invalid_grant`、插件提示 `oauth_token_invalid_grant`，或客户端明确要求重新授权时，按这个顺序恢复：
 
-1. 确认本机 ssmcp 是否还在线。当前项目有任务时，可另开一个终端、使用同一服务器账户启动新客户端并取得新登录码；否则重启当前客户端取得新码。
-2. 在 MCP 客户端里对原连接执行重新授权，填写新码；MCP URL 仍使用终端返回的完整用户路径。
+1. 确认使用的方式。`/mcp` 的 GitHub 授权失效时，重新进行 GitHub 登录并同意当前 MCP 客户端；无须为此重启在线后端。
+2. 登录码模式需要新码。当前项目有任务时，可另开一个同账户、未设置 `--allow` 的客户端取得新码；然后对原 `/SSH用户名` MCP 连接重新授权。新授权会绑定提供这枚新码的连接。
 3. 如果服务器重启后 MCP 客户端持续使用旧登记、重新授权仍失败，移除该 MCP 连接并用相同 URL 重新添加，让它完成新的动态客户端注册。
-4. 授权成功后调用 `list`，重新选择当前 `client_id`；保持签发这次授权的连接在线。
+4. 授权成功后调用 `list`，重新选择当前在线的 `client_id`。GitHub 模式检查目标连接的 `--allow`，登录码模式还需要保持签发连接在线。
 
-`invalid_grant` 可能来自连接退出、令牌过期、授权撤销或刷新令牌重放；错误本身不指出唯一原因。[刷新校验](../src/oauth.rs) · [重连与撤销测试](../tests/oauth_security.rs)
+`invalid_grant` 可能来自令牌过期、授权撤销、刷新令牌重放，或登录码模式的签发连接退出；错误本身不指出唯一原因。[刷新校验](../src/oauth.rs) · [重连与撤销测试](../tests/oauth_security.rs)
 
 <a id="session-lifetime"></a>
 
 ## 4. 重新打开后，还要登录吗？
 
-**取决于签发登录码的 ssmcp 进程是否还在线，以及 MCP 客户端保存的 OAuth 授权是否仍有效。** 当前版本把授权绑定到具体 SSH 连接，所有 OAuth 状态保存在服务端内存。[授权实现](../src/oauth.rs) · [重连隔离测试](../tests/oauth_security.rs)
+**GitHub 授权可以跨本机客户端重连继续使用；登录码授权仍绑定其签发连接。** 两者都要求 MCP 客户端保存有效令牌；服务器的 OAuth 状态只在内存中，服务端重启会清空它们。[授权实现](../src/oauth.rs) · [连接与授权检查](../src/broker.rs)
 
-| 操作或状态 | 结果与下一步 |
-| --- | --- |
-| 关闭后重新打开 ChatGPT；原 ssmcp 连接仍在线、保存的令牌有效 | 可继续使用已有授权 |
-| access token 到期；客户端有有效 refresh token，且原连接仍在线 | 客户端可自动刷新，无须填写登录码 |
-| 关闭本机终端导致 ssmcp 退出，或按 `Ctrl-C` 后重新运行 | 新连接获得新 ID 和登录码；需要重新 OAuth 授权 |
-| 默认配置下，refresh token 已连续 30 天未成功刷新，或授权已达 90 天 | 取得新登录码并重新授权 |
-| 服务端重启 `ssmcpd` | 连接与 OAuth 状态清空；重新连接并授权 |
-| 同一账户新增第二个项目客户端，原授权仍有效 | 已有授权可发现并操作新增客户端 |
-| 提供当前登录码的连接退出，账户下其他连接仍在线 | 该授权失效；其他连接自己的独立授权继续有效 |
+| 操作或状态 | GitHub 模式 | 登录码模式 |
+| --- | --- | --- |
+| 关闭后重新打开 MCP 应用，保存的令牌有效 | 可继续使用已有授权 | 签发连接仍在线时可继续使用 |
+| access token 到期，refresh token 有效 | 支持刷新的客户端可静默续期 | 同左，并要求签发连接仍在线 |
+| 本机 ssmcp 退出或重连 | 旧客户端消失；新连接明确允许同一身份时可被原授权发现 | 签发连接退出会撤销授权，需要新码登录 |
+| 当前无可访问的在线客户端 | `list` 为空；授权自身可保持有效 | 签发连接必须在线 |
+| 新增第二个项目客户端 | 每个客户端按自己的 `--allow` 核对稳定身份 ID | 只包括同一 SSH 账户下未设置 `--allow` 的连接 |
+| refresh token 闲置到期或授权达到总期限 | 重新 GitHub 登录并同意 MCP 客户端 | 取得新登录码并重新授权 |
+| 服务端重启 `ssmcpd` | 重新连接、注册和登录 | 同左 |
 
 | 凭据 | 用在哪里 | 有效期 |
 | --- | --- | --- |
 | SSH 私钥与服务端公钥登记 | OpenSSH 认证 | 由你和服务器管理员管理 |
-| `login_code` | 浏览器登录表单 | 签发后 30 分钟；成功使用一次即消耗 |
+| `login_code` | 登录码模式的浏览器表单 | 签发后 30 分钟；成功使用一次即消耗 |
 | 授权表单事务 | 浏览器中正在进行的登录 | 30 分钟；不会延长登录码自己的期限 |
 | OAuth authorization code | 浏览器回调后由 MCP 客户端兑换 | 60 秒；与客户端及 PKCE 绑定 |
 | access token | MCP 请求的 `Authorization: Bearer` 请求头 | 默认最长 8 小时 |
 | refresh token | MCP 客户端自动续期 | 默认闲置期限 30 天，成功刷新后重新计时；同一授权最长 90 天 |
 | OAuth 客户端登记及密钥 | 客户端自动注册与身份认证 | 默认最长 365 天；服务端重启清空 |
 
-表中为 0.3.2 的默认期限；管理员可以调整访问令牌、刷新闲置期、授权总期限和登记期限。令牌寿命还受客户端登记到期时间约束。SSH 断开、服务重启或授权撤销会提前使令牌失效；刷新不会推迟首次授权起算的 90 天总期限。授权覆盖同一 SSH 账户的全部在线客户端，分离不同操作者的权限时应使用不同服务器账户。[服务端有效期设置](deployment.md#oauth-lifetimes) · [生命周期校验](../src/oauth.rs) · [账号内客户端发现](../src/broker.rs)
+表中为 0.4.0 默认期限；管理员可以调整访问令牌、刷新闲置期、授权总期限和登记期限。令牌寿命还受登记到期时间约束。GitHub 授权绑定已验证的身份与 MCP 客户端，每次调用仍要匹配目标连接的允许列表；登录码授权另外绑定签发连接。服务重启和授权撤销会使两种方式的令牌提前失效，刷新不会推迟首次授权起算的总期限。[服务端有效期设置](deployment.md#oauth-lifetimes) · [生命周期校验](../src/oauth.rs)
 
 <a id="troubleshooting"></a>
 
@@ -323,10 +356,13 @@ MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册�
 | `ssh-copy-id`、SCP/SFTP 挂起或输出协议错误 | 目标账户已被 `ForceCommand` 固定为桥接。改用组外管理账户或控制台安装公钥 |
 | 主机密钥不匹配 | 向管理员核对新指纹与变更原因，再更新对应 known_hosts 条目 |
 | 没有连接 JSON，或提示 backend not found / startup failed | 先运行相应 `--list-tools`，检查原生 CLI、版本、登录配置和 `--backend` 路径；本机后端成功初始化后才发布连接信息 |
+| `--allow` 被拒绝、服务器未确认 GitHub 策略 | 确认客户端及服务器已更新到 0.4.0，服务器配置了 GitHub OAuth。该错误会停止启动，不会退回登录码授权 |
+| GitHub 身份解析失败 | 检查 `--allow` 用户名、服务端访问 GitHub API 的网络及响应；用户名改名后更新启动参数 |
+| GitHub 登录后 `list` 为空 | 检查浏览器登录的 GitHub 账号与在线客户端 `--allow` 是否一致；未获准的客户端不会显示 |
 | 登录码无效、过期或已使用 | 使用当前连接的未使用码；没有有效码时新建连接取得。核对 OAuth 页面资源 URL 与终端输出完全一致 |
 | MCP 返回 `401`、`error="invalid_token"` | 客户端用当前 refresh token 静默刷新，再用新访问令牌重试；刷新请求须带原 `resource` 和登记时的客户端认证 |
 | 已登录，但客户端从不自动续期 | 检查首次令牌响应是否有 `refresh_token`、客户端是否实现刷新和保存轮换后的新值。旧版登记可重新注册；显式只登记 `authorization_code` 时需修改客户端注册请求 |
-| `oauth_token_invalid_grant` / `invalid_grant` / 要求重新授权 | 检查签发连接是否退出、服务器是否重启、授权是否超时；取得新登录码，在 MCP 客户端执行重新授权。该错误本身不区分这些原因 |
+| `oauth_token_invalid_grant` / `invalid_grant` / 要求重新授权 | 检查授权寿命与服务器重启情况，按当前模式重新授权；登录码模式还需检查签发连接是否退出 |
 | 服务重启后仍使用旧 `client_id`，重复授权失败 | MCP 客户端应重新注册；若它继续缓存旧登记，移除该 MCP 连接后用相同完整 URL 重新添加 |
 | 登录成功后 `list` 找不到原来的 `client_id` | 客户端重连会分配新 ID。重新调用 `list`，按名称、模式和目录选取当前在线 ID |
 | `list` 正常，`code_mode` 报系统运行环境不可用 | 在服务器检查系统 Node.js、bubblewrap 和用户命名空间，见[部署说明](deployment.md#系统代码运行环境) |
@@ -338,6 +374,7 @@ MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册�
 - [ssmcp 客户端参数与 OpenSSH 调用](../src/client.rs)
 - [OpenSSH 服务端限制配置](../packaging/sshd-ssmcp.conf)
 - [OAuth 实现](../src/oauth.rs) 与 [OAuth 测试](../tests/oauth_security.rs)
+- [GitHub 身份验证与稳定 ID](../src/identity.rs)
 - [Linux 部署与升级](deployment.md)
 - [原生后端配置与接口](backends.md)
 - [OpenSSH ssh](https://man.openbsd.org/ssh)、[ssh_config](https://man.openbsd.org/ssh_config)、[sshd_config](https://man.openbsd.org/sshd_config)

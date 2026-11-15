@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1080" height="470" viewBox="0 0 1080 470" role="img" aria-labelledby="title desc">
   <title id="title">ssmcp: local tools, one SSH connection, two MCP tools</title>
-  <desc id="desc">The local ssmcp client runs a shell, Codex, Claude Code, Pi or OpenCode. It connects to ssmcpd using an outbound, public-key-authenticated SSH connection. An MCP client reaches the server over HTTPS with OAuth. Calls travel back to the local backend and results return over the same connections. The external MCP tools are list and code_mode.</desc>
+  <desc id="desc">The local ssmcp client runs a shell, Codex, Claude Code, Pi or OpenCode. It connects to ssmcpd using an outbound, public-key-authenticated SSH connection. With an allow list, the MCP client uses the global /mcp endpoint, signs in with GitHub and receives its own explicit OAuth consent. Discovery and calls check the verified GitHub ID against each local client's allow list. Tools execute locally and results return over the same connections. The external MCP tools are list and code_mode.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
       <path d="M1 1 7 4 1 7" fill="none" stroke="#627187" stroke-width="1.5" stroke-linejoin="round"/>
@@ -21,7 +21,7 @@
   </style>
   <rect width="1080" height="470" rx="20" fill="#0a0d12"/>
   <text x="48" y="62" fill="#f1f5fb" font-size="34" font-weight="650">Your tools stay on your machine.</text>
-  <text x="48" y="99" class="body">One SSH connection. Two MCP tools. Live local output.</text>
+  <text x="48" y="99" class="body">One SSH connection. Two MCP tools. Access you choose.</text>
 
   <rect x="48" y="153" width="292" height="208" rx="12" fill="#131922" stroke="#263142"/>
   <text x="72" y="185" class="label">YOUR MACHINE</text>
@@ -36,8 +36,8 @@
   <text x="477" y="185" class="label">YOUR SERVER</text>
   <text x="477" y="231" fill="#f1f5fb" font-size="29" font-weight="600" class="mono">ssmcpd</text>
   <text x="477" y="272" class="body">Route calls</text>
-  <text x="477" y="303" class="body">Verify access</text>
-  <text x="477" y="339" fill="#7f8da1" font-size="17" class="mono">/username</text>
+  <text x="477" y="303" class="body">Check allow</text>
+  <text x="477" y="339" fill="#7f8da1" font-size="17" class="mono">/mcp</text>
 
   <rect x="764" y="153" width="268" height="208" rx="12" fill="#131922" stroke="#263142"/>
   <text x="788" y="185" class="label">MCP CLIENT</text>

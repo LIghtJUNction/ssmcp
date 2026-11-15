@@ -1,9 +1,10 @@
-.TH SSMCPD 8 "2026-11-16" "ssmcp 0.3.2" "System Administration"
+.TH SSMCPD 8 "2026-11-16" "ssmcp 0.4.0" "System Administration"
 .SH NAME
 ssmcpd \- SSH-authenticated MCP gateway for local shells and coding agents
 .SH SYNOPSIS
 .B ssmcpd serve
-.BI \-\-public-url " https://host"
+.RB [ \-\-config " path" ]
+.RB [ \-\-public-url " https://host" ]
 .RB [ \-\-listen " 127.0.0.1:8080" ]
 .RB [ \-\-socket " path" ]
 .RB [ \-\-access-token-ttl " seconds" ]
@@ -15,10 +16,10 @@ ssmcpd \- SSH-authenticated MCP gateway for local shells and coding agents
 .RB [ \-\-socket " path" ]
 .SH DESCRIPTION
 The serve command listens for MCP HTTP requests and authenticated local bridge
-connections. A reverse proxy supplies public HTTPS. Connected clients are grouped
-by their Linux account and share an endpoint at /username. Each connection has
-an independent random client ID and one-time OAuth login code. Up to 128 clients
-may be attached to one account.
+connections. A reverse proxy supplies public HTTPS. Clients with an allow list
+use /mcp and GitHub identity authorization. Clients without an allow list retain
+the SSH account's /username endpoint and one-time login code. Each connection
+has an independent random client ID. Up to 128 clients may attach to one SSH account.
 .PP
 The attach command is run by OpenSSH as a ForceCommand. It forwards standard input
 and output to the daemon's Unix socket. The daemon obtains the account identity
@@ -30,8 +31,14 @@ capability names for shell, codex, cc, pi and opencode remain accessible inside
 code_mode; they are not individually advertised as external MCP tools.
 .SH OPTIONS
 .TP
+.BI \-\-config " path"
+Read a TOML configuration file for serve. SSMCP_CONFIG selects an explicit file
+when this option is absent. Otherwise /etc/ssmcpd/ssmcpd.toml is loaded if it exists.
+An explicitly selected missing or invalid file is an error.
+.TP
 .BI \-\-public-url " url"
 Public HTTPS origin used to construct MCP URLs and validate Origin headers.
+May also be configured by server.public_url in TOML or SSMCP_PUBLIC_URL.
 .TP
 .BI \-\-listen " address"
 Loopback HTTP socket address. The default is 127.0.0.1:8080.
@@ -59,12 +66,28 @@ seconds (365 days). The environment variable is SSMCP_CLIENT_REGISTRATION_TTL.
 .PP
 Lifetime options apply to serve. They accept positive integer seconds and require
 access <= idle <= max <= registration <= 315360000 (3650 days).
-Command-line options override their corresponding environment variables.
-The packaged systemd unit reads these variables from /etc/ssmcpd/ssmcpd.env.
+Configuration precedence is command line, environment, TOML, then defaults.
+The packaged systemd unit may read variables from /etc/ssmcpd/ssmcpd.env.
 Changes take effect when the daemon starts; restarting clears OAuth state.
+.SH TOML AND GITHUB
+The server section accepts listen, public_url and socket. The oauth section
+accepts access_token_ttl, refresh_token_idle_ttl, refresh_token_max_ttl and
+client_registration_ttl as integer seconds. The auth.github section contains
+client_id and client_secret from a GitHub OAuth App. Omit that section when
+only login-code authorization is required.
+.PP
+Configure the GitHub OAuth App callback as the public HTTPS origin followed by
+/oauth/callback/github. The server derives this callback from public_url. A
+secret-bearing TOML file must be private; use mode 0600 and make it owned by the
+ssmcpd service user. Keep client secrets out of source repositories and command
+arguments. Existing environment or command-line values can override TOML values.
+.PP
+GitHub login requests no repository or email scopes. The upstream access token
+is used to fetch the authenticated user identity and is not retained. ssmcp
+issues its own access and refresh tokens for MCP operations.
 .SH DISCOVERY AND EXECUTION
-The list tool returns clients belonging to the authenticated account, including
-their IDs, names, backend types, hostnames and startup directories. A client_id
+The list tool returns online clients permitted by the current authorization,
+including IDs, names, backend types, hostnames and startup directories. A client_id
 argument selects a paginated native capability catalog. Duplicate display names
 are allowed; dispatch always uses the connection ID.
 .PP
@@ -86,7 +109,7 @@ or unavailable namespaces produce an error, without falling back to direct
 Node.js execution. The list tool remains available.
 .PP
 Code source, runtime memory, execution time, host calls, logs and results are
-bounded. Each native call checks the authorization connection and target again.
+bounded. Each native call checks the current authorization and target access again.
 A timeout stops the script, but does not roll back actions already submitted to
 a native backend. Calls with an uncertain outcome should not be blindly retried.
 .PP
@@ -95,15 +118,26 @@ and RLIMIT_AS is 2 GiB; these are data and virtual-address-space limits, not a
 claim that total process memory is 32 MiB. The worker CPU limit is 2 seconds.
 .SH AUTHORIZATION LIFETIME
 The gateway serves OAuth discovery, dynamic client registration, authorization
-and token endpoints. An MCP client uses Authorization Code with S256 PKCE after
-the user enters the SSH connection's one-time login code on the authorization
-page. HTTP MCP requests carry an OAuth access token as their Bearer credential.
-The login code cannot be used as an access token.
+and token endpoints. On /mcp, GitHub login verifies the user; a separate ssmcp
+consent screen displays that identity, the MCP client name, registered callback
+origin, resource and current permitted-session count. The user must explicitly
+allow that MCP client. Consent can succeed with no matching sessions online;
+discovery then returns an empty list until an allowed connection appears.
 .PP
-An OAuth grant authorizes current and subsequently attached clients under the
-same Linux account while the grant's source SSH connection is live. Client IDs
-do not confer access. Connections and credentials from other accounts cannot
-enumerate or select these clients.
+The server resolves each allow-listed username to a stable GitHub user ID at
+attachment. Discovery and calls compare the verified ID with each connection's
+allow list. Rename pinning lasts for that connection only; a new attachment
+resolves the supplied usernames again. No persistent identity pins are stored.
+.PP
+On /username, the one-time login-code method remains available. Both methods
+complete Authorization Code with S256 PKCE. HTTP MCP requests carry a ssmcp
+access token as their Bearer credential.
+.PP
+GitHub grants authorize current and future connections that explicitly allow
+the verified identity and are not anchored to an issuing SSH connection.
+Login-code grants authorize only connections without an allow list under the
+same Linux account while the source SSH connection remains live. They cannot
+enumerate or call an allow-listed connection. Client IDs alone do not confer access.
 .PP
 Login codes and authorization-form transactions expire after 30 minutes.
 Login codes are consumed by successful authorization. The OAuth authorization
@@ -126,12 +160,11 @@ and replace its old refresh token before another refresh. Serialize refreshes
 for one grant; replaying an already consumed refresh token revokes that grant.
 Access-token expiry alone does not require interactive login.
 .PP
-Disconnecting the source client invalidates its associated login code, access
-tokens and refresh tokens. Other clients remain available through their own
-live grants. Reconnects receive new IDs and login codes. Registrations and OAuth
-state are in memory and end when the daemon exits. After upgrading from a version
-that omitted refresh-token grants by default, register and authorize the MCP
-client again to receive the new grant types and lifetimes.
+Disconnecting a local client removes that session and backend. A GitHub grant
+can remain valid and access other matching sessions or a newly attached allowed
+session. A login-code grant is revoked when its issuing connection disconnects.
+Registrations and OAuth state are in memory and end when the daemon exits, so
+a daemon restart requires registration and login again in both modes.
 .SH DEPLOYMENT
 Run the daemon as an unprivileged service account. Restrict access to the control
 socket with a dedicated group. Configure OpenSSH AuthenticationMethods publickey,
@@ -149,10 +182,15 @@ so bubblewrap can set limits in its own user namespace. Host kernel permissions
 still apply. Do not use RestrictNamespaces=yes for this service. Follow
 distribution AppArmor or SELinux policy when namespace setup is restricted.
 .PP
-The 0.3 series uses private bridge protocol version 4. Upgrade ssmcp and ssmcpd
-together. Older clients cannot attach to this protocol, and callers must migrate
-direct native MCP tool calls to list followed by code_mode.
+Version 0.4.0 keeps private bridge protocol version 4. Existing clients without
+an allow list retain login-code behavior. To use GitHub authorization, upgrade
+both programs and configure the provider. Unsupported older servers reject
+allow-list metadata; new clients also reject a legacy login-code response when
+an allow policy was requested. Updating source does not replace installed binaries.
 .SH FILES
+.TP
+.I /etc/ssmcpd/ssmcpd.toml
+Default optional TOML configuration. Protect provider secrets with mode 0600.
 .TP
 .I /etc/ssmcpd/ssmcpd.env
 Environment configuration for the packaged systemd unit.
