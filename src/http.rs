@@ -57,10 +57,10 @@ async fn endpoint(
         return StatusCode::FORBIDDEN.into_response();
     }
     let Some(secret) = bearer(headers) else {
-        return unauthorized(&broker.public_url, &user);
+        return unauthorized(&broker.public_url, &user, has_bearer_authorization(headers));
     };
     let Some(session) = broker.authenticate(&user, secret).await else {
-        return unauthorized(&broker.public_url, &user);
+        return unauthorized(&broker.public_url, &user, true);
     };
     if request.method() != Method::POST {
         return (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response();
@@ -116,15 +116,31 @@ async fn endpoint(
     Json(json!({"jsonrpc":"2.0","id":id,"result":decorate_result(result, era)})).into_response()
 }
 
-fn unauthorized(public_url: &str, user: &str) -> Response {
-    let challenge = format!(
+fn unauthorized(public_url: &str, user: &str, invalid_token: bool) -> Response {
+    let mut challenge = format!(
         "Bearer resource_metadata=\"{public_url}/.well-known/oauth-protected-resource/{user}\", scope=\"mcp\""
     );
+    // RFC 6750: an invalid/expired supplied token tells the client to refresh.
+    // Initial discovery without Bearer credentials carries no token error.
+    if invalid_token {
+        challenge.push_str(", error=\"invalid_token\"");
+    }
     (
         StatusCode::UNAUTHORIZED,
         [(header::WWW_AUTHENTICATE, challenge)],
     )
         .into_response()
+}
+
+fn has_bearer_authorization(headers: &HeaderMap) -> bool {
+    headers.get_all(header::AUTHORIZATION).iter().any(|value| {
+        value.to_str().ok().is_some_and(|value| {
+            value
+                .split_ascii_whitespace()
+                .next()
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("Bearer"))
+        })
+    })
 }
 
 fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, Fault> {
@@ -694,6 +710,36 @@ mod tests {
             HeaderValue::from_static("Bearer other"),
         );
         assert!(bearer(&headers).is_none());
+    }
+
+    #[test]
+    fn bearer_challenge_signals_invalid_tokens_without_mislabeling_initial_discovery() {
+        let mut headers = HeaderMap::new();
+        assert!(!has_bearer_authorization(&headers));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic secret"),
+        );
+        assert!(!has_bearer_authorization(&headers));
+        for value in ["Bearer", "Bearer ", "bEaReR unknown", "Bearer one,two"] {
+            headers.insert(header::AUTHORIZATION, HeaderValue::from_str(value).unwrap());
+            assert!(has_bearer_authorization(&headers), "{value}");
+        }
+        headers.append(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer other"),
+        );
+        assert!(has_bearer_authorization(&headers));
+
+        for invalid_token in [false, true] {
+            let response = unauthorized("https://mcp.example.test", "alice", invalid_token);
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let challenge = response.headers()[header::WWW_AUTHENTICATE]
+                .to_str()
+                .unwrap();
+            assert!(challenge.contains("resource_metadata=\"https://mcp.example.test/.well-known/oauth-protected-resource/alice\""));
+            assert_eq!(challenge.contains("error=\"invalid_token\""), invalid_token);
+        }
     }
 
     #[test]

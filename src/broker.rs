@@ -34,7 +34,7 @@ struct Call {
     reply: oneshot::Sender<CallResult>,
 }
 
-pub const LOGIN_LIFETIME: u64 = 600;
+pub const LOGIN_LIFETIME: u64 = 1800;
 
 struct LoginCode {
     value: String,
@@ -92,11 +92,19 @@ pub struct Broker {
 
 impl Broker {
     pub fn new(public_url: String) -> Self {
-        Self {
-            oauth: crate::oauth::OAuth::new(public_url.clone()),
+        Self::with_oauth_config(public_url, crate::oauth::OAuthConfig::default())
+            .expect("valid default OAuth lifetimes")
+    }
+
+    pub fn with_oauth_config(
+        public_url: String,
+        config: crate::oauth::OAuthConfig,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            oauth: crate::oauth::OAuth::with_config(public_url.clone(), config)?,
             public_url,
             sessions: RwLock::new(HashMap::new()),
-        }
+        })
     }
 
     pub async fn authenticate(&self, user: &str, access_token: &str) -> Option<Arc<Session>> {

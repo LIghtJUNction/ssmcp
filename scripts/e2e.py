@@ -336,7 +336,7 @@ class Harness:
         self.sensitive.append(login_code)
         self.check("secret" not in credentials, "SSH returns an OAuth login code, not a reusable bearer secret")
         self.check(bool(re.fullmatch(r"[0-9a-f]{64}", login_code)), "login code contains 256 random bits")
-        self.check(0 < credentials["login_expires_in"] <= 600, "login code reports its remaining ten-minute lifetime")
+        self.check(0 < credentials["login_expires_in"] <= 1800, "login code reports its remaining thirty-minute lifetime")
         self.check(self.request(body={}, secret=login_code)[0] == 401, "one-time login code cannot authenticate an MCP request")
         status, _, challenge = self.request(body={}, secret="")
         metadata_url = f"{PUBLIC_URL}/.well-known/oauth-protected-resource/{self.user}"
@@ -416,7 +416,7 @@ class Harness:
             self.check(status == 400 and result.get("error"), "authorization code cannot be exchanged for another resource")
         status, tokens, token_headers = self.oauth_request(token_path, "POST", exchange, form=True)
         self.check(status == 200 and tokens.get("token_type", "").lower() == "bearer", "OAuth code exchange returns an access token")
-        self.check(tokens.get("expires_in") == 3600 and tokens.get("refresh_token"), "OAuth access expires in one hour and supplies a refresh token")
+        self.check(tokens.get("expires_in") == 28800 and tokens.get("refresh_token"), "OAuth access expires in eight hours and supplies a refresh token")
         self.check("no-store" in token_headers.get("cache-control", ""), "OAuth token responses cannot be cached")
         self.secret = tokens["access_token"]
         self.sensitive += [tokens["access_token"], tokens["refresh_token"]]
