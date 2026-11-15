@@ -158,7 +158,8 @@ fn sandbox_command() -> Result<Command, String> {
         "PATH",
         "/runtime",
     ]);
-    // Only runtime libraries are visible. No account files, host /etc, /run or working directories.
+    // Only runtime libraries are visible. The worker needs no procfs; omitting it
+    // also preserves systemd's protected /proc mounts without relaxing the service.
     for path in ["/usr/lib", "/lib", "/lib64", "/usr/share/nodejs"] {
         command.args(["--ro-bind-try", path, path]);
     }
@@ -170,8 +171,6 @@ fn sandbox_command() -> Result<Command, String> {
         .arg(runner)
         .arg("/runner.js")
         .args([
-            "--proc",
-            "/proc",
             "--dev",
             "/dev",
             "--remount-ro",
@@ -712,7 +711,8 @@ mod tests {
             let readonly = false;
             try { fs.writeFileSync('/work/probe','x'); } catch (_) { readonly = true; }
             fs.writeFileSync('/tmp/probe','x');
-            const value = {denied,readonly,env:process.env,uid:process.getuid(),routes:fs.readFileSync('/proc/net/route','utf8').trim().split('\n').length};
+            const interfaces = Object.values(require('os').networkInterfaces()).flat();
+            const value = {denied,readonly,env:process.env,uid:process.getuid(),pid:process.pid,proc:fs.existsSync('/proc'),loopbackOnly:interfaces.every(address => address.internal)};
             process.stdout.write(JSON.stringify({type:'result',value})+'\n');
         "#]);
         let result = execute_process(probe, "return null;".into(), 10_000, json!([]), host())
@@ -721,7 +721,9 @@ mod tests {
         assert_eq!(result["result"]["denied"], json!([true, true, true, true]));
         assert_eq!(result["result"]["readonly"], true);
         assert_eq!(result["result"]["uid"], 65534);
-        assert_eq!(result["result"]["routes"], 1);
+        assert_eq!(result["result"]["proc"], false);
+        assert_eq!(result["result"]["loopbackOnly"], true);
+        assert!((1..16).contains(&result["result"]["pid"].as_u64().unwrap()));
         assert!(
             result["result"]["env"]
                 .as_object()
@@ -744,7 +746,7 @@ mod tests {
         assert!(args.iter().any(|v| v == "--disable-userns"));
         assert!(!args.iter().any(|v| matches!(
             v.as_str(),
-            "--share-net" | "/etc" | "/home" | "/run" | "/usr"
+            "--share-net" | "--proc" | "/proc" | "/etc" | "/home" | "/run" | "/usr"
         )));
         assert_eq!(command.as_std().get_envs().count(), 0);
     }
