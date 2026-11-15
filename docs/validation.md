@@ -4,7 +4,9 @@
 
 ## 当前验证结果
 
-截至 2026-11-16（UTC+8），本机格式检查、Clippy、构建和默认 Rust 测试通过：**96 个通过，8 个显式忽略**。完整系统隔离、真实 SSH 和五种后端的端到端测试已加入 GitHub CI；本次修订的 CI 结果尚待完成，不能把本机协议测试等同于完整隔离环境验收。
+截至 2026-11-16（UTC+8），包含最终系统运行时修复的提交 [`b70b0ac`](https://github.com/LIghtJUNction/ssmcp/commit/b70b0ac2f52980ccfb24233052745a065c46e678) 已在 **Linux x86_64 和 arm64 两个架构通过完整 CI**。每个架构完成 96 项默认 Rust 测试、完整系统隔离与 MCP 集成测试、133 项 SSH/OAuth 检查、189 项五模式链路检查，以及 Release 构建和安装检查。[通过的运行记录](https://github.com/LIghtJUNction/ssmcp/actions/runs/43746211798)
+
+本机格式检查、Clippy、构建和默认 Rust 测试也已通过；本机默认测试结果为 **96 个通过、8 个显式忽略**。默认 Rust 集合的范围如下，CI 会另外执行需要系统隔离环境的测试。
 
 | 测试集合 | 本机通过数 | 内容 |
 | --- | ---: | --- |
@@ -17,7 +19,7 @@
 | 客户端启动 | 3 | SSH 提前断开、部分帧、启动清理和登录码剩余时间 |
 | **合计** | **96** | 不包含模型调用 |
 
-默认忽略项共 8 个：4 个需要独立安装及配置原生 CLI 的探针，1 个需要真实 bubblewrap 命名空间的系统运行时测试，3 个需要完整系统代码运行环境的 MCP HTTP 集成测试。后四项在 CI 中使用专用命令强制执行；不通过关闭隔离来适应当前工作环境。[测试定义](../tests/two_tools.rs) · [运行时测试](../src/code_mode.rs)
+默认忽略项共 8 个：4 个需要独立安装及配置原生 CLI 的探针，1 个需要真实 bubblewrap 命名空间的系统运行时测试，3 个需要完整系统代码运行环境的 MCP HTTP 集成测试。后四项已在两个架构的 CI 中使用专用命令执行并通过；没有通过关闭隔离来适应当前工作环境。[测试定义](../tests/two_tools.rs) · [运行时测试](../src/code_mode.rs)
 
 ```sh
 cargo fmt --all -- --check
@@ -32,7 +34,26 @@ python3 scripts/e2e.py --bin-dir target/debug
 python3 scripts/e2e_agents.py --bin-dir target/debug
 ```
 
-当前工作环境拒绝 Unix listener 和 bubblewrap 配置隔离网络所需的 NETLINK 操作，自动审批也拒绝了提权请求。因此完整 SSH 与 OS 隔离验证交给仓库已有的 Ubuntu x86_64 / arm64 CI；本机成功结果仅对应上表中的实际执行范围。[CI 定义](../.github/workflows/ci.yml)
+当前工作环境拒绝 Unix listener 和 bubblewrap 配置隔离网络所需的 NETLINK 操作，自动审批也拒绝了提权请求。因此完整 SSH 与 OS 隔离验证使用仓库已有的 Ubuntu x86_64 / arm64 CI，两架构均已通过。本机成功结果仅对应上表中的实际执行范围。[CI 定义](../.github/workflows/ci.yml)
+
+## 双架构 CI 结果
+
+运行 [43746211798](https://github.com/LIghtJUNction/ssmcp/actions/runs/43746211798) 对应提交 `b70b0ac2f52980ccfb24233052745a065c46e678`，最终状态为 `completed / success`。后续验收报告提交仅更新文档，没有更改已验证代码、依赖、服务配置或工作流。
+
+| 检查 | [x86_64 作业](https://github.com/LIghtJUNction/ssmcp/actions/runs/43746211798/job/132909965714) | [arm64 作业](https://github.com/LIghtJUNction/ssmcp/actions/runs/43746211798/job/132909966015) |
+| --- | --- | --- |
+| fmt / Clippy 零警告 | 通过 | 通过 |
+| 默认 Rust 测试 | 96 通过，8 ignored | 96 通过，8 ignored |
+| Node.js 与 bubblewrap 运行时集合 | 8 通过，无忽略项 | 8 通过，无忽略项 |
+| 两工具 MCP HTTP 集成集合 | 3 通过，无忽略项 | 3 通过，无忽略项 |
+| 安装路径与 systemd 服务限制下的运行时探针 | 1 通过 | 1 通过 |
+| SSH、OAuth、HTTP、PTY 与多客户端 | 133 项通过 | 133 项通过 |
+| 五种后端完整 SSH/OAuth 链路 | 189 项通过 | 189 项通过 |
+| Release 构建与暂存安装 | 通过 | 通过 |
+
+上表中的运行时集合会重复执行默认集合中的 7 项测试，systemd 探针则重复验证同一个 OS 隔离测试；各行不应简单相加。除 4 个单独配置原生 CLI 的探针外，本轮所需 Rust 测试均已执行。
+
+服务验证使用系统包安装的 Node.js 与 bubblewrap，把测试程序和运行脚本放在实际安装目录，并按仓库 systemd unit 的保护设置启动。它同时验证默认脚本定位、只读工作目录、宿主文件不可见、隔离 PID 和网络、清空环境。worker 不挂载 `/proc`，避免与 systemd 的受保护 proc 挂载冲突；服务保护设置保持有效。[运行时探针](../src/code_mode.rs) · [服务单元](../packaging/ssmcpd.service)
 
 ## 行为验收范围
 
@@ -44,7 +65,7 @@ python3 scripts/e2e_agents.py --bin-dir target/debug
 | JavaScript 支持循环、条件、await、并发调用和日志；原生结果保留 | [运行时测试](../src/code_mode.rs)、[五模式端到端脚本](../scripts/e2e_agents.py) |
 | 每次原生调用检查签发连接是否仍在线，包括 await 之后 | [运行中的授权测试](../tests/two_tools.rs) |
 | 签发连接断开撤销关联授权，其他客户端的独立授权仍有效 | [OAuth 测试](../tests/oauth_security.rs)、[多客户端端到端脚本](../scripts/e2e.py) |
-| Node.js 进程受系统限制，不能访问宿主账号文件、工作目录或网络 | [独立 OS 隔离探针](../src/code_mode.rs)；需要 CI 实际运行 |
+| Node.js 进程受系统限制，不能访问宿主账号文件、工作目录或网络 | [独立 OS 隔离探针](../src/code_mode.rs)；两架构普通环境与 systemd 服务环境均通过 |
 | 关闭后端前先发现并停止子进程，避免 EOF 导致子进程被重新挂接后漏清理 | [进程管理](../src/backend/process.rs)、[顺序回归测试](../src/backend/rpc.rs) |
 
 ## 安装与使用
