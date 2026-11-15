@@ -13,6 +13,13 @@
 
 [**配置与登录教程**](docs/configuration.md) · [服务器部署](docs/deployment.md) · [后端与工具接口](docs/backends.md) · [验收记录](docs/validation.md) · [真实操作视频](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk)
 
+
+# 应用场景
+1. ChatGPT chat模式 Pro模型控制你本地的codex（还支持别的）完成软件工程任务。
+2. 使用我的AI订阅，远程控制朋友的电脑，帮朋友配置电脑环境，安装软件，安装ai工具。
+3. ...你来想想
+
+
 ## 快速开始
 
 服务器已部署 `ssmcpd`、接受你的 SSH 公钥后，在本机项目目录启动客户端。已有 `~/.ssh/config` 可以直接复用：
