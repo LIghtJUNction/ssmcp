@@ -1,6 +1,6 @@
 # ssmcp
 
-**让 MCP 直接使用你电脑上的 Shell 和编码智能体。**
+**把你电脑上的 Shell 和编码智能体转为远程mcp服务**
 
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
