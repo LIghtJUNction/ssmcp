@@ -7,6 +7,7 @@ ssmcp 直接调用系统 OpenSSH。已经能用公钥登录的服务器，可以
 | 复用现有 SSH 配置、用别名连接 | [SSH 配置](#ssh-config) |
 | 首次安装或更换公钥 | [公钥管理](#public-keys) |
 | 在 ChatGPT 或其他 MCP 客户端完成登录 | [OAuth 登录](#oauth-login) |
+| 了解令牌怎样自动续期 | [静默续期](#silent-refresh) |
 | 判断重新打开后是否要再次授权 | [连接与授权生命周期](#session-lifetime) |
 | 处理 `Permission denied`、过期登录码或 `invalid_grant` | [排查问题](#troubleshooting) |
 
@@ -223,7 +224,7 @@ Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent �
 {
   "url": "https://ssmcp.example.com/alice",
   "login_code": "本次连接生成的一次性登录码",
-  "login_expires_in": 600,
+  "login_expires_in": 1800,
   "client_id": "本次连接的唯一ID",
   "name": "ssmcp-project",
   "type": "codex",
@@ -232,7 +233,7 @@ Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent �
 }
 ```
 
-保持这个进程运行。`login_expires_in` 已扣除本机后端初始化耗时，实际输出可能小于 600；实时活动显示在 stderr。登录码可以授权对本机的访问，请只在对应 OAuth 登录页输入。[客户端输出与倒计时](../src/client.rs)
+保持这个进程运行。`login_expires_in` 已扣除本机后端初始化耗时，实际输出可能小于 1800；实时活动显示在 stderr。登录码可以授权对本机的访问，请只在对应 OAuth 登录页输入。[客户端输出与倒计时](../src/client.rs)
 
 ### MCP 客户端：添加 URL，输入登录码
 
@@ -244,11 +245,28 @@ Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent �
 
 远程 MCP 的工具列表始终只有 `list` 和 `code_mode`。本机 `--list-tools` 展示的是后端的原生工具；远程调用这些工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[两工具接口](../README.md) · [授权流程实现](../src/oauth.rs)
 
-MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册（DCR）。需要自动刷新时，客户端注册须包含 `grant_types: ["authorization_code", "refresh_token"]`；这由 MCP 客户端实现。注册、资源绑定及回调的协议细节见 [OAuth 兼容性](deployment.md#oauth-兼容性)。
+MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册（DCR）。0.3.2 中，注册时省略 `grant_types` 会默认获得 `authorization_code` 与 `refresh_token` 两种授权，注册响应会返回实际登记的类型；客户端也可以显式请求这两种类型。显式只请求 `["authorization_code"]` 的客户端继续只获得访问令牌。注册、资源绑定及回调的协议细节见 [OAuth 兼容性](deployment.md#oauth-兼容性)。
+
+<a id="silent-refresh"></a>
+
+### 静默续期：访问令牌到期后怎样继续使用
+
+**access token 到期后，有效的 refresh token 可以换取下一组令牌，整个过程无需打开登录页。** 服务端提供刷新接口；MCP 客户端负责在后台发起请求并保存结果。[刷新实现](../src/oauth.rs)
+
+1. 首次登录成功后，客户端保存 `access_token`、`expires_in` 和 `refresh_token`。
+2. 客户端在访问令牌到期前刷新，或收到 MCP 的 `401` 与 `WWW-Authenticate` 中的 `error="invalid_token"` 后刷新。
+3. 客户端向发现的 token endpoint 发出 `grant_type=refresh_token` 请求，带上当前 refresh token、原来的完整 `resource` URL，以及登记时约定的客户端身份认证。
+4. 成功响应包含新的 access token 和新的 refresh token。客户端保存整组新令牌，用新 refresh token 替换旧值，再重试需要授权的请求。同一授权的刷新应串行处理，避免多个请求重放同一个旧 refresh token。
+
+默认访问令牌可用 8 小时；每次成功刷新会把 refresh token 的闲置期限向后延长 30 天，同一授权从首次登录起最多延续 90 天。客户端登记与密钥默认可用 365 天。实际到期时间还受客户端登记和原授权剩余寿命约束，客户端应读取每次令牌响应的 `expires_in`。[默认有效期与配置](deployment.md#oauth-lifetimes)
+
+旧版容易让刷新令牌显得没有作用：省略 `grant_types` 的注册收不到 refresh token；即使已领取，同一授权也只持续 24 小时。0.3.2 延长了默认期限，并为省略该字段的新注册提供刷新授权。客户端仍需实现刷新请求和轮换令牌的保存；是否静默刷新应以所用 MCP 客户端的实际行为为准。
+
+从旧版升级后，完成一次新的客户端注册与 OAuth 登录，让客户端取得新的刷新授权；若应用一直保留旧登记，可移除原 MCP 连接，再用相同 URL 添加。更换登记或登录前先安排好正在进行的任务。升级过程和服务器重启的影响见[升级步骤](deployment.md#upgrade-032)。
 
 ### 登录码过期或已使用
 
-登录码签发后 10 分钟内可成功授权一次。已经登录的 MCP 客户端用 OAuth 令牌继续访问，正常刷新无须再填登录码。重新授权需要一枚新码：可以在同一账户下另启动一个客户端取得新码，或确认当前后端可停止后，退出并重启当前 ssmcp 进程。
+登录码签发后 30 分钟内可成功授权一次。已经登录的 MCP 客户端用 OAuth 令牌继续访问，正常刷新无须再填登录码。重新授权需要一枚新码：可以在同一账户下另启动一个客户端取得新码，或确认当前后端可停止后，退出并重启当前 ssmcp 进程。
 
 新授权会绑定提供新码的那条连接，后续要保持该连接运行。连接退出会清理它的后端，并撤销由它签发的授权；因此，正在执行任务时应先处理好任务再退出。[登录码与连接绑定](../src/broker.rs) · [OAuth 绑定](../src/oauth.rs)
 
@@ -256,7 +274,7 @@ MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册�
 
 ### 恢复已失效的 OAuth 授权
 
-遇到 `oauth_token_invalid_grant` 或要求重新授权时，按这个顺序恢复：
+单独的 access token 到期应先走上述静默刷新；刷新返回 `invalid_grant`、插件提示 `oauth_token_invalid_grant`，或客户端明确要求重新授权时，按这个顺序恢复：
 
 1. 确认本机 ssmcp 是否还在线。当前项目有任务时，可另开一个终端、使用同一服务器账户启动新客户端并取得新登录码；否则重启当前客户端取得新码。
 2. 在 MCP 客户端里对原连接执行重新授权，填写新码；MCP URL 仍使用终端返回的完整用户路径。
@@ -276,7 +294,7 @@ MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册�
 | 关闭后重新打开 ChatGPT；原 ssmcp 连接仍在线、保存的令牌有效 | 可继续使用已有授权 |
 | access token 到期；客户端有有效 refresh token，且原连接仍在线 | 客户端可自动刷新，无须填写登录码 |
 | 关闭本机终端导致 ssmcp 退出，或按 `Ctrl-C` 后重新运行 | 新连接获得新 ID 和登录码；需要重新 OAuth 授权 |
-| 原连接一直在线，但同一刷新授权已达最长 24 小时 | 取得新登录码并重新授权 |
+| 默认配置下，refresh token 已连续 30 天未成功刷新，或授权已达 90 天 | 取得新登录码并重新授权 |
 | 服务端重启 `ssmcpd` | 连接与 OAuth 状态清空；重新连接并授权 |
 | 同一账户新增第二个项目客户端，原授权仍有效 | 已有授权可发现并操作新增客户端 |
 | 提供当前登录码的连接退出，账户下其他连接仍在线 | 该授权失效；其他连接自己的独立授权继续有效 |
@@ -284,13 +302,14 @@ MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册�
 | 凭据 | 用在哪里 | 有效期 |
 | --- | --- | --- |
 | SSH 私钥与服务端公钥登记 | OpenSSH 认证 | 由你和服务器管理员管理 |
-| `login_code` | 浏览器登录表单 | 签发后 600 秒；成功使用一次即消耗 |
+| `login_code` | 浏览器登录表单 | 签发后 30 分钟；成功使用一次即消耗 |
+| 授权表单事务 | 浏览器中正在进行的登录 | 30 分钟；不会延长登录码自己的期限 |
 | OAuth authorization code | 浏览器回调后由 MCP 客户端兑换 | 60 秒；与客户端及 PKCE 绑定 |
-| access token | MCP 请求的 `Authorization: Bearer` 请求头 | 最长 1 小时 |
-| refresh token | MCP 客户端自动续期 | 每次刷新轮换；同一授权最长 24 小时 |
-| OAuth 客户端登记 | 客户端自动注册 | 最长 7 天；服务端重启清空 |
+| access token | MCP 请求的 `Authorization: Bearer` 请求头 | 默认最长 8 小时 |
+| refresh token | MCP 客户端自动续期 | 默认闲置期限 30 天，成功刷新后重新计时；同一授权最长 90 天 |
+| OAuth 客户端登记及密钥 | 客户端自动注册与身份认证 | 默认最长 365 天；服务端重启清空 |
 
-令牌寿命还会受到客户端登记到期时间约束。SSH 断开、服务重启或授权撤销会提前使令牌失效；刷新不会延长 24 小时总期限。授权覆盖同一 SSH 账户的全部在线客户端，分离不同操作者的权限时应使用不同服务器账户。[生命周期常量与校验](../src/oauth.rs) · [账号内客户端发现](../src/broker.rs)
+表中为 0.3.2 的默认期限；管理员可以调整访问令牌、刷新闲置期、授权总期限和登记期限。令牌寿命还受客户端登记到期时间约束。SSH 断开、服务重启或授权撤销会提前使令牌失效；刷新不会推迟首次授权起算的 90 天总期限。授权覆盖同一 SSH 账户的全部在线客户端，分离不同操作者的权限时应使用不同服务器账户。[服务端有效期设置](deployment.md#oauth-lifetimes) · [生命周期校验](../src/oauth.rs) · [账号内客户端发现](../src/broker.rs)
 
 <a id="troubleshooting"></a>
 
@@ -305,6 +324,8 @@ MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册�
 | 主机密钥不匹配 | 向管理员核对新指纹与变更原因，再更新对应 known_hosts 条目 |
 | 没有连接 JSON，或提示 backend not found / startup failed | 先运行相应 `--list-tools`，检查原生 CLI、版本、登录配置和 `--backend` 路径；本机后端成功初始化后才发布连接信息 |
 | 登录码无效、过期或已使用 | 使用当前连接的未使用码；没有有效码时新建连接取得。核对 OAuth 页面资源 URL 与终端输出完全一致 |
+| MCP 返回 `401`、`error="invalid_token"` | 客户端用当前 refresh token 静默刷新，再用新访问令牌重试；刷新请求须带原 `resource` 和登记时的客户端认证 |
+| 已登录，但客户端从不自动续期 | 检查首次令牌响应是否有 `refresh_token`、客户端是否实现刷新和保存轮换后的新值。旧版登记可重新注册；显式只登记 `authorization_code` 时需修改客户端注册请求 |
 | `oauth_token_invalid_grant` / `invalid_grant` / 要求重新授权 | 检查签发连接是否退出、服务器是否重启、授权是否超时；取得新登录码，在 MCP 客户端执行重新授权。该错误本身不区分这些原因 |
 | 服务重启后仍使用旧 `client_id`，重复授权失败 | MCP 客户端应重新注册；若它继续缓存旧登记，移除该 MCP 连接后用相同完整 URL 重新添加 |
 | 登录成功后 `list` 找不到原来的 `client_id` | 客户端重连会分配新 ID。重新调用 `list`，按名称、模式和目录选取当前在线 ID |

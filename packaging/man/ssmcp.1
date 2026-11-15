@@ -1,4 +1,4 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.3.1" "User Commands"
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.3.2" "User Commands"
 .SH NAME
 ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
@@ -158,10 +158,23 @@ through the fixed bridge command. Append the new public key, test a second
 connection, then remove only the old key. Removing a key affects new SSH
 authentication; close an existing connection to revoke its OAuth grants.
 .PP
-The login code expires 600 seconds after issue and is consumed by one successful
-authorization. login_expires_in subtracts backend startup time. Access tokens
-last at most one hour. Clients registered for the refresh_token grant receive
-rotating refresh tokens; an authorization family lasts at most 24 hours.
+The login code expires 1800 seconds after issue and is consumed by one successful
+authorization. login_expires_in subtracts backend startup time. In 0.3.2, access
+tokens default to at most 8 hours. Refresh tokens rotate on successful use and
+have a default 30-day idle period that slides forward on each refresh, bounded
+by a 90-day authorization-family lifetime measured from initial authorization.
+Client registrations and secrets default to 365 days. Server operators can
+configure these four lifetimes; tokens are also bounded by remaining grant and
+registration lifetimes.
+.PP
+Registration without grant_types provisions both authorization_code and
+refresh_token. Explicitly registering only authorization_code does not issue
+a refresh token. The MCP client must implement renewal and save the latest
+rotated refresh token. Before expiry, or after a 401 challenge with
+error="invalid_token", it requests grant_type=refresh_token with the current
+refresh token, original resource URL and registered client authentication.
+It saves the new token pair and retries with the new access token. Serialize
+refreshes for one grant; reusing a consumed refresh token revokes the grant.
 .PP
 An OAuth grant authorizes all current and subsequently attached clients under
 the same SSH account while its source connection is live. Disconnecting that
@@ -171,9 +184,13 @@ needed. Other SSH accounts are isolated.
 .PP
 Reopening an MCP application can reuse its saved, valid OAuth tokens while the
 source SSH connection remains alive. Restarting ssmcp or ssmcpd requires a new
-authorization. Expired, revoked or replayed refresh tokens produce invalid_grant;
+authorization. Access-token expiry can be handled by silent refresh without
+interactive login. Expired, revoked or replayed refresh tokens produce invalid_grant;
 reconnect with a fresh login code and authorize again. If a restarted server no
-longer recognizes a cached client_id, register the MCP connection again.
+longer recognizes a cached client_id, register the MCP connection again. After
+upgrading the server to 0.3.2, register and authorize once to obtain the new
+default refresh grant and lifetimes; updating source alone does not upgrade
+the running daemon.
 .PP
 Native agent permissions, request IDs and approval responses remain explicit.
 ssmcp does not automatically answer native requests. Install and configure the
