@@ -1,6 +1,6 @@
 use ssmcp::{broker::Broker, http};
 use std::{
-    io,
+    io::{self, Read, Write},
     net::{Shutdown, SocketAddr},
     os::unix::{
         fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
@@ -121,13 +121,29 @@ fn attach(path: &Path) -> ssmcp::Result<()> {
     // A pipe may remain blocked after the opposite direction closes. This helper has
     // no runtime or thread join on exit: returning from main closes all descriptors.
     std::thread::spawn(move || {
-        let _ = io::copy(&mut io::stdin().lock(), &mut input);
+        let _ = copy_live(&mut io::stdin().lock(), &mut input);
         let _ = input.shutdown(Shutdown::Both);
     });
-    let result = io::copy(&mut output, &mut io::stdout().lock());
+    let result = copy_live(&mut output, &mut io::stdout().lock());
     let _ = output.shutdown(Shutdown::Both);
     result?;
     Ok(())
+}
+
+fn copy_live(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<()> {
+    let mut bytes = [0u8; 16 * 1024];
+    loop {
+        let count = match reader.read(&mut bytes) {
+            Ok(0) => return Ok(()),
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        // SSH stdio may itself be a socket. Avoid whole-stream kernel-copy
+        // specializations: each protocol fragment must be visible immediately.
+        writer.write_all(&bytes[..count])?;
+        writer.flush()?;
+    }
 }
 
 struct SocketFile {
