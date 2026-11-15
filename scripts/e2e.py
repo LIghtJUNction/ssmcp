@@ -388,7 +388,7 @@ class Harness:
         self.check(form.visible == ["login_code"] and "transaction_id" in form.fields, "login page has one visible code field and a CSRF-bound transaction")
         cookie_header = headers.get("set-cookie", "")
         self.check(all(flag in cookie_header.lower() for flag in ("secure", "httponly", "samesite=lax")), "login cookie is Secure, HttpOnly and SameSite Lax")
-        self.check("no-store" in headers.get("cache-control", "") and headers.get("referrer-policy") == "no-referrer", "login page prevents caching and referrer leakage")
+        self.check("no-store" in headers.get("cache-control", "") and headers.get("referrer-policy") == "same-origin", "login page permits same-origin forms without cross-origin referrer leakage")
         cookie = cookie_header.split(";", 1)[0]
         payload = {**form.fields, "login_code": login_code}
         origin = {"Origin": PUBLIC_URL, "Accept": "text/html"}

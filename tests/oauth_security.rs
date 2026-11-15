@@ -418,7 +418,7 @@ async fn discovery_and_login_form_expose_no_reusable_ssh_bearer() {
     ] {
         assert!(set_cookie.contains(flag));
     }
-    assert_eq!(page.headers["referrer-policy"], "no-referrer");
+    assert_eq!(page.headers["referrer-policy"], "same-origin");
     assert_eq!(page.headers[header::CACHE_CONTROL], "no-store");
     assert!(
         page.headers["content-security-policy"]
@@ -507,6 +507,7 @@ async fn csrf_failures_and_duplicate_forms_do_not_consume_the_login_code() {
         (None, Some(ISSUER)),
         (Some(other.cookie.as_str()), Some(ISSUER)),
         (Some(first.cookie.as_str()), None),
+        (Some(first.cookie.as_str()), Some("null")),
         (
             Some(first.cookie.as_str()),
             Some("https://attacker.example"),

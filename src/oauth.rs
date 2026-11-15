@@ -1223,6 +1223,11 @@ fn consent_response(
     status: StatusCode,
 ) -> Response {
     let mut response = (status, Html(consent_page(id, transaction, error))).into_response();
+    // no-referrer makes browsers send Origin: null on form POSTs. Keep the
+    // same-origin form usable without leaking authorization URLs to callbacks.
+    response
+        .headers_mut()
+        .insert("referrer-policy", HeaderValue::from_static("same-origin"));
     if let Some(origin) = csp_callback_origin(&transaction.redirect.uri) {
         response.extensions_mut().insert(FormCallbackOrigin(origin));
     }
@@ -1308,7 +1313,9 @@ async fn security_headers(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
-    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers
+        .entry("referrer-policy")
+        .or_insert(HeaderValue::from_static("no-referrer"));
     headers.insert(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
@@ -1866,7 +1873,7 @@ mod tests {
             assert!(policy.contains("default-src 'none'"));
             assert!(!policy.contains("'unsafe-inline'"));
             assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-            assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+            assert_eq!(response.headers()["referrer-policy"], "same-origin");
         }
         for uri in [
             "https://*.example/callback",
