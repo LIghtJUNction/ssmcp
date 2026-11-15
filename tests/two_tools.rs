@@ -20,7 +20,7 @@ use tokio::{
 
 struct Client {
     id: String,
-    secret: String,
+    access_token: String,
     calls: Arc<AtomicUsize>,
     task: JoinHandle<()>,
     attachment: JoinHandle<ssmcp::Result<()>>,
@@ -45,6 +45,7 @@ impl Server {
         Self {
             broker,
             http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(5))
                 .build()
                 .unwrap(),
@@ -76,13 +77,15 @@ impl Server {
         .unwrap();
         let Some(Frame::Ready {
             url,
-            secret,
+            login_code,
             client_id,
+            ..
         }) = wire::read_frame(&mut reader).await.unwrap()
         else {
             panic!("missing registration");
         };
         self.owner = url.rsplit('/').next().unwrap().into();
+        let access_token = self.oauth_login(&url, &login_code).await;
         let response_id = client_id.clone();
         let calls = Arc::new(AtomicUsize::new(0));
         let recorded_calls = calls.clone();
@@ -132,7 +135,7 @@ impl Server {
         });
         self.clients.push(Client {
             id: client_id.clone(),
-            secret,
+            access_token,
             calls,
             task,
             attachment,
@@ -140,12 +143,97 @@ impl Server {
         client_id
     }
 
+    async fn oauth_login(&self, resource: &str, login_code: &str) -> String {
+        const CALLBACK: &str = "http://127.0.0.1:37401/callback";
+        // RFC 7636 Appendix B: independent PKCE S256 verifier/challenge pair.
+        const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+        let response = self.http.post(format!("{}/oauth/register", self.url))
+            .json(&json!({"client_name":"two-tool fixture","redirect_uris":[CALLBACK],
+                "token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"]}))
+            .send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 201);
+        let registration: Value = response.json().await.unwrap();
+        let oauth_client = registration["client_id"].as_str().unwrap();
+        let response = self
+            .http
+            .get(format!("{}/oauth/authorize", self.url))
+            .query(&[
+                ("response_type", "code"),
+                ("client_id", oauth_client),
+                ("redirect_uri", CALLBACK),
+                ("resource", resource),
+                ("scope", "mcp"),
+                ("state", "two-tools"),
+                ("code_challenge", CHALLENGE),
+                ("code_challenge_method", "S256"),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let cookie = response.headers()[reqwest::header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let html = response.text().await.unwrap();
+        let transaction = html
+            .split_once("name=transaction_id value=\"")
+            .unwrap()
+            .1
+            .split('"')
+            .next()
+            .unwrap();
+        let response = self
+            .http
+            .post(format!("{}/oauth/authorize", self.url))
+            .header(reqwest::header::COOKIE, cookie)
+            .header(reqwest::header::ORIGIN, "https://ssmcp.example")
+            .form(&[("transaction_id", transaction), ("login_code", login_code)])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 303);
+        let callback = reqwest::Url::parse(
+            response.headers()[reqwest::header::LOCATION]
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let code = callback
+            .query_pairs()
+            .find(|(name, _)| name == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        let response = self
+            .http
+            .post(format!("{}/oauth/token", self.url))
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", oauth_client),
+                ("code", &code),
+                ("code_verifier", VERIFIER),
+                ("redirect_uri", CALLBACK),
+                ("resource", resource),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let tokens: Value = response.json().await.unwrap();
+        tokens["access_token"].as_str().unwrap().into()
+    }
+
     async fn rpc(&self, method: &str, params: Value, modern: bool, issuer: usize) -> (u16, Value) {
         let mut params = params;
         let mut request = self
             .http
             .post(format!("{}/{}", self.url, self.owner))
-            .bearer_auth(&self.clients[issuer].secret)
+            .bearer_auth(&self.clients[issuer].access_token)
             .header("Accept", "application/json");
         if modern {
             params["_meta"] = json!({
@@ -192,7 +280,7 @@ impl Server {
         for _ in 0..100 {
             if self
                 .broker
-                .authenticate(&self.owner, &self.clients[index].secret)
+                .authenticate(&self.owner, &self.clients[index].access_token)
                 .await
                 .is_none()
             {
@@ -215,6 +303,7 @@ impl Drop for Server {
 }
 
 #[tokio::test]
+#[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
 async fn two_public_tools_cover_every_backend_with_native_discovery_and_javascript_dispatch() {
     let mut server = Server::start().await;
     for mode in [Mode::Shell, Mode::Codex, Mode::Cc, Mode::Pi, Mode::Opencode] {
@@ -311,6 +400,7 @@ async fn two_public_tools_cover_every_backend_with_native_discovery_and_javascri
 }
 
 #[tokio::test]
+#[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
 async fn credentials_and_client_ids_follow_individual_connection_lifetimes() {
     let mut server = Server::start().await;
     let original_id = server.attach(Mode::Shell).await;
@@ -328,7 +418,10 @@ async fn credentials_and_client_ids_follow_individual_connection_lifetimes() {
     assert_eq!(clients[0]["id"], sibling_id);
     let replacement_id = server.attach(Mode::Shell).await;
     assert_ne!(original_id, replacement_id);
-    assert_ne!(server.clients[0].secret, server.clients[2].secret);
+    assert_ne!(
+        server.clients[0].access_token,
+        server.clients[2].access_token
+    );
     assert_eq!(server.rpc("ping", json!({}), false, 0).await.0, 401);
     let code = format!(
         "return await call({}, 'fixture.echo', {{}});",
@@ -348,6 +441,7 @@ async fn credentials_and_client_ids_follow_individual_connection_lifetimes() {
 }
 
 #[tokio::test]
+#[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
 async fn running_code_rechecks_issuer_authority_before_each_native_call() {
     let mut server = Server::start().await;
     server.attach(Mode::Shell).await;

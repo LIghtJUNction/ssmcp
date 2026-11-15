@@ -605,8 +605,10 @@ impl OpenCode {
         }
         self.sockets.lock().unwrap().clear();
         if let Some(mut process) = self.process.lock().await.take() {
-            drop(process.child.stdin.take());
+            // Keep the stdin lease until owned descendants are captured and stopped.
+            // An EOF first can let the native parent exit and orphan separate sessions.
             process.shutdown().await;
+            drop(process.child.stdin.take());
         }
         for task in self.readers.lock().unwrap().drain(..) {
             task.abort();

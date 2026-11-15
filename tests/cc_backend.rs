@@ -215,6 +215,13 @@ async fn background_output_is_incremental_and_shutdown_stops_jobs_and_watchers()
         .call("cc.NativeFutureTool", json!({"spawn_child":true}))
         .await
         .unwrap();
+    let child: i32 = std::fs::read_to_string(directory.0.join("child-pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    // Keep the fixture child bound by pidfd so an assertion failure also cleans it up.
+    let owned = OwnedJobs::for_session(child);
+    assert!(owned.0.iter().any(|(pid, _)| *pid == child));
     client
         .call("cc.Bash", json!({"fixture_mode":"background"}))
         .await
@@ -259,10 +266,6 @@ async fn background_output_is_incremental_and_shutdown_stops_jobs_and_watchers()
             .is_empty()
     );
     let leader: i32 = std::fs::read_to_string(directory.0.join("pid"))
-        .unwrap()
-        .parse()
-        .unwrap();
-    let child: i32 = std::fs::read_to_string(directory.0.join("child-pid"))
         .unwrap()
         .parse()
         .unwrap();

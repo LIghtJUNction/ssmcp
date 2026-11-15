@@ -40,22 +40,28 @@ impl Managed {
         })
     }
 
-    pub async fn shutdown(&mut self) {
+    /// Stop owned descendants while their parent is still alive and identifiable.
+    /// Transport owners must call this before closing stdin, which can make a
+    /// cooperative native process exit and reparent its detached child sessions.
+    pub fn terminate(&mut self) {
         if self.stopped {
             return;
         }
         crate::pty::stop_session(self.pid, &self.leader);
         let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
         self.stopped = true;
+    }
+
+    pub async fn shutdown(&mut self) {
+        self.terminate();
+        // Always wait, including after synchronous termination or a cancelled wait.
+        let _ = self.child.wait().await;
     }
 }
 
 impl Drop for Managed {
     fn drop(&mut self) {
-        if !self.stopped {
-            crate::pty::stop_session(self.pid, &self.leader);
-        }
+        self.terminate();
     }
 }
 

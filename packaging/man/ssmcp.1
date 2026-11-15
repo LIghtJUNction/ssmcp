@@ -1,22 +1,54 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.1.0" "User Commands"
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.3.0" "User Commands"
 .SH NAME
-ssmcp \- expose a local terminal through an SSH-authenticated MCP gateway
+ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
 .B ssmcp
+.RB [ \-t " shell|codex|cc|pi|opencode" ]
+.RB [ \-\-name " name" ]
 .RB [ \-F " ssh_config" ]
 .RB [ \-i " identity" ]
 .RB [ \-p " port" ]
 .RB [ \-\-shell " path" ]
+.RB [ \-\-backend " program" ]
 .I user@host
-.SH DESCRIPTION
-ssmcp authenticates to OpenSSH using a public key and creates a new local
-pseudo-terminal. The server returns an HTTPS MCP URL and a connection-scoped
-bearer secret. One JSON object containing url and secret is written to standard
-output. Diagnostics are written to standard error.
+.RB [ \-\- " backend_args..." ]
 .PP
-Keep the program running while the terminal is in use. Ctrl-C or SIGTERM closes
-the SSH connection and terminal. The server revokes the URL and bearer secret.
+.B ssmcp
+.RB [ \-t " type" ]
+.RB [ \-\-backend " program" ]
+.B \-\-list-tools
+.RB [ \-\- " backend_args..." ]
+.SH DESCRIPTION
+ssmcp authenticates to OpenSSH using a public key and starts a local shell or
+coding-agent backend. Multiple clients may connect under the same SSH account.
+The server assigns each connection a random client ID and returns the account's
+HTTPS MCP URL and a one-time OAuth login code.
+.PP
+One JSON object containing url, login_code, login_expires_in, client_id, name,
+type, hostname and cwd is written to standard output. Live activity and
+diagnostics use standard error. The cwd field is the startup directory; it does
+not track shell directory changes or the workspaces of native agent sessions.
+.PP
+The external MCP catalog contains exactly two tools: list and code_mode.
+Use list to discover clients and their native capabilities. Use code_mode to
+run JavaScript that calls a selected capability over SSH. Selecting a different
+backend with \-t does not add external MCP tools.
+.PP
+Keep the program running while its backend is in use. Ctrl-C or SIGTERM closes
+the SSH connection, stops its backend and revokes OAuth grants associated with
+that connection. Other clients under the account remain separately connected.
 .SH OPTIONS
+.TP
+.BI \-t " type"
+.TQ
+.BI \-\-type " type"
+Select shell, codex, cc, pi or opencode. The default is shell.
+.TP
+.BI \-\-name " name"
+Set the client display name. The default combines hostname, backend type and
+process ID. Names are limited to 128 UTF-8 bytes and may not contain control
+characters or consist only of whitespace. Duplicate names are allowed; use the
+server-generated client ID to select an unambiguous target.
 .TP
 .BI \-F " file"
 Use a separate OpenSSH client configuration file.
@@ -28,11 +60,115 @@ Use the specified private key. ssh-agent is also supported.
 Connect to the specified SSH port.
 .TP
 .BI \-\-shell " path"
-Run the specified absolute shell path in the local pseudo-terminal.
+Run the specified absolute shell path in a local pseudo-terminal. Valid only
+with shell mode. The default is the absolute path in SHELL, or /bin/sh.
+.TP
+.BI \-\-backend " program"
+Override the native executable used by an agent backend. Not valid in shell mode.
+.TP
+.B \-\-list-tools
+Start the local backend, discover its native capabilities, print a JSON catalog
+and shut it down. Does not connect to SSH and does not accept user@host. This is
+the native capability catalog, not the two-tool external MCP catalog.
+.TP
+.B \-\-
+Pass remaining arguments to the selected agent executable without an additional
+shell. Shell mode does not accept these arguments. Transport settings managed
+by ssmcp must not be overridden.
+.TP
+.B \-h, \-\-help
+Print usage information and exit.
+.TP
+.B \-V, \-\-version
+Print the version and exit.
+.SH MCP TOOLS
+.TP
+.B list
+With no arguments, return online client IDs, names, backend types, hostnames and
+startup directories for the authenticated SSH account. With client_id, return
+that client's native tool names, descriptions and schemas. Pass a returned
+nextCursor as cursor to read another capability page.
+.TP
+.B code_mode
+Accept a code string and optional timeout_ms. JavaScript has clients (a metadata
+snapshot), await call(clientId, toolName, arguments), await tools(clientId,
+cursor), print, console.log and top-level return. Calls return complete native
+MCP results, including isError and structuredContent. Inspect isError even when
+the JavaScript promise resolves. The code-mode structuredContent has result
+(the script return value) and logs (an array of strings).
+.PP
+The server starts a system-installed Node.js process inside bubblewrap for each
+request. Node.js 18 or newer and bubblewrap 0.8 or newer are server dependencies
+managed by the operating system package manager; no npm package is needed. A client-only
+ssmcp installation does not require these server dependencies. The public
+JavaScript API is clients, call, tools and logging. Native backend calls execute
+on the selected client with that local user's permissions. Runtime state is
+fresh for each request; backend sessions remain alive.
+.PP
+The bridge script is installed at PREFIX/libexec/ssmcp/code-mode.js, normally
+/usr/local/libexec/ssmcp/code-mode.js. The server environment variable
+SSMCP_CODE_MODE_RUNNER may select an absolute script path. Missing dependencies
+or unavailable namespace isolation cause code_mode to fail; list remains usable.
+.PP
+Timeout stops orchestration, but an already-started native action may continue.
+Inspect native state before retrying a mutating action. Retain output cursors
+and agent session IDs in the calling application for subsequent requests.
+.SH BACKENDS
+.TP
+.B shell
+An interactive local shell and PTY. Internal capabilities are terminal.read,
+terminal.write, terminal.resize and terminal.status.
+.TP
+.B codex
+Codex App Server over stdio. Requires schema generation support. The installed
+CLI's generated client methods, events and approval responses are callable.
+.TP
+.B cc
+Claude Code's native claude mcp serve entry point. Tools are discovered and
+prefixed with cc.; their schemas and results are preserved. Native MCP tool
+calls do not imply the interactive terminal's confirmation behavior.
+.TP
+.B pi
+Pi's native JSONL RPC interface. Control commands use pi.; pi.rpc forwards
+additional commands supported by the installed CLI. Events and extension
+dialogs retain explicit read and response capabilities.
+.TP
+.B opencode
+OpenCode v2 serve with a private loopback listener, stdio ready handshake and
+OpenAPI discovery. Requires the v2 entry point; v1 is not supported. HTTP,
+SSE and WebSocket capabilities use the same code-mode interface.
 .SH AUTHENTICATION
-The client permits only SSH public-key authentication. Standard OpenSSH host-key
-verification remains enabled. The secret authorizes command execution with the
-permissions of the local user for the lifetime of the connection.
+Only SSH public-key authentication is permitted. Standard OpenSSH host-key
+verification remains enabled. Add the returned URL to an OAuth-capable MCP
+client, then enter login_code on its authorization page. The client completes
+Authorization Code with S256 PKCE and uses an access token as its Bearer
+credential. The login code cannot be used as a Bearer token.
+.PP
+The login code expires 600 seconds after issue and is consumed by one successful
+authorization. login_expires_in subtracts backend startup time. Access tokens
+last at most one hour. Clients registered for the refresh_token grant receive
+rotating refresh tokens; an authorization family lasts at most 24 hours.
+.PP
+An OAuth grant authorizes all current and subsequently attached clients under
+the same SSH account while its source connection is live. Disconnecting that
+source revokes its access and refresh tokens even if other clients remain
+connected. Reconnect to obtain a new login code when a fresh authorization is
+needed. Other SSH accounts are isolated.
+.PP
+Native agent permissions, request IDs and approval responses remain explicit.
+ssmcp does not automatically answer native requests. Install and configure the
+selected agent on the client; the gateway does not need that agent installed.
+.SH EXAMPLES
+.nf
+ssmcp --name build-shell user@host
+ssmcp -t codex --name review-codex user@host
+ssmcp -t cc --list-tools
+.fi
+.PP
+Example JavaScript supplied as code_mode's code argument, using an ID from list:
+.nf
+return await call("CLIENT_ID_FROM_LIST", "terminal.status", {});
+.fi
 .SH FILES
 .TP
 .I ~/.ssh/config

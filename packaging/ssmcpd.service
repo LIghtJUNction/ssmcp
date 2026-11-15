@@ -19,8 +19,11 @@ PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
 ProtectKernelTunables=yes
+# bubblewrap sets this namespace's limits before disabling nested user namespaces.
+# Keep namespace-aware directory lookup instead of binding a single sysctl file.
+ReadWritePaths=/proc/sys/user
 ProtectControlGroups=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

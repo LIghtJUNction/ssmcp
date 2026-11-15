@@ -1,6 +1,6 @@
-.TH SSMCPD 8 "2026-11-16" "ssmcp 0.1.0" "System Administration"
+.TH SSMCPD 8 "2026-11-16" "ssmcp 0.3.0" "System Administration"
 .SH NAME
-ssmcpd \- SSH terminal MCP gateway
+ssmcpd \- SSH-authenticated MCP gateway for local shells and coding agents
 .SH SYNOPSIS
 .B ssmcpd serve
 .BI \-\-public-url " https://host"
@@ -11,12 +11,19 @@ ssmcpd \- SSH terminal MCP gateway
 .RB [ \-\-socket " path" ]
 .SH DESCRIPTION
 The serve command listens for MCP HTTP requests and authenticated local bridge
-connections. A reverse proxy supplies public HTTPS. Each connected Linux user
-receives an endpoint at /username and a new random bearer secret.
+connections. A reverse proxy supplies public HTTPS. Connected clients are grouped
+by their Linux account and share an endpoint at /username. Each connection has
+an independent random client ID and one-time OAuth login code. Up to 128 clients
+may be attached to one account.
 .PP
 The attach command is run by OpenSSH as a ForceCommand. It forwards standard input
-and output to the daemon's Unix socket. The daemon obtains the username from
-kernel peer credentials, rather than user-supplied request fields.
+and output to the daemon's Unix socket. The daemon obtains the account identity
+from kernel peer credentials. Client names, hostnames, working directories and
+backend types are discovery metadata, not authentication fields.
+.PP
+The external MCP tool catalog contains exactly list and code_mode. The native
+capability names for shell, codex, cc, pi and opencode remain accessible inside
+code_mode; they are not individually advertised as external MCP tools.
 .SH OPTIONS
 .TP
 .BI \-\-public-url " url"
@@ -27,10 +34,76 @@ Loopback HTTP socket address. The default is 127.0.0.1:8080.
 .TP
 .BI \-\-socket " path"
 Unix control socket path. The default is /run/ssmcpd/control.sock.
+.SH DISCOVERY AND EXECUTION
+The list tool returns clients belonging to the authenticated account, including
+their IDs, names, backend types, hostnames and startup directories. A client_id
+argument selects a paginated native capability catalog. Duplicate display names
+are allowed; dispatch always uses the connection ID.
+.PP
+The code_mode tool starts a system-installed Node.js process inside bubblewrap
+for each invocation. Its host calls select a client by ID and forward native
+operations over the existing SSH bridge. The public JavaScript API provides
+clients, call, tools and logging. The worker does not inherit server credentials
+or mount the host's working directories, home directories or control socket.
+.PP
+Install Node.js 18 or newer and bubblewrap 0.8 or newer using the operating system
+package manager. No npm package is required. The bridge script is installed at
+PREFIX/libexec/ssmcp/code-mode.js, normally
+/usr/local/libexec/ssmcp/code-mode.js. SSMCP_CODE_MODE_RUNNER may select an
+absolute script path in the server environment.
+.PP
+Node.js vm contexts and permission flags are not security boundaries for
+untrusted code. Linux isolation is provided by bubblewrap; missing dependencies
+or unavailable namespaces produce an error, without falling back to direct
+Node.js execution. The list tool remains available.
+.PP
+Code source, runtime memory, execution time, host calls, logs and results are
+bounded. Each native call checks the authorization connection and target again.
+A timeout stops the script, but does not roll back actions already submitted to
+a native backend. Calls with an uncertain outcome should not be blindly retried.
+.PP
+The V8 old-generation heap is limited to 32 MiB. Linux RLIMIT_DATA is 256 MiB
+and RLIMIT_AS is 2 GiB; these are data and virtual-address-space limits, not a
+claim that total process memory is 32 MiB. The worker CPU limit is 2 seconds.
+.SH AUTHORIZATION LIFETIME
+The gateway serves OAuth discovery, dynamic client registration, authorization
+and token endpoints. An MCP client uses Authorization Code with S256 PKCE after
+the user enters the SSH connection's one-time login code on the authorization
+page. HTTP MCP requests carry an OAuth access token as their Bearer credential.
+The login code cannot be used as an access token.
+.PP
+An OAuth grant authorizes current and subsequently attached clients under the
+same Linux account while the grant's source SSH connection is live. Client IDs
+do not confer access. Connections and credentials from other accounts cannot
+enumerate or select these clients.
+.PP
+Login codes expire after 600 seconds and are consumed by successful authorization.
+Access tokens last at most one hour. Refresh tokens are issued only to clients
+registered for that grant and rotate on use, with a maximum authorization-family
+lifetime of 24 hours. Disconnecting the source client invalidates its associated
+login code, access tokens and refresh tokens. Other clients remain available
+through their own live grants. Reconnects receive new IDs and login codes.
+Registrations and OAuth state are in memory and end when the daemon exits.
 .SH DEPLOYMENT
 Run the daemon as an unprivileged service account. Restrict access to the control
 socket with a dedicated group. Configure OpenSSH AuthenticationMethods publickey,
 ForceCommand ssmcpd attach, DisableForwarding yes and PermitTTY no for this group.
+.PP
+Install and configure the selected backend on each client. The daemon does not
+need Codex, Claude Code, Pi or OpenCode installed. Backend operations use the
+client user's permissions; native requests and approvals remain explicit.
+.PP
+Unprivileged user and network namespaces must be available to bubblewrap. Keep
+NoNewPrivileges enabled and allow AF_NETLINK in RestrictAddressFamilies so
+bubblewrap can configure loopback inside the isolated network namespace.
+The unit keeps ProtectKernelTunables enabled with an exception for /proc/sys/user
+so bubblewrap can set limits in its own user namespace. Host kernel permissions
+still apply. Do not use RestrictNamespaces=yes for this service. Follow
+distribution AppArmor or SELinux policy when namespace setup is restricted.
+.PP
+Version 0.3.0 uses private bridge protocol version 4. Upgrade ssmcp and ssmcpd
+together. Older clients cannot attach to this protocol, and callers must migrate
+direct native MCP tool calls to list followed by code_mode.
 .SH FILES
 .TP
 .I /etc/ssmcpd/ssmcpd.env
@@ -38,6 +111,9 @@ Environment configuration for the packaged systemd unit.
 .TP
 .I /run/ssmcpd/control.sock
 Default control socket. Its mode is 0660.
+.TP
+.I /usr/local/libexec/ssmcp/code-mode.js
+Default installed JavaScript bridge script; changes with the installation prefix.
 .SH SEE ALSO
 .BR ssmcp (1),
 .BR sshd (8),

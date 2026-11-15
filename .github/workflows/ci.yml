@@ -29,13 +29,41 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends openssh-server
+          sudo apt-get install --yes --no-install-recommends openssh-server nodejs bubblewrap apparmor-profiles
+          if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
+            if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
+              sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+              sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+            fi
+          fi
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - name: Exercise system Node.js and bubblewrap
+        run: |
+          cargo test --locked --lib code_mode::tests -- --include-ignored
+          cargo test --locked --test two_tools -- --include-ignored
+      - name: Exercise runtime under installed service restrictions
+        run: |
+          runtime_test="$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"
+          sudo install -Dm0755 "$runtime_test" /usr/local/bin/ssmcp-runtime-test
+          sudo install -Dm0644 src/code_mode.js /usr/local/libexec/ssmcp/code-mode.js
+          restrictions=()
+          while IFS= read -r property; do
+            restrictions+=("--property=$property")
+          done < <(grep -E '^(NoNewPrivileges|PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ProtectKernelTunables|ProtectControlGroups|RestrictAddressFamilies|ReadWritePaths)=' packaging/ssmcpd.service)
+          sudo systemd-run --quiet --wait --pipe --collect \
+            --unit=ssmcp-runtime-test \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            --setenv=PATH=/usr/bin:/bin \
+            "${restrictions[@]}" \
+            /usr/local/bin/ssmcp-runtime-test \
+            --exact code_mode::tests::real_system_runtime_uses_mandatory_os_isolation --ignored --nocapture
       - run: cargo build --locked
-      - name: Exercise real SSH, HTTP and PTY
+      - name: Exercise real SSH, OAuth, HTTP and PTY
         run: python3 scripts/e2e.py --bin-dir target/debug
+      - name: Exercise all five backends through SSH and OAuth
+        run: python3 scripts/e2e_agents.py --bin-dir target/debug
       - run: cargo build --locked --release
       - name: Check staged Linux installation
         run: |
@@ -43,3 +71,4 @@ jobs:
           test -x "$RUNNER_TEMP/ssmcp-install/usr/local/bin/ssmcp"
           test -x "$RUNNER_TEMP/ssmcp-install/usr/local/bin/ssmcpd"
           test -f "$RUNNER_TEMP/ssmcp-install/usr/lib/systemd/system/ssmcpd.service"
+          test -f "$RUNNER_TEMP/ssmcp-install/usr/local/libexec/ssmcp/code-mode.js"

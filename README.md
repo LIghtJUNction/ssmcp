@@ -1,83 +1,165 @@
 # ssmcp
 
-通过一条 SSH 公钥连接，把本机终端提供给远程 MCP 客户端。
+用 SSH 公钥连接本机 shell 或编码智能体，再通过两个 MCP 工具统一控制：`list` 发现客户端，`code_mode` 用 JavaScript 调用客户端能力。
 
 ```sh
-ssmcp alice@ssmcp.xxxx.yyy
+# 在不同电脑或不同项目目录中运行，可以使用同一个服务端账号。
+ssmcp --name laptop -t shell alice@ssmcp.example
+ssmcp --name workstation -t codex alice@ssmcp.example
 ```
 
-连接成功后输出一行 JSON，包含服务端分配的 URL 和本次连接的 secret：
+`-t` 选择这条连接提供的本机后端。无论选择 `shell`、`codex`、`cc`、`pi` 还是 `opencode`，远程 MCP 的工具表都只有 `list` 和 `code_mode`。本机实时显示远程操作、输出和智能体事件；按 `Ctrl-C` 断开并清理后端进程。
+
+## 连接
+
+客户端成功启动后，在 stdout 输出一次连接信息：
 
 ```json
-{"url":"https://ssmcp.xxxx.yyy/alice","secret":"本次连接生成的64位十六进制字符串"}
+{
+  "url": "https://ssmcp.example/alice",
+  "login_code": "本次连接的一次性登录码",
+  "login_expires_in": 600,
+  "client_id": "服务端分配的64位十六进制连接ID",
+  "name": "laptop",
+  "type": "shell",
+  "cwd": "/home/alice/project",
+  "hostname": "alice-laptop"
+}
 ```
 
-在支持 Streamable HTTP 和自定义请求头的 MCP 客户端中填写该 URL，并设置 `Authorization: Bearer <secret>`。保持 `ssmcp` 在前台运行；按 `Ctrl-C` 结束连接，服务端随即撤销这个入口和 secret。
+在支持 Streamable HTTP、OAuth Authorization Code、S256 PKCE 和动态客户端注册的 MCP 客户端中填写 `url`，启动登录。在浏览器中确认目标 URL、客户端名称和回调来源，再输入 `login_code`。登录码签发后有效 600 秒、成功使用一次即失效；`login_expires_in` 已扣除本机后端初始化耗时。MCP 客户端取得独立的 OAuth access token 并负责保存和续期，登录码不能作为 Bearer token 使用。详见 [OAuth 兼容性](docs/deployment.md#oauth-兼容性)。
 
-## 两个程序，一条连接
+同一 SSH 账号可以连接多台电脑或多个本机进程，最多同时在线 128 个客户端。每条连接有独立 ID；显示名字可以相同，调用时始终使用 ID。
+
+授权可以操作同一 SSH 账号下的在线客户端，包括后来连接的客户端。授权绑定签发登录码的 SSH 连接：这条连接断开后，该授权的 access token 和 refresh token 立即失效，其他客户端及其独立授权保持可用。不同 SSH 账号互相隔离。
+
+## 两个 MCP 工具
+
+| 工具 | 参数 | 返回内容 |
+| --- | --- | --- |
+| `list` | `{}` | 当前账号的在线客户端，以及代码接口说明 |
+| `list` | `{"client_id":"…","cursor":"可选分页游标"}` | 指定客户端的原生工具名称、说明和完整参数 schema |
+| `code_mode` | `{"code":"JavaScript 源码","timeout_ms":30000}` | 代码的返回值 `result` 和日志数组 `logs` |
+
+MCP 协议方法 `tools/list` 固定返回上述两个工具。先调用工具 `list` 获得 ID、名字、`type`、`hostname` 和 `cwd`，再按需读取某个客户端的能力。大型原生工具表按页返回，使用 `nextCursor` 请求下一页。`cwd_kind: "startup"` 表示 `cwd` 是启动 ssmcp 时的目录；shell 后续执行 `cd`、智能体创建其他工作目录时，这个注册信息保持原值。
+
+### 在代码中操作 shell
+
+以下源码作为 `code_mode` 的 `code` 参数传入。代码可以使用变量、条件、循环、`await` 和 `Promise.all`：
+
+```javascript
+const client = clients.find(c => c.name === "laptop" && c.type === "shell");
+if (!client) throw new Error("laptop shell is offline");
+
+const status = await call(client.id, "terminal.status", {});
+if (status.isError) throw new Error(JSON.stringify(status.content));
+await call(client.id, "terminal.write", {data: "pwd\n"});
+const output = await call(client.id, "terminal.read", {
+  cursor: status.structuredContent.next_cursor,
+  wait_ms: 1000
+});
+console.log(output.structuredContent.text);
+return output;
+```
+
+shell 的 `terminal.read`、`terminal.write`、`terminal.resize`、`terminal.status` 都是代码内部能力。远程执行命令时发送带换行的 `data`；发送 `"\u0003"` 中断前台程序。持续读取时使用返回的 `next_cursor`。读取可能只得到部分输出，调用方按任务的结束条件继续读取。
+
+### 在代码中使用任意后端
+
+`list({client_id})` 和 `await tools(clientId)` 提供同一套原生能力描述。先查看实际 schema，再通过 `call` 传入它要求的参数。不要根据后端名字猜测工具名。
+
+```javascript
+const client = clients.find(c => c.type === "codex");
+if (!client) throw new Error("No Codex client connected");
+const page = await tools(client.id);
+return {
+  client,
+  tools: page.tools.map(t => ({name: t.name, description: t.description})),
+  nextCursor: page.nextCursor ?? null
+};
+```
+
+代码环境提供以下全局对象和函数：
+
+| 接口 | 语义 |
+| --- | --- |
+| `clients` | 本次代码开始时的客户端元数据快照 |
+| `await call(id, name, arguments = {})` | 调用指定客户端的原生工具，返回完整 MCP 结果 |
+| `await tools(id, cursor?)` | 读取指定客户端的一页原生工具 schema |
+| `print(value)` / `console.log(...)` | 将日志加入本次返回的 `logs` |
+| `return value` | 返回可 JSON 序列化的结果；省略时返回 `null` |
+
+`call` 保留原生 `content`、`structuredContent`、`isError` 和 `_meta`；代码可以据此处理文字、图像、审批请求及错误。原生 `isError: true` 也按原样返回，调用代码应显式检查。找不到客户端、参数不合法或桥接失败会抛出可捕获的异常。原生智能体的权限策略和审批流程继续生效。
+
+每次 `code_mode` 调用启动系统安装的 Node.js 子进程，并使用系统 `bubblewrap` 隔离运行环境。服务端通过有界 JSON 消息与子进程通信；子进程只获得本次客户端列表和桥接接口，不继承服务器凭据。源码最多 64 KiB；默认期限 30 秒，`timeout_ms` 可设为 1–900000 毫秒。运行时限制内存、调用次数和输出，并可中断无限循环。
+
+代码超时会停止后续编排。已经交给本机后端的命令可能继续执行，重试前应通过终端输出、原生事件或状态查询确认结果。
+
+## 客户端模式
+
+```sh
+ssmcp --name terminal alice@ssmcp.example                 # 默认 shell
+ssmcp --name coder -t codex alice@ssmcp.example
+ssmcp --name claude -t cc alice@ssmcp.example
+ssmcp --name pi -t pi alice@ssmcp.example
+ssmcp --name opencode -t opencode alice@ssmcp.example
+
+# 指定 SSH 配置、密钥、端口或 shell。
+ssmcp -F ~/.ssh/ssmcp_config -i ~/.ssh/id_ed25519 -p 2222 \
+  --shell /bin/bash --name laptop alice@my-server
+
+# 本机检查某个后端的原生工具，无需 SSH。
+ssmcp -t codex --list-tools
+
+# 覆盖后端可执行文件，-- 后的参数直接传给该后端。
+ssmcp -t pi --backend /opt/pi/bin/pi alice@ssmcp.example -- --model configured-model
+```
+
+每个客户端进程提供一个后端，远程代码可以组合调用不同客户端。各模式的协议、工具发现和使用条件见 [后端说明](docs/backends.md)。
+
+## 两个程序
 
 | 程序 | 运行位置 | 职责 |
 | --- | --- | --- |
-| `ssmcp` | 你的 Linux 电脑 | 公钥登录服务器，创建并控制一个独立 PTY 终端 |
-| `ssmcpd serve` | Linux 服务器 | 发布 `https://域名/用户名`，校验 secret，转发终端操作 |
-| `ssmcpd attach` | SSH 登录后的服务端进程 | 在 SSH 标准输入输出与守护进程的 Unix socket 之间转发数据 |
+| `ssmcp` | 本机 Linux | SSH 公钥登录，运行选定的后端并实时显示活动 |
+| `ssmcpd serve` | Linux 服务器 | 发布 `/用户名`，维护客户端列表，运行受限 JavaScript 并转发调用 |
+| `ssmcpd attach` | SSH 登录后的服务端进程 | 在 SSH 标准输入输出与守护进程 Unix socket 之间转发数据 |
 
-SSH 由系统 OpenSSH 实现。`ssmcpd` 从 Unix socket 的内核凭据取得实际用户 UID，再查询用户名；请求体无法指定或冒充其他用户。MCP 请求通过 HTTPS 到达服务器，终端读写再沿已有 SSH 连接回到本机。本机无需开放网络监听端口。
+OpenSSH 处理认证及主机密钥验证。守护进程从 Unix socket 的内核凭据获取实际 UID 和用户名，请求数据无法指定其他身份。本机无需为 ssmcp 开放公网端口；MCP 使用 HTTPS，服务器和本机之间使用已经建立的 SSH 连接。
 
-每个服务端用户名同时允许一条连接。重复连接会被拒绝，已有连接保持可用。每次重新连接都会生成新的 256 位随机 secret，凭据只在内存中保存。
+## 安装与升级
 
-## 安装
+需要 Linux 5.3 或更新内核和 OpenSSH。构建使用仓库固定的 Rust 1.100.0。服务器使用系统包管理器安装 Node.js 18+、bubblewrap 0.8+ 和 `sshd`；公网 HTTPS 可由 Caddy 提供。客户端运行所选编码智能体时，需要对应 CLI 已安装并完成本机配置。
 
-需要 Linux 5.3 或更新内核、Rust 工具链和 OpenSSH。客户端通过 pidfd 跟踪终端进程身份。构建使用仓库固定的 Rust 1.100.0；服务器另需 `sshd`，公网 HTTPS 可由 Caddy 提供。
+```sh
+# Debian / Ubuntu：服务端运行依赖
+sudo apt install openssh-server nodejs bubblewrap
+
+# Arch Linux：ssmcp-git 包也声明了这些依赖
+sudo pacman -S openssh nodejs bubblewrap
+
+# Fedora
+sudo dnf install openssh-server nodejs bubblewrap
+```
+
+只运行 `ssmcp` 客户端时，不需要服务端的 Node.js 和 bubblewrap。运行脚本随 `make install` 安装到 `$PREFIX/libexec/ssmcp/code-mode.js`，运行时本身由系统包管理器安装和更新。
 
 ```sh
 cargo build --locked --release
 sudo make install
 ```
 
-`make install` 将两个程序装入 `/usr/local/bin`，同时安装 man page 和配置示例。支持 `PREFIX` 与 `DESTDIR`。服务端的账户、systemd、SSH 公钥和 HTTPS 配置见 [部署说明](docs/deployment.md)。
+`make install` 安装两个程序、man page 和配置示例，支持 `PREFIX` 与 `DESTDIR`。完整服务端配置见 [部署说明](docs/deployment.md)。
 
-## 客户端
+**0.3.0 使用私有桥接协议 v4，并将远程工具表收敛为两个工具。** 升级时同时更新 `ssmcp` 和 `ssmcpd`，重新连接客户端，并刷新 MCP 客户端保存的工具表。原有直接调用 `terminal.*` 或智能体工具的脚本应改为通过 `code_mode` 的 `call` 调用。
 
-```sh
-# 使用 ~/.ssh/config 和 ssh-agent。
-ssmcp alice@ssmcp.xxxx.yyy
+## 权限与生命周期
 
-# 指定密钥、端口和本机 shell。
-ssmcp -i ~/.ssh/id_ed25519 -p 2222 --shell /bin/bash alice@ssmcp.xxxx.yyy
+启动 ssmcp 就是把本机选定后端交给同一 SSH 账号的 MCP 凭据持有者。shell 具有启动它的本机用户权限；编码智能体遵循它自身的策略。应使用可信服务器和合适的独立 SSH 账号管理这些客户端。
 
-# 使用独立 SSH 配置，也可以使用其中定义的 Host 别名。
-ssmcp -F ~/.ssh/ssmcp_config alice@my-server
-```
+服务器只监听 loopback HTTP，由反向代理提供 HTTPS。携带 `Origin` 时必须匹配配置的公网 origin。access token 只通过 `Authorization` 请求头传递，动态登录码通过 POST 表单提交；这些凭据不写入 URL 或服务日志。客户端成功输出包含登录码，应按凭据保存。
 
-客户端强制使用 SSH 公钥认证，并保留 OpenSSH 的主机密钥检查。已加密私钥的口令由 OpenSSH 或 `ssh-agent` 处理。登录账户的密码和交互式密码认证被禁用。
-
-`ssmcp` 创建的是当前用户权限下的新终端。命令的工作目录与环境来自启动 `ssmcp` 的进程；在终端中执行 `cd` 后，后续命令会继续使用新的目录。启动它的原有终端保持独立。
-
-## MCP 工具
-
-| 工具 | 参数 | 作用 |
-| --- | --- | --- |
-| `terminal.read` | `cursor`、`max_bytes`、`wait_ms` | 从字节游标读取输出；可以短暂等待新输出 |
-| `terminal.write` | `data` | 写入 UTF-8 文本、换行或控制字符 |
-| `terminal.resize` | `rows`、`cols` | 设置终端窗口大小 |
-| `terminal.status` | 无 | 查询本机终端状态 |
-
-执行命令时调用 `terminal.write`，例如 `{"data":"pwd\n"}`，然后调用 `terminal.read`。发送 `{"data":"\u0003"}` 相当于在该终端按 `Ctrl-C`，用于中断前台程序。
-
-读取结果包含可直接显示的 `text`、保留原始字节的 `data_base64`、下一次读取应携带的 `next_cursor`、`truncated` 和 `running`。初始 `cursor` 为 `0`，每次读取后使用返回的新游标。缓存保留最近 1 MiB 输出；游标早于缓存时，`truncated` 为 `true`，读取从当前可用的最早位置开始。
-
-单次读取默认 16 KiB，最大 32 KiB；单次写入最大 16 KiB。`wait_ms` 默认 `0`，最大 `5000`。窗口行列都在 `1..=1000` 范围内。输入限制、有限的在途请求和输出缓存防止一个请求无限占用内存。
-
-支持 MCP `2026-07-28` 的 `server/discover` 和逐请求元数据，也支持 `2025-03-26`、`2025-06-18`、`2025-11-25` 的 `initialize` 握手。HTTP 响应采用 JSON；通知返回 `202`。不创建 HTTP session，不提供后台 SSE，`GET` 和 `DELETE` 返回 `405`。
-
-## 连接与权限
-
-连接持续期间，secret 持有者拥有该终端用户的命令执行权限。服务器处理终端数据与 secret，应运行在你信任的服务器上。HTTPS 保护 MCP 客户端到服务器之间的数据，SSH 保护服务器到本机之间的数据。
-
-服务器仅监听 loopback HTTP，公网交给 HTTPS 反向代理。存在 `Origin` 请求头时，必须匹配配置的公网 origin。secret 使用 `Authorization` 请求头传递，程序不会把它写入 URL 或服务日志；客户端的成功输出包含 secret，应按凭据保存。
-
-本机退出、SSH 断开或守护进程重启后，原 secret 失效。客户端关闭 PTY 并清理 shell 和普通前台、后台任务。主动脱离终端会话的守护进程不属于这种终端生命周期管理范围。
+断开客户端后，服务端移除其连接 ID，撤销关联的登录码与 OAuth 授权，并清理本机后端。重新连接会生成新 ID 和新登录码。服务器重启会清空所有连接和凭据。shell 关闭时清理普通前台、后台任务；主动脱离终端会话的守护进程不属于该生命周期。
 
 ## 开发与验证
 
@@ -85,21 +167,16 @@ ssmcp -F ~/.ssh/ssmcp_config alice@my-server
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+# 以下两项要求系统允许 bubblewrap 创建隔离命名空间。
+cargo test --locked --lib code_mode::tests -- --include-ignored
+cargo test --locked --test two_tools -- --include-ignored
 cargo build --locked
 python3 scripts/e2e.py --bin-dir target/debug
+python3 scripts/e2e_agents.py --bin-dir target/debug
 ```
 
-端到端测试使用独立的本机 `sshd`、临时 Ed25519 密钥、临时 known_hosts 和随机 loopback 端口，覆盖真实 SSH 认证、两代 MCP 协议、终端操作与断线撤销。测试不需要生产服务器或已有私钥。CI 在 Linux x86_64 与 arm64 上执行同一套检查。
+真实 SSH 测试使用临时 Ed25519 密钥、独立本机 `sshd`、临时 known_hosts 和随机 loopback 端口，验证 OAuth、客户端发现、系统 JavaScript 调用、终端日志、多客户端并存与断线撤销。`e2e_agents.py` 在五种模式中走 SSH、OAuth 和两个 MCP 工具，智能体使用确定性协议 fixture，不调用模型。CI 在 Linux x86_64 和 arm64 上运行同一套检查。普通 `cargo test` 明确跳过需要真实隔离环境或原生 CLI 的测试；上述专用命令在 CI 中执行真实 Node.js 与 bubblewrap 验证。当前执行结果见 [验收报告](docs/validation.md)。
 
-本次交付的测试结果和证据见 [验收报告](docs/validation.md)。
-
-`ssmcp.xxxx.yyy` 是部署占位域名。部署前将它替换为你实际控制、已指向服务器的域名。
-
-## 参考
-
-- [MCP 2026 Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
-- [MCP 2025 Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
-- [OpenSSH sshd_config](https://man.openbsd.org/sshd_config)
-- [OpenSSH ssh_config](https://man.openbsd.org/ssh_config)
+参考：[MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)、[OpenSSH sshd_config](https://man.openbsd.org/sshd_config)、[Node.js](https://nodejs.org/)、[bubblewrap](https://github.com/containers/bubblewrap)。
 
 MIT License.

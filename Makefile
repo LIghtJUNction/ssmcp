@@ -17,12 +17,17 @@ check:
 
 test:
 	$(CARGO) test --locked
+	$(CARGO) test --locked --lib code_mode::tests -- --include-ignored
+	$(CARGO) test --locked --test two_tools -- --include-ignored
 	$(CARGO) build --locked
 	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
+	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug
 
 install:
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/man/man8
 	install -m 0755 $(CARGO_TARGET_DIR)/release/ssmcp $(CARGO_TARGET_DIR)/release/ssmcpd $(DESTDIR)$(PREFIX)/bin/
+	install -d $(DESTDIR)$(PREFIX)/libexec/ssmcp
+	install -m 0644 src/code_mode.js $(DESTDIR)$(PREFIX)/libexec/ssmcp/code-mode.js
 	install -m 0644 packaging/man/ssmcp.1 $(DESTDIR)$(PREFIX)/share/man/man1/
 	install -m 0644 packaging/man/ssmcpd.8 $(DESTDIR)$(PREFIX)/share/man/man8/
 	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs
