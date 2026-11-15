@@ -1,10 +1,11 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.3.2" "User Commands"
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.4.0" "User Commands"
 .SH NAME
 ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
 .B ssmcp
 .RB [ \-t " shell|codex|cc|pi|opencode" ]
 .RB [ \-\-name " name" ]
+.RB [ \-\-allow " username@github[,username@github...]" ]
 .RB [ \-F " ssh_config" ]
 .RB [ \-i " identity" ]
 .RB [ \-p " port" ]
@@ -21,11 +22,13 @@ ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP g
 .SH DESCRIPTION
 ssmcp authenticates to OpenSSH using a public key and starts a local shell or
 coding-agent backend. Multiple clients may connect under the same SSH account.
-The server assigns each connection a random client ID and returns the account's
-HTTPS MCP URL and a one-time OAuth login code.
+The server assigns each connection a random client ID. With \-\-allow, it
+returns the global HTTPS /mcp URL for GitHub identity authorization. Without
+\-\-allow, it returns the SSH account's /username URL and a one-time login code.
 .PP
-One JSON object containing url, login_code, login_expires_in, client_id, name,
-type, hostname and cwd is written to standard output. Live activity and
+One JSON object containing url, client_id, name, type, hostname and cwd is
+written to standard output. GitHub mode adds auth:"github" and the canonical
+allow list; login-code mode adds login_code and login_expires_in. Live activity and
 diagnostics use standard error. The cwd field is the startup directory; it does
 not track shell directory changes or the workspaces of native agent sessions.
 .PP
@@ -35,8 +38,9 @@ run JavaScript that calls a selected capability over SSH. Selecting a different
 backend with \-t does not add external MCP tools.
 .PP
 Keep the program running while its backend is in use. Ctrl-C or SIGTERM closes
-the SSH connection, stops its backend and revokes OAuth grants associated with
-that connection. Other clients under the account remain separately connected.
+the SSH connection and stops its backend. Login-code grants issued by that
+connection are revoked. GitHub identity grants remain subject to their own
+lifetimes and each currently connected client's allow policy.
 .SH OPTIONS
 .TP
 .BI \-t " type"
@@ -52,6 +56,18 @@ server-generated client ID to select an unambiguous target.
 .TP
 .BI \-F " file"
 Use a separate OpenSSH client configuration file.
+.TP
+.BI \-\-allow " username@github[,username@github...]"
+Allow verified GitHub users to access this connection. Repeat this option or
+separate entries with commas. At most 32 distinct users are accepted; case is
+normalized and duplicates are removed. The identity syntax is username@provider;
+github is the currently supported provider. Usernames contain 1 to 39 ASCII
+letters or digits with optional single hyphens between them.
+.PP
+This option requires an SSH destination and cannot accompany \-\-list-tools.
+No GitHub login is performed in the CLI; existing SSH keys and configuration
+remain in use. The server must support and configure GitHub OAuth. An unsupported
+server causes startup to fail before exposing the local backend.
 .TP
 .BI \-i " file"
 Use the specified private key. ssh-agent is also supported.
@@ -85,7 +101,7 @@ Print the version and exit.
 .TP
 .B list
 With no arguments, return online client IDs, names, backend types, hostnames and
-startup directories for the authenticated SSH account. With client_id, return
+startup directories that the current authorization may access. With client_id, return
 that client's native tool names, descriptions and schemas. Pass a returned
 nextCursor as cursor to read another capability page.
 .TP
@@ -139,10 +155,27 @@ OpenAPI discovery. Requires the v2 entry point; v1 is not supported. HTTP,
 SSE and WebSocket capabilities use the same code-mode interface.
 .SH AUTHENTICATION
 Only SSH public-key authentication is permitted. Standard OpenSSH host-key
-verification remains enabled. Add the returned URL to an OAuth-capable MCP
-client, then enter login_code on its authorization page. The client completes
-Authorization Code with S256 PKCE and uses an access token as its Bearer
-credential. The login code cannot be used as a Bearer token.
+verification remains enabled. With \-\-allow, add the returned /mcp URL to an
+OAuth-capable MCP client. Sign in with GitHub in the browser, then review the
+verified identity, MCP client name, registered callback origin and resource URL
+on ssmcp's separate consent page. Explicitly allow or cancel that MCP client's
+request. GitHub sign-in alone does not grant the MCP client access.
+.PP
+The server resolves allowed GitHub usernames to stable user IDs when each
+connection attaches. Discovery and calls check that connection's IDs. A rename
+does not change an existing connection's identity match; reconnecting resolves
+the startup usernames again. Update \-\-allow after a username change. No
+cross-connection username pin is persisted. An authorized MCP client may see
+an empty list until a matching connection comes online.
+.PP
+Without \-\-allow, add the returned /username URL and enter login_code on the
+OAuth page. This grant covers only clients without an allow list under that SSH
+account and depends on its issuing connection. It cannot access any client
+started with \-\-allow, even under the same SSH account.
+.PP
+Both modes complete Authorization Code with S256 PKCE and use ssmcp-issued
+access tokens as Bearer credentials. GitHub tokens are used to read the verified
+identity and are not retained. Repository and email scopes are not requested.
 .PP
 The destination may be a Host alias from ~/.ssh/config. OpenSSH resolves its
 HostName, User, Port, IdentityFile, IdentityAgent and ProxyJump settings. An
@@ -159,7 +192,7 @@ connection, then remove only the old key. Removing a key affects new SSH
 authentication; close an existing connection to revoke its OAuth grants.
 .PP
 The login code expires 1800 seconds after issue and is consumed by one successful
-authorization. login_expires_in subtracts backend startup time. In 0.3.2, access
+authorization. login_expires_in subtracts backend startup time. In 0.4.0, access
 tokens default to at most 8 hours. Refresh tokens rotate on successful use and
 have a default 30-day idle period that slides forward on each refresh, bounded
 by a 90-day authorization-family lifetime measured from initial authorization.
@@ -176,21 +209,21 @@ refresh token, original resource URL and registered client authentication.
 It saves the new token pair and retries with the new access token. Serialize
 refreshes for one grant; reusing a consumed refresh token revokes the grant.
 .PP
-An OAuth grant authorizes all current and subsequently attached clients under
-the same SSH account while its source connection is live. Disconnecting that
-source revokes its access and refresh tokens even if other clients remain
-connected. Reconnect to obtain a new login code when a fresh authorization is
-needed. Other SSH accounts are isolated.
+GitHub grants are bound to the verified identity, resource and OAuth client,
+without an issuing SSH connection. They may access current and future clients
+whose allow lists match that identity. Login-code grants are additionally bound
+to their issuing SSH connection and exclude all allow-listed clients. Closing
+that source revokes its access and refresh tokens. Reconnect to obtain a new
+login code when a fresh login-code authorization is needed.
 .PP
-Reopening an MCP application can reuse its saved, valid OAuth tokens while the
-source SSH connection remains alive. Restarting ssmcp or ssmcpd requires a new
-authorization. Access-token expiry can be handled by silent refresh without
-interactive login. Expired, revoked or replayed refresh tokens produce invalid_grant;
-reconnect with a fresh login code and authorize again. If a restarted server no
-longer recognizes a cached client_id, register the MCP connection again. After
-upgrading the server to 0.3.2, register and authorize once to obtain the new
-default refresh grant and lifetimes; updating source alone does not upgrade
-the running daemon.
+Reopening an MCP application can reuse its saved, valid OAuth tokens. GitHub
+grants survive local client reconnects, while session IDs and backends change;
+the new connection must explicitly allow the identity. Login-code grants require
+their source connection to remain alive. Daemon state is memory-only, so restarting
+ssmcpd requires new registration and login in both modes. Access-token expiry can
+be handled by silent refresh. Expired, revoked or replayed refresh tokens produce
+invalid_grant; sign in again using the selected mode. Updating source alone does
+not upgrade the running daemon.
 .PP
 Native agent permissions, request IDs and approval responses remain explicit.
 ssmcp does not automatically answer native requests. Install and configure the
@@ -199,6 +232,8 @@ selected agent on the client; the gateway does not need that agent installed.
 .nf
 ssmcp --name build-shell user@host
 ssmcp --name build-shell my-server
+ssmcp --allow octocat@github --name build-shell my-server
+ssmcp --allow alice@github,bob@github --allow carol@github my-server
 ssmcp -t codex --name review-codex user@host
 ssmcp -t cc --list-tools
 .fi

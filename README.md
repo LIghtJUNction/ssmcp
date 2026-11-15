@@ -17,26 +17,24 @@
 
 
 # 应用场景
+
 1. ChatGPT chat模式 Pro模型控制你本地的codex（还支持别的）完成软件工程任务。
 2. 使用我的AI订阅，远程控制朋友的电脑，帮朋友配置电脑环境，安装软件，安装ai工具。
-3. ...你来想想
+3. 在多台电脑、多个项目目录启动客户端，用同一个 MCP 入口找到有权操作的环境。
 
 # 安全警告⚠️
 
 本工具安全边界如下：
+
 1. 中转服务器可信任，😌作者我是可信任的，但我还是建议你自己部署。
-2. 授权流程如下，服务器同意你接入（你的公钥已经在服务器里面了），客户端和服务器建立连接，服务器给你发一个一次性令牌。不要泄露这个令牌。
-打开ChatGPT，打开插件，点击添加。
-参数：https://ssmcp.lmm.best
-没了，接下来保存即可
-点击连接，这一步是跳转Oauth登录页面，把刚刚令牌输入进去，就代表你是你了。
-3. 第三方登录（开发中），也就是github登录以及邮箱登录功能，这样客户端使用第三方账号登录，连接时使用相同的，第三方账号登录，不用担心令牌泄露，一次性令牌登录我依旧会保留。
+2. 服务器通过已经登记的 SSH 公钥接受本机连接。启动时用 `--allow 用户名@github` 指定谁能操作这个客户端，然后把终端返回的完整 URL 添加到 ChatGPT 或其他 MCP 应用。
+3. 0.4.0 支持 GitHub 浏览器登录：核对身份后，再明确同意当前 MCP 客户端连接。本机 CLI 无须登录 GitHub。省略 `--allow` 时保留一次性登录码流程；登录码和 OAuth 令牌都应妥善保管。当前第三方身份提供方为 GitHub，邮箱登录尚未提供。
 4. 建议，最好还是私有化部署，不要用公共的，需要自备域名和服务器，源代码都开源。
 
 
 ## 快速开始
 
-服务器已部署 `ssmcpd`、接受你的 SSH 公钥后，在本机项目目录启动客户端。已有 `~/.ssh/config` 可以直接复用：
+服务器已部署 0.4.0、配置 GitHub OAuth 并接受你的 SSH 公钥后，在本机项目目录启动客户端。已有 `~/.ssh/config` 可以直接复用：
 
 ```sshconfig
 Host my-ssmcp
@@ -49,20 +47,26 @@ Host my-ssmcp
 
 ```sh
 cd ~/projects/ssmcp
-ssmcp --name ssmcp-project -t codex my-ssmcp
+ssmcp --name ssmcp-project -t codex --allow octocat@github my-ssmcp
 ```
 
 `my-ssmcp` 是 SSH 配置别名；用户名、地址、端口和密钥交给系统 OpenSSH 解析。也可使用 `ssmcp alice@ssmcp.example.com`，或 `-F ~/.ssh/work_config` 指定配置文件。0.3.1 起支持省略用户名；已安装的 0.3.0 若提示 `destination must be user@host`，可先用 `alice@my-ssmcp`，或[重新构建安装](#安装与升级)。[SSH 配置细节](docs/configuration.md)
 
 **已经能用同一把公钥连接该服务器账号，就可以继续用它。** 首次登记和换钥都由服务器 OpenSSH 管理；受限账号启用 `ForceCommand` 后，通过独立管理员账号或服务器控制台追加新公钥。完整教程包括首次配置、保留旧钥、验证新钥和撤销旧连接的步骤。[公钥配置与更新](docs/configuration.md#更新公钥)
 
+把 `octocat` 换成获准访问这个客户端的 GitHub 用户名。`--allow` 使用 `用户名@提供方` 格式，目前支持 `@github`；可重复指定或用逗号分隔，最多 32 个不同用户，大小写不敏感：
+
+```sh
+ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
+```
+
 启动成功后，终端会输出一次连接信息：
 
 ```json
 {
-  "url": "https://ssmcp.example.com/alice",
-  "login_code": "本次连接的一次性登录码",
-  "login_expires_in": 1800,
+  "url": "https://ssmcp.example.com/mcp",
+  "auth": "github",
+  "allow": ["octocat@github"],
   "client_id": "服务端分配的连接 ID",
   "name": "ssmcp-project",
   "type": "codex",
@@ -71,24 +75,25 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 }
 ```
 
-将 `url` 添加到支持 OAuth 的 MCP 客户端，在它打开的登录页输入 `login_code`。授权完成后，先调用 `list` 选择客户端，再用 `list({client_id})` 查看原生工具及参数。**保持本机 ssmcp 进程运行。** [逐步登录教程](docs/configuration.md#登录流程)
+将 `url` 添加到支持 OAuth 的 MCP 客户端，选择 GitHub 登录。返回 ssmcp 后，核对 GitHub 身份、MCP 客户端名称和回调来源，点击“允许连接”。随后调用 `list` 查看获准访问的在线客户端，再用 `list({client_id})` 读取原生工具及参数。**保持本机 ssmcp 进程运行，才能继续操作它的后端。** [逐步登录教程](docs/configuration.md#登录流程)
+
+需要原有登录码方式时，省略 `--allow`。终端返回 `https://ssmcp.example.com/SSH用户名` 和一次性 `login_code`，在对应 OAuth 页面填写即可。该授权只覆盖同一 SSH 账号下未设置 `--allow` 的客户端。[两种授权方式](docs/configuration.md#authorization-modes)
 
 ## SSH 连接，OAuth 授权
 
-SSH 用公钥确认这台电脑可以连接服务器账号。OAuth 将一次性登录码换成 MCP 客户端保存的访问凭据。这个授权可以访问同一 SSH 账号下的所有在线客户端，并绑定签发登录码的那条 SSH 连接。[授权实现](src/oauth.rs)
+SSH 用公钥确认本机可以接入服务器。`--allow` 决定哪些 GitHub 用户可以使用这条连接的后端；浏览器登录确认操作者身份，之后由用户单独同意当前 MCP 客户端连接。服务端在客户端接入时将用户名解析为 GitHub 稳定用户 ID，每次发现和调用都核对目标客户端的允许列表。[身份验证](src/identity.rs) · [授权实现](src/oauth.rs)
 
-![公钥登记、本机启动、一次性登录码授权与 MCP 调用的四步流程。](docs/assets/login-flow.svg)
+![声明允许的 GitHub 用户、使用 SSH 接入、浏览器登录、明确同意 MCP 客户端连接的流程。](docs/assets/login-flow.svg)
 
-| 你做的操作 | 登录状态 |
-| --- | --- |
-| 重新打开 ChatGPT 或其他 MCP 应用，本机 ssmcp 仍在线 | 应用保存的令牌仍有效时可以继续使用；支持 refresh token 的客户端可自动续期 |
-| access token 到期，客户端持有有效 refresh token | 支持刷新的客户端静默换取新令牌并重试，无须输入登录码 |
-| 退出后重新启动签发授权的 ssmcp | 旧授权已撤销，用新连接的登录码重新授权 |
-| 再开一个项目客户端，原授权连接仍在线 | 同一 SSH 账号的现有授权可以发现它 |
-| 重启 `ssmcpd` | 内存中的连接与 OAuth 状态清空，需要重新连接并授权 |
-| 提示 `invalid_grant` 或登录码过期、已使用 | 按[登录恢复步骤](docs/configuration.md#登录恢复)取得新码并重新授权 |
+| 操作 | GitHub 身份授权 `/mcp` | 登录码授权 `/SSH用户名` |
+| --- | --- | --- |
+| 重新打开 MCP 应用 | 保存的授权有效时继续使用；支持刷新的客户端可自动续期 | 同左，并要求签发登录码的 SSH 连接仍在线 |
+| 本机 ssmcp 断开后重连 | 旧客户端消失；新客户端的 `--allow` 仍包含该身份时，可用现有授权发现它 | 签发连接退出会撤销其授权，需要新码登录 |
+| 新增一个项目客户端 | 只显示明确允许当前 GitHub 身份的客户端 | 只显示同一 SSH 账号下未设置 `--allow` 的客户端 |
+| 当前没有获准访问的在线客户端 | 可以完成登录与同意，`list` 返回空列表 | 需要在线连接签发登录码 |
+| 重启 `ssmcpd` | 内存中的连接、登记与授权清空，重新连接和登录 | 同左 |
 
-0.3.2 默认将登录码有效期设为 **30 分钟、使用一次**，access token 有效期设为 **8 小时**。refresh token 每次成功刷新都会轮换，并把闲置期限向后延长 **30 天**，同一授权从首次登录起最长 **90 天**。客户端登记默认有效 **365 天**。实际剩余时间受授权和登记到期时间约束；终端的 `login_expires_in` 已扣除后端启动时间。[有效期与服务端配置](docs/deployment.md#oauth-lifetimes)
+ssmcp 自己签发的 access token 默认有效 **8 小时**。refresh token 每次成功刷新都会轮换，并把闲置期限向后延长 **30 天**，同一授权从首次登录起最长 **90 天**。客户端登记默认有效 **365 天**。原有登录码仍是 **30 分钟、使用一次**。GitHub 只用于核验身份；MCP 使用上述 ssmcp 令牌。[有效期与服务端配置](docs/deployment.md#oauth-lifetimes)
 
 **访问令牌到期后，MCP 客户端可以用 refresh token 自动续期。** 新注册省略 `grant_types` 时，服务端默认提供刷新授权；客户端需保存每次返回的新 refresh token，并实现刷新请求。服务器返回到期提示与新令牌，自动发起刷新由 MCP 客户端负责。[静默续期流程](docs/configuration.md#silent-refresh)
 
@@ -120,7 +125,7 @@ ssmcp -t pi --backend /opt/pi/bin/pi my-ssmcp -- --no-session
 
 | MCP 工具 | 用法 |
 | --- | --- |
-| `list({})` | 列出当前账号的在线客户端：ID、名字、类型、主机和启动目录 |
+| `list({})` | 列出当前授权可访问的在线客户端：ID、名字、类型、主机和启动目录 |
 | `list({client_id})` | 读取指定客户端的原生工具名称与参数 schema；用 `nextCursor` 分页 |
 | `code_mode({code, timeout_ms})` | 用 JavaScript 调用原生工具，返回结果和日志 |
 
@@ -167,9 +172,9 @@ sudo dnf install openssh-server nodejs bubblewrap
 
 `ssmcpd serve` 发布 HTTPS 后面的 MCP 服务；SSH 登录后的 `ssmcpd attach` 转发连接数据。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js 和 bubblewrap。
 
-0.3 系列使用私有桥接协议 v4。跨协议版本升级时同时更新两端；重启服务后重新连接、完成 OAuth 登录并刷新 MCP 工具表。原有直接调用 `terminal.*` 或 Agent 工具的脚本，通过 `code_mode` 的 `call` 调用。
+0.4.0 继续使用私有桥接协议 v4，保留旧客户端的登录码方式。使用 `--allow` 需要更新两端，并在服务端配置 GitHub OAuth；遇到不支持该策略的旧服务器时，新客户端会拒绝继续启动后端。
 
-0.3.2 的长期授权与默认刷新支持需要更新 `ssmcpd`。升级重启后，在 MCP 客户端重新注册并登录一次；以后保持签发授权的 SSH 连接在线，由支持刷新的客户端自动续期。服务端重启和 SSH 断线仍会撤销相应授权。[升级步骤](docs/deployment.md#upgrade-032)
+服务端使用 TOML 配置，支持默认路径 `/etc/ssmcpd/ssmcpd.toml` 和 `--config`。GitHub callback 为公网 origin 后接 `/oauth/callback/github`。更新源码后还需安装新二进制并重启实际服务；重启后重新注册和登录。[TOML 与 GitHub 设置](docs/deployment.md#github-oauth) · [升级步骤](docs/deployment.md#upgrade-040)
 
 ## 验证与贡献
 
@@ -193,6 +198,7 @@ CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、�
 | --- | --- |
 | 复用 SSH 配置、首次登记公钥、更新密钥 | [配置教程](docs/configuration.md) |
 | 登录 ChatGPT / MCP，恢复过期授权 | [登录与恢复](docs/configuration.md#登录流程) |
+| 设置 `--allow`，了解哪些客户端会被看到 | [GitHub 身份与访问规则](docs/configuration.md#github-allow) |
 | 安装服务端、配置 systemd / SSH / HTTPS | [Linux 部署](docs/deployment.md) |
 | 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
 | 查看测试、架构与实际验收范围 | [验收记录](docs/validation.md) |

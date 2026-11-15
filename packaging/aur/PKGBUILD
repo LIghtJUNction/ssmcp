@@ -1,5 +1,5 @@
 pkgname=ssmcp-git
-pkgver=0.3.2.r19.g8ffe89e
+pkgver=0.4.0.r24.g95fa579
 pkgrel=1
 pkgdesc='Expose a local shell or coding agent as MCP through SSH public-key authentication'
 arch=('x86_64' 'aarch64')

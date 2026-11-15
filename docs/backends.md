@@ -1,25 +1,26 @@
 # 后端与代码模式
 
-ssmcp 0.3 系列对外只提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到在线客户端并读取它们的原生能力说明；`code_mode` 执行 JavaScript，通过 SSH 调用选定客户端的后端。`-t` 决定本机启动 Shell、Codex、Claude Code、Pi 或 OpenCode，不会增加对外 MCP 工具。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
+ssmcp 0.4.0 对外只提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到当前授权可访问的在线客户端，并读取它们的原生能力说明；`code_mode` 执行 JavaScript，通过 SSH 调用选定客户端的后端。`-t` 决定本机启动 Shell、Codex、Claude Code、Pi 或 OpenCode，不会增加对外 MCP 工具。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
 
 <a id="启动参数"></a>
 
 ## 1. 启动客户端
 
-先进入需要工作的本机目录，再运行 ssmcp。下面五条命令可以在不同终端运行，也可以分布在不同机器上；使用同一个 SSH 账户时，它们出现在同一份 `list` 中。
+先进入需要工作的本机目录，再运行 ssmcp。下面五条命令可以在不同终端运行，也可以分布在不同机器上。把 `octocat@github` 换成允许访问这些客户端的 GitHub 用户；该用户在浏览器完成登录并同意授权后，可以从 `/mcp` 的 `list` 发现这些在线客户端。
 
 ```sh
-ssmcp --name build-shell user@host
-ssmcp -t codex --name review-codex user@host
-ssmcp -t cc --name review-claude user@host
-ssmcp -t pi --name review-pi user@host
-ssmcp -t opencode --name review-opencode user@host
+ssmcp --allow octocat@github --name build-shell user@host
+ssmcp --allow octocat@github -t codex --name review-codex user@host
+ssmcp --allow octocat@github -t cc --name review-claude user@host
+ssmcp --allow octocat@github -t pi --name review-pi user@host
+ssmcp --allow octocat@github -t opencode --name review-opencode user@host
 ```
 
 | 参数 | 作用 |
 | --- | --- |
 | `-t TYPE`、`--type TYPE` | 选择 `shell`、`codex`、`cc`、`pi` 或 `opencode`；默认 `shell` |
 | `--name NAME` | 客户端显示名称；默认包含主机名、后端类型和进程 ID |
+| `--allow USER@PROVIDER` | 限定可访问本客户端的身份；目前仅支持 `github`，可重复或以逗号分隔，最多 32 个不同身份 |
 | `--shell /absolute/path` | Shell 模式的可执行文件；默认使用绝对路径的 `SHELL`，否则 `/bin/sh` |
 | `--backend PROGRAM` | 替换 Agent 模式的原生可执行文件 |
 | `-- backend_args...` | 原样传给所选 Agent，不经过额外 shell 解析 |
@@ -44,7 +45,9 @@ ssmcp -t opencode --name review-opencode user@host
 
 原生传输由 ssmcp 管理。不要用后端参数改写 Codex 的 `--listen`、Claude 的 print/输入输出/SDK 传输参数，或 OpenCode 的监听、stdio 和服务模式参数。Shell 模式只接受 `--shell`，不接受 `--backend` 或 Agent 参数。
 
-连接成功后，stdout 输出 MCP `url`、一次性 `login_code`、剩余有效秒数 `login_expires_in`，以及 `client_id` 和客户端元数据。把 URL 添加到支持 OAuth 的 MCP 客户端，在授权页面输入本机显示的登录码。OAuth Authorization Code + S256 PKCE 完成后，MCP 客户端使用取得的 access token 调用工具；登录码只用于网页授权。具体步骤见[OAuth 登录说明](deployment.md#5-建立连接并登录)。
+使用 `--allow` 时，连接成功后的 stdout 输出 `/mcp` 的完整 `url`、`auth: "github"`、`allow`、`client_id` 和客户端元数据，不输出登录码。把 URL 添加到支持 OAuth 的 MCP 客户端，在浏览器完成 GitHub 登录，再在 ssmcp 页面核对身份、MCP 客户端及回调来源，明确同意授权。命令行不要求登录 GitHub。
+
+省略 `--allow` 则保留传统模式：stdout 输出 `/<SSH 用户名>` 的 `url`、一次性 `login_code` 和剩余秒数 `login_expires_in`；在网页授权时输入该码。这种授权只能访问同一 SSH 账户下未设置 `--allow` 的客户端。两种模式均使用 OAuth Authorization Code + S256 PKCE；具体步骤见[OAuth 登录说明](deployment.md#5-建立连接并登录)。
 
 ## 2. 用 list 找到客户端和能力
 
@@ -99,7 +102,7 @@ for (const c of clients.filter(c => c.type === "shell")) {
 return states;
 ```
 
-每次 `call` 或 `tools` 都会重新检查授权连接和目标连接。客户端离线时请重新调用 `list`；断线后重连会得到新 ID。JavaScript 变量不会跨请求保留，但 Shell 和 Agent 的本机会话仍由客户端进程维护。需要继续读取输出或会话时，把游标、thread ID 或 session ID 保存到 MCP 调用方，再显式传入下一段代码。
+每次 `call` 或 `tools` 都会重新检查当前授权及目标客户端的访问条件。客户端离线时请重新调用 `list`；断线后重连会得到新 ID。JavaScript 变量不会跨请求保留，但 Shell 和 Agent 的本机会话仍由客户端进程维护。需要继续读取输出或会话时，把游标、thread ID 或 session ID 保存到 MCP 调用方，再显式传入下一段代码。
 
 ## 4. Shell：保留目录和进程状态
 
@@ -227,9 +230,11 @@ SSE 和 WebSocket 操作返回 `stream_id`。后续通过 `opencode.events` 读�
 
 Agent 事件页接受 `cursor`、`max_events` 和 `wait_ms`，返回 `next_cursor`。把游标保存到下一次代码请求；事件缓存有界，`truncated: true` 表示旧记录已经丢失。每页最多 256 条事件，等待最多 5000 ms。一次长轮询结束不代表 Agent 任务完成。[事件日志实现](../src/backend/events.rs)
 
-通过一条 SSH 连接的登录码完成 OAuth 后，该授权允许访问同一 SSH 账户下当前及后来连接的客户端。每次内部调用都会检查这条授权来源连接；它断开时，关联的 access token 和 refresh token 立即失效，即使其他客户端仍在线。其他 SSH 账户的客户端不会被列出或作为调用目标。[账户隔离实现](../src/broker.rs) · [OAuth 实现](../src/oauth.rs)
+GitHub 模式在客户端接入时，把 `--allow` 中的用户名解析为稳定的 GitHub 用户 ID；浏览器登录取得的身份只能访问明确允许此 ID 的在线客户端。同一授权可发现随后接入且允许该身份的客户端，也可以在尚无可访问客户端时完成授权，此时 `list` 为空。身份绑定只保留到本条 SSH 连接结束，重连会重新解析用户名。GitHub 授权不绑定某一条 SSH 来源连接；客户端离线会移除它自身，但不会因此撤销 GitHub OAuth 令牌。[身份解析](../src/identity.rs) · [访问控制](../src/broker.rs)
 
-0.3.2 的登录码从签发起有效 30 分钟，成功授权一次即消耗；显示的剩余秒数已扣除后端启动耗时。默认 access token 最长有效 8 小时，refresh token 闲置期为 30 天，每次成功刷新后重新计时并轮换令牌；同一授权从首次登录起最长 90 天，客户端登记默认有效 365 天。新注册省略 `grant_types` 时默认提供刷新授权；显式只申请 `authorization_code` 时不签发 refresh token。MCP 客户端负责保存轮换后的新令牌并主动刷新，访问令牌到期后可静默续期，无须再次输入登录码。需要重新授权时，从新连接取得新码。见[静默续期流程](configuration.md#silent-refresh)与[有效期及撤销规则](deployment.md#oauth-lifetimes)。
+传统登录码模式允许访问同一 SSH 账户下当前及后来连接、且未设置 `--allow` 的客户端，始终排除所有带有 `--allow` 的客户端。每次内部调用会检查签发登录码的来源连接；该连接断开时，其关联的 access token 和 refresh token 立即失效，即使其他客户端仍在线。[OAuth 实现](../src/oauth.rs)
+
+0.4.0 的默认 access token 有效期为 8 小时；refresh token 闲置期为 30 天，每次成功刷新后重新计时并轮换令牌，同一授权从首次登录起最长 90 天。客户端登记默认有效 365 天。新注册省略 `grant_types` 时默认提供刷新授权；显式只申请 `authorization_code` 时不签发 refresh token。MCP 客户端负责保存轮换后的新令牌并主动刷新，access token 到期本身不要求重新交互登录。传统模式的登录码有效 30 分钟、只能使用一次；需要重新授权时，应从新连接取得新码。两种模式的 OAuth 状态均只保存在内存中，ssmcpd 重启后需要重新登记并登录。见[静默续期流程](configuration.md#silent-refresh)与[有效期及撤销规则](deployment.md#oauth-lifetimes)。
 
 JavaScript 的公开编排接口是 `clients`、`call`、`tools` 和日志函数。每次请求使用独立的系统 Node.js 进程，进程环境由 bubblewrap 隔离，不继承服务器凭据；宿主机的工作目录、用户目录和控制 socket 不挂载进该环境。文件及命令操作通过 `call` 交给选定的本机后端，按该本机用户的权限执行。
 
