@@ -1,7 +1,9 @@
 //! Foreground SSH client. Credentials are emitted once, as a JSON object on stdout.
 use crate::{
     backend::Backend,
-    wire::{Frame, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, read_frame, write_frame},
+    wire::{
+        ClientMetadata, Frame, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, read_frame, write_frame,
+    },
 };
 use serde_json::json;
 use std::{
@@ -21,10 +23,11 @@ use tokio::{
     time::timeout,
 };
 
-const HELP: &str = "ssmcp — expose a local shell or coding agent over an SSH-authenticated MCP endpoint\n\nUsage: ssmcp [-t shell|codex|cc|pi|opencode] [options] user@host [-- backend_args...]\n       ssmcp -t TYPE [--backend PROGRAM] --list-tools [-- backend_args...]\n\n  -t, --type TYPE       Backend (default: shell)\n  -i identity          SSH private key file\n  -p port              SSH port\n  -F ssh_config        OpenSSH configuration file\n  --shell /path        Shell executable (shell mode only)\n  --backend PROGRAM    Override the native agent executable\n  --list-tools         Discover local tools as JSON, then exit without SSH\n\nUses only SSH public-key authentication and standard known_hosts checks.\nPrints {\"url\":\"https://host/user\",\"secret\":\"...\",\"type\":\"shell\"} once on stdout.\nLive input, output and native agent events appear on stderr.\nKeep this process running; Ctrl-C disconnects and stops the local backend.\n";
+const HELP: &str = "ssmcp — expose a local shell or coding agent over an SSH-authenticated MCP endpoint\n\nUsage: ssmcp [-t shell|codex|cc|pi|opencode] [options] user@host [-- backend_args...]\n       ssmcp -t TYPE [--backend PROGRAM] --list-tools [-- backend_args...]\n\n  -t, --type TYPE       Backend (default: shell)\n  -i identity          SSH private key file\n  -p port              SSH port\n  -F ssh_config        OpenSSH configuration file\n  --name NAME          Display name (default: hostname-type-pid)\n  --shell /path        Shell executable (shell mode only)\n  --backend PROGRAM    Override the native agent executable\n  --list-tools         Discover local tools as JSON, then exit without SSH\n\nUses only SSH public-key authentication and standard known_hosts checks.\nPrints {\"url\":\"https://host/user\",\"secret\":\"...\",\"client_id\":\"...\",\"type\":\"shell\"} once on stdout.\nLive input, output and native agent events appear on stderr.\nKeep this process running; Ctrl-C disconnects and stops the local backend.\n";
 
 struct Options {
     destination: Option<String>,
+    name: Option<String>,
     mode: Mode,
     backend: Option<OsString>,
     backend_args: Vec<OsString>,
@@ -39,6 +42,7 @@ impl Options {
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Self>, String> {
         let mut args = args.into_iter();
         let mut destination = None;
+        let mut name = None;
         let mut mode = Mode::Shell;
         let mut backend = None;
         let mut backend_args = Vec::new();
@@ -65,6 +69,14 @@ impl Options {
                 }
                 Some("--backend") => {
                     backend = Some(args.next().ok_or("--backend requires a program")?)
+                }
+                Some("--name") => {
+                    name = Some(
+                        args.next()
+                            .ok_or("--name requires a client name")?
+                            .into_string()
+                            .map_err(|_| "client name must be UTF-8")?,
+                    );
                 }
                 Some("--list-tools") => list_tools = true,
                 Some("--") => {
@@ -111,8 +123,14 @@ impl Options {
         if !shell.is_absolute() {
             return Err("--shell requires an absolute path".into());
         }
+        if let Some(name) = &name
+            && (name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control))
+        {
+            return Err("client name must be nonempty, contain no control characters, and be at most 128 bytes".into());
+        }
         Ok(Some(Self {
             destination,
+            name,
             mode,
             backend,
             backend_args,
@@ -122,6 +140,30 @@ impl Options {
             config,
             shell,
         }))
+    }
+
+    fn metadata(&self) -> crate::Result<ClientMetadata> {
+        let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")?
+            .trim_end_matches('\n')
+            .to_owned();
+        let cwd = std::env::current_dir()?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| "client cwd must be UTF-8")?;
+        let short_hostname: String = hostname.chars().take(24).collect();
+        let metadata = ClientMetadata {
+            name: self.name.clone().unwrap_or_else(|| {
+                format!(
+                    "{short_hostname}-{}-{}",
+                    self.mode.name(),
+                    std::process::id()
+                )
+            }),
+            cwd,
+            hostname,
+        };
+        metadata.validate()?;
+        Ok(metadata)
     }
 
     fn command(&self) -> Command {
@@ -214,6 +256,7 @@ pub async fn run() -> crate::Result<()> {
         println!("{}", json!({"type":options.mode.name(),"tools":tools?}));
         return Ok(());
     }
+    let metadata = options.metadata()?;
     let mut ssh = options
         .command()
         .spawn()
@@ -225,6 +268,7 @@ pub async fn run() -> crate::Result<()> {
         &Frame::Hello {
             version: VERSION,
             mode: options.mode,
+            metadata: metadata.clone(),
         },
     )
     .await?;
@@ -233,8 +277,8 @@ pub async fn run() -> crate::Result<()> {
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(()); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
     };
-    let (url, secret) = match ready {
-        Some(Frame::Ready { url, secret }) => (url, secret),
+    let (url, secret, client_id) = match ready {
+        Some(Frame::Ready { url, secret, client_id }) => (url, secret, client_id),
         Some(Frame::Reject { message }) => return Err(message.into()),
         None => return Err(
             "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions"
@@ -258,14 +302,14 @@ pub async fn run() -> crate::Result<()> {
         backend.shutdown().await;
         return Err(error.into());
     }
-    let output = json!({"url":url,"secret":secret,"type":options.mode.name()});
+    let output = json!({"url":url,"secret":secret,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":options.mode.name()});
     if let Err(error) = writeln!(io::stdout().lock(), "{output}").and_then(|_| io::stdout().flush())
     {
         backend.shutdown().await;
         return Err(error.into());
     }
     eprintln!(
-        "Connected ({}). Live activity is shown here; Ctrl-C disconnects and stops the backend.",
+        "Connected ({}). This secret controls all clients of the same SSH account while this connection is live. Live activity is shown here; Ctrl-C disconnects and revokes this secret.",
         options.mode.name()
     );
     // One reader owns partial frames, so a completed request cannot cancel and discard them.
@@ -358,6 +402,29 @@ mod tests {
             "@host",
         ] {
             assert!(validate_destination(destination).is_err());
+        }
+    }
+
+    #[test]
+    fn client_names_are_bounded_display_metadata() {
+        let options = Options::parse(
+            ["--name", "My workstation", "-t", "codex", "user@host"].map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        let info = options.metadata().unwrap();
+        assert_eq!(info.name, "My workstation");
+        assert!(std::path::Path::new(&info.cwd).is_absolute());
+        assert!(!info.hostname.is_empty());
+        for bad in ["".into(), "   ".into(), "bad\nname".into(), "a".repeat(129)] {
+            assert!(
+                Options::parse([
+                    OsString::from("--name"),
+                    OsString::from(bad),
+                    OsString::from("user@host")
+                ])
+                .is_err()
+            );
         }
     }
 

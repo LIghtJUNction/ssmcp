@@ -2,8 +2,9 @@
 //!
 //! Protocol: <https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http>
 use crate::{
-    broker::Broker,
-    wire::{MAX_FRAME, MAX_READ, MAX_WAIT_MS, MAX_WRITE, Operation},
+    broker::{Broker, Session},
+    code_mode::{self, DEFAULT_TIMEOUT_MS, Host, HostRequest, MAX_CODE_BYTES, MAX_TIMEOUT_MS},
+    wire::{MAX_FRAME, Operation},
 };
 use axum::{
     Json, Router,
@@ -15,6 +16,7 @@ use axum::{
     routing::{any, get},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::{sync::Arc, time::Duration};
 
@@ -101,17 +103,8 @@ async fn endpoint(
     };
     let result = match action(&request, era) {
         Ok(Action::Reply(result)) => result,
-        Ok(Action::Call(operation)) => {
-            let listing = matches!(operation, Operation::ListTools { .. });
-            match session.call(operation).await {
-                Ok(result) => result,
-                Err(message) if listing => {
-                    return Fault::new(StatusCode::BAD_GATEWAY, -32603, &message)
-                        .response(Some(id));
-                }
-                Err(message) => json!({"content":[{"type":"text","text":message}],"isError":true}),
-            }
-        }
+        Ok(Action::List(arguments)) => tool_result(list(&broker, &user, &session, arguments).await),
+        Ok(Action::Code(arguments)) => tool_result(execute(broker, user, session, arguments).await),
         Err(fault) => return fault.response(Some(id)),
     };
     Json(json!({"jsonrpc":"2.0","id":id,"result":decorate_result(result, era)})).into_response()
@@ -341,8 +334,32 @@ fn decode_header_name(value: &str) -> Result<String, Fault> {
 
 enum Action {
     Reply(Value),
-    Call(Operation),
+    List(ListArguments),
+    Code(CodeArguments),
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListArguments {
+    #[serde(default)]
+    client_id: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CodeArguments {
+    code: String,
+    #[serde(default = "default_timeout")]
+    timeout_ms: u64,
+}
+
+fn default_timeout() -> u64 {
+    DEFAULT_TIMEOUT_MS
+}
+
+const INSTRUCTIONS: &str = "Use list to discover online clients for this SSH account, then list({client_id}) for a client's native tool names and schemas. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. All -t backends are accessed inside code_mode. Native policies and approvals remain in effect. Credentials authorize this account's clients while the issuing SSH connection stays alive.";
 
 fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
     match request.method {
@@ -364,27 +381,23 @@ fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
                 "protocolVersion":if LEGACY.contains(&version) { version } else { LEGACY[0] },
                 "capabilities":{"tools":{}},
                 "serverInfo":server_info(),
-                "instructions":"Control the connected local shell or coding agent. Call tools/list for this connection's full native capabilities. Agent events and pending approvals have explicit tools; native policies remain in effect."
+                "instructions":INSTRUCTIONS
             })))
         }
         "server/discover" if era == Era::Modern => Ok(Action::Reply(json!({
             "supportedVersions":VERSIONS,"capabilities":{"tools":{}},
-            "instructions":"This endpoint controls one connected local shell or coding agent. Call tools/list to discover its capabilities."
+            "instructions":INSTRUCTIONS
         }))),
         "ping" => Ok(Action::Reply(json!({}))),
         "tools/list" => {
-            let cursor = match request.param("cursor") {
-                None => None,
-                Some(Value::String(cursor)) if cursor.len() <= 128 => Some(cursor.clone()),
-                _ => {
-                    return Err(Fault::params(
-                        "cursor must be a string of at most 128 bytes",
-                    ));
-                }
-            };
-            Ok(Action::Call(Operation::ListTools { cursor }))
+            if request.param("cursor").is_some() {
+                return Err(Fault::params(
+                    "the public tool catalog has no further pages",
+                ));
+            }
+            Ok(Action::Reply(json!({"tools":tool_definitions()})))
         }
-        "tools/call" => operation(request).map(Action::Call),
+        "tools/call" => operation(request),
         _ => Err(Fault::new(
             if era == Era::Modern {
                 StatusCode::NOT_FOUND
@@ -404,44 +417,163 @@ fn valid_implementation(value: &Value) -> bool {
     })
 }
 
-fn operation(request: &RpcRequest<'_>) -> Result<Operation, Fault> {
+fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
     let name = request
         .param("name")
         .and_then(Value::as_str)
         .ok_or_else(|| Fault::params("tool name must be a string"))?;
-    let op = match name {
-        "terminal.read" => "read",
-        "terminal.write" => "write",
-        "terminal.resize" => "resize",
-        "terminal.status" => "status",
-        _ => {
-            let arguments = request
-                .param("arguments")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            let operation = Operation::CallTool {
-                name: name.into(),
-                arguments,
-            };
-            operation.validate().map_err(|e| Fault::params(&e))?;
-            return Ok(operation);
+    let arguments = request
+        .param("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    match name {
+        "list" => {
+            let arguments: ListArguments = serde_json::from_value(arguments)
+                .map_err(|_| Fault::params("list accepts only client_id and cursor strings"))?;
+            if arguments
+                .client_id
+                .as_ref()
+                .is_some_and(|id| id.is_empty() || id.len() > 64)
+                || arguments
+                    .cursor
+                    .as_ref()
+                    .is_some_and(|cursor| cursor.len() > 128)
+                || (arguments.cursor.is_some() && arguments.client_id.is_none())
+            {
+                return Err(Fault::params(
+                    "client_id must be 1..=64 bytes; cursor is at most 128 bytes and requires client_id",
+                ));
+            }
+            Ok(Action::List(arguments))
         }
-    };
-    let mut arguments = match request.param("arguments") {
-        None => Map::new(),
-        Some(Value::Object(arguments)) => arguments.clone(),
-        _ => return Err(Fault::params("tool arguments must be an object")),
-    };
-    if arguments.contains_key("op") {
-        return Err(Fault::params("unexpected tool argument: op"));
+        "code_mode" => {
+            let arguments: CodeArguments = serde_json::from_value(arguments).map_err(|_| {
+                Fault::params("code_mode requires code and accepts an optional timeout_ms integer")
+            })?;
+            if arguments.code.trim().is_empty() || arguments.code.len() > MAX_CODE_BYTES {
+                return Err(Fault::params(&format!(
+                    "code must be nonempty and at most {MAX_CODE_BYTES} UTF-8 bytes"
+                )));
+            }
+            if arguments.timeout_ms == 0 || arguments.timeout_ms > MAX_TIMEOUT_MS {
+                return Err(Fault::params(&format!(
+                    "timeout_ms must be 1..={MAX_TIMEOUT_MS}"
+                )));
+            }
+            Ok(Action::Code(arguments))
+        }
+        _ => Err(Fault::params("unknown public tool; use list or code_mode")),
     }
-    arguments.insert("op".into(), Value::String(op.into()));
-    let operation: Operation = serde_json::from_value(Value::Object(arguments))
-        .map_err(|_| Fault::params("invalid tool arguments"))?;
-    operation
-        .validate()
-        .map_err(|message| Fault::params(&message))?;
-    Ok(operation)
+}
+
+fn client_info(session: &Session) -> Value {
+    let mut info = json!(session.info());
+    info["cwd_kind"] = json!("startup");
+    info
+}
+
+fn usage() -> Value {
+    json!({
+        "language":"javascript",
+        "clients":"Online client metadata snapshot; select a client by id from list.",
+        "call":"await call(clientId, toolName, arguments = {}) returns the complete native MCP result (including isError and structuredContent).",
+        "tools":"await tools(clientId, cursor?) returns a page of native tool schemas; pass nextCursor to get the next page.",
+        "output":"Use print(value) or console.log(value) for logs; return a JSON-serializable value.",
+        "example":"const c = clients.find(c => c.type === 'shell'); if (!c) throw new Error('No shell client'); return await call(c.id, 'terminal.status', {});"
+    })
+}
+
+async fn list(
+    broker: &Broker,
+    user: &str,
+    anchor: &Arc<Session>,
+    arguments: ListArguments,
+) -> Result<Value, String> {
+    if let Some(id) = arguments.client_id {
+        let session = broker.client(user, anchor, &id).await?;
+        let mut page = session
+            .call(Operation::ListTools {
+                cursor: arguments.cursor,
+            })
+            .await?;
+        if !page.is_object() {
+            return Err("client returned an invalid tool catalog".into());
+        }
+        page["client"] = client_info(&session);
+        return Ok(page);
+    }
+    let sessions = broker.clients(user, anchor).await?;
+    let clients: Vec<_> = sessions
+        .iter()
+        .map(|session| client_info(session))
+        .collect();
+    Ok(json!({"clients":clients,"code_mode":usage()}))
+}
+
+async fn execute(
+    broker: Arc<Broker>,
+    user: String,
+    anchor: Arc<Session>,
+    arguments: CodeArguments,
+) -> Result<Value, String> {
+    let sessions = broker.clients(&user, &anchor).await?;
+    let clients = json!(
+        sessions
+            .iter()
+            .map(|session| client_info(session))
+            .collect::<Vec<_>>()
+    );
+    let host: Host = Arc::new(move |request| {
+        let broker = broker.clone();
+        let user = user.clone();
+        let anchor = anchor.clone();
+        Box::pin(async move {
+            let (client_id, operation) = match request {
+                HostRequest::Call {
+                    client_id,
+                    name,
+                    arguments,
+                } => (client_id, Operation::CallTool { name, arguments }),
+                HostRequest::Tools { client_id, cursor } => {
+                    (client_id, Operation::ListTools { cursor })
+                }
+            };
+            // Recheck the issuing lease for every host call, including calls after await.
+            let session = broker.client(&user, &anchor, &client_id).await?;
+            session.call(operation).await
+        })
+    });
+    code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await
+}
+
+fn tool_result(result: Result<Value, String>) -> Value {
+    match result {
+        Ok(value) => crate::backend::result(value),
+        Err(message) => json!({"content":[{"type":"text","text":message}],"isError":true}),
+    }
+}
+
+pub(crate) fn tool_definitions() -> Value {
+    json!([
+        {
+            "name":"list",
+            "description":"List all online clients for this SSH account with unique id, name, type, hostname and startup cwd. With client_id, return that client's native tool names, descriptions and input schemas for use inside code_mode; follow nextCursor with cursor to page. Names are display labels; use id to dispatch.",
+            "inputSchema":{"type":"object","properties":{
+                "client_id":{"type":"string","minLength":1,"maxLength":64},
+                "cursor":{"type":"string","maxLength":128}
+            },"additionalProperties":false},
+            "annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}
+        },
+        {
+            "name":"code_mode",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}) returning the complete MCP tool result, await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Supports variables, loops, conditions, await and Promise.all. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. The code runtime has no filesystem, network, process or module access. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "inputSchema":{"type":"object","properties":{
+                "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
+                "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS}
+            },"required":["code"],"additionalProperties":false},
+            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}
+        }
+    ])
 }
 
 fn server_info() -> Value {
@@ -457,42 +589,6 @@ fn decorate_result(mut result: Value, era: Era) -> Value {
         result["_meta"]["io.modelcontextprotocol/serverInfo"] = server_info();
     }
     result
-}
-
-pub(crate) fn tool_definitions() -> Value {
-    json!([
-        {
-            "name":"terminal.read",
-            "description":"Read terminal output from a byte cursor. Reuse the returned cursor for the next read; output is retained in a bounded buffer.",
-            "inputSchema":{"type":"object","properties":{
-                "cursor":{"type":"integer","minimum":0,"default":0},
-                "max_bytes":{"type":"integer","minimum":1,"maximum":MAX_READ,"default":16384},
-                "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_WAIT_MS,"default":0}
-            },"additionalProperties":false},
-            "annotations":{"readOnlyHint":true,"destructiveHint":false}
-        },
-        {
-            "name":"terminal.write",
-            "description":"Write text or control characters to the terminal. Append a newline to run a command; use \\u0003 for Ctrl-C. The limit is 16384 UTF-8 bytes.",
-            "inputSchema":{"type":"object","properties":{"data":{"type":"string","maxLength":MAX_WRITE}},"required":["data"],"additionalProperties":false},
-            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}
-        },
-        {
-            "name":"terminal.resize",
-            "description":"Set terminal rows and columns.",
-            "inputSchema":{"type":"object","properties":{
-                "rows":{"type":"integer","minimum":1,"maximum":1000},
-                "cols":{"type":"integer","minimum":1,"maximum":1000}
-            },"required":["rows","cols"],"additionalProperties":false},
-            "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}
-        },
-        {
-            "name":"terminal.status",
-            "description":"Inspect terminal process state and output cursor.",
-            "inputSchema":{"type":"object","additionalProperties":false},
-            "annotations":{"readOnlyHint":true,"destructiveHint":false}
-        }
-    ])
 }
 
 struct Fault {
@@ -804,38 +900,52 @@ mod tests {
     }
 
     #[test]
-    fn terminal_arguments_follow_wire_limits() {
+    fn public_catalog_and_arguments_are_exactly_two_tools() {
+        let names: Vec<_> = tool_definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["list", "code_mode"]);
         let mut value =
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"terminal.read"}});
-        assert!(matches!(
-            operation(&parse(&value)),
-            Ok(Operation::Read {
-                cursor: 0,
-                max_bytes: 16384,
-                wait_ms: 0
-            })
-        ));
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list"}});
+        assert!(matches!(operation(&parse(&value)), Ok(Action::List(_))));
         for arguments in [
-            json!({"max_bytes":MAX_READ + 1}),
-            json!({"wait_ms":MAX_WAIT_MS + 1}),
-            json!({"cursor":-1}),
-            json!({"op":"status"}),
             json!({"extra":true}),
+            json!({"cursor":"abc"}),
+            json!({"client_id":""}),
+            json!({"client_id":123}),
         ] {
             value["params"]["arguments"] = arguments;
             assert!(operation(&parse(&value)).is_err());
         }
-        value["params"]["name"] = json!("terminal.write");
-        value["params"]["arguments"] = json!({"data":"世".repeat(MAX_WRITE / 3 + 1)});
-        assert!(operation(&parse(&value)).is_err());
-        value["params"]["name"] = json!("terminal.resize");
-        value["params"]["arguments"] = json!({"rows":24,"cols":80});
-        assert!(matches!(
-            operation(&parse(&value)),
-            Ok(Operation::Resize { rows: 24, cols: 80 })
-        ));
-        value["params"]["arguments"] = json!({"rows":0,"cols":80});
-        assert!(operation(&parse(&value)).is_err());
+        value["params"]["name"] = json!("code_mode");
+        for arguments in [
+            json!({}),
+            json!({"code":""}),
+            json!({"code":"return 1", "timeout_ms":0}),
+            json!({"code":"return 1", "timeout_ms":MAX_TIMEOUT_MS+1}),
+            json!({"code":"return 1", "extra":true}),
+            json!({"code":"界".repeat(MAX_CODE_BYTES/3+1)}),
+        ] {
+            value["params"]["arguments"] = arguments;
+            assert!(operation(&parse(&value)).is_err());
+        }
+        value["params"]["arguments"] = json!({"code":"return clients.length"});
+        assert!(matches!(operation(&parse(&value)), Ok(Action::Code(_))));
+        for name in [
+            "terminal.read",
+            "terminal.write",
+            "codex.thread_start",
+            "cc.Read",
+            "pi.prompt",
+            "opencode.request",
+        ] {
+            value["params"]["name"] = json!(name);
+            value["params"]["arguments"] = json!({});
+            assert!(operation(&parse(&value)).is_err());
+        }
     }
 
     #[test]

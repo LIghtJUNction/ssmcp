@@ -1,4 +1,4 @@
-//! One local backend per SSH registration; the daemon only forwards MCP messages.
+//! One local backend per SSH registration, called through the code-mode bridge.
 pub mod cc;
 pub mod codex;
 pub mod events;
@@ -9,7 +9,7 @@ pub mod rpc;
 
 use crate::{
     pty::Terminal,
-    wire::{Mode, Operation},
+    wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE, Mode, Operation},
 };
 use serde_json::{Value, json};
 use std::{
@@ -54,7 +54,7 @@ impl Backend {
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         let tools = match self {
-            Self::Shell(_) => Ok(crate::http::tool_definitions().as_array().unwrap().clone()),
+            Self::Shell(_) => Ok(terminal_tools().as_array().unwrap().clone()),
             Self::Codex(driver) => driver.tools().await,
             Self::Claude(driver) => driver.tools().await,
             Self::Pi(driver) => driver.tools().await,
@@ -95,7 +95,10 @@ impl Backend {
                 page(tools, cursor.as_deref())
             }
             Operation::CallTool { name, arguments } => match self {
-                Self::Shell(_) => Err("unknown shell tool".into()),
+                Self::Shell(terminal) => {
+                    let operation = terminal_operation(&name, arguments)?;
+                    Ok(result(terminal.perform(operation).await?))
+                }
                 Self::Codex(driver) => driver.call(&name, arguments).await,
                 Self::Claude(driver) => driver.call(&name, arguments).await,
                 Self::Pi(driver) => driver.call(&name, arguments).await,
@@ -104,7 +107,7 @@ impl Backend {
             operation => match self {
                 Self::Shell(terminal) => Ok(result(terminal.perform(operation).await?)),
                 _ => {
-                    Err("terminal.* tools are only available in shell mode; call tools/list".into())
+                    Err("terminal.* capabilities are only available in shell mode; use list to discover the selected client's tools".into())
                 }
             },
         }
@@ -119,6 +122,65 @@ impl Backend {
             Self::OpenCode(driver) => driver.shutdown().await,
         }
     }
+}
+
+/// Convert a shell capability into a validated private wire operation.
+fn terminal_operation(name: &str, arguments: Value) -> Result<Operation, String> {
+    let op = match name {
+        "terminal.read" => "read",
+        "terminal.write" => "write",
+        "terminal.resize" => "resize",
+        "terminal.status" => "status",
+        _ => return Err(format!("unknown shell capability: {name}")),
+    };
+    let mut arguments = arguments
+        .as_object()
+        .cloned()
+        .ok_or("tool arguments must be an object")?;
+    if arguments.contains_key("op") {
+        return Err("unexpected tool argument: op".into());
+    }
+    arguments.insert("op".into(), Value::String(op.into()));
+    let operation: Operation = serde_json::from_value(Value::Object(arguments))
+        .map_err(|e| format!("invalid shell arguments: {e}"))?;
+    operation.validate()?;
+    Ok(operation)
+}
+
+fn terminal_tools() -> Value {
+    json!([
+        {
+            "name":"terminal.read",
+            "description":"Read terminal output from a byte cursor. Reuse the returned cursor for the next read; output is retained in a bounded buffer.",
+            "inputSchema":{"type":"object","properties":{
+                "cursor":{"type":"integer","minimum":0,"default":0},
+                "max_bytes":{"type":"integer","minimum":1,"maximum":MAX_READ,"default":16384},
+                "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_WAIT_MS,"default":0}
+            },"additionalProperties":false},
+            "annotations":{"readOnlyHint":true,"destructiveHint":false}
+        },
+        {
+            "name":"terminal.write",
+            "description":"Write text or control characters to the terminal. Append a newline to run a command; use \\u0003 for Ctrl-C. The limit is 16384 UTF-8 bytes.",
+            "inputSchema":{"type":"object","properties":{"data":{"type":"string","maxLength":MAX_WRITE}},"required":["data"],"additionalProperties":false},
+            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}
+        },
+        {
+            "name":"terminal.resize",
+            "description":"Set terminal rows and columns.",
+            "inputSchema":{"type":"object","properties":{
+                "rows":{"type":"integer","minimum":1,"maximum":1000},
+                "cols":{"type":"integer","minimum":1,"maximum":1000}
+            },"required":["rows","cols"],"additionalProperties":false},
+            "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}
+        },
+        {
+            "name":"terminal.status",
+            "description":"Inspect terminal process state and output cursor.",
+            "inputSchema":{"type":"object","additionalProperties":false},
+            "annotations":{"readOnlyHint":true,"destructiveHint":false}
+        }
+    ])
 }
 
 // The cursor binds to catalog names/schema content, so list changes cannot silently skip tools.
@@ -172,6 +234,49 @@ pub fn result(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shell_capabilities_use_the_same_validated_dispatch_inside_code_mode() {
+        assert!(matches!(
+            terminal_operation("terminal.read", json!({})),
+            Ok(Operation::Read {
+                cursor: 0,
+                max_bytes: 16384,
+                wait_ms: 0
+            })
+        ));
+        for arguments in [
+            json!({"max_bytes":MAX_READ+1}),
+            json!({"wait_ms":MAX_WAIT_MS+1}),
+            json!({"cursor":-1}),
+            json!({"op":"status"}),
+            json!({"extra":true}),
+        ] {
+            assert!(terminal_operation("terminal.read", arguments).is_err());
+        }
+        assert!(
+            terminal_operation("terminal.write", json!({"data":"界".repeat(MAX_WRITE/3+1)}))
+                .is_err()
+        );
+        assert!(terminal_operation("terminal.resize", json!({"rows":0,"cols":80})).is_err());
+        assert!(terminal_operation("unknown", json!({})).is_err());
+    }
+
+    #[tokio::test]
+    async fn shell_calls_reach_the_terminal_through_generic_native_dispatch() {
+        let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
+        let backend = Backend::Shell(terminal.clone());
+        let result = backend
+            .perform(Operation::CallTool {
+                name: "terminal.status".into(),
+                arguments: json!({}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result["isError"], false);
+        assert_eq!(result["structuredContent"]["running"], true);
+        terminal.shutdown().await;
+    }
+
     #[test]
     fn tool_pagination_detects_catalog_changes() {
         let tools: Vec<_> = (0..150)

@@ -4,12 +4,55 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 4;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub const MAX_READ: usize = 32 * 1024;
 pub const MAX_WRITE: usize = 16 * 1024;
 pub const MAX_WAIT_MS: u64 = 5_000;
 pub const MAX_INFLIGHT: usize = 16;
+pub const MAX_CLIENTS_PER_USER: usize = 128;
+
+/// Display metadata supplied by the local client, never an authentication identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ClientMetadata {
+    pub name: String,
+    /// Absolute working directory at client startup; agent sessions may use other directories.
+    pub cwd: String,
+    pub hostname: String,
+}
+
+impl ClientMetadata {
+    pub fn validate(&self) -> Result<(), String> {
+        for (label, value, limit) in [
+            ("name", self.name.as_str(), 128),
+            ("cwd", self.cwd.as_str(), 4096),
+            ("hostname", self.hostname.as_str(), 255),
+        ] {
+            if value.trim().is_empty() || value.len() > limit || value.chars().any(char::is_control)
+            {
+                return Err(format!(
+                    "client {label} must be nonempty, contain no control characters, and be at most {limit} bytes"
+                ));
+            }
+        }
+        if !std::path::Path::new(&self.cwd).is_absolute() {
+            return Err("client cwd must be an absolute path".into());
+        }
+        Ok(())
+    }
+}
+
+/// Public discovery information. IDs identify a connection, not a display name.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub mode: Mode,
+    pub cwd: String,
+    pub hostname: String,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -118,10 +161,12 @@ pub enum Frame {
     Hello {
         version: u32,
         mode: Mode,
+        metadata: ClientMetadata,
     },
     Ready {
         url: String,
         secret: String,
+        client_id: String,
     },
     Call {
         id: u64,
@@ -209,6 +254,11 @@ mod tests {
             &Frame::Hello {
                 version: VERSION,
                 mode: Mode::Shell,
+                metadata: ClientMetadata {
+                    name: "dev".into(),
+                    cwd: "/project".into(),
+                    hostname: "localhost".into(),
+                },
             },
         )
         .await
@@ -217,9 +267,51 @@ mod tests {
             read_frame(&mut out.as_slice()).await.unwrap(),
             Some(Frame::Hello {
                 version: VERSION,
-                mode: Mode::Shell
-            })
+                mode: Mode::Shell,
+                metadata: ClientMetadata { name, cwd, hostname },
+            }) if name == "dev" && cwd == "/project" && hostname == "localhost"
         ));
+    }
+    #[test]
+    fn client_metadata_rejects_relative_paths_controls_and_unbounded_fields() {
+        let valid = ClientMetadata {
+            name: "My workstation".into(),
+            cwd: "/home/user/project".into(),
+            hostname: "workstation".into(),
+        };
+        assert!(valid.validate().is_ok());
+        for name in ["".into(), "  ".into(), "bad\nname".into(), "x".repeat(129)] {
+            assert!(
+                ClientMetadata {
+                    name,
+                    ..valid.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for cwd in [
+            "relative".into(),
+            "/bad\0path".into(),
+            format!("/{}", "x".repeat(4096)),
+        ] {
+            assert!(
+                ClientMetadata {
+                    cwd,
+                    ..valid.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            ClientMetadata {
+                hostname: "x".repeat(256),
+                ..valid
+            }
+            .validate()
+            .is_err()
+        );
     }
     #[test]
     fn rejects_unknown_fields_and_invalid_limits() {
