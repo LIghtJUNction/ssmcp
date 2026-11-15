@@ -1,0 +1,45 @@
+.TH SSMCPD 8 "2026-11-16" "ssmcp 0.1.0" "System Administration"
+.SH NAME
+ssmcpd \- SSH terminal MCP gateway
+.SH SYNOPSIS
+.B ssmcpd serve
+.BI \-\-public-url " https://host"
+.RB [ \-\-listen " 127.0.0.1:8080" ]
+.RB [ \-\-socket " path" ]
+.PP
+.B ssmcpd attach
+.RB [ \-\-socket " path" ]
+.SH DESCRIPTION
+The serve command listens for MCP HTTP requests and authenticated local bridge
+connections. A reverse proxy supplies public HTTPS. Each connected Linux user
+receives an endpoint at /username and a new random bearer secret.
+.PP
+The attach command is run by OpenSSH as a ForceCommand. It forwards standard input
+and output to the daemon's Unix socket. The daemon obtains the username from
+kernel peer credentials, rather than user-supplied request fields.
+.SH OPTIONS
+.TP
+.BI \-\-public-url " url"
+Public HTTPS origin used to construct MCP URLs and validate Origin headers.
+.TP
+.BI \-\-listen " address"
+Loopback HTTP socket address. The default is 127.0.0.1:8080.
+.TP
+.BI \-\-socket " path"
+Unix control socket path. The default is /run/ssmcpd/control.sock.
+.SH DEPLOYMENT
+Run the daemon as an unprivileged service account. Restrict access to the control
+socket with a dedicated group. Configure OpenSSH AuthenticationMethods publickey,
+ForceCommand ssmcpd attach, DisableForwarding yes and PermitTTY no for this group.
+.SH FILES
+.TP
+.I /etc/ssmcpd/ssmcpd.env
+Environment configuration for the packaged systemd unit.
+.TP
+.I /run/ssmcpd/control.sock
+Default control socket. Its mode is 0660.
+.SH SEE ALSO
+.BR ssmcp (1),
+.BR sshd (8),
+.BR sshd_config (5),
+.BR systemd.service (5)

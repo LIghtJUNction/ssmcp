@@ -1,0 +1,28 @@
+[package]
+name = "ssmcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Expose a local terminal as MCP through an SSH public-key connection"
+license = "MIT"
+repository = "https://github.com/LIghtJUNction/ssmcp"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+base64 = "0.22"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2.6"
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "signal", "time", "fs"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

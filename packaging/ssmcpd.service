@@ -1,0 +1,26 @@
+[Unit]
+Description=SSH terminal MCP gateway
+After=network.target
+
+[Service]
+Type=simple
+User=ssmcpd
+Group=ssmcp
+EnvironmentFile=/etc/ssmcpd/ssmcpd.env
+ExecStart=/usr/local/bin/ssmcpd serve --listen ${SSMCP_LISTEN} --public-url ${SSMCP_PUBLIC_URL}
+RuntimeDirectory=ssmcpd
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

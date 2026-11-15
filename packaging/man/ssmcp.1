@@ -1,0 +1,46 @@
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.1.0" "User Commands"
+.SH NAME
+ssmcp \- expose a local terminal through an SSH-authenticated MCP gateway
+.SH SYNOPSIS
+.B ssmcp
+.RB [ \-F " ssh_config" ]
+.RB [ \-i " identity" ]
+.RB [ \-p " port" ]
+.RB [ \-\-shell " path" ]
+.I user@host
+.SH DESCRIPTION
+ssmcp authenticates to OpenSSH using a public key and creates a new local
+pseudo-terminal. The server returns an HTTPS MCP URL and a connection-scoped
+bearer secret. One JSON object containing url and secret is written to standard
+output. Diagnostics are written to standard error.
+.PP
+Keep the program running while the terminal is in use. Ctrl-C or SIGTERM closes
+the SSH connection and terminal. The server revokes the URL and bearer secret.
+.SH OPTIONS
+.TP
+.BI \-F " file"
+Use a separate OpenSSH client configuration file.
+.TP
+.BI \-i " file"
+Use the specified private key. ssh-agent is also supported.
+.TP
+.BI \-p " port"
+Connect to the specified SSH port.
+.TP
+.BI \-\-shell " path"
+Run the specified absolute shell path in the local pseudo-terminal.
+.SH AUTHENTICATION
+The client permits only SSH public-key authentication. Standard OpenSSH host-key
+verification remains enabled. The secret authorizes command execution with the
+permissions of the local user for the lifetime of the connection.
+.SH FILES
+.TP
+.I ~/.ssh/config
+Default OpenSSH client configuration.
+.TP
+.I ~/.ssh/known_hosts
+Trusted SSH host keys.
+.SH SEE ALSO
+.BR ssmcpd (8),
+.BR ssh (1),
+.BR ssh_config (5)
