@@ -1,46 +1,165 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.1.0" "User Commands"
-.SH NAME
-ssmcp \- expose a local terminal through an SSH-authenticated MCP gateway
-.SH SYNOPSIS
+.TH SSMCP 1 "2026-11-15" "ssmcp 0.2.0" "用户命令"
+.SH 名称
+ssmcp \- 通过 SSH 公钥连接，把本机 Shell 或 Agent 提供为 MCP 服务
+.SH 用法
 .B ssmcp
+.RB [ \-t " shell|codex|cc|pi|opencode" ]
 .RB [ \-F " ssh_config" ]
 .RB [ \-i " identity" ]
 .RB [ \-p " port" ]
 .RB [ \-\-shell " path" ]
+.RB [ \-\-backend " program" ]
 .I user@host
-.SH DESCRIPTION
-ssmcp authenticates to OpenSSH using a public key and creates a new local
-pseudo-terminal. The server returns an HTTPS MCP URL and a connection-scoped
-bearer secret. One JSON object containing url and secret is written to standard
-output. Diagnostics are written to standard error.
+.RB [ \-\- " backend_args..." ]
 .PP
-Keep the program running while the terminal is in use. Ctrl-C or SIGTERM closes
-the SSH connection and terminal. The server revokes the URL and bearer secret.
-.SH OPTIONS
+.B ssmcp
+.RB [ \-t " type" ]
+.RB [ \-\-backend " program" ]
+.B \-\-list-tools
+.RB [ \-\- " backend_args..." ]
+.SH 描述
+ssmcp 使用系统 OpenSSH 的公钥认证连接服务器，在本机启动所选后端，
+经这条 SSH 连接提供远程 MCP 工具。
+服务器运行 ssmcpd，不需要安装本机使用的 Agent。
+.PP
+服务器预先配置用户的 SSH 公钥。
+连接及本机后端初始化成功后，标准输出只写入一行 JSON，包含
+url、login_code、login_expires_in 和 type。
+在支持 OAuth 的 MCP 客户端中添加 URL 并启动登录，
+核对浏览器页面中的客户端、回调来源和包含用户名的 MCP URL，把 login_code 粘贴到输入框提交。
+MCP 客户端自动取得访问令牌并连接。
+标准错误持续显示远程输入、后端输出、原生事件及诊断信息。
+.PP
+保持程序运行。本机 Ctrl-C 或 SIGTERM 断开 SSH、停止本次后端，
+并使本次登录码与 OAuth 令牌失效。一个服务端用户名同时只允许一个后端。
+.SH 选项
+.TP
+.BI \-t " type"
+.TQ
+.BI \-\-type " type"
+选择 shell、codex、cc、pi 或 opencode，默认 shell。
 .TP
 .BI \-F " file"
-Use a separate OpenSSH client configuration file.
+使用指定的 OpenSSH 客户端配置，可使用其中定义的 Host 别名。
 .TP
 .BI \-i " file"
-Use the specified private key. ssh-agent is also supported.
+使用指定 SSH 私钥；也支持 ssh-agent。
 .TP
 .BI \-p " port"
-Connect to the specified SSH port.
+使用指定 SSH 端口，范围为 1 至 65535。
 .TP
 .BI \-\-shell " path"
-Run the specified absolute shell path in the local pseudo-terminal.
-.SH AUTHENTICATION
-The client permits only SSH public-key authentication. Standard OpenSSH host-key
-verification remains enabled. The secret authorizes command execution with the
-permissions of the local user for the lifetime of the connection.
-.SH FILES
+Shell 模式使用的绝对可执行路径。默认采用绝对路径的 SHELL，
+否则使用 /bin/sh。仅适用于 shell 模式。
+.TP
+.BI \-\-backend " program"
+替换本机 Agent 可执行文件，默认按模式使用 codex、claude、pi 或 opencode。
+仅适用于 Agent 模式。
+.TP
+.B \-\-list-tools
+在本机启动并探测后端，输出包含 type 和完整 tools 数组的 JSON 后退出。
+不连接 SSH，不接受 user@host。
+.TP
+.B \-\-
+后续参数原样传给所选 Agent。stdio、监听地址等传输参数由 ssmcp 管理。
+Shell 模式不接受 Agent 参数。
+.TP
+.B \-h, \-\-help
+显示帮助并退出。
+.TP
+.B \-V, \-\-version
+显示版本并退出。
+.SH 后端
+.TP
+.B shell
+创建独立 PTY，提供 terminal.read、terminal.write、terminal.resize 和
+terminal.status。工作目录及环境来自本机启动进程，后续 cd 保留在该会话中。
+远程写入控制字符 0x03 中断 PTY 前台程序；本机 Ctrl-C 结束整个连接。
+.TP
+.B codex
+使用本机 Codex App Server 和生成的版本匹配 schema，映射所有客户端 API
+方法，initialize 由桥执行。工具名例如 codex.thread_start、codex.turn_start。
+API 方法数不等于模型内部工具数。
+ssmcp.codex.events、requests、respond 和 schema 提供事件与原生请求处理。
+.TP
+.B cc
+运行 claude mcp serve，动态转发所有原生 MCP 工具，名称加 cc. 前缀。
+cc.Agent 运行 Agent 任务。
+前台 cc.Bash 在原生调用完成时返回输出；run_in_background 且结果含
+backgroundOutputPath 时，桥增量跟随该文件。
+原生没有后台文件完成通知。
+.TP
+.B pi
+运行 pi --mode rpc，映射 33 个原生控制命令，并通过 pi.rpc 转发新增命令。
+pi.prompt 成功表示已接受、排队或 handled，完成状态查看 agent_settled。
+pi.get_commands 返回扩展命令、模板和技能，不是模型工具 schema 目录。
+ssmcp.pi.requests 与 respond 处理扩展对话。
+.TP
+.B opencode
+要求 OpenCode v2。启动专属 loopback 服务，从 OpenAPI 动态生成操作工具，
+支持 HTTP、SSE 和 WebSocket。
+opencode.events 读取进度，opencode.schema 查询参数定义，
+opencode.stream_send 和 stream_close 管理额外连接。
+.SH 认证与权限
+仅允许 SSH 公钥身份认证，保留 OpenSSH known_hosts 主机密钥检查。
+加密私钥口令由 OpenSSH 或 ssh-agent 处理。
+login_code 有效期为 600 秒，成功用于网页授权后立即消耗。
+login_expires_in 为扣除本机后端初始化耗时后的剩余有效秒数。
+它不能用作 MCP 请求的 Bearer token。
+OAuth 使用 Authorization Code 与 S256 PKCE，支持自动发现和动态客户端注册。
+当前不支持 Client ID Metadata Documents。
+access token 最长有效 1 小时。
+客户端注册时声明 refresh_token grant 才会取得刷新令牌；
+每次刷新轮换，同一授权最长持续 24 小时。
+SSH 断开或服务器重启后全部失效。
+.PP
+获得授权的 MCP 客户端可以本机用户身份调用所选后端提供的能力。
+.PP
+Agent 在本机使用已有登录、模型和项目配置。
+ssmcp 不自动批准原生请求。
+Claude Code 的 MCP 服务由调用方 MCP 客户端负责逐次工具确认，
+其行为不等同于交互式 TUI 确认流程。
+.SH 限制
+0.2.0 使用内部 wire v3，与 0.1 及 wire v2 开发快照不兼容，
+客户端和服务端需一起升级，并重新完成 OAuth 登录。
+SSH 单帧最大 4 MiB。远程工具目录每页最多 64 项，按 nextCursor 继续读取。
+.PP
+Agent 事件缓存最多 8 MiB，单条缓存记录超过 256 KiB 时保留截断预览，
+单次事件读取最多 512 KiB。
+事件等待 wait_ms 最大 5000，下一次读取使用 next_cursor。
+truncated 表示旧缓存已丢失。
+.PP
+Codex、Claude Code、Pi 原生调用最多等待 15 分钟。
+OpenCode HTTP 默认 30 秒，可通过参数设到 120 秒。
+超时不证明原操作已取消；先检查原生任务状态再决定是否重试。
+.SH 示例
+.nf
+ssmcp alice@ssmcp.example
+ssmcp \-t codex alice@ssmcp.example
+ssmcp \-t cc alice@ssmcp.example
+ssmcp \-t pi alice@ssmcp.example \-\- \-\-no-session
+ssmcp \-t opencode alice@ssmcp.example
+ssmcp \-t pi \-\-backend /opt/pi/bin/pi \-\-list-tools
+.fi
+.SH 环境
+.TP
+.B SHELL
+Shell 模式的缺省程序，必须是绝对路径，否则回退到 /bin/sh。
+.TP
+.B PATH
+用于查找 ssh 和未指定绝对路径的原生 Agent 可执行文件。
+.SH 退出状态
+正常结束返回 0；参数、连接或后端错误返回非零状态。
+.SH 文件
 .TP
 .I ~/.ssh/config
-Default OpenSSH client configuration.
+默认 OpenSSH 客户端配置。
 .TP
 .I ~/.ssh/known_hosts
-Trusted SSH host keys.
-.SH SEE ALSO
+可信 SSH 主机密钥。
+.SH 参见
 .BR ssmcpd (8),
 .BR ssh (1),
 .BR ssh_config (5)
+.PP
+项目 README、docs/backends.md 和 docs/deployment.md 包含完整使用及部署示例。

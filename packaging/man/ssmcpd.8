@@ -1,7 +1,7 @@
-.TH SSMCPD 8 "2026-11-16" "ssmcp 0.1.0" "System Administration"
-.SH NAME
-ssmcpd \- SSH terminal MCP gateway
-.SH SYNOPSIS
+.TH SSMCPD 8 "2026-11-15" "ssmcp 0.2.0" "系统管理"
+.SH 名称
+ssmcpd \- 使用 SSH 公钥与 OAuth 授权的本机 MCP 网关
+.SH 用法
 .B ssmcpd serve
 .BI \-\-public-url " https://host"
 .RB [ \-\-listen " 127.0.0.1:8080" ]
@@ -9,37 +9,105 @@ ssmcpd \- SSH terminal MCP gateway
 .PP
 .B ssmcpd attach
 .RB [ \-\-socket " path" ]
-.SH DESCRIPTION
-The serve command listens for MCP HTTP requests and authenticated local bridge
-connections. A reverse proxy supplies public HTTPS. Each connected Linux user
-receives an endpoint at /username and a new random bearer secret.
+.SH 描述
+serve 在前台运行，接收 MCP HTTP 请求和经过系统身份验证的本机桥连接。
+HTTPS 由反向代理提供。
+每个通过 SSH 公钥连接的 Linux 用户获得 /username 路径和一次性动态登录码。
+服务器转发到客户端本机的 Shell、Codex、Claude Code、Pi 或 OpenCode 后端，
+不需要安装这些 Agent。
 .PP
-The attach command is run by OpenSSH as a ForceCommand. It forwards standard input
-and output to the daemon's Unix socket. The daemon obtains the username from
-kernel peer credentials, rather than user-supplied request fields.
-.SH OPTIONS
+attach 由 OpenSSH 以已认证用户身份执行，作为 ForceCommand 将标准输入和输出
+连接到守护进程的 Unix socket。
+守护进程从内核提供的 socket peer credentials 取得用户名，
+不接受请求字段指定其他用户。
+一个用户名同时只允许一条在线连接。
+.PP
+动态登录码通过现有 SSH 通道返回客户端。
+MCP 客户端使用 /username URL 启动 OAuth 登录，
+用户在浏览器的单输入框页面粘贴动态登录码，成功后浏览器返回客户端。
+客户端通过 Authorization Code 与 S256 PKCE 取得访问令牌，
+并用 Authorization: Bearer 请求头调用 MCP。
+.SH 选项
 .TP
 .BI \-\-public-url " url"
-Public HTTPS origin used to construct MCP URLs and validate Origin headers.
+serve 必填。公网 HTTPS origin，用于构造 MCP URL、OAuth 元数据和校验 Origin。
+不能包含用户名、路径、查询参数或 fragment；可包含端口。
 .TP
 .BI \-\-listen " address"
-Loopback HTTP socket address. The default is 127.0.0.1:8080.
+serve 的 HTTP 监听地址，只允许 loopback，默认 127.0.0.1:8080。
 .TP
 .BI \-\-socket " path"
-Unix control socket path. The default is /run/ssmcpd/control.sock.
-.SH DEPLOYMENT
-Run the daemon as an unprivileged service account. Restrict access to the control
-socket with a dedicated group. Configure OpenSSH AuthenticationMethods publickey,
-ForceCommand ssmcpd attach, DisableForwarding yes and PermitTTY no for this group.
-.SH FILES
+Unix 控制 socket 的绝对路径，默认 /run/ssmcpd/control.sock。
+serve 和 attach 必须使用同一路径。
+.TP
+.B \-h, \-\-help
+显示帮助并退出。
+.TP
+.B \-V, \-\-version
+显示版本并退出。
+.SH OAUTH
+支持 Protected Resource Metadata、Authorization Server Metadata、
+动态客户端注册和 Authorization Code + S256 PKCE。
+MCP 客户端需支持这些流程；当前不支持 Client ID Metadata Documents。
+.PP
+GET /.well-known/oauth-protected-resource/username 返回资源元数据。
+GET /.well-known/oauth-authorization-server 返回授权服务元数据。
+POST /oauth/register 注册客户端，GET/POST /oauth/authorize 提供授权页面及提交，
+POST /oauth/token 兑换和刷新令牌。
+反向代理需同时转发这些路径及 /username。
+.PP
+授权及令牌请求的 resource 必须精确等于完整 MCP URL。
+scope 仅支持 mcp，省略时采用该值。
+回调地址必须为 HTTPS 或本机 HTTP loopback，且与登记值精确匹配。
+.PP
+动态登录码有效期 600 秒，成功用于网页授权一次即消耗，不能作为 Bearer token。
+OAuth authorization code 有效期 60 秒；access token 最长有效 1 小时。
+refresh token 每次刷新轮换，同一授权最长持续 24 小时。
+客户端必须在动态注册的 grant_types 中声明 refresh_token 才能取得刷新令牌；
+省略 grant_types 时仅登记 authorization_code。
+登录码过期或已使用后，重新建立 SSH 连接取得新码；
+已授权客户端正常续期使用 refresh token。
+.PP
+授权状态只保存在内存，并绑定当前 SSH 连接。
+SSH 断开或守护进程退出会使关联登录码和全部令牌失效。
+守护进程日志不记录这些凭据或后端执行内容。
+.PP
+最多保留 1024 个客户端登记，每项最长 7 天；
+最多保留 2048 个授权事务，每项最长 10 分钟。
+内存状态达到容量上限时返回 HTTP 503。
+重启或登记过期后，MCP 客户端需重新注册。
+项目本身不按请求来源限流，可在公网反向代理按负载配置速率和并发限制。
+.SH 部署
+以无特权服务账户运行守护进程，使用独立组限制控制 socket 访问。
+socket 目录必须由守护进程用户拥有，且不能允许组或其他用户写入；
+socket 权限为 0660。
+.PP
+预先为 SSH 用户安装公钥，为指定用户组配置 AuthenticationMethods publickey、
+PasswordAuthentication no、KbdInteractiveAuthentication no、
+ForceCommand ssmcpd attach、DisableForwarding yes、PermitTTY no 和 PermitUserRC no。
+保留 OpenSSH 主机密钥校验。
+.PP
+配置 HTTPS 反向代理，保留路径及 Authorization、Origin 和 MCP 协议请求头。
+客户端本机 stderr 实时显示命令、输出和 Agent 事件；服务器只处理认证与转发。
+.SH 协议与升级
+0.2.0 使用内部 wire v3。
+与 0.1 及 wire v2 开发快照不兼容，客户端和服务端必须一起升级，
+重连后重新完成 OAuth 登录。
+MCP 请求体与 SSH 单帧最大 4 MiB。
+.SH 文件
 .TP
 .I /etc/ssmcpd/ssmcpd.env
-Environment configuration for the packaged systemd unit.
+随包提供的 systemd unit 配置文件。
+SSMCP_LISTEN 与 SSMCP_PUBLIC_URL 由 unit 作为命令行参数传入。
 .TP
 .I /run/ssmcpd/control.sock
-Default control socket. Its mode is 0660.
-.SH SEE ALSO
+默认 Unix 控制 socket，权限为 0660。
+.SH 退出状态
+正常结束返回 0；配置、连接或运行错误返回非零状态。
+.SH 参见
 .BR ssmcp (1),
 .BR sshd (8),
 .BR sshd_config (5),
 .BR systemd.service (5)
+.PP
+项目 docs/deployment.md 提供安装、SSH、HTTPS、OAuth 与升级说明。

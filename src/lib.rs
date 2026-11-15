@@ -4,6 +4,7 @@ pub mod backend;
 pub mod broker;
 pub mod client;
 pub mod http;
+pub mod oauth;
 pub mod pty;
 pub mod wire;
 

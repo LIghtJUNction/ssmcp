@@ -11,6 +11,8 @@ import argparse
 import base64
 import concurrent.futures
 import http.client
+import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -23,6 +25,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from urllib.parse import urlencode, urlsplit, parse_qs
 
 
 MODERN = "2026-07-28"
@@ -71,6 +74,9 @@ class Harness:
         self.checks = []
         self.request_id = 0
         self.secret = ""
+        self.sensitive = []
+        self.oauth_client = None
+        self.oauth_grant = None
         self.client = None
 
     def check(self, condition, description):
@@ -116,8 +122,9 @@ class Harness:
             log.flush()
             text = path.read_text(errors="replace")[-4000:]
             # Successful client stdout is deliberately excluded: it has a secret.
-            if self.secret:
-                text = text.replace(self.secret, "[redacted]")
+            for secret in [self.secret, *self.sensitive]:
+                if secret:
+                    text = text.replace(secret, "[redacted]")
             if text:
                 print(f"\n{path.name}:\n{text}", flush=True)
 
@@ -273,11 +280,18 @@ class Harness:
 
         wait_for(ssh_ready, description="isolated sshd")
 
-    def start_client(self, label="client"):
-        process = self.spawn(label, [
-            str(self.binary_dir / "ssmcp"), "-F", str(self.directory / "ssh_config"),
-            "--shell", "/bin/sh", f"{self.user}@ssmcp-e2e",
-        ], stdout=subprocess.PIPE)
+    def start_client(self, label="client", mode=None, backend=None, backend_args=()):
+        command = [str(self.binary_dir / "ssmcp"), "-F", str(self.directory / "ssh_config")]
+        if mode is not None:
+            command += ["-t", mode]
+        if mode in (None, "shell"):
+            command += ["--shell", "/bin/sh"]
+        if backend is not None:
+            command += ["--backend", str(backend)]
+        command += [f"{self.user}@ssmcp-e2e"]
+        if backend_args:
+            command += ["--", *map(str, backend_args)]
+        process = self.spawn(label, command, stdout=subprocess.PIPE)
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
             if not selector.select(timeout=10):
@@ -286,6 +300,118 @@ class Harness:
         if not line:
             raise AssertionError("ssmcp exited before returning connection credentials")
         return process, json.loads(line)
+
+    def oauth_request(self, path, method="GET", data=None, *, cookie=None, headers=None, form=False):
+        extra = {"Accept": "application/json"}
+        if form:
+            extra["Content-Type"] = "application/x-www-form-urlencoded"
+            data = urlencode(data or {})
+        if cookie:
+            extra["Cookie"] = cookie
+        if headers:
+            extra.update(headers)
+        return self.request(method, data, path=path, secret="", headers=extra)
+
+    def oauth_login(self, credentials, *, attacks=False):
+        resource = credentials["url"]
+        login_code = credentials["login_code"]
+        self.sensitive.append(login_code)
+        self.check("secret" not in credentials, "SSH returns an OAuth login code, not a reusable bearer secret")
+        self.check(bool(re.fullmatch(r"[0-9a-f]{64}", login_code)), "login code contains 256 random bits")
+        self.check(0 < credentials["login_expires_in"] <= 600, "login code reports its remaining ten-minute lifetime")
+        self.check(self.request(body={}, secret=login_code)[0] == 401, "one-time login code cannot authenticate an MCP request")
+        status, _, challenge = self.request(body={}, secret="")
+        metadata_url = f"{PUBLIC_URL}/.well-known/oauth-protected-resource/{self.user}"
+        self.check(status == 401 and metadata_url in challenge.get("www-authenticate", ""), "MCP 401 advertises protected-resource metadata")
+        status, metadata, _ = self.oauth_request(urlsplit(metadata_url).path)
+        self.check(status == 200 and metadata["resource"] == resource and metadata["authorization_servers"] == [PUBLIC_URL], "resource metadata binds the exact user endpoint and OAuth issuer")
+        status, server, _ = self.oauth_request("/.well-known/oauth-authorization-server")
+        self.check(status == 200 and server["issuer"] == PUBLIC_URL and "S256" in server["code_challenge_methods_supported"], "OAuth discovery advertises authorization-code PKCE S256")
+        if self.oauth_client is None:
+            status, registration, _ = self.oauth_request(urlsplit(server["registration_endpoint"]).path, "POST", {
+                "client_name": "ssmcp end-to-end", "redirect_uris": ["http://127.0.0.1:37401/callback"],
+                "token_endpoint_auth_method": "none", "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"], "application_type": "native",
+            })
+            self.check(status == 201 and registration.get("client_id"), "public MCP client registers through OAuth DCR")
+            self.oauth_client = registration
+        client_id = self.oauth_client["client_id"]
+        redirect_uri = self.oauth_client["redirect_uris"][0]
+        verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        state = base64.urlsafe_b64encode(os.urandom(18)).decode()
+        authorize = urlsplit(server["authorization_endpoint"]).path
+        token_path = urlsplit(server["token_endpoint"]).path
+        params = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code", "scope": "mcp", "resource": resource,
+                  "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
+        if attacks:
+            bad = dict(params, redirect_uri="https://attacker.example/callback")
+            status, _, headers = self.oauth_request(authorize + "?" + urlencode(bad))
+            self.check(status == 400 and "location" not in headers, "OAuth never redirects to an unregistered callback")
+            bad = dict(params, code_challenge_method="plain")
+            status, result, headers = self.oauth_request(authorize + "?" + urlencode(bad))
+            returned = parse_qs(urlsplit(headers.get("location", "")).query)
+            self.check(status >= 400 or bool(returned.get("error")), "OAuth rejects a PKCE downgrade to plain")
+        status, html, headers = self.oauth_request(authorize + "?" + urlencode(params), headers={"Accept": "text/html"})
+        self.check(status == 200 and isinstance(html, str), "OAuth presents the login page")
+        class Form(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.fields = {}
+                self.visible = []
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == "input" and attrs.get("name"):
+                    if attrs.get("type") == "hidden":
+                        self.fields[attrs["name"]] = attrs.get("value", "")
+                    else:
+                        self.visible.append(attrs["name"])
+        form = Form()
+        form.feed(html)
+        self.check(form.visible == ["login_code"] and "transaction_id" in form.fields, "login page has one visible code field and a CSRF-bound transaction")
+        cookie_header = headers.get("set-cookie", "")
+        self.check(all(flag in cookie_header.lower() for flag in ("secure", "httponly", "samesite=lax")), "login cookie is Secure, HttpOnly and SameSite Lax")
+        self.check("no-store" in headers.get("cache-control", "") and headers.get("referrer-policy") == "no-referrer", "login page prevents caching and referrer leakage")
+        cookie = cookie_header.split(";", 1)[0]
+        payload = {**form.fields, "login_code": login_code}
+        origin = {"Origin": PUBLIC_URL, "Accept": "text/html"}
+        if attacks:
+            status, _, headers = self.oauth_request(authorize, "POST", payload, headers=origin, form=True)
+            self.check(status in (400, 403) and "location" not in headers, "login rejects a missing browser binding cookie")
+            status, _, headers = self.oauth_request(authorize, "POST", payload, cookie=cookie, headers={**origin, "Origin": "https://attacker.example"}, form=True)
+            self.check(status in (400, 403) and "location" not in headers, "login rejects a cross-origin form submission")
+            status, _, headers = self.oauth_request(authorize, "POST", {**payload, "login_code": "0" * 64}, cookie=cookie, headers=origin, form=True)
+            self.check(status != 303 and "location" not in headers, "an invalid login code cannot authorize the MCP client")
+        status, _, headers = self.oauth_request(authorize, "POST", payload, cookie=cookie, headers=origin, form=True)
+        self.check(status == 303, "one-time login code authorizes the OAuth client")
+        callback = urlsplit(headers["location"])
+        query = parse_qs(callback.query)
+        self.check(callback._replace(query="").geturl() == redirect_uri and query.get("state") == [state] and query.get("iss") == [PUBLIC_URL], "OAuth callback preserves state and identifies its issuer")
+        code = query["code"][0]
+        self.sensitive.append(code)
+        exchange = {"grant_type": "authorization_code", "client_id": client_id, "code": code,
+                    "code_verifier": verifier, "redirect_uri": redirect_uri, "resource": resource}
+        if attacks:
+            status, result, _ = self.oauth_request(token_path, "POST", {**exchange, "code_verifier": "x" * 43}, form=True)
+            self.check(status == 400 and result.get("error") == "invalid_grant", "authorization code rejects an incorrect PKCE verifier")
+            status, result, _ = self.oauth_request(token_path, "POST", {**exchange, "resource": PUBLIC_URL + "/different-user"}, form=True)
+            self.check(status == 400 and result.get("error"), "authorization code cannot be exchanged for another resource")
+        status, tokens, token_headers = self.oauth_request(token_path, "POST", exchange, form=True)
+        self.check(status == 200 and tokens.get("token_type", "").lower() == "bearer", "OAuth code exchange returns an access token")
+        self.check(tokens.get("expires_in") == 3600 and tokens.get("refresh_token"), "OAuth access expires in one hour and supplies a refresh token")
+        self.check("no-store" in token_headers.get("cache-control", ""), "OAuth token responses cannot be cached")
+        self.secret = tokens["access_token"]
+        self.sensitive += [tokens["access_token"], tokens["refresh_token"]]
+        self.oauth_grant = {"tokens": tokens, "exchange": exchange, "token_path": token_path, "authorize": authorize, "authorize_params": params}
+        return self.oauth_grant
+
+    def oauth_refresh(self, refresh_token=None, resource=None):
+        grant = self.oauth_grant
+        return self.oauth_request(grant["token_path"], "POST", {
+            "grant_type": "refresh_token", "client_id": self.oauth_client["client_id"],
+            "refresh_token": refresh_token or grant["tokens"]["refresh_token"],
+            "resource": resource or grant["exchange"]["resource"],
+        }, form=True)
 
     def run(self):
         self.prepare()
@@ -300,9 +426,8 @@ class Harness:
         ], capture_output=True, timeout=5)
         self.check(password.returncode == 255, "password and keyboard-interactive cannot authenticate")
         self.client, credentials = self.start_client()
-        self.secret = credentials["secret"]
+        self.oauth_login(credentials, attacks=True)
         self.check(credentials["url"] == f"{PUBLIC_URL}/{self.user}", "endpoint username comes from SSH account")
-        self.check(bool(re.fullmatch(r"[0-9a-f]{64}", self.secret)), "secret contains 256 random bits encoded as hex")
         self.check(self.request(body={}, secret="")[0] == 401, "missing Bearer is rejected")
         self.check(self.request(body={}, secret="0" * 64)[0] == 401, "incorrect Bearer is rejected")
         self.check(self.request(body={}, path="/different-user")[0] == 401, "secret cannot select another user")
@@ -410,11 +535,32 @@ class Harness:
         wait_for(lambda: not process_running(child_pid), description="background terminal job exit")
         self.check(True, "disconnect cleans up shell and terminal jobs")
         old_secret = self.secret
+        status, result, _ = self.oauth_refresh()
+        self.check(status == 400 and result.get("error") == "invalid_grant", "SSH disconnect revokes OAuth refresh authority")
         self.client, credentials = self.start_client("reconnect")
-        self.secret = credentials["secret"]
+        self.oauth_login(credentials)
         self.check(self.secret != old_secret and self.request(body={}, secret=old_secret)[0] == 401,
-                   "reconnect rotates credentials and rejects the previous secret")
+                   "reconnect requires a new OAuth login and rejects the previous access token")
         self.check(self.call("terminal.status")["running"], "reconnect creates a usable new terminal")
+        previous_refresh = self.oauth_grant["tokens"]["refresh_token"]
+        status, tokens, _ = self.oauth_refresh(resource=PUBLIC_URL + "/different-user")
+        self.check(status == 400 and tokens.get("error"), "refresh tokens cannot switch the protected resource")
+        status, tokens, _ = self.oauth_refresh()
+        self.check(status == 200 and tokens["refresh_token"] != previous_refresh, "refresh rotates the OAuth refresh token")
+        self.sensitive += [tokens["access_token"], tokens["refresh_token"]]
+        self.secret = tokens["access_token"]
+        self.oauth_grant["tokens"] = tokens
+        self.check(self.call("terminal.status")["running"], "a refreshed OAuth access token can control the same client")
+        status, result, _ = self.oauth_refresh(previous_refresh)
+        self.check(status == 400 and result.get("error") == "invalid_grant", "a reused refresh token is rejected")
+        self.check(self.request(body={})[0] == 401, "refresh-token replay revokes the token family")
+        self.stop(self.client)
+        self.client, credentials = self.start_client("code-replay")
+        grant = self.oauth_login(credentials)
+        status, result, _ = self.oauth_request(grant["token_path"], "POST", grant["exchange"], form=True)
+        self.check(status == 400 and result.get("error") == "invalid_grant", "an OAuth authorization code is single use")
+        self.check(self.request(body={})[0] == 401, "authorization-code replay revokes its issued token family")
+
         self.stop(self.client)
 
 

@@ -1,4 +1,4 @@
-//! Foreground SSH client. Credentials are emitted once, as a JSON object on stdout.
+//! Foreground SSH client. OAuth login details are emitted once, as a JSON object on stdout.
 use crate::{
     backend::Backend,
     wire::{Frame, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, read_frame, write_frame},
@@ -8,20 +8,107 @@ use std::{
     ffi::OsString,
     io::{self, Write},
     path::PathBuf,
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     sync::Arc,
     time::Duration,
 };
 use tokio::{
     io::BufReader,
-    process::Command,
+    process::{Child, ChildStdout, Command},
     signal::unix::{SignalKind, signal},
-    sync::{Mutex, mpsc},
-    task::JoinSet,
+    sync::{Mutex, mpsc, watch},
+    task::{JoinHandle, JoinSet},
     time::timeout,
 };
 
-const HELP: &str = "ssmcp — expose a local shell or coding agent over an SSH-authenticated MCP endpoint\n\nUsage: ssmcp [-t shell|codex|cc|pi|opencode] [options] user@host [-- backend_args...]\n       ssmcp -t TYPE [--backend PROGRAM] --list-tools [-- backend_args...]\n\n  -t, --type TYPE       Backend (default: shell)\n  -i identity          SSH private key file\n  -p port              SSH port\n  -F ssh_config        OpenSSH configuration file\n  --shell /path        Shell executable (shell mode only)\n  --backend PROGRAM    Override the native agent executable\n  --list-tools         Discover local tools as JSON, then exit without SSH\n\nUses only SSH public-key authentication and standard known_hosts checks.\nPrints {\"url\":\"https://host/user\",\"secret\":\"...\",\"type\":\"shell\"} once on stdout.\nLive input, output and native agent events appear on stderr.\nKeep this process running; Ctrl-C disconnects and stops the local backend.\n";
+const HELP: &str = "ssmcp — expose a local shell or coding agent over an SSH-authenticated MCP endpoint\n\nUsage: ssmcp [-t shell|codex|cc|pi|opencode] [options] user@host [-- backend_args...]\n       ssmcp -t TYPE [--backend PROGRAM] --list-tools [-- backend_args...]\n\n  -t, --type TYPE       Backend (default: shell)\n  -i identity          SSH private key file\n  -p port              SSH port\n  -F ssh_config        OpenSSH configuration file\n  --shell /path        Shell executable (shell mode only)\n  --backend PROGRAM    Override the native agent executable\n  --list-tools         Discover local tools as JSON, then exit without SSH\n\nUses only SSH public-key authentication and standard known_hosts checks.\nPrints {\"url\":\"https://host/user\",\"login_code\":\"...\",\"login_expires_in\":600,\"type\":\"shell\"} once on stdout.\nlogin_expires_in deducts local backend startup time.\nLive input, output and native agent events appear on stderr.\nKeep this process running; Ctrl-C disconnects and stops the local backend.\n";
+
+// A single reader owns every partial frame after Ready, including while a native
+// backend starts. A separate persistent status channel records a closed bridge
+// even when its frame queue has not yet been consumed.
+struct Incoming {
+    frames: mpsc::Receiver<io::Result<Option<Frame>>>,
+    closed: watch::Receiver<Option<String>>,
+    task: JoinHandle<()>,
+}
+
+impl Incoming {
+    fn start(mut reader: BufReader<ChildStdout>) -> Self {
+        let (frames_tx, frames) = mpsc::channel(MAX_INFLIGHT);
+        let (closed_tx, closed) = watch::channel(None);
+        let task = tokio::spawn(async move {
+            loop {
+                let frame = read_frame(&mut reader).await;
+                let error = match &frame {
+                    Ok(None) => Some("SSH disconnected before local backend readiness".into()),
+                    Err(error) => Some(format!(
+                        "SSH stream failed before local backend readiness: {error}"
+                    )),
+                    Ok(Some(Frame::Reject { message })) => {
+                        Some(format!("SSH server rejected the connection: {message}"))
+                    }
+                    _ => None,
+                };
+                let finished = error.is_some();
+                if let Some(error) = error {
+                    let _ = closed_tx.send(Some(error));
+                }
+                if frames_tx.send(frame).await.is_err() || finished {
+                    break;
+                }
+            }
+        });
+        Self {
+            frames,
+            closed,
+            task,
+        }
+    }
+
+    async fn disconnected(&mut self) -> String {
+        loop {
+            if let Some(error) = self.closed.borrow().clone() {
+                return error;
+            }
+            if self.closed.changed().await.is_err() {
+                return "SSH reader stopped before local backend readiness".into();
+            }
+        }
+    }
+
+    fn ensure_open(&self, ssh: &mut Child) -> Result<(), String> {
+        if let Some(error) = self.closed.borrow().clone() {
+            return Err(error);
+        }
+        if self.closed.has_changed().is_err() {
+            return Err("SSH reader stopped before local backend readiness".into());
+        }
+        // The process can exit before its reader task observes EOF (or a proxy
+        // child can retain stdout). Check both sources before publishing a code.
+        if let Some(status) = ssh.try_wait().map_err(|error| error.to_string())? {
+            return Err(ssh_ended(Ok(status)));
+        }
+        Ok(())
+    }
+
+    async fn stop(&mut self) {
+        self.task.abort();
+        let _ = (&mut self.task).await;
+    }
+}
+
+impl Drop for Incoming {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+fn ssh_ended(status: io::Result<ExitStatus>) -> String {
+    match status {
+        Ok(status) => format!("SSH exited before local backend readiness ({status})"),
+        Err(error) => format!("Could not wait for SSH during local backend startup: {error}"),
+    }
+}
 
 struct Options {
     destination: Option<String>,
@@ -233,8 +320,8 @@ pub async fn run() -> crate::Result<()> {
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(()); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
     };
-    let (url, secret) = match ready {
-        Some(Frame::Ready { url, secret }) => (url, secret),
+    let (url, login_code, login_expires_in) = match ready {
+        Some(Frame::Ready { url, login_code, login_expires_in }) => (url, login_code, login_expires_in),
         Some(Frame::Reject { message }) => return Err(message.into()),
         None => return Err(
             "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions"
@@ -242,48 +329,52 @@ pub async fn run() -> crate::Result<()> {
         ),
         _ => return Err("unexpected registration response".into()),
     };
+    let login_received_at = std::time::Instant::now();
+    let mut incoming = Incoming::start(reader);
     eprintln!("Starting local {} backend...", options.mode.name());
     let backend = tokio::select! {
-        result = timeout(Duration::from_secs(120), Backend::start(options.mode, &options.shell, options.backend.as_deref(), &options.backend_args)) => result.map_err(|_| "local backend startup timed out")??,
+        biased;
+        error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(error.into()); },
+        status = ssh.wait() => return Err(ssh_ended(status).into()),
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(()); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
+        result = timeout(Duration::from_secs(120), Backend::start(options.mode, &options.shell, options.backend.as_deref(), &options.backend_args)) => result.map_err(|_| "local backend startup timed out")??,
     };
     // Discover before publishing credentials, so a missing/incompatible backend fails locally.
     let discovered = tokio::select! {
+        biased;
+        error = incoming.disconnected() => Err(error),
+        status = ssh.wait() => Err(ssh_ended(status)),
+        _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(()); },
+        _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(()); },
         result = timeout(Duration::from_secs(120), backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
-        _ = interrupt.recv() => { backend.shutdown().await; let _ = ssh.kill().await; return Ok(()); },
-        _ = terminate.recv() => { backend.shutdown().await; let _ = ssh.kill().await; return Ok(()); },
     };
-    if let Err(error) = discovered {
+    if let Err(error) = discovered.and_then(|_| incoming.ensure_open(&mut ssh)) {
+        let _ = ssh.start_kill();
         backend.shutdown().await;
+        incoming.stop().await;
+        let _ = ssh.wait().await;
         return Err(error.into());
     }
-    let output = json!({"url":url,"secret":secret,"type":options.mode.name()});
+    let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
+    let output = json!({"url":url,"login_code":login_code,"login_expires_in":login_expires_in,"type":options.mode.name()});
     if let Err(error) = writeln!(io::stdout().lock(), "{output}").and_then(|_| io::stdout().flush())
     {
+        let _ = ssh.start_kill();
         backend.shutdown().await;
+        incoming.stop().await;
+        let _ = ssh.wait().await;
         return Err(error.into());
     }
     eprintln!(
-        "Connected ({}). Live activity is shown here; Ctrl-C disconnects and stops the backend.",
+        "Connected ({}). Enter login_code on the MCP OAuth login page. Live activity is shown here; Ctrl-C disconnects and revokes access.",
         options.mode.name()
     );
-    // One reader owns partial frames, so a completed request cannot cancel and discard them.
-    let (frames_tx, mut frames) = mpsc::channel(MAX_INFLIGHT);
-    let reader_task = tokio::spawn(async move {
-        loop {
-            let frame = read_frame(&mut reader).await;
-            let finished = !matches!(frame, Ok(Some(_)));
-            if frames_tx.send(frame).await.is_err() || finished {
-                break;
-            }
-        }
-    });
     let writer = Arc::new(Mutex::new(writer));
     let mut requests: JoinSet<io::Result<()>> = JoinSet::new();
     let result: crate::Result<()> = 'connected: loop {
         tokio::select! {
-            frame = frames.recv() => match frame {
+            frame = incoming.frames.recv() => match frame {
                 Some(Ok(Some(Frame::Call {id,operation}))) => {
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
@@ -325,8 +416,7 @@ pub async fn run() -> crate::Result<()> {
     };
     requests.abort_all();
     while requests.join_next().await.is_some() {}
-    reader_task.abort();
-    let _ = reader_task.await;
+    incoming.stop().await;
     drop(writer);
     let _ = ssh.start_kill();
     backend.shutdown().await;

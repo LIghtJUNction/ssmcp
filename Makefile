@@ -19,6 +19,7 @@ test:
 	$(CARGO) test --locked
 	$(CARGO) build --locked
 	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
+	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug
 
 install:
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/man/man8

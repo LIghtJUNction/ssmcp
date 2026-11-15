@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub const MAX_READ: usize = 32 * 1024;
 pub const MAX_WRITE: usize = 16 * 1024;
@@ -111,7 +111,7 @@ impl Operation {
     }
 }
 
-// Do not derive Debug: Ready carries a bearer secret.
+// Do not derive Debug: Ready carries a one-time OAuth login code.
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Frame {
@@ -121,7 +121,8 @@ pub enum Frame {
     },
     Ready {
         url: String,
-        secret: String,
+        login_code: String,
+        login_expires_in: u64,
     },
     Call {
         id: u64,

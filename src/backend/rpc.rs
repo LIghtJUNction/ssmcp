@@ -37,8 +37,10 @@ struct Waiting {
 
 pub struct Peer {
     dialect: Dialect,
-    writer: Mutex<Option<ChildStdin>>,
+    // Fields drop in declaration order. Cancellation can skip async shutdown, so
+    // Managed must stop descendants before closing stdin lets their parent exit.
     process: Mutex<Managed>,
+    writer: Mutex<Option<ChildStdin>>,
     reader: SyncMutex<Option<JoinHandle<()>>>,
     calls: SyncMutex<HashMap<String, Waiting>>,
     requests: SyncMutex<HashMap<String, Value>>,
@@ -72,8 +74,8 @@ impl Peer {
         );
         let peer = Arc::new(Self {
             dialect,
-            writer: Mutex::new(Some(writer)),
             process: Mutex::new(process),
+            writer: Mutex::new(Some(writer)),
             reader: SyncMutex::new(None),
             calls: SyncMutex::new(HashMap::new()),
             requests: SyncMutex::new(HashMap::new()),
@@ -138,8 +140,8 @@ impl Peer {
             // A cancelled/failed write may leave half a JSON frame in the pipe.
             // Never reuse it for a subsequent request or retry a mutating call.
             self.fail(error);
-            self.writer.lock().await.take();
             self.process.lock().await.shutdown().await;
+            self.writer.lock().await.take();
         }
         outcome
     }
@@ -385,8 +387,10 @@ impl Peer {
 
     pub async fn shutdown(&self) {
         self.fail("ssmcp disconnected");
-        self.writer.lock().await.take();
+        // Capture and stop owned descendants while the parent still exists.
+        // Closing stdin first lets fast native peers exit and orphan setsid jobs.
         self.process.lock().await.shutdown().await;
+        self.writer.lock().await.take();
         let task = self.reader.lock().unwrap().take();
         if let Some(task) = task {
             task.abort();
@@ -441,6 +445,89 @@ async fn read_json<R: AsyncBufRead + Unpin>(reader: &mut R) -> io::Result<Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dropping_peer_stops_separate_session_before_stdin_eof_orphans_it() {
+        use std::os::fd::{AsRawFd, OwnedFd};
+
+        struct TestChild(OwnedFd);
+        impl TestChild {
+            fn running(&self) -> bool {
+                let mut poll = libc::pollfd {
+                    fd: self.0.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: poll points to one initialized pollfd holding our pidfd.
+                let ready = unsafe { libc::poll(&mut poll, 1, 0) };
+                assert!(ready >= 0);
+                ready == 0
+            }
+        }
+        impl Drop for TestChild {
+            fn drop(&mut self) {
+                // SAFETY: this descriptor was bound to the test's owned child.
+                // Clean up even if the regression assertion fails.
+                unsafe {
+                    libc::syscall(
+                        libc::SYS_pidfd_send_signal,
+                        self.0.as_raw_fd(),
+                        libc::SIGKILL,
+                        std::ptr::null::<libc::siginfo_t>(),
+                        0,
+                    );
+                }
+            }
+        }
+
+        let mut command = Command::new("python3");
+        command.args([
+            "-u",
+            "-c",
+            r#"
+import json, os, subprocess, sys
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({'jsonrpc':'2.0', 'id':request['id'], 'result':{'parent':os.getpid(), 'child':child.pid}}), flush=True)
+os._exit(0)
+"#,
+        ]);
+        let peer = Peer::spawn(command, "drop-regression", Dialect::JsonRpc)
+            .await
+            .unwrap();
+        let result = peer.request("fixture", json!({})).await.unwrap();
+        let parent = result["parent"].as_i64().unwrap() as i32;
+        let child = result["child"].as_i64().unwrap() as i32;
+        let stat = std::fs::read_to_string(format!("/proc/{child}/stat")).unwrap();
+        let fields: Vec<_> = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .collect();
+        assert_eq!(fields[1].parse::<i32>().unwrap(), parent);
+        assert_eq!(fields[3].parse::<i32>().unwrap(), child);
+        let child = TestChild(crate::pty::open_pidfd(child).unwrap());
+        assert!(child.running());
+        timeout(Duration::from_secs(2), async {
+            while Arc::strong_count(&peer) > 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // Deliberately omit shutdown: a cancelled startup future has this path.
+        drop(peer);
+        timeout(Duration::from_secs(2), async {
+            while child.running() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("dropping a native peer orphaned its separate-session child");
+    }
+
     #[tokio::test]
     async fn json_lines_preserve_fragmentation_and_reject_truncation() {
         let (mut tx, rx) = tokio::io::duplex(64);

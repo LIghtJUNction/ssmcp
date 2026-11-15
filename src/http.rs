@@ -26,6 +26,7 @@ const CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
 
 pub fn router(broker: Arc<Broker>) -> Router {
     Router::new()
+        .merge(crate::oauth::routes())
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/{user}", any(endpoint))
         .with_state(broker)
@@ -44,15 +45,20 @@ async fn endpoint(
     Path(user): Path<String>,
     request: Request,
 ) -> Response {
+    // Path extraction percent-decodes input. Only validated Linux usernames may
+    // appear inside an OAuth challenge URL or select a resource.
+    if !crate::broker::valid_username(&user) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let headers = request.headers();
     if !valid_origin(headers, &broker.public_url) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let Some(secret) = bearer(headers) else {
-        return unauthorized();
+        return unauthorized(&broker.public_url, &user);
     };
     let Some(session) = broker.authenticate(&user, secret).await else {
-        return unauthorized();
+        return unauthorized(&broker.public_url, &user);
     };
     if request.method() != Method::POST {
         return (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response();
@@ -117,10 +123,13 @@ async fn endpoint(
     Json(json!({"jsonrpc":"2.0","id":id,"result":decorate_result(result, era)})).into_response()
 }
 
-fn unauthorized() -> Response {
+fn unauthorized(public_url: &str, user: &str) -> Response {
+    let challenge = format!(
+        "Bearer resource_metadata=\"{public_url}/.well-known/oauth-protected-resource/{user}\", scope=\"mcp\""
+    );
     (
         StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Bearer realm=\"ssmcp\"")],
+        [(header::WWW_AUTHENTICATE, challenge)],
     )
         .into_response()
 }

@@ -6,7 +6,7 @@ use std::{
     ffi::CStr,
     io::{self, Read},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -34,14 +34,25 @@ struct Call {
     reply: oneshot::Sender<CallResult>,
 }
 
+pub const LOGIN_LIFETIME: u64 = 600;
+
+struct LoginCode {
+    value: String,
+    expires: Instant,
+}
+
 pub struct Session {
-    secret: String,
+    login: Mutex<Option<LoginCode>>,
     sender: mpsc::Sender<Call>,
     slots: Semaphore,
     alive: AtomicBool,
 }
 
 impl Session {
+    pub(crate) fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+    }
+
     pub async fn call(&self, operation: Operation) -> CallResult {
         operation.validate()?;
         if !self.alive.load(Ordering::Acquire) {
@@ -66,30 +77,72 @@ impl Session {
 
 pub struct Broker {
     pub public_url: String,
+    pub oauth: crate::oauth::OAuth,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
 }
 
 impl Broker {
     pub fn new(public_url: String) -> Self {
         Self {
+            oauth: crate::oauth::OAuth::new(public_url.clone()),
             public_url,
             sessions: RwLock::new(HashMap::new()),
         }
     }
 
-    pub async fn authenticate(&self, user: &str, secret: &str) -> Option<Arc<Session>> {
-        if !valid_username(user) || secret.len() != 64 {
+    pub async fn authenticate(&self, user: &str, access_token: &str) -> Option<Arc<Session>> {
+        if !valid_username(user) {
             return None;
         }
+        self.oauth.authenticate(user, access_token)
+    }
+
+    pub async fn online_session(&self, user: &str) -> Option<Arc<Session>> {
         let sessions = self.sessions.read().await;
-        let session = sessions.get(user)?;
-        if session.alive.load(Ordering::Acquire)
-            && bool::from(session.secret.as_bytes().ct_eq(secret.as_bytes()))
-        {
-            Some(session.clone())
-        } else {
-            None
+        sessions.get(user).filter(|s| s.is_alive()).cloned()
+    }
+
+    pub async fn redeem_login(&self, user: &str, login_code: &str) -> Option<Arc<Session>> {
+        let login_code = login_code.trim();
+        if !valid_username(user) || login_code.len() != 64 {
+            return None;
         }
+        let session = self.online_session(user).await?;
+        {
+            let mut pending = session.login.lock().unwrap();
+            let code = pending.as_ref()?;
+            if !session.is_alive()
+                || Instant::now() >= code.expires
+                || !bool::from(code.value.as_bytes().ct_eq(login_code.as_bytes()))
+            {
+                return None;
+            }
+            pending.take();
+        }
+        Some(session)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_register(&self, user: &str, login_code: &str) -> Arc<Session> {
+        let (sender, _rx) = mpsc::channel(1);
+        let session = Arc::new(Session {
+            login: Mutex::new(Some(LoginCode {
+                value: login_code.into(),
+                expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
+            })),
+            sender,
+            slots: Semaphore::new(1),
+            alive: AtomicBool::new(true),
+        });
+        if let Some(previous) = self
+            .sessions
+            .write()
+            .await
+            .insert(user.into(), session.clone())
+        {
+            previous.alive.store(false, Ordering::Release);
+        }
+        session
     }
 
     pub async fn disconnect_all(&self) {
@@ -121,10 +174,13 @@ impl Broker {
                 return Ok(());
             }
         };
-        let secret = generate_secret()?;
+        let login_code = generate_secret()?;
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
-            secret: secret.clone(),
+            login: Mutex::new(Some(LoginCode {
+                value: login_code.clone(),
+                expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
+            })),
             sender,
             slots: Semaphore::new(wire::MAX_INFLIGHT),
             alive: AtomicBool::new(true),
@@ -146,7 +202,7 @@ impl Broker {
         }
         eprintln!("ssmcpd: connected {user} ({})", mode.name());
         let result: crate::Result<()> = async {
-            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{user}", self.public_url), secret }).await?;
+            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{user}", self.public_url), login_code, login_expires_in:LOGIN_LIFETIME }).await?;
             let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant)> = HashMap::new();
             let mut next_id = 0u64;
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
@@ -284,40 +340,26 @@ mod tests {
         assert_ne!(a, b);
     }
     #[tokio::test]
-    async fn bearer_is_scoped_to_user_and_revocation() {
+    async fn login_codes_are_one_use_scoped_expiring_and_not_access_tokens() {
         let broker = Broker::new("https://example.test".into());
-        let (sender, _rx) = mpsc::channel(1);
-        let session = Arc::new(Session {
-            secret: "a".repeat(64),
-            sender,
-            slots: Semaphore::new(1),
-            alive: AtomicBool::new(true),
-        });
-        broker
-            .sessions
-            .write()
-            .await
-            .insert("alice".into(), session);
+        let code = "a".repeat(64);
+        let session = broker.test_register("alice", &code).await;
+        assert!(broker.authenticate("alice", &code).await.is_none());
+        assert!(broker.redeem_login("bob", &code).await.is_none());
         assert!(
             broker
-                .authenticate("alice", &"a".repeat(64))
-                .await
-                .is_some()
-        );
-        assert!(broker.authenticate("bob", &"a".repeat(64)).await.is_none());
-        assert!(
-            broker
-                .authenticate("alice", &"b".repeat(64))
+                .redeem_login("alice", &"b".repeat(64))
                 .await
                 .is_none()
         );
+        assert!(broker.redeem_login("alice", &code).await.is_some());
+        assert!(broker.redeem_login("alice", &code).await.is_none());
         broker.disconnect_all().await;
-        assert!(
-            broker
-                .authenticate("alice", &"a".repeat(64))
-                .await
-                .is_none()
-        );
+        assert!(!session.is_alive());
+        let session = broker.test_register("alice", &code).await;
+        session.login.lock().unwrap().as_mut().unwrap().expires =
+            Instant::now() - Duration::from_secs(1);
+        assert!(broker.redeem_login("alice", &code).await.is_none());
     }
 
     #[tokio::test]
@@ -337,12 +379,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let Some(Frame::Ready { url, secret }) = wire::read_frame(&mut reader).await.unwrap()
+        let Some(Frame::Ready {
+            url, login_code, ..
+        }) = wire::read_frame(&mut reader).await.unwrap()
         else {
             panic!("missing registration");
         };
         let user = url.rsplit('/').next().unwrap();
-        let session = broker.authenticate(user, &secret).await.unwrap();
+        let session = broker.redeem_login(user, &login_code).await.unwrap();
         let first_session = session.clone();
         let first = tokio::spawn(async move { first_session.call(Operation::Status {}).await });
         let Some(Frame::Call { id: first_id, .. }) = wire::read_frame(&mut reader).await.unwrap()
@@ -395,7 +439,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert!(broker.authenticate(user, &secret).await.is_none());
+        assert!(broker.redeem_login(user, &login_code).await.is_none());
     }
 
     #[tokio::test]
@@ -414,7 +458,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let Some(Frame::Ready { url, secret }) = wire::read_frame(&mut reader).await.unwrap()
+        let Some(Frame::Ready {
+            url, login_code, ..
+        }) = wire::read_frame(&mut reader).await.unwrap()
         else {
             panic!("missing registration");
         };
@@ -438,7 +484,7 @@ mod tests {
         second.await.unwrap().unwrap();
         assert!(
             broker
-                .authenticate(url.rsplit('/').next().unwrap(), &secret)
+                .redeem_login(url.rsplit('/').next().unwrap(), &login_code)
                 .await
                 .is_some()
         );
