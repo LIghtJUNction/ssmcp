@@ -46,7 +46,7 @@ Examples:
   ssmcp -t codex -F ~/.ssh/work_config my-server
   ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
 
-Prints {"url":"https://host/user","login_code":"...","login_expires_in":600,"client_id":"...","type":"shell"} once on stdout.
+Prints {"url":"https://host/user","login_code":"...","login_expires_in":1800,"client_id":"...","type":"shell"} once on stdout.
 Add url to your MCP client, then enter login_code on its OAuth login page.
 login_expires_in deducts local backend startup time.
 Live input, output and native agent events appear on stderr.

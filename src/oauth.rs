@@ -28,11 +28,8 @@ use std::{
 };
 use subtle::ConstantTimeEq;
 
-const CLIENT_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
-const TRANSACTION_TTL: Duration = Duration::from_secs(600);
+const TRANSACTION_TTL: Duration = Duration::from_secs(crate::broker::LOGIN_LIFETIME);
 const CODE_TTL: Duration = Duration::from_secs(60);
-const ACCESS_TTL: Duration = Duration::from_secs(3600);
-const REFRESH_TTL: Duration = Duration::from_secs(24 * 3600);
 const MAX_CLIENTS: usize = 1024;
 const MAX_TRANSACTIONS: usize = 2048;
 const MAX_CODES: usize = 4096;
@@ -44,8 +41,54 @@ const COOKIE: &str = "__Host-ssmcp-oauth";
 type Key = [u8; 32];
 type OResult<T> = Result<T, OAuthError>;
 
+/// Lifetimes are fixed at daemon startup, not read from the environment per request.
+#[derive(Clone, Copy, Debug)]
+pub struct OAuthConfig {
+    pub access_token_ttl: Duration,
+    pub refresh_token_idle_ttl: Duration,
+    pub refresh_token_max_ttl: Duration,
+    pub client_registration_ttl: Duration,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self {
+            access_token_ttl: Duration::from_secs(8 * 3600),
+            refresh_token_idle_ttl: Duration::from_secs(30 * 24 * 3600),
+            refresh_token_max_ttl: Duration::from_secs(90 * 24 * 3600),
+            client_registration_ttl: Duration::from_secs(365 * 24 * 3600),
+        }
+    }
+}
+
+impl OAuthConfig {
+    pub fn validate(&self) -> crate::Result<()> {
+        for (name, ttl) in [
+            ("access-token-ttl", self.access_token_ttl),
+            ("refresh-token-idle-ttl", self.refresh_token_idle_ttl),
+            ("refresh-token-max-ttl", self.refresh_token_max_ttl),
+            ("client-registration-ttl", self.client_registration_ttl),
+        ] {
+            if ttl.as_secs() == 0
+                || ttl.subsec_nanos() != 0
+                || ttl > Duration::from_secs(3650 * 24 * 3600)
+            {
+                return Err(format!("{name} must be whole seconds in 1..=315360000").into());
+            }
+        }
+        if self.access_token_ttl > self.refresh_token_idle_ttl
+            || self.refresh_token_idle_ttl > self.refresh_token_max_ttl
+            || self.refresh_token_max_ttl > self.client_registration_ttl
+        {
+            return Err("token lifetimes must satisfy access-token-ttl <= refresh-token-idle-ttl <= refresh-token-max-ttl <= client-registration-ttl".into());
+        }
+        Ok(())
+    }
+}
+
 pub struct OAuth {
     issuer: String,
+    config: OAuthConfig,
     state: Arc<Mutex<Store>>,
 }
 
@@ -127,7 +170,9 @@ struct AuthorizationCode {
 
 struct Family {
     binding: Binding,
+    // The idle deadline slides on refresh, but never past the absolute deadline.
     expires: Instant,
+    absolute_expires: Instant,
     revoked: bool,
 }
 
@@ -311,8 +356,15 @@ impl OAuthError {
 
 impl OAuth {
     pub fn new(public_url: String) -> Self {
-        Self {
+        Self::with_config(public_url, OAuthConfig::default())
+            .expect("valid default OAuth lifetimes")
+    }
+
+    pub fn with_config(public_url: String, config: OAuthConfig) -> crate::Result<Self> {
+        config.validate()?;
+        Ok(Self {
             issuer: public_url.trim_end_matches('/').to_owned(),
+            config,
             state: Arc::new(Mutex::new(Store {
                 clients: HashMap::new(),
                 transactions: HashMap::new(),
@@ -323,7 +375,7 @@ impl OAuth {
                 pending_codes: 0,
                 next_sweep: Instant::now(),
             })),
-        }
+        })
     }
 
     pub fn authenticate(&self, user: &str, access_token: &str) -> Option<Arc<Session>> {
@@ -449,7 +501,11 @@ impl OAuth {
                 ));
             }
         };
-        let grants = grant_types.unwrap_or_else(|| vec!["authorization_code".into()]);
+        // RFC 7591 permits server-provisioned metadata when the actual values
+        // are returned. Opt omitted metadata into renewal; honor an explicit
+        // authorization_code-only registration.
+        let grants = grant_types
+            .unwrap_or_else(|| vec!["authorization_code".into(), "refresh_token".into()]);
         if !grants.iter().any(|g| g == "authorization_code")
             || grants.len() > 2
             || grants.iter().collect::<HashSet<_>>().len() != grants.len()
@@ -496,14 +552,15 @@ impl OAuth {
                 method,
                 secret_hash: secret.as_deref().map(hash),
                 refresh: grants.iter().any(|g| g == "refresh_token"),
-                expires: now + CLIENT_TTL,
+                expires: now + self.config.client_registration_ttl,
             },
         );
         let mut reply = json!({"client_id":id,"client_id_issued_at":issued,"client_name":name,"application_type":application_type,
             "redirect_uris":redirect_uris,"token_endpoint_auth_method":method.name(),"grant_types":grants,"response_types":["code"],"scope":"mcp"});
         if let Some(secret) = secret {
             reply["client_secret"] = secret.into();
-            reply["client_secret_expires_at"] = (issued + CLIENT_TTL.as_secs()).into();
+            reply["client_secret_expires_at"] =
+                (issued + self.config.client_registration_ttl.as_secs()).into();
         }
         Ok(reply)
     }
@@ -773,14 +830,15 @@ impl OAuth {
         } else {
             None
         };
-        let end = (now
+        let absolute_end = (now
             + if client.refresh {
-                REFRESH_TTL
+                self.config.refresh_token_max_ttl
             } else {
-                ACCESS_TTL
+                self.config.access_token_ttl
             })
         .min(client.expires);
-        let access_end = (now + ACCESS_TTL).min(end);
+        let end = (now + self.config.refresh_token_idle_ttl).min(absolute_end);
+        let access_end = (now + self.config.access_token_ttl).min(end);
         if access_end.duration_since(now).as_secs() == 0 {
             return Err(OAuthError::grant());
         }
@@ -789,6 +847,7 @@ impl OAuth {
             Family {
                 binding: code.binding,
                 expires: end,
+                absolute_expires: absolute_end,
                 revoked: false,
             },
         );
@@ -811,7 +870,8 @@ impl OAuth {
         }
         let code = state.codes.get_mut(&key).unwrap();
         code.used_family = Some(family_id);
-        code.retain_until = end;
+        // Keep replay detection for the whole grant, including after idle renewal.
+        code.retain_until = absolute_end;
         Ok(token_response(
             access,
             refresh,
@@ -859,17 +919,22 @@ impl OAuth {
             family.revoked = true;
             return Err(OAuthError::grant());
         }
-        let end = family.expires;
+        let absolute_end = family.absolute_expires.min(client.expires);
+        let end = (now + self.config.refresh_token_idle_ttl).min(absolute_end);
         if state.access.len() >= MAX_ACCESS || state.refresh.len() >= MAX_REFRESH {
             return Err(OAuthError::capacity());
         }
         let next = random("rt_")?;
         let access = random("at_")?;
-        let access_end = (now + ACCESS_TTL).min(end);
+        let access_end = (now + self.config.access_token_ttl).min(end);
         if access_end.duration_since(now).as_secs() == 0 {
             return Err(OAuthError::grant());
         }
-        state.refresh.get_mut(&key).unwrap().used = true;
+        family.expires = end;
+        let consumed = state.refresh.get_mut(&key).unwrap();
+        consumed.used = true;
+        // A rotated-out RT remains a replay marker until the absolute limit.
+        consumed.expires = absolute_end;
         state.refresh.insert(
             hash(&next),
             RefreshToken {
@@ -1380,8 +1445,9 @@ async fn authorize(
             response.headers_mut().insert(
                 header::SET_COOKIE,
                 HeaderValue::from_str(&format!(
-                    "{COOKIE}={}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=600",
-                    consent.csrf
+                    "{COOKIE}={}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={}",
+                    consent.csrf,
+                    TRANSACTION_TTL.as_secs()
                 ))
                 .unwrap(),
             );
@@ -1462,6 +1528,46 @@ async fn token(State(broker): State<Arc<Broker>>, request: Request) -> Response 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifetimes_reject_zero_fractional_unbounded_and_inconsistent_values() {
+        let defaults = OAuthConfig::default();
+        defaults.validate().unwrap();
+        for access in [Duration::ZERO, Duration::from_millis(1500), Duration::MAX] {
+            assert!(
+                OAuthConfig {
+                    access_token_ttl: access,
+                    ..defaults
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for invalid in [
+            OAuthConfig {
+                refresh_token_idle_ttl: defaults.access_token_ttl - Duration::from_secs(1),
+                ..defaults
+            },
+            OAuthConfig {
+                refresh_token_max_ttl: defaults.refresh_token_idle_ttl - Duration::from_secs(1),
+                ..defaults
+            },
+            OAuthConfig {
+                client_registration_ttl: defaults.refresh_token_max_ttl - Duration::from_secs(1),
+                ..defaults
+            },
+        ] {
+            assert!(OAuth::with_config("https://mcp.example".into(), invalid).is_err());
+        }
+        OAuthConfig {
+            access_token_ttl: Duration::from_secs(1),
+            refresh_token_idle_ttl: Duration::from_secs(30),
+            refresh_token_max_ttl: Duration::from_secs(60),
+            client_registration_ttl: Duration::from_secs(90),
+        }
+        .validate()
+        .unwrap();
+    }
 
     const ISSUER: &str = "https://ssmcp.example";
     const RESOURCE: &str = "https://ssmcp.example/alice";
@@ -1660,7 +1766,7 @@ mod tests {
         assert!(state.codes[&hash(&fixture.code)].used_family.is_none());
         drop(state);
         let tokens = fixture.tokens();
-        assert_eq!(tokens["expires_in"], 3600);
+        assert_eq!(tokens["expires_in"], 28800);
         assert!(tokens.get("refresh_token").is_none());
         let access = tokens["access_token"].as_str().unwrap();
         assert!(Arc::ptr_eq(
@@ -1680,77 +1786,146 @@ mod tests {
         assert!(oauth.authenticate("alice", access).is_none());
     }
 
-    #[tokio::test]
-    async fn refresh_uses_absolute_24_hour_deadline_and_caps_access() {
-        let fixture = Fixture::new(true).await;
-        let tokens = fixture.tokens();
-        assert_eq!(tokens["expires_in"], 3600);
-        let refresh = tokens["refresh_token"].as_str().unwrap();
-        let oauth = &fixture.broker.oauth;
-        let mut state = oauth.state.lock().unwrap();
-        let old = state.refresh[&hash(refresh)];
-        let end = state.families[&old.family].expires;
-        let initial_access = &state.access[&hash(tokens["access_token"].as_str().unwrap())];
-        assert_eq!(
-            end.duration_since(initial_access.expires),
-            REFRESH_TTL - ACCESS_TTL
-        );
-        assert_eq!(end, old.expires);
-        assert_eq!(state.codes[&hash(&fixture.code)].retain_until, end);
-        let now = end - Duration::from_secs(7);
-        let parameters = parameters(&[("refresh_token", refresh)]);
+    fn rotate_at(
+        fixture: &Fixture,
+        state: &mut Store,
+        refresh: &str,
+        now: Instant,
+    ) -> OResult<Value> {
         let client = state.clients[&fixture.client].clone();
-        let next = ok(oauth.rotate_refresh(
-            &mut state,
-            &parameters,
+        fixture.broker.oauth.rotate_refresh(
+            state,
+            &parameters_for_refresh(refresh),
             &fixture.client,
             &client,
             RESOURCE,
             now,
+        )
+    }
+
+    #[tokio::test]
+    async fn refresh_slides_idle_expiry_and_caps_access_at_absolute_deadline() {
+        let fixture = Fixture::new(true).await;
+        let tokens = fixture.tokens();
+        assert_eq!(tokens["expires_in"], 28800);
+        let mut refresh = tokens["refresh_token"].as_str().unwrap().to_owned();
+        let oauth = &fixture.broker.oauth;
+        let mut state = oauth.state.lock().unwrap();
+        let family_id = state.refresh[&hash(&refresh)].family;
+        let initial_end = state.families[&family_id].expires;
+        let absolute_end = state.families[&family_id].absolute_expires;
+        assert_eq!(
+            absolute_end.duration_since(initial_end),
+            Duration::from_secs(60 * 24 * 3600)
+        );
+        assert_eq!(state.codes[&hash(&fixture.code)].retain_until, absolute_end);
+        let mut previous_end = initial_end;
+        // Successful refreshes beyond the former 24-hour limit extend the idle
+        // deadline. Eventually the absolute deadline caps both tokens.
+        while previous_end < absolute_end {
+            let now = previous_end - Duration::from_secs(7);
+            let next = ok(rotate_at(&fixture, &mut state, &refresh, now));
+            let end = state.families[&family_id].expires;
+            assert!(end > previous_end);
+            assert_eq!(
+                end,
+                (now + oauth.config.refresh_token_idle_ttl).min(absolute_end)
+            );
+            assert_eq!(
+                next["expires_in"],
+                (now + oauth.config.access_token_ttl)
+                    .min(end)
+                    .duration_since(now)
+                    .as_secs()
+            );
+            assert!(state.refresh[&hash(&refresh)].used);
+            assert_eq!(state.refresh[&hash(&refresh)].expires, absolute_end);
+            refresh = next["refresh_token"].as_str().unwrap().to_owned();
+            assert_eq!(state.refresh[&hash(&refresh)].expires, end);
+            previous_end = end;
+        }
+        let next = ok(rotate_at(
+            &fixture,
+            &mut state,
+            &refresh,
+            absolute_end - Duration::from_secs(7),
         ));
         assert_eq!(next["expires_in"], 7);
-        assert_eq!(state.families[&old.family].expires, end);
-        assert_eq!(
-            state.access[&hash(next["access_token"].as_str().unwrap())].expires,
-            end
-        );
-        assert_eq!(
-            state.refresh[&hash(next["refresh_token"].as_str().unwrap())].expires,
-            end
-        );
-        assert!(state.refresh[&hash(refresh)].used);
-        assert!(
-            oauth
-                .rotate_refresh(
-                    &mut state,
-                    &parameters,
-                    &fixture.client,
-                    &client,
-                    RESOURCE,
-                    end
-                )
-                .is_err()
-        );
-        assert!(!state.families[&old.family].revoked);
-        let next_parameters = parameters_for_refresh(next["refresh_token"].as_str().unwrap());
-        assert!(
-            oauth
-                .rotate_refresh(
-                    &mut state,
-                    &next_parameters,
-                    &fixture.client,
-                    &client,
-                    RESOURCE,
-                    end
-                )
-                .is_err()
-        );
-        state.next_sweep = end;
-        state.sweep(end);
+        let last = next["refresh_token"].as_str().unwrap();
+        assert!(rotate_at(&fixture, &mut state, last, absolute_end).is_err());
+        assert!(!state.families[&family_id].revoked);
+        state.next_sweep = absolute_end;
+        state.sweep(absolute_end);
         assert!(state.families.is_empty());
         assert!(state.codes.is_empty());
         assert!(state.access.is_empty());
         assert!(state.refresh.is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_inactivity_expires_before_absolute_limit() {
+        let fixture = Fixture::new(true).await;
+        let tokens = fixture.tokens();
+        let refresh = tokens["refresh_token"].as_str().unwrap();
+        let mut state = fixture.broker.oauth.state.lock().unwrap();
+        let family_id = state.refresh[&hash(refresh)].family;
+        let end = state.families[&family_id].expires;
+        assert!(end < state.families[&family_id].absolute_expires);
+        assert!(rotate_at(&fixture, &mut state, refresh, end).is_err());
+        assert!(!state.refresh[&hash(refresh)].used);
+        state.next_sweep = end;
+        state.sweep(end);
+        assert!(state.families.is_empty());
+        assert!(state.refresh.is_empty());
+    }
+
+    #[tokio::test]
+    async fn replay_markers_survive_original_idle_deadline_after_refresh() {
+        for replay_code in [false, true] {
+            let fixture = Fixture::new(true).await;
+            let tokens = fixture.tokens();
+            let refresh = tokens["refresh_token"].as_str().unwrap();
+            let oauth = &fixture.broker.oauth;
+            let mut state = oauth.state.lock().unwrap();
+            let family_id = state.refresh[&hash(refresh)].family;
+            let initial_end = state.families[&family_id].expires;
+            let next = ok(rotate_at(
+                &fixture,
+                &mut state,
+                refresh,
+                initial_end - Duration::from_secs(7),
+            ));
+            let now = initial_end + Duration::from_secs(1);
+            state.next_sweep = now;
+            state.sweep(now);
+            assert!(state.refresh.contains_key(&hash(refresh)));
+            assert!(state.codes.contains_key(&hash(&fixture.code)));
+            assert!(!state.families[&family_id].revoked);
+            let result = if replay_code {
+                let client = state.clients[&fixture.client].clone();
+                oauth.exchange_code(
+                    &mut state,
+                    &fixture.exchange_parameters(),
+                    &fixture.client,
+                    &client,
+                    RESOURCE,
+                    now,
+                )
+            } else {
+                rotate_at(&fixture, &mut state, refresh, now)
+            };
+            assert!(result.is_err());
+            assert!(state.families[&family_id].revoked);
+            assert!(
+                rotate_at(
+                    &fixture,
+                    &mut state,
+                    next["refresh_token"].as_str().unwrap(),
+                    now,
+                )
+                .is_err()
+            );
+        }
     }
 
     fn parameters_for_refresh(refresh: &str) -> Parameters {

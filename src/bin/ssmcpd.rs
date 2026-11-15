@@ -1,5 +1,7 @@
-use ssmcp::{broker::Broker, http};
+use ssmcp::{broker::Broker, http, oauth::OAuthConfig};
 use std::{
+    collections::HashMap,
+    ffi::OsString,
     io::{self, Read, Write},
     net::{Shutdown, SocketAddr},
     os::unix::{
@@ -8,6 +10,7 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 use tokio::{
     net::{TcpListener, UnixListener},
@@ -16,12 +19,13 @@ use tokio::{
 };
 
 const SOCKET: &str = "/run/ssmcpd/control.sock";
-const HELP: &str = "ssmcpd - SSH-authenticated terminal MCP gateway\n\nUsage:\n  ssmcpd serve --public-url https://HOST [--listen 127.0.0.1:8080] [--socket PATH]\n  ssmcpd attach [--socket PATH]\n\nRun serve in the foreground under systemd. OpenSSH runs attach as the authenticated user.\n";
+const HELP: &str = "ssmcpd - SSH-authenticated terminal MCP gateway\n\nUsage:\n  ssmcpd serve --public-url https://HOST [--listen 127.0.0.1:8080] [--socket PATH]\n  ssmcpd attach [--socket PATH]\n\nToken lifetime options for serve (whole seconds; command line overrides environment):\n  --access-token-ttl N          SSMCP_ACCESS_TOKEN_TTL          [28800 / 8 hours]\n  --refresh-token-idle-ttl N    SSMCP_REFRESH_TOKEN_IDLE_TTL    [2592000 / 30 days]\n  --refresh-token-max-ttl N     SSMCP_REFRESH_TOKEN_MAX_TTL     [7776000 / 90 days]\n  --client-registration-ttl N   SSMCP_CLIENT_REGISTRATION_TTL   [31536000 / 365 days]\n  Required: 1 <= access <= refresh idle <= refresh max <= client <= 315360000.\n  Login codes and authorization forms last 30 minutes.\n\nRun serve in the foreground under systemd. OpenSSH runs attach as the authenticated user.\n";
 
 struct Config {
     listen: SocketAddr,
     public_url: String,
     socket: PathBuf,
+    oauth: OAuthConfig,
 }
 
 fn main() {
@@ -49,7 +53,9 @@ fn run() -> ssmcp::Result<()> {
         listen: "127.0.0.1:8080".parse()?,
         public_url: String::new(),
         socket: SOCKET.into(),
+        oauth: OAuthConfig::default(),
     };
+    let mut lifetime_options = HashMap::new();
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
             print!("{HELP}");
@@ -62,6 +68,18 @@ fn run() -> ssmcp::Result<()> {
             "--socket" => config.socket = value.into(),
             "--listen" if mode == "serve" => config.listen = value.parse()?,
             "--public-url" if mode == "serve" => config.public_url = normalize_origin(&value)?,
+            "--access-token-ttl" if mode == "serve" => {
+                lifetime_options.insert("SSMCP_ACCESS_TOKEN_TTL", seconds(&value, &arg)?);
+            }
+            "--refresh-token-idle-ttl" if mode == "serve" => {
+                lifetime_options.insert("SSMCP_REFRESH_TOKEN_IDLE_TTL", seconds(&value, &arg)?);
+            }
+            "--refresh-token-max-ttl" if mode == "serve" => {
+                lifetime_options.insert("SSMCP_REFRESH_TOKEN_MAX_TTL", seconds(&value, &arg)?);
+            }
+            "--client-registration-ttl" if mode == "serve" => {
+                lifetime_options.insert("SSMCP_CLIENT_REGISTRATION_TTL", seconds(&value, &arg)?);
+            }
             _ => return Err(format!("unknown option {arg}").into()),
         }
     }
@@ -71,6 +89,10 @@ fn run() -> ssmcp::Result<()> {
     if config.public_url.is_empty() {
         return Err("--public-url https://HOST is required".into());
     }
+    apply_oauth_options(&mut config.oauth, &lifetime_options, |name| {
+        std::env::var_os(name)
+    })?;
+    config.oauth.validate()?;
     if !config.listen.ip().is_loopback() {
         return Err(
             "--listen must be a loopback address; expose HTTPS through a reverse proxy".into(),
@@ -84,6 +106,49 @@ fn run() -> ssmcp::Result<()> {
         .enable_all()
         .build()?
         .block_on(serve(config))
+}
+
+fn seconds(value: &str, name: &str) -> ssmcp::Result<Duration> {
+    let value = value
+        .parse::<u64>()
+        .ok()
+        .filter(|seconds| (1..=315_360_000).contains(seconds))
+        .ok_or_else(|| format!("{name} must be an integer number of seconds in 1..=315360000"))?;
+    Ok(Duration::from_secs(value))
+}
+
+fn apply_oauth_options(
+    config: &mut OAuthConfig,
+    overrides: &HashMap<&str, Duration>,
+    mut environment: impl FnMut(&str) -> Option<OsString>,
+) -> ssmcp::Result<()> {
+    for (name, ttl) in [
+        ("SSMCP_ACCESS_TOKEN_TTL", &mut config.access_token_ttl),
+        (
+            "SSMCP_REFRESH_TOKEN_IDLE_TTL",
+            &mut config.refresh_token_idle_ttl,
+        ),
+        (
+            "SSMCP_REFRESH_TOKEN_MAX_TTL",
+            &mut config.refresh_token_max_ttl,
+        ),
+        (
+            "SSMCP_CLIENT_REGISTRATION_TTL",
+            &mut config.client_registration_ttl,
+        ),
+    ] {
+        if let Some(value) = overrides.get(name) {
+            *ttl = *value;
+        } else if let Some(value) = environment(name) {
+            *ttl = seconds(
+                value
+                    .to_str()
+                    .ok_or_else(|| format!("{name} must be UTF-8"))?,
+                name,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn normalize_origin(input: &str) -> ssmcp::Result<String> {
@@ -218,7 +283,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     use std::future::IntoFuture;
     let tcp = TcpListener::bind(config.listen).await?;
     let (unix, _socket_file) = bind_socket(&config.socket).await?;
-    let broker = Arc::new(Broker::new(config.public_url));
+    let broker = Arc::new(Broker::with_oauth_config(config.public_url, config.oauth)?);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let server = axum::serve(tcp, http::router(broker.clone()))
         .with_graceful_shutdown(async {
@@ -235,6 +300,13 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         "ssmcpd: listening on {}; control socket {}",
         config.listen,
         config.socket.display()
+    );
+    eprintln!(
+        "ssmcpd: OAuth lifetimes (seconds): access={}, refresh idle={}, refresh max={}, client={}",
+        config.oauth.access_token_ttl.as_secs(),
+        config.oauth.refresh_token_idle_ttl.as_secs(),
+        config.oauth.refresh_token_max_ttl.as_secs(),
+        config.oauth.client_registration_ttl.as_secs()
     );
     let mut server_finished = false;
     let result = loop {
@@ -269,6 +341,52 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_line_overrides_environment_without_parsing_shadowed_values() {
+        let mut config = OAuthConfig::default();
+        let overrides = HashMap::from([("SSMCP_ACCESS_TOKEN_TTL", Duration::from_secs(7200))]);
+        apply_oauth_options(&mut config, &overrides, |name| match name {
+            "SSMCP_ACCESS_TOKEN_TTL" => Some("invalid overridden value".into()),
+            "SSMCP_REFRESH_TOKEN_IDLE_TTL" => Some("604800".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(config.access_token_ttl, Duration::from_secs(7200));
+        assert_eq!(config.refresh_token_idle_ttl, Duration::from_secs(604800));
+        assert_eq!(
+            config.refresh_token_max_ttl,
+            OAuthConfig::default().refresh_token_max_ttl
+        );
+        assert!(
+            apply_oauth_options(&mut config, &HashMap::new(), |name| {
+                (name == "SSMCP_ACCESS_TOKEN_TTL").then(|| "invalid".into())
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn lifetime_options_require_bounded_positive_seconds() {
+        assert_eq!(
+            seconds("28800", "--access-token-ttl").unwrap().as_secs(),
+            28800
+        );
+        for value in [
+            "",
+            "0",
+            "-1",
+            "1.5",
+            "8h",
+            "315360001",
+            "18446744073709551616",
+        ] {
+            let message = seconds(value, "SSMCP_ACCESS_TOKEN_TTL")
+                .unwrap_err()
+                .to_string();
+            assert!(message.contains("SSMCP_ACCESS_TOKEN_TTL"));
+        }
+    }
     #[test]
     fn public_url_is_an_https_origin() {
         assert_eq!(

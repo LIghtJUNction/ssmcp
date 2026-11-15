@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use ssmcp::{
     broker::Broker,
     http,
+    oauth::OAuthConfig,
     wire::{self, Frame, Mode},
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -52,7 +53,11 @@ struct Registration {
 
 impl Harness {
     async fn new() -> Self {
-        let broker = Arc::new(Broker::new(ISSUER.into()));
+        Self::with_oauth_config(OAuthConfig::default()).await
+    }
+
+    async fn with_oauth_config(config: OAuthConfig) -> Self {
+        let broker = Arc::new(Broker::with_oauth_config(ISSUER.into(), config).unwrap());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = http::router(broker.clone());
@@ -107,7 +112,7 @@ impl Harness {
         else {
             panic!("Unix attachment did not return credentials");
         };
-        assert_eq!(login_expires_in, 600);
+        assert_eq!(login_expires_in, 1800);
         self.attachment = Some(Attachment {
             stream,
             task,
@@ -134,12 +139,34 @@ impl Harness {
     }
 
     async fn register(&self, method: &str, name: &str) -> Registration {
-        let response = self.client.post(format!("{}/oauth/register", self.base))
-            .json(&json!({"client_name":name,"redirect_uris":[CALLBACK],
-                "token_endpoint_auth_method":method,"grant_types":["authorization_code","refresh_token"]}))
-            .send().await.unwrap();
+        self.register_with_grants(method, name, Some(&["authorization_code", "refresh_token"]))
+            .await
+    }
+
+    async fn register_with_grants(
+        &self,
+        method: &str,
+        name: &str,
+        grants: Option<&[&str]>,
+    ) -> Registration {
+        let mut metadata = json!({"client_name":name,"redirect_uris":[CALLBACK],
+            "token_endpoint_auth_method":method});
+        if let Some(grants) = grants {
+            metadata["grant_types"] = json!(grants);
+        }
+        let response = self
+            .client
+            .post(format!("{}/oauth/register", self.base))
+            .json(&metadata)
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
         let value: Value = response.json().await.unwrap();
+        assert_eq!(
+            value["grant_types"],
+            json!(grants.unwrap_or(&["authorization_code", "refresh_token"]))
+        );
         Registration {
             id: value["client_id"].as_str().unwrap().into(),
             secret: value["client_secret"].as_str().map(str::to_owned),
@@ -279,20 +306,24 @@ impl Harness {
         request.form(&body).send().await.unwrap()
     }
 
-    async fn access_status(&self, access: &str) -> StatusCode {
-        self.client
+    async fn access(&self, access: Option<&str>) -> Response {
+        let mut request = self
+            .client
             .post(format!(
                 "{}{}",
                 self.base,
                 Url::parse(self.resource()).unwrap().path()
             ))
-            .bearer_auth(access)
             .header("MCP-Protocol-Version", "2025-11-25")
-            .json(&json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
-            .send()
-            .await
-            .unwrap()
-            .status()
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":"ping"}));
+        if let Some(access) = access {
+            request = request.bearer_auth(access);
+        }
+        request.send().await.unwrap()
+    }
+
+    async fn access_status(&self, access: &str) -> StatusCode {
+        self.access(Some(access)).await.status()
     }
 }
 
@@ -332,7 +363,7 @@ async fn tokens(response: Response) -> Value {
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     let value: Value = response.json().await.unwrap();
     assert_eq!(value["token_type"], "Bearer");
-    assert!((1..=3600).contains(&value["expires_in"].as_u64().unwrap()));
+    assert!((1..=28800).contains(&value["expires_in"].as_u64().unwrap()));
     assert!(value["access_token"].as_str().unwrap().starts_with("at_"));
     assert!(value["refresh_token"].as_str().unwrap().starts_with("rt_"));
     value
@@ -341,10 +372,13 @@ async fn tokens(response: Response) -> Value {
 #[tokio::test]
 async fn discovery_and_login_form_expose_no_reusable_ssh_bearer() {
     let harness = Harness::new().await;
-    assert_eq!(
-        harness.access_status(harness.login_code()).await,
-        StatusCode::UNAUTHORIZED
-    );
+    let rejected = harness.access(Some(harness.login_code())).await;
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    let challenge = rejected.headers()[header::WWW_AUTHENTICATE]
+        .to_str()
+        .unwrap();
+    assert!(challenge.contains("error=\"invalid_token\""));
+    assert!(!challenge.contains(harness.login_code()));
     let resource = Url::parse(harness.resource()).unwrap();
     let response = harness
         .client
@@ -353,6 +387,12 @@ async fn discovery_and_login_form_expose_no_reusable_ssh_bearer() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        !response.headers()[header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap()
+            .contains("error=")
+    );
     let metadata_path = format!("/.well-known/oauth-protected-resource{}", resource.path());
     assert!(
         response.headers()[header::WWW_AUTHENTICATE]
@@ -432,6 +472,99 @@ async fn discovery_and_login_form_expose_no_reusable_ssh_bearer() {
             .unwrap()
             .contains("frame-ancestors 'none'")
     );
+}
+
+#[tokio::test]
+async fn omitted_registration_grants_refresh_expired_access_without_a_new_login() {
+    let harness = Harness::with_oauth_config(OAuthConfig {
+        access_token_ttl: Duration::from_secs(1),
+        refresh_token_idle_ttl: Duration::from_secs(30),
+        refresh_token_max_ttl: Duration::from_secs(60),
+        client_registration_ttl: Duration::from_secs(90),
+    })
+    .await;
+    let client = harness
+        .register_with_grants("none", "silent refresh client", None)
+        .await;
+    let code = harness.code(&client).await;
+    let first = tokens(
+        harness
+            .token(&harness.exchange_parameters(&client, &code), &client)
+            .await,
+    )
+    .await;
+    assert_eq!(first["expires_in"], 1);
+    let access = first["access_token"].as_str().unwrap();
+    assert_eq!(harness.access_status(access).await, StatusCode::OK);
+
+    // Only the access token expires; the same SSH connection and refresh grant stay live.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let expired = harness.access(Some(access)).await;
+    assert_eq!(expired.status(), StatusCode::UNAUTHORIZED);
+    let challenge = expired.headers()[header::WWW_AUTHENTICATE]
+        .to_str()
+        .unwrap();
+    assert!(challenge.contains("error=\"invalid_token\""));
+    let resource_path = Url::parse(harness.resource()).unwrap();
+    assert!(challenge.contains(&format!(
+        "resource_metadata=\"{ISSUER}/.well-known/oauth-protected-resource{}\"",
+        resource_path.path()
+    )));
+
+    // A client responds to invalid_token with this token-endpoint request and retries MCP.
+    // No authorization page, login code, SSH reconnect or DCR registration is needed.
+    let refreshed = tokens(
+        harness
+            .token(
+                &harness.refresh_parameters(&client, first["refresh_token"].as_str().unwrap()),
+                &client,
+            )
+            .await,
+    )
+    .await;
+    assert_ne!(refreshed["access_token"], first["access_token"]);
+    assert_ne!(refreshed["refresh_token"], first["refresh_token"]);
+    let retried = harness
+        .access(Some(refreshed["access_token"].as_str().unwrap()))
+        .await;
+    assert_eq!(retried.status(), StatusCode::OK);
+    assert_eq!(retried.json::<Value>().await.unwrap()["result"], json!({}));
+    assert_eq!(
+        harness.access_status(access).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn explicit_authorization_code_registration_opts_out_of_refresh_tokens() {
+    let harness = Harness::new().await;
+    let client = harness
+        .register_with_grants("none", "access only client", Some(&["authorization_code"]))
+        .await;
+    let code = harness.code(&client).await;
+    let response = harness
+        .token(&harness.exchange_parameters(&client, &code), &client)
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let grant: Value = response.json().await.unwrap();
+    assert_eq!(grant["token_type"], "Bearer");
+    assert_eq!(grant["expires_in"], 28800);
+    assert!(grant.get("refresh_token").is_none());
+    assert_eq!(
+        harness
+            .access_status(grant["access_token"].as_str().unwrap())
+            .await,
+        StatusCode::OK
+    );
+    invalid_grant(
+        harness
+            .token(
+                &harness.refresh_parameters(&client, &format!("rt_{}", "0".repeat(64))),
+                &client,
+            )
+            .await,
+    )
+    .await;
 }
 
 #[tokio::test]
