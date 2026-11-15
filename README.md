@@ -77,7 +77,7 @@ ssmcp -F ~/.ssh/ssmcp_config alice@my-server
 
 服务器仅监听 loopback HTTP，公网交给 HTTPS 反向代理。存在 `Origin` 请求头时，必须匹配配置的公网 origin。secret 使用 `Authorization` 请求头传递，程序不会把它写入 URL 或服务日志；客户端的成功输出包含 secret，应按凭据保存。
 
-本机退出、SSH 断开或守护进程重启后，原 secret 失效。客户端关闭 PTY 并清理 shell 和普通前台任务。主动脱离终端会话的守护进程不属于这种终端生命周期管理范围。
+本机退出、SSH 断开或守护进程重启后，原 secret 失效。客户端关闭 PTY 并清理 shell 和普通前台、后台任务。主动脱离终端会话的守护进程不属于这种终端生命周期管理范围。
 
 ## 开发与验证
 
@@ -90,6 +90,8 @@ python3 scripts/e2e.py --bin-dir target/debug
 ```
 
 端到端测试使用独立的本机 `sshd`、临时 Ed25519 密钥、临时 known_hosts 和随机 loopback 端口，覆盖真实 SSH 认证、两代 MCP 协议、终端操作与断线撤销。测试不需要生产服务器或已有私钥。CI 在 Linux x86_64 与 arm64 上执行同一套检查。
+
+本次交付的测试结果和证据见 [验收报告](docs/validation.md)。
 
 `ssmcp.xxxx.yyy` 是部署占位域名。部署前将它替换为你实际控制、已指向服务器的域名。
 
