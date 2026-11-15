@@ -2,7 +2,7 @@
 //!
 //! Protocol: <https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http>
 use crate::{
-    broker::{Broker, Session},
+    broker::{Authorization, Broker, Session},
     code_mode::{self, DEFAULT_TIMEOUT_MS, Host, HostRequest, MAX_CODE_BYTES, MAX_TIMEOUT_MS},
     wire::{MAX_FRAME, Operation},
 };
@@ -59,9 +59,10 @@ async fn endpoint(
     let Some(secret) = bearer(headers) else {
         return unauthorized(&broker.public_url, &user, has_bearer_authorization(headers));
     };
-    let Some(session) = broker.authenticate(&user, secret).await else {
+    if broker.authenticate(&user, secret).await.is_none() {
         return unauthorized(&broker.public_url, &user, true);
-    };
+    }
+    let access_token = secret.to_owned();
     if request.method() != Method::POST {
         return (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response();
     }
@@ -107,10 +108,18 @@ async fn endpoint(
     let Some(id) = request.id else {
         return StatusCode::ACCEPTED.into_response();
     };
+    // The body may arrive slowly. Check the grant again before dispatching work.
+    let Some(authorization) = broker.authenticate(&user, &access_token).await else {
+        return unauthorized(&broker.public_url, &user, true);
+    };
     let result = match action(&request, era) {
         Ok(Action::Reply(result)) => result,
-        Ok(Action::List(arguments)) => tool_result(list(&broker, &user, &session, arguments).await),
-        Ok(Action::Code(arguments)) => tool_result(execute(broker, user, session, arguments).await),
+        Ok(Action::List(arguments)) => {
+            tool_result(list(&broker, &user, &authorization, arguments).await)
+        }
+        Ok(Action::Code(arguments)) => {
+            tool_result(execute(broker, user, authorization, access_token, arguments).await)
+        }
         Err(fault) => return fault.response(Some(id)),
     };
     Json(json!({"jsonrpc":"2.0","id":id,"result":decorate_result(result, era)})).into_response()
@@ -384,7 +393,7 @@ fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
 
-const INSTRUCTIONS: &str = "Use list to discover online clients for this SSH account, then list({client_id}) for a client's native tool names and schemas. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. All -t backends are accessed inside code_mode. Native policies and approvals remain in effect. Credentials authorize this account's clients while the issuing SSH connection stays alive.";
+const INSTRUCTIONS: &str = "Use list to discover clients allowed for your authenticated identity and this endpoint, then list({client_id}) for a client's native tool names and schemas. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. All -t backends are accessed inside code_mode. Native policies and approvals remain in effect. Each client's access policy is enforced for discovery and native calls. Login-code grants end when their issuing SSH connection ends.";
 
 fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
     match request.method {
@@ -511,11 +520,11 @@ fn usage() -> Value {
 async fn list(
     broker: &Broker,
     user: &str,
-    anchor: &Arc<Session>,
+    authorization: &Authorization,
     arguments: ListArguments,
 ) -> Result<Value, String> {
     if let Some(id) = arguments.client_id {
-        let session = broker.client(user, anchor, &id).await?;
+        let session = broker.client(user, authorization, &id).await?;
         let mut page = session
             .call(Operation::ListTools {
                 cursor: arguments.cursor,
@@ -527,7 +536,7 @@ async fn list(
         page["client"] = client_info(&session);
         return Ok(page);
     }
-    let sessions = broker.clients(user, anchor).await?;
+    let sessions = broker.clients(user, authorization).await?;
     let clients: Vec<_> = sessions
         .iter()
         .map(|session| client_info(session))
@@ -538,10 +547,11 @@ async fn list(
 async fn execute(
     broker: Arc<Broker>,
     user: String,
-    anchor: Arc<Session>,
+    authorization: Authorization,
+    access_token: String,
     arguments: CodeArguments,
 ) -> Result<Value, String> {
-    let sessions = broker.clients(&user, &anchor).await?;
+    let sessions = broker.clients(&user, &authorization).await?;
     let clients = json!(
         sessions
             .iter()
@@ -551,7 +561,7 @@ async fn execute(
     let host: Host = Arc::new(move |request| {
         let broker = broker.clone();
         let user = user.clone();
-        let anchor = anchor.clone();
+        let access_token = access_token.clone();
         Box::pin(async move {
             let (client_id, operation) = match request {
                 HostRequest::Call {
@@ -563,8 +573,13 @@ async fn execute(
                     (client_id, Operation::ListTools { cursor })
                 }
             };
-            // Recheck the issuing lease for every host call, including calls after await.
-            let session = broker.client(&user, &anchor, &client_id).await?;
+            // A snapshot grants no authority. Recheck token state, resource scope,
+            // the live connection and its ACL for every call, including after await.
+            let authorization = broker
+                .authenticate(&user, &access_token)
+                .await
+                .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
+            let session = broker.client(&user, &authorization, &client_id).await?;
             session.call(operation).await
         })
     });
@@ -582,7 +597,7 @@ pub(crate) fn tool_definitions() -> Value {
     json!([
         {
             "name":"list",
-            "description":"List all online clients for this SSH account with unique id, name, type, hostname and startup cwd. With client_id, return that client's native tool names, descriptions and input schemas for use inside code_mode; follow nextCursor with cursor to page. Names are display labels; use id to dispatch.",
+            "description":"List online clients allowed for your authenticated identity and this endpoint, with unique id, name, type, hostname and startup cwd. With client_id, return that client's native tool names, descriptions and input schemas for use inside code_mode; follow nextCursor with cursor to page. Names are display labels; use id to dispatch. Client access policies are checked on every lookup.",
             "inputSchema":{"type":"object","properties":{
                 "client_id":{"type":"string","minLength":1,"maxLength":64},
                 "cursor":{"type":"string","maxLength":128}

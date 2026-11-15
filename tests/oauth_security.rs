@@ -94,6 +94,7 @@ impl Harness {
                     name: "oauth-test".into(),
                     cwd: "/test".into(),
                     hostname: "localhost".into(),
+                    allow: Vec::new(),
                 },
             },
         )

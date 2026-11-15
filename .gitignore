@@ -3,3 +3,5 @@
 *.sock
 /.local/
 __pycache__/
+/ssmcpd.toml
+/.env

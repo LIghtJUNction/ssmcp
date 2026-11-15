@@ -14,15 +14,24 @@ const SSH: &str = r#"#!/usr/bin/python3
 import json, os, pathlib, sys, time
 directory = pathlib.Path(os.environ["SSMCP_STARTUP_DIR"])
 scenario = os.environ["SSMCP_STARTUP_SCENARIO"]
-assert json.loads(sys.stdin.readline())["type"] == "hello"
-print(json.dumps({"type":"ready", "url":"https://ssmcp.example/alice",
-                  "login_code":"a"*64, "login_expires_in":600,
+hello = json.loads(sys.stdin.readline())
+assert hello["type"] == "hello"
+(directory / "hello.json").write_text(json.dumps(hello))
+github = scenario.startswith("github-")
+code = "" if github else "a"*64
+expires = 0 if github else 600
+if scenario == "github-legacy":
+    code, expires = "a"*64, 600
+elif scenario == "github-bad-ttl":
+    expires = 600
+print(json.dumps({"type":"ready", "url":"https://ssmcp.example/mcp" if github else "https://ssmcp.example/alice",
+                  "login_code":code, "login_expires_in":expires,
                   "client_id":"b"*64}), flush=True)
 deadline = time.monotonic() + 5
 while not (directory / "native-request").exists():
     assert time.monotonic() < deadline, "native startup was never reached"
     time.sleep(0.005)
-if scenario == "healthy":
+if scenario.endswith("healthy"):
     # A partial frame must survive native startup and tool discovery.
     frame = json.dumps({"type":"call", "id":7, "operation":{"op":"list_tools"}}) + "\n"
     split = len(frame) // 2
@@ -46,7 +55,7 @@ for line in sys.stdin:
     request = json.loads(line)
     if request.get("type") == "get_state":
         (directory / "native-request").write_text("startup")
-        time.sleep(1.2 if scenario == "healthy" else 0.4)
+        time.sleep(1.2 if scenario.endswith("healthy") else 0.4)
         response = {"type":"response", "id":request["id"], "command":"get_state",
                     "success":True, "data":{}}
     elif request.get("method") == "initialize":
@@ -83,6 +92,15 @@ impl Fixture {
     }
 
     async fn run(&self, scenario: &str, phase: &str) -> std::process::Output {
+        self.run_with_args(scenario, phase, &[]).await
+    }
+
+    async fn run_with_args(
+        &self,
+        scenario: &str,
+        phase: &str,
+        extra_args: &[&str],
+    ) -> std::process::Output {
         let mut paths = vec![self.0.clone()];
         paths.extend(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
@@ -95,6 +113,7 @@ impl Fixture {
                 "--backend",
             ])
             .arg(self.0.join("native"))
+            .args(extra_args)
             .arg("alice@fixture")
             .env("PATH", std::env::join_paths(paths).unwrap())
             .env("SSMCP_STARTUP_DIR", &self.0)
@@ -188,6 +207,8 @@ async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
     let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(ready["type"], "pi");
     assert_eq!(ready["client_id"], "b".repeat(64));
+    assert!(ready.get("auth").is_none());
+    assert!(ready.get("allow").is_none());
     assert_eq!(ready["login_code"].as_str().unwrap().len(), 64);
     assert!((1..600).contains(&ready["login_expires_in"].as_u64().unwrap()));
     let reply: Value =
@@ -202,4 +223,58 @@ async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
             .any(|tool| tool["name"] == "pi.get_state")
     );
     fixture.assert_native_stopped().await;
+}
+
+#[tokio::test]
+async fn github_allow_handshake_publishes_browser_auth_without_login_code() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .run_with_args(
+            "github-healthy",
+            "startup",
+            &[
+                "--allow",
+                "OctoCat@GitHub, Alice@github",
+                "--allow",
+                "OCTOCAT@github",
+            ],
+        )
+        .await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(ready["auth"], "github");
+    assert_eq!(ready["url"], "https://ssmcp.example/mcp");
+    assert_eq!(
+        ready["allow"],
+        serde_json::json!(["octocat@github", "alice@github"])
+    );
+    assert_eq!(ready["client_id"], "b".repeat(64));
+    assert!(ready.get("login_code").is_none());
+    assert!(ready.get("login_expires_in").is_none());
+    let hello: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("hello.json")).unwrap()).unwrap();
+    assert_eq!(hello["version"], 4);
+    assert_eq!(hello["metadata"]["allow"], ready["allow"]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("allowed GitHub account"));
+    fixture.assert_native_stopped().await;
+}
+
+#[tokio::test]
+async fn github_allow_fails_closed_before_backend_start_if_server_returns_legacy_credentials() {
+    for scenario in ["github-legacy", "github-bad-ttl"] {
+        let fixture = Fixture::new();
+        let output = fixture
+            .run_with_args(scenario, "startup", &["--allow", "alice@github"])
+            .await;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!fixture.0.join("native-pid").exists());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("did not acknowledge the --allow"), "{error}");
+        assert!(!error.contains(&"a".repeat(64)));
+    }
 }

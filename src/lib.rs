@@ -5,6 +5,7 @@ pub mod broker;
 pub mod client;
 pub mod code_mode;
 pub mod http;
+pub mod identity;
 pub mod oauth;
 pub mod pty;
 pub mod wire;

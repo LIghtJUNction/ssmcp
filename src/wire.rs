@@ -11,8 +11,10 @@ pub const MAX_WRITE: usize = 16 * 1024;
 pub const MAX_WAIT_MS: u64 = 5_000;
 pub const MAX_INFLIGHT: usize = 16;
 pub const MAX_CLIENTS_PER_USER: usize = 128;
+pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 
-/// Display metadata supplied by the local client, never an authentication identity.
+/// Metadata and access policy supplied by the SSH-authenticated local client.
+/// These fields never select or replace the authenticated SSH account.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ClientMetadata {
@@ -20,6 +22,10 @@ pub struct ClientMetadata {
     /// Absolute working directory at client startup; agent sessions may use other directories.
     pub cwd: String,
     pub hostname: String,
+    /// Canonical GitHub principals allowed to access this connection.
+    /// Empty retains connection-bound login-code authorization.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
 }
 
 impl ClientMetadata {
@@ -39,8 +45,43 @@ impl ClientMetadata {
         if !std::path::Path::new(&self.cwd).is_absolute() {
             return Err("client cwd must be an absolute path".into());
         }
+        if self.allow.len() > MAX_ALLOWED_PRINCIPALS {
+            return Err(format!(
+                "client allow list must contain at most {MAX_ALLOWED_PRINCIPALS} GitHub principals"
+            ));
+        }
+        for (index, principal) in self.allow.iter().enumerate() {
+            if canonical_github_principal(principal)? != *principal {
+                return Err("client allow entries must use lowercase username@github".into());
+            }
+            if self.allow[..index].contains(principal) {
+                return Err("client allow list must not contain duplicate principals".into());
+            }
+        }
         Ok(())
     }
+}
+
+/// Validate a GitHub principal and return its case-insensitive canonical form.
+pub fn canonical_github_principal(principal: &str) -> Result<String, String> {
+    let (username, provider) = principal
+        .split_once('@')
+        .ok_or("allow entries must use username@github")?;
+    if !provider.eq_ignore_ascii_case("github") {
+        return Err("allow entries must use username@github; only GitHub is supported".into());
+    }
+    if username.is_empty()
+        || username.len() > 39
+        || username.starts_with('-')
+        || username.ends_with('-')
+        || username.contains("--")
+        || !username
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("invalid GitHub username: use 1..=39 ASCII letters or digits, with optional single hyphens between them".into());
+    }
+    Ok(format!("{}@github", username.to_ascii_lowercase()))
 }
 
 /// Public discovery information. IDs identify a connection, not a display name.
@@ -259,6 +300,7 @@ mod tests {
                     name: "dev".into(),
                     cwd: "/project".into(),
                     hostname: "localhost".into(),
+                    allow: Vec::new(),
                 },
             },
         )
@@ -269,8 +311,8 @@ mod tests {
             Some(Frame::Hello {
                 version: VERSION,
                 mode: Mode::Shell,
-                metadata: ClientMetadata { name, cwd, hostname },
-            }) if name == "dev" && cwd == "/project" && hostname == "localhost"
+                metadata: ClientMetadata { name, cwd, hostname, allow },
+            }) if name == "dev" && cwd == "/project" && hostname == "localhost" && allow.is_empty()
         ));
     }
     #[test]
@@ -279,6 +321,7 @@ mod tests {
             name: "My workstation".into(),
             cwd: "/home/user/project".into(),
             hostname: "workstation".into(),
+            allow: Vec::new(),
         };
         assert!(valid.validate().is_ok());
         for name in ["".into(), "  ".into(), "bad\nname".into(), "x".repeat(129)] {
@@ -313,6 +356,69 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+    #[test]
+    fn github_principals_enforce_username_rules_and_normalize_case() {
+        for (input, expected) in [
+            ("OctoCat@GitHub", "octocat@github"),
+            ("a@github", "a@github"),
+            ("9-Dev@github", "9-dev@github"),
+        ] {
+            assert_eq!(canonical_github_principal(input).unwrap(), expected);
+        }
+        assert!(canonical_github_principal(&format!("{}@github", "a".repeat(39))).is_ok());
+        assert!(canonical_github_principal(&format!("{}@github", "a".repeat(40))).is_err());
+        for input in [
+            "",
+            "alice",
+            "@github",
+            "alice@",
+            "alice@example.com",
+            "alice@github.com",
+            "alice@github@github",
+            "-alice@github",
+            "alice-@github",
+            "alice--dev@github",
+            "alice_dev@github",
+            "alice.dev@github",
+            "álìce@github",
+            "alice\n@github",
+            " alice@github",
+        ] {
+            assert!(canonical_github_principal(input).is_err(), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn client_metadata_keeps_legacy_shape_and_validates_allow_policy() {
+        let legacy = serde_json::json!({
+            "name":"dev", "cwd":"/project", "hostname":"workstation"
+        });
+        let mut metadata: ClientMetadata = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(metadata.allow.is_empty());
+        assert!(metadata.validate().is_ok());
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), legacy);
+        metadata.allow = vec!["alice@github".into(), "bob@github".into()];
+        assert!(metadata.validate().is_ok());
+        assert_eq!(
+            serde_json::to_value(&metadata).unwrap()["allow"],
+            serde_json::json!(["alice@github", "bob@github"])
+        );
+        for allow in [
+            vec!["Alice@github".into()],
+            vec!["alice@example.com".into()],
+            vec!["alice@github".into(), "alice@github".into()],
+            (0..=MAX_ALLOWED_PRINCIPALS)
+                .map(|i| format!("user-{i}@github"))
+                .collect(),
+        ] {
+            metadata.allow = allow;
+            assert!(metadata.validate().is_err());
+        }
+        metadata.allow = (0..MAX_ALLOWED_PRINCIPALS)
+            .map(|i| format!("user-{i}@github"))
+            .collect();
+        assert!(metadata.validate().is_ok());
     }
     #[test]
     fn rejects_unknown_fields_and_invalid_limits() {

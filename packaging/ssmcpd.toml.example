@@ -1,0 +1,21 @@
+# Copy to /etc/ssmcpd/ssmcpd.toml, owned by ssmcpd with mode 0600.
+# Precedence: command line > environment > TOML > built-in defaults.
+# Existing ssmcpd.env values override the corresponding TOML values.
+
+[server]
+listen = "127.0.0.1:8080"
+public_url = "https://ssmcp.example.com"
+socket = "/run/ssmcpd/control.sock"
+
+[oauth]
+access_token_ttl = 28800
+refresh_token_idle_ttl = 2592000
+refresh_token_max_ttl = 7776000
+client_registration_ttl = 31536000
+
+# Enable GitHub login by uncommenting this section and setting your OAuth App.
+# Its callback must equal server.public_url + "/oauth/callback/github".
+# Keep the actual secret in the server's private config, never in source control.
+# [auth.github]
+# client_id = "YOUR_GITHUB_OAUTH_CLIENT_ID"
+# client_secret = "YOUR_GITHUB_OAUTH_CLIENT_SECRET"

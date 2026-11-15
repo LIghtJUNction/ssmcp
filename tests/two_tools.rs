@@ -70,6 +70,7 @@ impl Server {
                     name: "same-display-name".into(),
                     cwd: format!("/workspace/{}", mode.name()),
                     hostname: "fixture".into(),
+                    allow: Vec::new(),
                 },
             },
         )

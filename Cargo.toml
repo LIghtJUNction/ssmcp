@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Expose a local shell or coding agent as MCP through SSH public-key authentication"
@@ -13,12 +13,13 @@ base64 = "0.22"
 libc = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect"] }
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_urlencoded = "0.7"
 sha2 = "0.10"
 subtle = "2.6"
+toml = "0.8"
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "signal", "time", "fs"] }
 
 [profile.release]
