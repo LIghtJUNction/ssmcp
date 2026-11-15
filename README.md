@@ -1,5 +1,14 @@
 # ssmcp
 
+## Live demo
+
+[**Watch the edited demo video (English on-screen guide)**](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk)
+
+The recording demonstrates a real remote terminal session: discover an online client with `list`, orchestrate its native tools with `code_mode`, execute a shell command, and read the terminal output.
+
+**What you are seeing:** real commands and output from the connected machine — not a simulated terminal.
+
+
 用 SSH 公钥连接本机 shell 或编码智能体，再通过两个 MCP 工具统一控制：`list` 发现客户端，`code_mode` 用 JavaScript 调用客户端能力。
 
 ```sh
