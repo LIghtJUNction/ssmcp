@@ -33,7 +33,7 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/assets
 	install -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/
 	install -m 0644 docs/*.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/
-	install -m 0644 docs/assets/*.svg $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/assets/
+	install -m 0644 docs/assets/*.svg docs/assets/*.jpg $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/assets/
 	install -m 0644 packaging/sshd-ssmcp.conf packaging/Caddyfile packaging/ssmcpd.env $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
 
 # Installs the unit and a first-time config; account creation and activation are explicit.
