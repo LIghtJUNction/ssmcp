@@ -352,9 +352,11 @@ impl Terminal {
 }
 
 pub(crate) fn stop_session(session: libc::pid_t, leader: &OwnedFd) {
-    // Job-control shells put background jobs in separate process groups. Take one
-    // session snapshot, then signal pidfds so PID reuse cannot target another process.
-    // This is cleanup for ordinary jobs, not containment for deliberate setsid/fork escape.
+    // Shell jobs can have their own process groups, and native coding agents can
+    // create child sessions. Include both this session and its still-owned process
+    // descendants, then signal pidfds rather than reusable numeric process IDs.
+    // Already reparented, detached daemons require native task cleanup; this is not
+    // a security sandbox or a replacement for a cgroup supervisor.
     let mut members = Vec::new();
     if let Ok(entries) = std::fs::read_dir("/proc") {
         for entry in entries.flatten() {
@@ -365,12 +367,12 @@ pub(crate) fn stop_session(session: libc::pid_t, leader: &OwnedFd) {
             else {
                 continue;
             };
-            if pid == session || process_session(pid) != Some(session) {
+            if pid == session || !owned_process(pid, session) {
                 continue;
             }
             if let Ok(fd) = open_pidfd(pid) {
                 // Validate after opening: the descriptor is bound to this exact process.
-                if process_session(pid) == Some(session) {
+                if owned_process(pid, session) {
                     members.push(fd);
                 }
             }
@@ -380,6 +382,38 @@ pub(crate) fn stop_session(session: libc::pid_t, leader: &OwnedFd) {
         let _ = signal_pidfd(&member, libc::SIGKILL);
     }
     let _ = signal_pidfd(leader, libc::SIGKILL);
+}
+
+fn owned_process(pid: libc::pid_t, leader: libc::pid_t) -> bool {
+    if process_session(pid) == Some(leader) {
+        return true;
+    }
+    // Validate every observed edge again after reaching the unreaped owner. This
+    // rejects a process that was reparented or a PID that was reused during lookup.
+    let mut ancestry = Vec::new();
+    let mut current = pid;
+    for _ in 0..256 {
+        if current <= 1 || ancestry.iter().any(|(p, _)| *p == current) {
+            return false;
+        }
+        let Some(identity) = process_parent_identity(current) else {
+            return false;
+        };
+        ancestry.push((current, identity));
+        if identity.0 == leader {
+            return ancestry
+                .iter()
+                .all(|(p, expected)| process_parent_identity(*p) == Some(*expected));
+        }
+        current = identity.0;
+    }
+    false
+}
+
+fn process_parent_identity(pid: libc::pid_t) -> Option<(libc::pid_t, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<_> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    Some((fields.get(1)?.parse().ok()?, fields.get(19)?.parse().ok()?))
 }
 
 fn process_session(pid: libc::pid_t) -> Option<libc::pid_t> {

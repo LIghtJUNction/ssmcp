@@ -430,6 +430,126 @@ async fn real_claude_backend_smoke() {
     })
     .await
     .unwrap();
+    // Claude Code 2.1.325 starts background Bash in another Linux session.
+    // Its TaskStop currently reports "No task found" for these native MCP jobs,
+    // so verify cleanup of an actual live Bash and its sleep child via pidfds.
+    let live = client
+        .call(
+            "cc.Bash",
+            json!({
+                "command":"printf '%s\\n' \"$BASHPID\"; sleep 60 & wait",
+                "description":"Exercise owned background process cleanup",
+                "run_in_background":true
+            }),
+        )
+        .await
+        .unwrap();
+    let live: Value = serde_json::from_str(live["content"][0]["text"].as_str().unwrap()).unwrap();
+    let output = PathBuf::from(live["backgroundOutputPath"].as_str().unwrap());
+    let bash_pid = timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(output) = std::fs::read_to_string(&output)
+                && let Ok(pid) = output.trim().parse::<i32>()
+            {
+                break pid;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    sleep(Duration::from_millis(100)).await;
+    let jobs = OwnedJobs::for_session(process_session(bash_pid).unwrap());
+    assert!(jobs.0.iter().any(|(pid, _)| *pid == bash_pid));
+    assert!(
+        jobs.0.len() >= 2,
+        "expected a live Bash and its sleep child"
+    );
     client.shutdown().await;
+    timeout(Duration::from_secs(2), async {
+        while !jobs.exited() {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("live native Bash or its child survived backend shutdown");
     assert_eq!(events(&client, cursor, 0).await["closed"], true);
+}
+
+// A failed smoke assertion must not strand its own 60-second background job.
+// Bind pidfds after validating this fixture's session, never signal a raw PID.
+struct OwnedJobs(Vec<(i32, std::os::fd::OwnedFd)>);
+
+impl OwnedJobs {
+    fn for_session(session: i32) -> Self {
+        use std::os::fd::FromRawFd;
+        let mut owned = Vec::new();
+        for entry in std::fs::read_dir("/proc").unwrap().flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|pid| pid.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if process_session(pid) != Some(session) {
+                continue;
+            }
+            // SAFETY: pidfd_open receives a checked integer process id.
+            let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+            if descriptor < 0 {
+                continue;
+            }
+            // SAFETY: successful pidfd_open returns a new owned descriptor.
+            let descriptor = unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor as i32) };
+            if process_session(pid) == Some(session) {
+                owned.push((pid, descriptor));
+            }
+        }
+        Self(owned)
+    }
+
+    fn exited(&self) -> bool {
+        use std::os::fd::AsRawFd;
+        self.0.iter().all(|(_, descriptor)| {
+            let mut descriptor = libc::pollfd {
+                fd: descriptor.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: poll receives one valid, writable descriptor entry.
+            unsafe {
+                libc::poll(&mut descriptor, 1, 0) == 1 && descriptor.revents & libc::POLLIN != 0
+            }
+        })
+    }
+}
+
+impl Drop for OwnedJobs {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        for (_, descriptor) in &self.0 {
+            // SAFETY: each descriptor is bound to a verified fixture process;
+            // the null siginfo requests ordinary SIGKILL delivery.
+            unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    descriptor.as_raw_fd(),
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                );
+            }
+        }
+    }
+}
+
+fn process_session(pid: i32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(") ")?
+        .1
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()
 }

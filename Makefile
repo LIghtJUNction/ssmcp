@@ -25,8 +25,9 @@ install:
 	install -m 0755 $(CARGO_TARGET_DIR)/release/ssmcp $(CARGO_TARGET_DIR)/release/ssmcpd $(DESTDIR)$(PREFIX)/bin/
 	install -m 0644 packaging/man/ssmcp.1 $(DESTDIR)$(PREFIX)/share/man/man1/
 	install -m 0644 packaging/man/ssmcpd.8 $(DESTDIR)$(PREFIX)/share/man/man8/
-	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples
-	install -m 0644 README.md docs/deployment.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/
+	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs
+	install -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/
+	install -m 0644 docs/*.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/
 	install -m 0644 packaging/sshd-ssmcp.conf packaging/Caddyfile packaging/ssmcpd.env $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
 
 # Installs the unit and a first-time config; account creation and activation are explicit.

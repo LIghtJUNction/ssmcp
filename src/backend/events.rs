@@ -1,4 +1,5 @@
 //! Bounded, cursor-addressed native events, also visible on the local terminal.
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -39,6 +40,14 @@ impl EventLog {
     }
 
     pub fn push(&self, mut event: Value) {
+        // Codex command streaming carries bytes as base64. Keep the original event
+        // and add readable text so both the local transcript and MCP consumers can inspect it.
+        if event["method"] == "command/exec/outputDelta"
+            && let Some(encoded) = event["params"]["deltaBase64"].as_str()
+            && let Ok(bytes) = STANDARD.decode(encoded)
+        {
+            event["ssmcp_output_text"] = json!(String::from_utf8_lossy(&bytes));
+        }
         let encoded = event.to_string();
         // stderr is the human transcript; stdout is reserved for the endpoint credentials.
         eprintln!("[ssmcp {}] {encoded}", self.label);

@@ -97,7 +97,12 @@ impl Operation {
                 cursor: Some(cursor),
             } if cursor.len() > 128 => Err("tool cursor is too long".into()),
             Self::CallTool { name, arguments }
-                if name.is_empty() || name.len() > 128 || !arguments.is_object() =>
+                if name.is_empty()
+                    || name.len() > 128
+                    || !name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+                    || !arguments.is_object() =>
             {
                 Err("invalid tool name or arguments".into())
             }

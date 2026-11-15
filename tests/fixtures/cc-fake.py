@@ -88,7 +88,8 @@ for line in sys.stdin:
             })
         elif name == "NativeFutureTool":
             if arguments.get("spawn_child"):
-                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                         start_new_session=True)
                 (directory / "child-pid").write_text(str(child.pid))
             send({"jsonrpc": "2.0", "method": "notifications/progress", "params": {
                 "progressToken": parameters["_meta"]["progressToken"], "progress": 1,

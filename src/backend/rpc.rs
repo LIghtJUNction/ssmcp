@@ -123,7 +123,7 @@ impl Peer {
         if encoded.len() > MAX_NATIVE_FRAME {
             return Err("native request exceeds 16 MiB".into());
         }
-        timeout(Duration::from_secs(10), async {
+        let outcome = timeout(Duration::from_secs(10), async {
             let mut guard = self.writer.lock().await;
             let writer = guard
                 .as_mut()
@@ -132,8 +132,16 @@ impl Peer {
             writer.flush().await
         })
         .await
-        .map_err(|_| "native stdin write timed out".to_string())?
-        .map_err(|e| e.to_string())
+        .map_err(|_| "native stdin write timed out".to_string())
+        .and_then(|result| result.map_err(|e| e.to_string()));
+        if let Err(error) = &outcome {
+            // A cancelled/failed write may leave half a JSON frame in the pipe.
+            // Never reuse it for a subsequent request or retry a mutating call.
+            self.fail(error);
+            self.writer.lock().await.take();
+            self.process.lock().await.shutdown().await;
+        }
+        outcome
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Response {
@@ -352,8 +360,10 @@ impl Peer {
             }
         }
         // Codex explicitly resolves approval/input requests on turn cancellation as well.
-        if message["method"] == "serverRequest/resolved"
-            && let Some(id) = message["params"].get("requestId")
+        if matches!(
+            message["method"].as_str(),
+            Some("serverRequest/resolved" | "notifications/cancelled")
+        ) && let Some(id) = message["params"].get("requestId")
         {
             self.requests.lock().unwrap().remove(&id.to_string());
         }

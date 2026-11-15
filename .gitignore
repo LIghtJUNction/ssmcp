@@ -2,3 +2,4 @@
 *.log
 *.sock
 /.local/
+__pycache__/

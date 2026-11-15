@@ -451,7 +451,10 @@ fn server_info() -> Value {
 fn decorate_result(mut result: Value, era: Era) -> Value {
     if era == Era::Modern {
         result["resultType"] = json!("complete");
-        result["_meta"] = json!({"io.modelcontextprotocol/serverInfo":server_info()});
+        if !result.get("_meta").is_some_and(Value::is_object) {
+            result["_meta"] = json!({});
+        }
+        result["_meta"]["io.modelcontextprotocol/serverInfo"] = server_info();
     }
     result
 }
@@ -833,6 +836,19 @@ mod tests {
         ));
         value["params"]["arguments"] = json!({"rows":0,"cols":80});
         assert!(operation(&parse(&value)).is_err());
+    }
+
+    #[test]
+    fn modern_result_preserves_native_metadata() {
+        let native = json!({"content":[],"_meta":{"vendor/result":[1,2,3],"ui":{"resourceUri":"ui://native"}}});
+        let result = decorate_result(native.clone(), Era::Modern);
+        assert_eq!(
+            result["_meta"]["vendor/result"],
+            native["_meta"]["vendor/result"]
+        );
+        assert_eq!(result["_meta"]["ui"], native["_meta"]["ui"]);
+        assert_eq!(result["resultType"], "complete");
+        assert!(result["_meta"]["io.modelcontextprotocol/serverInfo"].is_object());
     }
 
     #[test]

@@ -58,3 +58,58 @@ impl Drop for Managed {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{process::Stdio, time::Duration};
+    use tokio::{
+        io::{AsyncBufReadExt, BufReader},
+        time::timeout,
+    };
+
+    #[tokio::test]
+    async fn shutdown_stops_owned_children_in_a_separate_session() {
+        let mut command = Command::new("python3");
+        command.args(["-u","-c",r#"
+import os, subprocess, sys, time
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'], start_new_session=True)
+print(child.pid, flush=True)
+time.sleep(300)
+"#]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        let mut managed = Managed::spawn(&mut command).unwrap();
+        let mut stdout = BufReader::new(managed.child.stdout.take().unwrap());
+        let mut line = String::new();
+        timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        let pid: i32 = line.trim().parse().unwrap();
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        assert_eq!(
+            stat.rsplit_once(')')
+                .unwrap()
+                .1
+                .split_whitespace()
+                .nth(3)
+                .unwrap(),
+            pid.to_string()
+        );
+        managed.shutdown().await;
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let running = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .is_some_and(|s| {
+                        s.rsplit_once(')').unwrap().1.split_whitespace().next() != Some("Z")
+                    });
+                if !running {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned child must stop even when it called setsid");
+    }
+}

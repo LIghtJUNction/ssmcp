@@ -1,6 +1,7 @@
 //! OpenCode v2's native HTTP API, discovered from the owned server's OpenAPI document.
 use super::{events::EventLog, process::Managed, result};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Method, Response, Url};
 use serde_json::{Map, Value, json};
 use std::{
@@ -17,15 +18,20 @@ use std::{
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, BufReader},
     process::Command,
-    sync::Mutex,
+    sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
     time::{sleep, timeout},
+};
+use tokio_tungstenite::{
+    connect_async_with_config,
+    tungstenite::{Message, client::IntoClientRequest, protocol::WebSocketConfig},
 };
 
 const SPEC_LIMIT: usize = 4 * 1024 * 1024;
 const RESPONSE_LIMIT: usize = 1024 * 1024;
 const LINE_LIMIT: usize = 1024 * 1024;
 const STREAM_LIMIT: usize = 32;
+type SocketInput = (Message, oneshot::Sender<Result<(), String>>);
 
 #[derive(Clone)]
 struct Operation {
@@ -48,6 +54,7 @@ pub struct OpenCode {
     events: Arc<EventLog>,
     readers: StdMutex<Vec<JoinHandle<()>>>,
     streams: StdMutex<BTreeMap<u64, JoinHandle<()>>>,
+    sockets: StdMutex<BTreeMap<u64, mpsc::Sender<SocketInput>>>,
     next_stream: AtomicU64,
     closed: AtomicBool,
 }
@@ -146,6 +153,7 @@ impl OpenCode {
             events,
             readers: StdMutex::new(vec![stderr_task, stdout_task]),
             streams: StdMutex::new(BTreeMap::new()),
+            sockets: StdMutex::new(BTreeMap::new()),
             next_stream: AtomicU64::new(1),
             closed: AtomicBool::new(false),
         });
@@ -197,21 +205,8 @@ impl OpenCode {
         match name {
             "opencode.events" => return self.events.read(arguments).await.map(result),
             "opencode.schema" => return self.schema(&arguments).map(result),
-            "opencode.stream_close" => {
-                let id = arguments
-                    .get("stream_id")
-                    .and_then(Value::as_u64)
-                    .filter(|id| *id > 0)
-                    .ok_or(
-                        "stream_id must be a positive integer; stream 0 is the local live log",
-                    )?;
-                let removed = self.streams.lock().unwrap().remove(&id);
-                let existed = removed.is_some();
-                if let Some(task) = removed {
-                    task.abort();
-                }
-                return Ok(result(json!({"stream_id":id,"closed":existed})));
-            }
+            "opencode.stream_close" => return self.close_stream(&arguments).await.map(result),
+            "opencode.stream_send" => return self.send_socket(&arguments).await.map(result),
             _ => {}
         }
         let operation = if name == "opencode.api" {
@@ -248,6 +243,21 @@ impl OpenCode {
             RESPONSE_LIMIT as u64,
         )? as usize;
         self.events.push(redact(json!({"type":"ssmcp.request","tool":name,"method":method.as_str(),"path":path,"arguments":arguments}), &self.password));
+        if operation.is_some_and(|op| {
+            op.definition.get("x-websocket").and_then(Value::as_bool) == Some(true)
+        }) || arguments.get("websocket").and_then(Value::as_bool) == Some(true)
+        {
+            if method != Method::GET
+                || arguments.get("body").is_some()
+                || arguments.get("body_base64").is_some()
+            {
+                return Err("WebSocket operations require GET and no request body".into());
+            }
+            let payload = self.open_socket(&path, &arguments, operation).await?;
+            self.events
+                .push(json!({"type":"ssmcp.response","tool":name,"path":path,"result":payload}));
+            return Ok(result(payload));
+        }
         let response = self.send(method, &path, &arguments, operation).await?;
         let status = response.status().as_u16();
         let content_type = response
@@ -332,40 +342,29 @@ impl OpenCode {
         args: &Value,
         operation: Option<&Operation>,
     ) -> Result<Response, String> {
-        let mut url = request_url(&self.base, path)?;
-        if let Some(query) = args.get("query") {
-            let query = query.as_object().ok_or("query must be an object")?;
-            let pairs = query_pairs(
-                query,
-                operation.map(|o| o.parameters.as_slice()).unwrap_or(&[]),
-            )?;
-            url.query_pairs_mut().extend_pairs(pairs);
+        let url = self.url(path, args, operation)?;
+        let mut headers = user_headers(args)?;
+        if !headers.contains_key(reqwest::header::ACCEPT) {
+            let sse = path == "/api/event"
+                || operation.is_some_and(|op| {
+                    op.definition
+                        .pointer("/responses/200/content/text~1event-stream")
+                        .is_some()
+                });
+            headers.insert(
+                reqwest::header::ACCEPT,
+                reqwest::header::HeaderValue::from_static(if sse {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                }),
+            );
         }
         let mut request = self
             .client
             .request(method, url)
+            .headers(headers)
             .basic_auth("opencode", Some(&self.password));
-        if let Some(headers) = args.get("headers") {
-            let headers = headers.as_object().ok_or("headers must be an object")?;
-            if headers.len() > 64 {
-                return Err("too many request headers".into());
-            }
-            for (name, value) in headers {
-                if matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "authorization"
-                        | "proxy-authorization"
-                        | "host"
-                        | "connection"
-                        | "content-length"
-                        | "transfer-encoding"
-                ) {
-                    return Err(format!("ssmcp manages the {name} header"));
-                }
-                request =
-                    request.header(name, value.as_str().ok_or("header values must be strings")?);
-            }
-        }
         if args.get("body").is_some() && args.get("body_base64").is_some() {
             return Err("use either body or body_base64".into());
         }
@@ -400,6 +399,162 @@ impl OpenCode {
                 "OpenCode request timed out; a mutating request may still have run".to_owned()
             })?
             .map_err(|e| e.to_string())
+    }
+
+    fn url(&self, path: &str, args: &Value, operation: Option<&Operation>) -> Result<Url, String> {
+        let mut url = request_url(&self.base, path)?;
+        if let Some(query) = args.get("query") {
+            let query = query.as_object().ok_or("query must be an object")?;
+            let pairs = query_pairs(
+                query,
+                operation.map(|o| o.parameters.as_slice()).unwrap_or(&[]),
+            )?;
+            url.query_pairs_mut().extend_pairs(pairs);
+        }
+        Ok(url)
+    }
+
+    async fn open_socket(
+        &self,
+        path: &str,
+        args: &Value,
+        operation: Option<&Operation>,
+    ) -> Result<Value, String> {
+        let mut url = self.url(path, args, operation)?;
+        url.set_scheme("ws")
+            .map_err(|_| "could not construct the local WebSocket URL")?;
+        let mut request = url
+            .as_str()
+            .into_client_request()
+            .map_err(|e| e.to_string())?;
+        for (name, value) in &user_headers(args)? {
+            request.headers_mut().insert(name, value.clone());
+        }
+        let authorization = format!(
+            "Basic {}",
+            STANDARD.encode(format!("opencode:{}", self.password))
+        );
+        request.headers_mut().insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&authorization)
+                .map_err(|_| "invalid internal authorization header")?,
+        );
+        let config = WebSocketConfig::default()
+            .max_message_size(Some(RESPONSE_LIMIT))
+            .max_frame_size(Some(RESPONSE_LIMIT))
+            .write_buffer_size(0)
+            .max_write_buffer_size(RESPONSE_LIMIT + 1024);
+        let wait = integer_option(args, "timeout_ms", 30_000, 1, 120_000)?;
+        let (mut socket, _) = timeout(
+            Duration::from_millis(wait),
+            connect_async_with_config(request, Some(config), true),
+        )
+        .await
+        .map_err(|_| "OpenCode WebSocket connection timed out")?
+        .map_err(|e| e.to_string())?;
+        let id = self.next_stream.fetch_add(1, Ordering::Relaxed);
+        let mut streams = self.streams.lock().unwrap();
+        streams.retain(|_, task| !task.is_finished());
+        let mut sockets = self.sockets.lock().unwrap();
+        sockets.retain(|id, _| streams.contains_key(id));
+        if streams.len() >= STREAM_LIMIT {
+            return Err("too many OpenCode streams; close an existing stream".into());
+        }
+        let (sender, mut inputs) = mpsc::channel::<SocketInput>(8);
+        sockets.insert(id, sender);
+        let events = self.events.clone();
+        let password = self.password.clone();
+        let path = path.to_owned();
+        streams.insert(id, tokio::spawn(async move {
+            let error = loop {
+                tokio::select! {
+                    command = inputs.recv() => {
+                        let Some((message, done)) = command else {
+                            let _ = socket.close(None).await;
+                            break None;
+                        };
+                        let closing = matches!(&message, Message::Close(_));
+                        let sent = socket.send(message).await.map_err(|e|e.to_string());
+                        let error = sent.as_ref().err().cloned();
+                        let _ = done.send(sent);
+                        if closing || error.is_some() { break error; }
+                    },
+                    frame = socket.next() => match frame {
+                        Some(Ok(message)) => {
+                            let flush = matches!(&message,Message::Ping(_) | Message::Close(_));
+                            let closed = matches!(&message,Message::Close(_));
+                            if let Some(data) = socket_event(message) {
+                                events.push(redact(json!({"type":"opencode.websocket","stream_id":id,"path":path,"frame":data}),&password));
+                            }
+                            // tungstenite queues protocol replies to received ping/close frames.
+                            if flush && let Err(error) = socket.flush().await { break Some(error.to_string()); }
+                            if closed { break None; }
+                        },
+                        Some(Err(error)) => break Some(error.to_string()),
+                        None => break None,
+                    },
+                }
+            };
+            events.push(redact(json!({"type":"ssmcp.stream_closed","stream_id":id,"error":error}),&password));
+        }));
+        Ok(
+            json!({"status":101,"stream_id":id,"events_tool":"opencode.events",
+            "send_tool":"opencode.stream_send","close_tool":"opencode.stream_close"}),
+        )
+    }
+
+    async fn send_socket(&self, arguments: &Value) -> Result<Value, String> {
+        let id = stream_id(arguments)?;
+        let (message, bytes) = socket_message(arguments)?;
+        let sender = self
+            .sockets
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or("stream_id is not an open WebSocket")?;
+        self.events.push(redact(
+            json!({"type":"ssmcp.request","tool":"opencode.stream_send","arguments":arguments}),
+            &self.password,
+        ));
+        let (done, waiting) = oneshot::channel();
+        timeout(Duration::from_secs(5), async {
+            sender
+                .send((message, done))
+                .await
+                .map_err(|_| "OpenCode WebSocket has closed".to_owned())?;
+            waiting
+                .await
+                .map_err(|_| "OpenCode WebSocket stopped before confirming the write".to_owned())?
+        })
+        .await
+        .map_err(|_| "OpenCode WebSocket write timed out; the message may still be sent")??;
+        let output = json!({"stream_id":id,"sent":true,"bytes":bytes});
+        self.events
+            .push(json!({"type":"ssmcp.response","tool":"opencode.stream_send","result":output}));
+        Ok(output)
+    }
+
+    async fn close_stream(&self, arguments: &Value) -> Result<Value, String> {
+        let id = stream_id(arguments)?;
+        let sender = self.sockets.lock().unwrap().remove(&id);
+        if let Some(sender) = sender {
+            let (done, waiting) = oneshot::channel();
+            let _ = timeout(Duration::from_secs(2), async {
+                sender.send((Message::Close(None), done)).await.ok()?;
+                waiting.await.ok()
+            })
+            .await;
+        }
+        let removed = self.streams.lock().unwrap().remove(&id);
+        let existed = removed.is_some();
+        if let Some(task) = removed {
+            task.abort();
+        }
+        let output = json!({"stream_id":id,"closed":existed});
+        self.events
+            .push(json!({"type":"ssmcp.response","tool":"opencode.stream_close","result":output}));
+        Ok(output)
     }
 
     fn start_stream(
@@ -448,6 +603,7 @@ impl OpenCode {
         for (_, task) in std::mem::take(&mut *self.streams.lock().unwrap()) {
             task.abort();
         }
+        self.sockets.lock().unwrap().clear();
         if let Some(mut process) = self.process.lock().await.take() {
             drop(process.child.stdin.take());
             process.shutdown().await;
@@ -527,6 +683,116 @@ fn integer_option(
             .filter(|n| *n >= min && *n <= max)
             .ok_or_else(|| format!("{key} must be an integer in {min}..={max}")),
     }
+}
+
+fn user_headers(args: &Value) -> Result<reqwest::header::HeaderMap, String> {
+    let mut output = reqwest::header::HeaderMap::new();
+    let Some(headers) = args.get("headers") else {
+        return Ok(output);
+    };
+    let headers = headers.as_object().ok_or("headers must be an object")?;
+    if headers.len() > 64 {
+        return Err("too many request headers".into());
+    }
+    for (name, value) in headers {
+        let lower = name.to_ascii_lowercase();
+        if matches!(
+            lower.as_str(),
+            "authorization"
+                | "proxy-authorization"
+                | "host"
+                | "connection"
+                | "content-length"
+                | "transfer-encoding"
+                | "upgrade"
+        ) || lower.starts_with("sec-websocket-")
+        {
+            return Err(format!("ssmcp manages the {name} header"));
+        }
+        let name =
+            reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|e| e.to_string())?;
+        let value = reqwest::header::HeaderValue::from_str(
+            value.as_str().ok_or("header values must be strings")?,
+        )
+        .map_err(|e| e.to_string())?;
+        output.insert(name, value);
+    }
+    Ok(output)
+}
+
+fn stream_id(arguments: &Value) -> Result<u64, String> {
+    arguments
+        .get("stream_id")
+        .and_then(Value::as_u64)
+        .filter(|id| *id > 0)
+        .ok_or_else(|| {
+            "stream_id must be a positive integer; stream 0 is the local live log".into()
+        })
+}
+
+fn socket_message(arguments: &Value) -> Result<(Message, usize), String> {
+    let text = arguments.get("text");
+    let base64 = arguments.get("data_base64");
+    if text.is_some() && base64.is_some() {
+        return Err("use either text or data_base64".into());
+    }
+    let kind = arguments
+        .get("kind")
+        .map(|v| v.as_str().ok_or("kind must be a string"))
+        .transpose()?
+        .unwrap_or(if base64.is_some() { "binary" } else { "text" });
+    let bytes = if let Some(text) = text {
+        text.as_str()
+            .ok_or("text must be a string")?
+            .as_bytes()
+            .to_vec()
+    } else if let Some(encoded) = base64 {
+        let encoded = encoded.as_str().ok_or("data_base64 must be a string")?;
+        if encoded.len() > RESPONSE_LIMIT.div_ceil(3) * 4 {
+            return Err("WebSocket message exceeds 1 MiB".into());
+        }
+        STANDARD
+            .decode(encoded)
+            .map_err(|_| "invalid data_base64")?
+    } else if matches!(kind, "ping" | "pong") {
+        Vec::new()
+    } else {
+        return Err("text or data_base64 is required".into());
+    };
+    let length = bytes.len();
+    if length > RESPONSE_LIMIT || (matches!(kind, "ping" | "pong") && length > 125) {
+        return Err("WebSocket messages are limited to 1 MiB; ping/pong to 125 bytes".into());
+    }
+    let message = match kind {
+        "text" => Message::Text(
+            String::from_utf8(bytes)
+                .map_err(|_| "text messages must contain valid UTF-8")?
+                .into(),
+        ),
+        "binary" => Message::Binary(bytes.into()),
+        "ping" => Message::Ping(bytes.into()),
+        "pong" => Message::Pong(bytes.into()),
+        _ => {
+            return Err(
+                "kind must be text, binary, ping or pong; use opencode.stream_close to close"
+                    .into(),
+            );
+        }
+    };
+    Ok((message, length))
+}
+
+fn socket_event(message: Message) -> Option<Value> {
+    Some(match message {
+        Message::Text(text) => json!({"kind":"text","text":text.as_str()}),
+        Message::Binary(bytes) => json!({"kind":"binary","data_base64":STANDARD.encode(&bytes)}),
+        Message::Ping(bytes) => json!({"kind":"ping","data_base64":STANDARD.encode(&bytes)}),
+        Message::Pong(bytes) => json!({"kind":"pong","data_base64":STANDARD.encode(&bytes)}),
+        Message::Close(frame) => {
+            json!({"kind":"close","code":frame.as_ref().map(|f|u16::from(f.code)),"reason":frame.map(|f|f.reason.to_string())})
+        }
+        Message::Frame(_) => return None,
+    })
 }
 
 fn dereference<'a>(value: &'a Value, document: &'a Value) -> Result<&'a Value, String> {
@@ -1058,11 +1324,12 @@ fn redact(value: Value, password: &str) -> Value {
 
 fn extra_tools() -> Vec<Value> {
     vec![
-        json!({"name":"opencode.api","description":"Call any native OpenCode HTTP operation by operation_id, or method plus url_path on the private server. Use opencode.schema to discover input/output schemas. JSON uses body; raw bytes use body_base64. SSE starts a stream read with opencode.events. The native permission policy remains in effect.","inputSchema":{"type":"object","properties":{
-            "operation_id":{"type":"string"},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]},"url_path":{"type":"string"},"path":{"type":"object"},"query":{"type":"object"},"headers":{"type":"object","additionalProperties":{"type":"string"}},"body":{},"body_base64":{"type":"string"},"content_type":{"type":"string"},"response_max_bytes":{"type":"integer","minimum":1,"maximum":RESPONSE_LIMIT},"timeout_ms":{"type":"integer","minimum":1,"maximum":120000}},"additionalProperties":false}}),
+        json!({"name":"opencode.api","description":"Call a native OpenCode operation by operation_id, or method plus url_path on the private server. Use opencode.schema to discover schemas. JSON uses body; raw bytes use body_base64. SSE and WebSocket operations return stream_id; read with opencode.events. Set websocket=true for a raw WebSocket route. Native permission policy remains in effect.","inputSchema":{"type":"object","properties":{
+            "operation_id":{"type":"string"},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]},"url_path":{"type":"string"},"websocket":{"type":"boolean"},"path":{"type":"object"},"query":{"type":"object"},"headers":{"type":"object","additionalProperties":{"type":"string"}},"body":{},"body_base64":{"type":"string"},"content_type":{"type":"string"},"response_max_bytes":{"type":"integer","minimum":1,"maximum":RESPONSE_LIMIT},"timeout_ms":{"type":"integer","minimum":1,"maximum":120000}},"additionalProperties":false}}),
         json!({"name":"opencode.schema","description":"List installed OpenCode operations, or return a native operation and its referenced schemas by operation_id. This discovers the installed API instead of assuming a fixed OpenCode version.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"}},"additionalProperties":false}}),
         json!({"name":"opencode.events","description":"Read bounded cursor-addressed OpenCode live events, tool calls, results, permission requests and adapter logs. Also mirrored live in the local terminal. If truncated=true, advance to start_cursor; upstream stream_gap events mean native events were missed.","inputSchema":{"type":"object","properties":{"cursor":{"type":"integer","minimum":0},"max_events":{"type":"integer","minimum":1,"maximum":256,"default":50},"wait_ms":{"type":"integer","minimum":0,"maximum":5000}},"additionalProperties":false}}),
-        json!({"name":"opencode.stream_close","description":"Close an additional SSE stream opened by a native operation. Stream 0 is the always-on local live log.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1}},"required":["stream_id"],"additionalProperties":false}}),
+        json!({"name":"opencode.stream_close","description":"Close an SSE or WebSocket stream opened by a native operation. Stream 0 is the always-on local live log.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1}},"required":["stream_id"],"additionalProperties":false}}),
+        json!({"name":"opencode.stream_send","description":"Write a text/binary/ping/pong frame to an OpenCode WebSocket, such as native PTY terminal input or a client MCP JSON-RPC response. Specify text or data_base64. Data frames are bounded at 1 MiB, control frames at 125 bytes. Returns after the socket write succeeds; a timeout means delivery is uncertain.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1},"kind":{"type":"string","enum":["text","binary","ping","pong"]},"text":{"type":"string"},"data_base64":{"type":"string","contentEncoding":"base64"}},"required":["stream_id"],"additionalProperties":false}}),
     ]
 }
 
@@ -1157,6 +1424,212 @@ mod tests {
         );
     }
 
+    fn transport_backend(base: Url) -> OpenCode {
+        OpenCode {
+            client: Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            base,
+            password: "synthetic-test-password".into(),
+            process: Mutex::new(None),
+            document: json!({}),
+            operations: BTreeMap::new(),
+            catalog: Vec::new(),
+            events: EventLog::new("opencode-test"),
+            readers: StdMutex::new(Vec::new()),
+            streams: StdMutex::new(BTreeMap::new()),
+            sockets: StdMutex::new(BTreeMap::new()),
+            next_stream: AtomicU64::new(1),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    #[test]
+    fn websocket_input_and_internal_headers_are_bounded() {
+        assert!(socket_message(&json!({"kind":"ping","text":"x".repeat(126)})).is_err());
+        assert!(socket_message(&json!({"text":"x","data_base64":"eA=="})).is_err());
+        assert!(socket_message(&json!({"kind":"invalid","text":"x"})).is_err());
+        assert!(socket_message(&json!({"kind":"text","data_base64":"/w=="})).is_err());
+        assert_eq!(socket_message(&json!({"kind":"ping"})).unwrap().1, 0);
+        for name in [
+            "Authorization",
+            "Host",
+            "Connection",
+            "Upgrade",
+            "Sec-WebSocket-Key",
+        ] {
+            assert!(user_headers(&json!({"headers":{name:"override"}})).is_err());
+        }
+    }
+
+    // tungstenite's handshake callback requires its unboxed HTTP ErrorResponse.
+    #[allow(clippy::result_large_err)]
+    #[tokio::test]
+    async fn websocket_authentication_text_binary_ping_pong_and_close() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = private_url(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_hdr_async(
+                stream,
+                |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                    assert_eq!(request.uri().path(), "/ws");
+                    assert_eq!(
+                        request.headers()["authorization"],
+                        format!(
+                            "Basic {}",
+                            STANDARD.encode("opencode:synthetic-test-password")
+                        )
+                    );
+                    Ok(response)
+                },
+            )
+            .await
+            .unwrap();
+            let mut kinds = Vec::new();
+            while let Some(Ok(message)) = socket.next().await {
+                match message {
+                    Message::Text(_) => {
+                        kinds.push("text");
+                        socket.send(message).await.unwrap();
+                    }
+                    Message::Binary(_) => {
+                        kinds.push("binary");
+                        socket.send(message).await.unwrap();
+                    }
+                    Message::Ping(data) => {
+                        kinds.push("ping");
+                        socket.send(Message::Pong(data)).await.unwrap();
+                    }
+                    Message::Pong(_) => {
+                        kinds.push("pong");
+                    }
+                    Message::Close(_) => {
+                        kinds.push("close");
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            kinds
+        });
+        let backend = transport_backend(base);
+        let opened = backend
+            .call(
+                "opencode.api",
+                json!({"method":"GET","url_path":"/ws","websocket":true}),
+            )
+            .await
+            .unwrap();
+        let id = opened["structuredContent"]["stream_id"].as_u64().unwrap();
+        for args in [
+            json!({"stream_id":id,"text":"hello"}),
+            json!({"stream_id":id,"data_base64":"AP8="}),
+            json!({"stream_id":id,"kind":"ping","text":"probe"}),
+            json!({"stream_id":id,"kind":"pong","text":"reply"}),
+        ] {
+            let sent = backend.call("opencode.stream_send", args).await.unwrap();
+            assert_eq!(sent["structuredContent"]["sent"], true);
+        }
+        let mut frames = Vec::new();
+        let mut cursor = 0;
+        for _ in 0..30 {
+            let page = backend
+                .events
+                .read(json!({"cursor":cursor,"wait_ms":100}))
+                .await
+                .unwrap();
+            cursor = page["next_cursor"].as_u64().unwrap();
+            for item in page["events"].as_array().unwrap() {
+                if item["event"]["type"] == "opencode.websocket" {
+                    frames.push(item["event"]["frame"].clone());
+                }
+            }
+            if frames.len() >= 3 {
+                break;
+            }
+        }
+        assert!(
+            frames
+                .iter()
+                .any(|f| f == &json!({"kind":"text","text":"hello"}))
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|f| f == &json!({"kind":"binary","data_base64":"AP8="}))
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|f| f == &json!({"kind":"pong","data_base64":"cHJvYmU="}))
+        );
+        backend
+            .call("opencode.stream_close", json!({"stream_id":id}))
+            .await
+            .unwrap();
+        assert!(
+            backend
+                .call(
+                    "opencode.stream_send",
+                    json!({"stream_id":id,"text":"closed"})
+                )
+                .await
+                .is_err()
+        );
+        let kinds = timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(kinds, vec!["text", "binary", "ping", "pong", "close"]);
+        backend.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn http_and_websocket_redirects_do_not_forward_credentials() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = target.local_addr().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let backend = transport_backend(
+            private_url(&format!("http://{}", listener.local_addr().unwrap())).unwrap(),
+        );
+        let server = tokio::spawn(async move {
+            for scheme in ["http", "ws"] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer).await.unwrap();
+                stream.write_all(format!("HTTP/1.1 302 Found\r\nLocation: {scheme}://{address}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            }
+        });
+        let response = backend
+            .call(
+                "opencode.api",
+                json!({"method":"GET","url_path":"/redirect"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response["structuredContent"]["status"], 302);
+        assert!(
+            backend
+                .call(
+                    "opencode.api",
+                    json!({"method":"GET","url_path":"/redirect","websocket":true})
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            timeout(Duration::from_millis(100), target.accept())
+                .await
+                .is_err()
+        );
+        server.await.unwrap();
+        backend.shutdown().await;
+    }
+
     #[tokio::test]
     #[ignore = "requires an explicitly selected OpenCode v2 binary and isolated XDG directories; no model calls"]
     async fn real_opencode_without_model_calls() {
@@ -1234,6 +1707,29 @@ mod tests {
             let stream = backend.call("opencode.event.subscribe",json!({"query":{"types":["permission.asked","permission.replied"]}})).await?;
             let stream_id = stream["structuredContent"]["stream_id"].as_u64().ok_or("missing stream id")?;
             backend.call("opencode.stream_close",json!({"stream_id":stream_id})).await?;
+            let pty = backend.call("opencode.pty.create",json!({"query":{"location":{"directory":directory}},
+                "body":{"command":"/bin/sh","args":[],"cwd":directory,"title":"ssmcp WebSocket smoke"}
+            })).await?;
+            assert_eq!(pty["isError"],false,"{pty}");
+            let pty_id = pty["structuredContent"]["body"]["data"]["id"].as_str().ok_or("missing PTY id")?;
+            let socket = backend.call("opencode.pty.connect",json!({"path":{"ptyID":pty_id},"query":{"location[directory]":directory}})).await?;
+            assert_eq!(socket["structuredContent"]["status"],101);
+            let socket_id = socket["structuredContent"]["stream_id"].as_u64().ok_or("missing PTY socket id")?;
+            backend.call("opencode.stream_send",json!({"stream_id":socket_id,"text":"printf 'ssmcp-pty-%s\\n' websocket\n"})).await?;
+            let mut cursor = 0;
+            let mut pty_output = false;
+            for _ in 0..30 {
+                let page = backend.events.read(json!({"cursor":cursor,"max_events":256,"wait_ms":100})).await?;
+                cursor = page["next_cursor"].as_u64().ok_or("missing event cursor")?;
+                if page["events"].as_array().unwrap().iter().any(|e|e["event"]["type"] == "opencode.websocket"
+                    && e["event"]["frame"]["text"].as_str().is_some_and(|t|t.contains("ssmcp-pty-websocket"))) {
+                    pty_output = true; break;
+                }
+            }
+            assert!(pty_output,"native PTY WebSocket did not echo the command result");
+            backend.call("opencode.stream_close",json!({"stream_id":socket_id})).await?;
+            let removed_pty = backend.call("opencode.pty.remove",json!({"path":{"ptyID":pty_id},"query":{"location":{"directory":directory}}})).await?;
+            assert_eq!(removed_pty["structuredContent"]["status"],204);
             let events = backend.call("opencode.events",json!({"max_events":256})).await?;
             assert!(events.to_string().contains("permission.asked"));
             backend.call("opencode.shell.remove",json!({"path":{"id":shell_id},"query":{"location":{"directory":directory}}})).await?;

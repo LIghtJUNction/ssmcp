@@ -200,18 +200,16 @@ pub async fn run() -> crate::Result<()> {
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     if options.list_tools {
-        let backend = timeout(
-            Duration::from_secs(120),
-            Backend::start(
-                options.mode,
-                &options.shell,
-                options.backend.as_deref(),
-                &options.backend_args,
-            ),
-        )
-        .await
-        .map_err(|_| "local backend startup timed out")??;
-        let tools = backend.tools().await;
+        let backend = tokio::select! {
+            result = timeout(Duration::from_secs(120), Backend::start(options.mode, &options.shell, options.backend.as_deref(), &options.backend_args)) => result.map_err(|_| "local backend startup timed out")??,
+            _ = interrupt.recv() => return Ok(()),
+            _ = terminate.recv() => return Ok(()),
+        };
+        let tools = tokio::select! {
+            result = timeout(Duration::from_secs(120),backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
+            _ = interrupt.recv() => { backend.shutdown().await; return Ok(()); },
+            _ = terminate.recv() => { backend.shutdown().await; return Ok(()); },
+        };
         backend.shutdown().await;
         println!("{}", json!({"type":options.mode.name(),"tools":tools?}));
         return Ok(());
@@ -239,7 +237,7 @@ pub async fn run() -> crate::Result<()> {
         Some(Frame::Ready { url, secret }) => (url, secret),
         Some(Frame::Reject { message }) => return Err(message.into()),
         None => return Err(
-            "SSH disconnected before registration; check the SSH key, host key, and server setup"
+            "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions"
                 .into(),
         ),
         _ => return Err("unexpected registration response".into()),
@@ -301,7 +299,7 @@ pub async fn run() -> crate::Result<()> {
                         let mut result = backend.perform(operation).await;
                         // A large native response must not corrupt/disconnect the SSH stream.
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
-                            result = Err("native result exceeds the 4 MiB bridge frame limit; request a smaller page or output limit".into());
+                            result = Err("native call finished but its result exceeds the 4 MiB bridge frame limit; do not blindly repeat a mutating call, inspect native state or request a smaller output page".into());
                         }
                         if let Err(error) = &result { eprintln!("[ssmcp error] {error}"); }
                         timeout(Duration::from_secs(10),async {
