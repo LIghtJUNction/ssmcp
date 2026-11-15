@@ -10,7 +10,7 @@ ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP g
 .RB [ \-p " port" ]
 .RB [ \-\-shell " path" ]
 .RB [ \-\-backend " program" ]
-.I user@host
+.I [user@]host
 .RB [ \-\- " backend_args..." ]
 .PP
 .B ssmcp
@@ -144,6 +144,20 @@ client, then enter login_code on its authorization page. The client completes
 Authorization Code with S256 PKCE and uses an access token as its Bearer
 credential. The login code cannot be used as a Bearer token.
 .PP
+The destination may be a Host alias from ~/.ssh/config. OpenSSH resolves its
+HostName, User, Port, IdentityFile, IdentityAgent and ProxyJump settings. An
+explicit user@host overrides the configured User. Use \-F for a separate
+configuration. Local ssh-agent authentication works without agent forwarding;
+ssmcp disables forwarding, connection multiplexing and remote TTY allocation.
+.PP
+Public keys are managed by the server's OpenSSH authorized_keys policy. A key
+already accepted for that account can be reused. On a ForceCommand-restricted
+ssmcp account, update authorized_keys through a separate administrator account
+or server console; ssh-copy-id and SFTP cannot execute their normal operations
+through the fixed bridge command. Append the new public key, test a second
+connection, then remove only the old key. Removing a key affects new SSH
+authentication; close an existing connection to revoke its OAuth grants.
+.PP
 The login code expires 600 seconds after issue and is consumed by one successful
 authorization. login_expires_in subtracts backend startup time. Access tokens
 last at most one hour. Clients registered for the refresh_token grant receive
@@ -155,12 +169,19 @@ source revokes its access and refresh tokens even if other clients remain
 connected. Reconnect to obtain a new login code when a fresh authorization is
 needed. Other SSH accounts are isolated.
 .PP
+Reopening an MCP application can reuse its saved, valid OAuth tokens while the
+source SSH connection remains alive. Restarting ssmcp or ssmcpd requires a new
+authorization. Expired, revoked or replayed refresh tokens produce invalid_grant;
+reconnect with a fresh login code and authorize again. If a restarted server no
+longer recognizes a cached client_id, register the MCP connection again.
+.PP
 Native agent permissions, request IDs and approval responses remain explicit.
 ssmcp does not automatically answer native requests. Install and configure the
 selected agent on the client; the gateway does not need that agent installed.
 .SH EXAMPLES
 .nf
 ssmcp --name build-shell user@host
+ssmcp --name build-shell my-server
 ssmcp -t codex --name review-codex user@host
 ssmcp -t cc --list-tools
 .fi

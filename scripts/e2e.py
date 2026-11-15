@@ -227,6 +227,7 @@ class Harness:
             (self.directory / name).write_text(
                 f"Host ssmcp-e2e\n"
                 f"    HostName 127.0.0.1\n"
+                f"    User {self.user}\n"
                 f"    HostKeyAlias ssmcp-e2e\n"
                 f"    Port {self.ssh_port}\n"
                 f"    IdentityFile {self.directory / key}\n"
@@ -294,7 +295,7 @@ class Harness:
         wait_for(ssh_ready, description="isolated sshd")
 
     def start_client(self, label="client", *, name="workstation", cwd=None, mode=None,
-                     backend=None, backend_args=()):
+                     backend=None, backend_args=(), destination=None):
         command = [
             str(self.binary_dir / "ssmcp"), "-F", str(self.directory / "ssh_config"),
             "--name", name,
@@ -305,7 +306,7 @@ class Harness:
             command += ["--shell", "/bin/sh"]
         if backend is not None:
             command += ["--backend", str(backend)]
-        command += [f"{self.user}@ssmcp-e2e"]
+        command += [destination or f"{self.user}@ssmcp-e2e"]
         if backend_args:
             command += ["--", *map(str, backend_args)]
         process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd)
@@ -442,7 +443,9 @@ class Harness:
             f"{self.user}@ssmcp-e2e",
         ], capture_output=True, timeout=5)
         self.check(password.returncode == 255, "password and keyboard-interactive cannot authenticate")
-        self.client, credentials = self.start_client()
+        self.client, credentials = self.start_client(destination="ssmcp-e2e")
+        self.check(credentials["url"] == f"{PUBLIC_URL}/{self.user}",
+                   "bare SSH alias reuses configured User, HostName, Port, IdentityFile and host trust")
         self.oauth_login(credentials, attacks=True)
         self.client_id = credentials["client_id"]
         self.check(credentials["url"] == f"{PUBLIC_URL}/{self.user}", "endpoint username comes from SSH account")

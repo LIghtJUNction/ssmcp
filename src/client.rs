@@ -23,7 +23,36 @@ use tokio::{
     time::timeout,
 };
 
-const HELP: &str = "ssmcp — expose a local shell or coding agent over an SSH-authenticated MCP endpoint\n\nUsage: ssmcp [-t shell|codex|cc|pi|opencode] [options] user@host [-- backend_args...]\n       ssmcp -t TYPE [--backend PROGRAM] --list-tools [-- backend_args...]\n\n  -t, --type TYPE       Backend (default: shell)\n  -i identity          SSH private key file\n  -p port              SSH port\n  -F ssh_config        OpenSSH configuration file\n  --name NAME          Display name (default: hostname-type-pid)\n  --shell /path        Shell executable (shell mode only)\n  --backend PROGRAM    Override the native agent executable\n  --list-tools         Discover local tools as JSON, then exit without SSH\n\nUses only SSH public-key authentication and standard known_hosts checks.\nPrints {\"url\":\"https://host/user\",\"login_code\":\"...\",\"login_expires_in\":600,\"client_id\":\"...\",\"type\":\"shell\"} once on stdout.\nlogin_expires_in deducts local backend startup time.\nLive input, output and native agent events appear on stderr.\nKeep this process running; Ctrl-C disconnects and stops the local backend.\n";
+const HELP: &str = r#"ssmcp — expose a local shell or coding agent over an SSH-authenticated MCP endpoint
+
+Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_args...]
+       ssmcp -t TYPE [--backend PROGRAM] --list-tools [-- backend_args...]
+
+  -t, --type TYPE       Backend (default: shell)
+  -i identity          SSH private key file
+  -p port              SSH port
+  -F ssh_config        OpenSSH configuration file
+  --name NAME          Display name (default: hostname-type-pid)
+  --shell /path        Shell executable (shell mode only)
+  --backend PROGRAM    Override the native agent executable
+  --list-tools         Discover local tools as JSON, then exit without SSH
+
+Uses system OpenSSH and ~/.ssh/config, including Host aliases, User,
+IdentityFile, ssh-agent and ProxyJump. An explicit user@host overrides User.
+Uses only SSH public-key authentication and standard known_hosts checks.
+
+Examples:
+  ssmcp --name laptop my-server
+  ssmcp -t codex -F ~/.ssh/work_config my-server
+  ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
+
+Prints {"url":"https://host/user","login_code":"...","login_expires_in":600,"client_id":"...","type":"shell"} once on stdout.
+Add url to your MCP client, then enter login_code on its OAuth login page.
+login_expires_in deducts local backend startup time.
+Live input, output and native agent events appear on stderr.
+Keep this process running; Ctrl-C disconnects and revokes its OAuth grants.
+An SSH reconnect needs a new OAuth login; an MCP app restart can reuse valid tokens.
+"#;
 
 // A single reader owns every partial frame after Ready, including while a native
 // backend starts. A separate persistent status channel records a closed bridge
@@ -193,7 +222,7 @@ impl Options {
         if let Some(destination) = &destination {
             validate_destination(destination)?;
         } else if !list_tools {
-            return Err("expected user@host; see ssmcp --help".into());
+            return Err("expected an SSH host alias or user@host; see ssmcp --help".into());
         }
         if list_tools && destination.is_some() {
             return Err("--list-tools is local and does not take an SSH destination".into());
@@ -298,18 +327,22 @@ impl Options {
 }
 
 fn validate_destination(destination: &str) -> Result<(), String> {
-    let (user, host) = destination
-        .split_once('@')
-        .ok_or("destination must be user@host")?;
-    if user.is_empty()
-        || user.len() > 64
-        || user.starts_with('-')
-        || !user
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
-    {
-        return Err("invalid SSH username".into());
-    }
+    // Let OpenSSH resolve Host aliases and User from its own configuration.
+    // An explicit user@host still takes precedence, just as it does with ssh.
+    let host = if let Some((user, host)) = destination.split_once('@') {
+        if user.is_empty()
+            || user.len() > 64
+            || user.starts_with('-')
+            || !user
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        {
+            return Err("invalid SSH username".into());
+        }
+        host
+    } else {
+        destination
+    };
     if host.is_empty()
         || host.len() > 253
         || host.starts_with('-')
@@ -475,6 +508,10 @@ mod tests {
     #[test]
     fn destination_validation_rejects_shell_and_option_injection() {
         for destination in [
+            "my-server",
+            "ssmcp.example",
+            "127.0.0.1",
+            "[::1]",
             "user@host",
             "user@127.0.0.1",
             "user@[::1]",
@@ -483,7 +520,12 @@ mod tests {
             assert!(validate_destination(destination).is_ok());
         }
         for destination in [
-            "host",
+            "",
+            "-oProxyCommand=id",
+            "host;id",
+            "host name",
+            "host\n",
+            "ssh://user@host",
             "user@host;id",
             "-o@host",
             "user@-oProxyCommand=id",
@@ -493,6 +535,24 @@ mod tests {
         ] {
             assert!(validate_destination(destination).is_err());
         }
+    }
+
+    #[test]
+    fn ssh_alias_is_passed_to_openssh_without_inventing_a_username() {
+        let options = Options::parse(["-F", "config", "my-server"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        let command = options.command();
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|v| v.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            &args[args.len() - 6..],
+            ["-F", "config", "--", "my-server", "ssmcpd", "attach"]
+        );
+        assert!(Options::parse(["--list-tools", "my-server"].map(OsString::from)).is_err());
     }
 
     #[test]
