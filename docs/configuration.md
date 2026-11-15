@@ -1,0 +1,322 @@
+# 配置、SSH 公钥与登录
+
+ssmcp 直接调用系统 OpenSSH。已经能用公钥登录的服务器，可以复用现有密钥、`~/.ssh/config` 和本机 `ssh-agent`；在另一个项目目录启动客户端时，无须再次上传公钥。本文从已有服务器开始，完整部署见 [Linux 部署](deployment.md)。
+
+| 你要做什么 | 从这里开始 |
+| --- | --- |
+| 复用现有 SSH 配置、用别名连接 | [SSH 配置](#ssh-config) |
+| 首次安装或更换公钥 | [公钥管理](#public-keys) |
+| 在 ChatGPT 或其他 MCP 客户端完成登录 | [OAuth 登录](#oauth-login) |
+| 判断重新打开后是否要再次授权 | [连接与授权生命周期](#session-lifetime) |
+| 处理 `Permission denied`、过期登录码或 `invalid_grant` | [排查问题](#troubleshooting) |
+
+## 先分清三个位置
+
+| 位置 | 保存什么 | 负责什么 |
+| --- | --- | --- |
+| 本机电脑 | 项目、通常位于 `~/.ssh` 的私钥、Agent 原生配置 | 在项目目录启动 `ssmcp`，运行本机后端并通过 SSH 连到服务器 |
+| SSH 服务器 | 用户公钥、`ssmcpd`、HTTPS 入口 | OpenSSH 验证本机身份，`ssmcpd` 转发 MCP 调用 |
+| MCP 客户端，例如 ChatGPT | MCP URL、OAuth 令牌 | 用户授权后调用 `list` 与 `code_mode` |
+
+SSH 公钥回答“哪台设备能以这个服务器账户接入”。OAuth 授权回答“哪个 MCP 客户端可以使用这个账户的在线设备”。两步各有自己的凭据和有效期。[客户端实现](../src/client.rs) · [授权实现](../src/oauth.rs)
+
+<a id="ssh-config"></a>
+
+## 1. 复用已有 SSH 配置
+
+在本机 `~/.ssh/config` 中使用一个指向 ssmcp 账户的条目。如果已有条目可用，直接复用；下面的主机名、账户和密钥路径需要换成你的实际值。
+
+```sshconfig
+Host my-ssmcp
+    HostName ssmcp.example.com
+    User alice
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+```
+
+`Host` 是本机别名，`HostName` 是服务器地址，`User` 是服务器上的 Linux 账户。MCP URL 使用服务端实际认证的用户名，例如 `https://ssmcp.example.com/alice`。这里的 `User` 与 GitHub 用户名或 ChatGPT 账号无关。
+
+先查看 OpenSSH 解析出的配置。这一步不建立 SSH 连接：
+
+```sh
+ssh -G my-ssmcp | awk '$1 ~ /^(hostname|user|port|identityfile|identitiesonly|identityagent|proxyjump|proxycommand)$/'
+```
+
+在你的项目目录中启动客户端：
+
+```sh
+# 已安装的 0.3.0：显式填写服务器用户名，其他配置继续从 Host 条目读取。
+ssmcp --name ssmcp-project -t codex alice@my-ssmcp
+
+# 0.3.1 起：User 也可直接取自 SSH 配置。
+ssmcp --name ssmcp-project -t codex my-ssmcp
+```
+
+没有设置 `User` 的裸主机目标，会采用 OpenSSH 自身的用户名规则；通常为本机用户名。想固定账户时，在配置中写明 `User`，或继续使用 `alice@my-ssmcp`。`cwd` 是启动 ssmcp 时的本机目录快照，后续通过 `list` 可以找到它。
+
+### 独立配置文件、端口与密钥
+
+```sh
+# -F 使用另一份 OpenSSH 配置。
+ssmcp -F ~/.ssh/work-config -t codex alice@my-ssmcp
+
+# -p 显式选择端口；-i 提供要使用的私钥路径。
+ssmcp -p 2222 -i ~/.ssh/id_ed25519_work alice@my-ssmcp
+```
+
+`-i` 接受私钥文件，上传服务器时使用对应的 `.pub` 公钥文件。OpenSSH 可以同时配置多个 `IdentityFile`，因此单独增加 `-i` 不会排除其他密钥；需要验证某一把新密钥时，使用下文的[独立验证配置](#rotate-key)。
+
+OpenSSH 会处理 `HostName`、`User`、`Port`、`IdentityFile`、`IdentitiesOnly`、`IdentityAgent`、`Include`、`ProxyJump` 和 `ProxyCommand` 等配置。跳板机需允许相应的 SSH 转发。ssmcp 自身保持公钥认证、禁用连接复用和目标连接的转发；自定义 `RemoteCommand`、`SessionType` 等会改变 SSH 会话用途的设置应放在其他 Host 条目中。[SSH 命令构建](../src/client.rs) · [OpenSSH ssh_config](https://man.openbsd.org/ssh_config)
+
+### 有口令的私钥与 ssh-agent
+
+私钥有口令时，可以按 OpenSSH 的原生提示解锁，也可以把密钥加入已经运行的本机 agent：
+
+```sh
+ssh-add -l
+ssh-add ~/.ssh/id_ed25519
+```
+
+如果终端提示无法连接 agent，按桌面环境的方式启用它；独立 shell 也可运行 `eval "$(ssh-agent -s)"` 后再执行 `ssh-add`。ssmcp 允许本机 agent 参与认证，并关闭向服务器转发 agent。[客户端实现](../src/client.rs)
+
+首次连接出现主机指纹时，向服务器管理员核对。服务端可用 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` 查看对应主机公钥指纹；确认一致后接受。以后遇到主机密钥变化，先核实服务器是否重建或轮换密钥。[OpenSSH ssh](https://man.openbsd.org/ssh)
+
+<a id="public-keys"></a>
+<a id="更新公钥"></a>
+
+## 2. 添加或更新服务器上的公钥
+
+**已经建立 SSH 连接，说明这次使用的公钥已经被服务器接受。** 更换项目目录、启动第二个后端或重新登录 OAuth，都不要求重新登记同一把公钥。需要添加新电脑、新密钥或撤销旧密钥时，再更新服务端的授权文件。
+
+仓库提供的服务器配置使用系统 OpenSSH 账户和授权策略。通常公钥位于目标用户的 `~/.ssh/authorized_keys`，ssmcp 没有另一套公钥数据库，也没有自动上传公钥的命令。如果管理员配置了自定义 `AuthorizedKeysFile` 或 `AuthorizedKeysCommand`，应更新相应的实际来源。[服务器配置](../packaging/sshd-ssmcp.conf) · [OpenSSH sshd_config](https://man.openbsd.org/sshd_config)
+
+### 2.1 准备要登记的公钥
+
+本机已有密钥时，复用其 `.pub` 文件。确认文件和指纹：
+
+```sh
+ssh-keygen -lf ~/.ssh/id_ed25519.pub
+```
+
+需要一把独立密钥时，选择尚未使用的文件名，再运行：
+
+```sh
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_ssmcp -C "ssmcp workstation"
+```
+
+这会生成私钥 `id_ed25519_ssmcp` 和公钥 `id_ed25519_ssmcp.pub`。私钥留在本机；下文只传送 `.pub` 文件。已有同名文件时应换一个新名称，保留原密钥。
+
+### 2.2 账户尚未受 ForceCommand 限制
+
+目标账户仍允许正常 SSH 命令执行、且你已有该账户的登录方式时，可使用系统 `ssh-copy-id` 添加公钥：
+
+```sh
+ssh-copy-id -i ~/.ssh/id_ed25519.pub alice@ssmcp.example.com
+```
+
+自定义端口使用 `-p 2222`，已有可用的 Host 条目也可作为目标。这个步骤依赖服务器已允许的登录方式；ssmcp 本身只使用公钥认证。首次创建账户且没有可用登录方式时，由管理员通过管理账户或服务器控制台安装公钥。
+
+### 2.3 账户已经运行 ssmcp
+
+仓库中的 `Match Group ssmcp` 会把该组的 SSH 命令固定为 `ssmcpd attach`，连 `ssh-copy-id`、SCP/SFTP 请求也会进入桥接程序。此时使用**组外的管理账户或服务器控制台**更新公钥。[ForceCommand 配置](../packaging/sshd-ssmcp.conf)
+
+下面使用 `admin` 管理服务器、为 `alice` 添加公钥。先在本机上传公钥到管理账户：
+
+```sh
+scp ~/.ssh/id_ed25519.pub admin@ssmcp.example.com:alice-new.pub
+ssh admin@ssmcp.example.com
+```
+
+接下来在服务器的管理 shell 中运行。脚本读取目标账户的实际 home 和主组，保留已有密钥；同一公钥已存在时跳过添加，包括带有授权选项的现有条目。
+
+```sh
+sudo sh -s -- alice "$HOME/alice-new.pub" <<'SH'
+set -eu
+target_user=$1
+public_key_file=$2
+target_home=$(getent passwd "$target_user" | cut -d: -f6)
+target_group=$(id -gn "$target_user")
+case "$target_home" in
+  ""|/|[!/]*) printf 'Expected an absolute user home directory.\n' >&2; exit 1 ;;
+esac
+
+ssh-keygen -lf "$public_key_file"
+public_key=$(awk '
+  NF {
+    if (++count != 1 || $1 !~ /^(ssh-|ecdsa-|sk-)/ || NF < 2) exit 1
+    print
+  }
+  END { if (count != 1) exit 1 }
+' "$public_key_file")
+key_blob=$(printf '%s\n' "$public_key" | awk '{print $2}')
+authorized_keys="$target_home/.ssh/authorized_keys"
+
+install -d -m 0700 -o "$target_user" -g "$target_group" "$target_home/.ssh"
+touch "$authorized_keys"
+chown "$target_user:$target_group" "$authorized_keys"
+chmod 0600 "$authorized_keys"
+if awk -v key="$key_blob" '
+  /^[[:space:]]*#/ { next }
+  { for (i = 1; i <= NF; i++) if ($i == key) found = 1 }
+  END { exit !found }
+' "$authorized_keys"; then
+  printf 'Public key already registered.\n'
+else
+  printf '\n%s\n' "$public_key" >> "$authorized_keys"
+  printf 'Public key added; existing keys preserved.\n'
+fi
+SH
+```
+
+脚本适用于常见的每用户 `~/.ssh/authorized_keys` 布局。它只接受一个公钥条目，并把文件权限设为 `0600`、目录设为 `0700`。服务器启用 SELinux 时，还应按发行版要求为该 `.ssh` 目录恢复正确标签。公钥文件更新会影响后续 SSH 认证，无须为此重启 `ssmcpd`。
+
+<a id="rotate-key"></a>
+
+### 2.4 更换密钥：添加、验证、再撤销
+
+先按上面的步骤添加新公钥，并保留旧的可用连接。用单独的 SSH 配置验证新私钥，防止 agent 或其他 `IdentityFile` 意外使用旧密钥完成认证：
+
+```sh
+keycheck_config=$(mktemp)
+chmod 0600 "$keycheck_config"
+cat > "$keycheck_config" <<'SSHCONFIG'
+Host new-key-check
+    HostName ssmcp.example.com
+    User alice
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519_ssmcp
+    IdentitiesOnly yes
+    IdentityAgent none
+SSHCONFIG
+
+# 修改上面的主机、端口和新私钥路径后运行；旧版 0.3.0 也支持此写法。
+ssmcp -F "$keycheck_config" --name new-key-check alice@new-key-check
+
+# 验证连接成功，按 Ctrl-C 退出此临时客户端后清理配置。
+rm -- "$keycheck_config"
+```
+
+看到新的连接 JSON，说明指定的新私钥通过 SSH 认证并完成后端初始化。需要跳板机时，把对应 `ProxyJump` 及其 Host 配置加入这份独立文件。[客户端启动流程](../src/client.rs)
+
+验证成功后，在服务器管理 shell 中备份 `authorized_keys`，核对旧公钥指纹与条目，再用 `sudoedit` 只删除旧公钥所在行；保留新公钥、其他设备的公钥和各行的授权选项。最后把常用 Host 条目的 `IdentityFile` 改为新私钥。删除旧公钥会阻止它建立新 SSH 连接；已经建立的连接继续存在，需要在对应本机终端按 `Ctrl-C` 结束，关联 OAuth 授权随之撤销。
+
+<a id="oauth-login"></a>
+<a id="登录流程"></a>
+
+## 3. 完成 MCP 登录
+
+### 本机：启动需要控制的后端
+
+先在项目目录检查你选择的后端，再建立连接：
+
+```sh
+ssmcp -t codex --list-tools
+ssmcp --name ssmcp-project -t codex alice@my-ssmcp
+```
+
+Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent 的安装、模型身份和权限在本机由其原生 CLI 管理，见[后端说明](backends.md)。
+
+连接成功后，终端 stdout 输出一行 JSON。例如：
+
+```json
+{
+  "url": "https://ssmcp.example.com/alice",
+  "login_code": "本次连接生成的一次性登录码",
+  "login_expires_in": 600,
+  "client_id": "本次连接的唯一ID",
+  "name": "ssmcp-project",
+  "type": "codex",
+  "cwd": "/home/alice/projects/ssmcp",
+  "hostname": "workstation"
+}
+```
+
+保持这个进程运行。`login_expires_in` 已扣除本机后端初始化耗时，实际输出可能小于 600；实时活动显示在 stderr。登录码可以授权对本机的访问，请只在对应 OAuth 登录页输入。[客户端输出与倒计时](../src/client.rs)
+
+### MCP 客户端：添加 URL，输入登录码
+
+1. 在 ChatGPT 或其他支持 OAuth 的 MCP 客户端中添加终端输出的完整 `url`，包括 `/alice` 用户路径。
+2. 选择 OAuth 登录或重新连接。MCP 客户端发现授权端点后打开浏览器页面。
+3. 核对页面上的资源 URL、OAuth 客户端名称和回调来源，再填写本次 `login_code` 并提交。
+4. 浏览器返回 MCP 客户端，由客户端保存 access token，并在支持刷新时保存 refresh token。
+5. 调用 `list`，确认目标客户端的 `name`、`type`、`cwd`；随后用其 `client_id` 读取原生工具 schema，并通过 `code_mode` 调用。
+
+远程 MCP 的工具列表始终只有 `list` 和 `code_mode`。本机 `--list-tools` 展示的是后端的原生工具；远程调用这些工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[两工具接口](../README.md) · [授权流程实现](../src/oauth.rs)
+
+MCP 客户端需支持 Authorization Code、S256 PKCE 和动态客户端注册（DCR）。需要自动刷新时，客户端注册须包含 `grant_types: ["authorization_code", "refresh_token"]`；这由 MCP 客户端实现。注册、资源绑定及回调的协议细节见 [OAuth 兼容性](deployment.md#oauth-兼容性)。
+
+### 登录码过期或已使用
+
+登录码签发后 10 分钟内可成功授权一次。已经登录的 MCP 客户端用 OAuth 令牌继续访问，正常刷新无须再填登录码。重新授权需要一枚新码：可以在同一账户下另启动一个客户端取得新码，或确认当前后端可停止后，退出并重启当前 ssmcp 进程。
+
+新授权会绑定提供新码的那条连接，后续要保持该连接运行。连接退出会清理它的后端，并撤销由它签发的授权；因此，正在执行任务时应先处理好任务再退出。[登录码与连接绑定](../src/broker.rs) · [OAuth 绑定](../src/oauth.rs)
+
+<a id="登录恢复"></a>
+
+### 恢复已失效的 OAuth 授权
+
+遇到 `oauth_token_invalid_grant` 或要求重新授权时，按这个顺序恢复：
+
+1. 确认本机 ssmcp 是否还在线。当前项目有任务时，可另开一个终端、使用同一服务器账户启动新客户端并取得新登录码；否则重启当前客户端取得新码。
+2. 在 MCP 客户端里对原连接执行重新授权，填写新码；MCP URL 仍使用终端返回的完整用户路径。
+3. 如果服务器重启后 MCP 客户端持续使用旧登记、重新授权仍失败，移除该 MCP 连接并用相同 URL 重新添加，让它完成新的动态客户端注册。
+4. 授权成功后调用 `list`，重新选择当前 `client_id`；保持签发这次授权的连接在线。
+
+`invalid_grant` 可能来自连接退出、令牌过期、授权撤销或刷新令牌重放；错误本身不指出唯一原因。[刷新校验](../src/oauth.rs) · [重连与撤销测试](../tests/oauth_security.rs)
+
+<a id="session-lifetime"></a>
+
+## 4. 重新打开后，还要登录吗？
+
+**取决于签发登录码的 ssmcp 进程是否还在线，以及 MCP 客户端保存的 OAuth 授权是否仍有效。** 当前版本把授权绑定到具体 SSH 连接，所有 OAuth 状态保存在服务端内存。[授权实现](../src/oauth.rs) · [重连隔离测试](../tests/oauth_security.rs)
+
+| 操作或状态 | 结果与下一步 |
+| --- | --- |
+| 关闭后重新打开 ChatGPT；原 ssmcp 连接仍在线、保存的令牌有效 | 可继续使用已有授权 |
+| access token 到期；客户端有有效 refresh token，且原连接仍在线 | 客户端可自动刷新，无须填写登录码 |
+| 关闭本机终端导致 ssmcp 退出，或按 `Ctrl-C` 后重新运行 | 新连接获得新 ID 和登录码；需要重新 OAuth 授权 |
+| 原连接一直在线，但同一刷新授权已达最长 24 小时 | 取得新登录码并重新授权 |
+| 服务端重启 `ssmcpd` | 连接与 OAuth 状态清空；重新连接并授权 |
+| 同一账户新增第二个项目客户端，原授权仍有效 | 已有授权可发现并操作新增客户端 |
+| 提供当前登录码的连接退出，账户下其他连接仍在线 | 该授权失效；其他连接自己的独立授权继续有效 |
+
+| 凭据 | 用在哪里 | 有效期 |
+| --- | --- | --- |
+| SSH 私钥与服务端公钥登记 | OpenSSH 认证 | 由你和服务器管理员管理 |
+| `login_code` | 浏览器登录表单 | 签发后 600 秒；成功使用一次即消耗 |
+| OAuth authorization code | 浏览器回调后由 MCP 客户端兑换 | 60 秒；与客户端及 PKCE 绑定 |
+| access token | MCP 请求的 `Authorization: Bearer` 请求头 | 最长 1 小时 |
+| refresh token | MCP 客户端自动续期 | 每次刷新轮换；同一授权最长 24 小时 |
+| OAuth 客户端登记 | 客户端自动注册 | 最长 7 天；服务端重启清空 |
+
+令牌寿命还会受到客户端登记到期时间约束。SSH 断开、服务重启或授权撤销会提前使令牌失效；刷新不会延长 24 小时总期限。授权覆盖同一 SSH 账户的全部在线客户端，分离不同操作者的权限时应使用不同服务器账户。[生命周期常量与校验](../src/oauth.rs) · [账号内客户端发现](../src/broker.rs)
+
+<a id="troubleshooting"></a>
+
+## 5. 排查问题
+
+| 现象 | 检查与处理 |
+| --- | --- |
+| `destination must be user@host` 或 `expected user@host` | 当前运行的客户端仍要求显式用户名。使用 `ssmcp alice@my-ssmcp`，或更新到 0.3.1 及更新版本 |
+| `Permission denied (publickey)` | 用 `ssh -G my-ssmcp` 确认主机、账户、端口和密钥；核对服务端实际授权文件、文件所有者与权限。加密私钥需能解锁，本机 agent 可用 `ssh-add -l` 检查 |
+| `Too many authentication failures` | 为专用 Host 指定 `IdentityFile` 与 `IdentitiesOnly yes`，减少 agent 提供的无关密钥；验证新密钥时使用[独立配置](#rotate-key) |
+| `ssh-copy-id`、SCP/SFTP 挂起或输出协议错误 | 目标账户已被 `ForceCommand` 固定为桥接。改用组外管理账户或控制台安装公钥 |
+| 主机密钥不匹配 | 向管理员核对新指纹与变更原因，再更新对应 known_hosts 条目 |
+| 没有连接 JSON，或提示 backend not found / startup failed | 先运行相应 `--list-tools`，检查原生 CLI、版本、登录配置和 `--backend` 路径；本机后端成功初始化后才发布连接信息 |
+| 登录码无效、过期或已使用 | 使用当前连接的未使用码；没有有效码时新建连接取得。核对 OAuth 页面资源 URL 与终端输出完全一致 |
+| `oauth_token_invalid_grant` / `invalid_grant` / 要求重新授权 | 检查签发连接是否退出、服务器是否重启、授权是否超时；取得新登录码，在 MCP 客户端执行重新授权。该错误本身不区分这些原因 |
+| 服务重启后仍使用旧 `client_id`，重复授权失败 | MCP 客户端应重新注册；若它继续缓存旧登记，移除该 MCP 连接后用相同完整 URL 重新添加 |
+| 登录成功后 `list` 找不到原来的 `client_id` | 客户端重连会分配新 ID。重新调用 `list`，按名称、模式和目录选取当前在线 ID |
+| `list` 正常，`code_mode` 报系统运行环境不可用 | 在服务器检查系统 Node.js、bubblewrap 和用户命名空间，见[部署说明](deployment.md#系统代码运行环境) |
+
+需要定位 SSH 认证细节时，可在本机运行 `ssh -v -T alice@my-ssmcp` 查看认证阶段日志。受限账户认证成功后进入桥接，手工 SSH 会等待协议数据；看到认证成功后按 `Ctrl-C` 退出，再使用 ssmcp。分享诊断信息前移除登录码、OAuth 令牌和不希望公开的主机或路径信息。
+
+## 参考与实现依据
+
+- [ssmcp 客户端参数与 OpenSSH 调用](../src/client.rs)
+- [OpenSSH 服务端限制配置](../packaging/sshd-ssmcp.conf)
+- [OAuth 实现](../src/oauth.rs) 与 [OAuth 测试](../tests/oauth_security.rs)
+- [Linux 部署与升级](deployment.md)
+- [原生后端配置与接口](backends.md)
+- [OpenSSH ssh](https://man.openbsd.org/ssh)、[ssh_config](https://man.openbsd.org/ssh_config)、[sshd_config](https://man.openbsd.org/sshd_config)

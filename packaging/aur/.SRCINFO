@@ -1,6 +1,6 @@
 pkgbase = ssmcp-git
 	pkgdesc = Expose a local shell or coding agent as MCP through SSH public-key authentication
-	pkgver = 0.3.0.r8.gfdcf166
+	pkgver = 0.3.1.r16.g24922b7
 	pkgrel = 1
 	url = https://github.com/LIghtJUNction/ssmcp
 	arch = x86_64

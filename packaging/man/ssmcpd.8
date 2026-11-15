@@ -1,4 +1,4 @@
-.TH SSMCPD 8 "2026-11-16" "ssmcp 0.3.0" "System Administration"
+.TH SSMCPD 8 "2026-11-16" "ssmcp 0.3.1" "System Administration"
 .SH NAME
 ssmcpd \- SSH-authenticated MCP gateway for local shells and coding agents
 .SH SYNOPSIS
@@ -101,7 +101,7 @@ so bubblewrap can set limits in its own user namespace. Host kernel permissions
 still apply. Do not use RestrictNamespaces=yes for this service. Follow
 distribution AppArmor or SELinux policy when namespace setup is restricted.
 .PP
-Version 0.3.0 uses private bridge protocol version 4. Upgrade ssmcp and ssmcpd
+The 0.3 series uses private bridge protocol version 4. Upgrade ssmcp and ssmcpd
 together. Older clients cannot attach to this protocol, and callers must migrate
 direct native MCP tool calls to list followed by code_mode.
 .SH FILES

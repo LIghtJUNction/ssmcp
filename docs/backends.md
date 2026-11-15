@@ -1,6 +1,8 @@
 # 后端与代码模式
 
-ssmcp 0.3.0 对外只提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到在线客户端并读取它们的原生能力说明；`code_mode` 执行 JavaScript，通过 SSH 调用选定客户端的后端。`-t` 决定本机启动 Shell、Codex、Claude Code、Pi 或 OpenCode，不会增加对外 MCP 工具。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
+ssmcp 0.3 系列对外只提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到在线客户端并读取它们的原生能力说明；`code_mode` 执行 JavaScript，通过 SSH 调用选定客户端的后端。`-t` 决定本机启动 Shell、Codex、Claude Code、Pi 或 OpenCode，不会增加对外 MCP 工具。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
+
+<a id="启动参数"></a>
 
 ## 1. 启动客户端
 
@@ -21,7 +23,7 @@ ssmcp -t opencode --name review-opencode user@host
 | `--shell /absolute/path` | Shell 模式的可执行文件；默认使用绝对路径的 `SHELL`，否则 `/bin/sh` |
 | `--backend PROGRAM` | 替换 Agent 模式的原生可执行文件 |
 | `-- backend_args...` | 原样传给所选 Agent，不经过额外 shell 解析 |
-| `--list-tools` | 本机启动后端、打印完整原生能力目录后退出；不连接 SSH、不接受 `user@host` |
+| `--list-tools` | 本机启动后端、打印完整原生能力目录后退出；不连接 SSH、不接受 SSH 目标 |
 | `-F FILE`、`-i FILE`、`-p PORT` | OpenSSH 配置、私钥文件和端口 |
 
 服务器为每条连接生成独立 `id`，`--name` 仅用作显示标签。即使名称相同，也不会替换已有连接；分派时始终使用 ID。名称最多 128 个 UTF-8 字节，不能全为空白或包含控制字符。示例通过唯一名称找到客户端；同名连接存在时，请改为按 `list` 返回的 `id` 选择。[客户端实现](../src/client.rs) · [元数据约束](../src/wire.rs)
@@ -210,6 +212,8 @@ return await call(c.id, "opencode.api", {
 保留原生返回的 session ID，再按发现到的 prompt 和权限回复操作继续工作。桥在发布连接信息前订阅事件，`opencode.events` 可读取任务进展、权限请求与适配器日志；权限决定需要调用对应的原生操作，不会由 ssmcp 自动通过。
 
 SSE 和 WebSocket 操作返回 `stream_id`。后续通过 `opencode.events` 读取数据，`opencode.stream_send` 写入 WebSocket，`opencode.stream_close` 关闭已打开的流。流 ID 是后端资源句柄；这些操作仍通过代码模式调用。
+
+<a id="传输与资源边界"></a>
 
 ## 9. 事件、权限与运行边界
 

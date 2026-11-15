@@ -1,191 +1,175 @@
 # ssmcp
 
-## Live demo
+**让 MCP 直接使用你电脑上的 Shell 和编码智能体。**
 
-[**Watch the edited demo video (English on-screen guide)**](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk)
+[![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
+[![Linux](https://img.shields.io/badge/Linux-x86__64%20%C2%B7%20arm64-64748b?style=flat)](.github/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat)](LICENSE)
 
-The recording demonstrates a real remote terminal session: discover an online client with `list`, orchestrate its native tools with `code_mode`, execute a shell command, and read the terminal output.
+一条 SSH 连接，两个 MCP 工具。`list` 找到在线客户端，`code_mode` 调用它们的原生能力；命令、输出和智能体事件实时显示在本机终端。项目、模型配置和后端工具执行都留在本机。[工作原理](docs/backends.md)
 
-**What you are seeing:** real commands and output from the connected machine — not a simulated terminal.
+![本机工具通过 SSH 连接服务器，MCP 客户端经 HTTPS 和 OAuth 发现并调用工具；结果沿原连接返回。](docs/assets/connection-flow.svg)
 
+[**配置与登录教程**](docs/configuration.md) · [服务器部署](docs/deployment.md) · [后端与工具接口](docs/backends.md) · [验收记录](docs/validation.md) · [真实操作视频](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk)
 
-用 SSH 公钥连接本机 shell 或编码智能体，再通过两个 MCP 工具统一控制：`list` 发现客户端，`code_mode` 用 JavaScript 调用客户端能力。
+## 快速开始
 
-```sh
-# 在不同电脑或不同项目目录中运行，可以使用同一个服务端账号。
-ssmcp --name laptop -t shell alice@ssmcp.example
-ssmcp --name workstation -t codex alice@ssmcp.example
+服务器已部署 `ssmcpd`、接受你的 SSH 公钥后，在本机项目目录启动客户端。已有 `~/.ssh/config` 可以直接复用：
+
+```sshconfig
+Host my-ssmcp
+    HostName ssmcp.example.com
+    User alice
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
 ```
 
-`-t` 选择这条连接提供的本机后端。无论选择 `shell`、`codex`、`cc`、`pi` 还是 `opencode`，远程 MCP 的工具表都只有 `list` 和 `code_mode`。本机实时显示远程操作、输出和智能体事件；按 `Ctrl-C` 断开并清理后端进程。
+```sh
+cd ~/projects/ssmcp
+ssmcp --name ssmcp-project -t codex my-ssmcp
+```
 
-## 连接
+`my-ssmcp` 是 SSH 配置别名；用户名、地址、端口和密钥交给系统 OpenSSH 解析。也可使用 `ssmcp alice@ssmcp.example.com`，或 `-F ~/.ssh/work_config` 指定配置文件。0.3.1 起支持省略用户名；已安装的 0.3.0 若提示 `destination must be user@host`，可先用 `alice@my-ssmcp`，或[重新构建安装](#安装与升级)。[SSH 配置细节](docs/configuration.md)
 
-客户端成功启动后，在 stdout 输出一次连接信息：
+**已经能用同一把公钥连接该服务器账号，就可以继续用它。** 首次登记和换钥都由服务器 OpenSSH 管理；受限账号启用 `ForceCommand` 后，通过独立管理员账号或服务器控制台追加新公钥。完整教程包括首次配置、保留旧钥、验证新钥和撤销旧连接的步骤。[公钥配置与更新](docs/configuration.md#更新公钥)
+
+启动成功后，终端会输出一次连接信息：
 
 ```json
 {
-  "url": "https://ssmcp.example/alice",
+  "url": "https://ssmcp.example.com/alice",
   "login_code": "本次连接的一次性登录码",
   "login_expires_in": 600,
-  "client_id": "服务端分配的64位十六进制连接ID",
-  "name": "laptop",
-  "type": "shell",
-  "cwd": "/home/alice/project",
-  "hostname": "alice-laptop"
+  "client_id": "服务端分配的连接 ID",
+  "name": "ssmcp-project",
+  "type": "codex",
+  "cwd": "/home/alice/projects/ssmcp",
+  "hostname": "workstation"
 }
 ```
 
-在支持 Streamable HTTP、OAuth Authorization Code、S256 PKCE 和动态客户端注册的 MCP 客户端中填写 `url`，启动登录。在浏览器中确认目标 URL、客户端名称和回调来源，再输入 `login_code`。登录码签发后有效 600 秒、成功使用一次即失效；`login_expires_in` 已扣除本机后端初始化耗时。MCP 客户端取得独立的 OAuth access token 并负责保存和续期，登录码不能作为 Bearer token 使用。详见 [OAuth 兼容性](docs/deployment.md#oauth-兼容性)。
+将 `url` 添加到支持 OAuth 的 MCP 客户端，在它打开的登录页输入 `login_code`。授权完成后，先调用 `list` 选择客户端，再用 `list({client_id})` 查看原生工具及参数。**保持本机 ssmcp 进程运行。** [逐步登录教程](docs/configuration.md#登录流程)
 
-同一 SSH 账号可以连接多台电脑或多个本机进程，最多同时在线 128 个客户端。每条连接有独立 ID；显示名字可以相同，调用时始终使用 ID。
+## SSH 连接，OAuth 授权
 
-授权可以操作同一 SSH 账号下的在线客户端，包括后来连接的客户端。授权绑定签发登录码的 SSH 连接：这条连接断开后，该授权的 access token 和 refresh token 立即失效，其他客户端及其独立授权保持可用。不同 SSH 账号互相隔离。
+SSH 用公钥确认这台电脑可以连接服务器账号。OAuth 将一次性登录码换成 MCP 客户端保存的访问凭据。这个授权可以访问同一 SSH 账号下的所有在线客户端，并绑定签发登录码的那条 SSH 连接。[授权实现](src/oauth.rs)
 
-## 两个 MCP 工具
+![公钥登记、本机启动、一次性登录码授权与 MCP 调用的四步流程。](docs/assets/login-flow.svg)
 
-| 工具 | 参数 | 返回内容 |
-| --- | --- | --- |
-| `list` | `{}` | 当前账号的在线客户端，以及代码接口说明 |
-| `list` | `{"client_id":"…","cursor":"可选分页游标"}` | 指定客户端的原生工具名称、说明和完整参数 schema |
-| `code_mode` | `{"code":"JavaScript 源码","timeout_ms":30000}` | 代码的返回值 `result` 和日志数组 `logs` |
-
-MCP 协议方法 `tools/list` 固定返回上述两个工具。先调用工具 `list` 获得 ID、名字、`type`、`hostname` 和 `cwd`，再按需读取某个客户端的能力。大型原生工具表按页返回，使用 `nextCursor` 请求下一页。`cwd_kind: "startup"` 表示 `cwd` 是启动 ssmcp 时的目录；shell 后续执行 `cd`、智能体创建其他工作目录时，这个注册信息保持原值。
-
-### 在代码中操作 shell
-
-以下源码作为 `code_mode` 的 `code` 参数传入。代码可以使用变量、条件、循环、`await` 和 `Promise.all`：
-
-```javascript
-const client = clients.find(c => c.name === "laptop" && c.type === "shell");
-if (!client) throw new Error("laptop shell is offline");
-
-const status = await call(client.id, "terminal.status", {});
-if (status.isError) throw new Error(JSON.stringify(status.content));
-await call(client.id, "terminal.write", {data: "pwd\n"});
-const output = await call(client.id, "terminal.read", {
-  cursor: status.structuredContent.next_cursor,
-  wait_ms: 1000
-});
-console.log(output.structuredContent.text);
-return output;
-```
-
-shell 的 `terminal.read`、`terminal.write`、`terminal.resize`、`terminal.status` 都是代码内部能力。远程执行命令时发送带换行的 `data`；发送 `"\u0003"` 中断前台程序。持续读取时使用返回的 `next_cursor`。读取可能只得到部分输出，调用方按任务的结束条件继续读取。
-
-### 在代码中使用任意后端
-
-`list({client_id})` 和 `await tools(clientId)` 提供同一套原生能力描述。先查看实际 schema，再通过 `call` 传入它要求的参数。不要根据后端名字猜测工具名。
-
-```javascript
-const client = clients.find(c => c.type === "codex");
-if (!client) throw new Error("No Codex client connected");
-const page = await tools(client.id);
-return {
-  client,
-  tools: page.tools.map(t => ({name: t.name, description: t.description})),
-  nextCursor: page.nextCursor ?? null
-};
-```
-
-代码环境提供以下全局对象和函数：
-
-| 接口 | 语义 |
+| 你做的操作 | 登录状态 |
 | --- | --- |
-| `clients` | 本次代码开始时的客户端元数据快照 |
-| `await call(id, name, arguments = {})` | 调用指定客户端的原生工具，返回完整 MCP 结果 |
-| `await tools(id, cursor?)` | 读取指定客户端的一页原生工具 schema |
-| `print(value)` / `console.log(...)` | 将日志加入本次返回的 `logs` |
-| `return value` | 返回可 JSON 序列化的结果；省略时返回 `null` |
+| 重新打开 ChatGPT 或其他 MCP 应用，本机 ssmcp 仍在线 | 应用保存的令牌仍有效时可以继续使用；支持 refresh token 的客户端可自动续期 |
+| 退出后重新启动签发授权的 ssmcp | 旧授权已撤销，用新连接的登录码重新授权 |
+| 再开一个项目客户端，原授权连接仍在线 | 同一 SSH 账号的现有授权可以发现它 |
+| 重启 `ssmcpd` | 内存中的连接与 OAuth 状态清空，需要重新连接并授权 |
+| 提示 `invalid_grant` 或登录码过期、已使用 | 按[登录恢复步骤](docs/configuration.md#登录恢复)取得新码并重新授权 |
 
-`call` 保留原生 `content`、`structuredContent`、`isError` 和 `_meta`；代码可以据此处理文字、图像、审批请求及错误。原生 `isError: true` 也按原样返回，调用代码应显式检查。找不到客户端、参数不合法或桥接失败会抛出可捕获的异常。原生智能体的权限策略和审批流程继续生效。
+登录码从签发起最多有效 **10 分钟、使用一次**；终端的 `login_expires_in` 已扣除后端启动时间。access token 最长 1 小时；登记了刷新授权的客户端可轮换 refresh token，同一授权最长 24 小时。重开应用、SSH 重连和服务端重启各有不同的生命周期。[OAuth 兼容性与有效期](docs/deployment.md#oauth-兼容性)
 
-每次 `code_mode` 调用启动系统安装的 Node.js 子进程，并使用系统 `bubblewrap` 隔离运行环境。服务端通过有界 JSON 消息与子进程通信；子进程只获得本次客户端列表和桥接接口，不继承服务器凭据。源码最多 64 KiB；默认期限 30 秒，`timeout_ms` 可设为 1–900000 毫秒。运行时限制内存、调用次数和输出，并可中断无限循环。
+## 五种后端，同一个入口
 
-代码超时会停止后续编排。已经交给本机后端的命令可能继续执行，重试前应通过终端输出、原生事件或状态查询确认结果。
+| 本机后端 | 启动方式 | 运行内容 |
+| --- | --- | --- |
+| Shell | `ssmcp --name terminal my-ssmcp` | 有状态的本机 Shell 与 PTY；默认模式 |
+| Codex | `ssmcp -t codex --name coder my-ssmcp` | 已安装 Codex 的 App Server |
+| Claude Code | `ssmcp -t cc --name claude my-ssmcp` | 已安装 Claude Code 的 MCP 工具 |
+| Pi | `ssmcp -t pi --name pi my-ssmcp` | 已安装 Pi 的 JSONL RPC |
+| OpenCode | `ssmcp -t opencode --name opencode my-ssmcp` | 已安装 OpenCode v2 的服务接口 |
 
-## 客户端模式
+每个进程提供一个后端，同一账号最多同时在线 128 个客户端。`--name` 是显示名称，调用始终按服务端分配的 ID 路由；`cwd` 记录启动目录。Agent 的安装、模型配置和原生权限在本机完成，支持范围以实际发现的 schema 为准。[后端要求与示例](docs/backends.md)
 
 ```sh
-ssmcp --name terminal alice@ssmcp.example                 # 默认 shell
-ssmcp --name coder -t codex alice@ssmcp.example
-ssmcp --name claude -t cc alice@ssmcp.example
-ssmcp --name pi -t pi alice@ssmcp.example
-ssmcp --name opencode -t opencode alice@ssmcp.example
-
-# 指定 SSH 配置、密钥、端口或 shell。
-ssmcp -F ~/.ssh/ssmcp_config -i ~/.ssh/id_ed25519 -p 2222 \
-  --shell /bin/bash --name laptop alice@my-server
-
-# 本机检查某个后端的原生工具，无需 SSH。
+# 本机发现工具，无需 SSH，也不建立远程连接。
 ssmcp -t codex --list-tools
 
-# 覆盖后端可执行文件，-- 后的参数直接传给该后端。
-ssmcp -t pi --backend /opt/pi/bin/pi alice@ssmcp.example -- --model configured-model
+# 使用另一份 SSH 配置或已有私钥。
+ssmcp -F ~/.ssh/work_config -t codex my-ssmcp
+ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
+
+# 自定义后端路径；-- 后的参数交给本机后端。
+ssmcp -t pi --backend /opt/pi/bin/pi my-ssmcp -- --no-session
 ```
 
-每个客户端进程提供一个后端，远程代码可以组合调用不同客户端。各模式的协议、工具发现和使用条件见 [后端说明](docs/backends.md)。
+## 两个工具就够了
 
-## 两个程序
+| MCP 工具 | 用法 |
+| --- | --- |
+| `list({})` | 列出当前账号的在线客户端：ID、名字、类型、主机和启动目录 |
+| `list({client_id})` | 读取指定客户端的原生工具名称与参数 schema；用 `nextCursor` 分页 |
+| `code_mode({code, timeout_ms})` | 用 JavaScript 调用原生工具，返回结果和日志 |
 
-| 程序 | 运行位置 | 职责 |
-| --- | --- | --- |
-| `ssmcp` | 本机 Linux | SSH 公钥登录，运行选定的后端并实时显示活动 |
-| `ssmcpd serve` | Linux 服务器 | 发布 `/用户名`，维护客户端列表，运行受限 JavaScript 并转发调用 |
-| `ssmcpd attach` | SSH 登录后的服务端进程 | 在 SSH 标准输入输出与守护进程 Unix socket 之间转发数据 |
+例如，对名为 `terminal` 的 Shell 客户端执行 `pwd`。将下面源码放入 `code_mode` 的 `code` 参数：
 
-OpenSSH 处理认证及主机密钥验证。守护进程从 Unix socket 的内核凭据获取实际 UID 和用户名，请求数据无法指定其他身份。本机无需为 ssmcp 开放公网端口；MCP 使用 HTTPS，服务器和本机之间使用已经建立的 SSH 连接。
+```javascript
+const client = clients.find(c => c.name === "terminal" && c.type === "shell");
+if (!client) throw new Error("terminal is offline");
+
+const before = await call(client.id, "terminal.status", {});
+if (before.isError) return before;
+const sent = await call(client.id, "terminal.write", { data: "pwd\n" });
+if (sent.isError) return sent;
+return await call(client.id, "terminal.read", {
+  cursor: before.structuredContent.next_cursor,
+  wait_ms: 1000
+});
+```
+
+单次读取可能只有部分输出，继续用返回的 `next_cursor` 读取。调用 Agent 时，先用 `list({client_id})` 或 `await tools(client.id)` 检查实际 schema。`call` 保留原生 `content`、`structuredContent`、`isError` 和审批数据；代码应检查原生错误与任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
+
+代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过 SSH 将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
 
 ## 安装与升级
 
-需要 Linux 5.3 或更新内核和 OpenSSH。构建使用仓库固定的 Rust 1.100.0。服务器使用系统包管理器安装 Node.js 18+、bubblewrap 0.8+ 和 `sshd`；公网 HTTPS 可由 Caddy 提供。客户端运行所选编码智能体时，需要对应 CLI 已安装并完成本机配置。
+当前支持 Linux 5.3+，仓库固定构建工具链为 Rust 1.100.0。客户端需要 OpenSSH 和所选本机后端；服务端需要 OpenSSH Server、系统 Node.js 18+、bubblewrap 0.8+ 及 HTTPS 反向代理。[完整部署教程](docs/deployment.md)
 
 ```sh
-# Debian / Ubuntu：服务端运行依赖
-sudo apt install openssh-server nodejs bubblewrap
-
-# Arch Linux：ssmcp-git 包也声明了这些依赖
-sudo pacman -S openssh nodejs bubblewrap
-
-# Fedora
-sudo dnf install openssh-server nodejs bubblewrap
-```
-
-只运行 `ssmcp` 客户端时，不需要服务端的 Node.js 和 bubblewrap。运行脚本随 `make install` 安装到 `$PREFIX/libexec/ssmcp/code-mode.js`，运行时本身由系统包管理器安装和更新。
-
-```sh
+# 在仓库目录构建，并安装程序、运行脚本、man page 和文档。
 cargo build --locked --release
 sudo make install
 ```
 
-`make install` 安装两个程序、man page 和配置示例，支持 `PREFIX` 与 `DESTDIR`。完整服务端配置见 [部署说明](docs/deployment.md)。
+服务端依赖通过系统包管理器安装：
 
-**0.3.0 使用私有桥接协议 v4，并将远程工具表收敛为两个工具。** 升级时同时更新 `ssmcp` 和 `ssmcpd`，重新连接客户端，并刷新 MCP 客户端保存的工具表。原有直接调用 `terminal.*` 或智能体工具的脚本应改为通过 `code_mode` 的 `call` 调用。
+```sh
+# Debian / Ubuntu
+sudo apt install openssh-server nodejs bubblewrap
+# Arch Linux
+sudo pacman -S openssh nodejs bubblewrap
+# Fedora
+sudo dnf install openssh-server nodejs bubblewrap
+```
 
-## 权限与生命周期
+`ssmcpd serve` 发布 HTTPS 后面的 MCP 服务；SSH 登录后的 `ssmcpd attach` 转发连接数据。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js 和 bubblewrap。
 
-启动 ssmcp 就是把本机选定后端交给同一 SSH 账号的 MCP 凭据持有者。shell 具有启动它的本机用户权限；编码智能体遵循它自身的策略。应使用可信服务器和合适的独立 SSH 账号管理这些客户端。
+0.3 系列使用私有桥接协议 v4。跨协议版本升级时同时更新两端；重启服务后重新连接、完成 OAuth 登录并刷新 MCP 工具表。原有直接调用 `terminal.*` 或 Agent 工具的脚本，通过 `code_mode` 的 `call` 调用。当前 SSH 别名改进不改变 wire 协议。
 
-服务器只监听 loopback HTTP，由反向代理提供 HTTPS。携带 `Origin` 时必须匹配配置的公网 origin。access token 只通过 `Authorization` 请求头传递，动态登录码通过 POST 表单提交；这些凭据不写入 URL 或服务日志。客户端成功输出包含登录码，应按凭据保存。
-
-断开客户端后，服务端移除其连接 ID，撤销关联的登录码与 OAuth 授权，并清理本机后端。重新连接会生成新 ID 和新登录码。服务器重启会清空所有连接和凭据。shell 关闭时清理普通前台、后台任务；主动脱离终端会话的守护进程不属于该生命周期。
-
-## 开发与验证
+## 验证与贡献
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-# 以下两项要求系统允许 bubblewrap 创建隔离命名空间。
+cargo build --locked
+# 需要系统允许 bubblewrap 创建隔离命名空间。
 cargo test --locked --lib code_mode::tests -- --include-ignored
 cargo test --locked --test two_tools -- --include-ignored
-cargo build --locked
 python3 scripts/e2e.py --bin-dir target/debug
 python3 scripts/e2e_agents.py --bin-dir target/debug
 ```
 
-真实 SSH 测试使用临时 Ed25519 密钥、独立本机 `sshd`、临时 known_hosts 和随机 loopback 端口，验证 OAuth、客户端发现、系统 JavaScript 调用、终端日志、多客户端并存与断线撤销。`e2e_agents.py` 在五种模式中走 SSH、OAuth 和两个 MCP 工具，智能体使用确定性协议 fixture，不调用模型。CI 在 Linux x86_64 和 arm64 上运行同一套检查。普通 `cargo test` 明确跳过需要真实隔离环境或原生 CLI 的测试；上述专用命令在 CI 中执行真实 Node.js 与 bubblewrap 验证。当前执行结果见 [验收报告](docs/validation.md)。
+CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、独立 sshd、临时 known_hosts 和 loopback 端口；五模式链路测试使用确定性 Agent 协议 fixture，不发起模型推理。默认测试中需要系统隔离或单独安装原生 CLI 的探针会明确标为 ignored。[测试结果与范围](docs/validation.md) · [CI 工作流](.github/workflows/ci.yml)
 
-参考：[MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)、[OpenSSH sshd_config](https://man.openbsd.org/sshd_config)、[Node.js](https://nodejs.org/)、[bubblewrap](https://github.com/containers/bubblewrap)。
+## 文档导航
 
-MIT License.
+| 你想做什么 | 从这里开始 |
+| --- | --- |
+| 复用 SSH 配置、首次登记公钥、更新密钥 | [配置教程](docs/configuration.md) |
+| 登录 ChatGPT / MCP，恢复过期授权 | [登录与恢复](docs/configuration.md#登录流程) |
+| 安装服务端、配置 systemd / SSH / HTTPS | [Linux 部署](docs/deployment.md) |
+| 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
+| 查看测试、架构与实际验收范围 | [验收记录](docs/validation.md) |
+| 看真实终端操作 | [演示视频，英文说明](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk) |
+
+[MIT License](LICENSE) · [OpenSSH](https://www.openssh.com/) · [MCP](https://modelcontextprotocol.io/)

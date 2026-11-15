@@ -2,7 +2,9 @@
 
 服务器部署 OpenSSH、`ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp` 及需要控制的 Agent。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
 
-ssmcp 0.3.0 使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。**升级时同时更新客户端和服务端**，重启守护进程后重新连接，并在 MCP 客户端中完成 OAuth 登录、刷新工具表。旧版私有桥接协议不兼容；服务器重启会撤销当前在线入口及其全部授权。
+服务器已经部署好时，可直接阅读 [配置、SSH 公钥与登录](configuration.md)：复用 `~/.ssh/config`、添加和轮换公钥、完成 OAuth 登录，以及处理重新打开后的授权状态。
+
+ssmcp 0.3 系列使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。**从旧版桥接协议升级时同时更新客户端和服务端**，重启守护进程后重新连接，并在 MCP 客户端中完成 OAuth 登录、刷新工具表。旧版私有桥接协议不兼容；服务器重启会撤销当前在线入口及其全部授权。
 
 ## 1. 安装程序与服务账户
 
@@ -50,15 +52,17 @@ sudo systemctl status ssmcpd
 
 ## 2. 配置 SSH 公钥账户
 
-为允许连接的用户创建服务端普通账户，加入 `ssmcp` 组，并安装公钥：
+为允许连接的用户创建服务端普通账户，并加入 `ssmcp` 组：
 
 ```sh
 sudo useradd --create-home --user-group --shell /bin/sh --groups ssmcp alice
-sudo install -d -m 0700 -o alice -g alice /home/alice/.ssh
-sudo install -m 0600 -o alice -g alice alice.pub /home/alice/.ssh/authorized_keys
 ```
 
-已有账户使用 `sudo usermod -aG ssmcp alice`。`alice.pub` 是事先取得的公钥文件，私钥留在客户端。账户需要满足发行版的账户和 PAM 登录策略，并有可执行的登录 shell，供 OpenSSH 执行固定桥接命令。
+已有账户使用 `sudo usermod -aG ssmcp alice`，保留其 home、主组与已有公钥。账户需要满足发行版的账户和 PAM 登录策略，并有可执行的登录 shell，供 OpenSSH 执行固定桥接命令。
+
+由管理账户或服务器控制台按 [公钥安装步骤](configuration.md#public-keys) 添加客户端的 `.pub` 文件。该步骤查找目标账户的实际 home 和主组，向 `authorized_keys` 追加尚未登记的公钥，保留已有条目及授权选项；`.ssh` 使用 `0700`，`authorized_keys` 使用 `0600`，所有者为目标账户。私钥保留在客户端。已有自定义 `AuthorizedKeysFile` 或 `AuthorizedKeysCommand` 时，应更新 OpenSSH 实际使用的授权来源。
+
+尚未启用强制桥接、且目标账户已有普通 SSH 登录方式时，也可先用 `ssh-copy-id -i ~/.ssh/id_ed25519.pub alice@server` 添加公钥。启用下述 `ForceCommand` 后，普通 SSH 命令及 SCP/SFTP 都进入桥接程序；后续密钥管理应通过组外管理账户或控制台进行。管理员账户应保留独立的登录通道。
 
 安装仓库中的 SSH 配置片段：
 
@@ -122,6 +126,8 @@ ssmcp -t opencode --list-tools
 每次只检查需要使用的模式。`--list-tools` 在本机启动并关闭后端，不需要 SSH 目标；OpenCode 必须使用 v2。若可执行文件不在 PATH，使用 `--backend /absolute/path/to/program`。
 
 ## 5. 建立连接并登录
+
+首次使用时可按 [客户端配置与逐步登录教程](configuration.md#oauth-login) 操作。已有 SSH Host 条目的复用方法见 [SSH 配置](configuration.md#ssh-config)，重新打开后的行为见 [连接与授权生命周期](configuration.md#session-lifetime)。
 
 选择一个模式连接同一 SSH 目标：
 
@@ -193,7 +199,9 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 本机退出 ssmcp 后，旧 access token 应得到 `401`，旧 refresh token 也不能继续刷新。同一账号的其他客户端仍应在线，其独立授权仍有效。需要隔离不同操作者的权限时，使用不同服务端账户；这些账户的路径与授权独立，不能借请求体指定其他用户名。
 
-升级 0.3.0 时先安排现有连接退出，更新两端二进制与安装脚本，重启 `ssmcpd`，再重新连接并完成 OAuth 登录，刷新 MCP 客户端缓存的工具表。原有直接调用原生工具的代码改为经 `code_mode` 的 `call` 调用。内部 wire 版本不匹配会被拒绝；旧凭据和旧事件游标不可用于新连接。
+从 0.2 系列或更早版本升级到 0.3 系列时，先安排现有连接退出，更新两端二进制与安装脚本，重启 `ssmcpd`，再重新连接并完成 OAuth 登录，刷新 MCP 客户端缓存的工具表。原有直接调用原生工具的代码改为经 `code_mode` 的 `call` 调用。内部 wire 版本不匹配会被拒绝；旧凭据和旧事件游标不可用于新连接。
+
+0.3.1 的 SSH Host 别名支持是客户端改进，仍使用 wire v4；已有 0.3.0 服务端可继续配合使用。仅替换客户端不要求重启守护进程，但重启签发授权的客户端连接仍会撤销该连接的旧 OAuth 授权。
 
 本仓库的 `scripts/e2e.py` 使用临时本机 sshd 和临时密钥检验认证、MCP、后端转发与撤销行为。实际 DNS、TLS 证书、反向代理和发行版 SSH 策略仍需在你的服务器上验证；示例域名没有预先部署服务。
 
