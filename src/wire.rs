@@ -4,12 +4,45 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 1;
-pub const MAX_FRAME: usize = 256 * 1024;
+pub const VERSION: u32 = 2;
+pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub const MAX_READ: usize = 32 * 1024;
 pub const MAX_WRITE: usize = 16 * 1024;
 pub const MAX_WAIT_MS: u64 = 5_000;
 pub const MAX_INFLIGHT: usize = 16;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Shell,
+    Codex,
+    Cc,
+    Pi,
+    Opencode,
+}
+
+impl Mode {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "shell" => Ok(Self::Shell),
+            "codex" => Ok(Self::Codex),
+            "cc" => Ok(Self::Cc),
+            "pi" => Ok(Self::Pi),
+            "opencode" => Ok(Self::Opencode),
+            _ => Err("-t must be shell, codex, cc, pi, or opencode".into()),
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Codex => "codex",
+            Self::Cc => "cc",
+            Self::Pi => "pi",
+            Self::Opencode => "opencode",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -30,6 +63,14 @@ pub enum Operation {
         cols: u16,
     },
     Status {},
+    ListTools {
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    CallTool {
+        name: String,
+        arguments: Value,
+    },
 }
 
 fn default_max_bytes() -> usize {
@@ -52,6 +93,14 @@ impl Operation {
             {
                 Err("rows and cols must be 1..=1000".into())
             }
+            Self::ListTools {
+                cursor: Some(cursor),
+            } if cursor.len() > 128 => Err("tool cursor is too long".into()),
+            Self::CallTool { name, arguments }
+                if name.is_empty() || name.len() > 128 || !arguments.is_object() =>
+            {
+                Err("invalid tool name or arguments".into())
+            }
             _ => Ok(()),
         }
     }
@@ -63,6 +112,7 @@ impl Operation {
 pub enum Frame {
     Hello {
         version: u32,
+        mode: Mode,
     },
     Ready {
         url: String,
@@ -149,12 +199,21 @@ mod tests {
     #[tokio::test]
     async fn frames_round_trip() {
         let mut out = Vec::new();
-        write_frame(&mut out, &Frame::Hello { version: VERSION })
-            .await
-            .unwrap();
+        write_frame(
+            &mut out,
+            &Frame::Hello {
+                version: VERSION,
+                mode: Mode::Shell,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(
             read_frame(&mut out.as_slice()).await.unwrap(),
-            Some(Frame::Hello { version: VERSION })
+            Some(Frame::Hello {
+                version: VERSION,
+                mode: Mode::Shell
+            })
         ));
     }
     #[test]

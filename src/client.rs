@@ -1,7 +1,7 @@
 //! Foreground SSH client. Credentials are emitted once, as a JSON object on stdout.
 use crate::{
-    pty::Terminal,
-    wire::{Frame, MAX_INFLIGHT, VERSION, read_frame, write_frame},
+    backend::Backend,
+    wire::{Frame, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, read_frame, write_frame},
 };
 use serde_json::json;
 use std::{
@@ -21,10 +21,14 @@ use tokio::{
     time::timeout,
 };
 
-const HELP: &str = "ssmcp — expose one local terminal through an SSH-authenticated MCP endpoint\n\nUsage: ssmcp [-i identity] [-p port] [-F ssh_config] [--shell /path/to/shell] user@host\n\nUses SSH public-key authentication and the standard known_hosts checks.\nPrints {\"url\":\"https://host/user\",\"secret\":\"...\"} once on stdout.\nKeep this process running; Ctrl-C disconnects and closes the terminal.\n";
+const HELP: &str = "ssmcp — expose a local shell or coding agent over an SSH-authenticated MCP endpoint\n\nUsage: ssmcp [-t shell|codex|cc|pi|opencode] [options] user@host [-- backend_args...]\n       ssmcp -t TYPE [--backend PROGRAM] --list-tools [-- backend_args...]\n\n  -t, --type TYPE       Backend (default: shell)\n  -i identity          SSH private key file\n  -p port              SSH port\n  -F ssh_config        OpenSSH configuration file\n  --shell /path        Shell executable (shell mode only)\n  --backend PROGRAM    Override the native agent executable\n  --list-tools         Discover local tools as JSON, then exit without SSH\n\nUses only SSH public-key authentication and standard known_hosts checks.\nPrints {\"url\":\"https://host/user\",\"secret\":\"...\",\"type\":\"shell\"} once on stdout.\nLive input, output and native agent events appear on stderr.\nKeep this process running; Ctrl-C disconnects and stops the local backend.\n";
 
 struct Options {
-    destination: String,
+    destination: Option<String>,
+    mode: Mode,
+    backend: Option<OsString>,
+    backend_args: Vec<OsString>,
+    list_tools: bool,
     identity: Option<OsString>,
     port: Option<u16>,
     config: Option<OsString>,
@@ -35,6 +39,11 @@ impl Options {
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Self>, String> {
         let mut args = args.into_iter();
         let mut destination = None;
+        let mut mode = Mode::Shell;
+        let mut backend = None;
+        let mut backend_args = Vec::new();
+        let mut list_tools = false;
+        let mut explicit_shell = false;
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = std::env::var_os("SHELL")
             .map(PathBuf::from)
@@ -50,6 +59,18 @@ impl Options {
                     println!("ssmcp {}", env!("CARGO_PKG_VERSION"));
                     return Ok(None);
                 }
+                Some("-t" | "--type") => {
+                    let value = args.next().ok_or("-t requires a backend type")?;
+                    mode = Mode::parse(value.to_str().ok_or("backend type must be UTF-8")?)?;
+                }
+                Some("--backend") => {
+                    backend = Some(args.next().ok_or("--backend requires a program")?)
+                }
+                Some("--list-tools") => list_tools = true,
+                Some("--") => {
+                    backend_args.extend(args);
+                    break;
+                }
                 Some("-i") => identity = Some(args.next().ok_or("-i requires a file")?),
                 Some("-F") => config = Some(args.next().ok_or("-F requires a file")?),
                 Some("-p") => {
@@ -61,6 +82,7 @@ impl Options {
                     );
                 }
                 Some("--shell") => {
+                    explicit_shell = true;
                     shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?)
                 }
                 Some(value) if !value.starts_with('-') && destination.is_none() => {
@@ -69,13 +91,32 @@ impl Options {
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
             }
         }
-        let destination = destination.ok_or("expected user@host; see ssmcp --help")?;
-        validate_destination(&destination)?;
+        if let Some(destination) = &destination {
+            validate_destination(destination)?;
+        } else if !list_tools {
+            return Err("expected user@host; see ssmcp --help".into());
+        }
+        if list_tools && destination.is_some() {
+            return Err("--list-tools is local and does not take an SSH destination".into());
+        }
+        if mode == Mode::Shell && (backend.is_some() || !backend_args.is_empty()) {
+            return Err(
+                "shell mode uses --shell; --backend and backend arguments select an agent only"
+                    .into(),
+            );
+        }
+        if mode != Mode::Shell && explicit_shell {
+            return Err("--shell is only valid with -t shell".into());
+        }
         if !shell.is_absolute() {
             return Err("--shell requires an absolute path".into());
         }
         Ok(Some(Self {
             destination,
+            mode,
+            backend,
+            backend_args,
+            list_tools,
             identity,
             port,
             config,
@@ -116,7 +157,7 @@ impl Options {
         }
         command
             .arg("--")
-            .arg(&self.destination)
+            .arg(self.destination.as_ref().expect("SSH destination"))
             .args(["ssmcpd", "attach"]);
         command
             .stdin(Stdio::piped())
@@ -158,13 +199,37 @@ pub async fn run() -> crate::Result<()> {
     };
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
+    if options.list_tools {
+        let backend = timeout(
+            Duration::from_secs(120),
+            Backend::start(
+                options.mode,
+                &options.shell,
+                options.backend.as_deref(),
+                &options.backend_args,
+            ),
+        )
+        .await
+        .map_err(|_| "local backend startup timed out")??;
+        let tools = backend.tools().await;
+        backend.shutdown().await;
+        println!("{}", json!({"type":options.mode.name(),"tools":tools?}));
+        return Ok(());
+    }
     let mut ssh = options
         .command()
         .spawn()
         .map_err(|e| format!("could not start OpenSSH ssh: {e}"))?;
     let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
     let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
-    write_frame(&mut writer, &Frame::Hello { version: VERSION }).await?;
+    write_frame(
+        &mut writer,
+        &Frame::Hello {
+            version: VERSION,
+            mode: options.mode,
+        },
+    )
+    .await?;
     let ready = tokio::select! {
         result = timeout(Duration::from_secs(120),read_frame(&mut reader)) => result.map_err(|_| "SSH authentication timed out")??,
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(()); },
@@ -179,14 +244,32 @@ pub async fn run() -> crate::Result<()> {
         ),
         _ => return Err("unexpected registration response".into()),
     };
-    let terminal = Terminal::spawn(&options.shell)?;
-    let output = json!({"url":url,"secret":secret});
-    if let Err(error) = writeln!(io::stdout().lock(), "{output}").and_then(|_| io::stdout().flush())
-    {
-        terminal.shutdown().await;
+    eprintln!("Starting local {} backend...", options.mode.name());
+    let backend = tokio::select! {
+        result = timeout(Duration::from_secs(120), Backend::start(options.mode, &options.shell, options.backend.as_deref(), &options.backend_args)) => result.map_err(|_| "local backend startup timed out")??,
+        _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(()); },
+        _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
+    };
+    // Discover before publishing credentials, so a missing/incompatible backend fails locally.
+    let discovered = tokio::select! {
+        result = timeout(Duration::from_secs(120), backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
+        _ = interrupt.recv() => { backend.shutdown().await; let _ = ssh.kill().await; return Ok(()); },
+        _ = terminate.recv() => { backend.shutdown().await; let _ = ssh.kill().await; return Ok(()); },
+    };
+    if let Err(error) = discovered {
+        backend.shutdown().await;
         return Err(error.into());
     }
-    eprintln!("Connected. Keep ssmcp running; Ctrl-C disconnects and closes the terminal.");
+    let output = json!({"url":url,"secret":secret,"type":options.mode.name()});
+    if let Err(error) = writeln!(io::stdout().lock(), "{output}").and_then(|_| io::stdout().flush())
+    {
+        backend.shutdown().await;
+        return Err(error.into());
+    }
+    eprintln!(
+        "Connected ({}). Live activity is shown here; Ctrl-C disconnects and stops the backend.",
+        options.mode.name()
+    );
     // One reader owns partial frames, so a completed request cannot cancel and discard them.
     let (frames_tx, mut frames) = mpsc::channel(MAX_INFLIGHT);
     let reader_task = tokio::spawn(async move {
@@ -212,10 +295,15 @@ pub async fn run() -> crate::Result<()> {
                         }
                     }
                     if requests.len() >= MAX_INFLIGHT { break Err("server exceeded the in-flight request limit".into()); }
-                    let terminal = terminal.clone();
+                    let backend = backend.clone();
                     let writer = writer.clone();
                     requests.spawn(async move {
-                        let result = terminal.perform(operation).await;
+                        let mut result = backend.perform(operation).await;
+                        // A large native response must not corrupt/disconnect the SSH stream.
+                        if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
+                            result = Err("native result exceeds the 4 MiB bridge frame limit; request a smaller page or output limit".into());
+                        }
+                        if let Err(error) = &result { eprintln!("[ssmcp error] {error}"); }
                         timeout(Duration::from_secs(10),async {
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer,&Frame::Reply {id,result}).await
@@ -243,7 +331,7 @@ pub async fn run() -> crate::Result<()> {
     let _ = reader_task.await;
     drop(writer);
     let _ = ssh.start_kill();
-    terminal.shutdown().await;
+    backend.shutdown().await;
     let _ = ssh.wait().await;
     result
 }

@@ -1,5 +1,6 @@
 #![cfg(target_os = "linux")]
 
+pub mod backend;
 pub mod broker;
 pub mod client;
 pub mod http;

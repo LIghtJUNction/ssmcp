@@ -1,0 +1,25 @@
+[
+  {
+    "name": "NativeFutureTool",
+    "title": "A future native tool",
+    "description": "A fixture whose full native definition must survive the bridge.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "nested": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "integer"}}]},
+        "error": {"type": "boolean"},
+        "spawn_child": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "outputSchema": {"type": "object", "properties": {"future": {"type": "object"}}},
+    "annotations": {"readOnlyHint": false, "idempotentHint": false, "futureHint": {"nested": 7}},
+    "_meta": {"vendor/new-field": {"enabled": true}},
+    "futureExtension": ["preserve", {"every": "field"}]
+  },
+  {"name": "Bash", "description": "Fixture background output", "inputSchema": {"type": "object", "properties": {"fixture_mode": {"type": "string"}}}},
+  {"name": "events", "description": "A native name that must not shadow bridge controls", "inputSchema": {"type": "object"}},
+  {"name": "ssmcp.cc.respond", "description": "Another native name that must not shadow bridge controls", "inputSchema": {"type": "object"}},
+  {"name": "NeedsApproval", "description": "A bidirectional MCP fixture", "inputSchema": {"type": "object"}}
+]

@@ -101,17 +101,17 @@ async fn endpoint(
     };
     let result = match action(&request, era) {
         Ok(Action::Reply(result)) => result,
-        Ok(Action::Call(operation)) => match session.call(operation).await {
-            Ok(value) => {
-                let mut result =
-                    json!({"content":[{"type":"text","text":value.to_string()}],"isError":false});
-                if value.is_object() {
-                    result["structuredContent"] = value;
+        Ok(Action::Call(operation)) => {
+            let listing = matches!(operation, Operation::ListTools { .. });
+            match session.call(operation).await {
+                Ok(result) => result,
+                Err(message) if listing => {
+                    return Fault::new(StatusCode::BAD_GATEWAY, -32603, &message)
+                        .response(Some(id));
                 }
-                result
+                Err(message) => json!({"content":[{"type":"text","text":message}],"isError":true}),
             }
-            Err(message) => json!({"content":[{"type":"text","text":message}],"isError":true}),
-        },
+        }
         Err(fault) => return fault.response(Some(id)),
     };
     Json(json!({"jsonrpc":"2.0","id":id,"result":decorate_result(result, era)})).into_response()
@@ -364,19 +364,25 @@ fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
                 "protocolVersion":if LEGACY.contains(&version) { version } else { LEGACY[0] },
                 "capabilities":{"tools":{}},
                 "serverInfo":server_info(),
-                "instructions":"Operate the connected client's terminal. Use terminal.write to send text, terminal.read to read output, terminal.resize to set dimensions, and terminal.status to inspect it."
+                "instructions":"Control the connected local shell or coding agent. Call tools/list for this connection's full native capabilities. Agent events and pending approvals have explicit tools; native policies remain in effect."
             })))
         }
         "server/discover" if era == Era::Modern => Ok(Action::Reply(json!({
             "supportedVersions":VERSIONS,"capabilities":{"tools":{}},
-            "instructions":"This endpoint controls one connected client's terminal."
+            "instructions":"This endpoint controls one connected local shell or coding agent. Call tools/list to discover its capabilities."
         }))),
         "ping" => Ok(Action::Reply(json!({}))),
         "tools/list" => {
-            if request.param("cursor").is_some() {
-                return Err(Fault::params("this tool list has no pagination cursor"));
-            }
-            Ok(Action::Reply(json!({"tools":tool_definitions()})))
+            let cursor = match request.param("cursor") {
+                None => None,
+                Some(Value::String(cursor)) if cursor.len() <= 128 => Some(cursor.clone()),
+                _ => {
+                    return Err(Fault::params(
+                        "cursor must be a string of at most 128 bytes",
+                    ));
+                }
+            };
+            Ok(Action::Call(Operation::ListTools { cursor }))
         }
         "tools/call" => operation(request).map(Action::Call),
         _ => Err(Fault::new(
@@ -408,7 +414,18 @@ fn operation(request: &RpcRequest<'_>) -> Result<Operation, Fault> {
         "terminal.write" => "write",
         "terminal.resize" => "resize",
         "terminal.status" => "status",
-        _ => return Err(Fault::params("Unknown tool")),
+        _ => {
+            let arguments = request
+                .param("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let operation = Operation::CallTool {
+                name: name.into(),
+                arguments,
+            };
+            operation.validate().map_err(|e| Fault::params(&e))?;
+            return Ok(operation);
+        }
     };
     let mut arguments = match request.param("arguments") {
         None => Map::new(),
@@ -439,7 +456,7 @@ fn decorate_result(mut result: Value, era: Era) -> Value {
     result
 }
 
-fn tool_definitions() -> Value {
+pub(crate) fn tool_definitions() -> Value {
     json!([
         {
             "name":"terminal.read",

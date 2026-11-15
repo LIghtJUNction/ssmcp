@@ -53,10 +53,19 @@ pub struct Terminal {
     writer: AsyncMutex<()>,
     reader: Mutex<Option<JoinHandle<()>>>,
     closed: AtomicBool,
+    live: bool,
 }
 
 impl Terminal {
     pub fn spawn(shell: &Path) -> crate::Result<Arc<Self>> {
+        Self::spawn_with_logging(shell, false)
+    }
+
+    pub fn spawn_live(shell: &Path) -> crate::Result<Arc<Self>> {
+        Self::spawn_with_logging(shell, true)
+    }
+
+    fn spawn_with_logging(shell: &Path, live: bool) -> crate::Result<Arc<Self>> {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
@@ -131,6 +140,7 @@ impl Terminal {
             writer: AsyncMutex::new(()),
             reader: Mutex::new(None),
             closed: AtomicBool::new(false),
+            live,
         });
         let weak = Arc::downgrade(&terminal);
         let reader = tokio::spawn(async move {
@@ -150,7 +160,13 @@ impl Terminal {
                     break;
                 };
                 match result {
-                    Ok(n) if n > 0 => terminal.output.lock().unwrap().push(&data[..n]),
+                    Ok(n) if n > 0 => {
+                        terminal.output.lock().unwrap().push(&data[..n]);
+                        if terminal.live {
+                            use std::io::Write;
+                            let _ = std::io::stderr().lock().write_all(&data[..n]);
+                        }
+                    }
                     _ => {
                         // Linux PTYs report EIO when the last slave closes.
                         terminal.output.lock().unwrap().eof = true;
@@ -174,6 +190,12 @@ impl Terminal {
                 wait_ms,
             } => self.read(cursor, max_bytes, wait_ms).await,
             Operation::Write { data } => {
+                if self.live {
+                    eprintln!(
+                        "\n[ssmcp shell input] {}",
+                        serde_json::to_string(&data).unwrap()
+                    );
+                }
                 if !self.running().await {
                     return Err("terminal has exited".into());
                 }
@@ -202,6 +224,9 @@ impl Terminal {
                     return Err(io::Error::last_os_error().to_string());
                 }
                 Ok(json!({"rows":rows,"cols":cols}))
+            }
+            Operation::ListTools { .. } | Operation::CallTool { .. } => {
+                Err("not a terminal operation".into())
             }
             Operation::Status {} => {
                 let running = self.running().await;
@@ -322,35 +347,39 @@ impl Terminal {
     }
 
     fn stop_session(&self) {
-        // Job-control shells put background jobs in separate process groups. Take one
-        // session snapshot, then signal pidfds so PID reuse cannot target another process.
-        // This is cleanup for ordinary jobs, not containment for deliberate setsid/fork escape.
-        let mut members = Vec::new();
-        if let Ok(entries) = std::fs::read_dir("/proc") {
-            for entry in entries.flatten() {
-                let Some(pid) = entry
-                    .file_name()
-                    .to_str()
-                    .and_then(|name| name.parse::<libc::pid_t>().ok())
-                else {
-                    continue;
-                };
-                if pid == self.pid || process_session(pid) != Some(self.pid) {
-                    continue;
-                }
-                if let Ok(fd) = open_pidfd(pid) {
-                    // Validate after opening: the descriptor is bound to this exact process.
-                    if process_session(pid) == Some(self.pid) {
-                        members.push(fd);
-                    }
+        stop_session(self.pid, &self.leader);
+    }
+}
+
+pub(crate) fn stop_session(session: libc::pid_t, leader: &OwnedFd) {
+    // Job-control shells put background jobs in separate process groups. Take one
+    // session snapshot, then signal pidfds so PID reuse cannot target another process.
+    // This is cleanup for ordinary jobs, not containment for deliberate setsid/fork escape.
+    let mut members = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<libc::pid_t>().ok())
+            else {
+                continue;
+            };
+            if pid == session || process_session(pid) != Some(session) {
+                continue;
+            }
+            if let Ok(fd) = open_pidfd(pid) {
+                // Validate after opening: the descriptor is bound to this exact process.
+                if process_session(pid) == Some(session) {
+                    members.push(fd);
                 }
             }
         }
-        for member in members {
-            let _ = signal_pidfd(&member, libc::SIGKILL);
-        }
-        let _ = signal_pidfd(&self.leader, libc::SIGKILL);
     }
+    for member in members {
+        let _ = signal_pidfd(&member, libc::SIGKILL);
+    }
+    let _ = signal_pidfd(leader, libc::SIGKILL);
 }
 
 fn process_session(pid: libc::pid_t) -> Option<libc::pid_t> {
@@ -363,7 +392,7 @@ fn process_session(pid: libc::pid_t) -> Option<libc::pid_t> {
         .ok()
 }
 
-fn open_pidfd(pid: libc::pid_t) -> io::Result<OwnedFd> {
+pub(crate) fn open_pidfd(pid: libc::pid_t) -> io::Result<OwnedFd> {
     // SAFETY: pidfd_open takes only integer arguments and returns a fresh owned fd.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
     if fd < 0 {

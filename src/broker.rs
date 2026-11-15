@@ -19,7 +19,14 @@ use tokio::{
     time::{Instant, timeout},
 };
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const IO_TIMEOUT: Duration = Duration::from_secs(10);
+fn request_timeout(operation: &Operation) -> Duration {
+    match operation {
+        Operation::CallTool { .. } => Duration::from_secs(910),
+        Operation::ListTools { .. } => Duration::from_secs(120),
+        _ => Duration::from_secs(10),
+    }
+}
 type CallResult = std::result::Result<Value, String>;
 
 struct Call {
@@ -38,20 +45,21 @@ impl Session {
     pub async fn call(&self, operation: Operation) -> CallResult {
         operation.validate()?;
         if !self.alive.load(Ordering::Acquire) {
-            return Err("terminal disconnected".into());
+            return Err("client disconnected".into());
         }
         let _permit = self
             .slots
             .try_acquire()
-            .map_err(|_| "terminal busy; retry later")?;
+            .map_err(|_| "client busy; retry later")?;
+        let duration = request_timeout(&operation);
         let (reply, response) = oneshot::channel();
         self.sender
             .try_send(Call { operation, reply })
-            .map_err(|_| "terminal disconnected or busy")?;
-        match timeout(REQUEST_TIMEOUT, response).await {
+            .map_err(|_| "client disconnected or busy")?;
+        match timeout(duration, response).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err("terminal disconnected".into()),
-            Err(_) => Err("terminal request timed out; its outcome may be unknown".into()),
+            Ok(Err(_)) => Err("client disconnected".into()),
+            Err(_) => Err("client request timed out; its outcome may be unknown".into()),
         }
     }
 }
@@ -97,10 +105,11 @@ impl Broker {
         let user = tokio::task::spawn_blocking(move || username(uid)).await??;
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
-        match timeout(REQUEST_TIMEOUT, wire::read_frame(&mut reader)).await?? {
+        let mode = match timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await?? {
             Some(Frame::Hello {
                 version: wire::VERSION,
-            }) => {}
+                mode,
+            }) => mode,
             _ => {
                 wire::write_frame(
                     &mut writer,
@@ -111,7 +120,7 @@ impl Broker {
                 .await?;
                 return Ok(());
             }
-        }
+        };
         let secret = generate_secret()?;
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
@@ -127,7 +136,7 @@ impl Broker {
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "this user already has an active terminal".into(),
+                        message: "this user already has an active client".into(),
                     },
                 )
                 .await?;
@@ -135,7 +144,7 @@ impl Broker {
             }
             sessions.insert(user.clone(), session.clone());
         }
-        eprintln!("ssmcpd: connected {user}");
+        eprintln!("ssmcpd: connected {user} ({})", mode.name());
         let result: crate::Result<()> = async {
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{user}", self.public_url), secret }).await?;
             let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant)> = HashMap::new();
@@ -152,16 +161,16 @@ impl Broker {
                         Some(call) = requests.recv() => {
                             if call.reply.is_closed() { continue; }
                             if pending.len() >= wire::MAX_INFLIGHT {
-                                let _ = call.reply.send(Err("terminal busy; retry later".into()));
+                                let _ = call.reply.send(Err("client busy; retry later".into()));
                                 continue;
                             }
                             next_id = next_id.checked_add(1).ok_or("request id exhausted")?;
-                            pending.insert(next_id, (call.reply, Instant::now()));
-                            timeout(REQUEST_TIMEOUT, wire::write_frame(&mut writer, &Frame::Call { id:next_id, operation:call.operation })).await??;
+                            pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation)));
+                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::Call { id:next_id, operation:call.operation })).await??;
                         }
                         _ = expiry.tick() => {
-                            if pending.values().any(|(_, at)| at.elapsed() >= REQUEST_TIMEOUT) {
-                                return Err("terminal response timeout".into());
+                            if pending.values().any(|(_, deadline)| Instant::now() >= *deadline) {
+                                return Err("client response timeout".into());
                             }
                         }
                     }
@@ -171,7 +180,7 @@ impl Broker {
                         if let Some((reply, _)) = pending.remove(&id) { let _ = reply.send(result); }
                     }
                     None => break,
-                    _ => return Err("unexpected frame from terminal".into()),
+                    _ => return Err("unexpected frame from client".into()),
                 }
             }
             Ok(())
@@ -323,6 +332,7 @@ mod tests {
             &mut writer,
             &Frame::Hello {
                 version: wire::VERSION,
+                mode: wire::Mode::Shell,
             },
         )
         .await
@@ -399,6 +409,7 @@ mod tests {
             &mut writer,
             &Frame::Hello {
                 version: wire::VERSION,
+                mode: wire::Mode::Shell,
             },
         )
         .await
@@ -415,6 +426,7 @@ mod tests {
             &mut writer2,
             &Frame::Hello {
                 version: wire::VERSION,
+                mode: wire::Mode::Shell,
             },
         )
         .await

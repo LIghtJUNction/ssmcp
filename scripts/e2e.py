@@ -330,7 +330,7 @@ class Harness:
         self.check(self.request(body=[])[0] == 400, "JSON-RPC batches are rejected")
         self.check(self.rpc("ping", headers={"MCP-Protocol-Version": "1900-01-01"})[0] == 400,
                    "unsupported protocol version is rejected")
-        self.check(self.request(body=b"x" * (256 * 1024 + 1))[0] == 413, "oversize HTTP body is rejected")
+        self.check(self.request(body=b"x" * (4 * 1024 * 1024 + 1))[0] == 413, "oversize HTTP body is rejected")
 
         status, result, _ = self.rpc("server/discover", modern=True)
         self.check(status == 200 and result["result"]["resultType"] == "complete"
@@ -360,6 +360,15 @@ class Harness:
         duplicate.wait(timeout=5)
         self.check(duplicate.returncode != 0 and not duplicate.stdout.read(), "duplicate user connection is refused")
         self.check(self.call("terminal.status")["running"], "original terminal survives duplicate connection")
+        # Local observation is independent of terminal.read and PTY echo settings.
+        self.check(credentials.get("type") == "shell", "shell is the default backend")
+        self.call("terminal.write", {"data": "stty -echo; printf '%s%s\\n' 'SSMCP_' 'LIVE_OUTPUT'\n"})
+        log_path = self.directory / "client.log"
+        wait_for(lambda: "SSMCP_LIVE_OUTPUT" in log_path.read_text(errors="replace"), description="live shell output on local stderr")
+        self.check(True, "local stderr receives shell output without any MCP read")
+        self.call("terminal.write", {"data": "printf '%s%s\\n' 'SSMCP_' 'ECHO_DISABLED'; stty echo\n"})
+        wait_for(lambda: "SSMCP_ECHO_DISABLED" in log_path.read_text(errors="replace"), description="output with PTY echo disabled")
+        self.check("[ssmcp shell input]" in log_path.read_text(errors="replace"), "local transcript records remote input even when PTY echo is disabled")
         self.call("terminal.resize", {"rows": 37, "cols": 91})
         self.call("terminal.write", {"data": "stty size; tty; printf '%s%s:%s\\n' 'SSMCP_' 'SHELL' \"$$\"\n"})
         match, cursor, output = self.read_until(r"(?:\r?\n)SSMCP_SHELL:(\d+)\r?\n")
