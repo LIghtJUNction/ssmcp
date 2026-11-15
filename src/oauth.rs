@@ -1,8 +1,11 @@
-//! In-memory OAuth authorization-code server for an SSH-owned MCP session.
+//! OAuth authorization-code server for SSH login codes and provider identities.
 //!
 //! MCP 2026-07-28 authorization, RFC 7636, 8414, 8707, 9207, 9728 and 9700.
 //! No external metadata fetching: DCR is the advertised registration mechanism.
-use crate::broker::{Broker, Session, valid_username};
+use crate::{
+    broker::{Authorization, Broker, Session, valid_username},
+    identity::Identity,
+};
 use axum::{
     Json, Router,
     body::to_bytes,
@@ -23,13 +26,14 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     io::Read,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
 
 const TRANSACTION_TTL: Duration = Duration::from_secs(crate::broker::LOGIN_LIFETIME);
 const CODE_TTL: Duration = Duration::from_secs(60);
+const PROVIDER_TTL: Duration = Duration::from_secs(600);
 const MAX_CLIENTS: usize = 1024;
 const MAX_TRANSACTIONS: usize = 2048;
 const MAX_CODES: usize = 4096;
@@ -95,6 +99,7 @@ pub struct OAuth {
 struct Store {
     clients: HashMap<String, Client>,
     transactions: HashMap<Key, Transaction>,
+    upstream: HashMap<Key, ProviderLogin>,
     codes: HashMap<Key, AuthorizationCode>,
     families: HashMap<Key, Family>,
     access: HashMap<Key, AccessToken>,
@@ -142,6 +147,8 @@ struct Transaction {
     expires: Instant,
     attempts: u8,
     busy: bool,
+    provider_busy: bool,
+    identity: Option<Identity>,
 }
 
 #[derive(Clone)]
@@ -149,12 +156,44 @@ struct Binding {
     user: String,
     resource: String,
     client_id: String,
-    session: Weak<Session>,
+    authorization: Authorization,
 }
 
 impl Binding {
-    fn live(&self) -> Option<Arc<Session>> {
-        self.session.upgrade().filter(|session| session.is_alive())
+    fn live(&self) -> Option<Authorization> {
+        self.authorization
+            .is_live()
+            .then(|| self.authorization.clone())
+    }
+}
+
+struct ProviderLogin {
+    transaction_id: String,
+    provider: String,
+    verifier: String,
+    csrf: Key,
+    expires: Instant,
+}
+
+// A provider callback consumes its state before making network requests. Dropping
+// an interrupted exchange unlocks the form without accepting that state twice.
+struct ProviderAttempt {
+    state: Arc<Mutex<Store>>,
+    login: ProviderLogin,
+    transaction: Transaction,
+}
+
+impl Drop for ProviderAttempt {
+    fn drop(&mut self) {
+        if let Some(transaction) = self
+            .state
+            .lock()
+            .unwrap()
+            .transactions
+            .get_mut(&hash(&self.login.transaction_id))
+        {
+            transaction.provider_busy = false;
+        }
     }
 }
 
@@ -368,6 +407,7 @@ impl OAuth {
             state: Arc::new(Mutex::new(Store {
                 clients: HashMap::new(),
                 transactions: HashMap::new(),
+                upstream: HashMap::new(),
                 codes: HashMap::new(),
                 families: HashMap::new(),
                 access: HashMap::new(),
@@ -378,7 +418,7 @@ impl OAuth {
         })
     }
 
-    pub fn authenticate(&self, user: &str, access_token: &str) -> Option<Arc<Session>> {
+    pub fn authenticate(&self, user: &str, access_token: &str) -> Option<Authorization> {
         if !valid_username(user) || !opaque(access_token, "at_") {
             return None;
         }
@@ -651,6 +691,8 @@ impl OAuth {
             expires: (now + TRANSACTION_TTL).min(client.expires),
             attempts: 0,
             busy: false,
+            provider_busy: false,
+            identity: None,
         };
         state
             .transactions
@@ -685,7 +727,10 @@ impl OAuth {
                 "Authorization form does not belong to this browser",
             ));
         }
-        if transaction.busy || transaction.attempts >= 5 {
+        if transaction.busy
+            || transaction.provider_busy
+            || (transaction.identity.is_none() && transaction.attempts >= 5)
+        {
             return Err(OAuthError::invalid(
                 "Restart authorization before another login attempt",
             ));
@@ -703,7 +748,9 @@ impl OAuth {
         let code = random("ac_")?;
         let stored = state.transactions.get_mut(&key).unwrap();
         stored.busy = true;
-        stored.attempts += 1;
+        if stored.identity.is_none() {
+            stored.attempts += 1;
+        }
         state.pending_codes += 1;
         Ok(LoginAttempt {
             state: self.state.clone(),
@@ -714,8 +761,34 @@ impl OAuth {
     }
 
     fn finish_login(&self, attempt: LoginAttempt, session: Arc<Session>) -> OResult<Response> {
-        if !session.is_alive() {
+        if !session.is_alive()
+            || attempt.transaction.user == "mcp"
+            || attempt.transaction.identity.is_some()
+        {
             return Err(OAuthError::grant());
+        }
+        let authorization = Authorization::Legacy {
+            user: attempt.transaction.user.clone(),
+            anchor: Arc::downgrade(&session),
+        };
+        self.finish_authorization(attempt, authorization)
+    }
+
+    fn finish_authorization(
+        &self,
+        attempt: LoginAttempt,
+        authorization: Authorization,
+    ) -> OResult<Response> {
+        if !authorization.is_live() {
+            return Err(OAuthError::grant());
+        }
+        match (&authorization, &attempt.transaction.identity) {
+            (Authorization::Identity(identity), Some(verified))
+                if identity.provider == verified.provider
+                    && identity.subject == verified.subject => {}
+            (Authorization::Legacy { user, .. }, None)
+                if user == &attempt.transaction.user && user != "mcp" => {}
+            _ => return Err(OAuthError::grant()),
         }
         let now = Instant::now();
         let mut state = self.state.lock().unwrap();
@@ -733,7 +806,7 @@ impl OAuth {
             user: transaction.user,
             resource: transaction.resource,
             client_id: transaction.client_id,
-            session: Arc::downgrade(&session),
+            authorization,
         };
         state.codes.insert(
             hash(&attempt.code),
@@ -753,6 +826,153 @@ impl OAuth {
         );
         drop(state); // LoginAttempt::drop also locks the store.
         Ok(response)
+    }
+
+    fn begin_provider_login(
+        &self,
+        id: &str,
+        csrf: &str,
+        provider: &str,
+    ) -> OResult<(String, String)> {
+        if !opaque(id, "tx_") || !opaque(csrf, "csrf_") {
+            return Err(OAuthError::invalid(
+                "Authorization form has expired; restart the connection",
+            ));
+        }
+        let now = Instant::now();
+        let mut state = self.state.lock().unwrap();
+        state.sweep(now);
+        if state.upstream.len() >= MAX_TRANSACTIONS {
+            return Err(OAuthError::capacity());
+        }
+        let transaction = state
+            .transactions
+            .get_mut(&hash(id))
+            .filter(|t| now < t.expires)
+            .ok_or_else(|| {
+                OAuthError::invalid("Authorization form has expired; restart the connection")
+            })?;
+        if !bool::from(transaction.csrf.ct_eq(&hash(csrf))) {
+            return Err(OAuthError::invalid(
+                "Authorization form does not belong to this browser",
+            ));
+        }
+        if transaction.busy
+            || transaction.provider_busy
+            || transaction.attempts >= 5
+            || transaction.identity.is_some()
+        {
+            return Err(OAuthError::invalid(
+                "Restart authorization before another login attempt",
+            ));
+        }
+        let state_value = random("idp_")?;
+        let verifier = random("pkce_")?;
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let expires = (now + PROVIDER_TTL).min(transaction.expires);
+        transaction.provider_busy = true;
+        transaction.attempts += 1;
+        state.upstream.insert(
+            hash(&state_value),
+            ProviderLogin {
+                transaction_id: id.into(),
+                provider: provider.into(),
+                verifier,
+                csrf: hash(csrf),
+                expires,
+            },
+        );
+        Ok((state_value, challenge))
+    }
+
+    fn take_provider_login(
+        &self,
+        raw: &str,
+        csrf: &str,
+        provider: &str,
+    ) -> OResult<ProviderAttempt> {
+        if !opaque(raw, "idp_") || !opaque(csrf, "csrf_") {
+            return Err(OAuthError::invalid(
+                "Invalid or expired identity-provider state",
+            ));
+        }
+        let now = Instant::now();
+        let mut state = self.state.lock().unwrap();
+        state.sweep(now);
+        let key = hash(raw);
+        let login = state
+            .upstream
+            .get(&key)
+            .filter(|login| {
+                now < login.expires
+                    && login.provider == provider
+                    && bool::from(login.csrf.ct_eq(&hash(csrf)))
+            })
+            .ok_or_else(|| {
+                OAuthError::invalid(
+                    "Identity callback does not belong to this browser or has expired",
+                )
+            })?;
+        let transaction = state
+            .transactions
+            .get(&hash(&login.transaction_id))
+            .filter(|t| {
+                now < t.expires
+                    && t.provider_busy
+                    && !t.busy
+                    && bool::from(t.csrf.ct_eq(&hash(csrf)))
+            })
+            .cloned()
+            .ok_or_else(|| OAuthError::invalid("Authorization form has expired"))?;
+        let login = state.upstream.remove(&key).unwrap();
+        Ok(ProviderAttempt {
+            state: self.state.clone(),
+            login,
+            transaction,
+        })
+    }
+
+    fn finish_provider_login(
+        &self,
+        attempt: ProviderAttempt,
+        identity: Identity,
+    ) -> OResult<(String, Transaction)> {
+        if identity.provider != attempt.login.provider {
+            return Err(OAuthError::grant());
+        }
+        let now = Instant::now();
+        let mut state = self.state.lock().unwrap();
+        let transaction = state
+            .transactions
+            .get_mut(&hash(&attempt.login.transaction_id))
+            .filter(|t| {
+                now < t.expires && now < attempt.login.expires && t.provider_busy && !t.busy
+            })
+            .ok_or_else(|| OAuthError::invalid("Authorization form has expired"))?;
+        transaction.identity = Some(identity);
+        transaction.provider_busy = false;
+        let result = (attempt.login.transaction_id.clone(), transaction.clone());
+        drop(state);
+        Ok(result)
+    }
+
+    fn deny(&self, attempt: LoginAttempt) -> Response {
+        let mut state = self.state.lock().unwrap();
+        if let Some(transaction) = state.transactions.remove(&attempt.key)
+            && transaction.busy
+        {
+            state.pending_codes = state.pending_codes.saturating_sub(1);
+        }
+        let response = form_redirect(
+            &attempt.transaction.redirect,
+            &self.issuer,
+            &[
+                ("error", "access_denied"),
+                ("error_description", "The user declined this connection"),
+            ],
+        );
+        drop(state);
+        response
     }
 
     fn token(&self, parameters: &Parameters, headers: &HeaderMap) -> OResult<Value> {
@@ -968,6 +1188,16 @@ impl Store {
         self.clients.retain(|_, client| now < client.expires);
         self.transactions
             .retain(|_, t| now < t.expires && self.clients.contains_key(&t.client_id));
+        self.upstream.retain(|_, login| {
+            let key = hash(&login.transaction_id);
+            if now >= login.expires {
+                if let Some(transaction) = self.transactions.get_mut(&key) {
+                    transaction.provider_busy = false;
+                }
+                return false;
+            }
+            self.transactions.contains_key(&key)
+        });
         self.pending_codes = self.transactions.values().filter(|t| t.busy).count();
         self.families.retain(|_, f| {
             !f.revoked
@@ -1286,8 +1516,14 @@ fn consent_response(
     transaction: &Transaction,
     error: Option<&str>,
     status: StatusCode,
+    providers: &[&str],
+    count: Option<usize>,
 ) -> Response {
-    let mut response = (status, Html(consent_page(id, transaction, error))).into_response();
+    let mut response = (
+        status,
+        Html(consent_page(id, transaction, error, providers, count)),
+    )
+        .into_response();
     // no-referrer makes browsers send Origin: null on form POSTs. Keep the
     // same-origin form usable without leaking authorization URLs to callbacks.
     response
@@ -1299,7 +1535,13 @@ fn consent_response(
     response
 }
 
-fn consent_page(id: &str, transaction: &Transaction, error: Option<&str>) -> String {
+fn consent_page(
+    id: &str,
+    transaction: &Transaction,
+    error: Option<&str>,
+    providers: &[&str],
+    count: Option<usize>,
+) -> String {
     let callback = Url::parse(&transaction.redirect.uri)
         .unwrap()
         .origin()
@@ -1307,14 +1549,44 @@ fn consent_page(id: &str, transaction: &Transaction, error: Option<&str>) -> Str
     let error = error
         .map(|error| format!("<p class=error role=alert>{}</p>", escape(error)))
         .unwrap_or_default();
+    let details = format!(
+        "<dl><dt>客户端</dt><dd>{}</dd><dt>回调来源</dt><dd>{}</dd><dt>MCP 资源</dt><dd>{}</dd></dl>",
+        escape(&transaction.client_name),
+        escape(&callback),
+        escape(&transaction.resource)
+    );
+    let hidden = format!(
+        "<input type=hidden name=transaction_id value=\"{}\">",
+        escape(id)
+    );
+    if let Some(identity) = &transaction.identity {
+        let count = count.map_or_else(String::new, |count| format!("<p>当前可用会话：{count}</p>"));
+        return page(
+            "允许客户端连接？",
+            &format!(
+                "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
+                escape(&identity.login),
+                escape(&identity.provider)
+            ),
+        );
+    }
+    let mut choices = String::new();
+    for provider in providers {
+        let label = match *provider {
+            "github" => "GitHub",
+            other => other,
+        };
+        choices.push_str(&format!("<form method=post action=/oauth/authorize>{hidden}<button type=submit name=provider value=\"{}\">使用 {} 登录</button></form>", escape(provider), escape(label)));
+    }
+    if transaction.user != "mcp" {
+        choices.push_str(&format!("<p>也可粘贴本机 ssmcp 显示的一次性登录码，控制同一 SSH 账号下未设置 --allow 的会话。</p><form method=post action=/oauth/authorize>{hidden}<label for=login_code>一次性登录码</label><input id=login_code name=login_code type=password autocomplete=one-time-code minlength=64 maxlength=64 required spellcheck=false><button type=submit>使用登录码授权</button></form><p class=muted>登录码只使用一次。提供该登录码的 SSH 连接断开后，本次授权立即失效。设置了 --allow 的会话只接受其允许的第三方身份。</p>"));
+    } else if providers.is_empty() {
+        choices.push_str("<p class=error>此服务器尚未配置身份提供方，请联系服务器管理员。</p>");
+    }
     page(
-        "连接你的终端",
+        "连接你的会话",
         &format!(
-            "<p>粘贴本机 ssmcp 显示的一次性登录码，授权此 MCP 客户端控制同一 SSH 账号下的所有在线客户端，包括随后连接的客户端。</p><dl><dt>客户端</dt><dd>{}</dd><dt>回调来源</dt><dd>{}</dd><dt>MCP 资源</dt><dd>{}</dd></dl>{error}<form method=post action=/oauth/authorize><input type=hidden name=transaction_id value=\"{}\"><label for=login_code>一次性登录码</label><input id=login_code name=login_code type=password autocomplete=one-time-code minlength=64 maxlength=64 required spellcheck=false autofocus><button type=submit>授权连接</button></form><p class=muted>登录码只使用一次。提供该登录码的 SSH 连接断开后，本次授权立即失效。</p>",
-            escape(&transaction.client_name),
-            escape(&callback),
-            escape(&transaction.resource),
-            escape(id)
+            "<p>使用会话允许的账号登录，再确认是否授权此客户端。</p>{details}{error}{choices}"
         ),
     )
 }
@@ -1335,6 +1607,7 @@ pub fn routes() -> Router<Arc<Broker>> {
     Router::new()
         .merge(public)
         .route("/oauth/authorize", get(authorize).post(login))
+        .route("/oauth/callback/{provider}", get(provider_callback))
         .layer(middleware::map_response(security_headers))
 }
 
@@ -1440,8 +1713,14 @@ async fn authorize(
         .and_then(|parameters| broker.oauth.begin_authorization(&parameters, &headers));
     match outcome {
         Ok(consent) => {
-            let mut response =
-                consent_response(&consent.id, &consent.transaction, None, StatusCode::OK);
+            let mut response = consent_response(
+                &consent.id,
+                &consent.transaction,
+                None,
+                StatusCode::OK,
+                &broker.identities.names(),
+                None,
+            );
             response.headers_mut().insert(
                 header::SET_COOKIE,
                 HeaderValue::from_str(&format!(
@@ -1474,7 +1753,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
         if parameters
             .0
             .keys()
-            .any(|key| !matches!(key.as_str(), "transaction_id" | "login_code"))
+            .any(|key| !matches!(key.as_str(), "transaction_id" | "login_code" | "provider" | "decision"))
         {
             return Err(OAuthError::invalid("Unexpected authorization form field"));
         }
@@ -1482,14 +1761,50 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
         let csrf = csrf.as_deref().ok_or_else(|| {
             OAuthError::invalid("Authorization cookie is missing; restart the connection")
         })?;
-        let code = parameters.required("login_code")?.trim();
+        let methods = ["login_code", "provider", "decision"].iter()
+            .filter(|name| parameters.get(name).is_some()).count();
+        if methods != 1 {
+            return Err(OAuthError::invalid("Choose exactly one authorization action"));
+        }
+        if let Some(provider) = parameters.get("provider") {
+            if !broker.identities.enabled(provider) {
+                return Err(OAuthError::invalid("This identity provider is not configured"));
+            }
+            let (state, challenge) = broker.oauth.begin_provider_login(id, csrf, provider)?;
+            let location = broker.identities.authorization_url(provider, &state, &challenge)
+                .map_err(|_| OAuthError::internal())?;
+            // Finish the same-origin POST before navigating to the provider.
+            // A 303 can inherit the original form-action CSP in some browsers.
+            let location = escape(&location);
+            return Ok(Html(page_with_head("登录你的账号",
+                &format!("<p>正在前往登录页面。</p><p><a href=\"{location}\" rel=noreferrer>继续登录</a></p>"),
+                &format!("<meta http-equiv=refresh content=\"0;url={location}\">"))).into_response());
+        }
         let attempt = broker.oauth.begin_login(id, csrf)?;
+        if let Some(decision) = parameters.get("decision") {
+            if decision == "deny" {
+                return Ok(broker.oauth.deny(attempt));
+            }
+            if decision != "allow" {
+                return Err(OAuthError::invalid("Invalid consent action"));
+            }
+            let identity = attempt.transaction.identity.clone()
+                .ok_or_else(|| OAuthError::invalid("Sign in before granting this client access"))?;
+            let authorization = Authorization::Identity(identity);
+            return broker.oauth.finish_authorization(attempt, authorization);
+        }
+        if attempt.transaction.user == "mcp" || attempt.transaction.identity.is_some() {
+            return Err(OAuthError::invalid("This connection requires identity-provider consent"));
+        }
+        let code = parameters.required("login_code")?.trim();
         if code.len() != 64 || !code.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Ok(consent_response(
                 id,
                 &attempt.transaction,
                 Some("登录码无效。请粘贴本机终端显示的 64 位登录码。"),
                 StatusCode::BAD_REQUEST,
+                &broker.identities.names(),
+                None,
             ));
         }
         let Some(session) = broker.redeem_login(&attempt.transaction.user, code).await else {
@@ -1498,11 +1813,53 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
                 &attempt.transaction,
                 Some("登录码无效、已使用或已过期。请检查终端，必要时重新运行 ssmcp。"),
                 StatusCode::BAD_REQUEST,
+                &broker.identities.names(),
+                None,
             ));
         };
         broker.oauth.finish_login(attempt, session)
     }
     .await;
+    match outcome {
+        Ok(response) => response,
+        Err(error) => error.page(&broker.oauth.issuer),
+    }
+}
+
+async fn provider_callback(
+    State(broker): State<Arc<Broker>>,
+    Path(provider): Path<String>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    let outcome = async {
+        if !broker.identities.enabled(&provider) {
+            return Err(OAuthError::invalid("This identity provider is not configured"));
+        }
+        let parameters = Parameters::parse(query.as_deref().unwrap_or(""))?;
+        let csrf = cookie(&headers).ok_or_else(|| OAuthError::invalid(
+            "Authorization cookie is missing; restart the connection in the same browser"))?;
+        let attempt = broker.oauth.take_provider_login(parameters.required("state")?, csrf, &provider)?;
+        if parameters.get("error").is_some() {
+            return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
+                Some("第三方登录已取消或未成功。你可以重新登录。"), StatusCode::BAD_REQUEST,
+                &broker.identities.names(), None));
+        }
+        let code = parameters.required("code")?;
+        if code.is_empty() || code.len() > 2048 {
+            return Err(OAuthError::invalid("Invalid identity-provider authorization code"));
+        }
+        let identity = match broker.identities.exchange(&provider, code, &attempt.login.verifier).await {
+            Ok(identity) => identity,
+            Err(_) => return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
+                Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
+                StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
+        };
+        let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
+            .map_err(|_| OAuthError::grant())?.len();
+        let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
+        Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed)))
+    }.await;
     match outcome {
         Ok(response) => response,
         Err(error) => error.page(&broker.oauth.issuer),
@@ -1526,8 +1883,187 @@ async fn token(State(broker): State<Arc<Broker>>, request: Request) -> Response 
 }
 
 #[cfg(test)]
+#[path = "oauth_github_tests.rs"]
+mod github_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn github_identity(subject: &str, login: &str) -> Identity {
+        Identity {
+            provider: "github".into(),
+            subject: subject.into(),
+            login: login.into(),
+        }
+    }
+
+    #[test]
+    fn provider_state_is_single_use_browser_and_provider_bound() {
+        let oauth = OAuth::new(ISSUER.into());
+        let registered = ok(oauth.register(registration(true)));
+        let form = consent(&oauth, registered["client_id"].as_str().unwrap());
+        let (state, challenge) = ok(oauth.begin_provider_login(&form.id, &form.csrf, "github"));
+        assert_eq!(URL_SAFE_NO_PAD.decode(challenge).unwrap().len(), 32);
+        assert!(oauth.begin_login(&form.id, &form.csrf).is_err());
+        assert!(
+            oauth
+                .begin_provider_login(&form.id, &form.csrf, "github")
+                .is_err()
+        );
+        assert!(
+            oauth
+                .take_provider_login(&state, &ok(random("csrf_")), "github")
+                .is_err()
+        );
+        assert!(
+            oauth
+                .take_provider_login(&state, &form.csrf, "other")
+                .is_err()
+        );
+        let attempt = ok(oauth.take_provider_login(&state, &form.csrf, "github"));
+        assert!(
+            oauth
+                .take_provider_login(&state, &form.csrf, "github")
+                .is_err()
+        );
+        let (id, transaction) =
+            ok(oauth.finish_provider_login(attempt, github_identity("42", "alice")));
+        assert_eq!(id, form.id);
+        assert_eq!(transaction.identity.unwrap().subject, "42");
+        assert!(
+            oauth
+                .begin_provider_login(&form.id, &form.csrf, "github")
+                .is_err(),
+            "a verified identity cannot be replaced underneath a previously shown consent page"
+        );
+        let state = oauth.state.lock().unwrap();
+        assert!(
+            state.codes.is_empty(),
+            "upstream login cannot implicitly grant MCP access"
+        );
+        assert_eq!(state.pending_codes, 0);
+    }
+
+    #[test]
+    fn failed_or_expired_provider_callback_releases_form_without_replay() {
+        let oauth = OAuth::new(ISSUER.into());
+        let registered = ok(oauth.register(registration(true)));
+        let form = consent(&oauth, registered["client_id"].as_str().unwrap());
+        let (state, _) = ok(oauth.begin_provider_login(&form.id, &form.csrf, "github"));
+        drop(ok(oauth.take_provider_login(&state, &form.csrf, "github")));
+        assert!(
+            oauth
+                .take_provider_login(&state, &form.csrf, "github")
+                .is_err()
+        );
+        let (next, _) = ok(oauth.begin_provider_login(&form.id, &form.csrf, "github"));
+        {
+            let mut store = oauth.state.lock().unwrap();
+            store.upstream.get_mut(&hash(&next)).unwrap().expires = Instant::now();
+            store.next_sweep = Instant::now();
+        }
+        assert!(
+            oauth
+                .take_provider_login(&next, &form.csrf, "github")
+                .is_err()
+        );
+        assert!(!oauth.state.lock().unwrap().transactions[&hash(&form.id)].provider_busy);
+    }
+
+    #[test]
+    fn successful_final_provider_attempt_can_still_be_approved_or_denied() {
+        let oauth = OAuth::new(ISSUER.into());
+        let registered = ok(oauth.register(registration(true)));
+        let form = consent(&oauth, registered["client_id"].as_str().unwrap());
+        oauth
+            .state
+            .lock()
+            .unwrap()
+            .transactions
+            .get_mut(&hash(&form.id))
+            .unwrap()
+            .attempts = 4;
+        let (state, _) = ok(oauth.begin_provider_login(&form.id, &form.csrf, "github"));
+        let upstream = ok(oauth.take_provider_login(&state, &form.csrf, "github"));
+        ok(oauth.finish_provider_login(upstream, github_identity("42", "alice")));
+        let attempt = ok(oauth.begin_login(&form.id, &form.csrf));
+        assert_eq!(attempt.transaction.attempts, 5);
+        let response = oauth.deny(attempt);
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(
+            response.headers()[header::LOCATION]
+                .to_str()
+                .unwrap()
+                .contains("access_denied")
+        );
+        assert!(oauth.state.lock().unwrap().codes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn identity_grants_survive_disconnect_and_refresh_without_inheriting_legacy_sessions() {
+        let broker = Broker::new(ISSUER.into());
+        let registered = ok(broker.oauth.register(registration(true)));
+        let client = registered["client_id"].as_str().unwrap();
+        let form = consent(&broker.oauth, client);
+        let (state, _) = ok(broker
+            .oauth
+            .begin_provider_login(&form.id, &form.csrf, "github"));
+        let upstream = ok(broker
+            .oauth
+            .take_provider_login(&state, &form.csrf, "github"));
+        ok(broker
+            .oauth
+            .finish_provider_login(upstream, github_identity("42", "alice")));
+        let attempt = ok(broker.oauth.begin_login(&form.id, &form.csrf));
+        let code = attempt.code.clone();
+        ok(broker.oauth.finish_authorization(
+            attempt,
+            Authorization::Identity(github_identity("42", "alice")),
+        ));
+        let tokens = ok(broker.oauth.token(
+            &parameters(&[
+                ("client_id", client),
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                ("code_verifier", VERIFIER),
+                ("resource", RESOURCE),
+            ]),
+            &HeaderMap::new(),
+        ));
+        let access = tokens["access_token"].as_str().unwrap();
+        let authorization = broker.authenticate("alice", access).await.unwrap();
+        broker.test_register("alice", &"a".repeat(64)).await;
+        assert!(
+            broker
+                .clients("alice", &authorization)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            broker.authenticate("mcp", access).await.is_none(),
+            "resource binding must remain exact"
+        );
+        broker.disconnect_all().await;
+        assert!(broker.authenticate("alice", access).await.is_some());
+        let refreshed = ok(broker.oauth.token(
+            &parameters(&[
+                ("client_id", client),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+                ("resource", RESOURCE),
+            ]),
+            &HeaderMap::new(),
+        ));
+        assert_ne!(tokens["refresh_token"], refreshed["refresh_token"]);
+        assert!(
+            broker
+                .authenticate("alice", refreshed["access_token"].as_str().unwrap())
+                .await
+                .is_some()
+        );
+    }
 
     #[test]
     fn lifetimes_reject_zero_fractional_unbounded_and_inconsistent_values() {
@@ -1769,10 +2305,11 @@ mod tests {
         assert_eq!(tokens["expires_in"], 28800);
         assert!(tokens.get("refresh_token").is_none());
         let access = tokens["access_token"].as_str().unwrap();
-        assert!(Arc::ptr_eq(
-            &oauth.authenticate("alice", access).unwrap(),
-            &fixture.session
-        ));
+        let Authorization::Legacy { anchor, .. } = oauth.authenticate("alice", access).unwrap()
+        else {
+            panic!("login-code grant must keep its issuing session");
+        };
+        assert!(Arc::ptr_eq(&anchor.upgrade().unwrap(), &fixture.session));
         assert!(oauth.authenticate("alice", &"a".repeat(64)).is_none());
         assert!(oauth.authenticate("bob", access).is_none());
         oauth
@@ -2000,7 +2537,7 @@ mod tests {
         );
         let registered = ok(oauth.register(registration(true)));
         let form = consent(&oauth, registered["client_id"].as_str().unwrap());
-        let html = consent_page(&form.id, &form.transaction, None);
+        let html = consent_page(&form.id, &form.transaction, None, &[], None);
         assert!(html.contains("A &lt;testing&gt; client"));
         assert!(!html.contains("A <testing> client"));
         assert!(html.contains("https://client.example"));
@@ -2038,6 +2575,8 @@ mod tests {
                 &form.transaction,
                 error,
                 StatusCode::OK,
+                &[],
+                None,
             ))
             .await;
             let policy = response.headers()["content-security-policy"]

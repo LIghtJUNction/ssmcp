@@ -1,12 +1,15 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
-use crate::wire::{self, ClientInfo, Frame, Operation};
+use crate::{
+    identity::{GitHubConfig, Identity, IdentityProviders},
+    wire::{self, ClientInfo, Frame, Operation},
+};
 use serde_json::Value;
 use std::{
     collections::HashMap,
     ffi::CStr,
     io::{self, Read},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -35,6 +38,34 @@ struct Call {
 }
 
 pub const LOGIN_LIFETIME: u64 = 1800;
+pub const IDENTITY_RESOURCE: &str = "mcp";
+
+/// OAuth identity and connection ownership remain separate authorization paths.
+#[derive(Clone)]
+pub enum Authorization {
+    Legacy { user: String, anchor: Weak<Session> },
+    Identity(Identity),
+}
+
+impl Authorization {
+    pub fn is_live(&self) -> bool {
+        match self {
+            Self::Legacy { anchor, .. } => {
+                anchor.upgrade().is_some_and(|session| session.is_alive())
+            }
+            Self::Identity(_) => true,
+        }
+    }
+
+    fn permits(&self, session: &Session) -> bool {
+        match self {
+            Self::Legacy { .. } => session.allow.is_empty(),
+            Self::Identity(identity) => session.allow.iter().any(|allowed| {
+                allowed.provider == identity.provider && allowed.subject == identity.subject
+            }),
+        }
+    }
+}
 
 struct LoginCode {
     value: String,
@@ -43,6 +74,8 @@ struct LoginCode {
 
 pub struct Session {
     login: Mutex<Option<LoginCode>>,
+    // Resolved provider subject IDs are immutable for this SSH connection.
+    allow: Vec<Identity>,
     info: ClientInfo,
     sender: mpsc::Sender<Call>,
     slots: Semaphore,
@@ -87,6 +120,7 @@ impl Session {
 pub struct Broker {
     pub public_url: String,
     pub oauth: crate::oauth::OAuth,
+    pub identities: IdentityProviders,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
 }
 
@@ -100,14 +134,23 @@ impl Broker {
         public_url: String,
         config: crate::oauth::OAuthConfig,
     ) -> crate::Result<Self> {
+        Self::with_identity_config(public_url, config, None)
+    }
+
+    pub fn with_identity_config(
+        public_url: String,
+        config: crate::oauth::OAuthConfig,
+        github: Option<GitHubConfig>,
+    ) -> crate::Result<Self> {
         Ok(Self {
             oauth: crate::oauth::OAuth::with_config(public_url.clone(), config)?,
+            identities: IdentityProviders::new(&public_url, github)?,
             public_url,
             sessions: RwLock::new(HashMap::new()),
         })
     }
 
-    pub async fn authenticate(&self, user: &str, access_token: &str) -> Option<Arc<Session>> {
+    pub async fn authenticate(&self, user: &str, access_token: &str) -> Option<Authorization> {
         if !valid_username(user) {
             return None;
         }
@@ -115,23 +158,26 @@ impl Broker {
     }
 
     pub async fn online_session(&self, user: &str) -> Option<Arc<Session>> {
+        if user == IDENTITY_RESOURCE {
+            return None;
+        }
         self.sessions
             .read()
             .await
             .get(user)?
             .values()
-            .find(|session| session.is_alive())
+            .find(|session| session.is_alive() && session.allow.is_empty())
             .cloned()
     }
 
     pub async fn redeem_login(&self, user: &str, login_code: &str) -> Option<Arc<Session>> {
         let login_code = login_code.trim();
-        if !valid_username(user) || login_code.len() != 64 {
+        if !valid_username(user) || user == IDENTITY_RESOURCE || login_code.len() != 64 {
             return None;
         }
         let sessions = self.sessions.read().await;
         for session in sessions.get(user)?.values() {
-            if !session.is_alive() {
+            if !session.is_alive() || !session.allow.is_empty() {
                 continue;
             }
             let mut pending = session.login.lock().unwrap();
@@ -158,6 +204,7 @@ impl Broker {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
+            allow: Vec::new(),
             info: ClientInfo {
                 id: id.clone(),
                 name: "test".into(),
@@ -178,17 +225,15 @@ impl Broker {
         session
     }
 
-    /// An issuing connection authorizes its owner's clients while that connection is live.
+    /// Enumerate only sessions allowed by this identity and resource scope.
     pub async fn clients(
         &self,
         user: &str,
-        anchor: &Arc<Session>,
+        authorization: &Authorization,
     ) -> Result<Vec<Arc<Session>>, String> {
         let sessions = self.sessions.read().await;
-        let clients = authorized_clients(&sessions, user, anchor)?;
-        let mut result: Vec<_> = clients
-            .values()
-            .filter(|session| session.is_alive())
+        validate_authorization(&sessions, user, authorization)?;
+        let mut result: Vec<_> = accessible_sessions(&sessions, user, authorization)
             .cloned()
             .collect();
         result.sort_unstable_by(|left, right| left.client_id().cmp(right.client_id()));
@@ -198,14 +243,13 @@ impl Broker {
     pub async fn client(
         &self,
         user: &str,
-        anchor: &Arc<Session>,
+        authorization: &Authorization,
         id: &str,
     ) -> Result<Arc<Session>, String> {
         let sessions = self.sessions.read().await;
-        let clients = authorized_clients(&sessions, user, anchor)?;
-        clients
-            .get(id)
-            .filter(|session| session.is_alive())
+        validate_authorization(&sessions, user, authorization)?;
+        accessible_sessions(&sessions, user, authorization)
+            .find(|session| session.client_id() == id)
             .cloned()
             .ok_or_else(|| "client is unavailable; call list to refresh connected clients".into())
     }
@@ -246,14 +290,46 @@ impl Broker {
             wire::write_frame(&mut writer, &Frame::Reject { message }).await?;
             return Ok(());
         }
-        let login_code = generate_secret()?;
+        if user == IDENTITY_RESOURCE {
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reject {
+                    message: "SSH username mcp is reserved for the shared identity endpoint".into(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        let restricted = !metadata.allow.is_empty();
+        let allow = if restricted {
+            match self.identities.resolve_allow(&metadata.allow).await {
+                Ok(identities) if !identities.is_empty() => identities,
+                result => {
+                    let message = result
+                        .err()
+                        .unwrap_or_else(|| "allow list resolved to no identities".into());
+                    wire::write_frame(&mut writer, &Frame::Reject { message }).await?;
+                    return Ok(());
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        let login_code = if restricted {
+            String::new()
+        } else {
+            generate_secret()?
+        };
+        let login_expires_in = if restricted { 0 } else { LOGIN_LIFETIME };
+        let resource = if restricted { IDENTITY_RESOURCE } else { &user };
         let client_id = generate_secret()?;
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
-            login: Mutex::new(Some(LoginCode {
+            login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
+            allow,
             info: ClientInfo {
                 id: client_id.clone(),
                 name: metadata.name,
@@ -267,8 +343,10 @@ impl Broker {
         });
         {
             let mut sessions = self.sessions.write().await;
-            let clients = sessions.entry(user.clone()).or_default();
-            if clients.len() >= wire::MAX_CLIENTS_PER_USER {
+            if sessions
+                .get(&user)
+                .is_some_and(|clients| clients.len() >= wire::MAX_CLIENTS_PER_USER)
+            {
                 drop(sessions);
                 wire::write_frame(
                     &mut writer,
@@ -279,8 +357,11 @@ impl Broker {
                 .await?;
                 return Ok(());
             }
-            // An unexpected ID collision must never replace another live connection.
-            if clients.contains_key(&client_id) {
+            // /mcp can span owners, so connection IDs must be unique across the broker.
+            if sessions
+                .values()
+                .any(|clients| clients.contains_key(&client_id))
+            {
                 drop(sessions);
                 wire::write_frame(
                     &mut writer,
@@ -291,11 +372,14 @@ impl Broker {
                 .await?;
                 return Ok(());
             }
-            clients.insert(client_id.clone(), session.clone());
+            sessions
+                .entry(user.clone())
+                .or_default()
+                .insert(client_id.clone(), session.clone());
         }
         eprintln!("ssmcpd: connected {user}/{client_id} ({})", mode.name());
         let result: crate::Result<()> = async {
-            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{user}", self.public_url), login_code, login_expires_in:LOGIN_LIFETIME, client_id:client_id.clone() }).await?;
+            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone() }).await?;
             let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant)> = HashMap::new();
             let mut next_id = 0u64;
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
@@ -352,20 +436,46 @@ impl Broker {
     }
 }
 
-fn authorized_clients<'a>(
-    sessions: &'a HashMap<String, HashMap<String, Arc<Session>>>,
+fn validate_authorization(
+    sessions: &HashMap<String, HashMap<String, Arc<Session>>>,
     user: &str,
-    anchor: &Arc<Session>,
-) -> Result<&'a HashMap<String, Arc<Session>>, String> {
-    let clients = sessions.get(user).ok_or("authorization connection ended")?;
-    if !anchor.is_alive()
-        || !clients
-            .get(anchor.client_id())
-            .is_some_and(|current| Arc::ptr_eq(current, anchor))
-    {
-        return Err("authorization connection ended or belongs to another user".into());
+    authorization: &Authorization,
+) -> Result<(), String> {
+    if !valid_username(user) {
+        return Err("invalid resource scope".into());
     }
-    Ok(clients)
+    if let Authorization::Legacy {
+        user: owner,
+        anchor,
+    } = authorization
+    {
+        if user == IDENTITY_RESOURCE || owner != user {
+            return Err("authorization does not permit this resource".into());
+        }
+        let anchor = anchor.upgrade().ok_or("authorization connection ended")?;
+        let clients = sessions.get(user).ok_or("authorization connection ended")?;
+        if !anchor.is_alive()
+            || !anchor.allow.is_empty()
+            || !clients
+                .get(anchor.client_id())
+                .is_some_and(|current| Arc::ptr_eq(current, &anchor))
+        {
+            return Err("authorization connection ended or belongs to another user".into());
+        }
+    }
+    Ok(())
+}
+
+fn accessible_sessions<'a>(
+    sessions: &'a HashMap<String, HashMap<String, Arc<Session>>>,
+    user: &'a str,
+    authorization: &'a Authorization,
+) -> impl Iterator<Item = &'a Arc<Session>> {
+    sessions
+        .iter()
+        .filter(move |(owner, _)| user == IDENTITY_RESOURCE || owner.as_str() == user)
+        .flat_map(|(_, clients)| clients.values())
+        .filter(move |session| session.is_alive() && authorization.permits(session))
 }
 
 pub fn valid_username(user: &str) -> bool {
@@ -442,16 +552,22 @@ mod tests {
             name: name.into(),
             cwd: cwd.into(),
             hostname: "localhost".into(),
+            allow: Vec::new(),
         }
     }
 
     fn session(id: &str, secret: &str) -> Arc<Session> {
+        allowed_session(id, secret, Vec::new())
+    }
+
+    fn allowed_session(id: &str, secret: &str, allow: Vec<Identity>) -> Arc<Session> {
         let (sender, _rx) = mpsc::channel(1);
         Arc::new(Session {
-            login: Mutex::new(Some(LoginCode {
+            login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
+            allow,
             info: ClientInfo {
                 id: id.into(),
                 name: "same display name".into(),
@@ -463,6 +579,21 @@ mod tests {
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
         })
+    }
+
+    fn legacy(user: &str, anchor: &Arc<Session>) -> Authorization {
+        Authorization::Legacy {
+            user: user.into(),
+            anchor: Arc::downgrade(anchor),
+        }
+    }
+
+    fn github(subject: &str, login: &str) -> Identity {
+        Identity {
+            provider: "github".into(),
+            subject: subject.into(),
+            login: login.into(),
+        }
     }
     #[test]
     fn usernames_are_single_unambiguous_path_segments() {
@@ -624,11 +755,13 @@ mod tests {
         assert_ne!(credentials[0].2, credentials[1].2);
         let first = broker.redeem_login(user, &credentials[0].1).await.unwrap();
         let second = broker.redeem_login(user, &credentials[1].1).await.unwrap();
-        let clients = broker.clients(user, &first).await.unwrap();
+        let first_authorization = legacy(user, &first);
+        let second_authorization = legacy(user, &second);
+        let clients = broker.clients(user, &first_authorization).await.unwrap();
         assert_eq!(clients.len(), 2);
         assert_eq!(
             broker
-                .client(user, &first, &credentials[1].2)
+                .client(user, &first_authorization, &credentials[1].2)
                 .await
                 .unwrap()
                 .info()
@@ -637,7 +770,7 @@ mod tests {
         );
         assert_eq!(
             broker
-                .client(user, &second, &credentials[0].2)
+                .client(user, &second_authorization, &credentials[0].2)
                 .await
                 .unwrap()
                 .info()
@@ -646,7 +779,7 @@ mod tests {
         );
         assert!(
             broker
-                .client(user, &first, "same display name")
+                .client(user, &first_authorization, "same display name")
                 .await
                 .is_err()
         );
@@ -659,20 +792,27 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(broker.authenticate(user, &credentials[0].1).await.is_none());
-        assert!(broker.clients(user, &first).await.is_err());
+        assert!(broker.clients(user, &first_authorization).await.is_err());
         assert!(
             broker
-                .client(user, &first, second.client_id())
+                .client(user, &first_authorization, second.client_id())
                 .await
                 .is_err()
         );
         assert!(
             broker
-                .client(user, &second, first.client_id())
+                .client(user, &second_authorization, first.client_id())
                 .await
                 .is_err()
         );
-        assert_eq!(broker.clients(user, &second).await.unwrap().len(), 1);
+        assert_eq!(
+            broker
+                .clients(user, &second_authorization)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(second.is_alive());
 
         let (stream, task) = attachments.remove(0);
@@ -701,11 +841,21 @@ mod tests {
                 HashMap::from([("same-id".into(), bob.clone())]),
             );
         }
-        assert!(broker.clients("bob", &alice).await.is_err());
-        assert!(broker.client("bob", &alice, bob.client_id()).await.is_err());
-        assert!(broker.clients("alice", &bob).await.is_err());
+        let alice_authorization = legacy("alice", &alice);
+        let bob_authorization = legacy("bob", &bob);
+        assert!(broker.clients("bob", &alice_authorization).await.is_err());
+        assert!(
+            broker
+                .client("bob", &alice_authorization, bob.client_id())
+                .await
+                .is_err()
+        );
+        assert!(broker.clients("alice", &bob_authorization).await.is_err());
         assert!(Arc::ptr_eq(
-            &broker.client("alice", &alice, "same-id").await.unwrap(),
+            &broker
+                .client("alice", &alice_authorization, "same-id")
+                .await
+                .unwrap(),
             &alice
         ));
         // An old grant must not regain authority if an ID is ever reused.
@@ -717,13 +867,239 @@ mod tests {
             .get_mut("alice")
             .unwrap()
             .insert("same-id".into(), replacement.clone());
-        assert!(broker.clients("alice", &alice).await.is_err());
-        assert!(broker.client("alice", &alice, "same-id").await.is_err());
-        assert!(broker.clients("alice", &replacement).await.is_ok());
+        let replacement_authorization = legacy("alice", &replacement);
+        assert!(broker.clients("alice", &alice_authorization).await.is_err());
+        assert!(
+            broker
+                .client("alice", &alice_authorization, "same-id")
+                .await
+                .is_err()
+        );
+        assert!(
+            broker
+                .clients("alice", &replacement_authorization)
+                .await
+                .is_ok()
+        );
         broker.disconnect_all().await;
         assert!(!bob.is_alive());
         assert!(!replacement.is_alive());
-        assert!(broker.clients("alice", &replacement).await.is_err());
+        assert!(
+            broker
+                .clients("alice", &replacement_authorization)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn stable_identity_acl_filters_discovery_and_direct_ids_across_owners() {
+        let broker = Broker::new("https://example.test".into());
+        let unrestricted = session("legacy", &"a".repeat(64));
+        let alice_allowed =
+            allowed_session("alice-allowed", "unused", vec![github("42", "old-name")]);
+        let alice_denied = allowed_session("alice-denied", "unused", vec![github("7", "other")]);
+        let bob_allowed = allowed_session("bob-allowed", "unused", vec![github("42", "old-name")]);
+        {
+            let mut sessions = broker.sessions.write().await;
+            sessions.insert(
+                "alice".into(),
+                HashMap::from([
+                    (unrestricted.client_id().into(), unrestricted.clone()),
+                    (alice_allowed.client_id().into(), alice_allowed.clone()),
+                    (alice_denied.client_id().into(), alice_denied.clone()),
+                ]),
+            );
+            sessions.insert(
+                "bob".into(),
+                HashMap::from([(bob_allowed.client_id().into(), bob_allowed.clone())]),
+            );
+        }
+        // A username change preserves the numeric provider identity. Reusing the
+        // display name with a different subject must never inherit access.
+        let identity = Authorization::Identity(github("42", "new-name"));
+        let impostor = Authorization::Identity(github("99", "old-name"));
+        let other_provider = Authorization::Identity(Identity {
+            provider: "other-provider".into(),
+            subject: "42".into(),
+            login: "new-name".into(),
+        });
+        let alice_visible = broker.clients("alice", &identity).await.unwrap();
+        assert_eq!(alice_visible.len(), 1);
+        assert_eq!(alice_visible[0].client_id(), "alice-allowed");
+        let all_visible = broker.clients(IDENTITY_RESOURCE, &identity).await.unwrap();
+        assert_eq!(
+            all_visible
+                .iter()
+                .map(|s| s.client_id())
+                .collect::<Vec<_>>(),
+            ["alice-allowed", "bob-allowed"]
+        );
+        assert!(
+            broker
+                .clients(IDENTITY_RESOURCE, &impostor)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            broker
+                .clients(IDENTITY_RESOURCE, &other_provider)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            broker
+                .clients("missing-owner", &identity)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            broker
+                .client("alice", &identity, "bob-allowed")
+                .await
+                .is_err()
+        );
+        assert!(Arc::ptr_eq(
+            &broker
+                .client(IDENTITY_RESOURCE, &identity, "bob-allowed")
+                .await
+                .unwrap(),
+            &bob_allowed,
+        ));
+        let hidden = broker
+            .client(IDENTITY_RESOURCE, &identity, "alice-denied")
+            .await
+            .err();
+        let missing = broker
+            .client(IDENTITY_RESOURCE, &identity, "unknown")
+            .await
+            .err();
+        assert_eq!(hidden, missing);
+        assert!(
+            broker
+                .client(IDENTITY_RESOURCE, &identity, "legacy")
+                .await
+                .is_err()
+        );
+
+        let legacy = legacy("alice", &unrestricted);
+        let legacy_visible = broker.clients("alice", &legacy).await.unwrap();
+        assert_eq!(legacy_visible.len(), 1);
+        assert_eq!(legacy_visible[0].client_id(), "legacy");
+        assert!(
+            broker
+                .client("alice", &legacy, "alice-allowed")
+                .await
+                .is_err()
+        );
+        assert!(broker.clients(IDENTITY_RESOURCE, &legacy).await.is_err());
+        assert!(broker.client("bob", &legacy, "bob-allowed").await.is_err());
+        assert!(
+            broker
+                .clients("alice", &self::legacy("alice", &alice_allowed))
+                .await
+                .is_err()
+        );
+        assert!(alice_allowed.login.lock().unwrap().is_none());
+        // Even an unexpected leftover login code cannot bypass a restricted ACL.
+        *alice_allowed.login.lock().unwrap() = Some(LoginCode {
+            value: "b".repeat(64),
+            expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
+        });
+        assert!(
+            broker
+                .redeem_login("alice", &"b".repeat(64))
+                .await
+                .is_none()
+        );
+        assert!(Arc::ptr_eq(
+            &broker.online_session("alice").await.unwrap(),
+            &unrestricted
+        ));
+        assert!(broker.online_session("bob").await.is_none());
+        assert!(broker.online_session(IDENTITY_RESOURCE).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn identity_authority_survives_disconnect_without_granting_future_unlisted_sessions() {
+        let broker = Broker::new("https://example.test".into());
+        let original = allowed_session("original", "unused", vec![github("42", "owner")]);
+        broker.sessions.write().await.insert(
+            "alice".into(),
+            HashMap::from([(original.client_id().into(), original.clone())]),
+        );
+        let identity = Authorization::Identity(github("42", "owner"));
+        assert_eq!(
+            broker
+                .clients(IDENTITY_RESOURCE, &identity)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        broker.disconnect_all().await;
+        assert!(!original.is_alive());
+        assert!(identity.is_live());
+        assert!(
+            broker
+                .clients(IDENTITY_RESOURCE, &identity)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            broker
+                .client(IDENTITY_RESOURCE, &identity, "original")
+                .await
+                .is_err()
+        );
+        let denied = allowed_session("new-denied", "unused", vec![github("7", "owner")]);
+        let allowed = allowed_session("new-allowed", "unused", vec![github("42", "renamed")]);
+        broker.sessions.write().await.insert(
+            "alice".into(),
+            HashMap::from([
+                (denied.client_id().into(), denied),
+                (allowed.client_id().into(), allowed),
+            ]),
+        );
+        let visible = broker.clients(IDENTITY_RESOURCE, &identity).await.unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].client_id(), "new-allowed");
+        assert!(
+            broker
+                .client(IDENTITY_RESOURCE, &identity, "new-denied")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn restricted_registration_fails_closed_when_provider_is_disabled() {
+        let broker = Arc::new(Broker::new("https://example.test".into()));
+        let (server, client) = UnixStream::pair().unwrap();
+        let task = tokio::spawn(broker.clone().attach(server));
+        let mut stream = BufReader::new(client);
+        let mut meta = metadata("restricted", "/project");
+        meta.allow = vec!["alice@github".into()];
+        wire::write_frame(
+            stream.get_mut(),
+            &Frame::Hello {
+                version: wire::VERSION,
+                mode: wire::Mode::Shell,
+                metadata: meta,
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::Reject { message }) = wire::read_frame(&mut stream).await.unwrap() else {
+            panic!("restricted registration must not receive legacy credentials");
+        };
+        assert!(!message.is_empty());
+        task.await.unwrap().unwrap();
+        assert!(broker.sessions.read().await.is_empty());
     }
 
     #[tokio::test]
@@ -765,7 +1141,11 @@ mod tests {
             task.await.unwrap().unwrap();
         }
         assert_eq!(
-            broker.clients(&user, &anchor).await.unwrap().len(),
+            broker
+                .clients(&user, &legacy(&user, &anchor))
+                .await
+                .unwrap()
+                .len(),
             wire::MAX_CLIENTS_PER_USER
         );
         assert!(Arc::ptr_eq(

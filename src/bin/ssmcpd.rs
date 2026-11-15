@@ -1,4 +1,5 @@
-use ssmcp::{broker::Broker, http, oauth::OAuthConfig};
+use serde::Deserialize;
+use ssmcp::{broker::Broker, http, identity::GitHubConfig, oauth::OAuthConfig};
 use std::{
     collections::HashMap,
     ffi::OsString,
@@ -19,13 +20,147 @@ use tokio::{
 };
 
 const SOCKET: &str = "/run/ssmcpd/control.sock";
-const HELP: &str = "ssmcpd - SSH-authenticated terminal MCP gateway\n\nUsage:\n  ssmcpd serve --public-url https://HOST [--listen 127.0.0.1:8080] [--socket PATH]\n  ssmcpd attach [--socket PATH]\n\nToken lifetime options for serve (whole seconds; command line overrides environment):\n  --access-token-ttl N          SSMCP_ACCESS_TOKEN_TTL          [28800 / 8 hours]\n  --refresh-token-idle-ttl N    SSMCP_REFRESH_TOKEN_IDLE_TTL    [2592000 / 30 days]\n  --refresh-token-max-ttl N     SSMCP_REFRESH_TOKEN_MAX_TTL     [7776000 / 90 days]\n  --client-registration-ttl N   SSMCP_CLIENT_REGISTRATION_TTL   [31536000 / 365 days]\n  Required: 1 <= access <= refresh idle <= refresh max <= client <= 315360000.\n  Login codes and authorization forms last 30 minutes.\n\nRun serve in the foreground under systemd. OpenSSH runs attach as the authenticated user.\n";
+const CONFIG_FILE: &str = "/etc/ssmcpd/ssmcpd.toml";
+const HELP: &str = r#"ssmcpd - SSH-authenticated terminal MCP gateway
+
+Usage:
+  ssmcpd serve [--config PATH] [--public-url https://HOST] [--listen 127.0.0.1:8080] [--socket PATH]
+  ssmcpd attach [--socket PATH]
+
+Configuration:
+  --config PATH selects a TOML file; SSMCP_CONFIG also selects a file.
+  Otherwise /etc/ssmcpd/ssmcpd.toml is read when present.
+  Precedence: command line > environment > TOML > built-in defaults.
+  Server settings: [server] listen, public_url, socket.
+  Environment: SSMCP_LISTEN, SSMCP_PUBLIC_URL, SSMCP_SOCKET.
+  GitHub: [auth.github] client_id, client_secret (private file mode 0600).
+  Callback: PUBLIC_URL/oauth/callback/github. Identity MCP endpoint: PUBLIC_URL/mcp.
+
+Token lifetime options for serve (whole seconds; TOML keys are under [oauth]):
+  --access-token-ttl N          SSMCP_ACCESS_TOKEN_TTL          [28800 / 8 hours]
+  --refresh-token-idle-ttl N    SSMCP_REFRESH_TOKEN_IDLE_TTL    [2592000 / 30 days]
+  --refresh-token-max-ttl N     SSMCP_REFRESH_TOKEN_MAX_TTL     [7776000 / 90 days]
+  --client-registration-ttl N   SSMCP_CLIENT_REGISTRATION_TTL   [31536000 / 365 days]
+  Required: 1 <= access <= refresh idle <= refresh max <= client <= 315360000.
+  TOML keys use underscores, e.g. access_token_ttl = 28800.
+  Login codes and authorization forms last 30 minutes.
+
+Run serve in the foreground under systemd. OpenSSH runs attach as the authenticated user.
+"#;
 
 struct Config {
     listen: SocketAddr,
     public_url: String,
     socket: PathBuf,
     oauth: OAuthConfig,
+    github: Option<GitHubConfig>,
+}
+
+// Plain TOML configuration. Never derive Debug or include source text in errors:
+// the same file may contain an identity provider's client secret.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FileConfig {
+    server: ServerConfig,
+    oauth: TokenConfig,
+    auth: AuthConfig,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ServerConfig {
+    listen: Option<SocketAddr>,
+    public_url: Option<String>,
+    socket: Option<PathBuf>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TokenConfig {
+    access_token_ttl: Option<u64>,
+    refresh_token_idle_ttl: Option<u64>,
+    refresh_token_max_ttl: Option<u64>,
+    client_registration_ttl: Option<u64>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AuthConfig {
+    github: Option<GitHubConfig>,
+}
+
+fn parse_file_config(source: &str) -> ssmcp::Result<FileConfig> {
+    toml::from_str(source).map_err(|error: toml::de::Error| {
+        let line = error.span().map(|span| {
+            source.as_bytes()[..span.start.min(source.len())]
+                .iter()
+                .filter(|&&byte| byte == b'\n')
+                .count()
+                + 1
+        });
+        format!(
+            "invalid TOML configuration{}; check section names, value types, and quoting",
+            line.map_or_else(String::new, |line| format!(" near line {line}"))
+        )
+        .into()
+    })
+}
+
+fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("open configuration {}: {error}", path.display()))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > 64 * 1024 {
+        return Err("configuration must be a regular file of at most 64 KiB".into());
+    }
+    let mut source = String::new();
+    Read::by_ref(&mut file)
+        .take(64 * 1024 + 1)
+        .read_to_string(&mut source)?;
+    if source.len() > 64 * 1024 {
+        return Err("configuration exceeds 64 KiB".into());
+    }
+    let file = parse_file_config(&source)?;
+    if file.auth.github.is_some() && metadata.mode() & 0o077 != 0 {
+        return Err("configuration containing provider secrets must have mode 0600 and be owned by the service user".into());
+    }
+    if let Some(value) = file.server.listen {
+        config.listen = value;
+    }
+    if let Some(value) = file.server.public_url {
+        config.public_url = normalize_origin(&value)?;
+    }
+    if let Some(value) = file.server.socket {
+        config.socket = value;
+    }
+    for (name, value, target) in [
+        (
+            "oauth.access_token_ttl",
+            file.oauth.access_token_ttl,
+            &mut config.oauth.access_token_ttl,
+        ),
+        (
+            "oauth.refresh_token_idle_ttl",
+            file.oauth.refresh_token_idle_ttl,
+            &mut config.oauth.refresh_token_idle_ttl,
+        ),
+        (
+            "oauth.refresh_token_max_ttl",
+            file.oauth.refresh_token_max_ttl,
+            &mut config.oauth.refresh_token_max_ttl,
+        ),
+        (
+            "oauth.client_registration_ttl",
+            file.oauth.client_registration_ttl,
+            &mut config.oauth.client_registration_ttl,
+        ),
+    ] {
+        if let Some(value) = value {
+            *target = seconds(&value.to_string(), name)?;
+        }
+    }
+    config.github = file.auth.github;
+    Ok(())
 }
 
 fn main() {
@@ -49,36 +184,79 @@ fn run() -> ssmcp::Result<()> {
     if mode != "serve" && mode != "attach" {
         return Err(format!("unknown command {mode}; see --help").into());
     }
+    let remaining: Vec<String> = args.collect();
+    if remaining
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        print!("{HELP}");
+        return Ok(());
+    }
+    let (pairs, remainder) = remaining.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err(format!("missing value for {}", remaining.last().unwrap()).into());
+    }
+    let mut options = HashMap::new();
+    for pair in pairs {
+        if options.insert(pair[0].as_str(), pair[1].as_str()).is_some() {
+            return Err(format!("duplicate option {}", pair[0]).into());
+        }
+    }
     let mut config = Config {
         listen: "127.0.0.1:8080".parse()?,
         public_url: String::new(),
         socket: SOCKET.into(),
         oauth: OAuthConfig::default(),
+        github: None,
     };
-    let mut lifetime_options = HashMap::new();
-    while let Some(arg) = args.next() {
-        if arg == "--help" || arg == "-h" {
-            print!("{HELP}");
-            return Ok(());
+    if mode == "serve" {
+        let path = options
+            .get("--config")
+            .map(|path| PathBuf::from(*path))
+            .or_else(|| std::env::var_os("SSMCP_CONFIG").map(PathBuf::from))
+            .or_else(|| {
+                Path::new(CONFIG_FILE)
+                    .exists()
+                    .then(|| PathBuf::from(CONFIG_FILE))
+            });
+        if let Some(path) = path {
+            load_file_config(&path, &mut config)?;
         }
-        let value = args
-            .next()
-            .ok_or_else(|| format!("missing value for {arg}"))?;
-        match arg.as_str() {
+        // Environment retains compatibility with installations predating TOML.
+        if !options.contains_key("--listen")
+            && let Ok(value) = std::env::var("SSMCP_LISTEN")
+        {
+            config.listen = value.parse()?;
+        }
+        if !options.contains_key("--public-url")
+            && let Ok(value) = std::env::var("SSMCP_PUBLIC_URL")
+        {
+            config.public_url = normalize_origin(&value)?;
+        }
+        if !options.contains_key("--socket")
+            && let Some(value) = std::env::var_os("SSMCP_SOCKET")
+        {
+            config.socket = value.into();
+        }
+    }
+    let mut lifetime_options = HashMap::new();
+    for (arg, value) in options {
+        match arg {
+            "--config" if mode == "serve" => {}
             "--socket" => config.socket = value.into(),
             "--listen" if mode == "serve" => config.listen = value.parse()?,
-            "--public-url" if mode == "serve" => config.public_url = normalize_origin(&value)?,
+            "--public-url" if mode == "serve" => config.public_url = normalize_origin(value)?,
             "--access-token-ttl" if mode == "serve" => {
-                lifetime_options.insert("SSMCP_ACCESS_TOKEN_TTL", seconds(&value, &arg)?);
+                lifetime_options.insert("SSMCP_ACCESS_TOKEN_TTL", seconds(value, arg)?);
             }
             "--refresh-token-idle-ttl" if mode == "serve" => {
-                lifetime_options.insert("SSMCP_REFRESH_TOKEN_IDLE_TTL", seconds(&value, &arg)?);
+                lifetime_options.insert("SSMCP_REFRESH_TOKEN_IDLE_TTL", seconds(value, arg)?);
             }
             "--refresh-token-max-ttl" if mode == "serve" => {
-                lifetime_options.insert("SSMCP_REFRESH_TOKEN_MAX_TTL", seconds(&value, &arg)?);
+                lifetime_options.insert("SSMCP_REFRESH_TOKEN_MAX_TTL", seconds(value, arg)?);
             }
             "--client-registration-ttl" if mode == "serve" => {
-                lifetime_options.insert("SSMCP_CLIENT_REGISTRATION_TTL", seconds(&value, &arg)?);
+                lifetime_options.insert("SSMCP_CLIENT_REGISTRATION_TTL", seconds(value, arg)?);
             }
             _ => return Err(format!("unknown option {arg}").into()),
         }
@@ -87,7 +265,9 @@ fn run() -> ssmcp::Result<()> {
         return attach(&config.socket);
     }
     if config.public_url.is_empty() {
-        return Err("--public-url https://HOST is required".into());
+        return Err(
+            "set server.public_url in TOML, SSMCP_PUBLIC_URL, or --public-url https://HOST".into(),
+        );
     }
     apply_oauth_options(&mut config.oauth, &lifetime_options, |name| {
         std::env::var_os(name)
@@ -283,7 +463,11 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     use std::future::IntoFuture;
     let tcp = TcpListener::bind(config.listen).await?;
     let (unix, _socket_file) = bind_socket(&config.socket).await?;
-    let broker = Arc::new(Broker::with_oauth_config(config.public_url, config.oauth)?);
+    let broker = Arc::new(Broker::with_identity_config(
+        config.public_url,
+        config.oauth,
+        config.github,
+    )?);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let server = axum::serve(tcp, http::router(broker.clone()))
         .with_graceful_shutdown(async {
@@ -341,6 +525,69 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toml_schema_rejects_typos_and_redacts_secret_source_in_errors() {
+        let config = parse_file_config(
+            r#"
+[server]
+public_url = "https://ssmcp.example"
+[oauth]
+access_token_ttl = 7200
+[auth.github]
+client_id = "example-client-id"
+client_secret = "example-test-secret"
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.oauth.access_token_ttl, Some(7200));
+        assert_eq!(config.auth.github.unwrap().client_id, "example-client-id");
+        for source in [
+            "[auth.github]\nclient_id = 'id'\nclient_secret = 'marker-secret' extra",
+            "[oauth]\naccess_token_ttl = 'marker-secret'",
+            "[auth]\nclient_secret = 'marker-secret'",
+            "[server]\npublic_urll = 'marker-secret'",
+        ] {
+            let error = parse_file_config(source).err().unwrap().to_string();
+            assert!(error.contains("invalid TOML"));
+            assert!(!error.contains("marker-secret"));
+        }
+    }
+
+    #[test]
+    fn toml_secrets_need_private_permissions_and_environment_overrides_file_values() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("ssmcp-config-{}-{nonce}.toml", std::process::id()));
+        std::fs::write(&path, "[server]\npublic_url = 'https://SSMCP.example:443/'\n[oauth]\naccess_token_ttl = 3600\n[auth.github]\nclient_id = 'test-id'\nclient_secret = 'test-secret'\n").unwrap();
+        let mut config = Config {
+            listen: "127.0.0.1:8080".parse().unwrap(),
+            public_url: String::new(),
+            socket: SOCKET.into(),
+            oauth: OAuthConfig::default(),
+            github: None,
+        };
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            load_file_config(&path, &mut config)
+                .unwrap_err()
+                .to_string()
+                .contains("0600")
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        load_file_config(&path, &mut config).unwrap();
+        assert_eq!(config.public_url, "https://ssmcp.example");
+        assert_eq!(config.oauth.access_token_ttl.as_secs(), 3600);
+        apply_oauth_options(&mut config.oauth, &HashMap::new(), |name| {
+            (name == "SSMCP_ACCESS_TOKEN_TTL").then(|| "7200".into())
+        })
+        .unwrap();
+        assert_eq!(config.oauth.access_token_ttl.as_secs(), 7200);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn command_line_overrides_environment_without_parsing_shadowed_values() {

@@ -1,8 +1,9 @@
-//! Foreground SSH client. OAuth login details are emitted once, as a JSON object on stdout.
+//! Foreground SSH client. Connection details are emitted once as JSON on stdout.
 use crate::{
     backend::Backend,
     wire::{
-        ClientMetadata, Frame, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, read_frame, write_frame,
+        ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
+        canonical_github_principal, read_frame, write_frame,
     },
 };
 use serde_json::json;
@@ -33,6 +34,8 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
   -p port              SSH port
   -F ssh_config        OpenSSH configuration file
   --name NAME          Display name (default: hostname-type-pid)
+  --allow USER@github  Allow GitHub identities; repeat or separate with commas
+                       (at most 32 distinct users; case-insensitive)
   --shell /path        Shell executable (shell mode only)
   --backend PROGRAM    Override the native agent executable
   --list-tools         Discover local tools as JSON, then exit without SSH
@@ -45,13 +48,20 @@ Examples:
   ssmcp --name laptop my-server
   ssmcp -t codex -F ~/.ssh/work_config my-server
   ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
+  ssmcp --allow octocat@github,alice@github -t codex my-server
 
 Prints {"url":"https://host/user","login_code":"...","login_expires_in":1800,"client_id":"...","type":"shell"} once on stdout.
 Add url to your MCP client, then enter login_code on its OAuth login page.
 login_expires_in deducts local backend startup time.
+With --allow, prints url, client information, allow and auth:"github" instead
+of a login_code. Add url to the MCP client and sign in with an allowed GitHub
+account in the browser. The CLI needs no GitHub login; SSH keys stay unchanged.
+--allow requires a server that supports GitHub authorization and cannot be
+combined with --list-tools.
 Live input, output and native agent events appear on stderr.
-Keep this process running; Ctrl-C disconnects and revokes its OAuth grants.
-An SSH reconnect needs a new OAuth login; an MCP app restart can reuse valid tokens.
+Keep this process running; Ctrl-C disconnects and stops its local backend.
+Without --allow, disconnecting revokes this connection's OAuth grants and
+reconnecting needs a new OAuth login. An MCP app restart can reuse valid tokens.
 "#;
 
 // A single reader owns every partial frame after Ready, including while a native
@@ -144,6 +154,7 @@ fn ssh_ended(status: io::Result<ExitStatus>) -> String {
 struct Options {
     destination: Option<String>,
     name: Option<String>,
+    allow: Vec<String>,
     mode: Mode,
     backend: Option<OsString>,
     backend_args: Vec<OsString>,
@@ -159,6 +170,7 @@ impl Options {
         let mut args = args.into_iter();
         let mut destination = None;
         let mut name = None;
+        let mut allow = Vec::new();
         let mut mode = Mode::Shell;
         let mut backend = None;
         let mut backend_args = Vec::new();
@@ -194,6 +206,13 @@ impl Options {
                             .map_err(|_| "client name must be UTF-8")?,
                     );
                 }
+                Some("--allow") => {
+                    let value = args.next().ok_or("--allow requires username@github")?;
+                    add_allowed_principals(
+                        &mut allow,
+                        value.to_str().ok_or("--allow must be UTF-8")?,
+                    )?;
+                }
                 Some("--list-tools") => list_tools = true,
                 Some("--") => {
                     backend_args.extend(args);
@@ -227,6 +246,11 @@ impl Options {
         if list_tools && destination.is_some() {
             return Err("--list-tools is local and does not take an SSH destination".into());
         }
+        if list_tools && !allow.is_empty() {
+            return Err(
+                "--allow requires an SSH connection and cannot be used with --list-tools".into(),
+            );
+        }
         if mode == Mode::Shell && (backend.is_some() || !backend_args.is_empty()) {
             return Err(
                 "shell mode uses --shell; --backend and backend arguments select an agent only"
@@ -247,6 +271,7 @@ impl Options {
         Ok(Some(Self {
             destination,
             name,
+            allow,
             mode,
             backend,
             backend_args,
@@ -277,6 +302,7 @@ impl Options {
             }),
             cwd,
             hostname,
+            allow: self.allow.clone(),
         };
         metadata.validate()?;
         Ok(metadata)
@@ -324,6 +350,22 @@ impl Options {
             .kill_on_drop(true);
         command
     }
+}
+
+fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
+    for entry in value.split(',') {
+        let principal = canonical_github_principal(entry.trim())
+            .map_err(|error| format!("--allow: {error}"))?;
+        if !allow.contains(&principal) {
+            if allow.len() == MAX_ALLOWED_PRINCIPALS {
+                return Err(format!(
+                    "--allow accepts at most {MAX_ALLOWED_PRINCIPALS} distinct GitHub users"
+                ));
+            }
+            allow.push(principal);
+        }
+    }
+    Ok(())
 }
 
 fn validate_destination(destination: &str) -> Result<(), String> {
@@ -406,6 +448,15 @@ pub async fn run() -> crate::Result<()> {
         ),
         _ => return Err("unexpected registration response".into()),
     };
+    let github_auth = !metadata.allow.is_empty();
+    if github_auth && (!login_code.is_empty() || login_expires_in != 0) {
+        let _ = ssh.kill().await;
+        return Err("server did not acknowledge the --allow GitHub access policy; upgrade ssmcpd with GitHub authorization configured before connecting".into());
+    }
+    if !github_auth && (login_code.is_empty() || login_expires_in == 0) {
+        let _ = ssh.kill().await;
+        return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
+    }
     let login_received_at = std::time::Instant::now();
     let mut incoming = Incoming::start(reader);
     eprintln!("Starting local {} backend...", options.mode.name());
@@ -434,7 +485,14 @@ pub async fn run() -> crate::Result<()> {
         return Err(error.into());
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
-    let output = json!({"url":url,"login_code":login_code,"login_expires_in":login_expires_in,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":options.mode.name()});
+    let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":options.mode.name()});
+    if github_auth {
+        output["auth"] = json!("github");
+        output["allow"] = json!(metadata.allow);
+    } else {
+        output["login_code"] = json!(login_code);
+        output["login_expires_in"] = json!(login_expires_in);
+    }
     if let Err(error) = writeln!(io::stdout().lock(), "{output}").and_then(|_| io::stdout().flush())
     {
         let _ = ssh.start_kill();
@@ -443,10 +501,17 @@ pub async fn run() -> crate::Result<()> {
         let _ = ssh.wait().await;
         return Err(error.into());
     }
-    eprintln!(
-        "Connected ({}). Enter login_code on the MCP OAuth login page to authorize this SSH account's clients while this connection stays live. Local activity is shown here; Ctrl-C disconnects and revokes access.",
-        options.mode.name()
-    );
+    if github_auth {
+        eprintln!(
+            "Connected ({}). Add url to your MCP client and sign in with an allowed GitHub account. Local activity is shown here; Ctrl-C disconnects this client.",
+            options.mode.name()
+        );
+    } else {
+        eprintln!(
+            "Connected ({}). Enter login_code on the MCP OAuth login page to authorize this SSH account's clients while this connection stays live. Local activity is shown here; Ctrl-C disconnects and revokes access.",
+            options.mode.name()
+        );
+    }
     let writer = Arc::new(Mutex::new(writer));
     let mut requests: JoinSet<io::Result<()>> = JoinSet::new();
     let result: crate::Result<()> = 'connected: loop {
@@ -576,6 +641,78 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn github_allow_flags_combine_canonicalize_and_deduplicate() {
+        let options = Options::parse(
+            [
+                "--allow",
+                "OctoCat@GitHub, Alice-Dev@github",
+                "--allow",
+                "OCTOCAT@github,bob@github",
+                "my-server",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            options.allow,
+            ["octocat@github", "alice-dev@github", "bob@github"]
+        );
+        assert_eq!(options.metadata().unwrap().allow, options.allow);
+        assert_eq!(options.destination.as_deref(), Some("my-server"));
+        assert!(
+            !options
+                .command()
+                .as_std()
+                .get_args()
+                .any(|arg| arg.to_string_lossy().contains("@github"))
+        );
+    }
+
+    #[test]
+    fn github_allow_limits_distinct_users_and_rejects_invalid_or_local_options() {
+        let all = (0..MAX_ALLOWED_PRINCIPALS)
+            .map(|i| format!("user-{i}@github"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let options =
+            Options::parse(["--allow", &all, "--allow", &all, "my-server"].map(OsString::from))
+                .unwrap()
+                .unwrap();
+        assert_eq!(options.allow.len(), MAX_ALLOWED_PRINCIPALS);
+        let error = Options::parse(
+            ["--allow", &all, "--allow", "another@github", "my-server"].map(OsString::from),
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("32 distinct"), "{error}");
+        for value in [
+            "",
+            "alice",
+            "alice@example.com",
+            "alice@github,",
+            ",alice@github",
+        ] {
+            let error = Options::parse(["--allow", value, "my-server"].map(OsString::from))
+                .err()
+                .unwrap();
+            assert!(error.contains("--allow"), "{error}");
+        }
+        assert!(
+            Options::parse(["--allow"].map(OsString::from))
+                .err()
+                .unwrap()
+                .contains("requires username@github")
+        );
+        assert!(
+            Options::parse(["--list-tools", "--allow", "alice@github"].map(OsString::from))
+                .err()
+                .unwrap()
+                .contains("cannot be used with --list-tools")
+        );
     }
 
     #[test]
