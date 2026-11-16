@@ -228,6 +228,18 @@ not upgrade the running daemon.
 Native agent permissions, request IDs and approval responses remain explicit.
 ssmcp does not automatically answer native requests. Install and configure the
 selected agent on the client; the gateway does not need that agent installed.
+.SH CONTEXT AND TEXT FILES
+Every backend provides native skill metadata, instruction views and UTF-8 file
+primitives through code_mode. Use context.roots, skills.list/read/view,
+agents.list/read/resolve and fs.readText/writeText/editText.
+The workspace root is the startup directory. Repeat
+.B --context-root PATH
+to add up to eight existing read-only context directories. Select their returned
+root IDs explicitly; these grants do not extend ordinary file writes.
+Skill views index name and description frontmatter. Full documents are read on
+demand. Instruction views follow the selected root to a target and preserve
+source paths and contents. No model is started by these operations.
+
 .SH EXAMPLES
 .nf
 ssmcp --name build-shell user@host

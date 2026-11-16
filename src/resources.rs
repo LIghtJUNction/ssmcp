@@ -7,7 +7,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 pub const PAGE_SIZE: usize = 32;
 pub const MAX_RESOURCE_BYTES: usize = 1024 * 1024;
@@ -21,6 +21,16 @@ Follow nextUri to read the next page. Do not invent tool names or backend argume
 Use code_mode with clients, await call(clientId, toolName, arguments), \
 await tools(clientId, cursor), print/console.log and an explicit return. \
 Native results preserve isError and structuredContent; inspect them before claiming success.\n\n\
+Read ssmcp://clients/{id}/context for configured context roots, /skills for skill metadata, \
+ and /agents for the applicable AGENTS.md chain. skills pages accept root and cursor; agents \
+ accepts root and a workspace-relative path. Follow skills nextUri without changing its cursor. \
+ context.roots, skills.list/read/view and agents.list/read/resolve expose these native views \
+ in code_mode without invoking a model. Additional --context-root directories are explicit, \
+ read-only context sources; they do not expand filesystem write access.\n\n\
+Use fs.readText for bounded UTF-8 text with byte offsets and next_offset, fs.writeText to \
+ create or explicitly overwrite text, and fs.editText for one exact literal replacement. \
+ Text writes are atomic and at most 256 KiB. expected_sha256 guards cooperating native \
+ writes; external programs are not an atomic compare-and-swap participant.\n\n\
 code_mode runs in an isolated process on the ssmcp server. It is not the caller's \
 ChatGPT sandbox and cannot read its filesystem directly. Connect the caller's workspace \
 using the explicit bridge workflow documented by the project before transferring files \
@@ -51,9 +61,7 @@ impl ResourceError {
             Self::InvalidParams(message) => message,
             Self::NotFound => "Resource not found",
             Self::Unavailable => "Resource is unavailable; refresh the client list and retry",
-            Self::TooLarge => {
-                "Resource exceeds the 1 MiB content limit; use a smaller native schema page"
-            }
+            Self::TooLarge => "Resource exceeds the 1 MiB content limit; use a smaller native page",
         }
     }
 }
@@ -168,6 +176,24 @@ pub async fn list(
             "One page of live native tools and input schemas. Follow nextUri for remaining pages.",
             "application/json",
         ));
+        entries.push(descriptor(
+            format!("ssmcp://clients/{id}/context"),
+            format!("{}: context roots", info.name),
+            "Configured read-only context roots. Additional roots require an explicit --context-root.",
+            "application/json",
+        ));
+        entries.push(descriptor(
+            format!("ssmcp://clients/{id}/skills"),
+            format!("{}: skills", info.name),
+            "One page of discovered skill metadata in the workspace root. Follow nextUri for remaining pages.",
+            "application/json",
+        ));
+        entries.push(descriptor(
+            format!("ssmcp://clients/{id}/agents"),
+            format!("{}: workspace instructions", info.name),
+            "The applicable AGENTS.md instruction chain for the workspace root.",
+            "application/json",
+        ));
     }
     let fingerprint = snapshot(&entries);
     let offset = page_offset(cursor, &fingerprint, entries.len())?;
@@ -198,6 +224,24 @@ pub fn templates() -> Value {
             "name":"Client native tool schemas",
             "description":"Read native schemas for a discovered client; follow nextUri without altering its opaque cursor.",
             "mimeType":"application/json"
+        },
+        {
+            "uriTemplate":"ssmcp://clients/{client_id}/context",
+            "name":"Client context roots",
+            "description":"Read explicitly configured context roots without starting a model.",
+            "mimeType":"application/json"
+        },
+        {
+            "uriTemplate":"ssmcp://clients/{client_id}/skills{?root,cursor}",
+            "name":"Client skills",
+            "description":"Read skill metadata in a discovered root (default workspace); follow nextUri for further pages.",
+            "mimeType":"application/json"
+        },
+        {
+            "uriTemplate":"ssmcp://clients/{client_id}/agents{?root,path}",
+            "name":"Client instruction chain",
+            "description":"Resolve AGENTS.md files for a relative target path (default .) in a discovered root (default workspace).",
+            "mimeType":"application/json"
         }
     ]})
 }
@@ -223,7 +267,23 @@ fn limits() -> Value {
             "max_forwarded_connections":crate::bridge::MAX_CONNECTIONS,
             "sync_defaults":{"dry_run":true,"delete":false},
             "port_scope":"loopback only",
-            "code_mode_helpers":["fs","rsync","sync","jobs","ports","resources"]
+            "code_mode_helpers":[
+                "fs","fs.readText","fs.writeText","fs.editText",
+                "context.roots","skills.list","skills.read","skills.view",
+                "agents.list","agents.read","agents.resolve",
+                "rsync","sync","jobs","ports","resources"
+            ],
+            "text_files":{
+                "max_write_bytes":262144,
+                "max_read_bytes":262144,
+                "min_read_bytes":4,
+                "offset_unit":"UTF-8 bytes",
+                "expected_sha256":"guards cooperating native writes, not arbitrary external programs"
+            },
+            "context":{
+                "model_invocation":false,
+                "additional_roots":"explicit --context-root directories; read-only context access"
+            }
         },
         "wire":{
             "version":wire::VERSION,
@@ -233,6 +293,8 @@ fn limits() -> Value {
         "resources":{
             "page_size":PAGE_SIZE,
             "max_content_bytes":MAX_RESOURCE_BYTES,
+            "max_uri_bytes":MAX_URI_BYTES,
+            "max_cursor_bytes":128,
             "subscribe":false,
             "listChanged":false,
             "observation":"fresh snapshot per read"
@@ -263,7 +325,28 @@ fn with_cursor(base: &str, cursor: &str) -> String {
     format!("{base}?{query}")
 }
 
-fn parse_uri(uri: &str) -> Result<(&str, Option<String>), ResourceError> {
+type Query = BTreeMap<String, String>;
+
+fn query_encoding_valid(query: &str) -> bool {
+    let mut decoded = Vec::with_capacity(query.len());
+    let mut bytes = query.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let Some(high) = bytes.next().and_then(|b| (b as char).to_digit(16)) else {
+                return false;
+            };
+            let Some(low) = bytes.next().and_then(|b| (b as char).to_digit(16)) else {
+                return false;
+            };
+            decoded.push((high * 16 + low) as u8);
+        } else {
+            decoded.push(byte);
+        }
+    }
+    std::str::from_utf8(&decoded).is_ok()
+}
+
+fn parse_uri(uri: &str) -> Result<(&str, Query), ResourceError> {
     if uri.is_empty() || uri.len() > MAX_URI_BYTES || uri.chars().any(char::is_control) {
         return Err(ResourceError::InvalidParams(
             "resource uri must be 1..=1024 bytes without control characters",
@@ -275,25 +358,106 @@ fn parse_uri(uri: &str) -> Result<(&str, Option<String>), ResourceError> {
     if base.contains('#') || query.is_some_and(|q| q.contains('#')) {
         return Err(ResourceError::NotFound);
     }
-    let cursor = match query {
-        None => None,
-        Some(query) => {
-            let pairs: Vec<(String, String)> = serde_urlencoded::from_str(query)
-                .map_err(|_| ResourceError::InvalidParams("invalid resource query"))?;
-            if pairs.len() != 1
-                || pairs[0].0 != "cursor"
-                || pairs[0].1.is_empty()
-                || pairs[0].1.len() > 128
-                || pairs[0].1.chars().any(char::is_control)
-            {
-                return Err(ResourceError::InvalidParams(
-                    "resource query accepts one nonempty cursor of at most 128 bytes",
-                ));
-            }
-            Some(pairs.into_iter().next().unwrap().1)
+    let mut values = Query::new();
+    let Some(query) = query else {
+        return Ok((base, values));
+    };
+    let allowed: &[&str] = if base == "ssmcp://clients" {
+        &["cursor"]
+    } else {
+        match base
+            .strip_prefix("ssmcp://clients/")
+            .and_then(|path| path.split_once('/'))
+            .map(|(_, kind)| kind)
+        {
+            Some("tools") => &["cursor"],
+            Some("skills") => &["root", "cursor"],
+            Some("agents") => &["root", "path"],
+            Some("info" | "context") => &[],
+            _ => return Err(ResourceError::NotFound),
         }
     };
-    Ok((base, cursor))
+    if query.is_empty() || !query_encoding_valid(query) {
+        return Err(ResourceError::InvalidParams("invalid resource query"));
+    }
+    let pairs: Vec<(String, String)> = serde_urlencoded::from_str(query)
+        .map_err(|_| ResourceError::InvalidParams("invalid resource query"))?;
+    for (key, value) in pairs {
+        if !allowed.contains(&key.as_str()) {
+            return Err(ResourceError::InvalidParams(
+                "resource query contains an unsupported parameter",
+            ));
+        }
+        if value.is_empty()
+            || value.chars().any(char::is_control)
+            || (key == "cursor" && value.len() > 128)
+        {
+            return Err(ResourceError::InvalidParams(
+                "resource query values must be nonempty without controls; cursor is at most 128 bytes",
+            ));
+        }
+        if values.insert(key, value).is_some() {
+            return Err(ResourceError::InvalidParams(
+                "resource query parameters must not be repeated",
+            ));
+        }
+    }
+    if values.is_empty() {
+        return Err(ResourceError::InvalidParams("invalid resource query"));
+    }
+    Ok((base, values))
+}
+
+async fn native_view(
+    broker: &Broker,
+    user: &str,
+    authorization: &Authorization,
+    session: &Session,
+    kind: &str,
+    query: &Query,
+) -> Result<Value, ResourceError> {
+    let (name, field) = match kind {
+        "context" => ("ssmcp.context.roots", "roots"),
+        "skills" => ("ssmcp.skills.list", "skills"),
+        "agents" => ("ssmcp.agents.resolve", "files"),
+        _ => return Err(ResourceError::NotFound),
+    };
+    let mut arguments = json!({});
+    if let Some(root) = query.get("root") {
+        arguments["root"] = json!(root);
+    }
+    if kind == "skills" {
+        if let Some(cursor) = query.get("cursor") {
+            arguments["cursor"] = json!(cursor);
+        }
+    } else if kind == "agents" {
+        arguments["path"] = json!(query.get("path").map(String::as_str).unwrap_or("."));
+    }
+    let response = session
+        .call(Operation::CallTool {
+            name: name.into(),
+            arguments,
+        })
+        .await;
+    // A native read may outlive its request's connection-bound authorization.
+    broker
+        .client(user, authorization, session.client_id())
+        .await
+        .map_err(|_| ResourceError::NotFound)?;
+    let response = response.map_err(|_| ResourceError::Unavailable)?;
+    if response
+        .get("isError")
+        .is_some_and(|value| value != &Value::Bool(false))
+    {
+        return Err(ResourceError::Unavailable);
+    }
+    let mut view = response
+        .get("structuredContent")
+        .filter(|value| value.is_object() && value[field].is_array())
+        .cloned()
+        .ok_or(ResourceError::Unavailable)?;
+    view["client"] = client_info(session);
+    Ok(view)
 }
 
 pub async fn read(
@@ -302,7 +466,8 @@ pub async fn read(
     authorization: &Authorization,
     uri: &str,
 ) -> Result<Value, ResourceError> {
-    let (base, cursor) = parse_uri(uri)?;
+    let (base, query) = parse_uri(uri)?;
+    let cursor = query.get("cursor").cloned();
     // Validate endpoint scope and a connection-bound grant even for static guidance.
     let current = sessions(broker, user, authorization).await?;
     if base == "ssmcp://clients" {
@@ -332,7 +497,7 @@ pub async fn read(
             .await
             .map_err(|_| ResourceError::NotFound)?;
         return match kind {
-            "info" if cursor.is_none() => json_content(uri, client_info(&session)),
+            "info" => json_content(uri, client_info(&session)),
             "tools" => {
                 let mut page = session
                     .call(Operation::ListTools { cursor })
@@ -353,6 +518,30 @@ pub async fn read(
                         return Err(ResourceError::Unavailable);
                     }
                     page["nextUri"] = json!(with_cursor(base, next));
+                }
+                json_content(uri, page)
+            }
+            "context" | "skills" | "agents" => {
+                let mut page =
+                    native_view(broker, user, authorization, &session, kind, &query).await?;
+                if kind == "skills"
+                    && let Some(next) = page.get("next_cursor").filter(|value| !value.is_null())
+                {
+                    let next = next.as_str().ok_or(ResourceError::Unavailable)?;
+                    if next.len() > 128 || next.is_empty() || next.chars().any(char::is_control) {
+                        return Err(ResourceError::Unavailable);
+                    }
+                    let mut pairs = vec![("cursor", next)];
+                    if let Some(root) = query.get("root") {
+                        pairs.push(("root", root));
+                    }
+                    let query = serde_urlencoded::to_string(pairs)
+                        .map_err(|_| ResourceError::Unavailable)?;
+                    let next_uri = format!("{base}?{query}");
+                    if next_uri.len() > MAX_URI_BYTES {
+                        return Err(ResourceError::Unavailable);
+                    }
+                    page["nextUri"] = json!(next_uri);
                 }
                 json_content(uri, page)
             }
@@ -401,17 +590,19 @@ mod tests {
         assert!(text.contains(alice.client_id()));
         assert!(!text.contains(bob.client_id()));
         assert!(list(&broker, "bob", &auth, None).await.is_err());
-        assert_eq!(
-            read(
-                &broker,
-                "alice",
-                &auth,
-                &format!("ssmcp://clients/{}/info", bob.client_id())
-            )
-            .await
-            .unwrap_err(),
-            ResourceError::NotFound,
-        );
+        for kind in ["info", "tools", "context", "skills", "agents"] {
+            assert_eq!(
+                read(
+                    &broker,
+                    "alice",
+                    &auth,
+                    &format!("ssmcp://clients/{}/{kind}", bob.client_id())
+                )
+                .await
+                .unwrap_err(),
+                ResourceError::NotFound,
+            );
+        }
         let inventory = decode(
             read(&broker, "alice", &auth, "ssmcp://clients")
                 .await
@@ -439,22 +630,29 @@ mod tests {
         }
         let first = list(&broker, "alice", &auth, None).await.unwrap();
         assert_eq!(first["resources"].as_array().unwrap().len(), PAGE_SIZE);
-        let cursor = first["nextCursor"].as_str().unwrap();
-        let second = list(&broker, "alice", &auth, Some(cursor)).await.unwrap();
-        assert_eq!(second["resources"].as_array().unwrap().len(), 14);
-        assert!(second.get("nextCursor").is_none());
-        let all: Vec<_> = first["resources"]
-            .as_array()
-            .unwrap()
+        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
+        let mut pages = vec![first];
+        while let Some(next) = pages.last().unwrap()["nextCursor"].as_str() {
+            pages.push(list(&broker, "alice", &auth, Some(next)).await.unwrap());
+        }
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| page["resources"].as_array().unwrap().len())
+                .collect::<Vec<_>>(),
+            [32, 32, 32, 13]
+        );
+        let all: Vec<_> = pages
             .iter()
-            .chain(second["resources"].as_array().unwrap())
+            .flat_map(|page| page["resources"].as_array().unwrap())
             .map(|r| r["uri"].as_str().unwrap())
             .collect();
         let unique: std::collections::HashSet<_> = all.iter().collect();
+        assert_eq!(all.len(), 109);
         assert_eq!(all.len(), unique.len());
         broker.test_register("alice", &"a".repeat(64)).await;
         assert!(matches!(
-            list(&broker, "alice", &auth, Some(cursor)).await,
+            list(&broker, "alice", &auth, Some(&cursor)).await,
             Err(ResourceError::InvalidParams(_))
         ));
     }
@@ -509,6 +707,14 @@ mod tests {
             "ssmcp://clients?cursor=a&cursor=b",
             "ssmcp://clients?unknown=a",
             "ssmcp://clients?cursor=%0A",
+            "ssmcp://clients?cursor=%GG",
+            "ssmcp://clients?cursor=%C3",
+            "ssmcp://clients/abc/context?root=workspace",
+            "ssmcp://clients/abc/skills?root=one&root=two",
+            "ssmcp://clients/abc/skills?root=one&ro%6Ft=two",
+            "ssmcp://clients/abc/skills?path=.",
+            "ssmcp://clients/abc/agents?cursor=next",
+            "ssmcp://clients/abc/agents?path=%00",
             "ssmcp://guide#fragment",
             "ssmcp://clients\n",
         ] {
@@ -516,7 +722,28 @@ mod tests {
         }
         let value = "cursor /+=?&:";
         let uri = with_cursor("ssmcp://clients/abc/tools", value);
-        assert_eq!(parse_uri(&uri).unwrap().1.as_deref(), Some(value));
+        assert_eq!(
+            parse_uri(&uri).unwrap().1.get("cursor").map(String::as_str),
+            Some(value)
+        );
+        let query =
+            serde_urlencoded::to_string([("root", "context +&/?:"), ("path", "目录/a +&?=b")])
+                .unwrap();
+        let uri = format!("ssmcp://clients/abc/agents?{query}");
+        let (_, values) = parse_uri(&uri).unwrap();
+        assert_eq!(
+            values.get("root").map(String::as_str),
+            Some("context +&/?:")
+        );
+        assert_eq!(values.get("path").map(String::as_str), Some("目录/a +&?=b"));
+        assert!(parse_uri(&format!("ssmcp://clients?cursor={}", "x".repeat(129))).is_err());
+        assert!(
+            parse_uri(&format!(
+                "ssmcp://clients/abc/agents?path={}",
+                "x".repeat(MAX_URI_BYTES)
+            ))
+            .is_err()
+        );
         assert!(
             content(
                 "ssmcp://guide",
