@@ -92,6 +92,7 @@ impl Harness {
                 mode: Mode::Shell,
                 metadata: wire::ClientMetadata {
                     name: "oauth-test".into(),
+                    title: None,
                     cwd: "/test".into(),
                     hostname: "localhost".into(),
                     allow: Vec::new(),

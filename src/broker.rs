@@ -237,6 +237,7 @@ impl Broker {
             info: ClientInfo {
                 id: id.clone(),
                 name: "test".into(),
+                title: None,
                 mode: wire::Mode::Shell,
                 cwd: "/test".into(),
                 hostname: "localhost".into(),
@@ -363,6 +364,7 @@ impl Broker {
             info: ClientInfo {
                 id: client_id.clone(),
                 name: metadata.name,
+                title: metadata.title,
                 mode,
                 cwd: metadata.cwd,
                 hostname: metadata.hostname,
@@ -599,6 +601,7 @@ mod tests {
     fn metadata(name: &str, cwd: &str) -> wire::ClientMetadata {
         wire::ClientMetadata {
             name: name.into(),
+            title: None,
             cwd: cwd.into(),
             hostname: "localhost".into(),
             allow: Vec::new(),
@@ -620,6 +623,7 @@ mod tests {
             info: ClientInfo {
                 id: id.into(),
                 name: "same display name".into(),
+                title: None,
                 mode: wire::Mode::Shell,
                 cwd: "/project".into(),
                 hostname: "localhost".into(),
