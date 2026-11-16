@@ -248,6 +248,8 @@ pub fn node() -> Result<PathBuf, String> {
             "Node entry is not a native executable; refusing to pass --jitless to a shim".into(),
         );
     }
+    let probe_timeout = Duration::from_secs(3);
+    let spawn_started = Instant::now();
     let mut child = Command::new(&path)
         .args(NODE_FLAGS)
         .args(["--eval", "if (!process.versions.node) process.exit(1)"])
@@ -257,24 +259,50 @@ pub fn node() -> Result<PathBuf, String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("could not validate installed Node: {e}"))?;
-    let deadline = Instant::now() + Duration::from_secs(3);
+        .map_err(|e| {
+            format!(
+                "could not validate installed Node: {e} (runtime={path:?}, stage=spawn, elapsed_ms={}, wait_timeout_ms={})",
+                spawn_started.elapsed().as_millis(),
+                probe_timeout.as_millis(),
+            )
+        })?;
+    let probe_started = Instant::now();
+    let deadline = probe_started + probe_timeout;
+    let pid = child.id();
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(path),
             Ok(Some(status)) => {
                 return Err(format!(
-                    "installed Node does not support the isolated executor flags ({status})"
+                    "installed Node does not support the isolated executor flags ({status}) (runtime={path:?}, stage=compatibility_exit, elapsed_ms={}, wait_timeout_ms={}, pid={pid})",
+                    probe_started.elapsed().as_millis(),
+                    probe_timeout.as_millis(),
                 ));
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
             outcome => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(match outcome {
-                    Err(error) => format!("Node compatibility check failed: {error}"),
-                    _ => "Node compatibility check timed out".into(),
-                });
+                let elapsed_ms = probe_started.elapsed().as_millis();
+                let termination_requested = child.kill().is_ok();
+                // This is the status after our existing termination/reap path,
+                // not evidence that Node exited naturally or crashed on its own.
+                let cleanup_status = child
+                    .wait()
+                    .map(|status| status.to_string())
+                    .unwrap_or_else(|_| "unavailable".into());
+                let (stage, message) = match outcome {
+                    Err(error) => (
+                        "compatibility_poll",
+                        format!("Node compatibility check failed: {error}"),
+                    ),
+                    _ => (
+                        "compatibility_wait",
+                        "Node compatibility check timed out".to_owned(),
+                    ),
+                };
+                return Err(format!(
+                    "{message} (runtime={path:?}, stage={stage}, elapsed_ms={elapsed_ms}, wait_timeout_ms={}, pid={pid}, termination_requested={termination_requested}, cleanup_status={cleanup_status})",
+                    probe_timeout.as_millis(),
+                ));
             }
         }
     }
