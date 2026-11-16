@@ -336,6 +336,24 @@ def release_notes(root=None):
     return notes
 
 
+def find_release(repository, tag, root=None):
+    """The tag endpoint excludes drafts; search all release pages before creating one."""
+    root = root or ROOT
+    endpoint = f"repos/{repository}/releases"
+    found = subprocess.run(["gh", "api", f"{endpoint}/tags/{tag}"],
+                           text=True, capture_output=True, cwd=root)
+    if found.returncode == 0:
+        return json.loads(found.stdout)
+    if not re.search(r"\bHTTP 404\b", found.stderr):
+        raise RuntimeError(found.stderr.strip())
+    pages = json.loads(command("gh", "api", "--paginate", "--slurp",
+                               endpoint + "?per_page=100", cwd=root))
+    matches = [item for page in pages for item in page if item["tag_name"] == tag]
+    if len(matches) > 1:
+        raise ValueError(f"multiple releases use tag {tag}; refusing to choose a draft")
+    return matches[0] if matches else None
+
+
 def release(tag, root=None):
     root = root or ROOT
     validate_tag(tag, root)
@@ -343,19 +361,18 @@ def release(tag, root=None):
     repository = os.environ["GITHUB_REPOSITORY"]
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
         raise ValueError("invalid repository name")
-    endpoint = f"repos/{repository}/releases/tags/{tag}"
-    found = subprocess.run(["gh", "api", endpoint], text=True, capture_output=True, cwd=root)
-    if found.returncode:
-        if "404" not in found.stderr:
-            raise RuntimeError(found.stderr.strip())
+    metadata = find_release(repository, tag, root)
+    if metadata is None:
         with tempfile.TemporaryDirectory(prefix="ssmcp-notes-") as temporary:
             notes = Path(temporary) / "notes.md"
             notes.write_text(release_notes(root), encoding="utf-8")
             subprocess.run(["gh", "release", "create", tag, "--repo", repository, "--verify-tag",
                             "--draft", "--title", tag, "--notes-file", str(notes)], cwd=root, check=True)
-        metadata = json.loads(command("gh", "api", endpoint, cwd=root))
-    else:
-        metadata = json.loads(found.stdout)
+        metadata = find_release(repository, tag, root)
+        if metadata is None:
+            raise RuntimeError(f"created release {tag} is not visible; retry without creating another draft")
+    # Keep using the same release object while it is still an unpublished draft.
+    endpoint = f"repos/{repository}/releases/{metadata['id']}"
     assets = {a["name"]: a for a in metadata["assets"]}
     for path in sorted((root / "dist").iterdir()):
         if not path.is_file():
