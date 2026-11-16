@@ -4,7 +4,7 @@
 
 服务器已经部署好时，可直接阅读 [配置、SSH 公钥与登录](configuration.md)：复用 `~/.ssh/config`、添加和轮换公钥、完成 OAuth 登录，以及处理重新打开后的授权状态。
 
-ssmcp 0.4.0 继续使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。旧客户端可继续使用登录码；新的 `--allow 用户名@github` 需要两端更新，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接、客户端登记和 OAuth 授权。
+ssmcp 0.4.0 继续使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。旧客户端可继续使用登录码；新的 `--allow 用户名@github` 需要两端更新，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
 
 ## 1. 安装程序与服务账户
 
@@ -207,7 +207,7 @@ ssmcpd 同时承担 MCP 资源服务器和 OAuth 授权服务器角色。GitHub 
 
 当前不支持 Client ID Metadata Documents（CIMD）；仅支持 CIMD 的 MCP 客户端无法连接。MCP 2026-07-28 推荐 CIMD，并保留 DCR 作为兼容路径，本实现采用后者。[MCP 注册选择](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
 
-MCP 的 DCR 接口在省略 `grant_types` 时默认登记 `["authorization_code","refresh_token"]`，并在响应中返回实际登记的类型。显式只请求 `["authorization_code"]` 时，令牌响应不包含 refresh token。MCP 客户端登记及其密钥默认有效 365 天，状态只保存在内存；守护进程重启或登记过期后需要重新注册。若应用持续缓存旧 `client_id`，可删除该 MCP 连接后重新添加。[授权实现](../src/oauth.rs)
+MCP 的 DCR 接口在省略 `grant_types` 时默认登记 `["authorization_code","refresh_token"]`，并在响应中返回实际登记的类型。显式只请求 `["authorization_code"]` 时，令牌响应不包含 refresh token。MCP 客户端登记及其密钥默认有效 365 天，启用持久化时登记保存在私有 TOML 中；登记过期后需要重新注册。若应用持续缓存旧 `client_id`，可删除该 MCP 连接后重新添加。[授权实现](../src/oauth.rs)
 
 客户端实现自动续期时，应保存首次登录和每次刷新返回的最新令牌。在 access token 到期前，或收到 MCP `401` 响应中 `WWW-Authenticate: Bearer` 的 `error="invalid_token"` 后，向 token endpoint 发送 `grant_type=refresh_token`、当前 refresh token、原 `resource`，并按登记的认证方式携带客户端身份。成功后，用返回的新 refresh token 替换旧值，再用新 access token 重试。刷新请求应按授权串行执行；已使用的 refresh token 会失效，重放它会触发授权撤销。服务端提供这条刷新路径，MCP 客户端负责主动调用。[客户端续期步骤](configuration.md#silent-refresh)
 
@@ -395,3 +395,11 @@ map $arg_state $ssmcp_github_backend {
 在该站点现有 HTTPS `server` 中，为上表三个门户路径增加对应 `location`，并为精确 `/oauth/callback/github` 设置 `proxy_pass http://$ssmcp_github_backend`。这些 location 采用与原网关一致的 Host、HTTP/1.1、超时和不缓存设置。配置后先运行 `nginx -t`，再 reload Nginx。
 
 GitHub OAuth App 继续使用同一个 `https://你的域名/oauth/callback/github` 地址。网页会话和插件授权分别处理；只允许精确列出的门户路径进入门户上游。验证首页、GitHub 跳转、公钥保存、实际 SSH 接入后，再交付使用。
+
+## 日志和受控升级
+
+客户端日志模式、服务端关联日志、systemd 目录与代理超时策略见 [日志与主题配置](logging.md)。升级使用 `scripts/deploy_server.py`：先在独立端口和独立状态目录执行 `--phase stage`，核验健康、OAuth discovery 和 DCR 重启恢复；再携带同一制品校验值与提交执行 `--phase apply`。生产文件变化会使旧预演凭据失效。安装或健康检查失败时恢复旧包和原文件。
+
+生产重启会中断当前 ssmcp 管理连接。升级驱动必须由独立 SSH/systemd 作业持有，结果写入可独立读取的验收报告。服务恢复后重新授权 MCP；不要依赖正在被升级的会话完成回滚。
+
+回滚材料在操作期间保存在私有目录。完成后流式归档到开发机 `~/Backups/servers/archczy/`，核对文件内容、权限和链接，再移除服务器上的本次临时制品与预演目录。回滚恢复需要先把归档传回服务器。

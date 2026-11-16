@@ -62,7 +62,8 @@ Examples:
   ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
   ssmcp --allow octocat@github,alice@github -t codex my-server
 
-Prints {"url":"https://host/user","login_code":"...","login_expires_in":1800,"client_id":"...","type":"shell"} once on stdout.
+Redirected stdout (or jsonl mode) emits one connection JSON object.
+Interactive stdout shows the MCP URL and OAuth login instructions.
 Add url to your MCP client, then enter login_code on its OAuth login page.
 login_expires_in deducts local backend startup time.
 With --allow, prints url, client information, allow and auth:"github" instead
@@ -72,7 +73,8 @@ account in the browser. The CLI needs no GitHub login; SSH keys stay unchanged.
 combined with --list-tools.
 Live input, output and native agent events appear on stderr as readable blocks.
 Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
-Unified diffs show old/new line numbers. --raw disables display parsing only.
+Unified diffs show old/new line numbers. --raw and --raw-events select jsonl.
+--verbose expands folded output and shows the full original JSON event.
 Workspace file operations are rooted at the startup directory. System rsync
 transfers and loopback TCP forwards are available to every backend.
 Keep this process running; Ctrl-C disconnects and stops its local backend.

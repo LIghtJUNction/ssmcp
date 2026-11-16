@@ -604,6 +604,15 @@ impl Renderer {
                     .iter()
                     .take(if self.verbose { usize::MAX } else { 12 })
                 {
+                    if title == "Result"
+                        && matches!(
+                            key.as_str(),
+                            "process" | "in_flight" | "pid" | "rssBytes" | "timeout" | "timedOut"
+                        )
+                    {
+                        continue;
+                    }
+
                     if !matches!(
                         key.as_str(),
                         "id" | "jsonrpc"
@@ -1324,7 +1333,7 @@ mod tests {
         r.event(&mut out, "one", &json!({"id":1,"result":{}}))
             .unwrap();
         assert_eq!(r.requests.len(), 1);
-        assert!(r.requests.contains_key("two\01"));
+        assert!(r.requests.contains_key("two\u{0}1"));
         r.ui.show_request_id = false;
         out.clear();
         r.event(&mut out, "two", &json!({"id":1,"result":{}}))
