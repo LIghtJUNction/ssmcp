@@ -1,51 +1,56 @@
 # 后端与代码模式
 
-ssmcp 对外提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到当前授权可访问的在线客户端及其能力；`code_mode` 执行 JavaScript，通过 SSH 调用选定客户端的工具。每条新连接都提供交互式终端和独立命令任务，并自动发现本机已安装的 Codex、Claude Code、Pi、OpenCode；它们共享这条连接，分别保留原生工具名和参数。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
+ssmcp 对外提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过 SSH 编排该客户端的原生工具。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
 
 <a id="启动参数"></a>
 
 ## 1. 启动客户端
 
-先进入需要工作的本机目录，再运行 ssmcp。把 `octocat@github` 换成允许访问此客户端的 GitHub 用户；该用户在浏览器完成登录并同意授权后，可以从 `/mcp` 的 `list` 发现在线连接。`--title` 描述本次任务，`--name` 标记机器或工作区。
+先在 Linux、macOS 或 Windows 进入需要工作的本机目录，再启动一个客户端。它始终提供交互式 shell，并自动发现 `PATH` 中可用的 Codex、Claude Code、Pi、OpenCode 原生接口。把 `octocat@github` 换成允许访问这条连接的 GitHub 用户名；安装方式和平台范围见[版本与安装](releases.md)。
 
 ```sh
-ssmcp --allow octocat@github --name development --title "修复客户端重载" user@host
-# 只检查本机能力，不建立 SSH 连接。
-ssmcp --list-tools
+ssmcp --allow octocat@github --name dev --title "检查当前项目并修复构建" user@host
 ```
 
 | 参数 | 作用 |
 | --- | --- |
 | `--name NAME` | 客户端显示名称；默认包含主机名和进程 ID |
-| `--title TEXT` | 本次任务的可选标题，最多 512 个 UTF-8 字节 |
-| `--allow USER@PROVIDER` | 限定可访问本客户端的身份；目前仅支持 `github`，可重复或以逗号分隔，最多 32 个不同身份 |
-| `--shell /absolute/path` | 交互式终端的可执行文件；Unix 默认取绝对路径的 `SHELL`，否则 `/bin/sh`；Windows 默认取绝对路径的 `COMSPEC`，否则系统 `cmd.exe` |
-| `--context-root PATH` | 额外的只读技能与指令目录；可重复，最多八个 |
-| `--list-tools` | 发现本机原生与工作区工具，打印 JSON 目录后退出；不接受 SSH 目标 |
+| `--title TITLE` | 供 agent 识别任务的会话标题；最多 512 个 UTF-8 字节 |
+| `--allow USER@PROVIDER` | 指定可访问身份；目前支持 `github`，可重复或以逗号分隔，最多 32 个不同身份 |
+| `--shell /absolute/path` | 选择交互式 shell；Unix 默认使用绝对路径的 `SHELL` 或 `/bin/sh`，Windows 使用绝对路径的 `COMSPEC` 或系统 `cmd.exe` |
+| `--context-root PATH` | 增加只读 skills／AGENTS 文档根目录；最多 8 个，不扩展普通文件写入范围 |
+| `--list-tools` | 发现并打印本机工具目录后退出；不连接 SSH、不接受 SSH 目标或 `--allow` |
 | `-F FILE`、`-i FILE`、`-p PORT` | OpenSSH 配置、私钥文件和端口 |
 
-服务器为每条连接生成独立 `id`，`--name` 仅用作显示标签。即使名称相同，也不会替换已有连接；分派时始终使用 ID。名称最多 128 个 UTF-8 字节，不能全为空白或包含控制字符。示例通过唯一名称找到客户端；同名连接存在时，请改为按 `list` 返回的 `id` 选择。[客户端实现](../src/client.rs) · [元数据约束](../src/wire.rs)
+`--name` 和 `--title` 是显示信息，允许重名。服务端为每条连接分配独立 `id`，所有调用用这个 ID 分派；重连后需重新读取 `list`。`--name` 最多 128 个 UTF-8 字节，不能全为空白或含控制字符；同名连接需按 ID 区分。`cwd` 记录启动目录，不随交互式 shell 的 `cd` 改变。[客户端参数](../src/client.rs) · [元数据约束](../src/wire.rs)
 
-| 能力 | 本机入口或发现名称 | 前提与边界 |
+### 从旧的后端选择参数迁移
+
+删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，保留 SSH、身份、名称和日志选项。客户端已移除这些选择入口；例如旧的 `ssmcp -t codex --name dev my-server` 改为 `ssmcp --name dev my-server`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。
+
+```sh
+# 不连接 SSH，先检查这台电脑实际发现了什么。
+ssmcp --list-tools
+
+# 同一连接提供 shell 和成功初始化的原生适配器。
+ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
+```
+
+| 来源 | 本机原生入口或实现 | 可调用范围 |
 | --- | --- | --- |
-| `terminal.*` | `--shell` 指定的交互式 Shell | Linux、macOS 使用 PTY，Windows 使用 ConPTY；同一终端保留目录、环境和前台程序 |
-| `ssmcp.exec.*` | 命令的 argv 数组 | 每项任务有独立进程、状态、stdout 与 stderr；不需要安装 Agent |
-| `codex.*` | `PATH` 中的 `codex` | 启动 `app-server --listen stdio://`，须支持 `app-server generate-json-schema --experimental` |
-| `cc.*` | `PATH` 中的 `claude` | 启动 `mcp serve`，使用该入口实际提供的 MCP 目录 |
-| `pi.*` | `PATH` 中的 `pi` | 启动 `--mode rpc`；扩展和模型配置来自本机 Pi |
-| `opencode.*` | `PATH` 中的 `opencode` | 启动 `serve --stdio --hostname 127.0.0.1 --port 0`；要求 v2 ready 握手和 `/openapi.json` |
+| ssmcp | 交互式终端、独立后台进程、文件、上下文原语 | 不依赖安装 coding harness；文件读写与命令执行直接在本机完成 |
+| Codex | `codex app-server --listen stdio://`，并须支持 `app-server generate-json-schema --experimental` | App Server 方法；成功发现时注册 `codex.mcp.*`，通过原生 MCP 调用接口转发 |
+| Claude Code | `claude mcp serve` | 该入口实际返回的 MCP 工具目录，统一加 `cc.` 前缀 |
+| Pi | `pi --mode rpc` | 原生 JSONL RPC 控制命令；内部模型工具不自动变成独立 RPC 接口 |
+| OpenCode | `opencode serve --stdio --hostname 127.0.0.1 --port 0` | v2 服务的 `/openapi.json` 操作；要求对应 ready 握手，不兼容 v1 旧入口 |
 
-先在客户端安装所需 CLI，并按其要求配置账户或模型。ssmcp 启动时并行发现这些入口；某个可选 CLI 缺失、启动失败或目录不可用时，会保留 Shell 和其他已成功注册的工具。通过 `ssmcp.harnesses.list` 查看各命名空间的注册数量，并以当前 `list({client_id})` 的目录为准。发现原生接口不会提交模型任务；模型任务仍须显式调用相应工具。ssmcpd 无须安装这些 CLI。[发现与容错](../src/backend/mod.rs) · [启动回归测试](../tests/client_startup.rs)
+发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend/mod.rs)
 
-代码模式调用服务器上由系统包管理器安装的 Node.js 18 或更新版本，并使用系统 bubblewrap 0.8 或更新版本隔离每次执行，再在隔离环境内通过 util-linux 的 prlimit 限制进程数。Debian/Ubuntu 可用 `sudo apt install nodejs bubblewrap util-linux`，Arch Linux 可用 `sudo pacman -S nodejs bubblewrap util-linux`；安装后确认版本满足要求。这些依赖安装在服务器上；仅运行 `ssmcp` 客户端不需要它们，也不需要为代码模式安装 npm 包。
+工具发现不为这些 harness 提交生成任务。后续操作是否调用模型由原生方法决定：例如 `codex.turn_start`、`pi.prompt` 和可能存在的 `cc.Agent` 会进入其任务或模型流程；直接 MCP 工具也可能在工具内部使用模型。普通读写文件与 shell 命令优先使用 ssmcp 自带的 `fs` 和 `ssmcp.exec.*`，不要把“注册到 code_mode”理解为所有方法都无需模型。
 
-`make install` 把桥接脚本安装到 `$PREFIX/libexec/ssmcp/code-mode.js`，Node.js、bubblewrap 和 prlimit 由系统包管理器维护。自定义脚本位置时，用服务环境变量 `SSMCP_CODE_MODE_RUNNER` 指定绝对路径。依赖缺失或系统不允许建立隔离环境时，`code_mode` 返回错误；`list` 仍可用于发现客户端。具体部署条件见[部署说明](deployment.md#系统代码运行环境)。
+`ssmcpd` 和代码模式的隔离执行环境运行在 Linux。服务端通过系统 Node.js、bubblewrap 与 util-linux 的 `prlimit` 执行编排代码；客户端只需本机 OpenSSH 与所选 shell。服务端的安装条件见[部署说明](deployment.md#系统代码运行环境)。原生 rsync 端点目前也仅在 Linux 客户端提供；macOS／Windows 可使用文件和 loopback 网络原语。[rsync 平台分支](../src/rsync.rs)
 
-原生传输参数由 ssmcp 管理。旧版的 `-t`、`--type`、`--backend` 和尾随 Agent 参数已经移除；升级启动命令时删除这些参数，把所需 CLI 放入客户端的 `PATH`。账户、模型和扩展配置继续由各 CLI 自己管理。[客户端参数](../src/client.rs)
-
-使用 `--allow` 时，连接成功后显示 `/mcp` 的完整 URL 和 GitHub 登录提示；重定向 stdout 或使用 `--log-format jsonl` 时，输出包含 `url`、`auth: "github"`、`allow`、`client_id` 和客户端元数据的 JSON。把 URL 添加到支持 OAuth 的 MCP 客户端，在浏览器完成 GitHub 登录，再在 ssmcp 页面核对身份、MCP 客户端及回调来源并同意授权。命令行不要求登录 GitHub。
-
-省略 `--allow` 则保留登录码模式：显示 `/<SSH 用户名>` 的 URL、一次性登录码及剩余秒数，在 JSON 中对应 `url`、`login_code`、`login_expires_in`。网页授权时输入该码，授权可访问同一 SSH 账户下未设置 `--allow` 的客户端。两种方式均使用 OAuth Authorization Code + S256 PKCE；具体步骤见[OAuth 登录说明](deployment.md#5-建立连接并登录)。
+带 `--allow` 时使用 `/mcp` 的 GitHub OAuth；省略它时使用 `/<SSH 用户名>` 的一次性登录码授权。交互式终端显示连接摘要；重定向 stdout 或使用 `--raw` 时得到机器可读连接 JSON。两种方式均经原有 SSH 公钥认证，具体流程见[配置与登录](configuration.md)。
 
 ## 2. 用 list 找到客户端和能力
 
@@ -55,7 +60,7 @@ ssmcp --list-tools
 {"name":"list","arguments":{}}
 ```
 
-结果的 `structuredContent.clients` 包含 `id`、`name`、可选 `title`、`type`、`hostname`、`cwd` 和 `cwd_kind`。新客户端的 `type` 为 `shell`，已注册的原生能力需要看工具目录。`cwd_kind` 为 `startup`：它记录启动 ssmcp 时的目录，不随交互式 Shell 的 `cd` 改变，也不代表某个 Agent 内部 thread/session 的目录。`structuredContent.code_mode` 提供代码模式的调用说明。
+结果的 `structuredContent.clients` 包含 `id`、`name`、可选 `title`、`type`、`hostname`、`cwd` 和 `cwd_kind`。`cwd_kind` 为 `startup`：它记录启动 ssmcp 时的目录，不随 Shell 的 `cd` 改变，也不代表某个 Agent 内部 thread/session 的目录。`structuredContent.code_mode` 提供代码模式的调用说明。
 
 为选定客户端读取能力目录时，将下面的 ID 换成 `list` 的实际返回值：
 
@@ -76,7 +81,7 @@ MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有
 把 JavaScript 源码放入 `code`，即可使用变量、分支、循环、`await` 和 `Promise.all`。下面查询刚才命名的 Shell 状态：
 
 ```json
-{"name":"code_mode","arguments":{"code":"const c = clients.find(c => c.name === 'development'); if (!c) throw new Error('Client is offline'); return await call(c.id, 'terminal.status', {});"}}
+{"name":"code_mode","arguments":{"code":"const c = clients.find(c => c.name === 'dev'); if (!c) throw new Error('Shell client is offline'); return await call(c.id, 'terminal.status', {});"}}
 ```
 
 | JavaScript 接口 | 返回或作用 |
@@ -84,15 +89,24 @@ MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有
 | `clients` | 本次调用开始时的只读客户端元数据快照 |
 | `await call(clientId, toolName, arguments = {})` | 选定后端的完整 MCP 工具结果 |
 | `await tools(clientId, cursor?)` | 一页原生能力目录；用 `nextCursor` 继续读取 |
-| `await exec.run(clientId, options)` | 启动独立命令，等待一段时间并读取输出；后文说明后台生命周期 |
-| `await exec.parallel(clientId, commands, options?)` | 以有限数量的编排同时处理多个命令，逐项保留成功与失败 |
-| `await reload(clientId)` | 请求客户端使用已安装的新程序重启；随后重新发现连接 |
+| `exec.run(clientId, options)` | 启动独立命令，并在指定等待时间内返回状态和分离的输出流 |
+| `exec.parallel(clientId, commands, {concurrency:4})` | 有界并行启动和观察命令，按输入顺序保留每项结果 |
+| `exec.start/list/status/read/wait/cancel/forget` | 管理客户端后台命令；与服务端传输用的 `jobs.*` 分开 |
+| `fs.readText/writeText/editText(clientId, options)` | 工作区内的原生 UTF-8 文件操作；成功写入产生本机 diff 记录 |
+| `skills.list/view/read(clientId, options)` | 索引、摘要视图和原文读取；不会提交模型任务 |
+| `agents.list/resolve/read(clientId, options)` | 查看指令来源、根到目标的优先级和原文 |
+| `await exec.run(clientId, options)` | 启动独立命令、有界等待并读取一次输出；需检查 `running` 与退出码 |
+| `await exec.parallel(clientId, commands, options?)` | 限制同时进行的命令编排，按输入顺序保留每项结果 |
+| `context.roots(clientId)` | 查看工作区与额外只读上下文根 |
+| `await reload(clientId)` | 重启已安装的客户端入口，随后用 `list` 获取新连接 ID |
+| `outputs.read/stat(clientId, options)` | 按转储 ID 读取长输出或查看元数据 |
+| `outputs.cleanup(clientId)` | 立即执行与自动清理相同的保留策略 |
 | `print(value)`、`console.log(value)` | 记录本次代码模式的有界日志；也支持 `console.warn`、`console.error` |
 | `return value` | 返回可序列化为 JSON 的值；未返回时为 `null` |
 
 代码模式结果的 `structuredContent` 为 `{ "result": ..., "logs": [...] }`。其中 `result` 是显式返回值，`logs` 为字符串数组。`call` 保留原生结果中的 `content`、`structuredContent`、`isError` 等字段；原生工具可以正常返回 `isError: true`，调用方需检查这个字段。连接或转发错误会使对应调用失败，可用 JavaScript `try/catch` 处理。
 
-`exec`、`fs`、`outputs` 等 helper 会取出成功结果中的结构化数据，并把工具错误转换为 JavaScript 异常，因此示例可以直接读取返回对象的字段。需要完整原生 MCP 信封时，改用 `call`。
+`fs`、`skills`、`agents`、`exec`、`reload` 和 `outputs` 的便捷原语返回解包后的结构化结果，原生工具返回错误时会抛出异常；`exec.parallel` 把各项失败保留为 `rejected/reason`。直接 `call` 则返回完整 MCP 结果。更多文件、显式上下文根、rsync、端口与托管同步任务示例见[工作区](workspaces.md)、[上下文](context.md)与[会话控制](session-control.md)。
 
 以下代码在一次请求中查看多个 Shell 客户端。此后各小节的 JavaScript 块都应作为 `code_mode` 的 `code` 字符串发送。
 
@@ -109,10 +123,12 @@ return states;
 
 ## 4. 命令：并行执行、后台管理与等待
 
+分步操作、完整输出读取和故障恢复见[独立命令指南](commands.md)。
+
 普通命令通过 `exec` 执行，每项任务有独立 `job_id`、退出码和输出流。`command` 是 argv 数组，第一个元素是程序，其余元素是参数；不会隐式解析管道、重定向或变量展开。需要 Shell 语法时，显式运行该平台的 Shell，例如 Unix 的 `["sh", "-c", "printf hello"]` 或 Windows 的 `["cmd.exe", "/d", "/s", "/c", "echo hello"]`。默认目录是客户端启动目录，`cwd` 可指定另一个已存在的绝对目录；`env` 是对继承环境的覆盖。[命令实现](../src/backend/shell.rs) · [JavaScript helper](../src/code_mode.js)
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("Client is offline");
 return await exec.run(c.id, {
   command: ["git", "status", "--short"],
@@ -129,7 +145,7 @@ return await exec.run(c.id, {
 ### 后台任务与增量输出
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("Client is offline");
 const job = await exec.start(c.id, {
   command: ["cargo", "test"], cwd: c.cwd
@@ -146,7 +162,7 @@ return {job_id: job.job_id, state: await exec.wait(c.id, job.job_id, {wait_ms: 5
 | `exec.status(id, jobId)` | 查询状态、耗时、退出码与日志元数据 |
 | `exec.wait(id, jobId, {wait_ms:5000})` | 有界等待完成；到期保留后台任务 |
 | `exec.read(id, jobId, {stdout_cursor, stderr_cursor, max_bytes, wait_ms})` | 增量读取两条输出流和同一时刻的状态快照 |
-| `exec.cancel(id, jobId)` | 终止所属进程树并返回状态；对已完成任务可重复调用 |
+| `exec.cancel(id, jobId)` | 请求终止所属进程树并返回最新状态；仍需检查 `running`，对已完成任务可重复调用 |
 | `exec.forget(id, jobId)` | 移除已完成任务的记录；正在运行的任务需先取消 |
 | `exec.events(id, {cursor, max_events, wait_ms})` | 分页读取命令事件 |
 
@@ -157,7 +173,7 @@ return {job_id: job.job_id, state: await exec.wait(c.id, job.job_id, {wait_ms: 5
 ### 并行命令
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("Client is offline");
 return await exec.parallel(c.id, [
   {command: ["git", "status", "--short"], cwd: c.cwd},
@@ -174,8 +190,10 @@ return await exec.parallel(c.id, [
 
 `terminal.write`、`terminal.read`、`terminal.resize`、`terminal.status` 操作同一个交互式终端。命令输入和合并后的 PTY 输出显示在本机；`cd`、环境变量和前台程序保留在该终端中。独立 `exec` 任务不继承终端内后续发生的目录或环境变化。[Linux PTY](../src/pty.rs) · [macOS 与 Windows 终端](../src/pty_portable.rs)
 
+下面的 `pwd` 用于 Unix shell；Windows 默认 `cmd.exe` 可发送 `"cd\r\n"` 查看当前目录。命令文本必须符合所选 shell 的语法。
+
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("Shell client is offline");
 const before = await call(c.id, "terminal.status", {});
 if (before.isError) return before;
@@ -191,14 +209,22 @@ return await call(c.id, "terminal.read", {
 
 PTY 最近 1 MiB 输出保存在内存中。单次读取最多 32 KiB，写入最多 16 KiB，`wait_ms` 最多 5000；`terminal.resize` 接受 `rows`、`cols`，范围均为 `1..=1000`。通过 `terminal.write` 写入 `"\u0003"` 可中断 PTY 前台程序；本机按 Ctrl-C 会结束 ssmcp 连接及其后端。
 
+### 标题、重载与长输出
+
+`--title` 随连接进入 `list`，供 agent 确认本轮任务。安装更新后可按[重载协议](#9-更新后的客户端重载)重启原入口；重载应答与新版本已经在线是两个状态，需要重新读取 `list` 确认。
+
+长输出超过 32 KiB 或 500 行时按来源转储，返回 ID、路径、摘要、字节数和行数。Unix 使用 `/tmp/ssmcp/<uid>`，Windows 默认使用 `%LOCALAPPDATA%\ssmcp\output`，未设置 LOCALAPPDATA 时使用用户临时目录下的 `ssmcp/output`；返回路径属于目标客户端机器。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，活动文件不参加自动淘汰。具体的 `complete`、范围及截断语义见[长输出护卫](session-control.md#长输出自动转储)与[实现](../src/output.rs)。
+
 ## 5. Codex：生成式 App Server 目录
 
-Codex 适配器从已发现的可执行文件生成 schema，并把客户端方法转换成内部能力：例如 `thread/start` 对应 `codex.thread_start`。ssmcp 完成连接初始化；其他生成方法、通用 `codex.rpc`、事件和待回复请求均通过代码模式调用。可用方法及参数取决于本机 Codex 版本，应先检查 `list({client_id})`。[Codex 适配实现](../src/backend/codex.rs)
+Codex 适配器从当前可执行文件生成 schema，并把客户端方法转换成内部能力：例如 `thread/start` 对应 `codex.thread_start`。ssmcp 完成连接初始化；其他生成方法、通用 `codex.rpc`、事件和待回复请求均通过代码模式调用。可用方法及参数取决于本机 Codex 版本，应先检查 `list({client_id})`。[Codex 适配实现](../src/backend/codex.rs)
 
-确认用户已授权使用本机 Agent 后，在提供 `thread/start` 和 `turn/start` 的版本中，下面创建工作线程并提交一项任务：
+适配器也尝试从原生 MCP server 状态中发现工具，成功项注册为 `codex.mcp.<server>.<tool>`，通过 `mcpServer/tool/call` 直接转发。名称与参数以目录为准；查询或原生接口失败时会记录诊断，不会伪造缺失工具。Codex 的 MCP 目录、App Server 方法和模型 turn 是三类不同入口。
+
+在提供 `thread/start` 和 `turn/start` 的版本中，下面创建工作线程并提交模型任务。这段示例用于明确需要 Codex 处理任务的场景；查询 schema、文件或执行 shell 无须提交 turn：
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("Codex client is offline");
 const created = await call(c.id, "codex.thread_start", { cwd: c.cwd });
 if (created.isError) return created;
@@ -212,7 +238,7 @@ return await call(c.id, "codex.turn_start", {
 提交 turn 的响应不代表模型任务完成。继续调用 `ssmcp.codex.events`，读取原生事件及 `turn/completed` 的状态。`ssmcp.codex.requests` 返回待处理的审批、用户输入或动态工具请求；`ssmcp.codex.schema` 可查看响应 schema，`ssmcp.codex.respond` 使用原始 ID 和对应的 `result` 或 `error` 回复。ssmcp 不会自动选择审批答案。
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("Codex client is offline");
 return await call(c.id, "ssmcp.codex.requests", {});
 ```
@@ -221,12 +247,12 @@ return await call(c.id, "ssmcp.codex.requests", {});
 
 ## 6. Claude Code：发现原生 MCP 工具
 
-Claude Code 适配器连接 `claude mcp serve`，读取它的完整分页目录，并给每个原生名称加上 `cc.` 前缀。原生 schema、描述、annotations 和结果字段保留；工具是否存在由本机版本与配置决定。[Claude Code 适配实现](../src/backend/cc.rs)
+Claude Code 适配器连接 `claude mcp serve`，重新读取它的完整分页目录，并给每个原生名称加上 `cc.` 前缀。原生 schema、描述、annotations 和结果字段保留；工具是否存在由本机版本与配置决定。[Claude Code 适配实现](../src/backend/cc.rs)
 
 当发现目录提供 `cc.Read` 且参数包含 `file_path` 时，可以读取启动目录中的 README：
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("Claude Code client is offline");
 return await call(c.id, "cc.Read", { file_path: c.cwd + "/README.md" });
 ```
@@ -237,10 +263,10 @@ Claude 的前台 Bash 输出通常随调用结果返回。桥记录原生进度�
 
 ## 7. Pi：原生 JSONL RPC
 
-Pi 适配器把已有控制命令映射为 `pi.*`，并通过 `pi.rpc` 转发本机支持的新命令。目录描述的是控制协议，模型工具、扩展和 MCP 配置仍归 Pi 管理。下面的 `pi.prompt` 会提交模型任务，应先确认已有相应授权。[Pi 适配实现](../src/backend/pi.rs)
+Pi 适配器把已有控制命令映射为 `pi.*`，并通过 `pi.rpc` 转发本机支持的新命令。目录描述的是控制协议，模型工具、扩展和 MCP 配置仍归 Pi 管理。[Pi 适配实现](../src/backend/pi.rs)
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("Pi client is offline");
 const state = await call(c.id, "pi.get_state", {});
 print(state);
@@ -262,7 +288,7 @@ OpenCode 适配器启动专属 v2 服务，使用随机 loopback 端口和独立
 先在代码模式中查看当前安装版本提供哪些操作：
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("OpenCode client is offline");
 return await call(c.id, "opencode.schema", {});
 ```
@@ -270,7 +296,7 @@ return await call(c.id, "opencode.schema", {});
 对于提供 `session.create` 的 v2 目录，可以按该操作的 schema 创建会话：
 
 ```js
-const c = clients.find(c => c.name === "development");
+const c = clients.find(c => c.name === "dev");
 if (!c) throw new Error("OpenCode client is offline");
 return await call(c.id, "opencode.api", {
   operation_id: "session.create",
@@ -284,7 +310,7 @@ SSE 和 WebSocket 操作返回 `stream_id`。后续通过 `opencode.events` 读�
 
 ## 9. 更新后的客户端重载
 
-更新磁盘上的 ssmcp 后，在当前目录确认 `ssmcp.client.reload` 可用，再通过 `code_mode` 调用 `await reload(clientId)`。helper 返回原生重载应答；`accepted:true` 表示请求已经被接收，仍须再次调用公开 `list` 验证新连接。支持此协议的客户端会等待服务器确认应答已收取，随后停止本连接的后台任务、原生适配器和转发，并从原安装入口启动更新后的程序，保留参数、cwd、环境与允许列表。[重载握手](../src/client.rs) · [重启实现](../src/client/reload.rs)
+更新磁盘上的 ssmcp 后，在当前工具目录确认 `ssmcp.client.reload` 可用，再通过 `code_mode` 调用 `await reload(clientId)`。helper 返回原生重载应答；`accepted:true` 表示请求已经被接收，仍须再次调用公开 `list` 验证新连接。支持此协议的客户端会等待服务器确认应答已收取，随后停止本连接的后台任务、原生适配器和转发，并从原安装入口启动更新后的程序，保留参数、cwd、环境与允许列表。[重载握手](../src/client.rs) · [重启实现](../src/client/reload.rs)
 
 重载时存在未结束的内部调用会返回 busy，应先等调用完成。已返回 `job_id` 的后台任务不属于在途请求，但会在重载时被终止；先完成或取消需要保留结果的任务。`reload` 不安装新版本，也不迁移进程和会话状态；它使用当前安装路径上的程序。初次从不支持该能力的旧版升级，需要在本机普通重启一次。
 
@@ -309,9 +335,7 @@ GitHub 模式在客户端接入时，把 `--allow` 中的用户名解析为稳�
 
 传统登录码模式允许访问同一 SSH 账户下当前及后来连接、且未设置 `--allow` 的客户端，始终排除所有带有 `--allow` 的客户端。每次内部调用会检查签发登录码的来源连接；该连接断开时，其关联的 access token 和 refresh token 立即失效，即使其他客户端仍在线。[OAuth 实现](../src/oauth.rs)
 
-默认 access token 有效期为 8 小时；refresh token 闲置期为 30 天，每次成功刷新后重新计时并轮换令牌，同一授权从首次登录起最长 90 天。客户端登记默认有效 365 天。新注册省略 `grant_types` 时默认提供刷新授权；显式只申请 `authorization_code` 时不签发 refresh token。MCP 客户端负责保存轮换后的新令牌并主动刷新，access token 到期本身不要求重新交互登录。[静默续期流程](configuration.md#silent-refresh)
-
-登录码有效 30 分钟、只能使用一次；需要重新授权时，应从新连接取得新码。两种方式的访问令牌、刷新令牌和未完成授权均保存在内存中，ssmcpd 重启后需要重新登录；启用客户端登记持久化时，仍有效的登记可跨重启保留。[有效期及撤销规则](deployment.md#oauth-lifetimes) · [持久化实现](../src/oauth.rs)
+默认 access token 有效期为 8 小时；refresh token 闲置期为 30 天，每次成功刷新后重新计时并轮换令牌，同一授权从首次登录起最长 90 天。客户端登记默认有效 365 天。新注册省略 `grant_types` 时默认提供刷新授权；显式只申请 `authorization_code` 时不签发 refresh token。MCP 客户端负责保存轮换后的新令牌并主动刷新，access token 到期本身不要求重新交互登录。传统模式的登录码有效 30 分钟、只能使用一次；需要重新授权时，应从新连接取得新码。访问令牌、刷新令牌与未完成授权仍保存在内存中，ssmcpd 重启后需要重新授权；启用客户端登记持久化时，未过期的登记可跨重启保留。见[静默续期流程](configuration.md#silent-refresh)与[有效期及撤销规则](deployment.md#oauth-lifetimes)。
 
 JavaScript 提供 `clients`、`call`、`tools`、日志函数，以及 `exec`、`fs`、`outputs`、`context`、`skills`、`agents`、`reload` 等 helper；完整说明可读取 `ssmcp://guide` 与 `ssmcp://limits`。每次请求使用独立的系统 Node.js 进程，进程环境由 bubblewrap 隔离，不继承服务器凭据；宿主机的工作目录、用户目录和控制 socket 不挂载进该环境。helper 和 `call` 将操作交给选定的客户端，按该本机用户的权限执行。
 
@@ -332,4 +356,4 @@ JavaScript 提供 `clients`、`call`、`tools`、日志函数，以及 `exec`、
 
 超时、断线或结果过大时，已发送的原生命令可能仍在运行或已经完成；应先查询其状态，避免盲目重发写入、启动任务等操作。上表约束来自[运行时实现](../src/code_mode.rs)。
 
-后端 fixture 验证协议映射与响应处理。实际模型任务使用本机配置的 CLI、账户及模型服务；本次验证范围见验收报告。新增版本的能力应由 `list` 和原生 schema 确认。
+后端 fixture 验证协议映射与响应处理；跨平台发布测试另外执行真实文件与原生进程操作。它们不证明每个已安装 harness、插件、MCP 服务器或模型都可用。实际任务依赖本机原生 CLI、账户和服务，新增能力仍需由 `list` 与原生 schema 确认。[跨平台原语测试](../tests/release_client.rs)

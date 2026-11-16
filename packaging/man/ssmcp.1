@@ -1,4 +1,4 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp" "User Commands"
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.5.0" "User Commands"
 .SH NAME
 ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
@@ -32,8 +32,8 @@ not track shell directory changes or the workspaces of native agent sessions.
 .PP
 The external MCP catalog contains exactly two tools: list and code_mode.
 Use list to discover clients and their native capabilities. Use code_mode to
-run JavaScript that calls a selected capability over SSH. Installed harnesses
-share the same client connection and external MCP tools.
+run JavaScript that calls a selected capability over SSH. All installed harness
+capabilities share the shell connection and keep their native permission checks.
 .PP
 Keep the program running while its backend is in use. Ctrl-C or SIGTERM closes
 the SSH connection and stops its backend. Login-code grants issued by that
@@ -373,3 +373,13 @@ Include UTC timestamps on event headings.
 .TP
 .B --max-inline-output N
 Show at most N lines per buffered output block. Default: 12.
+
+.SH PLATFORMS
+The client supports Linux, macOS and Windows. Linux releases contain ssmcp and
+ssmcpd; macOS and Windows releases contain the client. Windows uses ConPTY and
+requires OpenSSH Client. Rsync endpoints are currently Linux-only.
+Release archives cover x86_64 and ARM64 and include SHA-256 checksums.
+.SH MIGRATION
+Version 0.5 removes -t, --type and --backend. Install native harnesses on PATH;
+use --list-tools to inspect available capabilities. Automatic discovery does
+not start a model turn; individual native calls may do so.

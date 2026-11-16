@@ -113,43 +113,43 @@ pub fn is_executable(path: &Path) -> bool {
     }
 }
 
+/// Resolve PATH without canonicalizing symlinks: tools such as mise dispatch by argv[0].
 pub fn executable(name: &str) -> Result<PathBuf, String> {
-    let search_path = std::env::var_os("PATH").unwrap_or_default();
-    let candidates = std::env::split_paths(&search_path).flat_map(|directory| {
-        let paths = vec![directory.join(name)];
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    executable_in(name, &std::env::var_os("PATH").unwrap_or_default(), &cwd)
+}
+
+fn executable_in(name: &str, search_path: &std::ffi::OsStr, cwd: &Path) -> Result<PathBuf, String> {
+    for directory in std::env::split_paths(search_path) {
+        let directory = if directory.is_absolute() {
+            directory
+        } else {
+            cwd.join(directory)
+        };
+        let candidate = directory.join(name);
+        if is_executable(&candidate) {
+            return Ok(candidate);
+        }
         #[cfg(windows)]
-        let paths = {
-            let mut paths = paths;
-            if Path::new(name).extension().is_none() {
-                for extension in std::env::var("PATHEXT")
-                    .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
-                    .split(';')
-                {
-                    if extension.starts_with('.') && !extension.contains(['/', '\\']) {
-                        paths.push(directory.join(format!("{name}{extension}")));
+        if Path::new(name).extension().is_none() {
+            for extension in std::env::var("PATHEXT")
+                .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+                .split(';')
+            {
+                if extension.starts_with('.') && !extension.contains(['/', '\\']) {
+                    let candidate = directory.join(format!("{name}{extension}"));
+                    if is_executable(&candidate) {
+                        return Ok(candidate);
                     }
                 }
             }
-            paths
-        };
-        paths
-    });
-    candidates
-        .filter(|p| is_executable(p))
-        .find_map(|p| p.canonicalize().ok())
-        .ok_or_else(|| format!("{name} was not found in PATH"))
+        }
+    }
+    Err(format!("required executable {name} is not installed"))
 }
 
 pub fn random_bytes(bytes: &mut [u8]) -> io::Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::io::Read;
-        std::fs::File::open("/dev/urandom")?.read_exact(bytes)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        getrandom::fill(bytes).map_err(|error| io::Error::other(error.to_string()))
-    }
+    getrandom::fill(bytes).map_err(|error| io::Error::other(error.to_string()))
 }
 
 pub fn private_directory(path: &Path) -> io::Result<()> {
@@ -160,223 +160,15 @@ pub fn private_directory(path: &Path) -> io::Result<()> {
     }
     #[cfg(windows)]
     {
-        std::fs::create_dir(path)
-    }
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-pub(crate) fn stop_unix_descendants(owner: libc::pid_t) {
-    // The owner is still unreaped. Include shell jobs in separate process groups.
-    let output = std::process::Command::new("/bin/ps")
-        .args(["-axo", "pid=,ppid="])
-        .output();
-    if let Ok(output) = output {
-        let rows: Vec<(i32, i32)> = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
-            })
-            .collect();
-        let mut owned = vec![owner];
-        for _ in 0..256 {
-            let old = owned.len();
-            for (pid, parent) in &rows {
-                if *pid > 1 && owned.contains(parent) && !owned.contains(pid) {
-                    owned.push(*pid);
-                }
-            }
-            if old == owned.len() {
-                break;
-            }
-        }
-        for pid in owned.into_iter().rev() {
-            // SAFETY: signal the observed child tree rooted at the still-owned leader.
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-            }
-        }
-    }
-    // SAFETY: negative owner addresses only the process group created for this child.
-    unsafe {
-        libc::kill(-owner, libc::SIGKILL);
+        windows::create_private_directory(path)
     }
 }
 
 #[cfg(windows)]
-pub(crate) struct WindowsJob(std::os::windows::io::OwnedHandle);
-
+#[path = "platform_windows.rs"]
+pub(crate) mod windows;
 #[cfg(windows)]
-pub(crate) fn resume_process(pid: u32) -> io::Result<()> {
-    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use windows_sys::Win32::{
-        Foundation::INVALID_HANDLE_VALUE,
-        System::{Diagnostics::ToolHelp::*, Threading::*},
-    };
-    // The child starts suspended so even a fast batch wrapper cannot launch
-    // descendants before it belongs to the kill-on-close job.
-    let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if raw == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    let snapshot = unsafe { OwnedHandle::from_raw_handle(raw) };
-    let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-    entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
-    let mut found = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) } != 0;
-    while found {
-        if entry.th32OwnerProcessID == pid {
-            let raw = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-            if raw.is_null() {
-                return Err(io::Error::last_os_error());
-            }
-            let thread = unsafe { OwnedHandle::from_raw_handle(raw) };
-            if unsafe { ResumeThread(thread.as_raw_handle()) } == u32::MAX {
-                return Err(io::Error::last_os_error());
-            }
-            return Ok(());
-        }
-        found = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) } != 0;
-    }
-    Err(io::Error::other(
-        "suspended child primary thread was not found",
-    ))
-}
-
-#[cfg(windows)]
-impl WindowsJob {
-    pub fn new() -> io::Result<Self> {
-        use std::os::windows::io::{AsRawHandle, FromRawHandle};
-        use windows_sys::Win32::System::JobObjects::*;
-        // SAFETY: null parameters create an unnamed job with the caller's security descriptor.
-        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let job = Self(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(handle) });
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        // SAFETY: the job and correctly sized limit structure remain live for this call.
-        if unsafe {
-            SetInformationJobObject(
-                job.0.as_raw_handle(),
-                JobObjectExtendedLimitInformation,
-                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-                std::mem::size_of_val(&limits) as u32,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(job)
-    }
-    pub fn assign(&self, process: std::os::windows::io::RawHandle) -> io::Result<()> {
-        use std::os::windows::io::AsRawHandle;
-        // SAFETY: both handles are borrowed live kernel objects.
-        if unsafe {
-            windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(
-                self.0.as_raw_handle(),
-                process,
-            )
-        } == 0
-        {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-    pub fn assign_pid(&self, pid: u32) -> io::Result<()> {
-        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-        use windows_sys::Win32::System::Threading::*;
-        // SAFETY: acquire only the access required to add our child to this job.
-        let handle = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
-        if handle.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let process = unsafe { OwnedHandle::from_raw_handle(handle) };
-        self.assign(process.as_raw_handle())
-    }
-    pub fn terminate(&self) {
-        use std::os::windows::io::AsRawHandle;
-        // SAFETY: this unnamed job only owns children started by this client.
-        unsafe {
-            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0.as_raw_handle(), 1);
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) struct DirectoryLock {
-    #[cfg(unix)]
-    _file: std::fs::File,
-    #[cfg(windows)]
-    handle: std::os::windows::io::OwnedHandle,
-    // Windows mutex ownership belongs to a thread, so guards must stay on it.
-    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn lock_directory(path: &Path) -> Result<DirectoryLock, String> {
-    #[cfg(unix)]
-    {
-        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        loop {
-            match lock_file(&file, true) {
-                Ok(()) => break,
-                Err(error)
-                    if error.kind() == io::ErrorKind::WouldBlock
-                        && std::time::Instant::now() < deadline =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                Err(error) => return Err(error.to_string()),
-            }
-        }
-        Ok(DirectoryLock {
-            _file: file,
-            _thread: std::marker::PhantomData,
-        })
-    }
-    #[cfg(windows)]
-    {
-        use sha2::{Digest, Sha256};
-        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-        use windows_sys::Win32::{
-            Foundation::{WAIT_ABANDONED, WAIT_OBJECT_0},
-            System::Threading::*,
-        };
-        let digest = Sha256::digest(path.to_string_lossy().to_lowercase().as_bytes());
-        let name: Vec<u16> = format!("Local\\ssmcp-workspace-{digest:x}")
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        // SAFETY: name is NUL-terminated; default security limits this to the caller's session.
-        let raw = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-        if raw.is_null() {
-            return Err(io::Error::last_os_error().to_string());
-        }
-        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
-        let result = unsafe { WaitForSingleObject(handle.as_raw_handle(), 500) };
-        if result != WAIT_OBJECT_0 && result != WAIT_ABANDONED {
-            return Err("workspace directory is busy; retry the file operation".into());
-        }
-        Ok(DirectoryLock {
-            handle,
-            _thread: std::marker::PhantomData,
-        })
-    }
-}
-
-#[cfg(windows)]
-impl Drop for DirectoryLock {
-    fn drop(&mut self) {
-        use std::os::windows::io::AsRawHandle;
-        // SAFETY: this guard acquired the mutex on the current thread.
-        unsafe {
-            windows_sys::Win32::System::Threading::ReleaseMutex(self.handle.as_raw_handle());
-        }
-    }
-}
+pub(crate) use windows::{WindowsJob, resume_process};
 
 pub(crate) fn lock_file(file: &std::fs::File, nonblocking: bool) -> io::Result<()> {
     #[cfg(unix)]
@@ -401,40 +193,37 @@ pub(crate) fn lock_file(file: &std::fs::File, nonblocking: bool) -> io::Result<(
     }
     #[cfg(windows)]
     {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::{
-            Storage::FileSystem::*,
-            System::IO::{OVERLAPPED, OVERLAPPED_0, OVERLAPPED_0_0},
-        };
-        // Reserve a byte beyond any artifact's range. Windows byte-range locks
-        // are mandatory; locking data bytes would block readers of live output.
-        let mut overlapped = OVERLAPPED {
-            Anonymous: OVERLAPPED_0 {
-                Anonymous: OVERLAPPED_0_0 {
-                    Offset: u32::MAX - 1,
-                    OffsetHigh: u32::MAX,
-                },
-            },
-            ..OVERLAPPED::default()
-        };
-        let flags = LOCKFILE_EXCLUSIVE_LOCK
-            | if nonblocking {
-                LOCKFILE_FAIL_IMMEDIATELY
-            } else {
-                0
-            };
-        // SAFETY: this synchronous file handle and writable OVERLAPPED are live for the call.
-        if unsafe { LockFileEx(file.as_raw_handle(), flags, 0, 1, 0, &mut overlapped) } == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+        windows::lock(file, nonblocking)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_keeps_shim_name_and_resolves_relative_path_entries() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let mut random = [0u8; 16];
+        random_bytes(&mut random).unwrap();
+        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let directory = std::env::temp_dir().join(format!("ssmcp-shim-test-{suffix}"));
+        let bin = directory.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let dispatcher = bin.join("dispatcher");
+        std::fs::write(&dispatcher, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&dispatcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let shim = bin.join("agent-shim");
+        symlink("dispatcher", &shim).unwrap();
+
+        let found = executable_in("agent-shim", std::ffi::OsStr::new("bin"), &directory).unwrap();
+        assert_eq!(found, shim);
+        assert_ne!(found, found.canonicalize().unwrap());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn machine_defaults_and_entropy_are_available() {
         assert!(default_shell().is_absolute());

@@ -94,6 +94,10 @@ def catalog(harness, mode):
                   f"{mode}: all discovered tools retain JSON schemas")
     harness.check(harness.call("terminal.status")["running"], f"{mode}: the shell stays available")
     counts = harness.call("ssmcp.harnesses.list")["harnesses"]
+    harness.check(counts == {
+        name: sum(tool.startswith(f"{name}.") for tool in names)
+        for name in ("codex", "cc", "pi", "opencode")
+    }, f"{mode}: harness counts match the complete registered catalog")
     expected = set(MODES[1:]) if mode == "all" else ({mode} if mode != "shell" else set())
     harness.check({name for name, count in counts.items() if count} == expected,
                   f"{mode}: automatic discovery reports exactly the installed fixture harnesses")
@@ -443,8 +447,10 @@ def run(harness):
         backend = FIXTURES / fixture if fixture else None
         arguments = ("--fixture-dir", directory) if mode in ("cc", "opencode") else ()
         label = f"client-{mode}"
-        client, credentials = harness.start_client(label, mode=mode, backend=backend,
-                                                   backend_args=arguments, name=f"{mode}-fixture", cwd=directory)
+        client, credentials = harness.start_client(
+            label, harness=mode if fixture else None, fixture=backend,
+            fixture_args=arguments, name=f"{mode}-fixture", cwd=directory,
+        )
         harness.client = client
         harness.client_id = credentials["client_id"]
         harness.check(credentials.get("type") == "shell"

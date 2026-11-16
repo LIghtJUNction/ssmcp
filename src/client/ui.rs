@@ -90,7 +90,11 @@ impl Ui {
         let path = explicit.map(Path::to_path_buf).or(env_path).or_else(|| {
             std::env::var_os("XDG_CONFIG_HOME")
                 .map(PathBuf::from)
-                .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
+                        .map(|p| PathBuf::from(p).join(".config"))
+                })
                 .map(|p| p.join("ssmcp/config.toml"))
         });
         let Some(path) = path else {

@@ -73,35 +73,46 @@ def emit(result):
     return result
 
 
-def validate_tag(tag, root=None):
+def event_mode(event_name, ref, event):
+    """Only a pushed version tag or an explicit main dispatch can publish."""
+    if event_name == "push" and ref.startswith("refs/tags/v"):
+        return ref.removeprefix("refs/tags/"), False
+    if event_name == "workflow_dispatch" and ref == "refs/heads/main":
+        tag = (event.get("inputs") or {}).get("tag", "")
+        if not isinstance(tag, str):
+            raise ValueError("the release tag input must be a string")
+        return tag or None, not bool(tag)
+    if ref == "refs/heads/release-check":
+        if event_name == "push" and not event.get("created", False):
+            return None, True
+        if event_name == "create" and event.get("ref_type") == "branch" and event.get("ref") == "release-check":
+            return None, True
+    raise ValueError("this event is not an authorized release or main preflight trigger")
+
+
+def validate_tag(tag, root=None, *, build_only=False):
     root = root or ROOT
-    actual = validate_package(tag, root)
+    if build_only and tag is not None:
+        raise ValueError("build-only validation cannot select a release tag")
+    actual = validate_package("v" + version(root) if build_only else tag or "", root)
     sha = command("git", "rev-parse", "HEAD", cwd=root)
-    if command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}", cwd=root) != sha:
+    if not build_only and command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}", cwd=root) != sha:
         raise ValueError("the checkout must be the requested tag's commit")
     subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"],
                    cwd=root, check=True)
     subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
-    result = {"tag": tag, "version": actual, "sha": sha,
-              "prerelease": str("-" in actual).lower(), "publish": "true", "create_tag": "false"}
-    return emit(result)
+    return emit({"tag": tag or "", "version": actual, "sha": sha,
+                 "prerelease": str("-" in actual).lower(),
+                 "publish": str(not build_only).lower(), "create_tag": "false"})
 
 
 def prepare(tag=None, automatic=False, root=None):
-    root = root or ROOT
-    if not automatic:
-        if tag is None:
-            raise ValueError("provide an existing release tag or --auto")
-        return validate_tag(tag, root)
-    actual = version(root)
-    tag = "v" + actual
-    validate_package(tag, root)
-    sha = command("git", "rev-parse", "HEAD", cwd=root)
-    subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"], cwd=root, check=True)
-    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
-    exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", "refs/tags/" + tag], cwd=root).returncode == 0
-    return emit({"tag": tag, "version": actual, "sha": sha, "prerelease": str("-" in actual).lower(),
-                 "publish": str(not exists).lower(), "create_tag": "true"})
+    """Legacy prepare --auto now performs a main preflight without publishing."""
+    if automatic:
+        return validate_tag(tag, root, build_only=True)
+    if tag is None:
+        raise ValueError("provide an existing release tag or --auto for preflight")
+    return validate_tag(tag, root)
 
 
 def create_tag(tag, sha, root=None):
@@ -116,10 +127,11 @@ def create_tag(tag, sha, root=None):
     if exists:
         if command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}", cwd=root) != sha:
             raise ValueError("release tag already points at another commit")
-        return
-    command("git", "config", "user.name", "github-actions[bot]", cwd=root)
-    command("git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com", cwd=root)
-    command("git", "tag", "-a", tag, "-m", "ssmcp " + tag, cwd=root)
+    else:
+        command("git", "config", "user.name", "github-actions[bot]", cwd=root)
+        command("git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com", cwd=root)
+        command("git", "tag", "-a", tag, "-m", "ssmcp " + tag, cwd=root)
+    # Retry a tag whose earlier push failed; an existing remote tag is never forced.
     command("git", "push", "origin", "refs/tags/" + tag, cwd=root)
 
 
@@ -282,7 +294,7 @@ def publish(root=None):
         return
     release_version = version(root)
     checksum = digest(root / "target/package" / f"ssmcp-{release_version}.crate")
-    # The workflow verified this package before creating its release tag.
+    # The workflow already verified this source package with cargo publish --dry-run.
     subprocess.run(["cargo", "publish", "--locked", "--no-verify"], cwd=root, check=True)
     for _ in range(18):
         existing = registry_checksum(release_version)
@@ -310,8 +322,9 @@ def release(tag, root=None):
         with tempfile.TemporaryDirectory(prefix="ssmcp-notes-") as temporary:
             notes = Path(temporary) / "notes.md"
             notes.write_text(
-                f"Install from crates.io with `cargo install ssmcp --version {version(root)} --locked --bin ssmcp`, "
-                "or use the attached installers.\n\n"
+                "Download an archive or use the attached installers. The separate `publish_crates` "
+                "job reports crates.io publication status; after that job succeeds, install with "
+                f"`cargo install ssmcp --version {version(root)} --locked --bin ssmcp`.\n\n"
                 "Linux / macOS: `curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh`\n\n"
                 "Windows PowerShell: `irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex`\n\n"
                 "Linux archives include `ssmcp` and `ssmcpd`. macOS and Windows archives include the "
@@ -361,12 +374,17 @@ def main():
     commands.add_parser("version")
     prepare_parser = commands.add_parser("prepare")
     prepare_parser.add_argument("tag", nargs="?")
-    prepare_parser.add_argument("--auto", action="store_true")
+    prepare_parser.add_argument("--auto", action="store_true",
+                                help="legacy main preflight alias; never creates a tag or publishes")
     tag_parser = commands.add_parser("tag")
     tag_parser.add_argument("tag")
     tag_parser.add_argument("sha")
     commands.add_parser("bump").add_argument("level", choices=["patch", "minor", "major"])
-    commands.add_parser("validate").add_argument("--tag", required=True)
+    validate_parser = commands.add_parser("validate")
+    validation_mode = validate_parser.add_mutually_exclusive_group(required=True)
+    validation_mode.add_argument("--tag")
+    validation_mode.add_argument("--build-only", action="store_true")
+    validation_mode.add_argument("--event", action="store_true")
     commands.add_parser("package").add_argument("--target", required=True, choices=TARGETS)
     commands.add_parser("pack").add_argument("target", choices=TARGETS)
     commands.add_parser("checksums")
@@ -384,7 +402,13 @@ def main():
     elif args.command == "bump":
         bump(args.level)
     elif args.command == "validate":
-        validate_tag(args.tag)
+        if args.event:
+            with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
+                event = json.load(stream)
+            tag, build_only = event_mode(os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"], event)
+            validate_tag(tag, build_only=build_only)
+        else:
+            validate_tag(args.tag, build_only=args.build_only)
     elif args.command in {"package", "pack"}:
         package(args.target)
     elif args.command == "checksums":

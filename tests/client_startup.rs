@@ -233,7 +233,13 @@ async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
 #[tokio::test]
 async fn an_unavailable_optional_harness_catalog_keeps_shell_tools_online() {
     let fixture = Fixture::new();
-    let output = fixture.run("catalog-error-healthy", "discovery").await;
+    let output = fixture
+        .run_with_args(
+            "catalog-error-healthy",
+            "discovery",
+            &["--log-format", "jsonl", "--no-color"],
+        )
+        .await;
     assert!(
         output.status.success(),
         "{}",
@@ -251,7 +257,19 @@ async fn an_unavailable_optional_harness_catalog_keeps_shell_tools_online() {
             .iter()
             .all(|tool| !tool["name"].as_str().unwrap().starts_with("cc."))
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("fixture catalog unavailable"));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let events: Vec<Value> = stderr
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every stderr line is JSON"))
+        .collect();
+    assert!(events.iter().any(|event| {
+        event["type"] == "ssmcp.status"
+            && event["level"] == "Warning"
+            && event["message"].as_str().is_some_and(|message| {
+                message.contains("fixture catalog unavailable")
+                    && message.contains("shell remains available")
+            })
+    }));
     fixture.assert_native_stopped().await;
 }
 

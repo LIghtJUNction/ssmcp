@@ -649,6 +649,7 @@ fn default_bytes() -> usize {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::Write;
 
     fn completed_job(store: &Arc<OutputStore>) -> Arc<Job> {
         let id = format!("test-{}", NEXT_JOB.fetch_add(1, Ordering::Relaxed));
@@ -743,22 +744,67 @@ mod tests {
             .to_owned()
     }
 
-    #[cfg(unix)]
+    const OUTPUT_START: &str = "SSMCP_SHELL_FIXTURE_OUTPUT\n";
+
+    async fn start_fixture(shell: &Shell, fixture: &str, timeout_ms: u64) -> String {
+        shell
+            .call(
+                "ssmcp.exec.start",
+                json!({
+                    "command":[std::env::current_exe().unwrap(),"--exact",
+                        "backend::shell::tests::fixture_process","--nocapture"],
+                    "env":{"SSMCP_SHELL_TEST_FIXTURE":fixture},
+                    "timeout_ms":timeout_ms
+                }),
+            )
+            .await
+            .unwrap()["job_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn output(value: &Value) -> &str {
+        value["stdout"]
+            .as_str()
+            .unwrap()
+            .split_once(OUTPUT_START)
+            .expect("the native command did not emit its output boundary")
+            .1
+    }
+
+    // Re-exec the Rust test binary so the same process lifecycle regressions run
+    // on Windows without relying on sh, sleep, printf or an external interpreter.
+    #[test]
+    fn fixture_process() {
+        let Ok(fixture) = std::env::var("SSMCP_SHELL_TEST_FIXTURE") else {
+            return;
+        };
+        let (stdout, stderr) = match fixture.as_str() {
+            "alpha" | "beta" => {
+                std::thread::sleep(Duration::from_millis(250));
+                (fixture.clone(), format!("{fixture}-err"))
+            }
+            "retained" | "next" => (fixture, String::new()),
+            "wait" => {
+                std::thread::sleep(Duration::from_secs(60));
+                (String::new(), String::new())
+            }
+            _ => panic!("unknown native command fixture"),
+        };
+        print!("{OUTPUT_START}{stdout}");
+        eprint!("{stderr}");
+        std::io::stdout().flush().unwrap();
+        std::io::stderr().flush().unwrap();
+        // Avoid libtest's trailing report so bytes after the boundary are exact.
+        std::process::exit(0);
+    }
+
     #[tokio::test]
     async fn independent_jobs_run_concurrently_and_keep_streams_separate() {
         let shell = Shell::new();
-        let a = start(
-            &shell,
-            &["sh", "-c", "sleep 0.25; printf alpha; printf alpha-err >&2"],
-            5000,
-        )
-        .await;
-        let b = start(
-            &shell,
-            &["sh", "-c", "sleep 0.25; printf beta; printf beta-err >&2"],
-            5000,
-        )
-        .await;
+        let a = start_fixture(&shell, "alpha", 5000).await;
+        let b = start_fixture(&shell, "beta", 5000).await;
         let status = shell
             .call("ssmcp.exec.status", json!({"job_id":a}))
             .await
@@ -780,9 +826,9 @@ mod tests {
             .call("ssmcp.exec.read", json!({"job_id":b}))
             .await
             .unwrap();
-        assert_eq!(first["stdout"], "alpha");
+        assert_eq!(output(&first), "alpha");
         assert_eq!(first["stderr"], "alpha-err");
-        assert_eq!(second["stdout"], "beta");
+        assert_eq!(output(&second), "beta");
         assert_eq!(second["stderr"], "beta-err");
         assert_eq!(
             shell
@@ -794,12 +840,11 @@ mod tests {
         shell.shutdown().await;
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn jobs_support_timeout_cancellation_and_client_isolation() {
         let one = Shell::new();
         let two = Shell::new();
-        let timeout_job = start(&one, &["sh", "-c", "sleep 5"], 100).await;
+        let timeout_job = start_fixture(&one, "wait", 100).await;
         let timed = one
             .call(
                 "ssmcp.exec.wait",
@@ -808,7 +853,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(timed["timed_out"], true);
-        let cancel_job = start(&one, &["sh", "-c", "sleep 5"], 5000).await;
+        let cancel_job = start_fixture(&one, "wait", 5000).await;
         assert!(
             two.call("ssmcp.exec.status", json!({"job_id":cancel_job}))
                 .await

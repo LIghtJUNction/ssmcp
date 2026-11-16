@@ -85,50 +85,25 @@ impl Backend {
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         let mut tools = terminal_tools().as_array().unwrap().clone();
         tools.extend(shell::Shell::tools());
-        if let Some(driver) = &self.codex {
-            append_catalog(&mut tools, "codex", driver.tools().await);
-        }
-        if let Some(driver) = &self.claude {
-            append_catalog(&mut tools, "claude", driver.tools().await);
-        }
-        if let Some(driver) = &self.pi {
-            append_catalog(&mut tools, "pi", driver.tools().await);
-        }
-        if let Some(driver) = &self.opencode {
-            append_catalog(&mut tools, "opencode", driver.tools().await);
-        }
         tools.push(json!({
             "name":"ssmcp.harnesses.list",
-            "description":"List installed coding harnesses and the number of native tools registered for each.",
-            "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
+            "description":"List coding harnesses detected on this client and the number of native tools registered for each.",
+            "inputSchema":{"type":"object","additionalProperties":false},
             "annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}
         }));
-        if tools.len() > 8192 {
-            return Err("combined native tool catalog exceeds 8192 tools".into());
+        if let Some(driver) = &self.codex {
+            append_harness_tools(&mut tools, "Codex", driver.tools()).await;
         }
-        let mut names = std::collections::HashSet::new();
-        for tool in &tools {
-            let name = tool
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or("native tool has no name")?;
-            if name.is_empty()
-                || name.len() > 128
-                || !name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-            {
-                return Err(format!("native tool name is not MCP compatible: {name:?}"));
-            }
-            if !names.insert(name) {
-                return Err(format!(
-                    "installed harnesses expose a duplicate tool name: {name}"
-                ));
-            }
-            if !tool.get("inputSchema").is_some_and(Value::is_object) {
-                return Err(format!("native tool {name} has no input schema"));
-            }
+        if let Some(driver) = &self.claude {
+            append_harness_tools(&mut tools, "Claude Code", driver.tools()).await;
         }
+        if let Some(driver) = &self.pi {
+            append_harness_tools(&mut tools, "Pi", driver.tools()).await;
+        }
+        if let Some(driver) = &self.opencode {
+            append_harness_tools(&mut tools, "OpenCode", driver.tools()).await;
+        }
+        validate_catalog(&tools)?;
         Ok(tools)
     }
 
@@ -260,45 +235,69 @@ impl Backend {
     }
 }
 
-// Optional harness discovery must not take the shell or the other harnesses
-// offline. Validate the entire incoming catalog before extending the live view.
-fn append_catalog(tools: &mut Vec<Value>, harness: &str, catalog: Result<Vec<Value>, String>) {
-    let catalog = catalog.and_then(|catalog| {
-        if tools.len() + catalog.len() >= 8192 {
-            return Err("combined tool catalog exceeds 8192 tools".into());
-        }
-        let mut names: std::collections::HashSet<_> = tools
-            .iter()
-            .filter_map(|tool| tool["name"].as_str())
-            .collect();
-        for tool in &catalog {
-            let name = tool["name"].as_str().ok_or("tool has no name")?;
-            if name.is_empty()
-                || name.len() > 128
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
-                || !tool["inputSchema"].is_object()
-            {
-                return Err(format!("invalid tool schema: {name:?}"));
-            }
-            if !names.insert(name) {
-                return Err(format!("duplicate tool name: {name}"));
-            }
-        }
-        drop(names);
-        Ok(catalog)
-    });
-    match catalog {
-        Ok(catalog) => tools.extend(catalog),
-        Err(error) => crate::client::render::status(
-            "harness",
-            "Warning",
-            &format!(
-                "{harness} tool discovery failed: {error}; shell and other harnesses remain available"
-            ),
-        ),
+fn validate_catalog(tools: &[Value]) -> Result<(), String> {
+    if tools.len() > 8192 {
+        return Err("combined native tool catalog exceeds 8192 tools".into());
     }
+    let mut names = std::collections::HashSet::new();
+    for tool in tools {
+        let name = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or("native tool has no name")?;
+        if name.is_empty()
+            || name.len() > 128
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+        {
+            return Err(format!("native tool name is not MCP compatible: {name:?}"));
+        }
+        if !names.insert(name) {
+            return Err(format!(
+                "installed harnesses expose a duplicate tool name: {name}"
+            ));
+        }
+        if !tool.get("inputSchema").is_some_and(Value::is_object) {
+            return Err(format!("native tool {name} has no input schema"));
+        }
+        if tool.to_string().len() > crate::wire::MAX_FRAME / 2 {
+            return Err(format!(
+                "native tool {name} exceeds the transport schema limit"
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn append_harness_tools(
+    tools: &mut Vec<Value>,
+    harness: &str,
+    catalog: impl std::future::Future<Output = Result<Vec<Value>, String>>,
+) {
+    let result = match tokio::time::timeout(std::time::Duration::from_secs(15), catalog).await {
+        Ok(result) => result,
+        Err(_) => Err("tool discovery timed out".into()),
+    };
+    let old_len = tools.len();
+    let failure = match result {
+        Ok(catalog) => {
+            tools.extend(catalog);
+            validate_catalog(tools).err()
+        }
+        Err(error) => Some(error),
+    };
+    if let Some(error) = failure {
+        tools.truncate(old_len);
+        harness_status(
+            "Warning",
+            &format!("{harness} tools unavailable: {error}; shell remains available"),
+        );
+    }
+}
+
+pub(crate) fn harness_status(level: &str, message: &str) {
+    crate::client::render::status("harness", level, message);
 }
 
 /// Convert a shell capability into a validated private wire operation.
@@ -411,6 +410,30 @@ pub fn result(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn unavailable_harness_preserves_shell_catalog() {
+        let mut tools = terminal_tools().as_array().unwrap().clone();
+        let original = tools.clone();
+        append_harness_tools(&mut tools, "fixture", async { Err("peer closed".into()) }).await;
+        assert_eq!(tools, original);
+        append_harness_tools(&mut tools, "fixture", async {
+            Ok(vec![
+                json!({"name":"terminal.read","inputSchema":{"type":"object"}}),
+            ])
+        })
+        .await;
+        assert_eq!(
+            tools, original,
+            "a collision must reject only the optional catalogue"
+        );
+        append_harness_tools(&mut tools, "fixture", async {
+            Ok(vec![
+                json!({"name":"fixture.read","inputSchema":{"type":"object"}}),
+            ])
+        })
+        .await;
+        assert_eq!(tools.len(), original.len() + 1);
+    }
     #[test]
     fn shell_capabilities_use_the_same_validated_dispatch_inside_code_mode() {
         assert!(matches!(

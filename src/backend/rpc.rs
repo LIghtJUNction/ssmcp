@@ -478,8 +478,23 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_retains_native_stdin_until_descendant_cleanup_can_start() {
-        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
-        command.args(["-c", "import sys; sys.stdin.read()"]);
+        // Both commands block on stdin without emitting protocol bytes. Use
+        // native shell builtins so release tests need no Python installation.
+        #[cfg(windows)]
+        let command = {
+            let mut command = Command::new(crate::platform::default_shell());
+            command.args(["/d", "/q", "/c", "set /p SSMCP_TEST_STDIN="]);
+            command
+        };
+        #[cfg(unix)]
+        let command = {
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", "read ssmcp_test_stdin"])
+                .env("ENV", "/dev/null")
+                .env("BASH_ENV", "/dev/null");
+            command
+        };
         let peer = Peer::spawn(command, "cleanup-fixture", Dialect::JsonRpc)
             .await
             .unwrap();
