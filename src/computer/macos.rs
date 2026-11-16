@@ -692,7 +692,6 @@ fn keyboard_event(
 
 /// Only numeric state crosses an await. Drop retries releases synchronously; no
 /// helper thread or detached task can continue injecting input after cancellation.
-#[derive(Default)]
 struct InputRelease {
     mouse: Option<(Button, Point, u8)>,
     key: Option<u16>,
@@ -758,7 +757,9 @@ async fn click(value: Click) -> Result<(), String> {
     for count in 1..=value.count {
         let mut release = InputRelease {
             mouse: Some((value.button, point, count)),
-            ..InputRelease::default()
+            key: None,
+            modifiers: Vec::new(),
+            base_flags: 0,
         };
         mouse_event(mouse_kind(value.button, true), value.button, point, count)?;
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -787,7 +788,9 @@ async fn drag(value: Drag) -> Result<(), String> {
     move_pointer(start)?;
     let mut release = InputRelease {
         mouse: Some((value.button, start, 1)),
-        ..InputRelease::default()
+        key: None,
+        modifiers: Vec::new(),
+        base_flags: 0,
     };
     mouse_event(mouse_kind(value.button, true), value.button, start, 1)?;
     let kind = match value.button {
@@ -980,8 +983,10 @@ async fn key(value: Key) -> Result<(), String> {
         );
     }
     let mut release = InputRelease {
+        mouse: None,
+        key: None,
+        modifiers: Vec::new(),
         base_flags: unsafe { CGEventSourceFlagsState(0) },
-        ..InputRelease::default()
     };
     for (modifier_code, mask) in requested {
         if modifier_code == code || unsafe { CGEventSourceKeyState(0, modifier_code) } {
@@ -1034,8 +1039,10 @@ async fn type_text(value: TypeText) -> Result<Value, String> {
                 );
             }
             let mut release = InputRelease {
+                mouse: None,
                 key: Some(0),
-                ..InputRelease::default()
+                modifiers: Vec::new(),
+                base_flags: 0,
             };
             keyboard_event(0, true, 0, Some(&chunk))?;
             keyboard_event(0, false, 0, Some(&chunk))?;
