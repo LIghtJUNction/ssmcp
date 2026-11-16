@@ -44,6 +44,7 @@ jobs:
           cargo test --locked --lib code_mode::tests -- --include-ignored
           cargo test --locked --test two_tools -- --include-ignored
           cargo test --locked --test workspace_bridge -- --ignored --test-threads=1
+          cargo test --locked --test context_helpers -- --ignored --test-threads=1
       - name: Exercise runtime under installed service restrictions
         run: |
           runtime_test="$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"

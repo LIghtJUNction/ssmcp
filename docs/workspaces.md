@@ -55,6 +55,8 @@ return await fs.write(workspaceId, {
 
 写入先准备临时文件，再原子提交。默认拒绝覆盖，显式 `overwrite:true` 才替换已有普通文件。`fs.mkdir(id,{path,parents:true})` 创建目录，`fs.stat(id,{path})` 读取元数据。文件读写仅支持普通文件；路径穿越和符号链接路径被拒绝；这些限制只描述工作区内置方法，所选原生 Shell 或 Agent 仍遵循它自己的权限。
 
+原生 UTF-8 文件读写、技能摘要和 AGENTS.md 视图参见 [上下文与文本接口](context.md)。
+
 ## 目录同步
 
 两端需要通过系统包管理器安装 `rsync`。ssmcp 使用系统 rsync 的协议和增量传输；协议字节沿现有客户端连接转发，不经过模型文本。

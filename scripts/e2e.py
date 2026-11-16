@@ -39,6 +39,9 @@ SHELL_TOOLS = frozenset({
 })
 BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
+    "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text",
+    "ssmcp.context.roots", "ssmcp.skills.list", "ssmcp.skills.read", "ssmcp.skills.view",
+    "ssmcp.agents.list", "ssmcp.agents.read", "ssmcp.agents.resolve",
     "ssmcp.net.listen", "ssmcp.net.accept", "ssmcp.net.connect", "ssmcp.net.read",
     "ssmcp.net.write", "ssmcp.net.shutdown", "ssmcp.net.close", "ssmcp.net.list",
     "ssmcp.rsync.start", "ssmcp.rsync.read", "ssmcp.rsync.write",
@@ -227,6 +230,73 @@ class Harness:
                    and result["stat"]["size"] == len(payload)
                    and (directory / relative).read_bytes() == payload,
                    f"{label}: fs.mkdir/write/read/stat preserve binary bytes through real SSH")
+
+        skill = "---\nname: ssh-skill\ndescription: Inspect files through SSH.\n---\nSKILL_BODY_ONLY_ON_READ\n"
+        text = "\ufeff原生文件🙂\r\nbefore\r\n"
+        code = r"""
+            const id = %s;
+            const initial = await fs.writeText(id, {
+                path:"workspace-check/text.txt", text:%s
+            });
+            const read = await fs.readText(id, {path:"workspace-check/text.txt"});
+            const edited = await fs.editText(id, {
+                path:"workspace-check/text.txt", old_text:"before", new_text:"after",
+                expected_sha256:read.sha256
+            });
+            let stale = false;
+            try {
+                await fs.editText(id, {
+                    path:"workspace-check/text.txt", old_text:"after", new_text:"stale",
+                    expected_sha256:read.sha256
+                });
+            } catch (_) { stale = true; }
+            const current = await fs.readText(id, {path:"workspace-check/text.txt"});
+            await fs.writeText(id, {path:"skills/ssh-skill/SKILL.md",text:%s,create_parents:true});
+            await fs.writeText(id, {path:"workspace-check/AGENTS.md",text:"Parent rule.\n"});
+            await fs.writeText(id, {path:"workspace-check/nested/agents.md",text:"Nested rule.\n"});
+            const roots = await context.roots(id);
+            const index = await skills.list(id);
+            const view = await skills.view(id);
+            const full = await skills.read(id, {path:"skills/ssh-skill/SKILL.md"});
+            const rules = await agents.resolve(id, {path:"workspace-check/nested/new.rs"});
+            const instruction = await agents.read(id, {path:"workspace-check/AGENTS.md"});
+            const skillResource = await resources.read("ssmcp://clients/"+id+"/skills?root=workspace");
+            const ruleResource = await resources.read("ssmcp://clients/"+id+"/agents?path=workspace-check%%2Fnested%%2Fnew.rs");
+            return {initial,read,edited,current,stale,roots,index,view,full,rules,instruction,
+                    skillResource:JSON.parse(skillResource.contents[0].text),
+                    ruleResource:JSON.parse(ruleResource.contents[0].text)};
+        """ % (
+            json.dumps(client_id or self.client_id), json.dumps(text), json.dumps(skill),
+        )
+        result = self.public_call("code_mode", {"code": code})["result"]
+        self.check(result["read"]["text"] == text
+                   and result["read"]["sha256"] == hashlib.sha256(text.encode()).hexdigest(),
+                   f"{label}: native UTF-8 read/write preserves BOM, Unicode and CRLF")
+        self.check(result["edited"]["replacements"] == 1 and result["stale"]
+                   and result["current"]["text"] == text.replace("before", "after")
+                   and (directory / "workspace-check/text.txt").read_bytes()
+                       == text.replace("before", "after").encode(),
+                   f"{label}: native text edit enforces SHA-256 preconditions through SSH")
+        self.check(result["roots"]["roots"][0]["id"] == "workspace"
+                   and result["roots"]["roots"][0]["path"] == str(directory.resolve()),
+                   f"{label}: context roots identify the actual SSH client directory")
+        summaries = result["index"]["skills"]
+        self.check(len(summaries) == 1 and summaries[0]["name"] == "ssh-skill"
+                   and "SKILL_BODY_ONLY_ON_READ" not in json.dumps(result["index"])
+                   and "Inspect files through SSH." in result["view"]["markdown"],
+                   f"{label}: skill discovery generates summaries without loading body text into the view")
+        self.check(result["full"]["content"] == skill
+                   and result["full"]["root"]["id"] == "workspace",
+                   f"{label}: complete skill contents are read on demand with provenance")
+        self.check([row["path"] for row in result["rules"]["files"]]
+                   == ["workspace-check/AGENTS.md", "workspace-check/nested/agents.md"]
+                   and [row["content"] for row in result["rules"]["files"]]
+                   == ["Parent rule.\n", "Nested rule.\n"]
+                   and result["instruction"]["content"] == "Parent rule.\n",
+                   f"{label}: AGENTS resolution keeps parent-to-target order and exact text")
+        self.check(result["skillResource"]["skills"][0]["name"] == "ssh-skill"
+                   and result["ruleResource"]["files"] == result["rules"]["files"],
+                   f"{label}: dynamic skill and instruction resources route across actual SSH")
 
     def read_until(self, pattern, *, cursor=0, timeout=5.0, client_id=None):
         deadline = time.monotonic() + timeout
