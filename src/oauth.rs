@@ -1702,7 +1702,7 @@ async fn security_headers(mut response: Response) -> Response {
         || "'self'".to_owned(),
         |origin| format!("'self' {}", origin.0),
     );
-    headers.insert("content-security-policy",HeaderValue::from_str(&format!("default-src 'none'; style-src 'sha256-{style}'; form-action {form}; base-uri 'none'; frame-ancestors 'none'")).unwrap());
+    headers.entry("content-security-policy").or_insert(HeaderValue::from_str(&format!("default-src 'none'; style-src 'sha256-{style}'; form-action {form}; base-uri 'none'; frame-ancestors 'none'")).unwrap());
     response
 }
 
@@ -1873,6 +1873,9 @@ async fn provider_callback(
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
+    if provider == "github" && crate::portal::is_callback(query.as_deref()) {
+        return crate::portal::callback(broker, query.as_deref().unwrap_or(""), headers).await;
+    }
     let outcome = async {
         if !broker.identities.enabled(&provider) {
             return Err(OAuthError::invalid("This identity provider is not configured"));

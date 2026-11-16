@@ -201,7 +201,11 @@ class Harness:
                 raise AssertionError("PTY text and base64 bytes disagree")
             output += result["text"]
             cursor = result["next_cursor"]
-            match = re.search(pattern, output)
+            # Modern readline emits bracketed-paste toggles and an extra CR
+            # before command output. Match visible text, while the byte-for-byte
+            # text/base64 assertion above still checks the actual transport.
+            visible = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output).replace("\n\r", "\n")
+            match = re.search(pattern, visible)
             if match:
                 return match, cursor, output
         raise AssertionError(f"Expected PTY output did not arrive: {pattern!r}; received {output[-2000:]!r}")
@@ -268,7 +272,7 @@ class Harness:
             "authenticationmethods publickey", "passwordauthentication no",
             "kbdinteractiveauthentication no", "disableforwarding yes", "permittty no",
         )
-        self.check(all(item in effective.splitlines() for item in required), "effective sshd config permits public keys only")
+        self.check(all(item in effective.lower().splitlines() for item in required), "effective sshd config permits public keys only")
         daemon = self.spawn("daemon", [
             str(self.binary_dir / "ssmcpd"), "serve", "--listen", f"127.0.0.1:{self.http_port}",
             "--public-url", PUBLIC_URL, "--socket", str(self.socket),

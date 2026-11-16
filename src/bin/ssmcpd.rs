@@ -31,6 +31,7 @@ Configuration:
   --config PATH selects a TOML file; SSMCP_CONFIG also selects a file.
   Otherwise /etc/ssmcpd/ssmcpd.toml is read when present.
   Precedence: command line > environment > TOML > built-in defaults.
+  Portal: [portal] state_dir (optional private persistent directory).
   Server settings: [server] listen, public_url, socket.
   Environment: SSMCP_LISTEN, SSMCP_PUBLIC_URL, SSMCP_SOCKET.
   GitHub: [auth.github] client_id, client_secret (private file mode 0600).
@@ -60,6 +61,7 @@ struct Config {
     oauth: OAuthConfig,
     github: Option<GitHubConfig>,
     client_registry: Option<PathBuf>,
+    portal_dir: Option<PathBuf>,
 }
 
 // Plain TOML configuration. Never derive Debug or include source text in errors:
@@ -70,6 +72,13 @@ struct FileConfig {
     server: ServerConfig,
     oauth: TokenConfig,
     auth: AuthConfig,
+    portal: PortalConfig,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PortalConfig {
+    state_dir: Option<PathBuf>,
 }
 
 #[derive(Default, Deserialize)]
@@ -167,6 +176,7 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
         }
     }
     config.client_registry = file.oauth.client_registry;
+    config.portal_dir = file.portal.state_dir;
     config.github = file.auth.github;
     Ok(())
 }
@@ -217,6 +227,7 @@ fn run() -> ssmcp::Result<()> {
         oauth: OAuthConfig::default(),
         github: None,
         client_registry: None,
+        portal_dir: None,
     };
     if mode == "serve" {
         let path = options
@@ -491,6 +502,12 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
             "ssmcpd: warning: OAuth client registry is memory-only; configure --client-registry for restart recovery"
         );
     }
+    if let Some(path) = config.portal_dir {
+        if !broker.identities.enabled("github") {
+            return Err("portal.state_dir requires the existing auth.github configuration".into());
+        }
+        broker.portal = ssmcp::portal::Portal::open(&path)?;
+    }
     let broker = Arc::new(broker);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let server = axum::serve(tcp, http::router(broker.clone()))
@@ -594,6 +611,7 @@ client_secret = "example-test-secret"
             oauth: OAuthConfig::default(),
             github: None,
             client_registry: None,
+            portal_dir: None,
         };
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
