@@ -31,6 +31,15 @@ await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
 Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
+Use computer.status(clientId) to inspect native desktop capabilities. computer.screenshot, \
+move/click/drag/key/type/scroll and windows/focus operate the client desktop. Browser control \
+uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/\
+evaluate/screenshot/close/disconnect. Neither provider invokes a model. Both convenience \
+namespaces return complete native MCP results; inspect isError and structuredContent. \
+Use image(await computer.screenshot(clientId)) or image(await browser.screenshot(clientId,\
+{target_id})) for visible MCP image content, then return only metadata. Do not print image \
+base64. Use screenshot image_to_desktop mapping for scaled desktop coordinates. Browser \
+element refs come from the current snapshot and expire on navigation or replacement.\n\n\
 Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
 command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
 incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \
@@ -300,6 +309,9 @@ fn limits() -> Value {
             "max_timeout_ms":code_mode::MAX_TIMEOUT_MS,
             "max_result_bytes":code_mode::MAX_RESULT_BYTES,
             "max_log_bytes":code_mode::MAX_LOG_BYTES,
+            "max_images":code_mode::MAX_IMAGES,
+            "max_image_encoded_bytes":code_mode::MAX_IMAGE_ENCODED_BYTES,
+            "image_output":"image(nativeResult) emits actual MCP image blocks; metadata stays separate",
             "max_native_calls":code_mode::MAX_CALLS,
             "max_native_inflight":code_mode::MAX_NATIVE_INFLIGHT,
             "max_concurrent_runs":code_mode::MAX_CONCURRENT,
@@ -343,6 +355,16 @@ fn limits() -> Value {
             "snapshot_size_unit":"serialized JSON bytes",
             "native_catalog_timeout_ms":5000,
             "refresh":"omit the cursor to discover current native tools"
+        },
+        "native_control":{
+            "computer_namespace":"ssmcp.computer.*",
+            "browser_namespace":"ssmcp.browser.*",
+            "model_invocation":false,
+            "desktop_coordinates":"global desktop logical coordinates; use screenshot image_to_desktop mapping",
+            "browser_transport":"native Chromium CDP, explicit loopback endpoints only",
+            "image_max_decoded_bytes":400*1024,
+            "image_formats":["image/png","image/jpeg"],
+            "lifetime":"client connection; owned browser processes stop on disconnect; attached browsers remain running"
         },
         "command_jobs":{
             "default_wait_ms":5000,

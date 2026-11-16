@@ -131,9 +131,9 @@ async fn endpoint(
         Ok(Action::List(arguments)) => {
             tool_result(list(&broker, &user, &authorization, arguments).await)
         }
-        Ok(Action::Code(arguments)) => {
-            tool_result(execute(broker, user, authorization, access_token, arguments).await)
-        }
+        Ok(Action::Code(arguments)) => crate::code_mode::tool_result(
+            execute(broker, user, authorization, access_token, arguments).await,
+        ),
         Ok(Action::ResourceList(cursor)) => {
             let result = resources::list(&broker, &user, &authorization, cursor.as_deref()).await;
             if broker.authenticate(&user, &access_token).await.is_none() {
@@ -616,7 +616,9 @@ fn usage() -> Value {
         "exec":"exec.run(clientId,{command:[...],cwd,wait_ms}) runs a command and collects output; exec.parallel(clientId,[{command:[...]},...],{concurrency:4}) settles bounded parallel runs. exec.start/list/status/read/wait/cancel/forget manage independent jobs. wait_ms only limits waiting; timeout_ms limits execution. Reuse job_id; commands survive code_mode completion.",
         "reload":"await reload(clientId) acknowledges a client restart from the updated installed executable. Stops background work; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.",
         "outputs":"Long command output spills to private files under /tmp/ssmcp on the client. outputs.read(clientId,{id,offset,max_bytes}), outputs.stat(clientId,{id}), outputs.cleanup(clientId) inspect artifacts by returned ID. Metadata includes SHA-256, bytes, lines, completeness and expiry; automatic retention is 24 hours.",
-        "output":"Use print(value) or console.log(value) for logs; return a JSON-serializable value.",
+        "output":"Use print(value) or console.log(value) for logs; return a JSON-serializable value. Use image(nativeScreenshotResult) to emit actual MCP image content without copying base64 into logs.",
+        "computer":"Native desktop control: computer.status/monitors/windows/focus/screenshot/move/click/drag/key/type/scroll(clientId, options). Read status and tool schemas for session-specific capabilities; screenshot coordinates describe the current display mapping.",
+        "browser":"Native Chromium control: browser.status/launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/evaluate/screenshot/close/disconnect(clientId, options). Uses client-owned CDP connections and installed system browsers; no model is invoked.",
         "fs":"fs.list/stat/read/write/mkdir and fs.readText/writeText/editText(clientId, options) provide rooted binary and UTF-8 file primitives.",
         "skills":"skills.list/read/view(clientId, options) discover metadata summaries or read full SKILL.md documents without invoking a model.",
         "agents":"agents.list/read/resolve(clientId, options) inspect instruction files and root-to-target precedence with explicit provenance.",
@@ -756,7 +758,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes exec.run and exec.parallel for bounded parallel commands; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS}
