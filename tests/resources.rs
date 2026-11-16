@@ -73,6 +73,7 @@ impl Server {
                 mode,
                 metadata: ClientMetadata {
                     name: "same-display-name".into(),
+                    title: None,
                     cwd: format!("/workspace/{}", mode.name()),
                     hostname: "fixture".into(),
                     allow: Vec::new(),

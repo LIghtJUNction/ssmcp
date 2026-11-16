@@ -66,6 +66,8 @@ jobs:
         run: python3 scripts/test_registry_restart.py --bin-dir target/debug
       - name: Exercise real SSH, OAuth, HTTP and PTY
         run: python3 scripts/e2e.py --bin-dir target/debug
+      - name: Exercise session title, reload and output artifacts
+        run: python3 scripts/e2e_session_features.py --bin-dir target/debug
       - name: Exercise all five backends through SSH and OAuth
         run: python3 scripts/e2e_agents.py --bin-dir target/debug
       - run: cargo build --locked --release

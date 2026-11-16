@@ -233,6 +233,26 @@ async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
 }
 
 #[tokio::test]
+async fn session_title_reaches_ssh_handshake_and_connection_output() {
+    let fixture = Fixture::new();
+    let title = "更新客户端 · 保留任务上下文";
+    let output = fixture
+        .run_with_args("healthy", "startup", &["--title", title])
+        .await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(ready["title"], title);
+    let hello: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("hello.json")).unwrap()).unwrap();
+    assert_eq!(hello["metadata"]["title"], title);
+    fixture.assert_native_stopped().await;
+}
+
+#[tokio::test]
 async fn github_allow_handshake_publishes_browser_auth_without_login_code() {
     let fixture = Fixture::new();
     let output = fixture

@@ -576,8 +576,12 @@ mod tests {
             const file = await fs.read('one',{path:'data.bin',offset:8});
             const mapping = await ports.list();
             const job = await jobs.wait('job',{wait_ms:100});
-            return {transfer,resource,file,mapping,job,alias:sync === rsync,
-                frozen:[fs,jobs,ports,resources].every(Object.isFrozen)};
+            const restarted = await reload('one');
+            const artifact = await outputs.read('one',{id:'abc',offset:42,max_bytes:128});
+            const metadata = await outputs.stat('one',{id:'abc'});
+            const cleaned = await outputs.cleanup('one');
+            return {transfer,resource,file,mapping,job,restarted,artifact,metadata,cleaned,alias:sync === rsync,
+                frozen:[fs,jobs,ports,resources,outputs].every(Object.isFrozen)};
         "#).await.unwrap();
         assert_eq!(output["result"]["transfer"]["name"], "sync");
         assert_eq!(
@@ -587,6 +591,11 @@ mod tests {
         assert_eq!(output["result"]["file"]["arguments"]["offset"], 8);
         assert_eq!(output["result"]["mapping"]["name"], "ports.list");
         assert_eq!(output["result"]["job"]["arguments"]["wait_ms"], 100);
+        assert_eq!(output["result"]["restarted"]["id"], "one");
+        assert_eq!(output["result"]["restarted"]["arguments"], json!({}));
+        assert_eq!(output["result"]["artifact"]["arguments"]["offset"], 42);
+        assert_eq!(output["result"]["metadata"]["arguments"]["id"], "abc");
+        assert_eq!(output["result"]["cleaned"]["arguments"], json!({}));
         assert_eq!(output["result"]["alias"], true);
         assert_eq!(output["result"]["frozen"], true);
         assert!(run_code("return await rsync([]);").await.is_err());

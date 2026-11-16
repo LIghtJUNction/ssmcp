@@ -23,6 +23,7 @@ test:
 	$(CARGO) test --locked --test context_helpers -- --ignored --test-threads=1
 	$(CARGO) build --locked
 	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
+	python3 scripts/e2e_session_features.py --bin-dir $(CARGO_TARGET_DIR)/debug
 	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug
 
 install:

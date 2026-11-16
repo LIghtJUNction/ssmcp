@@ -12,6 +12,7 @@ pub const MAX_WAIT_MS: u64 = 5_000;
 pub const MAX_INFLIGHT: usize = 16;
 pub const MAX_CLIENTS_PER_USER: usize = 128;
 pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
+pub const MAX_TITLE_BYTES: usize = 512;
 
 /// Metadata and access policy supplied by the SSH-authenticated local client.
 /// These fields never select or replace the authenticated SSH account.
@@ -19,6 +20,10 @@ pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 #[serde(deny_unknown_fields)]
 pub struct ClientMetadata {
     pub name: String,
+    /// Operator-supplied task context, never an authorization policy or command.
+    /// Omit when unset so clients without a title retain the legacy wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Absolute working directory at client startup; agent sessions may use other directories.
     pub cwd: String,
     pub hostname: String,
@@ -30,6 +35,7 @@ pub struct ClientMetadata {
 
 impl ClientMetadata {
     pub fn validate(&self) -> Result<(), String> {
+        validate_title(self.title.as_deref())?;
         for (label, value, limit) in [
             ("name", self.name.as_str(), 128),
             ("cwd", self.cwd.as_str(), 4096),
@@ -62,6 +68,19 @@ impl ClientMetadata {
     }
 }
 
+pub fn validate_title(title: Option<&str>) -> Result<(), String> {
+    if let Some(title) = title
+        && (title.trim().is_empty()
+            || title.len() > MAX_TITLE_BYTES
+            || title.chars().any(char::is_control))
+    {
+        return Err(format!(
+            "session title must be nonempty, contain no control characters, and be at most {MAX_TITLE_BYTES} UTF-8 bytes"
+        ));
+    }
+    Ok(())
+}
+
 /// Validate a GitHub principal and return its case-insensitive canonical form.
 pub fn canonical_github_principal(principal: &str) -> Result<String, String> {
     let (username, provider) = principal
@@ -89,6 +108,8 @@ pub fn canonical_github_principal(principal: &str) -> Result<String, String> {
 pub struct ClientInfo {
     pub id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(rename = "type")]
     pub mode: Mode,
     pub cwd: String,
@@ -218,6 +239,11 @@ pub enum Frame {
         id: u64,
         result: std::result::Result<Value, String>,
     },
+    /// Confirms that the broker received a successful client reload ACK.
+    /// Only sent for an explicitly requested, accepted reload operation.
+    ReloadCommit {
+        id: u64,
+    },
     Reject {
         message: String,
     },
@@ -298,6 +324,7 @@ mod tests {
                 mode: Mode::Shell,
                 metadata: ClientMetadata {
                     name: "dev".into(),
+                    title: None,
                     cwd: "/project".into(),
                     hostname: "localhost".into(),
                     allow: Vec::new(),
@@ -311,14 +338,15 @@ mod tests {
             Some(Frame::Hello {
                 version: VERSION,
                 mode: Mode::Shell,
-                metadata: ClientMetadata { name, cwd, hostname, allow },
-            }) if name == "dev" && cwd == "/project" && hostname == "localhost" && allow.is_empty()
+                metadata: ClientMetadata { name, title, cwd, hostname, allow },
+            }) if name == "dev" && title.is_none() && cwd == "/project" && hostname == "localhost" && allow.is_empty()
         ));
     }
     #[test]
     fn client_metadata_rejects_relative_paths_controls_and_unbounded_fields() {
         let valid = ClientMetadata {
             name: "My workstation".into(),
+            title: None,
             cwd: "/home/user/project".into(),
             hostname: "workstation".into(),
             allow: Vec::new(),
@@ -396,6 +424,7 @@ mod tests {
         });
         let mut metadata: ClientMetadata = serde_json::from_value(legacy.clone()).unwrap();
         assert!(metadata.allow.is_empty());
+        assert!(metadata.title.is_none());
         assert!(metadata.validate().is_ok());
         assert_eq!(serde_json::to_value(&metadata).unwrap(), legacy);
         metadata.allow = vec!["alice@github".into(), "bob@github".into()];
@@ -419,6 +448,38 @@ mod tests {
             .map(|i| format!("user-{i}@github"))
             .collect();
         assert!(metadata.validate().is_ok());
+    }
+
+    #[test]
+    fn session_titles_round_trip_and_are_validated_independently_of_client_names() {
+        let legacy = serde_json::json!({
+            "name":"dev", "cwd":"/project", "hostname":"workstation"
+        });
+        let mut metadata: ClientMetadata = serde_json::from_value(legacy).unwrap();
+        metadata.title = Some("排查构建失败 · #42".into());
+        assert!(metadata.validate().is_ok());
+        let value = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(value["title"], "排查构建失败 · #42");
+        assert_eq!(
+            serde_json::from_value::<ClientMetadata>(value).unwrap(),
+            metadata
+        );
+        for title in [
+            "".into(),
+            "   ".into(),
+            "bad\ttitle".into(),
+            "bad\0title".into(),
+            "界".repeat(171),
+        ] {
+            metadata.title = Some(title);
+            assert!(metadata.validate().is_err());
+        }
+        metadata.title = Some("界".repeat(170));
+        assert!(metadata.validate().is_ok());
+        metadata.title = Some("x".repeat(MAX_TITLE_BYTES));
+        assert!(metadata.validate().is_ok());
+        metadata.title = Some("x".repeat(MAX_TITLE_BYTES + 1));
+        assert!(metadata.validate().is_err());
     }
     #[test]
     fn rejects_unknown_fields_and_invalid_limits() {
