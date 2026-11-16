@@ -1049,8 +1049,52 @@ mod tests {
     }
     #[tokio::test]
     async fn spilled_output_remains_live_before_completion_and_is_not_replayed() {
+        use tokio::{io::AsyncWriteExt, net::TcpListener};
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
         let shell = Shell::new();
-        let id = py(&shell, "import sys,time; sys.stdout.write('line\\n'*600); sys.stdout.flush(); time.sleep(.2); print('AFTER_SPILL_MARKER',flush=True); time.sleep(1)").await;
+        let script = format!(
+            r#"import socket, sys
+with socket.create_connection(("127.0.0.1", {port}), timeout=5) as gate:
+    gate.settimeout(None)
+    sys.stdout.write("line\n" * 600)
+    sys.stdout.flush()
+    gate.recv(1)
+    print("AFTER_SPILL_MARKER", flush=True)
+    gate.recv(1)
+"#
+        );
+        let id = py(&shell, &script).await;
+        let (mut gate, _) = timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("output fixture did not connect to its parent")
+            .unwrap();
+        drop(listener);
+        // Observe the spill before permitting the marker, so pipe coalescing
+        // cannot accidentally turn this into a pre-spill delivery test.
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let state = shell
+                    .call("ssmcp.exec.status", json!({"job_id":id}))
+                    .await
+                    .unwrap();
+                if state["stdout"]["artifact"].is_object() {
+                    assert_eq!(state["running"], true);
+                    assert!(state["stdout"]["artifact"]["lines"].as_u64().unwrap() >= 600);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("output fixture did not spill before its marker");
+        timeout(Duration::from_secs(5), gate.write_all(b"\x01"))
+            .await
+            .expect("parent could not permit the post-spill marker")
+            .unwrap();
+        // Keep the child alive until the parent has observed live output.
+        // Dropping this owned socket on failure also releases the child's recv.
         let mut cursor = 0;
         let mut markers = 0;
         timeout(Duration::from_secs(5), async {
@@ -1089,10 +1133,17 @@ mod tests {
                 .unwrap()["running"],
             true
         );
-        shell
+        timeout(Duration::from_secs(5), gate.write_all(b"\x01"))
+            .await
+            .expect("parent could not release the output fixture")
+            .unwrap();
+        drop(gate);
+        let finished = shell
             .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
             .await
             .unwrap();
+        assert_eq!(finished["running"], false);
+        assert_eq!(finished["exit_code"], 0);
         shell
             .call("ssmcp.exec.read", json!({"job_id":id}))
             .await
