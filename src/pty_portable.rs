@@ -399,12 +399,18 @@ mod tests {
             .unwrap();
         terminal
             .perform(Operation::Write {
-                data: "echo SSMCP_PORTABLE_OK\r\n".into(),
+                // The expected marker is absent from the typed command, so
+                // terminal input echo cannot satisfy the execution assertion.
+                #[cfg(windows)]
+                data: "echo SSMCP_PORTABLE_^O^K\r\n".into(),
+                #[cfg(unix)]
+                data: "printf 'SSMCP_PORTABLE_%s\\n' 'OK'\n".into(),
             })
             .await
             .unwrap();
         let mut cursor = 0;
-        timeout(Duration::from_secs(10), async {
+        let mut output = String::new();
+        let executed = timeout(Duration::from_secs(10), async {
             loop {
                 let page = terminal
                     .perform(Operation::Read {
@@ -415,19 +421,17 @@ mod tests {
                     .await
                     .unwrap();
                 cursor = page["next_cursor"].as_u64().unwrap();
-                if page["text"]
-                    .as_str()
-                    .unwrap()
-                    .lines()
-                    .any(|line| line.trim() == "SSMCP_PORTABLE_OK")
-                {
+                output.push_str(page["text"].as_str().unwrap());
+                // ConPTY places VT cursor controls around text; reads can also
+                // split any marker across chunks. Neither changes its meaning.
+                if output.contains("SSMCP_PORTABLE_OK") {
                     break;
                 }
             }
         })
-        .await
-        .unwrap();
+        .await;
         terminal.shutdown().await;
+        assert!(executed.is_ok(), "native shell output: {output:?}");
         assert!(!terminal.running().await);
     }
 }

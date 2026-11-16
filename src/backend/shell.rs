@@ -205,7 +205,7 @@ impl Shell {
             tool(
                 "ssmcp.exec.events",
                 "Read bounded execution events also shown on the client terminal.",
-                super::events::schema(),
+                super::events::schema()["properties"].clone(),
                 &[],
                 true,
             ),
@@ -418,8 +418,8 @@ impl Shell {
                 biased;
                 _=cancel_rx.changed() => (None,true,false,None),
                 result=async {
-                    if args.timeout_ms==0 { Ok(process.child.wait().await) }
-                    else { timeout(Duration::from_millis(args.timeout_ms),process.child.wait()).await }
+                    if args.timeout_ms==0 { Ok(process.wait().await) }
+                    else { timeout(Duration::from_millis(args.timeout_ms),process.wait()).await }
                 } => match result {
                     Ok(Ok(status)) => (status.code(),false,false,None),
                     Ok(Err(error)) => (None,false,false,Some(error.to_string())),
