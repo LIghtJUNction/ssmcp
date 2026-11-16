@@ -1744,19 +1744,29 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let ws_url = format!("ws://{address}/devtools/browser/test");
         let response_url = ws_url.clone();
+        let (close_tx, close_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let _socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let (mut http, _) = listener.accept().await.unwrap();
-            let mut request = vec![0; 4096];
-            let n = http.read(&mut request).await.unwrap();
-            assert!(String::from_utf8_lossy(&request[..n]).contains("/json/version"));
-            let body = json!({"webSocketDebuggerUrl":response_url}).to_string();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            http.write_all(response.as_bytes()).await.unwrap();
+            for status in ["200 OK", "503 Service Unavailable"] {
+                let (mut http, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let mut chunk = [0; 1024];
+                    let n = http.read(&mut chunk).await.unwrap();
+                    assert!(n > 0, "discovery request ended before its headers");
+                    request.extend_from_slice(&chunk[..n]);
+                    assert!(request.len() <= 4096, "discovery request headers too large");
+                }
+                assert!(String::from_utf8_lossy(&request).contains("/json/version"));
+                let body = json!({"webSocketDebuggerUrl":response_url}).to_string();
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                http.write_all(response.as_bytes()).await.unwrap();
+            }
+            close_rx.await.unwrap();
         });
         let cdp = Cdp::connect(&ws_url).await.unwrap();
         let browser = Browser::new(std::env::current_dir().unwrap()).unwrap();
@@ -1772,20 +1782,49 @@ mod tests {
             .perform("ssmcp.browser.status", json!({}))
             .await
             .unwrap();
-        assert_eq!(ready["structuredContent"]["connected"], true);
-        server.await.unwrap();
+        assert_eq!(ready["structuredContent"]["connected"], true, "{ready}");
+        let unavailable = browser
+            .perform("ssmcp.browser.status", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            unavailable["structuredContent"]["connected"], false,
+            "{unavailable}"
+        );
+        assert!(
+            unavailable["structuredContent"]["reason"]
+                .as_str()
+                .is_some_and(
+                    |reason| reason.starts_with("CDP discovery failed:") && reason.contains("503")
+                ),
+            "the explicit HTTP 503 must report discovery failure: {unavailable}"
+        );
+        close_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("the owned discovery listener did not close")
+            .unwrap();
         let gone = browser
             .perform("ssmcp.browser.status", json!({}))
             .await
             .unwrap();
-        assert_eq!(gone["structuredContent"]["connected"], false);
-        assert!(
-            gone["structuredContent"]["reason"]
-                .as_str()
-                .unwrap()
-                .contains("discovery")
+        let state = &gone["structuredContent"];
+        assert_eq!(state["connected"], false, "{gone}");
+        assert_eq!(
+            state["endpoint"], ready["structuredContent"]["endpoint"],
+            "{gone}"
         );
-        assert!(browser.session.lock().await.is_some());
+        assert_eq!(state["owned"], false, "{gone}");
+        assert_eq!(state["native"], true, "{gone}");
+        assert_eq!(state["protocol"], "cdp", "{gone}");
+        assert!(
+            state["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.starts_with("CDP discovery failed:")
+                    || reason == "browser debugger status probe timed out"),
+            "closed debugger must report a discovery error or its bounded probe timeout: {gone}"
+        );
+        assert!(browser.session.lock().await.is_some(), "{gone}");
         browser.shutdown().await;
     }
 

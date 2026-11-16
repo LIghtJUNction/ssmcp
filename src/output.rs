@@ -166,12 +166,15 @@ impl OutputStore {
             let base = Path::new("/tmp/ssmcp");
             match std::fs::DirBuilder::new().mode(0o1777).create(base) {
                 Ok(()) => std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o1777))
-                    .map_err(error)?,
+                    .map_err(|e| format!("set shared output directory permissions: {e}"))?,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(error(e)),
+                Err(e) => return Err(format!("create shared output directory: {e}")),
             }
-            let base_fd = open_directory(base).map_err(error)?;
-            let metadata = base_fd.metadata().map_err(error)?;
+            let base_fd =
+                open_directory(base).map_err(|e| format!("open shared output directory: {e}"))?;
+            let metadata = base_fd
+                .metadata()
+                .map_err(|e| format!("inspect shared output directory: {e}"))?;
             let uid = unsafe { libc::geteuid() };
             if (metadata.uid() != 0 && metadata.uid() != uid)
                 || (metadata.mode() & 0o002 != 0 && metadata.mode() & 0o1000 == 0)
@@ -188,7 +191,8 @@ impl OutputStore {
                 .map(PathBuf::from)
                 .unwrap_or_else(std::env::temp_dir)
                 .join("ssmcp");
-            std::fs::create_dir_all(&base).map_err(error)?;
+            std::fs::create_dir_all(&base)
+                .map_err(|e| format!("create output base directory: {e}"))?;
             Ok(base.join("output"))
         }
     }
@@ -204,16 +208,20 @@ impl OutputStore {
         reload: Option<&str>,
     ) -> Result<Arc<Self>, String> {
         #[cfg(windows)]
-        let directory_fd = windows::private_directory(&directory).map_err(error)?;
+        let directory_fd = windows::private_directory(&directory)
+            .map_err(|e| format!("open private output directory: {e}"))?;
         #[cfg(unix)]
         let directory_fd = {
             match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
                 Ok(()) => {}
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(error(e)),
+                Err(e) => return Err(format!("create private output directory: {e}")),
             }
-            let directory_fd = open_directory(&directory).map_err(error)?;
-            let metadata = directory_fd.metadata().map_err(error)?;
+            let directory_fd = open_directory(&directory)
+                .map_err(|e| format!("open private output directory: {e}"))?;
+            let metadata = directory_fd
+                .metadata()
+                .map_err(|e| format!("inspect private output directory: {e}"))?;
             if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
                 return Err(
                     "output directory must be owned by this user with private permissions".into(),
@@ -222,18 +230,22 @@ impl OutputStore {
             directory_fd
         };
         let mut store = Self {
-            owner: random_id()?,
+            owner: random_id().map_err(|e| format!("generate output owner: {e}"))?,
             directory,
             directory_fd,
             policy,
         };
         if let Some(token) = reload
-            && let Some(owner) = store.consume_reload(token)?
+            && let Some(owner) = store
+                .consume_reload(token)
+                .map_err(|e| format!("restore output ownership: {e}"))?
         {
             store.owner = owner;
         }
         let store = Arc::new(store);
-        store.cleanup_all()?;
+        store
+            .cleanup_all()
+            .map_err(|e| format!("initial output retention cleanup: {e}"))?;
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let weak = Arc::downgrade(&store);
             runtime.spawn(async move {
@@ -396,8 +408,8 @@ impl OutputStore {
     fn directory_lock(&self) -> Result<File, String> {
         let file = self
             .open(".cleanup.lock", Access::CreateReadWrite)
-            .map_err(error)?;
-        lock(&file, false).map_err(error)?;
+            .map_err(|e| format!("open output cleanup lock: {e}"))?;
+        lock(&file, false).map_err(|e| format!("acquire output cleanup lock: {e}"))?;
         Ok(file)
     }
 
@@ -565,7 +577,8 @@ impl OutputStore {
         let mut files = Vec::new();
         let mut active = 0u64;
         // Read through the opened directory, not a possibly replaced pathname.
-        let entries = directory_entries(&self.directory_fd).map_err(error)?;
+        let entries = directory_entries(&self.directory_fd)
+            .map_err(|e| format!("enumerate output artifacts: {e}"))?;
         for name in entries {
             let Some(name) = name.to_str() else { continue };
             if let Some(token) = name
@@ -624,7 +637,9 @@ impl OutputStore {
                 active += 1;
                 continue;
             }
-            let metadata = file.metadata().map_err(error)?;
+            let metadata = file
+                .metadata()
+                .map_err(|e| format!("inspect retained output artifact: {e}"))?;
             let modified = metadata.modified().ok().map(timestamp).unwrap_or(current);
             files.push((modified, id.to_owned(), metadata.len(), file));
         }
@@ -1150,6 +1165,10 @@ fn open_directory(path: &Path) -> io::Result<File> {
 #[cfg(unix)]
 fn directory_entries(directory: &Directory) -> io::Result<Vec<std::ffi::OsString>> {
     use std::os::unix::ffi::OsStringExt;
+    fn failure(step: &str) -> io::Error {
+        let cause = io::Error::last_os_error();
+        io::Error::new(cause.kind(), format!("{step}: {cause}"))
+    }
     // openat(".") gives this scan an independent directory cursor. Dup would
     // share the retained descriptor's offset and miss entries on later scans.
     let fd = unsafe {
@@ -1160,11 +1179,11 @@ fn directory_entries(directory: &Directory) -> io::Result<Vec<std::ffi::OsString
         )
     };
     if fd < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(failure("open directory scan handle"));
     }
     let stream = unsafe { libc::fdopendir(fd) };
     if stream.is_null() {
-        let error = io::Error::last_os_error();
+        let error = failure("open directory stream");
         unsafe {
             libc::close(fd);
         }
@@ -1192,7 +1211,7 @@ fn directory_entries(directory: &Directory) -> io::Result<Vec<std::ffi::OsString
         let entry = unsafe { libc::readdir(stream.0) };
         if entry.is_null() {
             if unsafe { *errno } != 0 {
-                return Err(io::Error::last_os_error());
+                return Err(failure("read directory stream"));
             }
             break;
         }
@@ -1293,6 +1312,150 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn initial_cleanup_error_identifies_the_failed_step_without_hiding_the_cause() {
+        let fixture = Fixture::new(Policy::default());
+        let lock = fixture.path.join(".cleanup.lock");
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::create_dir(&lock).unwrap();
+        let error = OutputStore::at(fixture.path.clone(), Policy::default())
+            .err()
+            .expect("a directory cannot be used as the cleanup lock");
+        assert!(
+            error.starts_with("initial output retention cleanup: open output cleanup lock:"),
+            "{error}"
+        );
+        assert!(
+            lock.is_dir(),
+            "a failed initialization must not remove the unexpected entry"
+        );
+    }
+
+    #[test]
+    fn concurrent_store_initialization_and_cleanup_preserve_ownership() {
+        const CHILD_DIRECTORY: &str = "SSMCP_TEST_OUTPUT_CONCURRENCY_DIRECTORY";
+        if let Some(path) = std::env::var_os(CHILD_DIRECTORY) {
+            let path = PathBuf::from(path);
+            let start = std::sync::Arc::new(std::sync::Barrier::new(4));
+            std::thread::scope(|scope| {
+                for worker in 0..4 {
+                    let path = path.clone();
+                    let start = start.clone();
+                    scope.spawn(move || {
+                        start.wait();
+                        for iteration in 0..4 {
+                            let store = OutputStore::at(
+                                path.clone(),
+                                Policy {
+                                    inline_bytes: 1,
+                                    ..Policy::default()
+                                },
+                            )
+                            .unwrap();
+                            let bytes = format!("worker-{worker}-iteration-{iteration}\n");
+                            let mut capture = store.capture("concurrent-initialization");
+                            capture.push(bytes.as_bytes()).unwrap();
+                            assert!(
+                                store.cleanup_all().unwrap()["active_artifacts"]
+                                    .as_u64()
+                                    .unwrap()
+                                    >= 1
+                            );
+                            capture.finish().unwrap();
+                            let metadata = capture.metadata().unwrap();
+                            assert!(metadata.complete);
+                            assert_eq!(
+                                metadata.sha256,
+                                format!("{:x}", Sha256::digest(bytes.as_bytes()))
+                            );
+                            let other = OutputStore::at(path.clone(), Policy::default()).unwrap();
+                            assert_eq!(
+                                other
+                                    .perform_sync("ssmcp.output.stat", json!({"id":metadata.id}))
+                                    .unwrap_err(),
+                                "unknown output artifact for this connection"
+                            );
+                            let read = store
+                                .perform_sync("ssmcp.output.read", json!({"id":metadata.id}))
+                                .unwrap();
+                            assert_eq!(read["text"], bytes);
+                            assert_eq!(read["eof"], true);
+                        }
+                    });
+                }
+            });
+            return;
+        }
+
+        // A separate test process bounds a deadlocked native filesystem lock as
+        // well as Rust joins. Only this fixture's private directory is shared;
+        // the real UID output directory and other tests' captures are untouched.
+        let fixture = Fixture::new(Policy::default());
+        struct Child(std::process::Child);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        // Ordinary files cannot block the worker on a full pipe. These names
+        // do not match the artifact namespace, so concurrent cleanup ignores them.
+        let stdout = fixture
+            .store
+            .open("concurrency-stdout.log", Access::CreateNewWrite)
+            .unwrap();
+        let stderr = fixture
+            .store
+            .open("concurrency-stderr.log", Access::CreateNewWrite)
+            .unwrap();
+        let mut child = Child(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "output::tests::concurrent_store_initialization_and_cleanup_preserve_ownership",
+                    "--nocapture",
+                ])
+                .env(CHILD_DIRECTORY, &fixture.path)
+                .stdout(std::process::Stdio::from(stdout))
+                .stderr(std::process::Stdio::from(stderr))
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let (status, timed_out) = loop {
+            match child.0.try_wait() {
+                Ok(Some(status)) => break (Ok(status), false),
+                Err(error) => {
+                    let _ = child.0.kill();
+                    let _ = child.0.wait();
+                    break (Err(error), false);
+                }
+                Ok(None) => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.0.kill();
+                break (child.0.wait(), true);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let mut diagnostics = String::new();
+        for name in ["concurrency-stdout.log", "concurrency-stderr.log"] {
+            let mut bytes = Vec::new();
+            let result = fixture
+                .store
+                .open(name, Access::Read)
+                .and_then(|file| file.take(32 * 1024).read_to_end(&mut bytes));
+            diagnostics.push_str(&format!("\n{name}:\n{}", String::from_utf8_lossy(&bytes)));
+            if let Err(error) = result {
+                diagnostics.push_str(&format!("\nfailed to read diagnostic log: {error}"));
+            }
+        }
+        assert!(
+            !timed_out && status.as_ref().is_ok_and(|status| status.success()),
+            "concurrent output child: timed_out={timed_out}; status={status:?}\n{diagnostics}"
+        );
     }
 
     #[test]
