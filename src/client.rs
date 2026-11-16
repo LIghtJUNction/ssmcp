@@ -41,6 +41,7 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
                        (at most 32 distinct users; case-insensitive)
   --shell /path        Shell executable (shell mode only)
   --backend PROGRAM    Override the native agent executable
+  --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
   --raw                Show unmodified event payloads instead of the pretty transcript
   --list-tools         Discover native and workspace tools as JSON, then exit without SSH
 
@@ -67,6 +68,8 @@ Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
 Unified diffs show old/new line numbers. --raw disables display parsing only.
 Workspace file operations are rooted at the startup directory. System rsync
 transfers and loopback TCP forwards are available to every backend.
+Skill summaries and AGENTS.md views stay inside the workspace unless an operator
+adds --context-root. These extra roots expose context documents, not file writes.
 Keep this process running; Ctrl-C disconnects and stops its local backend.
 Without --allow, disconnecting revokes this connection's OAuth grants and
 reconnecting needs a new OAuth login. An MCP app restart can reuse valid tokens.
@@ -166,6 +169,7 @@ struct Options {
     mode: Mode,
     backend: Option<OsString>,
     backend_args: Vec<OsString>,
+    context_roots: Vec<PathBuf>,
     list_tools: bool,
     raw: bool,
     identity: Option<OsString>,
@@ -183,6 +187,7 @@ impl Options {
         let mut mode = Mode::Shell;
         let mut backend = None;
         let mut backend_args = Vec::new();
+        let mut context_roots = Vec::new();
         let mut list_tools = false;
         let mut raw = false;
         let mut explicit_shell = false;
@@ -222,6 +227,25 @@ impl Options {
                         &mut allow,
                         value.to_str().ok_or("--allow must be UTF-8")?,
                     )?;
+                }
+                Some("--context-root") => {
+                    if context_roots.len() >= 8 {
+                        return Err("--context-root accepts at most 8 directories".into());
+                    }
+                    let value = args.next().ok_or("--context-root requires a directory")?;
+                    if value.is_empty()
+                        || value.to_string_lossy().len() > 4096
+                        || value.to_string_lossy().chars().any(char::is_control)
+                    {
+                        return Err("--context-root requires a valid directory path".into());
+                    }
+                    let path = PathBuf::from(value)
+                        .canonicalize()
+                        .map_err(|error| format!("--context-root: {error}"))?;
+                    if !path.is_dir() {
+                        return Err("--context-root must name an existing directory".into());
+                    }
+                    context_roots.push(path);
                 }
                 Some("--list-tools") => list_tools = true,
                 Some("--raw") => raw = true,
@@ -286,6 +310,7 @@ impl Options {
             mode,
             backend,
             backend_args,
+            context_roots,
             list_tools,
             raw,
             identity,
@@ -425,7 +450,11 @@ pub async fn run() -> crate::Result<()> {
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
-        let backend = Runtime::new(backend, std::env::current_dir()?)?;
+        let backend = Runtime::with_context_roots(
+            backend,
+            std::env::current_dir()?,
+            options.context_roots.clone(),
+        )?;
         let tools = tokio::select! {
             result = timeout(Duration::from_secs(120),backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
             _ = interrupt.recv() => { backend.shutdown().await; return Ok(()); },
@@ -485,7 +514,11 @@ pub async fn run() -> crate::Result<()> {
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
         result = timeout(Duration::from_secs(120), Backend::start(options.mode, &options.shell, options.backend.as_deref(), &options.backend_args)) => result.map_err(|_| "local backend startup timed out")??,
     };
-    let backend = Runtime::new(backend, PathBuf::from(&metadata.cwd))?;
+    let backend = Runtime::with_context_roots(
+        backend,
+        PathBuf::from(&metadata.cwd),
+        options.context_roots.clone(),
+    )?;
     // Discover before publishing credentials, so a missing/incompatible backend fails locally.
     let discovered = tokio::select! {
         biased;
@@ -774,5 +807,82 @@ mod tests {
             &args[args.len() - 4..],
             ["--", "user@alias", "ssmcpd", "attach"]
         );
+    }
+    #[test]
+    fn context_roots_are_local_configuration_and_never_ssh_or_backend_arguments() {
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        let options = Options::parse([
+            OsString::from("--context-root"),
+            root.clone().into_os_string(),
+            OsString::from("--context-root"),
+            root.clone().into_os_string(),
+            OsString::from("my-server"),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.context_roots, vec![root.clone(), root.clone()]);
+        assert!(options.backend_args.is_empty());
+        assert!(
+            !options
+                .command()
+                .as_std()
+                .get_args()
+                .any(|arg| arg == root.as_os_str())
+        );
+        let local = Options::parse([
+            OsString::from("--context-root"),
+            root.into_os_string(),
+            OsString::from("--list-tools"),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(local.list_tools);
+        assert_eq!(local.context_roots.len(), 1);
+        let native = Options::parse(
+            [
+                "-t",
+                "codex",
+                "my-server",
+                "--",
+                "--context-root",
+                "native-option",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(native.context_roots.is_empty());
+        assert_eq!(
+            native.backend_args,
+            ["--context-root", "native-option"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn invalid_or_excessive_context_roots_fail_during_option_parsing() {
+        for args in [
+            vec![OsString::from("--context-root")],
+            vec![
+                OsString::from("--context-root"),
+                OsString::from(""),
+                OsString::from("my-server"),
+            ],
+            vec![
+                OsString::from("--context-root"),
+                std::env::current_exe().unwrap().into_os_string(),
+                OsString::from("my-server"),
+            ],
+        ] {
+            let error = Options::parse(args).err().unwrap();
+            assert!(error.contains("--context-root"), "{error}");
+        }
+        let mut args = Vec::new();
+        for _ in 0..9 {
+            args.push(OsString::from("--context-root"));
+            args.push(std::env::temp_dir().into_os_string());
+        }
+        args.push(OsString::from("my-server"));
+        let error = Options::parse(args).err().unwrap();
+        assert!(error.contains("at most 8"), "{error}");
     }
 }
