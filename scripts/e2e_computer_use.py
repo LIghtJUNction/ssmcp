@@ -68,6 +68,9 @@ def json_get(url):
 class ComputerUse(Harness):
     def __init__(self, directory, binary_dir, evidence_dir, desktop, chromium):
         super().__init__(directory, binary_dir)
+        # Wait for the bounded code_mode result (30s), including browser launch
+        # (20s) and its cleanup. The generic 10s HTTP limit can expire first.
+        self.http_timeout = 35
         self.evidence_dir = evidence_dir
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self.desktop = desktop

@@ -213,7 +213,9 @@ class Harness:
         raw_body = body if isinstance(body, (bytes, str)) else json.dumps(body).encode()
         if body is None:
             raw_body = None
-        connection = http.client.HTTPConnection("127.0.0.1", self.http_port, timeout=10)
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.http_port, timeout=getattr(self, "http_timeout", 10)
+        )
         try:
             connection.request(method, path or f"/{self.user}", body=raw_body, headers=request_headers)
             response = connection.getresponse()
