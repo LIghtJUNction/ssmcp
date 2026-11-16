@@ -16,6 +16,8 @@ include = [
     "/src/**",
     "/skills/**",
     "/docs/workspaces.md",
+    "/docs/context.md",
+    "/docs/validation-context-primitives.md",
     "/docs/validation-workspace-bridge.md",
     "/tests/**",
     "/scripts/e2e.py",

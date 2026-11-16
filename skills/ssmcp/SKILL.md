@@ -20,6 +20,14 @@ ssmcp --name workspace --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
 
 Use the operator's configured SSH destination and authorized identity. Do not copy private SSH keys, disable host-key checks, or work around a network policy. If the caller environment cannot connect, report that exact limitation and continue work on reachable peers.
 
+## Inspect available skills and instruction files
+
+Use `context.roots(id)` to see the workspace and any explicit read-only context roots. Start with `skills.view(id)` for a compact Markdown index or `skills.list(id,options)` for metadata. Follow `next_cursor` using the same scan options. Names can repeat; choose by root and path, then call `skills.read(id,{path})` for the full SKILL.md.
+
+`agents.resolve(id,{path:"src/lib.rs"})` returns instruction origins and exact content in root-to-target order. `agents.list` returns origins only, and `agents.read` reads a selected file. At each directory ssmcp selects the first nonempty AGENTS.override.md, AGENTS.md, or agents.md. Review provenance and diagnostics before applying relevant instructions.
+
+The default root is the client's startup workspace. An operator may add up to eight read-only roots with repeated `--context-root PATH`; select their returned IDs explicitly with the `root` option. A root that directly contains skill folders can be scanned with `paths:["."]`. These context roots do not extend ordinary file-write access. This is a current disk view, not an inventory of a backend model's loaded prompt. Metadata parsing uses the documented YAML subset; read diagnostics and do not infer missing descriptions from body text.
+
 ## Execute native tools
 
 ```js
@@ -40,7 +48,9 @@ return await fs.read(clients[0].id, {
 });
 ```
 
-File contents are base64, so binary bytes survive transport. Follow returned offsets for chunked reads. Write helpers replace a bounded file atomically; set `overwrite:true` only for an intended replacement. Use rsync for directory trees and large files.
+Use fs.readText/writeText/editText for UTF-8 text without base64. For an existing-file change, read the complete file, confirm eof and non-null sha256, then pass expected_sha256 to the write or edit. editText requires exactly one nonempty literal match and rejects ambiguous or stale changes. Text pagination follows next_offset without splitting UTF-8 characters.
+
+Binary file contents are base64, so binary bytes survive transport. Follow returned offsets for chunked reads. Write helpers replace a bounded file atomically; set `overwrite:true` only for an intended replacement. Use rsync for directory trees and large files.
 
 ## Synchronize with system rsync
 

@@ -157,6 +157,28 @@ return await call(client.id, "terminal.read", {
 
 代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过 SSH 将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
 
+## 技能摘要、AGENTS.md 与文本原语
+
+通过 code_mode 原生生成技能摘要、读取适用于目标路径的指令文件，并直接处理 UTF-8 文本：
+
+~~~js
+return await skills.view(clientId);
+~~~
+
+~~~js
+return await agents.resolve(clientId, {path: "src/lib.rs"});
+~~~
+
+~~~js
+return await fs.readText(clientId, {path: "README.md"});
+~~~
+
+skills.list/read/view 分别用于元数据索引、全文读取与 Markdown 摘要视图；agents.list/read/resolve 保留目录层级和文件来源。fs.writeText/editText 支持原子写入及 SHA-256 前置条件。它们由客户端直接执行，不需要启动模型。
+
+默认以客户端启动目录为根；全局技能或上层规则可通过重复的 --context-root PATH 加入只读上下文视图。context.roots(clientId) 返回可选择的根 ID。普通文件写入范围独立于这些只读配置。
+
+[完整接口与示例](docs/context.md) · [上下文能力验收记录](docs/validation-context-primitives.md)
+
 ## 文件同步、端口映射和动态资源
 
 每个客户端同时提供受启动目录限制的文件能力。通过 `code_mode` 使用 `fs.list/stat/read/write/mkdir`，不需要为简单文件操作拼接命令。目录同步调用系统 rsync，端口转发在所选客户端的回环地址之间传送 TCP。
