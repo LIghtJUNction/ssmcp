@@ -9,6 +9,7 @@ pub mod identity;
 pub mod oauth;
 pub mod pty;
 pub mod wire;
+pub mod resources;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
