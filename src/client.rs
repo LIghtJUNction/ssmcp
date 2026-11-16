@@ -1,5 +1,6 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
 pub(crate) mod render;
+mod ui;
 
 use crate::{
     backend::Backend,
@@ -12,14 +13,14 @@ use crate::{
 use serde_json::json;
 use std::{
     ffi::OsString,
-    io::{self, Write},
+    io::{self},
     path::PathBuf,
     process::{ExitStatus, Stdio},
     sync::Arc,
     time::Duration,
 };
 use tokio::{
-    io::BufReader,
+    io::{AsyncReadExt, BufReader},
     process::{Child, ChildStdout, Command},
     signal::unix::{SignalKind, signal},
     sync::{Mutex, mpsc, watch},
@@ -41,7 +42,14 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
                        (at most 32 distinct users; case-insensitive)
   --shell /path        Shell executable (shell mode only)
   --backend PROGRAM    Override the native agent executable
-  --raw                Show unmodified event payloads instead of the pretty transcript
+  --log-format FORMAT  pretty (default), pretty-verbose, or jsonl
+  --no-color           Disable ANSI colors (also honors NO_COLOR)
+  --verbose            Alias for --log-format pretty-verbose
+  --raw, --raw-events   Alias for --log-format jsonl
+  --ui-config FILE     Local [ui] TOML; default ~/.config/ssmcp/config.toml
+  --theme NAME         minimal, codex-dark, nord, or solarized
+  --timestamps         Show UTC timestamps on event headings
+  --max-inline-output N  Maximum lines per buffered output block (default 12)
   --list-tools         Discover native and workspace tools as JSON, then exit without SSH
 
 Uses system OpenSSH and ~/.ssh/config, including Host aliases, User,
@@ -167,7 +175,12 @@ struct Options {
     backend: Option<OsString>,
     backend_args: Vec<OsString>,
     list_tools: bool,
-    raw: bool,
+    log_format: Option<render::LogFormat>,
+    ui_config: Option<PathBuf>,
+    theme: Option<ui::Theme>,
+    timestamps: bool,
+    max_inline_output: Option<usize>,
+    no_color: bool,
     identity: Option<OsString>,
     port: Option<u16>,
     config: Option<OsString>,
@@ -184,7 +197,12 @@ impl Options {
         let mut backend = None;
         let mut backend_args = Vec::new();
         let mut list_tools = false;
-        let mut raw = false;
+        let mut log_format = None;
+        let mut ui_config = None;
+        let mut theme = None;
+        let mut timestamps = false;
+        let mut max_inline_output = None;
+        let mut no_color = false;
         let mut explicit_shell = false;
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = std::env::var_os("SHELL")
@@ -224,7 +242,37 @@ impl Options {
                     )?;
                 }
                 Some("--list-tools") => list_tools = true,
-                Some("--raw") => raw = true,
+                Some("--log-format") => {
+                    let value = args
+                        .next()
+                        .ok_or("--log-format requires pretty, pretty-verbose, or jsonl")?;
+                    log_format = Some(render::LogFormat::parse(
+                        value.to_str().ok_or("--log-format must be UTF-8")?,
+                    )?);
+                }
+                Some("--no-color") => no_color = true,
+                Some("--verbose") => log_format = Some(render::LogFormat::PrettyVerbose),
+                Some("--raw" | "--raw-events") => log_format = Some(render::LogFormat::Jsonl),
+                Some("--ui-config") => {
+                    ui_config = Some(PathBuf::from(
+                        args.next().ok_or("--ui-config requires a file")?,
+                    ))
+                }
+                Some("--theme") => {
+                    let value = args.next().ok_or("--theme requires a name")?;
+                    theme = Some(ui::Theme::parse(
+                        value.to_str().ok_or("--theme must be UTF-8")?,
+                    )?);
+                }
+                Some("--timestamps") => timestamps = true,
+                Some("--max-inline-output") => {
+                    max_inline_output = Some(
+                        args.next()
+                            .and_then(|a| a.to_str().and_then(|v| v.parse::<usize>().ok()))
+                            .filter(|n| (1..=10000).contains(n))
+                            .ok_or("--max-inline-output must be in 1..=10000")?,
+                    );
+                }
                 Some("--") => {
                     backend_args.extend(args);
                     break;
@@ -287,7 +335,12 @@ impl Options {
             backend,
             backend_args,
             list_tools,
-            raw,
+            log_format,
+            ui_config,
+            theme,
+            timestamps,
+            max_inline_output,
+            no_color,
             identity,
             port,
             config,
@@ -358,7 +411,7 @@ impl Options {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         command
     }
@@ -416,7 +469,19 @@ pub async fn run() -> crate::Result<()> {
     let Some(options) = Options::parse(std::env::args_os().skip(1))? else {
         return Ok(());
     };
-    render::configure(options.raw);
+    let mut ui = ui::Ui::load(options.ui_config.as_deref())?;
+    if let Some(format) = options.log_format {
+        ui.log_format = format;
+    }
+    if let Some(theme) = options.theme {
+        ui.theme = theme;
+    }
+    if let Some(limit) = options.max_inline_output {
+        ui.max_inline_output = limit;
+    }
+    ui.timestamps |= options.timestamps;
+    ui.color &= !options.no_color;
+    render::configure(ui);
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     if options.list_tools {
@@ -440,6 +505,20 @@ pub async fn run() -> crate::Result<()> {
         .command()
         .spawn()
         .map_err(|e| format!("could not start OpenSSH ssh: {e}"))?;
+    if let Some(mut stderr) = ssh.stderr.take() {
+        tokio::spawn(async move {
+            let mut bytes = [0u8; 4096];
+            while let Ok(n) = stderr.read(&mut bytes).await {
+                if n == 0 {
+                    break;
+                }
+                render::event(
+                    "ssh",
+                    &json!({"stderr":String::from_utf8_lossy(&bytes[..n])}),
+                );
+            }
+        });
+    }
     let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
     let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
     write_frame(
@@ -476,7 +555,7 @@ pub async fn run() -> crate::Result<()> {
     }
     let login_received_at = std::time::Instant::now();
     let mut incoming = Incoming::start(reader);
-    eprintln!("Starting local {} backend...", options.mode.name());
+    render::status(options.mode.name(), "Progress", "Starting local backend");
     let backend = tokio::select! {
         biased;
         error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(error.into()); },
@@ -511,25 +590,33 @@ pub async fn run() -> crate::Result<()> {
         output["login_code"] = json!(login_code);
         output["login_expires_in"] = json!(login_expires_in);
     }
-    if let Err(error) = writeln!(io::stdout().lock(), "{output}").and_then(|_| io::stdout().flush())
-    {
+    if let Err(error) = render::connection(&output) {
         let _ = ssh.start_kill();
         backend.shutdown().await;
         incoming.stop().await;
         let _ = ssh.wait().await;
         return Err(error.into());
     }
-    if github_auth {
-        eprintln!(
-            "Connected ({}). Add url to your MCP client and sign in with an allowed GitHub account. Local activity is shown here; Ctrl-C disconnects this client.",
-            options.mode.name()
-        );
-    } else {
-        eprintln!(
-            "Connected ({}). Enter login_code on the MCP OAuth login page to authorize this SSH account's clients while this connection stays live. Local activity is shown here; Ctrl-C disconnects and revokes access.",
-            options.mode.name()
-        );
-    }
+    render::status(
+        options.mode.name(),
+        "Connected",
+        &format!(
+            "CONNECTED  client={}  mode={}  cwd={}  id={}",
+            metadata.name,
+            options.mode.name(),
+            metadata.cwd,
+            client_id
+        ),
+    );
+    render::status(
+        options.mode.name(),
+        "Result",
+        if github_auth {
+            "Sign in with an allowed GitHub account. Ctrl-C disconnects this client."
+        } else {
+            "Enter login_code on the MCP OAuth page. Ctrl-C disconnects and revokes access."
+        },
+    );
     let writer = Arc::new(Mutex::new(writer));
     let mut requests: JoinSet<io::Result<()>> = JoinSet::new();
     let result: crate::Result<()> = 'connected: loop {
@@ -552,7 +639,7 @@ pub async fn run() -> crate::Result<()> {
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
                             result = Err("native call finished but its result exceeds the 4 MiB bridge frame limit; do not blindly repeat a mutating call, inspect native state or request a smaller output page".into());
                         }
-                        if let Err(error) = &result { eprintln!("[ssmcp error] {error}"); }
+                        if let Err(error) = &result { render::status("ssmcp", "Error", error); }
                         timeout(Duration::from_secs(10),async {
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer,&Frame::Reply {id,result}).await
@@ -581,7 +668,13 @@ pub async fn run() -> crate::Result<()> {
     let _ = ssh.start_kill();
     backend.shutdown().await;
     let _ = ssh.wait().await;
+    render::status(options.mode.name(), "Result", "DISCONNECTED");
     result
+}
+
+/// Print a terminal failure using the selected client log format.
+pub fn report_error(error: &str) {
+    render::status("ssmcp", "Error", error);
 }
 
 #[cfg(test)]
@@ -589,19 +682,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn raw_only_selects_display_and_is_not_forwarded() {
+    fn log_format_options_only_select_display_and_are_not_forwarded() {
         let pretty = Options::parse(["host"].map(OsString::from))
             .unwrap()
             .unwrap();
-        let raw = Options::parse(["--raw", "host"].map(OsString::from))
+        let jsonl = Options::parse(["--log-format", "jsonl", "host"].map(OsString::from))
             .unwrap()
             .unwrap();
-        assert!(!pretty.raw);
-        assert!(raw.raw);
+        let verbose = Options::parse(["--verbose", "--no-color", "host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pretty.log_format, None);
+        assert_eq!(jsonl.log_format, Some(render::LogFormat::Jsonl));
+        assert_eq!(verbose.log_format, Some(render::LogFormat::PrettyVerbose));
+        assert!(verbose.no_color);
         assert_eq!(
             pretty.command().as_std().get_args().collect::<Vec<_>>(),
-            raw.command().as_std().get_args().collect::<Vec<_>>()
+            jsonl.command().as_std().get_args().collect::<Vec<_>>()
         );
+        assert!(Options::parse(["--log-format", "xml", "host"].map(OsString::from)).is_err());
     }
 
     #[test]
