@@ -48,6 +48,23 @@ if scenario.endswith("healthy"):
     sys.stdout.write(frame[split:]); sys.stdout.flush()
     reply = json.loads(sys.stdin.readline())
     (directory / "reply.json").write_text(json.dumps(reply))
+    page = reply["result"]["Ok"]
+    catalog = list(page["tools"])
+    identifier = 8
+    cursors = set()
+    while page.get("nextCursor"):
+        cursor = page["nextCursor"]
+        assert cursor not in cursors, "tool catalog pagination repeated a cursor"
+        cursors.add(cursor)
+        print(json.dumps({"type":"call", "id":identifier, "operation":{
+            "op":"list_tools", "cursor":cursor}}), flush=True)
+        continuation = json.loads(sys.stdin.readline())
+        assert continuation["type"] == "reply" and continuation["id"] == identifier
+        page = continuation["result"]["Ok"]
+        catalog.extend(page["tools"])
+        identifier += 1
+    assert len(catalog) == len({tool["name"] for tool in catalog}), "duplicate catalog entries"
+    (directory / "catalog.json").write_text(json.dumps({"tools":catalog}))
     # Shell capabilities must be served while native discovery is still blocked.
     assert not (directory / "release-native").exists()
     assert not (directory / "native-response").exists()
@@ -59,7 +76,6 @@ if scenario.endswith("healthy"):
     if scenario == "catalog-timeout-healthy":
         expected = "discovering"
     deadline = time.monotonic() + 4
-    identifier = 8
     while True:
         assert time.monotonic() < deadline, "background discovery did not settle"
         print(json.dumps({"type":"call","id":identifier,"operation":{
@@ -282,13 +298,11 @@ async fn live_ssh_preserves_partial_frames_and_publishes_shell_capabilities() {
         serde_json::from_slice(&std::fs::read(fixture.0.join("reply.json")).unwrap()).unwrap();
     assert_eq!(reply["type"], "reply");
     assert_eq!(reply["id"], 7);
-    assert!(
-        reply["result"]["Ok"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tool| tool["name"] == "ssmcp.exec.start")
-    );
+    let catalog: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("catalog.json")).unwrap()).unwrap();
+    let tools = catalog["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "ssmcp.exec.start"));
+    assert!(tools.iter().any(|tool| tool["name"] == "terminal.status"));
     fixture.assert_native_stopped().await;
 }
 
@@ -309,9 +323,9 @@ async fn an_unavailable_optional_harness_catalog_keeps_shell_tools_online() {
     );
     let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(ready["type"], "shell");
-    let reply: Value =
-        serde_json::from_slice(&std::fs::read(fixture.0.join("reply.json")).unwrap()).unwrap();
-    let tools = reply["result"]["Ok"]["tools"].as_array().unwrap();
+    let catalog: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("catalog.json")).unwrap()).unwrap();
+    let tools = catalog["tools"].as_array().unwrap();
     assert!(tools.iter().any(|tool| tool["name"] == "terminal.status"));
     assert!(tools.iter().any(|tool| tool["name"] == "ssmcp.exec.start"));
     assert!(
@@ -367,9 +381,9 @@ async fn an_unresponsive_optional_catalog_keeps_shell_online_and_cancels_on_disc
     let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(ready["type"], "shell");
     assert_eq!(ready["client_id"], "b".repeat(64));
-    let reply: Value =
-        serde_json::from_slice(&std::fs::read(fixture.0.join("reply.json")).unwrap()).unwrap();
-    let tools = reply["result"]["Ok"]["tools"].as_array().unwrap();
+    let catalog: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("catalog.json")).unwrap()).unwrap();
+    let tools = catalog["tools"].as_array().unwrap();
     assert!(tools.iter().any(|tool| tool["name"] == "terminal.status"));
     assert!(tools.iter().any(|tool| tool["name"] == "ssmcp.exec.start"));
     assert!(
