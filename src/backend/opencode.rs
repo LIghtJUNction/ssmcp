@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
-    io::{self, Read},
+    io,
     process::Stdio,
     sync::{
         Arc, Mutex as StdMutex,
@@ -71,7 +71,7 @@ impl OpenCode {
             }
         }
         let mut random = [0_u8; 32];
-        std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+        crate::platform::random_bytes(&mut random)?;
         let password = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random);
         let events = EventLog::new("opencode");
         let mut command = Command::new(program);

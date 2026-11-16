@@ -30,6 +30,13 @@ include = [
     "/scripts/test_registry_restart.py",
     "/scripts/deploy_server.py",
     "/scripts/render_log_preview.py",
+    "/scripts/install.sh",
+    "/scripts/install.ps1",
+    "/scripts/release.py",
+    "/scripts/test_release.py",
+    "/scripts/test_installers.py",
+    "/docs/releases.md",
+    "/docs/commands.md",
     "/packaging/ssmcp-portal-ssh.*",
     "/packaging/ssmcp-portal.service",
     "/packaging/sshd-ssmcp-portal.conf",
@@ -67,6 +74,13 @@ sha2 = "0.10"
 subtle = "2.6"
 toml = "0.8"
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "signal", "time", "fs"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+portable-pty = "0.9"
+getrandom = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [profile.release]
 lto = "thin"

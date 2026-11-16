@@ -69,7 +69,11 @@ for line in sys.stdin:
     elif request.get("method") == "tools/list":
         (directory / "native-request").write_text("discovery")
         time.sleep(0.4)
-        response = {"jsonrpc":"2.0", "id":request["id"], "result":{"tools":[]}}
+        if scenario == "catalog-error-healthy":
+            response = {"jsonrpc":"2.0", "id":request["id"],
+                        "error":{"code":-32000, "message":"fixture catalog unavailable"}}
+        else:
+            response = {"jsonrpc":"2.0", "id":request["id"], "result":{"tools":[]}}
     else:
         continue
     print(json.dumps(response), flush=True)
@@ -108,21 +112,15 @@ impl Fixture {
         phase: &str,
         extra_args: &[&str],
     ) -> std::process::Output {
-        let mut paths = vec![self.0.clone()];
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
+        let harness = if phase == "discovery" { "claude" } else { "pi" };
+        std::os::unix::fs::symlink(self.0.join("native"), self.0.join(harness)).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
         command
-            .args([
-                "-t",
-                if phase == "discovery" { "cc" } else { "pi" },
-                "--backend",
-            ])
-            .arg(self.0.join("native"))
+            .args(["--shell", "/bin/sh"])
             .args(extra_args)
             .arg("alice@fixture")
-            .env("PATH", std::env::join_paths(paths).unwrap())
+            // Exercise automatic discovery without observing real installed harnesses.
+            .env("PATH", &self.0)
             .env("SSMCP_STARTUP_DIR", &self.0)
             .env("SSMCP_STARTUP_SCENARIO", scenario)
             .env("SSMCP_STARTUP_PHASE", phase)
@@ -212,7 +210,7 @@ async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
         String::from_utf8_lossy(&output.stderr)
     );
     let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(ready["type"], "pi");
+    assert_eq!(ready["type"], "shell");
     assert_eq!(ready["client_id"], "b".repeat(64));
     assert!(ready.get("auth").is_none());
     assert!(ready.get("allow").is_none());
@@ -229,6 +227,31 @@ async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
             .iter()
             .any(|tool| tool["name"] == "pi.get_state")
     );
+    fixture.assert_native_stopped().await;
+}
+
+#[tokio::test]
+async fn an_unavailable_optional_harness_catalog_keeps_shell_tools_online() {
+    let fixture = Fixture::new();
+    let output = fixture.run("catalog-error-healthy", "discovery").await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(ready["type"], "shell");
+    let reply: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("reply.json")).unwrap()).unwrap();
+    let tools = reply["result"]["Ok"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "terminal.status"));
+    assert!(tools.iter().any(|tool| tool["name"] == "ssmcp.exec.start"));
+    assert!(
+        tools
+            .iter()
+            .all(|tool| !tool["name"].as_str().unwrap().starts_with("cc."))
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("fixture catalog unavailable"));
     fixture.assert_native_stopped().await;
 }
 

@@ -1,24 +1,21 @@
 //! Root-scoped files and bounded loopback TCP handles shared by every backend.
+mod audit;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    ffi::CString,
     fs::{File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
-    },
     path::{Component, Path, PathBuf},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -30,6 +27,20 @@ use tokio::{
     time::timeout,
 };
 
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(target_os = "linux")]
+use std::{
+    ffi::CString,
+    os::fd::{AsRawFd, FromRawFd},
+    time::Instant,
+};
+#[cfg(not(target_os = "linux"))]
+#[path = "workspace/portable.rs"]
+mod portable;
+
 pub const MAX_FILE_BYTES: usize = 256 * 1024;
 pub const MAX_NET_BYTES: usize = 64 * 1024;
 pub const MAX_HANDLES: usize = 64;
@@ -38,6 +49,7 @@ const MAX_ENTRIES: usize = 128;
 
 struct Root {
     path: PathBuf,
+    #[cfg(target_os = "linux")]
     directory: File,
 }
 struct Listener {
@@ -95,13 +107,18 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(root: PathBuf) -> Result<Self, String> {
         let path = root.canonicalize().map_err(error)?;
+        #[cfg(target_os = "linux")]
         let directory = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&path)
             .map_err(error)?;
         Ok(Self {
-            root: Arc::new(Root { path, directory }),
+            root: Arc::new(Root {
+                path,
+                #[cfg(target_os = "linux")]
+                directory,
+            }),
             handles: StdMutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(MAX_HANDLES)),
             nonce: random_id().map_err(error)?,
@@ -247,7 +264,7 @@ impl Workspace {
         if name.starts_with("ssmcp.fs.") {
             let root = self.root.clone();
             let name = name.to_owned();
-            return tokio::task::spawn_blocking(move || root.perform(&name, arguments))
+            return tokio::task::spawn_blocking(move || root.perform_audited(&name, arguments))
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -483,6 +500,98 @@ impl Root {
             _ => Err(format!("unknown workspace capability: {name}")),
         }
     }
+    fn read(&self, args: FileReadArgs) -> Result<Value, String> {
+        if args.max_bytes == 0 || args.max_bytes > MAX_FILE_BYTES {
+            return Err(format!("max_bytes must be 1..={MAX_FILE_BYTES}"));
+        }
+        let mut file = self.file(&args.path)?;
+        let metadata = file.metadata().map_err(error)?;
+        if !metadata.is_file() {
+            return Err("path is not a regular file".into());
+        }
+        if args.offset > metadata.len() {
+            return Err("offset is beyond the file".into());
+        }
+        file.seek(SeekFrom::Start(args.offset)).map_err(error)?;
+        let mut bytes = vec![0; args.max_bytes];
+        let mut count = 0;
+        while count < bytes.len() {
+            let read = file.read(&mut bytes[count..]).map_err(error)?;
+            if read == 0 {
+                break;
+            }
+            count += read;
+        }
+        let next = args.offset + count as u64;
+        Ok(
+            json!({"data_base64":STANDARD.encode(&bytes[..count]),"offset":args.offset,"next_offset":next,"size":metadata.len(),"eof":next>=metadata.len()}),
+        )
+    }
+    fn read_text(&self, args: FileReadArgs) -> Result<Value, String> {
+        if !(4..=MAX_FILE_BYTES).contains(&args.max_bytes) {
+            return Err(format!(
+                "max_bytes must be 4..={MAX_FILE_BYTES} for UTF-8 text"
+            ));
+        }
+        let mut file = self.file(&args.path)?;
+        let metadata = regular_metadata(&file)?;
+        if args.offset > metadata.len() {
+            return Err("offset is beyond the file".into());
+        }
+        file.seek(SeekFrom::Start(args.offset)).map_err(error)?;
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut file)
+            .take(args.max_bytes as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(error)?;
+        if !same_version(&metadata, &file.metadata().map_err(error)?) {
+            return Err("file changed during read; retry from a fresh read".into());
+        }
+        let count = bytes.len().min(args.max_bytes);
+        let at_end = bytes.len() <= args.max_bytes;
+        let text = match std::str::from_utf8(&bytes[..count]) {
+            Ok(text) => text,
+            Err(error) if error.error_len().is_none() && !at_end && error.valid_up_to() > 0 => {
+                std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap()
+            }
+            Err(_) => return Err(
+                "invalid UTF-8 or offset is inside a character; use the previous next_offset, or fs.read for binary data".into()
+            ),
+        };
+        let next = args.offset + text.len() as u64;
+        let eof = at_end && text.len() == bytes.len();
+        let digest = (args.offset == 0 && eof).then(|| sha256(text.as_bytes()));
+        Ok(json!({
+            "path":args.path,"text":text,"offset":args.offset,"next_offset":next,
+            "bytes":text.len(),"size":metadata.len(),"eof":eof,"truncated":!eof,"sha256":digest
+        }))
+    }
+
+    fn write(&self, args: FileWriteArgs) -> Result<Value, String> {
+        let data = decode(&args.data_base64, MAX_FILE_BYTES)?;
+        self.write_bytes(&args.path, &data, args.overwrite, args.create_parents, None)?;
+        Ok(json!({"path":args.path,"written":data.len()}))
+    }
+
+    fn write_text(&self, args: TextWriteArgs) -> Result<Value, String> {
+        if args.text.len() > MAX_FILE_BYTES {
+            return Err(format!("text exceeds {MAX_FILE_BYTES} UTF-8 bytes"));
+        }
+        self.write_bytes(
+            &args.path,
+            args.text.as_bytes(),
+            args.overwrite,
+            args.create_parents,
+            args.expected_sha256.as_deref(),
+        )?;
+        Ok(
+            json!({"path":args.path,"written":args.text.len(),"sha256":sha256(args.text.as_bytes())}),
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Root {
     fn components(path: &str) -> Result<Vec<CString>, String> {
         if path.len() > 4096 || path.chars().any(char::is_control) {
             return Err("invalid workspace path".into());
@@ -599,94 +708,6 @@ impl Root {
         }
         Ok(result)
     }
-    fn read(&self, args: FileReadArgs) -> Result<Value, String> {
-        if args.max_bytes == 0 || args.max_bytes > MAX_FILE_BYTES {
-            return Err(format!("max_bytes must be 1..={MAX_FILE_BYTES}"));
-        }
-        let mut file = self.file(&args.path)?;
-        let metadata = file.metadata().map_err(error)?;
-        if !metadata.is_file() {
-            return Err("path is not a regular file".into());
-        }
-        if args.offset > metadata.len() {
-            return Err("offset is beyond the file".into());
-        }
-        file.seek(SeekFrom::Start(args.offset)).map_err(error)?;
-        let mut bytes = vec![0; args.max_bytes];
-        let mut count = 0;
-        while count < bytes.len() {
-            let read = file.read(&mut bytes[count..]).map_err(error)?;
-            if read == 0 {
-                break;
-            }
-            count += read;
-        }
-        let next = args.offset + count as u64;
-        Ok(
-            json!({"data_base64":STANDARD.encode(&bytes[..count]),"offset":args.offset,"next_offset":next,"size":metadata.len(),"eof":next>=metadata.len()}),
-        )
-    }
-    fn read_text(&self, args: FileReadArgs) -> Result<Value, String> {
-        if !(4..=MAX_FILE_BYTES).contains(&args.max_bytes) {
-            return Err(format!(
-                "max_bytes must be 4..={MAX_FILE_BYTES} for UTF-8 text"
-            ));
-        }
-        let mut file = self.file(&args.path)?;
-        let metadata = regular_metadata(&file)?;
-        if args.offset > metadata.len() {
-            return Err("offset is beyond the file".into());
-        }
-        file.seek(SeekFrom::Start(args.offset)).map_err(error)?;
-        let mut bytes = Vec::new();
-        Read::by_ref(&mut file)
-            .take(args.max_bytes as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(error)?;
-        if !same_version(&metadata, &file.metadata().map_err(error)?) {
-            return Err("file changed during read; retry from a fresh read".into());
-        }
-        let count = bytes.len().min(args.max_bytes);
-        let at_end = bytes.len() <= args.max_bytes;
-        let text = match std::str::from_utf8(&bytes[..count]) {
-            Ok(text) => text,
-            Err(error) if error.error_len().is_none() && !at_end && error.valid_up_to() > 0 => {
-                std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap()
-            }
-            Err(_) => return Err(
-                "invalid UTF-8 or offset is inside a character; use the previous next_offset, or fs.read for binary data".into()
-            ),
-        };
-        let next = args.offset + text.len() as u64;
-        let eof = at_end && text.len() == bytes.len();
-        let digest = (args.offset == 0 && eof).then(|| sha256(text.as_bytes()));
-        Ok(json!({
-            "path":args.path,"text":text,"offset":args.offset,"next_offset":next,
-            "bytes":text.len(),"size":metadata.len(),"eof":eof,"truncated":!eof,"sha256":digest
-        }))
-    }
-
-    fn write(&self, args: FileWriteArgs) -> Result<Value, String> {
-        let data = decode(&args.data_base64, MAX_FILE_BYTES)?;
-        self.write_bytes(&args.path, &data, args.overwrite, args.create_parents, None)?;
-        Ok(json!({"path":args.path,"written":data.len()}))
-    }
-
-    fn write_text(&self, args: TextWriteArgs) -> Result<Value, String> {
-        if args.text.len() > MAX_FILE_BYTES {
-            return Err(format!("text exceeds {MAX_FILE_BYTES} UTF-8 bytes"));
-        }
-        self.write_bytes(
-            &args.path,
-            args.text.as_bytes(),
-            args.overwrite,
-            args.create_parents,
-            args.expected_sha256.as_deref(),
-        )?;
-        Ok(
-            json!({"path":args.path,"written":args.text.len(),"sha256":sha256(args.text.as_bytes())}),
-        )
-    }
 
     fn write_bytes(
         &self,
@@ -785,6 +806,7 @@ impl Root {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn open_at(directory: &File, name: &CString, flags: i32, mode: u32) -> io::Result<File> {
     let descriptor = unsafe {
         libc::openat(
@@ -802,6 +824,7 @@ fn open_at(directory: &File, name: &CString, flags: i32, mode: u32) -> io::Resul
 }
 /// Native writers cooperate on a fresh directory descriptor, including across
 /// Workspace instances. External editors do not participate in this advisory lock.
+#[cfg(target_os = "linux")]
 fn locked_directory(directory: &File) -> Result<File, String> {
     let locked = open_at(
         directory,
@@ -837,12 +860,18 @@ fn regular_metadata(file: &File) -> Result<std::fs::Metadata, String> {
     Ok(metadata)
 }
 
+#[cfg(unix)]
 fn same_version(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
     before.len() == after.len()
         && before.mtime() == after.mtime()
         && before.mtime_nsec() == after.mtime_nsec()
         && before.ctime() == after.ctime()
         && before.ctime_nsec() == after.ctime_nsec()
+}
+
+#[cfg(windows)]
+fn same_version(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
+    before.len() == after.len() && before.modified().ok() == after.modified().ok()
 }
 
 fn whole_file(file: &mut File) -> Result<Vec<u8>, String> {
@@ -885,6 +914,7 @@ fn check_hash(expected: &str, actual: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn atomic_write(
     parent: &File,
     name: &CString,
@@ -945,11 +975,23 @@ fn atomic_write(
 
 fn random_id() -> io::Result<String> {
     let mut bytes = [0u8; 16];
-    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    crate::platform::random_bytes(&mut bytes)?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 fn modified(metadata: &std::fs::Metadata) -> String {
-    format!("{}:{:09}", metadata.mtime(), metadata.mtime_nsec())
+    #[cfg(unix)]
+    {
+        format!("{}:{:09}", metadata.mtime(), metadata.mtime_nsec())
+    }
+    #[cfg(windows)]
+    {
+        let timestamp = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .unwrap_or_default();
+        format!("{}:{:09}", timestamp.as_secs(), timestamp.subsec_nanos())
+    }
 }
 fn kind(metadata: &std::fs::Metadata) -> &'static str {
     if metadata.is_file() {
@@ -1132,7 +1174,7 @@ struct NetWriteArgs {
     data_base64: String,
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     struct Scratch(PathBuf);

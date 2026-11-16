@@ -1,4 +1,3 @@
-#[cfg(target_os = "linux")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::process::ExitCode {
     match ssmcp::client::run().await {
@@ -9,6 +8,3 @@ async fn main() -> std::process::ExitCode {
         }
     }
 }
-
-#[cfg(not(target_os = "linux"))]
-compile_error!("ssmcp requires Linux");
