@@ -1329,6 +1329,9 @@ mod tests {
                 0
             );
         }
+        // Keep the fixture's terminal open until its output has been consumed;
+        // closing the last slave can discard unread bytes on Darwin.
+        let keep_slave = slave.try_clone().unwrap();
         let shared = Arc::new(Shared {
             state: Mutex::new(State::new(30, 110, &Ui::default())),
             stop: AtomicBool::new(false),
@@ -1357,24 +1360,42 @@ mod tests {
             drop(session);
             let _ = done.send(());
         });
-        assert!(
-            complete.recv_timeout(Duration::from_secs(1)).is_ok(),
-            "display did not stop within deadline"
-        );
-        cleanup.join().unwrap();
+        let until = Instant::now() + Duration::from_secs(1);
+        let mut stopped = false;
         loop {
-            match master.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) => bytes.extend_from_slice(&buffer[..n]),
-                Err(error)
-                    if error.kind() == io::ErrorKind::WouldBlock
-                        || error.raw_os_error() == Some(libc::EIO) =>
-                {
-                    break;
+            // Drain while Drop joins the worker, as a real terminal emulator
+            // does; a full PTY output queue must not starve bounded restoration.
+            let drained = match master.read(&mut buffer) {
+                Ok(0) => true,
+                Ok(n) => {
+                    bytes.extend_from_slice(&buffer[..n]);
+                    false
                 }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,
                 Err(error) => panic!("fixture output: {error}"),
+            };
+            if !stopped {
+                match complete.try_recv() {
+                    Ok(()) => stopped = true,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        panic!("display cleanup thread exited before confirming shutdown")
+                    }
+                }
+            }
+            assert!(
+                Instant::now() < until,
+                "display did not stop and drain within deadline"
+            );
+            if stopped && drained {
+                break;
+            }
+            if drained {
+                std::thread::sleep(Duration::from_millis(2));
             }
         }
+        cleanup.join().unwrap();
+        drop(keep_slave);
         assert!(!shared.alive.load(Ordering::Acquire));
         assert!(bytes.windows(8).any(|part| part == b"\x1b[?1049h"));
         assert!(bytes.windows(8).any(|part| part == b"\x1b[?1049l"));

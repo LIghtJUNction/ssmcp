@@ -330,7 +330,8 @@ class Unified(SessionFeatures):
         invoked = self.tool_catalog(through_code=True)
         # Compare full descriptors, including complete JSON Schemas/extensions.
         index = lambda tools: {tool["name"]: tool for tool in tools}
-        self.check(index(listed) == index(invoked) and len(index(listed)) == len(listed),
+        self.check(index(listed) == index(invoked) and len(index(listed)) == len(listed)
+                   and len(index(invoked)) == len(invoked),
                    "list and code_mode tools return one identical collision-free full-schema catalog")
         self.check(not any(t["name"].startswith(("codex.", "claude.", "pi.", "opencode.")) for t in listed),
                    "unavailable Harnesses contribute no invented native tools")

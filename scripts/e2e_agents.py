@@ -264,9 +264,11 @@ def catalog(harness, mode):
     kinds = MODES[1:] if mode == "all" else (mode,)
     prefixes = tuple(prefix for kind in kinds for label in ("claude" if kind == "cc" else kind,)
                      for prefix in (f"{label}.", f"ssmcp.{label}."))
-    shared = {name for name in names if name.startswith(("ssmcp.fs.", "ssmcp.net.", "ssmcp.rsync.", "ssmcp.context.", "ssmcp.skills.", "ssmcp.agents.", "ssmcp.output.", "ssmcp.client.", "ssmcp.exec.", "ssmcp.harnesses.", "ssmcp.audit."))}
+    shared = set(names) - SHELL_TOOLS - {
+        name for name in names if name.startswith(prefixes)
+    }
     harness.check(shared == BUILTIN_TOOLS,
-                  f"{mode}: exact workspace, command, context and rsync capabilities are discoverable")
+                  f"{mode}: exact canonical shared builtins are fully discoverable")
     native = set(names) - BUILTIN_TOOLS - SHELL_TOOLS
     harness.check(SHELL_TOOLS <= set(names)
                   and (not native if mode == "shell" else bool(native) and all(name.startswith(prefixes) for name in native)),
@@ -608,25 +610,40 @@ def combined_harnesses_and_commands(harness):
     services.check_no_launch()
     # The Claude fixture changes its DynamicN tool on every fresh native scan.
     # Two interleaved public scans must each keep one generation across pages.
+    def finish_catalog(first):
+        page, names, seen, pages = first, set(), set(), 0
+        while True:
+            rows = page["tools"]
+            pages += 1
+            if not isinstance(rows, list) or len(rows) > 64:
+                raise AssertionError("all: invalid snapshot capability page")
+            batch = [tool["name"] for tool in rows]
+            if len(batch) != len(set(batch)) or names.intersection(batch):
+                raise AssertionError("all: duplicate snapshot capability name")
+            names.update(batch)
+            cursor = page.get("nextCursor")
+            if cursor is None:
+                return names
+            if not isinstance(cursor, str) or not cursor or cursor in seen or pages >= 100:
+                raise AssertionError("all: invalid or repeated snapshot capability cursor")
+            seen.add(cursor)
+            page = harness.public_call("list", {"client_id": harness.client_id, "cursor": cursor})
+
     older = harness.public_call("list", {"client_id": harness.client_id})
-    old_first_dynamic = {tool["name"] for tool in older["tools"] if tool["name"].startswith("claude.Dynamic")}
+    original_older_names = finish_catalog(older)
+    old_dynamic = {name for name in original_older_names if name.startswith("claude.Dynamic")}
+
     def changed_catalog():
         candidate = harness.public_call("list", {"client_id": harness.client_id})
-        names = {tool["name"] for tool in candidate["tools"] if tool["name"].startswith("claude.Dynamic")}
-        return candidate if names and names != old_first_dynamic else None
+        names = {name for name in finish_catalog(candidate) if name.startswith("claude.Dynamic")}
+        return candidate if names and names != old_dynamic else None
+
     newer = wait_for(changed_catalog, description="background native catalog refresh")
-
-    def finish_catalog(first):
-        result = list(first["tools"])
-        cursor = first.get("nextCursor")
-        while cursor is not None:
-            page = harness.public_call("list", {"client_id": harness.client_id, "cursor": cursor})
-            result.extend(page["tools"])
-            cursor = page.get("nextCursor")
-        return {tool["name"] for tool in result}
-
+    # Re-read the older cursor after a new generation appeared.
     older_names = finish_catalog(older)
     newer_names = finish_catalog(newer)
+    if older_names != original_older_names:
+        raise AssertionError("all: the older catalog snapshot changed after refresh")
     older_dynamic = {name for name in older_names if name.startswith("claude.Dynamic")}
     newer_dynamic = {name for name in newer_names if name.startswith("claude.Dynamic")}
     harness.check(len(older_dynamic) == len(newer_dynamic) == 1

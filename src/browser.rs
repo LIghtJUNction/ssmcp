@@ -1258,12 +1258,15 @@ fn create_profile() -> Result<Profile, String> {
     getrandom::fill(&mut bytes).map_err(|e| e.to_string())?;
     let suffix = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let path = std::env::temp_dir().join(format!("ssmcp-browser-{suffix}"));
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
         builder.mode(0o700);
-    }
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     builder
         .create(&path)
         .map_err(|e| format!("browser profile: {e}"))?;
