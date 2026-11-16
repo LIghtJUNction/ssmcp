@@ -97,11 +97,14 @@ class DownloadBoundsTests(unittest.TestCase):
 
         shim = cls.directory / "legacy_curl.py"
         shim.write_text(
-            "import os, sys\n"
+            "import os, resource, sys\n"
             "arguments = sys.argv[1:]\n"
             "assert arguments[0] == '--disable'\n"
             "assert arguments.count('--max-filesize') == 1\n"
             "index = arguments.index('--max-filesize')\n"
+            "cap = int(arguments[index + 1])\n"
+            "actual = resource.getrlimit(resource.RLIMIT_FSIZE)\n"
+            "assert actual == (cap, cap), (cap, actual)\n"
             "del arguments[index:index + 2]\n"
             "command = [os.environ['SSMCP_TEST_REAL_CURL'], arguments[0],\n"
             "           '--cacert', os.environ['SSMCP_TEST_CERTIFICATE'],\n"
@@ -154,6 +157,7 @@ class DownloadBoundsTests(unittest.TestCase):
                     'download_url "$1" "$2" "$3"',
                 )
                 self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(destination.exists(), result.stderr)
                 self.assertEqual(destination.stat().st_size, cap)
                 self.assertFalse(list(self.directory.glob("core*")))
 

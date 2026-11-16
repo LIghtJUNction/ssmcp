@@ -369,8 +369,11 @@ class Dashboard(Harness):
         self.finish_job(second, front)
         front.until(lambda s: "Tasks · 0 running" in text(s), "completed tasks leaving the active sidebar")
 
+        # Build markers from pieces so the readable command preview cannot
+        # satisfy or duplicate the stream-content assertions below.
         output = self.run_job([sys.executable, "-c",
-            "import sys; print('DASH_STDOUT_ONCE', flush=True); print('DASH_STDERR_ONCE', file=sys.stderr, flush=True)"])
+            "import sys; print('DASH_STDOUT_' + 'ONCE', flush=True); "
+            "print('DASH_STDERR_' + 'ONCE', file=sys.stderr, flush=True)"])
         self.finish_job(output, front)
         front.until(lambda s: "DASH_STDERR_ONCE" in text(s), "real stderr in the observation pane")
         shot = front.snapshot(cells=True)
