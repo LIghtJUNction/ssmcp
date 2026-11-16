@@ -169,10 +169,10 @@ class Frontend:
         self.pump()
         return self.decoder.request(op="snapshot", cells=cells)
 
-    def until(self, predicate, description, *, timeout=8):
+    def until(self, predicate, description, *, timeout=8, cells=False):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            snapshot = self.snapshot()
+            snapshot = self.snapshot(cells=cells)
             if predicate(snapshot):
                 return snapshot
             if self.process.poll() is not None:
@@ -319,6 +319,28 @@ class Dashboard(Harness):
         self.check(True, "a real foreground TTY enables the dashboard even with NO_COLOR")
         front.until(lambda s: "Clean working tree" in text(s), "a real clean Git observation")
         self.check(True, "sidebar observes the owned Git repository without network access")
+
+        def owned_head():
+            result = subprocess.run(
+                ["git", "--no-pager", "--no-optional-locks", "-c", "log.showSignature=false",
+                 "log", "-1", "--abbrev=8", "--no-patch", "--no-show-signature",
+                 "--no-decorate", "--no-notes", "--format=%h%x00%s", "HEAD", "--"],
+                cwd=self.workspace, env=git_env, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, encoding="utf-8", check=True, timeout=5)
+            return tuple(result.stdout.rstrip("\n").split("\0", 1))
+
+        def sidebar(snapshot):
+            return region(snapshot, 0, 57, 78, 106)
+
+        initial_head, initial_subject = owned_head()
+        initial_history = front.until(
+            lambda shot: "Recent commits" in sidebar(shot)
+                         and initial_head in sidebar(shot)
+                         and initial_subject in sidebar(shot),
+            "recent commits from the owned Git HEAD", cells=True)
+        self.check(initial_head in sidebar(initial_history)
+                   and initial_subject in sidebar(initial_history),
+                   "sidebar recent commits match the real owned Git HEAD and subject")
         self.pane_size(front, (18, 77), "DASH_SIZE_106")
         initial = front.snapshot(cells=True)
         self.check("Tasks · 0 running" in region(initial, 0, 57, 78, 106)
@@ -371,8 +393,31 @@ class Dashboard(Harness):
         front.until(lambda s: "dashboard-audit.txt" in text(s) and "+2" in text(s), "actual write and diff audit")
         self.check((self.workspace / "dashboard-audit.txt").read_text() == "one\nupdated\nthree\n",
                    "visible file audit and diff correspond to a successful real write")
-        front.until(lambda s: "dashboard-audit.txt" in "\n".join(s["rows"][-18:]), "Git file observation")
+        changed_git = front.until(
+            lambda shot: "dashboard-audit.txt" in sidebar(shot),
+            "Git file observation in the sidebar", cells=True)
         self.check(True, "Git sidebar refreshes from the real changed workspace")
+        self.check(owned_head() == (initial_head, initial_subject)
+                   and initial_head in sidebar(changed_git)
+                   and initial_subject in sidebar(changed_git),
+                   "uncommitted workspace changes preserve the observed commit history")
+
+        subprocess.run(
+            ["git", "--no-pager", "-c", "user.name=Dashboard fixture",
+             "-c", "user.email=dashboard@example.invalid", "-c", "commit.gpgSign=false",
+             "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "--allow-empty",
+             "-m", "fixture history refresh"],
+            cwd=self.workspace, env=git_env, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, check=True, timeout=5)
+        next_head, next_subject = owned_head()
+        refreshed_git = front.until(
+            lambda shot: next_head in sidebar(shot) and next_subject in sidebar(shot)
+                         and initial_head in sidebar(shot),
+            "changed HEAD refreshing recent commits", cells=True)
+        history_text = sidebar(refreshed_git)
+        self.check(next_head != initial_head
+                   and history_text.index(next_head) < history_text.index(initial_head),
+                   "a real owned commit refreshes HEAD and is displayed before its parent")
 
         fixture = self.workspace / "query-fixture.py"
         fixture.write_text(QUERY_FIXTURE)

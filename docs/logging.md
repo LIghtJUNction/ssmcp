@@ -21,11 +21,15 @@ stdout 用于连接信息。重定向 stdout 或选择 JSONL 时，保留单行�
 
 ## 固定状态区与窗口尺寸
 
-真实交互终端默认启用 `ui.dashboard = true`。窗口至少 96 列、18 行时，左上显示日志，左下保留交互式 Shell，右侧固定显示并行任务、原生进度和 Git 状态。右栏宽度为终端列数的四分之一，限制在 28–36 列；106 列窗口对应 77 列工作区、1 列分隔和 28 列状态区。少于 96 列或 18 行时收起右栏；例如 80 列窗口仍保留上下分开的日志与 Shell，并使用全宽。终端高度至少 5 行时可以切换日志焦点；不足 5 行时优先保留 PTY，F6 不再作为界面快捷键拦截。物理终端尺寸和交互 PTY 尺寸分别处理，调整窗口会更新布局与 Shell 的可用尺寸。[布局](../src/client/panel.rs) · [终端合成](../src/client/terminal.rs)
+真实交互终端默认启用 `ui.dashboard = true`。窗口至少 96 列、18 行时，左上显示日志，左下保留交互式 Shell，右侧依次显示并行任务、原生进度、Git 状态和最近提交。右栏宽度为终端列数的四分之一，限制在 28–36 列；106 列窗口对应 77 列工作区、1 列分隔和 28 列状态区。少于 96 列或 18 行时收起右栏；例如 80 列窗口仍保留上下分开的日志与 Shell，并使用全宽。终端高度至少 5 行时可以切换日志焦点；不足 5 行时优先保留 PTY，F6 不再作为界面快捷键拦截。物理终端尺寸和交互 PTY 尺寸分别处理，调整窗口会更新布局与 Shell 的可用尺寸。[布局](../src/client/panel.rs) · [终端合成](../src/client/terminal.rs)
 
 日志和交互 Shell 使用各自的终端状态，后台输出不会覆盖正在输入的命令。面板只接收文字和语义颜色；分支、路径、任务名和进度消息中的控制字符转成可见文字，按 Unicode 显示宽度截断。`NO_COLOR` 和 `--no-color` 仅关闭颜色。JSONL、重定向 stderr、`TERM=dumb` 或 `ui.dashboard = false` 保留行式输出。
 
-Git 状态在授权启动目录独立查询，约每 2 秒刷新；读取本地 Git 元数据，不执行 fetch，也不读文件内容。右栏显示分支、已知的 ahead/behind、暂存/工作区/未跟踪项计数、冲突和少量路径。未跟踪目录可能作为一项计数。查询失败时保留的旧数据标为 Last known state；没有成功观测时显示 pending、unavailable 或 checking，不报告工作区干净。Git 观察不代替成功文件操作的审计事件。[Git 观察器](../src/client/git_status.rs) · [Git porcelain v2 与后台刷新](https://git-scm.com/docs/git-status)
+Git 状态在授权启动目录独立查询，约每 2 秒刷新；读取本地 Git 信息，不执行 fetch；面板不展示工作区文件正文。右栏显示分支、已知的 ahead/behind、暂存/工作区/未跟踪项计数、冲突和少量路径。未跟踪目录可能作为一项计数。查询失败时保留的旧数据标为 Last known state；没有成功观测时显示 pending、unavailable 或 checking，不报告工作区干净。Git 观察不代替成功文件操作的审计事件。[Git 观察器](../src/client/git_status.rs) · [Git porcelain v2 与后台刷新](https://git-scm.com/docs/git-status)
+
+右栏各段连续排列，用细分隔线区分任务、工作区与提交历史；Git 状态不再固定到窗口底部。最近提交从已观察的完整 HEAD 读取，最多保留 5 条：每条显示短 SHA、原生提交时间的相对值，以及最多两行标题。标题先脱敏再按 Unicode 字符宽度换行；有足够空间时显示 3–5 条，更矮的窗口减少条数并标明当前显示数量。
+
+HEAD 改变时先清除旧历史，再读取对应提交链，失败显示 unavailable，空仓库显示 No commits yet。Git 状态过期时，保留的历史明确标为 stale，不把其他 HEAD 的提交当作当前分支记录。相对时间依据实际观察时间推进；未知时间不会补成当前时间。[最近提交观察](../src/client/git_status.rs) · [侧栏排版](../src/client/panel.rs)
 
 ### 回看日志与返回 Shell
 
