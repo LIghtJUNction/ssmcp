@@ -9,6 +9,9 @@ const bytes = Buffer.byteLength;
 const MAX_FRAME = 4 * 1024 * 1024;
 const MAX_RESULT = 1024 * 1024;
 const MAX_LOG = 64 * 1024;
+const MAX_IMAGE_BYTES = 400 * 1024;
+const MAX_IMAGES = 4;
+const MAX_IMAGE_ENCODED_BYTES = 2 * 1024 * 1024;
 const MAX_CALLS = 128;
 const MAX_PENDING = 16;
 const pending = new Map();
@@ -17,6 +20,8 @@ let started = false;
 let finished = false;
 let nextId = 0;
 let logBytes = 0;
+let imageCount = 0;
+let imageBytes = 0;
 let rejectionOverflow = false;
 
 function bounded(text, limit) {
@@ -128,9 +133,42 @@ function log(line) {
   return true;
 }
 
+// Images have a separate bounded channel so base64 never becomes a text log.
+function emitImage(encoded) {
+  const failure = error => encode({ ok: false, error });
+  if (finished) return failure('code_mode already finished');
+  if (typeof encoded !== 'string' || bytes(encoded, 'utf8') > MAX_IMAGE_BYTES * 2) {
+    return failure('image content exceeds 400 KiB');
+  }
+  let item;
+  try { item = decode(encoded); } catch { return failure('image content must be JSON'); }
+  if (!item || item.type !== 'image' || !['image/png', 'image/jpeg'].includes(item.mimeType)
+      || typeof item.data !== 'string' || !item.data
+      || item.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4
+      || item.data.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(item.data)) {
+    return failure('image requires PNG or JPEG content and canonical base64 data within 400 KiB');
+  }
+  const data = Buffer.from(item.data, 'base64');
+  if (data.length > MAX_IMAGE_BYTES || data.toString('base64') !== item.data) {
+    return failure('image requires canonical base64 data within 400 KiB');
+  }
+  const magic = item.mimeType === 'image/png'
+    ? data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
+    : data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255;
+  if (!magic) return failure('image bytes do not match their PNG or JPEG MIME type');
+  if (imageCount >= MAX_IMAGES || imageBytes + item.data.length > MAX_IMAGE_ENCODED_BYTES) {
+    return failure('code_mode images exceed 4 images or 2 MiB of encoded data');
+  }
+  imageCount++;
+  imageBytes += item.data.length;
+  send({ type: 'image', content: { type: 'image', mimeType: item.mimeType, data: item.data } });
+  return encode({ ok: true });
+}
+
 const bootstrap = `(() => {
   const native = globalThis.__ssmcp_host;
   const output = globalThis.__ssmcp_log;
+  const visual = globalThis.__ssmcp_image;
   const parse = JSON.parse;
   const stringify = JSON.stringify;
   const freeze = Object.freeze;
@@ -148,6 +186,7 @@ const bootstrap = `(() => {
   const clients = deepFreeze(parse(globalThis.__ssmcp_clients));
   delete globalThis.__ssmcp_host;
   delete globalThis.__ssmcp_log;
+  delete globalThis.__ssmcp_image;
   delete globalThis.__ssmcp_clients;
   const dispatch = async (kind, id, name, args) => {
     if (typeof id !== 'string' || typeof name !== 'string') {
@@ -163,6 +202,28 @@ const bootstrap = `(() => {
     }
     return dispatch('call', id, name, args);
   };
+  const image = value => {
+    if (value?.isError) {
+      const detail = value.content?.find(item => item?.type === 'text')?.text;
+      throw new Failure('image() cannot display a failed native tool result'
+        + (typeof detail === 'string' ? ': ' + detail.slice(0, 4096) : ''));
+    }
+    const items = value?.type === 'image' ? [value]
+      : isArray(value?.content) ? value.content.filter(item => item?.type === 'image') : [];
+    if (!items.length) throw new Failure('image() expects an image content block or a native result containing images');
+    for (const item of items) {
+      const reply = parse(visual(stringify({type:item.type,mimeType:item.mimeType,data:item.data})));
+      if (!reply.ok) throw new Failure(reply.error);
+    }
+  };
+  const browser = freeze(Object.fromEntries(
+    ['status','launch','connect','tabs','open','navigate','snapshot','click','fill','key','scroll','evaluate','screenshot','close','disconnect']
+      .map(name => [name, (id, args = {}) => call(id, 'ssmcp.browser.' + name, args)])
+  ));
+  const computer = freeze(Object.fromEntries(
+    ['status','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
+      .map(name => [name, (id, args = {}) => call(id, 'ssmcp.computer.' + name, args)])
+  ));
   const tools = async (id, cursor = null) => {
     if (cursor !== null && typeof cursor !== 'string') {
       throw new Failure('tool cursor must be a string or null');
@@ -305,6 +366,9 @@ const bootstrap = `(() => {
     clients: { value: clients, enumerable: true },
     call: { value: call, enumerable: true },
     tools: { value: tools, enumerable: true },
+    image: { value: image, enumerable: true },
+    browser: { value: browser, enumerable: true },
+    computer: { value: computer, enumerable: true },
     reload: { value: reload, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
@@ -330,6 +394,7 @@ async function run(frame) {
   const context = vm.createContext(Object.assign(Object.create(null), {
     __ssmcp_host: bridge,
     __ssmcp_log: log,
+    __ssmcp_image: emitImage,
     __ssmcp_clients: clients,
   }), { name: 'ssmcp-code-mode', codeGeneration: { strings: false, wasm: false } });
   new vm.Script(bootstrap, { filename: 'ssmcp-api.js' }).runInContext(context, { timeout: 2000 });

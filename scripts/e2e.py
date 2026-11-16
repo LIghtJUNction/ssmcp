@@ -53,6 +53,32 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
     "ssmcp.exec.read", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.audit.events",
+    "ssmcp.browser.status",
+    "ssmcp.browser.launch",
+    "ssmcp.browser.connect",
+    "ssmcp.browser.tabs",
+    "ssmcp.browser.open",
+    "ssmcp.browser.navigate",
+    "ssmcp.browser.snapshot",
+    "ssmcp.browser.click",
+    "ssmcp.browser.fill",
+    "ssmcp.browser.key",
+    "ssmcp.browser.scroll",
+    "ssmcp.browser.evaluate",
+    "ssmcp.browser.screenshot",
+    "ssmcp.browser.close",
+    "ssmcp.browser.disconnect",
+    "ssmcp.computer.status",
+    "ssmcp.computer.monitors",
+    "ssmcp.computer.windows",
+    "ssmcp.computer.focus",
+    "ssmcp.computer.screenshot",
+    "ssmcp.computer.move",
+    "ssmcp.computer.click",
+    "ssmcp.computer.drag",
+    "ssmcp.computer.key",
+    "ssmcp.computer.type",
+    "ssmcp.computer.scroll",
 })
 
 
@@ -637,9 +663,19 @@ class Harness:
                    and isinstance(inventory["code_mode"], dict),
                    "list returns client identity, display name, launch cwd, backend type and code API")
         capabilities = self.public_call("list", {"client_id": self.client_id})
+        catalog = list(capabilities["tools"])
+        cursors = set()
+        while capabilities.get("nextCursor"):
+            cursor = capabilities["nextCursor"]
+            if cursor in cursors:
+                raise AssertionError("list repeated a catalog cursor")
+            cursors.add(cursor)
+            capabilities = self.public_call("list", {"client_id": self.client_id, "cursor": cursor})
+            catalog.extend(capabilities["tools"])
         expected_tools = SHELL_TOOLS | BUILTIN_TOOLS
-        self.check({tool["name"] for tool in capabilities["tools"]} == expected_tools
-                   and all(isinstance(tool["inputSchema"], dict) for tool in capabilities["tools"]),
+        self.check({tool["name"] for tool in catalog} == expected_tools
+                   and len(catalog) == len(expected_tools)
+                   and all(isinstance(tool["inputSchema"], dict) for tool in catalog),
                    "list discovers exact native capability names and schemas for code_mode")
         self.check(any(key.lower() == "cache-control" and "no-store" in value for key, value in headers.items()),
                    "MCP responses cannot be stored by caches")
@@ -714,8 +750,20 @@ class Harness:
         self.check(len(result["result"]) == 2 and all(state["running"] for state in result["result"])
                    and any("checked" in log for log in result["logs"]),
                    "code_mode executes JavaScript loops, conditions, awaited native calls and logs")
-        result = self.public_call("code_mode", {"code": "return await tools(%s);" % json.dumps(self.client_id)})
-        self.check({tool["name"] for tool in result["result"]["tools"]} == expected_tools,
+        result = self.public_call("code_mode", {"code": """
+            const catalog = [], seen = new Set();
+            let cursor;
+            do {
+                const page = await tools(%s, cursor);
+                catalog.push(...page.tools);
+                cursor = page.nextCursor;
+                if (cursor && seen.has(cursor)) throw Error('catalog cursor repeated');
+                if (cursor) seen.add(cursor);
+            } while (cursor);
+            return {tools: catalog};
+        """ % json.dumps(self.client_id)})
+        self.check({tool["name"] for tool in result["result"]["tools"]} == expected_tools
+                   and len(result["result"]["tools"]) == len(expected_tools),
                    "code_mode discovers native capability schemas through tools(client_id)")
         for code, timeout_ms, expected_error, description in (
             ("return await call('missing-client', 'terminal.status', {});", 2000,
