@@ -1,0 +1,122 @@
+{
+  "status": "passed",
+  "controller_fixture": {
+    "name": "acceptance fixture",
+    "model": "fixture-model"
+  },
+  "transport": "isolated OpenSSH + OAuth + owned physical PTY + independent vt100 decoder",
+  "preview_kind": "rendered live PTY cells, not a system desktop screenshot",
+  "model_invoked": false,
+  "binaries": {
+    "ssmcp": "8f69875df98518036ad49b888280118529dd5ab7d8c5c167522a1004ee577bac",
+    "ssmcpd": "f787a1dc97dc3986c801cfca666deb0aa0a87ff0b2dc01a15ff0b0a63f5e14ec",
+    "vt_snapshot": "9cf1fe64b3bae78cf3757166c27e5db562481636162971ace1c45d5a55c17df0"
+  },
+  "checks": [
+    "effective sshd config permits public keys only",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "three independent shells are registered without selecting background terminals",
+    "background PTY output does not overwrite the selected screen",
+    "two real background commands remain independently addressable",
+    "F7 sends following local input only to the newly selected shell",
+    "local F7 and remote terminal inventory share one selection",
+    "F7 and F6 inside bracketed paste reach the real child byte for byte",
+    "pasted F7 does not switch terminals",
+    "background terminal reaches its own raw query reader",
+    "background terminal receives a device reply while build remains selected",
+    "background cursor query returns that terminal's virtual coordinates",
+    "device replies do not change selected terminal",
+    "missing model metadata displays Model unknown instead of guessing",
+    "build live terminal snapshot contains no authentication credentials",
+    "F6 audit browsing remains usable beside F7 session switching",
+    "legacy calls without terminal_id target main without moving local focus",
+    "logs live terminal snapshot contains no authentication credentials",
+    "closing selected terminal restores main with its existing output intact",
+    "main live terminal snapshot contains no authentication credentials",
+    "exited PTY input failure keeps F7 working and never replays failed text to main",
+    "live code_mode CUA facade reaches native capability status without a model",
+    "background command survives code_mode calls and exits successfully when released",
+    "background command survives code_mode calls and exits successfully when released",
+    "CUA launches only an owned headless Chromium with an isolated profile",
+    "CUA opens the locally supplied fixture page",
+    "CUA observes the real fixture document before capturing it",
+    "real CUA screenshot completes through the public code_mode endpoint",
+    "code_mode image() returns one actual MCP image content block",
+    "MCP image data contains real JPEG or PNG bytes matching its MIME type",
+    "CUA screenshot metadata arrives separately from its image bytes",
+    "image Base64 is not copied into code_mode text logs",
+    "CUA disconnect closes only the isolated browser it owns",
+    "disconnect restores the owned physical terminal and its input mode"
+  ],
+  "captures": [
+    {
+      "label": "build",
+      "source": "decoded real physical PTY bytes",
+      "snapshot_sha256": "f845ffb1a1f0b8fba2f8a9e29d18e77b95300bc8c374d834cdc5769f340d6dd5",
+      "rows": 46,
+      "columns": 144,
+      "snapshot": "terminal-build.json",
+      "preview": "terminal-build.png",
+      "preview_sha256": "8665957824a19d3e4ae25146809ecda4e5fd49c7033263b31bba27f173fc576e"
+    },
+    {
+      "label": "logs",
+      "source": "decoded real physical PTY bytes",
+      "snapshot_sha256": "97cb64d3abff9129652311e5ea93aff818d5bd9e6939e0ae842a274bf9469814",
+      "rows": 46,
+      "columns": 144,
+      "snapshot": "terminal-logs.json",
+      "preview": "terminal-logs.png",
+      "preview_sha256": "68b1143e312fa459c1a4845ed7f5077ab0d0428ea9807a208701a7fe9e8f0dc8"
+    },
+    {
+      "label": "main",
+      "source": "decoded real physical PTY bytes",
+      "snapshot_sha256": "e08bc6f390d8b4ca17c542d929f8a032dca2c93cf5a6ed76ed3023940c61906a",
+      "rows": 46,
+      "columns": 144,
+      "snapshot": "terminal-main.json",
+      "preview": "terminal-main.png",
+      "preview_sha256": "9ceb10e2b37e3caf37bd547a27df9939a89498682e33cc20733e4f53211a70e9"
+    }
+  ],
+  "cua_browser": {
+    "status": "passed",
+    "executable": "/usr/lib/chromium/chromium",
+    "mime_type": "image/jpeg",
+    "bytes": 17024,
+    "sha256": "d93ce0aa2babf37113ba09a421ca1be22279f53e6f8cffbd787b543d97e2714a",
+    "result": {
+      "metadata": {
+        "bytes": 17024,
+        "height": 513,
+        "mime_type": "image/jpeg",
+        "scale": 1,
+        "target_id": "B80374B771FBAF02DC03A3DB78AD5759",
+        "width": 960
+      },
+      "target_id": "B80374B771FBAF02DC03A3DB78AD5759"
+    },
+    "model_invoked": false,
+    "owned_browser_disconnected": true,
+    "image": "cua-browser.jpg"
+  },
+  "script_sha256": "7489418c28d0629764ebe97b680366c896cb3d403b3691d58d2ba06ea4bcb842",
+  "duration_seconds": 7.295
+}
