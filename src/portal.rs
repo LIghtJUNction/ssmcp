@@ -1,5 +1,6 @@
 //! Browser account portal, sharing the MCP gateway's verified GitHub identity provider.
 //! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
+mod setup;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -39,6 +40,7 @@ type DigestKey = [u8; 32];
 #[derive(Default)]
 pub struct Portal {
     browser: Mutex<BrowserState>,
+    setup: Mutex<setup::SetupState>,
     store: Option<Arc<Mutex<Store>>>,
 }
 
@@ -56,6 +58,7 @@ struct Session {
 }
 struct Pending {
     browser: DigestKey,
+    return_to: Option<setup::ReturnTo>,
     verifier: String,
     expires: Instant,
 }
@@ -204,6 +207,7 @@ impl Portal {
     pub fn open(path: &Path) -> crate::Result<Self> {
         Ok(Self {
             browser: Mutex::default(),
+            setup: Mutex::default(),
             store: Some(Arc::new(Mutex::new(Store::open(path)?))),
         })
     }
@@ -272,6 +276,7 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/account/logout", post(logout))
         .route("/account/keys", post(add_key))
         .route("/account/keys/delete", post(delete_key))
+        .merge(setup::routes())
         .layer(middleware::map_response(security_headers))
 }
 
@@ -378,6 +383,14 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Result<Re
     let (headers, form) = form(request).await?;
     only(&form, &["csrf"])?;
     let (browser_key, _) = broker.portal.verify(&headers, &form, &broker.public_url)?;
+    start_login(&broker, browser_key, None)
+}
+
+fn start_login(
+    broker: &Broker,
+    browser_key: DigestKey,
+    return_to: Option<setup::ReturnTo>,
+) -> Result<Response, Problem> {
     let state = format!("portal_{}", random()?);
     let verifier = random()?;
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
@@ -396,6 +409,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Result<Re
         digest(&state),
         Pending {
             browser: browser_key,
+            return_to,
             verifier,
             expires: Instant::now() + LOGIN_TTL,
         },
@@ -454,7 +468,15 @@ async fn finish_callback(
         .exchange("github", code, &pending.verifier)
         .await
         .map_err(|_| Problem::Unauthorized)?;
-    finish_identity(&broker.portal, browser_key, identity).await
+    let mut response = finish_identity(&broker.portal, browser_key, identity).await?;
+    if let Some(return_to) = pending.return_to {
+        let location = return_to.location(&broker.portal)?;
+        response.headers_mut().insert(
+            header::LOCATION,
+            HeaderValue::from_str(&location).map_err(|_| Problem::Invalid)?,
+        );
+    }
+    Ok(response)
 }
 async fn finish_identity(
     portal: &Portal,

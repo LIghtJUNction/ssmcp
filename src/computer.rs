@@ -1743,7 +1743,7 @@ if root.exists():
         assert!(computer.releases.state.lock().unwrap().tasks.is_empty());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "subprocess fixture with a fake compositor helper"]
     async fn hyprland_focus_observation_fixture() {
@@ -1823,7 +1823,7 @@ if root.exists():
         assert_eq!(computer.shutdown().await.unwrap_err(), error);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn hyprland_focus_requires_observed_active_window() {
         use std::os::unix::fs::PermissionsExt;

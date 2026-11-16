@@ -1,0 +1,151 @@
+{
+  "status": "passed",
+  "cases": [
+    {
+      "name": "auto_setup_ctrl_c",
+      "portal_routes": [
+        "/api/setup/start",
+        "/api/setup/poll",
+        "/api/setup/cancel"
+      ],
+      "browser_requests": [
+        {
+          "arguments": [
+            "http://127.0.0.1:35147/setup?code=TEST-1234"
+          ],
+          "pid": 2049241
+        }
+      ],
+      "ssh_config_unchanged": true,
+      "keygen_unused": true,
+      "home_isolated": true,
+      "caller_home_environment_unchanged": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.256,
+      "output_tail": "[PROG] ssh Connecting to 127.0.0.1 with OpenSSH\r\n[STDERR] ssh\r\n  ssh: connect to host 127.0.0.1 port 36399: Connection refused\r\n[ERR ] ssmcp SSH disconnected before registration; check the SSH key, host key, server setup, and m…\r\n正在打开 http://127.0.0.1:35147 的 GitHub 登录授权。\r\n请核对浏览器中的配对码：TEST-1234\r\nhttp://127.0.0.1:35147/setup?code=TEST-1234\r\n^C"
+    },
+    {
+      "name": "no_setup_tty",
+      "portal_routes": [],
+      "browser_requests": [],
+      "ssh_config_unchanged": true,
+      "keygen_unused": true,
+      "home_isolated": true,
+      "caller_home_environment_unchanged": true,
+      "exit_code": 1,
+      "elapsed_seconds": 0.192,
+      "output_tail": "[PROG] ssh Connecting to 127.0.0.1 with OpenSSH\r\n[STDERR] ssh\r\n  ssh: connect to host 127.0.0.1 port 36399: Connection refused\r\n[ERR ] ssmcp SSH disconnected before registration; check the SSH key, host key, server setup, and m…\r\n"
+    },
+    {
+      "name": "non_tty",
+      "portal_routes": [],
+      "browser_requests": [],
+      "ssh_config_unchanged": true,
+      "keygen_unused": true,
+      "home_isolated": true,
+      "caller_home_environment_unchanged": true,
+      "exit_code": 1,
+      "output_tail": "[PROG] ssh Connecting to 127.0.0.1 with OpenSSH\n[STDERR] ssh\n  ssh: connect to host 127.0.0.1 port 36399: Connection refused\n[ERR ] ssmcp SSH disconnected before registration; check the SSH key, host key, server setup, and m…\n"
+    },
+    {
+      "name": "probe_term_proxy_cleanup",
+      "portal_routes": [],
+      "browser_requests": [],
+      "ssh_config_unchanged": true,
+      "keygen_unused": true,
+      "home_isolated": true,
+      "caller_home_environment_unchanged": true,
+      "real_openssh": "/usr/bin/ssh",
+      "cleanup_snapshot": {
+        "session_keeper_alive": true,
+        "cli": {
+          "pid": 2049981,
+          "alive": false
+        },
+        "ssh": {
+          "pid": 2049984,
+          "alive": false
+        },
+        "proxy": {
+          "pid": 2050008,
+          "alive": false
+        },
+        "proxy_signal": null
+      },
+      "session_keeper_alive_at_cleanup_observation": true,
+      "proxy_and_ssh_stopped_before_pty_close": true,
+      "ssh_child_controlling_terminal": false,
+      "cli_controlling_terminal_preserved": true,
+      "transport_timeout_disabled_to_exercise_outer_timer": false,
+      "proxy_signal": null,
+      "exit_code": 0,
+      "elapsed_seconds": 0.452,
+      "output_tail": ""
+    },
+    {
+      "name": "probe_deadline_proxy_cleanup",
+      "portal_routes": [
+        "/api/setup/start",
+        "/api/setup/poll",
+        "/api/setup/cancel"
+      ],
+      "browser_requests": [
+        {
+          "arguments": [
+            "http://127.0.0.1:45577/setup?code=TEST-1234"
+          ],
+          "pid": 2055255
+        }
+      ],
+      "ssh_config_unchanged": true,
+      "keygen_unused": true,
+      "home_isolated": true,
+      "caller_home_environment_unchanged": true,
+      "real_openssh": "/usr/bin/ssh",
+      "cleanup_snapshot": {
+        "session_keeper_alive": true,
+        "cli": {
+          "pid": 2050051,
+          "start": "2872479",
+          "state": "S",
+          "ppid": 2050018,
+          "pgrp": 2050051,
+          "session": 2050018,
+          "foreground_pgrp": 2050051,
+          "alive": true,
+          "signals": {
+            "SigBlk": "0000000000000000",
+            "SigIgn": "0000000000001000",
+            "SigCgt": "0000000100004442"
+          }
+        },
+        "ssh": {
+          "pid": 2050054,
+          "alive": false
+        },
+        "proxy": {
+          "pid": 2050062,
+          "alive": false
+        },
+        "proxy_signal": null
+      },
+      "session_keeper_alive_at_cleanup_observation": true,
+      "proxy_and_ssh_stopped_before_pty_close": true,
+      "ssh_child_controlling_terminal": false,
+      "cli_controlling_terminal_preserved": true,
+      "transport_timeout_disabled_to_exercise_outer_timer": true,
+      "proxy_signal": null,
+      "exit_code": 0,
+      "elapsed_seconds": 30.707,
+      "output_tail": "\u001b[31;1m[ERR ] \u001b[0mssmcp SSH registration reached its deadline.\r\n正在打开 http://127.0.0.1:45577 的 GitHub 登录授权。\r\n请核对浏览器中的配对码：TEST-1234\r\nhttp://127.0.0.1:45577/setup?code=TEST-1234\r\n^C"
+    }
+  ],
+  "fixture_sha256": "bb25d7c31315623503dec6ef23ba37ff86efc53460bffe88621e4e1290e46928",
+  "fixture_self_test": "passed",
+  "session_keeper_survivor_verified": true,
+  "real_browser_opened": false,
+  "binary_sha256": "67df7f18f7adcc1024cc1bf0cfbc829227137c7c67d75ee9b3b62f8b02de7ba6",
+  "binary_source": "/home/lightjunction/Documents/GITHUB/ssmcp/target/debug/ssmcp",
+  "binary_version": "ssmcp 0.6.1",
+  "openssh_version": "OpenSSH_10.6p2, OpenSSL 4.1.0 23 Oct 2026"
+}
