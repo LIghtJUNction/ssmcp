@@ -278,7 +278,8 @@ pub fn routes() -> Router<Arc<Broker>> {
 async fn security_headers(mut response: Response) -> Response {
     let h = response.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    // Keep Origin on same-origin form POSTs for strict CSRF validation.
+    h.insert("referrer-policy", HeaderValue::from_static("same-origin"));
     h.insert(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
