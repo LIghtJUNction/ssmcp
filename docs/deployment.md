@@ -180,7 +180,15 @@ HTTPS、localhost 和 `127.0.0.1` 回调通常直接跳转。IPv6 等 IP 回调�
 
 stderr 始终显示本机活动。stdout 可以保存到文件；登录码模式的输出含可授权本机操作的一次性凭据，应限制文件访问权限。
 
-ssmcp 每次连接创建新的后端进程。Shell 是新的 PTY，Agent 是否恢复会话由其原生参数与配置决定。退出会让这条连接及后端消失；GitHub 授权本身可以保持有效，重连后按新连接的允许列表重新判断访问。登录码授权仍绑定其签发连接。GitHub 用户名在每次接入时重新解析，当前没有跨连接持久保存的用户名与稳定 ID 绑定；改名后应更新 `--allow` 参数。
+ssmcp 每次连接创建新的 PTY 和连接内工具运行时；退出会清理连接拥有的任务与原生子进程，既有 Pi/OpenCode 服务仅断开桥接。原生会话是否恢复仍由提供者的配置与实际接口决定。GitHub 授权本身可以保持有效，重连后按新连接的允许列表重新判断访问。登录码授权仍绑定其签发连接。GitHub 用户名在每次接入时重新解析，当前没有跨连接持久保存的用户名与稳定 ID 绑定；改名后应更新 `--allow` 参数。
+
+### 本机后台客户端
+
+需要离开交互终端后保持客户端运行时，在本机项目目录使用 `ssmcp --daemon --watchdog --name workstation --allow octocat@github my-ssmcp`。这启动当前用户管理的客户端会话，与服务器的 `ssmcpd.service` 分开。服务端账户、SSH 公钥和 OAuth 配置继续生效；不自动启用开机或登录自启。[完整会话管理](session-control.md#后台运行与延时重连)
+
+`sessions status workstation --json` 分别报告管理器与 Broker 连接状态；启动命令成功不证明已连通。watchdog 默认每 5 秒重试连接，可用 `--reconnect-delay SECONDS` 设置 1–3600 秒；该参数要求 `--watchdog`。手动 `sessions stop workstation` 后不会因延时到期重新启动。断线仍清理旧连接的命令与转发，新连接重新发现能力并取得新 ID。
+
+后台客户端使用创建时保存的二进制副本。部署新版客户端后，需要在处理旧会话结果后 remove 并重新创建；普通 restart 和 MCP reload 仍使用保存版本。Linux 日志来自该用户 unit 的实际 journal，不可用时明确降级；macOS/Windows 当前只有生命周期日志。平台管理器及 Windows 原生崩溃重试的 60 秒下限、255 次上限见会话说明，不能与 SSH 连接重试混为一谈。[后台日志](logging.md#后台会话日志)
 
 ### OAuth 兼容性
 

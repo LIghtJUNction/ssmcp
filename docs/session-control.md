@@ -1,6 +1,6 @@
-# 会话标题、客户端重载与长输出护卫
+# 客户端会话、重连与输出管理
 
-这三个功能让 agent 能够识别会话任务、重新加载已安装的客户端，并按需读取大量输出。公开 MCP 工具仍是 `list` 和 `code_mode`；`reload`、`outputs` 是 `code_mode` 内的 JavaScript 原语。
+本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具仍是 `list` 和 `code_mode`；`reload`、`outputs` 是 `code_mode` 内的 JavaScript 原语，`ssmcp sessions` 是在客户端机器运行的本地管理命令。
 
 ## 用标题说明本次任务
 
@@ -60,6 +60,60 @@ Unix 使用 `exec` 替换当前进程映像。Windows 启动替代客户端，�
 | 一次性登录码 | 旧连接的授权失效。重连生成新登录码，需要重新完成 OAuth 登录 |
 
 重载保留安装入口，包括入口末端的符号链接，因此更新该链接指向的新版本也能生效。它不会继续执行已被替换的旧程序映像。使用 `reload` 前需同时升级客户端和服务端，使两端都支持重载回执；旧客户端首次升级仍需手动重新启动。
+
+后台会话使用创建时保存的可执行文件副本。对这种会话，`reload` 和 `sessions restart` 仍运行已保存版本；更新普通安装入口不会自动更换它。后台版本升级步骤见下节。
+
+## 后台运行与延时重连
+
+`--daemon` 把客户端交给当前用户的原生服务管理器，命令返回后客户端继续运行。`--watchdog` 在连接失败或断开后重试；它也可单独用于前台客户端。`--reconnect-delay SECONDS` 只在指定 `--watchdog` 时有效，默认 **5 秒**，允许 **1–3600 秒**的整数。仅指定 `--daemon` 不会启用 watchdog。[参数与连接循环](../src/client.rs) · [本机会话管理](../src/session.rs)
+
+在项目目录中创建一个具名后台会话：
+
+```sh
+ssmcp --daemon --watchdog --reconnect-delay 5 \
+  --name workstation --title "修复项目并执行测试" \
+  --allow octocat@github my-ssmcp
+ssmcp sessions status workstation --json
+```
+
+将 GitHub 用户与 SSH 目标替换为已有配置。后台模式沿用 SSH 公钥、`--allow` 和原生工具权限；可用工具仍需真实发现。启动成功只表示原生管理器接受了启动请求，尚不能证明 SSH 或 Broker 已连通。先检查 `connection_state`，再通过 MCP `list` 核对在线客户端。没有 `--allow` 的连接仍使用登录码 OAuth；只有确实需要登录码时，在本机明确执行 `ssmcp sessions auth workstation`。登录码不会进入普通状态或生命周期日志；auth 命令只返回当前已连接会话的可用码，正常断线处理会清除本地 auth 记录。
+
+### 查看和管理保存的会话
+
+这些命令都支持 `--json`，只管理当前用户所选状态目录下的会话。保存的 `NAME` 是本地管理标识；每次 SSH 连接的 `client_id` 仍由 Broker 新建。后台名称须为 1–128 个 UTF-8 字节，不得以 `-` 开头，不得含控制字符、路径分隔符或首尾空白；名称内部可以有空格，使用时加引号。同名创建会明确拒绝覆盖。
+
+| 本地命令 | 行为 |
+| --- | --- |
+| `ssmcp sessions list --json` | 枚举保存的会话及当前观测状态，包括已经停止的会话 |
+| `ssmcp sessions status NAME --json` | 分别查看原生管理器状态与 Broker 连接状态 |
+| `ssmcp sessions start NAME` | 使用保存的配置和可执行文件启动已停止的会话 |
+| `ssmcp sessions stop NAME` | 请求停止，抑制 watchdog，并确认原生管理器已经停止；不会因延时到期自行恢复 |
+| `ssmcp sessions restart NAME` | 先停止再启动同一保存配置，不改变版本或工作目录 |
+| `ssmcp sessions logs NAME --lines 100 --json` | 查询有界日志；`--lines` 默认 50，允许 1–1000，返回值明确来源与覆盖范围 |
+| `ssmcp sessions auth NAME --json` | 仅在当前连接存在可用登录码时显式读取私有认证信息；不要把结果贴入普通日志 |
+| `ssmcp sessions remove NAME` | 先停止会话，再删除它的保存配置、二进制副本及本地生命周期记录 |
+
+`manager_state`、`manager_active`、`manager_pid` 描述系统管理器观测；`connection_state` 描述 `connected`、`disconnected` 或 `unknown`。管理器 active、进程存在或 CLI 返回 0 都不等于已连上 Broker。`phase` 记录最近的 `starting`、`connected`、`reconnecting`、`disconnected` 或 `stopped` 阶段，配合 `attempt`、`retry_after_secs` 和观测时间阅读。只有当前进程的有效 connected 观测才会附带 `connection`；首次尚无观测时可能显示 unknown。
+
+连接断开会清理它拥有的命令、PTY、转发与工具注册；watchdog 随后建立新连接并重新发现能力。它不会保存旧任务，也不会把旧连接输出的读取权限迁移给新连接。GitHub OAuth 能否继续使用仍取决于有效身份授权及新连接的 `--allow`；登录码模式需要使用新连接签发的码重新登录。人工停止优先使用 `sessions stop`；前台 watchdog 可用 Ctrl-C 停止。直接强制杀死后台进程可能触发原生崩溃恢复。
+
+### 平台、状态与版本
+
+后台功能使用已存在的用户管理器，不自动安装服务管理器、不启用系统启动或用户登录触发，也不配置 Linux linger。用户注销后的存活范围取决于现有管理器和登录会话。
+
+| 平台 | 原生后台管理 | 启用 watchdog 后的进程崩溃恢复 |
+| --- | --- | --- |
+| Linux | transient `systemd --user` service | `Restart=on-failure`，按所设延时配置 `RestartSec` |
+| macOS | 当前用户的 launchd agent | 失败退出时恢复，按所设延时配置 `ThrottleInterval` |
+| Windows | 当前已登录用户的计划任务，无管理员或 SYSTEM 身份 | 原生间隔为设定值与 60 秒中的较大值，最多 255 次失败重启 |
+
+表中描述代码配置，平台现场验收状态另见[验收材料](validation-0.6.0.md)。原生进程崩溃恢复与 SSH 重连分开：Windows 的 60 秒下限和 255 次配置不限制存活客户端内部按 `--reconnect-delay` 进行的连接重试。Linux `sessions logs` 优先查询对应 unit 的实际 journal；查询不可用或无记录时明确退回生命周期日志。macOS、Windows 目前仅提供生命周期记录，不能据此宣称已观察完整原生工具输出。[日志来源](logging.md#后台会话日志)
+
+默认状态目录为 Linux 的 `$XDG_STATE_HOME/ssmcp/sessions`（未设置时为 `~/.local/state/ssmcp/sessions`）、macOS 的 `~/Library/Application Support/ssmcp/sessions`，或 Windows 的 `%LOCALAPPDATA%\ssmcp\sessions`。`SSMCP_SESSION_HOME` 可指定私有绝对路径，创建和管理时须使用同一值。Unix 目录和记录文件默认分别为 0700、0600，程序拒绝不符合私有权限或符号链接约束的状态路径。该目录与工作区、连接输出目录分别管理。
+
+会话保存启动目录、参数、当前可执行文件副本及 SHA-256，并只记录所需的 `PATH`、`SSH_AUTH_SOCK` 环境引用；HOME 由用户管理器提供。不要假定创建命令所在 Shell 的全部环境变量会被复制。保留 SSH 配置、密钥、工作区及实际工具路径，不能因为二进制已经复制就删除这些依赖。
+
+升级后台会话时，先记录原来的工作目录、SSH 参数、标题和允许列表，处理需要保留的结果，然后 `sessions remove NAME`；安装新版本后，从原工作目录用同一组参数重新执行 `--daemon`。`start`、`restart`、MCP `reload` 都不会替换保存的二进制。删除会话不会无条件清空连接输出区，已结束输出仍按保留与配额策略清理。
 
 ## 长输出自动转储
 
