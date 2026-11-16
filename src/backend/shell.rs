@@ -126,17 +126,41 @@ struct Registry {
     closed: bool,
 }
 pub struct Shell {
+    root: PathBuf,
+    output: Arc<OutputStore>,
+    namespace: String,
     registry: Mutex<Registry>,
     slots: Arc<Semaphore>,
     events: Arc<EventLog>,
 }
 impl Shell {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
+        Self::with_workspace(
+            std::env::current_dir().expect("shell startup directory is unavailable"),
+            OutputStore::new_connection().expect("shell output store is unavailable"),
+        )
+        .expect("shell workspace is unavailable")
+    }
+
+    pub fn with_workspace(root: PathBuf, output: Arc<OutputStore>) -> Result<Arc<Self>, String> {
+        let root = root
+            .canonicalize()
+            .map_err(|error| format!("invalid execution workspace: {error}"))?;
+        if !root.is_dir() {
+            return Err("execution workspace must be a directory".into());
+        }
+        let mut nonce = [0u8; 16];
+        crate::platform::random_bytes(&mut nonce).map_err(|error| error.to_string())?;
+        let namespace = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+        let events = EventLog::with_output("shell", output.clone());
+        Ok(Arc::new(Self {
+            root,
+            output,
+            namespace,
             registry: Mutex::new(Registry::default()),
             slots: Arc::new(Semaphore::new(MAX_JOBS)),
-            events: EventLog::new("shell"),
-        })
+            events,
+        }))
     }
     fn registry(&self) -> std::sync::MutexGuard<'_, Registry> {
         self.registry.lock().unwrap_or_else(|e| e.into_inner())
@@ -152,7 +176,7 @@ impl Shell {
                 "ssmcp.exec.start",
                 "Start an independent argv command immediately and return job_id. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked.",
                 json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":MAX_COMMAND_ARGS},
-                    "cwd":{"type":"string","description":"Existing absolute directory; defaults to the client process working directory."},
+                    "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
                     "timeout_ms":{"type":"integer","minimum":0,"maximum":MAX_TIMEOUT,"default":0,"description":"0 means no execution deadline. A nonzero deadline terminates the command."}}),
                 &["command"],
@@ -328,13 +352,18 @@ impl Shell {
         {
             return Err("invalid or oversized environment override".into());
         }
-        let cwd = args
-            .cwd
-            .unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?);
-        if !cwd.is_absolute() || !cwd.is_dir() {
-            return Err("cwd must be an existing absolute directory".into());
+        let requested = args.cwd.unwrap_or_else(|| self.root.clone());
+        let cwd = if requested.is_absolute() {
+            requested
+        } else {
+            self.root.join(requested)
         }
-        let store = OutputStore::global()?;
+        .canonicalize()
+        .map_err(|error| format!("invalid execution cwd: {error}"))?;
+        if !cwd.is_dir() || !cwd.starts_with(&self.root) {
+            return Err("cwd must be an existing directory inside the authorized workspace".into());
+        }
+        let store = &self.output;
         // Reserve capacity before spawning: rejected requests must never run commands.
         let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
             format!("at most {MAX_JOBS} commands may run at once; wait or cancel an existing job")
@@ -382,7 +411,7 @@ impl Shell {
             .ok_or("command stderr unavailable")?;
         let id = format!(
             "{}-{:x}",
-            std::process::id(),
+            self.namespace,
             NEXT_JOB.fetch_add(1, Ordering::Relaxed)
         );
         let (cancel, cancel_rx) = watch::channel(false);
@@ -399,15 +428,15 @@ impl Shell {
                 timed_out: false,
                 error: None,
                 finished: None,
-                stdout: Output::new(&store, format!("job:{id}:stdout")),
-                stderr: Output::new(&store, format!("job:{id}:stderr")),
+                stdout: Output::new(store, format!("job:{id}:stdout")),
+                stderr: Output::new(store, format!("job:{id}:stderr")),
             }),
             changed: Notify::new(),
             cancel,
         });
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
-        self.events.push(json!({"type":"ssmcp.exec.started","job_id":id,"pid":pid,"command":job.command,"cwd":job.cwd}));
+        self.events.push(json!({"type":"exec.started","job_id":id,"pid":pid,"command":job.command,"cwd":job.cwd}));
         let events = self.events.clone();
         let worker = job.clone();
         tokio::spawn(async move {
@@ -418,8 +447,8 @@ impl Shell {
                 biased;
                 _=cancel_rx.changed() => (None,true,false,None),
                 result=async {
-                    if args.timeout_ms==0 { Ok(process.child.wait().await) }
-                    else { timeout(Duration::from_millis(args.timeout_ms),process.child.wait()).await }
+                    if args.timeout_ms==0 { Ok(process.wait().await) }
+                    else { timeout(Duration::from_millis(args.timeout_ms),process.wait()).await }
                 } => match result {
                     Ok(Ok(status)) => (status.code(),false,false,None),
                     Ok(Err(error)) => (None,false,false,Some(error.to_string())),
@@ -444,7 +473,7 @@ impl Shell {
             drop(permit);
             worker.changed.notify_waiters();
             let mut snapshot = worker.snapshot();
-            snapshot["type"] = json!("ssmcp.exec.finished");
+            snapshot["type"] = json!("exec.exited");
             events.push(snapshot);
         });
         let mut result = job.snapshot();
@@ -530,7 +559,7 @@ async fn capture<R: AsyncRead + Unpin>(
                 break;
             }
             Ok(count) => {
-                let (inline, notice) = {
+                let (offset, notice) = {
                     let mut state = job.state();
                     let output = if stream == "stdout" {
                         &mut state.stdout
@@ -538,16 +567,20 @@ async fn capture<R: AsyncRead + Unpin>(
                         &mut state.stderr
                     };
                     let was_spilled = output.capture.is_spilled();
+                    let offset = output.end;
                     output.append(&buffer[..count]);
                     (
-                        !output.capture.is_spilled(),
+                        offset,
                         (!was_spilled && output.capture.is_spilled())
                             .then(|| output.capture.metadata()),
                     )
                 };
-                if inline {
-                    events.push(json!({"method":"command/exec/outputDelta","params":{"deltaBase64":STANDARD.encode(&buffer[..count]),"stream":stream,"processId":job.id}}));
-                } else if let Some(artifact) = notice {
+                // Retention and live observation are independent: spilling never
+                // stops new output events or repeats bytes already displayed.
+                events.push(json!({"type":format!("exec.{stream}"),"job_id":job.id,
+                    "method":"command/exec/outputDelta","params":{"deltaBase64":STANDARD.encode(&buffer[..count]),
+                    "stream":stream,"processId":job.id,"offset":offset,"next_offset":offset+count as u64}}));
+                if let Some(artifact) = notice {
                     events.push(json!({"type":"ssmcp.output_archived","job_id":job.id,"stream":stream,"artifact":artifact}));
                 }
                 job.changed.notify_waiters();
@@ -855,6 +888,145 @@ mod tests {
         shell.shutdown().await;
     }
     #[tokio::test]
+    async fn spilled_output_remains_live_before_completion_and_is_not_replayed() {
+        let shell = Shell::new();
+        let id = py(&shell, "import sys,time; sys.stdout.write('line\\n'*600); sys.stdout.flush(); time.sleep(.2); print('AFTER_SPILL_MARKER',flush=True); time.sleep(1)").await;
+        let mut cursor = 0;
+        let mut markers = 0;
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let page = shell
+                    .call(
+                        "ssmcp.exec.events",
+                        json!({"cursor":cursor,"max_events":256,"wait_ms":100}),
+                    )
+                    .await
+                    .unwrap();
+                cursor = page["next_cursor"].as_u64().unwrap();
+                for record in page["events"].as_array().unwrap() {
+                    let event = &record["event"];
+                    if event["method"] == "command/exec/outputDelta"
+                        && let Some(encoded) = event["params"]["deltaBase64"].as_str()
+                    {
+                        let bytes = STANDARD.decode(encoded).unwrap();
+                        markers += String::from_utf8_lossy(&bytes)
+                            .matches("AFTER_SPILL_MARKER")
+                            .count();
+                    }
+                }
+                if markers != 0 {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("post-spill output was not delivered live");
+        assert_eq!(markers, 1);
+        assert_eq!(
+            shell
+                .call("ssmcp.exec.status", json!({"job_id":id}))
+                .await
+                .unwrap()["running"],
+            true
+        );
+        shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
+            .await
+            .unwrap();
+        shell
+            .call("ssmcp.exec.read", json!({"job_id":id}))
+            .await
+            .unwrap();
+        shell
+            .call("ssmcp.exec.read", json!({"job_id":id}))
+            .await
+            .unwrap();
+        let remaining = shell
+            .call(
+                "ssmcp.exec.events",
+                json!({"cursor":cursor,"max_events":256}),
+            )
+            .await
+            .unwrap();
+        for record in remaining["events"].as_array().unwrap() {
+            if let Some(encoded) = record["event"]["params"]["deltaBase64"].as_str() {
+                assert!(
+                    !String::from_utf8_lossy(&STANDARD.decode(encoded).unwrap())
+                        .contains("AFTER_SPILL_MARKER")
+                );
+            }
+        }
+        shell.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn execution_cwd_is_bound_to_the_authorized_workspace() {
+        let base = std::env::temp_dir().join(format!(
+            "ssmcp-exec-root-{}-{}",
+            std::process::id(),
+            NEXT_JOB.fetch_add(1, Ordering::Relaxed)
+        ));
+        let root = base.join("workspace");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let shell =
+            Shell::with_workspace(root.clone(), OutputStore::new_connection().unwrap()).unwrap();
+        let command = json!([python(), "-u", "-c", "import os; print(os.getcwd())"]);
+        for cwd in [outside.to_string_lossy().into_owned(), "../outside".into()] {
+            assert!(
+                shell
+                    .call("ssmcp.exec.start", json!({"command":command,"cwd":cwd}))
+                    .await
+                    .is_err()
+            );
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+            assert!(
+                shell
+                    .call(
+                        "ssmcp.exec.start",
+                        json!({"command":command,"cwd":"escape"})
+                    )
+                    .await
+                    .is_err()
+            );
+        }
+        let job = shell
+            .call(
+                "ssmcp.exec.start",
+                json!({"command":command,"cwd":"nested"}),
+            )
+            .await
+            .unwrap();
+        let id = job["job_id"].as_str().unwrap();
+        assert_eq!(
+            job["cwd"],
+            json!(root.join("nested").canonicalize().unwrap())
+        );
+        shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
+            .await
+            .unwrap();
+        let result = shell
+            .call("ssmcp.exec.read", json!({"job_id":id}))
+            .await
+            .unwrap();
+        assert_eq!(
+            result["stdout"].as_str().unwrap().trim(),
+            root.join("nested")
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        shell.shutdown().await;
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
     async fn large_output_keeps_the_full_artifact_and_the_bounded_tail() {
         let shell = Shell::new();
         let id = py(&shell, "import sys; sys.stdout.buffer.write(b'x'*100000)").await;
@@ -870,7 +1042,7 @@ mod tests {
         let artifact = &page["snapshot"]["stdout"]["artifact"];
         assert_eq!(artifact["bytes"], 100000);
         assert_eq!(artifact["complete"], true);
-        let store = OutputStore::global().unwrap();
+        let store = shell.output.clone();
         let saved = store
             .perform(
                 "ssmcp.output.read",

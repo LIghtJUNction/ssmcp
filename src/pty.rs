@@ -67,18 +67,28 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn spawn(shell: &Path) -> crate::Result<Arc<Self>> {
-        Self::spawn_with_logging(shell, false)
+        Self::spawn_with_logging(shell, false, OutputStore::global()?)
     }
 
     pub fn spawn_live(shell: &Path) -> crate::Result<Arc<Self>> {
-        Self::spawn_with_logging(shell, true)
+        Self::spawn_with_logging(shell, true, OutputStore::global()?)
     }
 
-    fn spawn_with_logging(shell: &Path, live: bool) -> crate::Result<Arc<Self>> {
+    pub fn spawn_live_with_store(
+        shell: &Path,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        Self::spawn_with_logging(shell, true, output)
+    }
+
+    fn spawn_with_logging(
+        shell: &Path,
+        live: bool,
+        output_store: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
-        let output_store = OutputStore::global()?;
         let mut master = -1;
         let mut slave = -1;
         let size = libc::winsize {

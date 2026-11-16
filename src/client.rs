@@ -1,4 +1,5 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
+mod input;
 pub(crate) mod reload;
 pub(crate) mod render;
 mod ui;
@@ -222,7 +223,11 @@ impl Options {
                 Some("-t" | "--type" | "--backend") => {
                     return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; installed harnesses are discovered automatically".into());
                 }
-                Some(value) if value.starts_with("--type=") || value.starts_with("--backend=") || value.starts_with("-t=") => {
+                Some(value)
+                    if value.starts_with("--type=")
+                        || value.starts_with("--backend=")
+                        || value.starts_with("-t=") =>
+                {
                     return Err("harness selection was removed; remove -t/--type/--backend; installed harnesses are discovered automatically".into());
                 }
                 Some("--name") => {
@@ -502,13 +507,19 @@ pub async fn run() -> crate::Result<()> {
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
-        let backend = Runtime::with_context_roots(
-            backend,
+        let backend = match Runtime::with_context_roots(
+            backend.clone(),
             std::env::current_dir()?,
             options.context_roots.clone(),
-        )?;
+        ) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                backend.shutdown().await;
+                return Err(error.into());
+            }
+        };
         let tools = tokio::select! {
-            result = timeout(Duration::from_secs(120),backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
+            result = timeout(Duration::from_secs(120),async { backend.wait_discovery().await; backend.tools().await }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
             _ = interrupt.recv() => { backend.shutdown().await; return Ok(()); },
             _ = terminate.recv() => { backend.shutdown().await; return Ok(()); },
         };
@@ -585,12 +596,21 @@ pub async fn run() -> crate::Result<()> {
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
         result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
     };
-    let backend = Runtime::with_context_roots(
-        backend,
+    let backend = match Runtime::with_context_roots(
+        backend.clone(),
         PathBuf::from(&metadata.cwd),
         options.context_roots.clone(),
-    )?;
-    // Discover before publishing credentials, so a missing/incompatible backend fails locally.
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = ssh.start_kill();
+            backend.shutdown().await;
+            incoming.stop().await;
+            let _ = ssh.wait().await;
+            return Err(error.into());
+        }
+    };
+    // Core tools are ready immediately; optional providers continue discovery independently.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
@@ -642,6 +662,16 @@ pub async fn run() -> crate::Result<()> {
             "Enter login_code on the MCP OAuth page. Ctrl-C disconnects and revokes access."
         },
     );
+    let local_input = match input::Input::attach(backend.terminal()) {
+        Ok(input) => input,
+        Err(error) => {
+            let _ = ssh.start_kill();
+            backend.shutdown().await;
+            incoming.stop().await;
+            let _ = ssh.wait().await;
+            return Err(error.into());
+        }
+    };
     let writer = Arc::new(Mutex::new(writer));
     let mut requests: JoinSet<io::Result<()>> = JoinSet::new();
     let mut reload_requested = false;
@@ -658,7 +688,7 @@ pub async fn run() -> crate::Result<()> {
                     }
                     if reload::is_reload(&operation) {
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
-                        let response = restart.accept(arguments, requests.len(), &client_id, github_auth);
+                        let response = backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth));
                         let accepted = response.is_ok();
                         let sent = timeout(Duration::from_secs(10), async {
                             let mut writer = writer.lock().await;
@@ -731,6 +761,9 @@ pub async fn run() -> crate::Result<()> {
             _ = terminate.recv() => break Ok(()),
         }
     };
+    if let Some(input) = local_input {
+        input.shutdown().await;
+    }
     requests.abort_all();
     while requests.join_next().await.is_some() {}
     incoming.stop().await;
@@ -740,7 +773,7 @@ pub async fn run() -> crate::Result<()> {
     let _ = ssh.wait().await;
     render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {
-        return restart.execute();
+        return restart.execute(backend.output());
     }
     result
 }
@@ -1058,10 +1091,20 @@ mod tests {
         .unwrap();
         assert!(local.list_tools);
         assert_eq!(local.context_roots.len(), 1);
-        assert!(Options::parse(
-            ["-t", "codex", "my-server", "--", "--context-root", "native-option"]
+        assert!(
+            Options::parse(
+                [
+                    "-t",
+                    "codex",
+                    "my-server",
+                    "--",
+                    "--context-root",
+                    "native-option"
+                ]
                 .map(OsString::from)
-        ).is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1092,4 +1135,3 @@ mod tests {
         assert!(error.contains("at most 8"), "{error}");
     }
 }
-

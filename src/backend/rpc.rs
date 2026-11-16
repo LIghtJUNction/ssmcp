@@ -6,7 +6,7 @@ use std::{
     io,
     process::Stdio,
     sync::{
-        Arc, Mutex as SyncMutex,
+        Arc, Mutex as SyncMutex, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -48,14 +48,33 @@ pub struct Peer {
     next: AtomicU64,
     alive: AtomicBool,
     events: Arc<EventLog>,
+    // Cancellation Drop cannot await a contended process lock. A weak self
+    // reference schedules cleanup without creating a permanent ownership cycle.
+    weak: Weak<Self>,
 }
 
 impl Peer {
     pub async fn spawn(
-        mut command: Command,
+        command: Command,
         label: &str,
         dialect: Dialect,
     ) -> crate::Result<Arc<Self>> {
+        Self::spawn_with_output(
+            command,
+            label,
+            dialect,
+            crate::output::OutputStore::global()?,
+        )
+        .await
+    }
+
+    pub async fn spawn_with_output(
+        mut command: Command,
+        label: &str,
+        dialect: Dialect,
+        output: Arc<crate::output::OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        crate::program::configure(&mut command);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -78,7 +97,7 @@ impl Peer {
             .stderr
             .take()
             .ok_or("backend stderr unavailable")?;
-        let peer = Arc::new(Self {
+        let peer = Arc::new_cyclic(|weak| Self {
             dialect,
             process: Mutex::new(process),
             writer: Mutex::new(Some(writer)),
@@ -88,7 +107,8 @@ impl Peer {
             requests: SyncMutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             alive: AtomicBool::new(true),
-            events: EventLog::new(label),
+            events: EventLog::with_output(label, output),
+            weak: weak.clone(),
         });
         let events = Arc::downgrade(&peer.events);
         let stderr_task = tokio::spawn(async move {
@@ -148,11 +168,34 @@ impl Peer {
         }
         let outcome = timeout(Duration::from_secs(10), async {
             let mut guard = self.writer.lock().await;
+            // A queued sender can wake after another write poisoned this pipe.
+            if !self.alive.load(Ordering::Acquire) {
+                return Err(io::Error::other("native process disconnected"));
+            }
             let writer = guard
                 .as_mut()
                 .ok_or_else(|| io::Error::other("native stdin closed"))?;
+            struct IncompleteFrame<'a> {
+                peer: &'a Peer,
+                armed: bool,
+            }
+            impl Drop for IncompleteFrame<'_> {
+                fn drop(&mut self) {
+                    if self.armed {
+                        self.peer.interrupted_write();
+                    }
+                }
+            }
+            // Construct after acquiring the writer: cancelling while merely
+            // queued cannot have written bytes and must not disconnect a peer.
+            let mut frame = IncompleteFrame {
+                peer: self,
+                armed: true,
+            };
             writer.write_all(&encoded).await?;
-            writer.flush().await
+            writer.flush().await?;
+            frame.armed = false;
+            Ok::<(), io::Error>(())
         })
         .await
         .map_err(|_| "native stdin write timed out".to_string())
@@ -165,6 +208,24 @@ impl Peer {
             self.writer.lock().await.take();
         }
         outcome
+    }
+
+    fn interrupted_write(&self) {
+        // This runs even when an outer timeout/abort drops send before its
+        // normal error branch. No later frame may follow a partial JSON line.
+        self.fail("native stdin write interrupted; transport cannot be reused");
+        if let Ok(mut process) = self.process.try_lock() {
+            process.terminate();
+        }
+        if let (Ok(runtime), Some(peer)) =
+            (tokio::runtime::Handle::try_current(), self.weak.upgrade())
+        {
+            // Keep stdin open until shutdown has captured and stopped owned
+            // descendants. Also reap if termination happened synchronously.
+            runtime.spawn(async move {
+                peer.shutdown().await;
+            });
+        }
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Response {
@@ -475,6 +536,163 @@ async fn read_json<R: AsyncBufRead + Unpin>(reader: &mut R) -> io::Result<Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn request_seen(peer: &Peer, id: &str) {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if peer
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .contains_key(&json!(id).to_string())
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("fixture did not observe native input");
+    }
+
+    async fn responsive_peer() -> Arc<Peer> {
+        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+        command.args(["-u", "-c", r#"
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if request.get('method') == 'fixture/hang':
+        print(json.dumps({'jsonrpc':'2.0','id':'awaiting','method':'fixture/observed','params':{}}), flush=True)
+    elif 'id' in request:
+        print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':{'accepted':True}}), flush=True)
+"#]);
+        Peer::spawn(command, "framing-fixture", Dialect::JsonRpc)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn cancelled_partial_frame_revokes_transport_and_reaps_native_process() {
+        for process_lock_contended in [false, true] {
+            let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+            command.args(["-u", "-c", r#"
+import json, os, time
+assert len(os.read(0, 1)) == 1
+print(json.dumps({'jsonrpc':'2.0','id':'partial','method':'fixture/first-byte','params':{}}), flush=True)
+time.sleep(60)
+"#]);
+            let peer = Peer::spawn(command, "partial-frame-fixture", Dialect::JsonRpc)
+                .await
+                .unwrap();
+            let sending = peer.clone();
+            let task = tokio::spawn(async move {
+                sending
+                    .send(
+                        json!({"method":"fixture/large","params":{"data":"x".repeat(8*1024*1024)}}),
+                    )
+                    .await
+            });
+            request_seen(&peer, "partial").await;
+            assert!(
+                !task.is_finished(),
+                "fixture must stop consuming before the complete frame fits"
+            );
+            let held = if process_lock_contended {
+                Some(peer.process.lock().await)
+            } else {
+                None
+            };
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert!(!peer.alive.load(Ordering::Acquire));
+            assert!(peer.send(json!({"method":"fixture/next"})).await.is_err());
+            if held.is_some() {
+                assert!(
+                    peer.writer.lock().await.is_some(),
+                    "stdin must stay open until descendant cleanup obtains the process lock"
+                );
+            }
+            drop(held);
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    if peer.writer.lock().await.is_none() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("cancelled write did not finish native cleanup");
+            assert!(
+                peer.process.lock().await.child.id().is_none(),
+                "native child was not reaped"
+            );
+            peer.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_while_queued_for_writer_preserves_the_healthy_peer() {
+        let peer = responsive_peer().await;
+        let writer = peer.writer.lock().await;
+        let sending = peer.clone();
+        let task =
+            tokio::spawn(async move { sending.send(json!({"method":"fixture/queued"})).await });
+        tokio::task::yield_now().await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(peer.alive.load(Ordering::Acquire));
+        drop(writer);
+        assert_eq!(
+            peer.request("fixture/ping", json!({})).await.unwrap(),
+            json!({"accepted":true})
+        );
+        peer.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn queued_writer_rechecks_liveness_after_acquiring_the_pipe() {
+        let peer = responsive_peer().await;
+        let writer = peer.writer.lock().await;
+        let sending = peer.clone();
+        let task =
+            tokio::spawn(async move { sending.send(json!({"method":"fixture/queued"})).await });
+        tokio::task::yield_now().await;
+        peer.fail("fixture disconnected while sender was queued");
+        drop(writer);
+        assert!(
+            timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        peer.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_a_complete_frame_keeps_approval_and_control_transport() {
+        let peer = responsive_peer().await;
+        let waiting = peer.clone();
+        let task = tokio::spawn(async move { waiting.request("fixture/hang", json!({})).await });
+        request_seen(&peer, "awaiting").await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(peer.alive.load(Ordering::Acquire));
+        assert!(peer.calls.lock().unwrap().is_empty());
+        assert_eq!(
+            peer.request("fixture/ping", json!({})).await.unwrap(),
+            json!({"accepted":true})
+        );
+        assert!(
+            peer.requests
+                .lock()
+                .unwrap()
+                .contains_key(&json!("awaiting").to_string()),
+            "cancellation must not automatically answer native requests"
+        );
+        peer.shutdown().await;
+    }
 
     #[tokio::test]
     async fn shutdown_retains_native_stdin_until_descendant_cleanup_can_start() {

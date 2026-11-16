@@ -1,33 +1,76 @@
-//! Version-matched Codex App Server: every generated client method, native events,
-//! and server-initiated approvals/tool calls. No embedded copy of Codex's tool set.
+//! Version-matched Codex App Server and its dynamically discovered MCP tools.
+//! Native requests, results and approvals remain owned by the installed server.
 use super::{
     result,
     rpc::{Dialect, Peer},
 };
+use crate::output::OutputStore;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
+    fmt::Write,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
-use tokio::{process::Command, time::timeout};
+use tokio::{process::Command, sync::Mutex, time::timeout};
 
 type Methods = BTreeMap<String, (String, bool)>;
+const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(60);
+const MCP_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_MCP_PAGES: usize = 128;
+const MAX_MCP_TOOLS: usize = 4096;
+
+#[derive(Clone)]
+struct McpRoute {
+    server: String,
+    tool: String,
+}
+
+#[derive(Default)]
+struct McpCatalog {
+    tools: Vec<Value>,
+    routes: BTreeMap<String, McpRoute>,
+    omitted: Vec<Value>,
+}
+
+#[derive(Default)]
+struct McpState {
+    thread_id: Option<String>,
+    catalog: McpCatalog,
+    error: Option<String>,
+    generation: u64,
+    refreshing: bool,
+}
 
 pub struct Codex {
     peer: Arc<Peer>,
     tools: Vec<Value>,
     methods: Methods,
     schemas: BTreeMap<String, Value>,
-    mcp_thread_id: Option<String>,
-    mcp_tools: BTreeMap<String, (String, String)>,
+    // A snapshot lock never crosses network I/O. Healthy refreshes retain the
+    // last complete snapshot; failure/cancellation revokes it atomically.
+    mcp: std::sync::Mutex<McpState>,
+    mcp_refresh: Mutex<()>,
+    // A native list request may outlive our deadline; retain at most one rather
+    // than accumulating uncancellable native requests on every refresh tick.
+    mcp_page: Mutex<Option<tokio::task::JoinHandle<Result<Value, String>>>>,
+    mcp_supported: bool,
 }
 
 impl Codex {
     pub async fn start(program: &OsStr, args: &[OsString]) -> crate::Result<Arc<Self>> {
+        Self::start_with_output(program, args, OutputStore::global()?).await
+    }
+
+    pub async fn start_with_output(
+        program: &OsStr,
+        args: &[OsString],
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
         for arg in args {
             if arg == "--listen" || arg.to_string_lossy().starts_with("--listen=") {
                 return Err(
@@ -63,13 +106,24 @@ impl Codex {
             .get("ClientRequest.json")
             .ok_or("Codex generated no ClientRequest.json")?;
         let (tools, methods) = catalog(request_schema)?;
+        let mcp_supported = [
+            "thread/start",
+            "mcpServerStatus/list",
+            "mcpServer/tool/call",
+        ]
+        .iter()
+        .all(|expected| {
+            methods
+                .values()
+                .any(|(method, _)| method.as_str() == *expected)
+        });
         let mut command = Command::new(program);
         command
             .args(["app-server", "--listen", "stdio://"])
             .args(args);
-        let peer = Peer::spawn(command, "codex", Dialect::JsonRpc).await?;
+        let peer = Peer::spawn_with_output(command, "codex", Dialect::JsonRpc, output).await?;
         let initialized = async {
-            peer.request("initialize",json!({
+            peer.request("initialize", json!({
                 "clientInfo":{"name":"ssmcp","title":"ssmcp","version":env!("CARGO_PKG_VERSION")},
                 "capabilities":{"experimentalApi":true}
             })).await?;
@@ -80,35 +134,213 @@ impl Codex {
             peer.shutdown().await;
             return Err(error.into());
         }
-        let (mcp_thread_id, mcp_tools, dynamic_tools) = discover_mcp_tools(&peer).await;
-        let mut tools = tools;
-        let mut registered: BTreeSet<String> = tools
-            .iter()
-            .filter_map(|t| t["name"].as_str().map(str::to_owned))
-            .collect();
-        for tool in dynamic_tools {
-            if let Some(name) = tool["name"].as_str() {
-                if registered.insert(name.to_owned()) {
-                    tools.push(tool);
-                }
-            }
-        }
-        eprintln!(
-            "[ssmcp harness] Codex MCP tools registered: {}",
-            mcp_tools.len()
-        );
-        Ok(Arc::new(Self {
+        let codex = Arc::new(Self {
             peer,
             tools,
             methods,
             schemas,
-            mcp_thread_id,
-            mcp_tools,
-        }))
+            mcp: std::sync::Mutex::new(McpState::default()),
+            mcp_refresh: Mutex::new(()),
+            mcp_page: Mutex::new(None),
+            mcp_supported,
+        });
+        // MCP discovery is optional. A rejected or absent MCP capability does
+        // not suppress the already-negotiated App Server control interface.
+        let _ = codex.refresh_mcp().await;
+        Ok(codex)
+    }
+
+    async fn connected(&self) -> bool {
+        self.peer.pending().await["connected"] == true
+    }
+
+    async fn invalidate_mcp(&self, error: &str) {
+        let mut state = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+        state.catalog = McpCatalog::default();
+        state.error = Some(error.to_owned());
+        state.generation += 1;
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
-        Ok(self.tools.clone())
+        if !self.connected().await {
+            self.invalidate_mcp("Codex native process disconnected")
+                .await;
+            return Err("Codex native process disconnected".into());
+        }
+        let _ = self.refresh_mcp().await;
+        if !self.connected().await {
+            self.invalidate_mcp("Codex native process disconnected")
+                .await;
+            return Err("Codex native process disconnected".into());
+        }
+        let mut tools = self.tools.clone();
+        tools.extend(
+            self.mcp
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .catalog
+                .tools
+                .clone(),
+        );
+        Ok(tools)
+    }
+
+    /// MCP discovery diagnostics; App Server controls may remain available when
+    /// this optional scope is unavailable or a tool has no native schema.
+    pub async fn diagnostics(&self) -> Value {
+        let connected = self.connected().await;
+        if !connected {
+            self.invalidate_mcp("Codex native process disconnected")
+                .await;
+        }
+        let state = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+        json!({
+            "status":if connected && state.error.is_none() {"ready"} else {"unavailable"},
+            "reason":state.error,
+            "tools":state.catalog.tools.len(),
+            "connected":connected,
+            "refreshing":state.refreshing,
+            "generation":state.generation,
+            "scope":"MCP tools enumerated by Codex mcpServerStatus/list and forwarded through mcpServer/tool/call",
+            "omitted":state.catalog.omitted
+        })
+    }
+
+    async fn refresh_mcp(&self) -> Result<(), String> {
+        // Concurrent listings share the existing snapshot instead of queuing
+        // another potentially slow native network discovery.
+        let Ok(_serial) = self.mcp_refresh.try_lock() else {
+            return Ok(());
+        };
+        let (generation, previous_error, thread_id) = {
+            let mut state = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+            state.refreshing = true;
+            (
+                state.generation,
+                state.error.clone(),
+                state.thread_id.clone(),
+            )
+        };
+        struct Refresh<'a> {
+            state: &'a std::sync::Mutex<McpState>,
+            generation: u64,
+            finished: bool,
+        }
+        impl Drop for Refresh<'_> {
+            fn drop(&mut self) {
+                if self.finished {
+                    return;
+                }
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.refreshing = false;
+                if state.generation == self.generation {
+                    state.catalog = McpCatalog::default();
+                    state.error = Some("Codex MCP discovery was cancelled".into());
+                    state.generation += 1;
+                }
+            }
+        }
+        let mut refresh = Refresh {
+            state: &self.mcp,
+            generation,
+            finished: false,
+        };
+        let discovered = timeout(MCP_DISCOVERY_TIMEOUT, async {
+            if !self.connected().await {
+                return Err("Codex native process disconnected".to_owned());
+            }
+            if !self.mcp_supported {
+                return Err("Installed Codex does not expose MCP discovery and direct calls in its native schema".to_owned());
+            }
+            if thread_id.is_none() {
+                let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+                let response = self.peer.request(
+                    "thread/start", json!({"cwd":cwd,"ephemeral":true})
+                ).await?;
+                let thread_id = response.pointer("/thread/id")
+                    .and_then(Value::as_str).filter(|id| !id.is_empty())
+                    .ok_or("Codex MCP thread response omitted thread.id")?.to_owned();
+                let mut state = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+                if state.generation != generation {
+                    return Err("Codex MCP discovery was invalidated while starting its thread".into());
+                }
+                state.thread_id = Some(thread_id);
+            }
+            discover_mcp_tools(self).await
+        }).await.map_err(|_| "Codex MCP discovery timed out".to_owned()).and_then(|value| value);
+        let outcome = {
+            let mut state = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+            state.refreshing = false;
+            if state.generation != generation {
+                Err("Codex MCP discovery was invalidated before publication".to_owned())
+            } else {
+                state.generation += 1;
+                match discovered {
+                    Ok(catalog) => {
+                        state.catalog = catalog;
+                        state.error = None;
+                        Ok(())
+                    }
+                    Err(error) => {
+                        state.catalog = McpCatalog::default();
+                        state.error = Some(error.clone());
+                        Err(error)
+                    }
+                }
+            }
+        };
+        refresh.finished = true;
+        if let Err(error) = &outcome
+            && previous_error.as_deref() != Some(error.as_str())
+        {
+            self.peer.events().push(json!({
+                "type":"harness.discovery.failed","provider":"codex",
+                "scope":"mcp","error":error
+            }));
+        }
+        outcome
+    }
+
+    async fn discovery_page(&self, params: Value) -> Result<Value, String> {
+        let mut pending = self.mcp_page.lock().await;
+        if let Some(previous) = pending.as_mut() {
+            // A timeout/cancellation cannot cancel undocumented native server
+            // work. Drain its eventual response before issuing any new list.
+            if timeout(Duration::from_millis(25), previous).await.is_err() {
+                return Err(
+                    "A previous Codex MCP discovery page is still pending; no new request was sent"
+                        .into(),
+                );
+            }
+            pending.take();
+        }
+        let peer = self.peer.clone();
+        *pending = Some(tokio::spawn(async move {
+            peer.request("mcpServerStatus/list", params).await
+        }));
+        match timeout(MCP_PAGE_TIMEOUT, pending.as_mut().unwrap()).await {
+            Ok(result) => {
+                pending.take();
+                result.map_err(|error| format!("Codex MCP discovery request stopped: {error}"))?
+            }
+            Err(_) => Err("Codex MCP discovery page timed out".into()),
+        }
+    }
+
+    async fn native_call(&self, method: &str, params: Value) -> Result<Value, String> {
+        let response = self.peer.request(method, params).await;
+        if method == "mcpServer/tool/call" && response.is_err() {
+            self.invalidate_mcp("Codex MCP native request failed; refresh the discovered catalog")
+                .await;
+        }
+        let value = response?;
+        if method == "mcpServer/tool/call" {
+            // This is already a CallToolResult, including native isError,
+            // structuredContent, images, metadata and future result fields.
+            Ok(value)
+        } else {
+            Ok(result(value))
+        }
     }
 
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
@@ -135,165 +367,200 @@ impl Codex {
                 let method = args
                     .get("method")
                     .and_then(Value::as_str)
-                    .filter(|m| !m.is_empty())
+                    .filter(|method| !method.is_empty())
                     .ok_or("method is required")?;
                 if method == "initialize" {
                     return Err("ssmcp already initialized this Codex connection".into());
                 }
-                Ok(result(
-                    self.peer
-                        .request(
-                            method,
-                            args.get("params").cloned().unwrap_or_else(|| json!({})),
-                        )
-                        .await?,
-                ))
+                self.native_call(
+                    method,
+                    args.get("params").cloned().unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            _ if name.starts_with("codex.mcp.") => {
+                if !self.connected().await {
+                    self.invalidate_mcp("Codex native process disconnected")
+                        .await;
+                    return Err("Codex native process disconnected".into());
+                }
+                let (route, thread_id) = {
+                    let state = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+                    let route = state
+                        .catalog
+                        .routes
+                        .get(name)
+                        .ok_or("Codex MCP tool is not in the current discovered catalog")?
+                        .clone();
+                    let thread_id = state
+                        .thread_id
+                        .clone()
+                        .ok_or("Codex MCP thread is unavailable")?;
+                    (route, thread_id)
+                };
+                let response = self
+                    .native_call(
+                        "mcpServer/tool/call",
+                        json!({
+                            "server":route.server,"threadId":thread_id,
+                            "tool":route.tool,"arguments":args
+                        }),
+                    )
+                    .await;
+                if !self.connected().await {
+                    self.invalidate_mcp("Codex native process disconnected")
+                        .await;
+                }
+                response
             }
             _ => {
-                if let Some((server, tool)) = self.mcp_tools.get(name) {
-                    let thread_id = self
-                        .mcp_thread_id
-                        .as_deref()
-                        .ok_or("Codex MCP thread is unavailable")?;
-                    return Ok(result(self.peer.request("mcpServer/tool/call", json!({"server":server,"threadId":thread_id,"tool":tool,"arguments":args})).await?));
-                }
                 let (method, null_params) = self
                     .methods
                     .get(name)
                     .ok_or("unknown Codex tool; call tools/list or codex.rpc")?;
-                if *null_params && args.as_object().is_none_or(|a| !a.is_empty()) {
+                if *null_params
+                    && args
+                        .as_object()
+                        .is_none_or(|arguments| !arguments.is_empty())
+                {
                     return Err("this native method takes no arguments".into());
                 }
-                Ok(result(
-                    self.peer
-                        .request(method, if *null_params { Value::Null } else { args })
-                        .await?,
-                ))
+                self.native_call(method, if *null_params { Value::Null } else { args })
+                    .await
             }
         }
     }
 
     pub async fn shutdown(&self) {
+        self.invalidate_mcp("Codex native process disconnected")
+            .await;
         self.peer.shutdown().await;
+        let pending = self.mcp_page.lock().await.take();
+        if let Some(task) = pending {
+            task.abort();
+            let _ = task.await;
+        }
     }
 }
 
-async fn discover_mcp_tools(
-    peer: &Arc<Peer>,
-) -> (
-    Option<String>,
-    BTreeMap<String, (String, String)>,
-    Vec<Value>,
-) {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    let thread = match timeout(
-        Duration::from_secs(15),
-        peer.request("thread/start", json!({"cwd":cwd,"ephemeral":true})),
-    )
-    .await
-    {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => {
-            eprintln!("[ssmcp harness] Codex MCP thread unavailable: {error}");
-            return (None, BTreeMap::new(), Vec::new());
+impl Drop for Codex {
+    fn drop(&mut self) {
+        if let Some(task) = self.mcp_page.get_mut().take() {
+            task.abort();
         }
-        Err(_) => {
-            eprintln!("[ssmcp harness] Codex MCP thread startup timed out");
-            return (None, BTreeMap::new(), Vec::new());
-        }
-    };
-    let Some(thread_id) = thread
-        .pointer("/thread/id")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-    else {
-        eprintln!("[ssmcp harness] Codex MCP thread response omitted thread.id");
-        return (None, BTreeMap::new(), Vec::new());
-    };
+    }
+}
+
+async fn discover_mcp_tools(codex: &Codex) -> Result<McpCatalog, String> {
+    let mut catalog = McpCatalog::default();
     let mut cursor: Option<String> = None;
-    let mut methods = BTreeMap::new();
-    let mut definitions = Vec::new();
-    for _ in 0..128 {
-        let mut params = json!({"detail":"toolsAndAuthOnly","limit":1});
-        if let Some(value) = &cursor {
-            params["cursor"] = json!(value);
+    let mut cursors = BTreeSet::new();
+    let mut servers_seen = BTreeSet::new();
+    for _ in 0..MAX_MCP_PAGES {
+        let mut params = json!({"detail":"toolsAndAuthOnly","limit":64});
+        if let Some(cursor) = &cursor {
+            params["cursor"] = json!(cursor);
         }
-        let page = match timeout(
-            Duration::from_secs(5),
-            peer.request("mcpServerStatus/list", params),
-        )
-        .await
-        {
-            Ok(Ok(value)) => value,
-            Ok(Err(error)) => {
-                eprintln!("[ssmcp harness] Codex MCP discovery stopped: {error}");
-                break;
+        let page = codex.discovery_page(params).await?;
+        let servers = page
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or("Codex MCP discovery returned no data array")?;
+        for server in servers {
+            if catalog.tools.len() + catalog.omitted.len() >= MAX_MCP_TOOLS {
+                return Err("Codex MCP tool catalog exceeds 4096 entries".into());
             }
-            Err(_) => {
-                eprintln!("[ssmcp harness] Codex MCP discovery page timed out");
-                break;
+            let server_name = server
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or("Codex MCP server has no name")?;
+            if !servers_seen.insert(server_name.to_owned()) {
+                return Err("Codex MCP discovery repeated a server".into());
             }
-        };
-        if let Some(servers) = page.get("data").and_then(Value::as_array) {
-            for server in servers {
-                let Some(server_name) = server.get("name").and_then(Value::as_str) else {
-                    continue;
-                };
-                let Some(tools) = server.get("tools").and_then(Value::as_object) else {
-                    continue;
-                };
-                for (tool_name, spec) in tools {
-                    let Some(schema) = spec.get("inputSchema").filter(|v| v.is_object()) else {
-                        continue;
-                    };
-                    let server_part = safe_tool_segment(server_name);
-                    let tool_part = safe_tool_segment(tool_name);
-                    let name = format!("codex.mcp.{server_part}.{tool_part}");
-                    if name.len() > 128 || methods.contains_key(&name) {
-                        continue;
-                    }
-                    let description = spec
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Native MCP server tool exposed by Codex");
-                    let mut definition = json!({"name":name,"description":description,"inputSchema":schema,"annotations":spec.get("annotations").cloned().unwrap_or_else(||json!({"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}))});
-                    if let Some(meta) = spec.get("_meta") {
-                        definition["_meta"] = meta.clone();
-                    }
-                    methods.insert(name, (server_name.to_owned(), tool_name.to_owned()));
-                    definitions.push(definition);
+            let Some(tools) = server.get("tools").and_then(Value::as_object) else {
+                catalog.omitted.push(json!({"server":server_name,"reason":"Native server did not expose a tool catalog"}));
+                continue;
+            };
+            for (key, spec) in tools {
+                if catalog.tools.len() + catalog.omitted.len() >= MAX_MCP_TOOLS {
+                    return Err("Codex MCP tool catalog exceeds 4096 entries".into());
                 }
+                let native_name = spec
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(key.as_str());
+                if native_name.is_empty() || !spec.get("inputSchema").is_some_and(Value::is_object)
+                {
+                    catalog.omitted.push(json!({"server":server_name,"tool":native_name,"reason":"Native tool has no usable name or inputSchema; not enumerable"}));
+                    continue;
+                }
+                let name = mcp_tool_name(server_name, native_name);
+                let mut definition = spec.clone();
+                // Keep the complete native Tool. Only its bridge routing name
+                // changes; never synthesize schemas, annotations or approvals.
+                definition["name"] = json!(name);
+                if catalog
+                    .routes
+                    .insert(
+                        name,
+                        McpRoute {
+                            server: server_name.to_owned(),
+                            tool: native_name.to_owned(),
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err("Codex MCP routing name collision".into());
+                }
+                catalog.tools.push(definition);
             }
         }
-        let next = page
-            .get("nextCursor")
-            .and_then(Value::as_str)
-            .filter(|v| !v.is_empty())
-            .map(str::to_owned);
-        if next.is_none() || next == cursor {
-            break;
+        match page.get("nextCursor") {
+            None | Some(Value::Null) => {
+                catalog
+                    .tools
+                    .sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+                return Ok(catalog);
+            }
+            Some(Value::String(next)) if !next.is_empty() => {
+                if !cursors.insert(next.clone()) {
+                    return Err("Codex MCP discovery repeated a pagination cursor".into());
+                }
+                cursor = Some(next.clone());
+            }
+            _ => return Err("Codex MCP discovery returned an invalid pagination cursor".into()),
         }
-        cursor = next;
     }
-    (Some(thread_id), methods, definitions)
+    Err("Codex MCP discovery exceeded its pagination limit".into())
 }
 
-fn safe_tool_segment(value: &str) -> String {
-    let value: String = value
-        .bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() || b"_.-".contains(&b) {
-                b as char
+fn mcp_tool_name(server: &str, tool: &str) -> String {
+    fn component(value: &str) -> String {
+        let mut encoded = String::new();
+        for byte in value.bytes() {
+            if byte.is_ascii_alphanumeric() || byte == b'-' {
+                encoded.push(char::from(byte));
             } else {
-                '_'
+                // '_' itself is escaped, as are '.' separators and UTF-8 bytes.
+                write!(&mut encoded, "_{byte:02X}").unwrap();
             }
-        })
-        .collect();
-    if value.is_empty() {
-        "unknown".into()
-    } else {
-        value
+        }
+        encoded
     }
+    let name = format!("codex.mcp.{}.{}", component(server), component(tool));
+    if name.len() <= 128 {
+        return name;
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"ssmcp.codex.mcp\0");
+    digest.update((server.len() as u64).to_be_bytes());
+    digest.update(server.as_bytes());
+    digest.update((tool.len() as u64).to_be_bytes());
+    digest.update(tool.as_bytes());
+    // '_h' cannot occur in an escaped component: an escape always starts with
+    // two uppercase hex digits. Long names therefore have a disjoint namespace.
+    format!("codex.mcp._h{:x}", digest.finalize())
 }
 
 fn catalog(schema: &Value) -> Result<(Vec<Value>, Methods), String> {
@@ -452,6 +719,38 @@ fn load_schemas(root: &Path) -> crate::Result<BTreeMap<String, Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_routing_names_keep_components_distinct_and_are_bounded() {
+        let pairs = [
+            ("a.b", "c"),
+            ("a", "b.c"),
+            ("a/b", "c"),
+            ("a_b", "c"),
+            ("a_2Fb", "c"),
+            ("a", "读取/文件"),
+            ("a", "????"),
+            ("a", "____"),
+            ("_h", "literal"),
+        ];
+        let names: BTreeSet<_> = pairs
+            .iter()
+            .map(|(server, tool)| mcp_tool_name(server, tool))
+            .collect();
+        assert_eq!(names.len(), pairs.len());
+        assert_eq!(
+            mcp_tool_name("codegraph", "read"),
+            "codex.mcp.codegraph.read"
+        );
+        assert_eq!(mcp_tool_name("a.b", "c/d"), "codex.mcp.a_2Eb.c_2Fd");
+        let long = "读取/file_".repeat(100);
+        let first = mcp_tool_name("server", &long);
+        assert_eq!(first, mcp_tool_name("server", &long));
+        assert!(first.starts_with("codex.mcp._h"));
+        assert!(first.len() <= 128);
+        assert_ne!(first, mcp_tool_name("server", &(long + "x")));
+    }
+
     #[test]
     fn schemas_keep_recursive_refs_and_every_native_method() {
         let schema = json!({"oneOf":[

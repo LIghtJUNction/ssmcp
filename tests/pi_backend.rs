@@ -12,6 +12,12 @@ async fn start() -> Arc<Pi> {
 }
 
 async fn call(pi: &Pi, name: &str, args: Value) -> Value {
+    // Exercise the published control wrapper while retaining readable native
+    // command names in the protocol fixtures below.
+    let (name, args) = match name.strip_prefix("pi.") {
+        Some(command) if command != "rpc" => ("pi.rpc", json!({"type":command,"args":args})),
+        _ => (name, args),
+    };
     timeout(Duration::from_secs(5), pi.call(name, args))
         .await
         .expect("Pi call timed out")
@@ -399,4 +405,46 @@ async fn real_pi_cli_smoke() {
         payload(&call(&pi, "ssmcp.pi.events", json!({})).await)["closed"],
         true
     );
+}
+
+#[tokio::test]
+async fn discovery_reports_control_scope_without_inventing_native_tool_schemas() {
+    let pi = start().await;
+    let before = call(&pi, "pi.get_state", json!({})).await;
+    let tools = pi.tools().await.unwrap();
+    let names: std::collections::BTreeSet<_> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from([
+            "pi.rpc",
+            "ssmcp.pi.events",
+            "ssmcp.pi.requests",
+            "ssmcp.pi.respond",
+        ])
+    );
+    let diagnostic = pi.diagnostics().await;
+    assert_eq!(diagnostic["status"], "ready");
+    assert_eq!(diagnostic["tools"], 4);
+    assert_eq!(diagnostic["nativeToolEnumeration"], "unavailable");
+    assert!(
+        diagnostic["scope"]
+            .as_str()
+            .unwrap()
+            .contains("not enumerable")
+    );
+    assert_eq!(pi.tools().await.unwrap(), tools);
+    let after = call(&pi, "pi.get_state", json!({})).await;
+    assert_eq!(
+        payload(&after)["data"]["calls"].as_u64().unwrap(),
+        payload(&before)["data"]["calls"].as_u64().unwrap() + 1,
+        "catalog discovery must not issue prompts or probe unadvertised commands"
+    );
+    pi.shutdown().await;
+    assert!(pi.tools().await.is_err());
+    let diagnostic = pi.diagnostics().await;
+    assert_eq!(diagnostic["status"], "unavailable");
+    assert_eq!(diagnostic["tools"], 0);
 }

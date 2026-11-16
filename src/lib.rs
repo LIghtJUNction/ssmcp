@@ -1,3 +1,4 @@
+pub(crate) mod audit;
 pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod broker;
@@ -13,14 +14,15 @@ pub mod identity;
 pub mod oauth;
 pub mod output;
 pub mod platform;
-pub mod program;
 #[cfg(target_os = "linux")]
 pub mod portal;
+pub mod program;
 #[cfg(target_os = "linux")]
 pub mod pty;
 #[cfg(not(target_os = "linux"))]
 #[path = "pty_portable.rs"]
 pub mod pty;
+pub mod registry;
 #[cfg(target_os = "linux")]
 pub mod resources;
 pub mod wire;

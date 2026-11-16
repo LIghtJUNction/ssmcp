@@ -147,6 +147,7 @@ impl Root {
 
     fn write_bytes(
         &self,
+        tool: &str,
         path: &str,
         data: &[u8],
         overwrite: bool,
@@ -162,6 +163,7 @@ impl Root {
         let parent = self.directory_path(parents, create_parents)?;
         let _lock = crate::platform::lock_directory(&parent)?;
         let target = parent.join(name);
+        let mut before = audit::Snapshot::Missing;
         let permissions = match std::fs::symlink_metadata(&target) {
             Ok(metadata) => {
                 reject_link(&metadata)?;
@@ -171,9 +173,16 @@ impl Root {
                 if !overwrite {
                     return Err("file already exists; set overwrite=true".into());
                 }
-                if let Some(expected) = expected_sha256 {
-                    check_hash(expected, &sha256(&whole_file(&mut open_file(&target)?)?))?;
-                }
+                before = if let Some(expected) = expected_sha256 {
+                    let bytes = whole_file(&mut open_file(&target)?)?;
+                    check_hash(expected, &sha256(&bytes))?;
+                    audit::Snapshot::from_bytes(path, &bytes)
+                } else {
+                    match open_file(&target) {
+                        Ok(mut file) => audit::Snapshot::from_file(path, &mut file),
+                        Err(_) => audit::Snapshot::Unknown("snapshot_unavailable"),
+                    }
+                };
                 Some(metadata.permissions())
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound && expected_sha256.is_none() => {
@@ -181,7 +190,9 @@ impl Root {
             }
             Err(error) => return Err(error.to_string()),
         };
-        replace_file(&target, data, overwrite, permissions)
+        replace_file(&target, data, overwrite, permissions)?;
+        self.audit.written(tool, path, before, data);
+        Ok(())
     }
 
     fn edit_text(&self, args: TextEditArgs) -> Result<Value, String> {
@@ -227,6 +238,12 @@ impl Root {
         replacement.push_str(&text[index + args.old_text.len()..]);
         drop(file);
         replace_file(&target, replacement.as_bytes(), true, Some(permissions))?;
+        self.audit.written(
+            "ssmcp.fs.edit_text",
+            &args.path,
+            audit::Snapshot::from_bytes(&args.path, &bytes),
+            replacement.as_bytes(),
+        );
         Ok(
             json!({"path":args.path,"written":replacement.len(),"replacements":1,"sha256":sha256(replacement.as_bytes()),"previous_sha256":previous_sha256}),
         )

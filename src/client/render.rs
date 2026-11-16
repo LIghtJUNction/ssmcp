@@ -133,6 +133,8 @@ impl Renderer {
     }
 
     fn event(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<()> {
+        let safe = crate::audit::event(value.clone());
+        let value = &safe;
         if self.raw {
             writeln!(out, "{value}")?;
         } else if !self.activity(out, label, value)? && !self.rpc(out, label, value)? {
@@ -146,7 +148,7 @@ impl Renderer {
                 self.ui.theme.color("gray"),
                 &format!(
                     "[RAW] {}\n",
-                    serde_json::to_string_pretty(value).unwrap_or_default()
+                    serde_json::to_string_pretty(&debug_metadata(value)).unwrap_or_default()
                 ),
             )?;
         }
@@ -155,9 +157,12 @@ impl Renderer {
 
     fn activity(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<bool> {
         let kind = value["type"].as_str().unwrap_or("");
-        let id = value["job_id"].as_str().unwrap_or("");
+        let id = value["job_id"]
+            .as_str()
+            .or_else(|| value["id"].as_str())
+            .unwrap_or("");
         match kind {
-            "ssmcp.exec.started" => {
+            "exec.started" | "ssmcp.exec.started" => {
                 let command = command_label(&value["command"]);
                 self.summary(out, label, "Running", &format!("{id}  {command}"))?;
                 if let Some(cwd) = value["cwd"].as_str() {
@@ -169,7 +174,43 @@ impl Renderer {
                     )?;
                 }
             }
-            "ssmcp.exec.finished" => {
+            "exec.stdout" | "exec.stderr" | "ssmcp.exec.stdout" | "ssmcp.exec.stderr"
+            | "process_output" => {
+                // Existing Codex-compatible delta events already take the single
+                // streaming path below. Do not render their duplicate text field.
+                if value.pointer("/params/deltaBase64").is_some() {
+                    return Ok(false);
+                }
+                let stream = value["stream"]
+                    .as_str()
+                    .unwrap_or(if kind.ends_with("stderr") {
+                        "stderr"
+                    } else {
+                        "stdout"
+                    });
+                let process = value["job_id"]
+                    .as_str()
+                    .or_else(|| value["process_id"].as_str())
+                    .or_else(|| value["id"].as_str())
+                    .unwrap_or("command");
+                let data = value["data_base64"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .or_else(|| value["text"].as_str().map(|text| STANDARD.encode(text)));
+                if let Some(data) = data {
+                    self.value(
+                        out,
+                        label,
+                        &json!({
+                            "method":"command/exec/outputDelta",
+                            "params":{"processId":process,"stream":stream,"deltaBase64":data}
+                        }),
+                        "Command",
+                        0,
+                    )?;
+                }
+            }
+            "exec.exited" | "ssmcp.exec.exited" | "ssmcp.exec.finished" => {
                 let failed = value["exit_code"].as_i64().is_some_and(|v| v != 0)
                     || !value["error"].is_null();
                 let title = if value["timed_out"] == true {
@@ -211,32 +252,135 @@ impl Renderer {
                 value["stream"].as_str().unwrap_or("output"),
                 &value["artifact"],
             )?,
-            "ssmcp.fileread" => {
-                self.summary(out, label, "Read", value["path"].as_str().unwrap_or(""))?
+            "file.read" | "ssmcp.file.read" | "ssmcp.fileread" => {
+                self.summary(out, label, "Read", value["path"].as_str().unwrap_or(""))?;
             }
-            "ssmcp.filechange" => {
-                self.summary(out, label, "Edit", value["path"].as_str().unwrap_or(""))?;
-                if let Some(diff) = value["diff"].as_str().filter(|v| !v.is_empty()) {
-                    self.text(out, label, diff)?;
+            "file.write" | "ssmcp.file.write" => {
+                let path = value["path"].as_str().unwrap_or("");
+                let bytes = value["written"]
+                    .as_u64()
+                    .map(|n| format!("  {n} bytes"))
+                    .unwrap_or_default();
+                self.summary(out, label, "Edit", &format!("{path}{bytes}"))?;
+            }
+            "file.diff" | "ssmcp.file.diff" => {
+                let path = value["path"].as_str().unwrap_or("");
+                let counts = value["added_lines"]
+                    .as_u64()
+                    .zip(value["removed_lines"].as_u64())
+                    .map(|(added, removed)| format!("  +{added} / -{removed}"))
+                    .unwrap_or_else(|| "  line counts unknown".into());
+                self.summary(out, label, "Diff", &format!("{path}{counts}"))?;
+                // A preview and the complete inline diff may both be present.
+                // Select one; querying fs.events/output.read does not replay it.
+                if let Some(preview) = value["preview"]
+                    .as_str()
+                    .or_else(|| value["diff"].as_str())
+                    .filter(|v| !v.is_empty())
+                {
+                    self.text(out, label, preview)?;
                     self.finish(out, label)?;
-                } else if value["preview_available"] == false {
-                    self.text(
+                }
+                if let Some(artifact) = value.get("diff_artifact").filter(|v| !v.is_null()) {
+                    self.artifact(out, label, "", "diff", artifact)?;
+                }
+                if value["diff_complete"] == false {
+                    let reason = value["diff_unavailable_reason"]
+                        .as_str()
+                        .or_else(|| value["output_error"].as_str())
+                        .unwrap_or("snapshot unavailable");
+                    self.summary(
                         out,
                         label,
-                        "Binary or large file updated; preview unavailable\n",
+                        "Warning",
+                        &format!("diff unavailable: {reason}"),
+                    )?;
+                } else if value["preview_truncated"] == true {
+                    self.summary(
+                        out,
+                        label,
+                        "Output",
+                        "diff preview folded; complete diff is queryable",
                     )?;
                 }
             }
-            "ssmcp.skill_use" => self.summary(
-                out,
-                label,
-                "Skill",
-                &format!(
-                    "{}  {}",
-                    value["tool"].as_str().unwrap_or(""),
-                    value["skill"].as_str().unwrap_or("")
-                ),
-            )?,
+            "ssmcp.filechange" => {
+                // Older/native reports are observations, not evidence that this
+                // broker independently audited an external write.
+                self.summary(
+                    out,
+                    label,
+                    "Files",
+                    &format!("reported change  {}", value["path"].as_str().unwrap_or("")),
+                )?;
+                if let Some(diff) = value["diff"].as_str().filter(|v| !v.is_empty()) {
+                    self.text(out, label, diff)?;
+                    self.finish(out, label)?;
+                }
+            }
+            "skill.discovery.completed" | "ssmcp.skill.discovery.completed" => {
+                let detail = value["shown"]
+                    .as_u64()
+                    .map(|shown| format!("discovery completed  {shown} summaries"))
+                    .unwrap_or_else(|| "discovery completed".into());
+                self.summary(out, label, "Skill", &detail)?;
+            }
+            "skill.discovered"
+            | "ssmcp.skill.discovered"
+            | "skill.read"
+            | "ssmcp.skill.read"
+            | "skill.invoked"
+            | "ssmcp.skill.invoked"
+            | "ssmcp.skill_use" => {
+                let state = if kind.ends_with(".discovered") {
+                    "discovered"
+                } else if kind.ends_with(".read") {
+                    "read"
+                } else if kind.ends_with(".invoked") {
+                    "invoked"
+                } else {
+                    "activity reported; invocation unconfirmed"
+                };
+                let subject = value["path"]
+                    .as_str()
+                    .or_else(|| value["name"].as_str())
+                    .or_else(|| value["skill"].as_str())
+                    .or_else(|| value["tool"].as_str())
+                    .unwrap_or("");
+                self.summary(out, label, "Skill", &format!("{state}  {subject}"))?;
+            }
+            "harness.tool.started"
+            | "ssmcp.harness.tool.started"
+            | "harness.tool.completed"
+            | "ssmcp.harness.tool.completed" => {
+                let provider = value["provider"].as_str().unwrap_or(label);
+                let tool = value["tool"].as_str().unwrap_or("");
+                let call = value
+                    .get("call_id")
+                    .map(|v| format!("  call={}", compact(v, 0)))
+                    .unwrap_or_default();
+                if kind.ends_with(".started") {
+                    self.summary(
+                        out,
+                        label,
+                        "Request",
+                        &format!("{provider}  {tool}{call}  started"),
+                    )?;
+                } else {
+                    let success = value["success"] == true;
+                    let state = if success { "completed" } else { "failed" };
+                    let elapsed = value["duration_ms"]
+                        .as_u64()
+                        .map(|v| format!("  {:.2}s", v as f64 / 1000.0))
+                        .unwrap_or_default();
+                    self.summary(
+                        out,
+                        label,
+                        if success { "Success" } else { "Error" },
+                        &format!("{provider}  {tool}{call}  {state}{elapsed}"),
+                    )?;
+                }
+            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -403,11 +547,16 @@ impl Renderer {
                 title,
                 &format!("{method}{id_text}{elapsed}{meta}"),
             )?;
-            if let Some(error) = v.get("error").filter(|e| !e.is_null()) {
-                self.value(out, label, error, "Error", 0)?;
-            } else {
-                self.value(out, label, result, "Result", 0)?;
+            if let Some(code) = v.pointer("/error/code") {
+                self.summary(
+                    out,
+                    label,
+                    "Error",
+                    &format!("native error code={}", compact(code, 0)),
+                )?;
             }
+            // Response payloads are available to the caller. The audit copy
+            // contains metadata only and must not replay wait/read output.
             return Ok(true);
         }
         Ok(false)
@@ -451,6 +600,7 @@ impl Renderer {
             "Running" => ("RUN ", "blue"),
             "Read" => ("READ", "cyan"),
             "Edit" => ("EDIT", "purple"),
+            "Diff" => ("DIFF", "purple"),
             "Skill" => ("SKIL", "purple"),
             "Output" => ("SAVE", "gray"),
             "Success" | "Connected" => ("OK  ", "green"),
@@ -921,6 +1071,49 @@ impl Renderer {
     }
 }
 
+// Verbose mode adds routing metadata, not a second copy of already-rendered
+// output/diffs. Raw mode still emits one sanitized event per input event.
+fn debug_metadata(value: &Value) -> Value {
+    let kind = value["type"].as_str().unwrap_or("");
+    let stream = value.pointer("/params/deltaBase64").is_some()
+        || matches!(
+            kind,
+            "exec.stdout"
+                | "exec.stderr"
+                | "ssmcp.exec.stdout"
+                | "ssmcp.exec.stderr"
+                | "process_output"
+                | "ssmcp.terminal_output"
+        );
+    let diff = matches!(kind, "file.diff" | "ssmcp.file.diff");
+    let mut copy = value.clone();
+    if let Some(object) = copy.as_object_mut() {
+        if stream {
+            for key in [
+                "text",
+                "data_base64",
+                "ssmcp_output_text",
+                "delta",
+                "stdout",
+                "stderr",
+            ] {
+                object.remove(key);
+            }
+            if let Some(params) = object.get_mut("params").and_then(Value::as_object_mut) {
+                params.remove("deltaBase64");
+                params.remove("text");
+            }
+            object.insert("output_already_rendered".into(), json!(true));
+        }
+        if diff {
+            object.remove("diff");
+            object.remove("preview");
+            object.insert("diff_already_rendered".into(), json!(true));
+        }
+    }
+    copy
+}
+
 /// A bounded description, never a giant JSON dump in the default transcript.
 fn command_label(command: &Value) -> String {
     command
@@ -1028,12 +1221,25 @@ pub(crate) fn terminal_output(bytes: &[u8]) {
     let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
     let mut out = io::stderr().lock();
     if renderer.raw {
-        let _=renderer.event(&mut out,"shell",&json!({"type":"ssmcp.terminal_output","data_base64":STANDARD.encode(bytes),"text":String::from_utf8_lossy(bytes)}));
-    } else if renderer.color {
+        let _ = renderer.event(
+            &mut out,
+            "shell",
+            &json!({
+                "type":"ssmcp.terminal_output",
+                "data_base64":STANDARD.encode(bytes),"text":String::from_utf8_lossy(bytes)
+            }),
+        );
+    } else if out.is_terminal() {
+        // This is the user's interactive PTY, not an audit transcript. Preserve
+        // cursor control and split UTF-8 bytes independently of NO_COLOR.
         let _ = out.write_all(bytes);
         let _ = out.flush();
     } else {
-        let _ = out.write_all(clean(&String::from_utf8_lossy(bytes)).as_bytes());
+        let safe = crate::audit::event(json!({
+            "type":"ssmcp.terminal_output","text":String::from_utf8_lossy(bytes)
+        }));
+        let text = safe["text"].as_str().unwrap_or("");
+        let _ = out.write_all(clean(text).as_bytes());
         let _ = out.flush();
     }
 }
@@ -1217,7 +1423,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_is_exact_original_serialization_without_added_fields() {
+    fn raw_keeps_nonsecret_notification_shape() {
         let event = json!({"method":"command/exec/outputDelta","params":{"deltaBase64":"aGkK"},"unknown":{"x":"a\\nb"}});
         assert_eq!(
             render(std::slice::from_ref(&event), true, true),
@@ -1242,10 +1448,9 @@ mod tests {
 
     #[test]
     fn envelopes_newlines_plain_text_and_source_escapes() {
-        let event: Value = serde_json::from_str(
-            r#"{"result":{"content":[{"type":"text","text":"first\nsecond"}]}}"#,
-        )
-        .unwrap();
+        let event: Value =
+            serde_json::from_str(r#"{"content":[{"type":"text","text":"first\nsecond"}]}"#)
+                .unwrap();
         let text = render(
             &[
                 event,
@@ -1323,7 +1528,7 @@ mod tests {
         assert_eq!(wrapped.chars().filter(|c| *c == 'x').count(), 1001); // label codex includes x
     }
     #[test]
-    fn buffered_command_reply_keeps_both_streams_and_request_context() {
+    fn rpc_reply_keeps_status_and_request_context_without_replaying_streams() {
         let text = render(
             &[
                 json!({"type":"ssmcp.request","request":{"id":"r1","method":"command/exec","params":{"command":["sh","-c","printf hello"],"cwd":"/project","timeoutMs":1000}}}),
@@ -1337,10 +1542,6 @@ mod tests {
             "cmd=sh -c",
             "cwd=/project",
             "timeout=1.000s",
-            "[STDOUT]",
-            "[STDERR]",
-            "hello\n  second",
-            "warning",
             "\x1b[34;1m",
             "\x1b[32;1m",
         ] {
@@ -1349,10 +1550,13 @@ mod tests {
                 "missing {expected}: {text}"
             );
         }
+        assert!(!text.contains("hello\n  second"));
+        assert!(!text.contains("warning"));
+        assert!(!text.contains("[STDOUT]"));
     }
 
     #[test]
-    fn timeout_still_displays_partial_stdout_and_stderr() {
+    fn timeout_reply_shows_status_without_replaying_streams() {
         let text = render(
             &[
                 json!({"id":"r2","result":{"exitCode":124,"stdout":"partial output","stderr":"installing tool"}}),
@@ -1360,25 +1564,23 @@ mod tests {
             false,
             true,
         );
-        for expected in [
-            "command timeout",
-            "partial output",
-            "installing tool",
-            "exitCode=124",
-        ] {
+        for expected in ["command timeout", "exitCode=124"] {
             assert!(text.contains(expected), "{text}");
         }
+        assert!(!text.contains("partial output"));
+        assert!(!text.contains("installing tool"));
     }
 
     #[test]
-    fn rpc_protocol_errors_are_red_and_raw_stays_unmodified() {
+    fn rpc_protocol_errors_keep_codes_while_raw_logs_omit_arbitrary_messages() {
         let event = json!({"id":"r3","error":{"code":-32601,"message":"unsupported method"}});
         let text = render(std::slice::from_ref(&event), false, true);
         assert!(text.contains("\x1b[31;1m"));
-        assert!(text.contains("unsupported method"));
+        assert!(text.contains("-32601"));
+        assert!(!text.contains("unsupported method"));
         assert_eq!(
             render(std::slice::from_ref(&event), true, true),
-            format!("{event}\n")
+            format!("{}\n", crate::audit::event(event.clone()))
         );
     }
     #[test]
@@ -1392,23 +1594,26 @@ mod tests {
             })
         };
         renderer.event(&mut out, "codex", &delta("live")).unwrap();
-        assert_eq!(String::from_utf8_lossy(&out), "[STDOUT] codex\n  live");
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "[STDOUT] codex · running\n  live"
+        );
         renderer
             .event(&mut out, "codex", &delta(" progress"))
             .unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out),
-            "[STDOUT] codex\n  live progress"
+            "[STDOUT] codex · running\n  live progress"
         );
         renderer.event(&mut out, "codex", &delta("\nnext")).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out),
-            "[STDOUT] codex\n  live progress\n  next"
+            "[STDOUT] codex · running\n  live progress\n  next"
         );
         renderer.finish_group(&mut out, "codex").unwrap();
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "[STDOUT] codex\n  live progress\n  next\n"
+            "[STDOUT] codex · running\n  live progress\n  next\n"
         );
     }
 
@@ -1430,7 +1635,7 @@ mod tests {
         }
         assert_eq!(
             clean(&String::from_utf8_lossy(&out)),
-            "[STDOUT] codex\n  1234567890\n  ab"
+            "[STDOUT] codex · command\n  1234567890\n  ab"
         );
         renderer
             .event(
@@ -1441,7 +1646,7 @@ mod tests {
             .unwrap();
         let text = clean(&String::from_utf8(out).unwrap());
         assert!(
-            text.starts_with("[STDOUT] codex\n  1234567890\n  ab\n[OK  ]"),
+            text.starts_with("[STDOUT] codex · command\n  1234567890\n  ab\n[OK  ]"),
             "{text}"
         );
         assert_eq!(text.matches("1234567890").count(), 1);
@@ -1479,7 +1684,7 @@ mod tests {
     #[test]
     fn pretty_folds_output_keeps_tail_and_verbose_reveals_json() {
         let stdout = (0..40).map(|n| format!("line-{n}\n")).collect::<String>();
-        let event = json!({"id":"fold","result":{"exitCode":1,"stdout":stdout,"stderr":"fatal: stopped","huge":{"blob":"x".repeat(10000)}}});
+        let event = json!({"type":"command_output","exitCode":1,"stdout":stdout,"stderr":"fatal: stopped","huge":{"blob":"x".repeat(10000)}});
         let text = render(std::slice::from_ref(&event), false, false);
         assert!(text.contains("lines folded"));
         assert!(text.contains("line-39"));
@@ -1572,11 +1777,11 @@ mod tests {
     fn job_lifecycle_has_commands_status_and_distinct_stream_labels() {
         let output = render(
             &[
-                json!({"type":"ssmcp.exec.started","job_id":"42-1","command":["cargo","test"],"cwd":"/work"}),
+                json!({"type":"exec.started","job_id":"42-1","command":["cargo","test"],"cwd":"/work"}),
                 json!({"method":"command/exec/outputDelta","params":{"processId":"42-1","stream":"stdout","deltaBase64":STANDARD.encode("ok\n")}}),
-                json!({"type":"ssmcp.exec.finished","job_id":"42-1","state":"completed","exit_code":0,"duration_ms":1234}),
-                json!({"type":"ssmcp.fileread","path":"src/main.rs"}),
-                json!({"type":"ssmcp.skill_use","tool":"ssmcp.skills.read","skill":"skills/review/SKILL.md"}),
+                json!({"type":"exec.exited","job_id":"42-1","state":"completed","exit_code":0,"duration_ms":1234}),
+                json!({"type":"ssmcp.file.read","path":"src/main.rs"}),
+                json!({"type":"ssmcp.skill.read","tool":"ssmcp.skills.read","skill":"skills/review/SKILL.md"}),
             ],
             false,
             false,
@@ -1586,7 +1791,7 @@ mod tests {
         assert!(output.contains("codex · 42-1"));
         assert!(output.contains("completed  exit=0  1.23s"));
         assert!(output.contains("[READ] codex  src/main.rs"));
-        assert!(output.contains("[SKIL] codex  ssmcp.skills.read"));
+        assert!(output.contains("[SKIL] codex  read"));
         assert!(!output.contains("{\"type\""));
     }
 
@@ -1597,14 +1802,14 @@ mod tests {
         };
         let events = [
             json!({"type":"ssmcp.status","level":"Connected","message":"ssmcp · improve command execution"}),
-            json!({"type":"ssmcp.exec.started","job_id":"1842-1","command":["cargo","test","--locked"],"cwd":"~/projects/ssmcp"}),
-            json!({"type":"ssmcp.exec.started","job_id":"1842-2","command":["cargo","clippy","--locked"],"cwd":"~/projects/ssmcp"}),
+            json!({"type":"exec.started","job_id":"1842-1","command":["cargo","test","--locked"],"cwd":"~/projects/ssmcp"}),
+            json!({"type":"exec.started","job_id":"1842-2","command":["cargo","clippy","--locked"],"cwd":"~/projects/ssmcp"}),
             json!({"method":"command/exec/outputDelta","params":{"processId":"1842-1","stream":"stdout","deltaBase64":STANDARD.encode("running 7 command lifecycle tests\ntest parallel_commands ... ok\ntest wait_keeps_command_running ... ok\n")}}),
-            json!({"type":"ssmcp.exec.finished","job_id":"1842-2","state":"completed","exit_code":0,"duration_ms":890}),
-            json!({"type":"ssmcp.exec.finished","job_id":"1842-1","state":"completed","exit_code":0,"duration_ms":1280}),
-            json!({"type":"ssmcp.fileread","path":"src/backend/shell.rs"}),
+            json!({"type":"exec.exited","job_id":"1842-2","state":"completed","exit_code":0,"duration_ms":890}),
+            json!({"type":"exec.exited","job_id":"1842-1","state":"completed","exit_code":0,"duration_ms":1280}),
+            json!({"type":"ssmcp.file.read","path":"src/backend/shell.rs"}),
             json!({"type":"ssmcp.filechange","path":"src/backend/shell.rs","diff":"--- a/src/backend/shell.rs\n+++ b/src/backend/shell.rs\n@@ -18,1 +18,1 @@\n-const MAX_WAIT: u64 = 5_000;\n+const MAX_WAIT: u64 = 60_000;\n"}),
-            json!({"type":"ssmcp.skill_use","tool":"ssmcp.skills.read","skill":"skills/ssmcp/SKILL.md"}),
+            json!({"type":"ssmcp.skill.read","tool":"ssmcp.skills.read","skill":"skills/ssmcp/SKILL.md"}),
             json!({"type":"ssmcp.output_archived","job_id":"1842-3","stream":"stdout","artifact":{"path":"/tmp/ssmcp/1000/command-output.log","bytes":126720,"lines":2400,"complete":true}}),
             json!({"type":"ssmcp.status","level":"Progress","message":"Reload acknowledged · reconnecting with updated client"}),
         ];
@@ -1617,5 +1822,107 @@ mod tests {
         renderer.finish_group(&mut output, "dev").unwrap();
         std::fs::write(path, output).unwrap();
     }
-}
+    #[test]
+    fn every_log_mode_redacts_secrets_and_preserves_native_values() {
+        let events = [
+            json!({"type":"note","text":"visible progress","env":{"PATH":"/private-path-value"},"api_key":"private-token-value"}),
+            json!({"id":"result","result":{"exit_code":0,"text":"private-file-value","stdout":"replayed-value"}}),
+            json!({"type":"ssmcp.file.read","path":".env","text":"private-env-file-value"}),
+        ];
+        for (raw, verbose) in [(false, false), (true, false), (false, true)] {
+            let mut renderer = Renderer::new(raw, false, 100);
+            renderer.verbose = verbose;
+            let mut output = Vec::new();
+            for event in &events {
+                renderer.event(&mut output, "test", event).unwrap();
+            }
+            renderer.finish_group(&mut output, "test").unwrap();
+            let text = String::from_utf8(output).unwrap();
+            for secret in [
+                "/private-path-value",
+                "private-token-value",
+                "private-file-value",
+                "replayed-value",
+                "private-env-file-value",
+            ] {
+                assert!(
+                    !text.contains(secret),
+                    "raw={raw} verbose={verbose}: {text}"
+                );
+            }
+            assert!(text.contains("visible progress"), "{text}");
+        }
+        assert_eq!(events[1]["result"]["text"], "private-file-value");
+    }
 
+    #[test]
+    fn live_stdout_and_stderr_are_not_replayed_by_wait_or_read_responses() {
+        let events = [
+            json!({"type":"exec.started","job_id":"81","command":["cargo","test"]}),
+            json!({"type":"exec.stdout","job_id":"81","text":"unique-out\n",
+                "method":"command/exec/outputDelta","params":{"processId":"81","stream":"stdout",
+                    "offset":0,"next_offset":11,"deltaBase64":STANDARD.encode("unique-out\n")}}),
+            json!({"type":"exec.stderr","job_id":"81","text":"unique-err\n",
+                "method":"command/exec/outputDelta","params":{"processId":"81","stream":"stderr",
+                    "offset":0,"next_offset":11,"deltaBase64":STANDARD.encode("unique-err\n")}}),
+            json!({"id":"wait","method":"tools/call","params":{"name":"ssmcp.exec.wait","arguments":{"id":"81"}}}),
+            json!({"id":"wait","result":{"structuredContent":{"id":"81","exit_code":0,"stdout":"unique-out\n","stderr":"unique-err\n"}}}),
+            json!({"id":"read","result":{"content":[{"type":"text","text":"unique-out\nunique-err\n"}]}}),
+            json!({"type":"exec.exited","job_id":"81","state":"completed","exit_code":0,"duration_ms":25}),
+        ];
+        for verbose in [false, true] {
+            let mut renderer = Renderer::new(false, false, 100);
+            renderer.verbose = verbose;
+            let mut output = Vec::new();
+            for event in &events {
+                renderer.event(&mut output, "codex", event).unwrap();
+            }
+            renderer.finish_group(&mut output, "codex").unwrap();
+            let text = String::from_utf8(output).unwrap();
+            assert_eq!(text.matches("unique-out").count(), 1, "{text}");
+            assert_eq!(text.matches("unique-err").count(), 1, "{text}");
+            assert!(text.contains("[STDOUT] codex · 81"));
+            assert!(text.contains("[STDERR] codex · 81"));
+            assert!(text.contains("completed  exit=0"));
+        }
+    }
+
+    #[test]
+    fn file_skill_and_harness_events_show_only_observed_states() {
+        let diff = "--- a/file\n+++ b/file\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+        let text = render(
+            &[
+                json!({"type":"ssmcp.file.write","path":"file","written":4}),
+                json!({"type":"ssmcp.file.diff","path":"file","added_lines":1,"removed_lines":1,
+                "diff":diff,"preview":diff,"diff_complete":true}),
+                json!({"type":"ssmcp.file.diff","path":"other","added_lines":null,"removed_lines":null,
+                "diff_complete":false,"diff_unavailable_reason":"snapshot_unknown"}),
+                json!({"type":"ssmcp.skill.discovery.completed","shown":0,"invoked":false}),
+                json!({"type":"ssmcp.skill.discovered","path":"skills/review/SKILL.md","invoked":false}),
+                json!({"type":"ssmcp.skill.read","path":"skills/review/SKILL.md","invoked":false}),
+                json!({"type":"ssmcp.skill.invoked","name":"explicit-native-invocation"}),
+                json!({"type":"ssmcp.harness.tool.started","call_id":7,"provider":"codex","tool":"codex.mcp.graph.lookup","generation":2}),
+                json!({"type":"ssmcp.harness.tool.completed","call_id":7,"provider":"codex","tool":"codex.mcp.graph.lookup","success":true,"duration_ms":12,"file_audit":"unknown"}),
+            ],
+            false,
+            false,
+        );
+        assert_eq!(text.matches("-old").count(), 1, "{text}");
+        assert_eq!(text.matches("+new").count(), 1, "{text}");
+        for expected in [
+            "+1 / -1",
+            "line counts unknown",
+            "diff unavailable: snapshot_unknown",
+            "discovery completed  0 summaries",
+            "discovered",
+            "read  skills/review",
+            "invoked  explicit-native-invocation",
+            "codex.mcp.graph.lookup",
+            "completed",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(!text.contains("+0 / -0"));
+        assert!(!text.contains("skill used"));
+    }
+}

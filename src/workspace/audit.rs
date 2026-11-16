@@ -1,176 +1,928 @@
-//! Compact local visibility for file and skill operations; wire results stay unchanged.
-use super::{MAX_FILE_BYTES, Root, Workspace};
+//! Evidence from native filesystem operations. External file effects are not inferred.
+use super::{MAX_FILE_BYTES, Root, sha256, whole_file};
+use crate::{backend::events::EventLog, output::OutputStore};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::{collections::HashSet, fs::File, sync::Arc};
 
-impl Workspace {
-    pub async fn snapshot_file(&self, path: &str) -> Option<String> {
-        let root = self.root.clone();
-        let path = path.to_owned();
-        tokio::task::spawn_blocking(move || root.snapshot_text(&path))
-            .await
-            .ok()
-            .flatten()
+const PREVIEW_BYTES: usize = 16 * 1024;
+const PREVIEW_LINES: usize = 160;
+// A pathological diff must not monopolize the filesystem executor. Exhausting
+// either bound produces unknown counts, never a fabricated replacement diff.
+const MAX_DIFF_WORK: usize = 8_000_000;
+const MAX_TRACE_ENTRIES: usize = 2_000_000;
+
+pub(super) enum Snapshot {
+    Missing,
+    Text(String),
+    Unknown(&'static str),
+}
+
+impl Snapshot {
+    pub(super) fn from_bytes(path: &str, bytes: &[u8]) -> Self {
+        if sensitive_path(path) {
+            return Self::Unknown("sensitive_path");
+        }
+        if bytes.len() > MAX_FILE_BYTES {
+            return Self::Unknown("snapshot_size_limit");
+        }
+        match std::str::from_utf8(bytes) {
+            Ok(text) => {
+                if text
+                    .chars()
+                    .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+                {
+                    Self::Unknown("binary_content")
+                } else if sensitive_text(text) {
+                    Self::Unknown("sensitive_content")
+                } else {
+                    Self::Text(text.to_owned())
+                }
+            }
+            Err(_) => Self::Unknown("binary_content"),
+        }
     }
 
-    pub fn audit_harness_file(
-        &self,
-        kind: &str,
-        harness: &str,
-        tool: &str,
-        path: &str,
-        before: Option<&str>,
-        after: Option<&str>,
-    ) {
-        file_event(kind, harness, tool, path, before, after);
+    pub(super) fn from_file(path: &str, file: &mut File) -> Self {
+        if sensitive_path(path) {
+            return Self::Unknown("sensitive_path");
+        }
+        if file
+            .metadata()
+            .is_ok_and(|m| m.len() > MAX_FILE_BYTES as u64)
+        {
+            return Self::Unknown("snapshot_size_limit");
+        }
+        match whole_file(file) {
+            Ok(bytes) => Self::from_bytes(path, &bytes),
+            Err(_) => Self::Unknown("snapshot_unavailable"),
+        }
     }
 
-    pub fn audit_harness_skill(&self, harness: &str, tool: &str, skill: Option<&str>) {
-        crate::client::render::event(
-            harness,
-            &json!({"type":"ssmcp.skill_use","tool":tool,"skill":skill}),
+    fn metadata(&self) -> Value {
+        match self {
+            Self::Missing => json!({"state":"missing"}),
+            Self::Text(text) => {
+                json!({"state":"known","bytes":text.len(),"sha256":sha256(text.as_bytes())})
+            }
+            Self::Unknown(reason) => json!({"state":"unknown","reason":reason}),
+        }
+    }
+
+    fn text(&self) -> Option<&str> {
+        match self {
+            Self::Missing => Some(""),
+            Self::Text(text) => Some(text),
+            Self::Unknown(_) => None,
+        }
+    }
+}
+
+pub(super) struct FileAudit {
+    events: Arc<EventLog>,
+    output: Arc<OutputStore>,
+}
+
+impl FileAudit {
+    pub(super) fn new(events: Arc<EventLog>, output: Arc<OutputStore>) -> Self {
+        Self { events, output }
+    }
+
+    pub(super) fn written(&self, tool: &str, path: &str, before: Snapshot, committed: &[u8]) {
+        // Callers invoke this only after the atomic replace succeeds, while
+        // still holding their native directory lock. Content comes from that
+        // committed write, not an unrelated subsequent filesystem snapshot.
+        let after = Snapshot::from_bytes(path, committed);
+        self.events.push(json!({
+            "type":"ssmcp.file.write","tool":tool,"path":path,
+            "written":committed.len(),"created":matches!(before, Snapshot::Missing),
+            "observation":"native_atomic_write","external_operations":"unknown"
+        }));
+        self.events.push(self.diff_event(tool, path, before, after));
+    }
+
+    fn diff_event(&self, tool: &str, path: &str, before: Snapshot, after: Snapshot) -> Value {
+        let mut event = json!({
+            "type":"ssmcp.file.diff","tool":tool,"path":path,
+            "before":before.metadata(),"after":after.metadata(),
+            "added_lines":null,"removed_lines":null,"changed":null,
+            "diff":null,"preview":null,"preview_truncated":false,
+            "diff_artifact":null,"diff_complete":false,
+            "observation":"native_atomic_write","external_operations":"unknown",
+            "external_writers":"not_serialized"
+        });
+        let (Some(old), Some(new)) = (before.text(), after.text()) else {
+            event["diff_unavailable_reason"] = json!("snapshot_unknown");
+            return event;
+        };
+        let diff = match unified_diff(
+            path,
+            old,
+            new,
+            matches!(before, Snapshot::Missing),
+            matches!(after, Snapshot::Missing),
+        ) {
+            Ok(diff) => diff,
+            Err(reason) => {
+                event["diff_unavailable_reason"] = json!(reason);
+                return event;
+            }
+        };
+        event["added_lines"] = json!(diff.added);
+        event["removed_lines"] = json!(diff.removed);
+        event["changed"] = json!(
+            old != new || matches!(before, Snapshot::Missing) != matches!(after, Snapshot::Missing)
         );
+        let (preview, truncated) = preview(&diff.text);
+        event["preview"] = json!(preview);
+        event["preview_truncated"] = json!(truncated);
+        let mut capture = self.output.capture("workspace_file_diff");
+        let saved = capture
+            .push(diff.text.as_bytes())
+            .and_then(|_| capture.finish());
+        // Finish failed captures too, so partial bytes have honest metadata.
+        if saved.is_err() {
+            let _ = capture.finish();
+        }
+        event["diff_complete"] = json!(saved.is_ok());
+        if capture.is_spilled() {
+            event["diff_artifact"] = json!(capture.metadata());
+        } else if saved.is_ok() {
+            // Small diffs are fully queryable in fs.events. Larger ones use the
+            // same output.read/stat and retention policy as every other source.
+            event["diff"] = json!(diff.text);
+        }
+        if let Some(error) = capture.error() {
+            event["output_error"] = json!(error);
+        }
+        event
     }
 }
 
 impl Root {
-    fn snapshot_text(&self, path: &str) -> Option<String> {
-        let path = Path::new(path);
-        let path = if path.is_absolute() {
-            path.strip_prefix(&self.path).ok()?
-        } else {
-            path
-        };
-        let result = self
-            .perform(
-                "ssmcp.fs.read_text",
-                json!({"path":path,"max_bytes":MAX_FILE_BYTES}),
-            )
-            .ok()?;
-        (result["eof"] == true)
-            .then(|| result["text"].as_str().map(str::to_owned))
-            .flatten()
-    }
-
     pub(super) fn perform_audited(&self, name: &str, args: Value) -> Result<Value, String> {
         let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
-        let write = matches!(
-            name,
-            "ssmcp.fs.write" | "ssmcp.fs.write_text" | "ssmcp.fs.edit_text"
-        );
-        let read = matches!(name, "ssmcp.fs.read" | "ssmcp.fs.read_text");
-        let before = if write {
-            path.as_deref().and_then(|path| self.snapshot_text(path))
-        } else {
-            None
-        };
         let result = self.perform(name, args)?;
-        if let Some(path) = path {
-            if write {
-                let after = self.snapshot_text(&path);
-                file_event(
-                    "filechange",
-                    "files",
-                    name,
-                    &path,
-                    before.as_deref(),
-                    after.as_deref(),
-                );
-            } else if read {
-                file_event("fileread", "files", name, &path, None, None);
-            }
+        if matches!(name, "ssmcp.fs.read" | "ssmcp.fs.read_text")
+            && let Some(path) = path
+        {
+            self.audit.events.push(json!({
+                "type":"ssmcp.file.read","tool":name,"path":path,
+                "offset":result.get("offset"),"next_offset":result.get("next_offset"),
+                "bytes":result["next_offset"].as_u64().zip(result["offset"].as_u64())
+                    .map(|(end, start)| end.saturating_sub(start)),
+                "sensitive":sensitive_path(&path),
+                "observation":"native_file_read","external_operations":"unknown"
+            }));
         }
         Ok(result)
     }
 }
 
-fn file_event(
-    kind: &str,
-    harness: &str,
-    tool: &str,
-    path: &str,
-    before: Option<&str>,
-    after: Option<&str>,
-) {
-    let (diff, truncated) = if kind == "filechange" && (before.is_some() || after.is_some()) {
-        unified_diff(path, before.unwrap_or(""), after.unwrap_or(""))
-    } else {
-        (String::new(), false)
-    };
-    crate::client::render::event(
-        harness,
-        &json!({
-            "type":format!("ssmcp.{kind}"), "tool":tool, "path":path,
-            "diff":diff, "diff_truncated":truncated,
-            "preview_available":kind != "filechange" || before.is_some() || after.is_some()
-        }),
-    );
+// Audit metadata deliberately does not include environment values, arguments,
+// or file bodies. Sensitive paths and recognizable secret material also never
+// enter diff previews or output artifacts. This is not a claim that arbitrary
+// secrets in an otherwise ordinary source file can always be recognized.
+fn sensitive_path(path: &str) -> bool {
+    path.split(['/', '\\']).any(|part| {
+        let name = part.to_ascii_lowercase();
+        matches!(
+            name.as_str(),
+            ".env"
+                | ".envrc"
+                | ".ssh"
+                | ".aws"
+                | ".azure"
+                | ".gnupg"
+                | ".kube"
+                | ".git"
+                | ".npmrc"
+                | ".netrc"
+                | ".pypirc"
+                | "auth.json"
+                | "oauth.json"
+                | ".claude.json"
+                | "id_rsa"
+                | "id_dsa"
+                | "id_ecdsa"
+                | "id_ed25519"
+                | "private"
+                | "private_keys"
+                | "private-keys"
+        ) || name.starts_with(".env.")
+            || name.trim_start_matches('.').starts_with("credential")
+            || name.trim_start_matches('.').starts_with("secret")
+            || name.starts_with("tokens.")
+            || name.starts_with("token.")
+            || (name.starts_with("ssh_host_") && name.ends_with("_key"))
+            || [".pem", ".key", ".p12", ".pfx", ".jks", ".kdbx"]
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+    })
 }
 
-/// A single replacement hunk with context. Bounded display never alters the edit.
-fn unified_diff(path: &str, before: &str, after: &str) -> (String, bool) {
-    if before == after {
-        return (String::new(), false);
+fn sensitive_text(text: &str) -> bool {
+    if text.contains("-----BEGIN") && text.contains("PRIVATE KEY-----") {
+        return true;
     }
-    let old: Vec<_> = before.lines().collect();
-    let new: Vec<_> = after.lines().collect();
-    let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    for word in text.split(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_' | '.')) {
+        if (word.len() >= 20
+            && ["sk-", "ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_"]
+                .iter()
+                .any(|prefix| word.starts_with(prefix)))
+            || (word.len() >= 16
+                && ["xoxb-", "xoxp-", "xoxa-", "xoxr-"]
+                    .iter()
+                    .any(|p| word.starts_with(p)))
+            || (word.len() == 20
+                && (word.starts_with("AKIA") || word.starts_with("ASIA"))
+                && word
+                    .bytes()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()))
+        {
+            return true;
+        }
+    }
+    text.lines().any(|line| {
+        let Some((key, value)) = line.trim().split_once(['=', ':']) else {
+            return false;
+        };
+        let key = key.trim().trim_matches(['"', '\'']).to_ascii_lowercase();
+        let value = value.trim().trim_matches(['"', '\'', ',', ';']);
+        matches!(
+            key.as_str(),
+            "api_key"
+                | "api-key"
+                | "apikey"
+                | "access_token"
+                | "refresh_token"
+                | "token"
+                | "accesstoken"
+                | "refreshtoken"
+                | "authorization"
+                | "client_secret"
+                | "aws_secret_access_key"
+                | "password"
+                | "private_key"
+        ) && value.len() >= 12
+            && !value.starts_with(['$', '{', '<'])
+            && !value.contains(' ')
+    })
+}
+
+fn preview(diff: &str) -> (&str, bool) {
+    let mut end = 0;
+    for (count, line) in diff.split_inclusive('\n').enumerate() {
+        if count == PREVIEW_LINES || end + line.len() > PREVIEW_BYTES {
+            break;
+        }
+        end += line.len();
+    }
+    (&diff[..end], end != diff.len())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edit<'a> {
+    Equal(&'a str),
+    Delete(&'a str),
+    Insert(&'a str),
+}
+
+fn shortest_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Result<Vec<Edit<'a>>, &'static str> {
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
     let suffix = old[prefix..]
         .iter()
         .rev()
         .zip(new[prefix..].iter().rev())
         .take_while(|(a, b)| a == b)
         .count();
-    let start = prefix.saturating_sub(3);
-    let old_end = (old.len() - suffix + 3).min(old.len());
-    let new_end = (new.len() - suffix + 3).min(new.len());
-    let old_start = if old_end == start { start } else { start + 1 };
-    let new_start = if new_end == start { start } else { start + 1 };
-    let mut diff = format!(
-        "--- a/{path}\n+++ b/{path}\n@@ -{old_start},{} +{new_start},{} @@\n",
-        old_end - start,
-        new_end - start
+    let a = &old[prefix..old.len() - suffix];
+    let b = &new[prefix..new.len() - suffix];
+    let mut edits = Vec::with_capacity(old.len() + new.len());
+    edits.extend(old[..prefix].iter().map(|line| Edit::Equal(line)));
+    let old_lines: HashSet<_> = a.iter().copied().collect();
+    if a.is_empty() || b.is_empty() || !b.iter().any(|line| old_lines.contains(line)) {
+        edits.extend(a.iter().map(|line| Edit::Delete(line)));
+        edits.extend(b.iter().map(|line| Edit::Insert(line)));
+    } else {
+        edits.extend(myers(a, b)?);
+    }
+    edits.extend(
+        old[old.len() - suffix..]
+            .iter()
+            .map(|line| Edit::Equal(line)),
     );
-    let mut lines = 0;
-    let mut truncated = false;
-    let mut append = |prefix: char, line: &str| {
-        if lines >= 160 || diff.len() + line.len() + 2 > 16 * 1024 {
-            truncated = true;
-            return;
+    Ok(edits)
+}
+
+// Myers' shortest edit path, with only the reachable diagonals retained in each
+// trace row. It keeps separated edits and repeated unchanged lines intact.
+fn myers<'a>(old: &[&'a str], new: &[&'a str]) -> Result<Vec<Edit<'a>>, &'static str> {
+    let mut trace: Vec<Vec<usize>> = Vec::new();
+    let mut work = 0usize;
+    let mut entries = 0usize;
+    let mut distance = None;
+    'search: for d in 0..=old.len() + new.len() {
+        entries += d + 1;
+        if entries > MAX_TRACE_ENTRIES {
+            return Err("diff_complexity_limit");
         }
-        diff.push(prefix);
-        diff.push_str(line);
-        diff.push('\n');
-        lines += 1;
+        let mut row = Vec::with_capacity(d + 1);
+        for j in 0..=d {
+            work += 1;
+            if work > MAX_DIFF_WORK {
+                return Err("diff_complexity_limit");
+            }
+            let k = 2 * j as isize - d as isize;
+            let mut x = if d == 0 {
+                0
+            } else {
+                let previous = &trace[d - 1];
+                if j == 0 {
+                    previous[0]
+                } else if j == d {
+                    previous[d - 1] + 1
+                } else if previous[j - 1] < previous[j] {
+                    previous[j]
+                } else {
+                    previous[j - 1] + 1
+                }
+            };
+            let mut y = x as isize - k;
+            while x < old.len() && y >= 0 && (y as usize) < new.len() && old[x] == new[y as usize] {
+                x += 1;
+                y += 1;
+                work += 1;
+                if work > MAX_DIFF_WORK {
+                    return Err("diff_complexity_limit");
+                }
+            }
+            row.push(x);
+            if x >= old.len() && y >= new.len() as isize {
+                trace.push(row);
+                distance = Some(d);
+                break 'search;
+            }
+        }
+        trace.push(row);
+    }
+    let Some(distance) = distance else {
+        return Err("diff_unavailable");
     };
-    for line in &old[start..prefix] {
-        append(' ', line);
+    let (mut x, mut y) = (old.len(), new.len());
+    let mut reverse = Vec::with_capacity(x + y);
+    for d in (1..=distance).rev() {
+        let k = x as isize - y as isize;
+        let j = ((k + d as isize) / 2) as usize;
+        let previous = &trace[d - 1];
+        let insert = j == 0 || (j != d && previous[j - 1] < previous[j]);
+        let previous_k = if insert { k + 1 } else { k - 1 };
+        let previous_x = previous[((previous_k + d as isize - 1) / 2) as usize];
+        let previous_y = (previous_x as isize - previous_k) as usize;
+        while x > previous_x && y > previous_y {
+            reverse.push(Edit::Equal(old[x - 1]));
+            x -= 1;
+            y -= 1;
+        }
+        if insert {
+            reverse.push(Edit::Insert(new[y - 1]));
+            y -= 1;
+        } else {
+            reverse.push(Edit::Delete(old[x - 1]));
+            x -= 1;
+        }
     }
-    for line in &old[prefix..old.len() - suffix] {
-        append('-', line);
+    while x > 0 && y > 0 {
+        reverse.push(Edit::Equal(old[x - 1]));
+        x -= 1;
+        y -= 1;
     }
-    for line in &new[prefix..new.len() - suffix] {
-        append('+', line);
+    reverse.reverse();
+    Ok(reverse)
+}
+
+struct Diff {
+    text: String,
+    added: usize,
+    removed: usize,
+}
+
+fn unified_diff(
+    path: &str,
+    old: &str,
+    new: &str,
+    old_missing: bool,
+    new_missing: bool,
+) -> Result<Diff, &'static str> {
+    let before: Vec<_> = old.split_inclusive('\n').collect();
+    let after: Vec<_> = new.split_inclusive('\n').collect();
+    let edits = shortest_edits(&before, &after)?;
+    let added = edits
+        .iter()
+        .filter(|edit| matches!(edit, Edit::Insert(_)))
+        .count();
+    let removed = edits
+        .iter()
+        .filter(|edit| matches!(edit, Edit::Delete(_)))
+        .count();
+    if added == 0 && removed == 0 && old_missing == new_missing {
+        return Ok(Diff {
+            text: String::new(),
+            added,
+            removed,
+        });
     }
-    for line in &old[old.len() - suffix..old_end] {
-        append(' ', line);
+    let old_name = if old_missing {
+        "/dev/null".to_owned()
+    } else {
+        format!("a/{path}")
+    };
+    let new_name = if new_missing {
+        "/dev/null".to_owned()
+    } else {
+        format!("b/{path}")
+    };
+    let mut text = format!("--- {old_name}\n+++ {new_name}\n");
+    let changes: Vec<_> = edits
+        .iter()
+        .enumerate()
+        .filter_map(|(i, edit)| (!matches!(edit, Edit::Equal(_))).then_some(i))
+        .collect();
+    let (mut next_change, mut cursor, mut old_line, mut new_line) = (0, 0, 1, 1);
+    while next_change < changes.len() {
+        let start = changes[next_change].saturating_sub(3);
+        let mut last = changes[next_change];
+        next_change += 1;
+        while next_change < changes.len() && changes[next_change] - last <= 7 {
+            last = changes[next_change];
+            next_change += 1;
+        }
+        let end = (last + 4).min(edits.len());
+        for edit in &edits[cursor..start] {
+            advance(*edit, &mut old_line, &mut new_line);
+        }
+        let old_count = edits[start..end]
+            .iter()
+            .filter(|edit| !matches!(edit, Edit::Insert(_)))
+            .count();
+        let new_count = edits[start..end]
+            .iter()
+            .filter(|edit| !matches!(edit, Edit::Delete(_)))
+            .count();
+        let old_start = if old_count == 0 {
+            old_line - 1
+        } else {
+            old_line
+        };
+        let new_start = if new_count == 0 {
+            new_line - 1
+        } else {
+            new_line
+        };
+        text.push_str(&format!(
+            "@@ -{old_start},{old_count} +{new_start},{new_count} @@\n"
+        ));
+        for edit in &edits[start..end] {
+            let (prefix, line) = match edit {
+                Edit::Equal(line) => (' ', *line),
+                Edit::Delete(line) => ('-', *line),
+                Edit::Insert(line) => ('+', *line),
+            };
+            text.push(prefix);
+            text.push_str(line);
+            if !line.ends_with('\n') {
+                text.push_str("\n\\ No newline at end of file\n");
+            }
+            advance(*edit, &mut old_line, &mut new_line);
+        }
+        cursor = end;
     }
-    if truncated {
-        diff.push_str("… diff preview folded; the complete change is saved in the file\n");
+    Ok(Diff {
+        text,
+        added,
+        removed,
+    })
+}
+
+fn advance(edit: Edit<'_>, old: &mut usize, new: &mut usize) {
+    if !matches!(edit, Edit::Insert(_)) {
+        *old += 1;
     }
-    (diff, truncated)
+    if !matches!(edit, Edit::Delete(_)) {
+        *new += 1;
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::Workspace;
     use super::*;
+    use std::path::PathBuf;
+
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "ssmcp-audit-{}-{}",
+                std::process::id(),
+                super::super::random_id().unwrap()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn workspace(&self, output: Arc<OutputStore>) -> Workspace {
+            Workspace::with_output(self.0.clone(), output).unwrap()
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
-    fn diff_has_context_and_keeps_real_line_numbers() {
-        let (diff, truncated) = unified_diff("src/a.rs", "same\nold\ntail\n", "same\nnew\ntail\n");
-        assert!(diff.contains("@@ -1,3 +1,3 @@\n same\n-old\n+new\n tail\n"));
-        assert!(!truncated);
-        assert!(unified_diff("a", "", "new\n").0.contains("@@ -0,0 +1,1 @@"));
-        assert!(unified_diff("a", "old\n", "").0.contains("@@ -1,1 +0,0 @@"));
-        assert!(unified_diff("a", "same", "same").0.is_empty());
+    fn separated_edits_count_only_changed_lines_and_preserve_newline_status() {
+        let diff = unified_diff(
+            "src/a.rs",
+            "same\nold\nmiddle\nold2\ntail\n",
+            "same\nnew\nmiddle\nnew2\ntail\n",
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!((diff.added, diff.removed), (2, 2));
+        assert!(diff.text.contains(" middle\n"));
+        assert!(!diff.text.contains("-middle"));
+        let diff = unified_diff("a", "same", "same\n", false, false).unwrap();
+        assert_eq!((diff.added, diff.removed), (1, 1));
+        assert!(
+            diff.text
+                .contains("-same\n\\ No newline at end of file\n+same\n")
+        );
+        assert!(
+            unified_diff("a", "", "new\n", true, false)
+                .unwrap()
+                .text
+                .contains("@@ -0,0 +1,1 @@")
+        );
+        assert!(
+            unified_diff("a", "old\n", "", false, true)
+                .unwrap()
+                .text
+                .contains("@@ -1,1 +0,0 @@")
+        );
+        assert!(
+            unified_diff("a", "same", "same", false, false)
+                .unwrap()
+                .text
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn distant_changes_keep_real_hunk_positions() {
+        let old = (0..24).map(|i| format!("line-{i}\n")).collect::<String>();
+        let new = old
+            .replace("line-2\n", "changed-2\n")
+            .replace("line-20\n", "changed-20\n");
+        let diff = unified_diff("a", &old, &new, false, false).unwrap();
+        assert_eq!((diff.added, diff.removed), (2, 2));
+        assert!(diff.text.contains("@@ -1,6 +1,6 @@"));
+        assert!(diff.text.contains("@@ -18,7 +18,7 @@"));
+        assert!(!diff.text.contains("line-10"));
+    }
+
+    #[test]
+    fn edit_paths_reconstruct_inputs_and_match_independent_lcs_counts() {
+        let mut samples = vec![Vec::new()];
+        for len in 1..=5 {
+            for bits in 0..1usize << len {
+                samples.push(
+                    (0..len)
+                        .map(|i| if bits & (1 << i) == 0 { "a\n" } else { "b\n" })
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        for old in &samples {
+            for new in &samples {
+                let edits = shortest_edits(old, new).unwrap();
+                let reconstructed_old: Vec<_> = edits
+                    .iter()
+                    .filter_map(|edit| match edit {
+                        Edit::Equal(line) | Edit::Delete(line) => Some(*line),
+                        _ => None,
+                    })
+                    .collect();
+                let reconstructed_new: Vec<_> = edits
+                    .iter()
+                    .filter_map(|edit| match edit {
+                        Edit::Equal(line) | Edit::Insert(line) => Some(*line),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(&reconstructed_old, old);
+                assert_eq!(&reconstructed_new, new);
+                let mut lengths = vec![vec![0; new.len() + 1]; old.len() + 1];
+                for i in 0..old.len() {
+                    for j in 0..new.len() {
+                        lengths[i + 1][j + 1] = if old[i] == new[j] {
+                            lengths[i][j] + 1
+                        } else {
+                            lengths[i][j + 1].max(lengths[i + 1][j])
+                        };
+                    }
+                }
+                assert_eq!(
+                    edits.iter().filter(|e| matches!(e, Edit::Equal(_))).count(),
+                    lengths[old.len()][new.len()]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_is_never_treated_as_missing_and_sensitive_content_is_not_archived() {
+        let output = OutputStore::global().unwrap();
+        let audit = FileAudit::new(EventLog::new("test"), output);
+        let unknown = audit.diff_event(
+            "write",
+            "file",
+            Snapshot::Unknown("permission_denied"),
+            Snapshot::Text("replacement\n".into()),
+        );
+        assert_eq!(unknown["before"]["state"], "unknown");
+        assert!(unknown["added_lines"].is_null());
+        assert!(unknown["diff"].is_null());
+        assert_eq!(unknown["diff_complete"], false);
+        for path in [
+            ".env",
+            ".env.local",
+            ".ssh/id_ed25519",
+            "nested/credentials.json",
+            "key.pem",
+        ] {
+            let event = audit.diff_event(
+                "write",
+                path,
+                Snapshot::Missing,
+                Snapshot::from_bytes(path, b"private_value_123456789\n"),
+            );
+            assert!(event["diff_artifact"].is_null());
+            assert!(event["preview"].is_null());
+            assert!(!event.to_string().contains("private_value_123456789"));
+        }
+        assert!(matches!(
+            Snapshot::from_bytes("normal.txt", b"-----BEGIN PRIVATE KEY-----\nprivate\n"),
+            Snapshot::Unknown("sensitive_content")
+        ));
+    }
+
+    #[tokio::test]
+    async fn only_successful_native_operations_emit_and_large_diffs_round_trip() {
+        let scratch = Scratch::new();
+        let output = OutputStore::global().unwrap();
+        let workspace = scratch.workspace(output.clone());
+        assert!(
+            workspace
+                .perform("ssmcp.fs.read_text", json!({"path":"missing"}))
+                .await
+                .is_err()
+        );
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.edit_text",
+                    json!({"path":"missing","old_text":"old","new_text":"new"})
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            workspace
+                .perform("ssmcp.fs.events", json!({}))
+                .await
+                .unwrap()["next_cursor"],
+            0
+        );
+        let text = (0..650)
+            .map(|i| format!("row-{i:04} {}\n", "x".repeat(64)))
+            .collect::<String>();
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"large.txt","text":text}),
+            )
+            .await
+            .unwrap();
+        let page = workspace
+            .perform("ssmcp.fs.events", json!({}))
+            .await
+            .unwrap();
+        let events = page["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["event"]["type"], "ssmcp.file.write");
+        let diff = &events[1]["event"];
+        assert_eq!(diff["added_lines"], 650);
+        assert_eq!(diff["removed_lines"], 0);
+        assert_eq!(diff["diff_complete"], true);
+        assert_eq!(diff["preview_truncated"], true);
+        assert!(diff["diff"].is_null());
+        let artifact = &diff["diff_artifact"];
+        assert_eq!(artifact["complete"], true);
+        let id = artifact["id"].as_str().unwrap();
+        let mut restored = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = output
+                .perform(
+                    "ssmcp.output.read",
+                    json!({"id":id,"offset":offset,"max_bytes":4096}),
+                )
+                .await
+                .unwrap();
+            use base64::Engine;
+            restored.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(page["data_base64"].as_str().unwrap())
+                    .unwrap(),
+            );
+            if page["eof"] == true {
+                break;
+            }
+            offset = page["next_offset"].as_u64().unwrap();
+        }
+        assert_eq!(sha256(&restored), artifact["sha256"].as_str().unwrap());
+        assert!(
+            String::from_utf8(restored)
+                .unwrap()
+                .ends_with(&format!("+row-0649 {}\n", "x".repeat(64)))
+        );
+        let cursor = page["next_cursor"].as_u64().unwrap();
+        assert!(workspace.perform("ssmcp.fs.write_text",
+            json!({"path":"large.txt","text":"bad","overwrite":true,"expected_sha256":"0".repeat(64)})).await.is_err());
+        assert_eq!(
+            workspace
+                .perform("ssmcp.fs.events", json!({"cursor":cursor}))
+                .await
+                .unwrap()["next_cursor"],
+            cursor
+        );
+    }
+
+    #[tokio::test]
+    async fn binary_and_oversized_preimages_have_unknown_counts() {
+        let scratch = Scratch::new();
+        let output = OutputStore::global().unwrap();
+        let workspace = scratch.workspace(output);
+        for (path, before) in [
+            ("binary", vec![0, 255]),
+            ("large", vec![b'x'; MAX_FILE_BYTES + 1]),
+        ] {
+            std::fs::write(scratch.0.join(path), before).unwrap();
+            workspace
+                .perform(
+                    "ssmcp.fs.write_text",
+                    json!({"path":path,"text":"replacement\n","overwrite":true}),
+                )
+                .await
+                .unwrap();
+        }
+        let events = workspace
+            .perform("ssmcp.fs.events", json!({}))
+            .await
+            .unwrap();
+        for item in events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["event"]["type"] == "ssmcp.file.diff")
+        {
+            assert_eq!(item["event"]["before"]["state"], "unknown");
+            assert!(item["event"]["added_lines"].is_null());
+            assert!(item["event"]["diff_artifact"].is_null());
+        }
+    }
+    #[tokio::test]
+    async fn read_edit_and_sensitive_events_report_observations_once() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace(OutputStore::global().unwrap());
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"file","text":"first\nsame\nlast\n"}),
+            )
+            .await
+            .unwrap();
+        workspace
+            .perform("ssmcp.fs.read_text", json!({"path":"file"}))
+            .await
+            .unwrap();
+        workspace
+            .perform(
+                "ssmcp.fs.edit_text",
+                json!({"path":"file","old_text":"same","new_text":"changed"}),
+            )
+            .await
+            .unwrap();
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":".env","text":"TOKEN=private_value_123456789\n"}),
+            )
+            .await
+            .unwrap();
+        let page = workspace
+            .perform("ssmcp.fs.events", json!({}))
+            .await
+            .unwrap();
+        let events = page["events"].as_array().unwrap();
+        assert_eq!(events.len(), 7);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e["event"]["type"] == "ssmcp.file.read")
+                .count(),
+            1
+        );
+        let change = &events[4]["event"];
+        assert_eq!(change["type"], "ssmcp.file.diff");
+        assert_eq!(change["added_lines"], 1);
+        assert_eq!(change["removed_lines"], 1);
+        assert!(
+            change["diff"]
+                .as_str()
+                .unwrap()
+                .contains("-same\n+changed\n")
+        );
+        let secret = &events[6]["event"];
+        assert_eq!(secret["after"]["reason"], "sensitive_path");
+        assert!(secret["diff_artifact"].is_null());
+        assert!(!page.to_string().contains("private_value_123456789"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_native_writes_have_a_consistent_snapshot_chain() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace(OutputStore::global().unwrap());
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"shared","text":"initial\n"}),
+            )
+            .await
+            .unwrap();
+        let (left, right) = tokio::join!(
+            workspace.perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"shared","text":"left\n","overwrite":true})
+            ),
+            workspace.perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"shared","text":"right\n","overwrite":true})
+            ),
+        );
+        left.unwrap();
+        right.unwrap();
+        let page = workspace
+            .perform("ssmcp.fs.events", json!({}))
+            .await
+            .unwrap();
+        let diffs: Vec<_> = page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["event"]["type"] == "ssmcp.file.diff")
+            .map(|item| &item["event"])
+            .collect();
+        assert_eq!(diffs.len(), 3);
+        for pair in diffs.windows(2) {
+            assert_eq!(pair[0]["after"]["sha256"], pair[1]["before"]["sha256"]);
+            assert_eq!(pair[1]["added_lines"], 1);
+            assert_eq!(pair[1]["removed_lines"], 1);
+        }
+        assert_eq!(
+            diffs[2]["after"]["sha256"],
+            sha256(&std::fs::read(scratch.0.join("shared")).unwrap())
+        );
+    }
+
+    #[test]
+    fn pathological_edit_distance_reports_unknown_instead_of_false_counts() {
+        let old = (0..2200).map(|i| format!("line-{i}\n")).collect::<String>();
+        let new = (0..2200)
+            .rev()
+            .map(|i| format!("line-{i}\n"))
+            .collect::<String>();
+        let audit = FileAudit::new(EventLog::new("test"), OutputStore::global().unwrap());
+        let event = audit.diff_event(
+            "write",
+            "reversed",
+            Snapshot::Text(old),
+            Snapshot::Text(new),
+        );
+        assert_eq!(event["diff_unavailable_reason"], "diff_complexity_limit");
+        assert!(event["added_lines"].is_null());
+        assert!(event["removed_lines"].is_null());
+        assert_eq!(event["diff_complete"], false);
     }
 }

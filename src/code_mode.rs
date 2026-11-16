@@ -89,7 +89,11 @@ fn bounded(mut text: String, max: usize) -> String {
 }
 
 pub(crate) fn executable(name: &str) -> Result<PathBuf, String> {
-    if name == "node" { crate::program::node() } else { crate::program::executable(name) }
+    if name == "node" {
+        crate::program::node()
+    } else {
+        crate::program::executable(name)
+    }
 }
 
 fn runner_path() -> Result<PathBuf, String> {
