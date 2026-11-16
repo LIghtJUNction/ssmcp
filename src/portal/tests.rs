@@ -29,12 +29,20 @@ fn key() -> String {
 }
 #[test]
 fn key_parser_rejects_options_private_keys_wrong_algorithms_lengths_and_controls() {
-    assert!(parse_key(&key(), "laptop").is_ok());
+    let expected = parse_key(&key(), "laptop").unwrap();
+    for pasted in [format!("{}\n", key()), format!(" \t{}\r\n", key())] {
+        let parsed = parse_key(&pasted, "laptop").unwrap();
+        assert_eq!(parsed.public_key, expected.public_key);
+        assert_eq!(parsed.fingerprint, expected.fingerprint);
+    }
     for raw in [
         "-----BEGIN OPENSSH PRIVATE KEY-----".into(),
         format!("command=\"id\" {}", key()),
         key().replace("ssh-ed25519", "ssh-rsa"),
         format!("{}\nssh-ed25519 bad", key()),
+        key().replace(' ', "\t"),
+        format!("{}\0", key()),
+        "\r\n \t".into(),
         "ssh-ed25519 AAAA".into(),
         "x".repeat(1025),
     ] {
@@ -47,6 +55,54 @@ fn key_parser_rejects_options_private_keys_wrong_algorithms_lengths_and_controls
     bytes.push(1);
     assert!(parse_key(&format!("ssh-ed25519 {}", STANDARD.encode(bytes)), "").is_err());
 }
+#[test]
+fn session_capacity_recycles_only_idle_anonymous_visitors() {
+    let mut browser = BrowserState::default();
+    let now = Instant::now();
+    for index in 0..MAX_SESSIONS {
+        browser.sessions.insert(
+            digest(&index.to_string()),
+            Session {
+                subject: (index == 0).then(|| "123".to_owned()),
+                csrf: "fixture".to_owned(),
+                expires: now + Duration::from_secs(60 + index as u64),
+            },
+        );
+    }
+    browser.pending.insert(
+        digest("pending"),
+        Pending {
+            browser: digest("1"),
+            verifier: "fixture".to_owned(),
+            expires: now + LOGIN_TTL,
+        },
+    );
+    browser.make_room_for_session().unwrap();
+    assert_eq!(browser.sessions.len(), MAX_SESSIONS - 1);
+    assert!(browser.sessions.contains_key(&digest("0")));
+    assert!(browser.sessions.contains_key(&digest("1")));
+    assert!(browser.pending.contains_key(&digest("pending")));
+    assert!(!browser.sessions.contains_key(&digest("2")));
+    assert!(browser.sessions.contains_key(&digest("3")));
+
+    browser.sessions.insert(
+        digest("replacement"),
+        Session {
+            subject: Some("456".to_owned()),
+            csrf: "fixture".to_owned(),
+            expires: now + SESSION_TTL,
+        },
+    );
+    for (key, session) in &mut browser.sessions {
+        if key != &digest("1") {
+            session.subject = Some("123".to_owned());
+        }
+    }
+    assert_eq!(browser.make_room_for_session(), Err(Problem::Busy));
+    assert_eq!(browser.sessions.len(), MAX_SESSIONS);
+    assert!(browser.sessions.contains_key(&digest("1")));
+}
+
 #[test]
 fn durable_accounts_survive_rename_and_keys_are_owner_scoped() {
     let tmp = Temp::new();
@@ -266,9 +322,23 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         "{base}/oauth/callback/github?state={}&code=fixture-code",
         params["state"]
     );
-    assert_eq!(
-        client.get(&callback_url).send().await.unwrap().status(),
-        401
+    let missing_cookie = client.get(&callback_url).send().await.unwrap();
+    assert_eq!(missing_cookie.status(), 401);
+    let policy = missing_cookie.headers()["content-security-policy"]
+        .to_str()
+        .unwrap();
+    assert!(policy.contains("style-src 'self'"));
+    assert!(policy.contains("default-src 'none'"));
+    assert!(policy.contains("frame-ancestors 'none'"));
+    assert!(!policy.contains("'unsafe-inline'"));
+    assert_eq!(missing_cookie.headers()["cache-control"], "no-store");
+    assert_eq!(missing_cookie.headers()["referrer-policy"], "no-referrer");
+    assert!(
+        missing_cookie
+            .text()
+            .await
+            .unwrap()
+            .contains("href=\"/portal.css\"")
     );
     let callback = client
         .get(&callback_url)
