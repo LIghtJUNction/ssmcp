@@ -2207,6 +2207,62 @@ mod tests {
     }
 
     #[test]
+    fn narrow_exec_stdout_keeps_unicode_chunks_and_redacts_secrets() {
+        let mut renderer = Renderer::new(false, false, 12);
+        let mut output = Vec::new();
+        // These are complete UTF-8 chunks, not arbitrary byte fragments.
+        let chunks = [
+            format!("{}\u{3001}exit=0", "a".repeat(51)),
+            "\u{1f980}\n".to_owned(),
+            "token_test\u{3001}API_TOKEN=renderer-only-secret\n".to_owned(),
+        ];
+        let mut offset = 0;
+        for chunk in &chunks {
+            let next = offset + chunk.len();
+            renderer
+                .event(
+                    &mut output,
+                    "test",
+                    &json!({
+                        "type":"exec.stdout",
+                        "job_id":"unicode",
+                        "method":"command/exec/outputDelta",
+                        "params":{
+                            "processId":"unicode","stream":"stdout",
+                            "offset":offset,"next_offset":next,
+                            "deltaBase64":STANDARD.encode(chunk)
+                        }
+                    }),
+                )
+                .unwrap();
+            offset = next;
+        }
+        renderer.finish_group(&mut output, "test").unwrap();
+        let text = String::from_utf8(output).unwrap();
+        let mut rows = text.lines();
+        assert_eq!(rows.next(), Some("[STDOUT] test \u{b7} unicode"));
+        let body = rows
+            .map(|line| {
+                assert!(
+                    unicode_width::UnicodeWidthStr::width(line) <= 12,
+                    "{line:?}"
+                );
+                line.strip_prefix("  ").expect("stdout line indentation")
+            })
+            .collect::<String>();
+        assert_eq!(
+            body,
+            format!(
+                "{}\u{3001}exit=0\u{1f980}token_test\u{3001}API_TOKEN=[redacted]",
+                "a".repeat(51)
+            )
+        );
+        assert_eq!(text.matches("[STDOUT]").count(), 1);
+        assert!(!body.contains("renderer-only-secret"));
+        assert!(!text.contains("[OK"));
+    }
+
+    #[test]
     fn base64_partial_output_is_visible_before_completion() {
         let mut renderer = Renderer::new(false, false, 100);
         let mut output = Vec::new();
