@@ -1,4 +1,4 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.6.0" "User Commands"
+.TH SSMCP 1 "2026-11-17" "ssmcp 0.6.0" "User Commands"
 .SH NAME
 ssmcp \- bridge local tools and independent commands through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
@@ -13,7 +13,13 @@ ssmcp \- bridge local tools and independent commands through an SSH-authenticate
 .RB [ \-\-daemon ]
 .RB [ \-\-watchdog ]
 .RB [ \-\-reconnect-delay " seconds" ]
+.RB [ \-\-portal " https://origin" ]
+.RB [ \-\-no-setup ]
 .I [user@]host
+.PP
+.B ssmcp setup
+.RB [ options ]
+.IR [[user@]host]
 .PP
 .B ssmcp
 .B \-\-list-tools
@@ -50,6 +56,35 @@ stops its owned background jobs and closes native provider connections.
 Operator-managed external Pi and OpenCode services are not terminated. Login-code grants issued by that
 connection are revoked. GitHub identity grants remain subject to their own
 lifetimes and each currently connected client's allow policy.
+.SH FIRST CONNECTION
+An interactive first connection failure opens the GitHub authorization page on
+the target ssmcp portal. Compare the browser pairing code with the terminal,
+sign in, and explicitly authorize the requesting computer. The account is the
+ssmcp account associated with that GitHub identity; registering a key does not
+modify the SSH keys settings on github.com.
+.PP
+The terminal asks before installing missing OpenSSH tools, creating a dedicated
+Ed25519 key, or registering an existing public key. Enter yes or y to consent.
+The private key stays on this computer. A generated dedicated key has no
+passphrase for unattended reconnects, as explained before creation.
+.PP
+After public key registration, choose a computer display name or press Return
+to accept the shown default. The client preserves unrelated SSH configuration,
+backs up changed content, writes an explicit managed Host alias, and checks
+its effective configuration with ssh -G. It then verifies the registration
+handshake and continues running. OpenSSH still performs host-key confirmation.
+.PP
+Use ssmcp setup to start this flow directly. Without a destination, setup uses
+ssmcp.lmm.best. Use the printed SSH alias for subsequent connections. The
+automatic flow requires interactive stdin and stderr, runs only once before
+the current process has ever registered, and never runs inside a saved
+background service. A watchdog reconnect after successful registration does
+not reopen account authorization.
+.PP
+The client and ssmcpd portal must both support the setup endpoints. Public
+binary downloads use bounded waits and verified mirror fallback; credentials,
+pairing secrets and official verification metadata are never sent to public
+mirrors. Package installation transactions are separate from timed downloads.
 .SH OPTIONS
 .TP
 .BI \-\-name " name"
@@ -76,9 +111,19 @@ github is the currently supported provider. Usernames contain 1 to 39 ASCII
 letters or digits with optional single hyphens between them.
 .PP
 This option requires an SSH destination and cannot accompany \-\-list-tools.
-No GitHub login is performed in the CLI; existing SSH keys and configuration
-remain in use. The server must support and configure GitHub OAuth. An unsupported
+The flag selects access policy. Existing SSH keys and configuration remain
+usable; interactive first-connection setup may open the portal in a browser.
+The server must support and configure GitHub OAuth. An unsupported
 server causes startup to fail before exposing the local backend.
+.TP
+.BI \-\-portal " https://origin"
+Use this HTTPS portal origin for setup when it differs from the SSH hostname.
+Paths, query strings, fragments and embedded credentials are rejected.
+.TP
+.B \-\-no-setup
+Disable automatic first-connection setup. Noninteractive commands and saved
+background services do not start interactive setup even without this flag.
+Cannot accompany the setup subcommand.
 .TP
 .BI \-i " file"
 Use the specified private key. ssh-agent is also supported.
@@ -139,7 +184,8 @@ missing runtimes or dependencies. Node.js 18 or newer, bubblewrap 0.8 or newer a
 server dependencies managed by the operating system package manager; no npm package is needed. A client-only
 ssmcp installation does not require these server dependencies. The public
 JavaScript API includes clients, call, tools, logging, exec, reload, outputs.read/stat/cleanup,
-fs, context, skills, agents, rsync/sync, jobs, ports and resources. Short native
+fs, context, skills, agents, rsync/sync, jobs, ports, resources, browser, computer
+and omarchy. Short native
 results are returned unchanged. Long backend output is replaced by artifact
 metadata; inspect spilled and use outputs.read. PTY artifacts contain raw terminal
 bytes; command streams have separate artifacts; oversized MCP results retain
