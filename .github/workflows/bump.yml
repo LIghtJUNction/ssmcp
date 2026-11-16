@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       level:
-        description: Version component to increment, commit, tag and publish
+        description: Version component to increment, commit and validate for publishing
         required: true
         default: patch
         type: choice
@@ -24,8 +24,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,10 +46,6 @@ jobs:
           git add Cargo.toml Cargo.lock
           git commit -m "chore: release $RELEASE_TAG"
           git push origin HEAD:main
-      - name: Create the requested release tag without moving an existing tag
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: python3 scripts/release.py tag "$RELEASE_TAG" "$(git rev-parse HEAD)"
 
   dispatch_release:
     needs: bump
@@ -61,11 +55,10 @@ jobs:
       contents: read
       actions: write
     steps:
-      - name: Start checks and publishing for the new tag
+      - name: Start checks and publishing for the new main version
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.bump.outputs.tag }}
-        # A tag pushed with GITHUB_TOKEN does not start a push workflow.
-        # workflow_dispatch does, and the explicit tag keeps empty-input runs as preflight only.
-        run: gh workflow run release.yml --ref main -f "tag=$RELEASE_TAG"
+        # GITHUB_TOKEN pushes do not start another push workflow.
+        # Release creates the version tag only after all checks and packaging pass.
+        run: gh workflow run release.yml --ref main

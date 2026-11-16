@@ -590,9 +590,8 @@ mod tests {
         let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
         terminal
             .perform(Operation::Write {
-                data:
-                    "stty -echo; trap '' HUP; sleep 60 & printf 'SSMCP_CHILD=%s\\n' \"$!\"; exit\n"
-                        .into(),
+                data: "stty -echo; trap '' HUP; sleep 60 & printf SSMCP_CHILD=; jobs -p; exit\n"
+                    .into(),
             })
             .await
             .unwrap();

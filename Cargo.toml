@@ -28,6 +28,7 @@ include = [
     "/scripts/install.ps1",
     "/scripts/install.sh",
     "/docs/releases.md",
+    "/docs/release-notes-*.md",
     "/scripts/e2e.py",
     "/scripts/e2e_session_features.py",
     "/scripts/e2e_agents.py",

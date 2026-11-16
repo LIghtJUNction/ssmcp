@@ -507,6 +507,6 @@ mod tests {
         let third = page(tools.clone(), second["nextCursor"].as_str()).unwrap();
         assert_eq!(third["tools"].as_array().unwrap().len(), 22);
         assert!(third.get("nextCursor").is_none());
-        assert!(page(tools[1..].to_vec(), first["nextCursor"].as_str()).is_err());
+        assert!(page(&tools[1..], first["nextCursor"].as_str()).is_err());
     }
 }

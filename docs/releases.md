@@ -139,63 +139,57 @@ rm -rf "$ssmcp_unpack_dir"
 
 核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --name dev --title "维护当前项目" --allow octocat@github my-ssmcp`。安装网关还需要配置 OpenSSH、HTTPS 与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
 
-## 维护者：先预检 main，再推版本 tag
+## 维护者：在 main 自动验证并发布
 
-Release 工作流有预检与发布两种入口。普通 `main` push 不触发这个工作流；除下表指定的 `release-check` 外，其他分支的创建事件会跳过构建任务。预检只输出 Actions artifacts，不创建 tag、GitHub Release，也不上传 crates.io。
+每次向 `main` 推送都会运行 CI；其中涉及 `Cargo.toml` 的推送还会启动 Release。发布脚本读取 manifest 版本并固定本次事件的源码提交，先完成全部检查和打包，再创建 `vX.Y.Z` tag。同一版本已有 tag 时，普通 main 发布入口会跳过，日常修改不会覆盖已发布版本。[CI](../.github/workflows/ci.yml) · [发布工作流](../.github/workflows/release.yml)
 
 | 触发方式 | 检查的源码 | 构建后是否发布 |
 | --- | --- | --- |
-| 在 `main` 手动运行，`tag` 留空 | 当次 checkout 的 `main` | 否 |
-| 创建精确命名的 `release-check` 分支，或更新该分支 | `main`；该分支仅作预检触发入口 | 否 |
-| 推送 `v*` tag | tag 指向的 commit，必须已进入 `main` | 是 |
-| 在 `main` 手动运行并填写已有 tag | 指定 tag 的 commit，必须已进入 `main` | 是，适合重跑 |
+| 向 `main` 推送包含 `Cargo.toml` 的修改 | 该次 push 的 commit | 该版本尚无 tag 时发布 |
+| 在 `main` 手动运行，`tag` 留空 | 该次 dispatch 的 main commit | 该版本尚无 tag 时发布 |
+| 在 `main` 手动运行，`build_only=true`、`tag` 留空 | 该次 dispatch 的 main commit | 否，只生成 Actions artifacts |
+| 推送 `v[0-9]*` tag | tag 指向的 commit，必须已进入 `main` | 是 |
+| 在 `main` 手动运行并填写已有 tag | 指定 tag 的 commit，必须已进入 `main` | 是，适合重试 |
 
-手动预检可在 GitHub **Actions → Release → Run workflow** 中选择 `main`，保持 `tag` 为空，或使用：
-
-```sh
-gh workflow run release.yml --ref main
-```
-
-不能直接调用 `workflow_dispatch` 的集成可以创建 `release-check` 分支指向当前 `main`。工作流对该分支的 `create`／`push` 入口都只执行 main 预检；新建分支的重复 push 事件会跳过，避免与 create 重复构建。其他分支和 tag 的 create 事件不执行构建任务。后续更新该分支时使用普通快进更新，不强推；它不是发布分支。[事件判定](../scripts/release.py)
-
-预检会验证 `Cargo.toml` 与 `Cargo.lock` 的包版本一致、checkout 可从 `origin/main` 到达，以及受跟踪源码没有额外修改。`checks` 复用 CI：在六个平台执行 native clippy 和测试，并在 Linux 检查真实 SSH／OAuth／HTTP、系统隔离和服务限制；harness 协议测试使用确定性 fixtures，不提交真实模型任务。`build` 矩阵负责各目标的 release build、可执行文件冒烟，以及真实归档的安装、更新、损坏下载、错误版本和下载失败测试；它不会再次重复单元测试。[跨平台原语测试](../tests/release_client.rs)还验证实际文件操作、skills／AGENTS 读取、后台进程的输出、退出码与取消。预检结果应对应准备发布的 commit，源码改变后应重新预检。[CI](../.github/workflows/ci.yml) · [安装器测试](../scripts/test_installers.py)
-
-正式发布前更新 `Cargo.toml` 的版本，并用 Cargo 更新 `Cargo.lock` 中本包的版本。将修改提交推送到 `main`，完成上述预检，再为这个已验证 commit 创建与 manifest 一致的 tag。例如 manifest 是 `X.Y.Z`，tag 必须是 `vX.Y.Z`；workflow 不会猜测或自动改写版本号。
+手动入口位于 GitHub **Actions → Release → Run workflow**。只做预检时勾选 `build_only`，或使用：
 
 ```sh
-# 在已经提交、推送且验证过的 main 上执行。
-release_version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-git tag -a "v$release_version" -m "Release v$release_version"
-git push origin "v$release_version"
+gh workflow run release.yml --ref main -f build_only=true
 ```
 
-发布顺序由工作流固定：先验证 tag／manifest／lockfile／main ancestry，再完成 `checks` 和全部六个平台构建。之后 crates.io 与 GitHub Release 两个 job 并行执行，各自报告结果；其中一个失败不会被另一个的成功掩盖。GitHub Release 在附件上传并检查后才从 draft 公开，预发布 tag 会标记为 prerelease。
+预检和正式发布采用同一组检查：manifest 与 lockfile 的本包版本必须一致，checkout 必须已经进入 `origin/main`，受跟踪源码必须保持干净。`checks` 复用六个平台的 CI，并在 Linux 检查真实 SSH／OAuth／HTTP、系统隔离和服务限制；harness 协议测试使用确定性 fixtures。`build` 矩阵负责各目标的 release build、可执行文件冒烟，以及真实归档的安装、更新、损坏下载、错误版本和下载失败测试。[跨平台原语测试](../tests/release_client.rs)还验证实际文件操作、skills／AGENTS 读取、后台进程的输出、退出码与取消。源码改变后需让新的 commit 重新通过检查。[安装器测试](../scripts/test_installers.py)
+
+`finalize` 等待 `checks` 与全部六个平台构建成功，核对完整归档集，再运行 `cargo package --locked` 验证源码包。正式发布才在此时创建缺少的 tag；已有 tag 必须仍指向本次已验证提交。随后将验证过的 `.crate` 保存为 `verified-crate` artifact，交给独立的 crates 发布 job，避免再次执行源码编译验证。[事件与 tag 校验](../scripts/release.py)
+
+crates.io 与 GitHub Release 两个发布 job 在 `finalize` 成功后并行执行，各自报告结果。GitHub Release 在附件上传并检查后才从 draft 公开；预发布 tag 会标记为 prerelease。发布页保留安装说明，并自动附加仓库中存在的 `docs/release-notes-<版本号>.md`。两条发布路径共用已验证的源码提交，但其中一方的凭据问题不会阻塞另一方。
 
 ### 手动递增版本并启动发布
 
-`Bump version` 是显式的维护者操作，只允许在 `main` 手动运行。它按 `patch`、`minor` 或 `major` 同步更新本包 manifest 与 lockfile、提交并普通快进推送到 `main`、创建匹配 tag，最后以该已有 tag 显式调用 Release 工作流。它不会给日常 `main` push 增加自动发版行为；空 tag 的 Release 手动入口仍然只做预检。
+维护者可以直接同步更新 `Cargo.toml` 与 `Cargo.lock` 的本包版本并推送 main，也可以运行 `Bump version`。它只接受 main 上的显式操作，按 `patch`、`minor` 或 `major` 更新版本、提交并普通快进推送，随后显式启动 Release。Bump 不提前创建 tag；tag 仍由 Release 在全部门禁通过后创建。
 
 ```sh
 gh workflow run bump.yml --ref main -f level=patch
 ```
 
-Bump 使用 `GITHUB_TOKEN` 推送的 tag 不会自行触发另一个 push 工作流，因此单独的 `dispatch_release` job 必须传入新 tag。GitHub 对 `workflow_dispatch` 允许工作流之间的显式触发，这是版本递增之后仍能实际进入发布检查的关键。[Bump 工作流](../.github/workflows/bump.yml) · [GitHub 触发规则](https://docs.github.com/en/actions/concepts/security/github_token)
+Bump 使用 `GITHUB_TOKEN` 推送的提交不会自行触发另一个 push 工作流，因此 `dispatch_release` 单独启动 Release 的 main 入口。版本提交使用 contents 写权限，触发工作流的 job 使用 actions 写权限。[Bump 工作流](../.github/workflows/bump.yml) · [GitHub 触发规则](https://docs.github.com/en/actions/concepts/security/github_token)
 
-Bump 创建 tag 以后仍要等待全部发布检查通过，才会上传 crates.io 或公开 GitHub Release。首次验证跨平台变更时，先运行前述 main 预检；已经创建 tag 的失败发布应重跑该 tag 的 Release，避免再次运行 Bump 意外递增第二个版本。如果只是 `dispatch_release` 失败，可以重跑该失败 job，它会沿用已创建的 tag。
+若只是 `dispatch_release` 失败，在 main 仍是准备发布的版本时可重跑该 job，或直接调用 `gh workflow run release.yml --ref main`。不要为了重试同一版本再运行一次 Bump，否则会递增第二个版本。
 
 ## crates.io 凭据与失败重跑
 
 首次发布前，在仓库 Actions secrets 中配置有权发布 `ssmcp` 的 `CARGO_REGISTRY_TOKEN`。工作流也兼容历史拼写 `CARGO_REGISTY_TOKEN`；两个都存在时使用标准名称。Token 只传入 crates 发布步骤，不写入源码、日志或发行附件。当前工作流没有把未配置的 OIDC 可信发布者当作凭据备用方案。
 
-crates 发布会先执行 `cargo publish --locked --dry-run`，再上传并核对 crates.io 返回的包 checksum。若相同版本已经存在，只在其字节摘要与本地 `.crate` 一致时跳过；摘要不同会停止，要求选择新版本。crates 凭据缺失不阻塞已经通过全部构建的 GitHub Release job。[发布校验](../scripts/release.py) · [回归测试](../scripts/test_release.py)
+crates 发布读取 `finalize` 已验证的 `.crate`，检查注册表状态，再运行 `cargo publish --locked --no-verify` 并核对上传后的 checksum；`--no-verify` 复用前一 job 完成的包验证。若相同版本已经存在，只在其字节摘要与验证过的 `.crate` 一致时跳过；摘要不同或该版本被撤回时停止，要求选择新版本。crates 凭据缺失只会让 `publish_crates` 失败，GitHub Release 仍可发布已经通过完整门禁的预编译资产。[发布校验](../scripts/release.py) · [回归测试](../scripts/test_release.py)
 
-已有 tag 的失败运行可以在 GitHub 重跑失败 jobs，或在 `main` 手动填写该 tag：
+同一 commit 的临时故障可以在 GitHub 重跑失败 jobs。自动 main 运行已经创建 tag 后，应选择 **Re-run failed jobs**；完整重跑会重新执行版本探测，并因已有 tag 而跳过。已有 tag 也可以从 main 的手动入口显式重试：
 
 ```sh
 gh workflow run release.yml --ref main -f tag=vX.Y.Z
 ```
 
-已经公开的 Release 附件不会被静默替换。重跑发现同名附件时校验内容，内容不同则停止。归档时间戳固定用于减少非源码差异，但这不构成跨任意环境的二进制可重复构建承诺。修复源码或改变依赖后，应提交新版本、重新预检并创建新 tag，而不是移动已发布 tag。
+源码修复后的新 commit 不能通过重跑旧 run 验证：旧 run 固定旧 SHA。tag 尚未创建时，将修复推送 main，再调用 `gh workflow run release.yml --ref main`，或通过包含 `Cargo.toml` 的更新重新触发。tag 已经创建时，源码修复应使用新的版本号，已有 tag 保持不动。
+
+已经公开的 Release 附件不会被静默替换。重跑发现同名附件时校验内容，内容不同则停止。归档时间戳固定用于减少非源码差异，但这不构成跨任意环境的二进制可重复构建承诺。
 
 ## 发布证据如何判断
 
@@ -203,9 +197,9 @@ gh workflow run release.yml --ref main -f tag=vX.Y.Z
 
 | 文档中的行为 | 可核查依据 |
 | --- | --- |
-| 只有指定入口可以发布，预检强制禁发 | [工作流条件](../.github/workflows/release.yml)、`event_mode` 与事件回归测试 |
-| 六个平台及完整集成检查通过后才允许发布 | `checks`、`build` 矩阵与两个发布 job 的 `needs` |
-| 手动 Bump 能启动发布且不改变空 tag 预检含义 | `bump.yml` 的显式 tag dispatch 与 `event_mode` |
+| main 新版本可自动发布，显式预检强制禁发 | [工作流条件](../.github/workflows/release.yml)、`event_mode` 与事件回归测试 |
+| 六个平台及源码包验证通过后才创建 tag | `finalize` 对 `checks`、`build` 的依赖与创建 tag 的步骤顺序 |
+| 手动 Bump 能启动验证且不提前打 tag | `bump.yml` 的显式 main dispatch 与 `event_mode` |
 | 文件、上下文、进程原语有实际运行检查 | [release_client.rs](../tests/release_client.rs) |
 | 包和附件必须符合校验摘要 | [release.py](../scripts/release.py)、[test_release.py](../scripts/test_release.py) |
 | 某次版本已经发布 | 该版本的 Actions 结果、Release 附件、crates.io 版本记录 |
