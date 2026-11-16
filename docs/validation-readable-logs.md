@@ -6,7 +6,7 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| cargo test --locked | 190 passed，11 ignored，0 failed |
+| cargo test --locked | 208 passed，13 ignored，0 failed（合并 context primitives 后重跑） |
 | code_mode::tests --include-ignored | 9 passed，其中含默认忽略的系统隔离测试 |
 | two_tools --include-ignored | 3 passed |
 | workspace_bridge --ignored --test-threads=1 | 3 passed |
@@ -17,6 +17,8 @@
 | cargo fmt --all | 通过 |
 | Caddyfile adapt | 成功 |
 | systemd-analyze verify | ssmcpd 单元验证通过 |
+
+合并主分支的 context primitives 后保留 --context-root 与全部日志参数，整套测试及 Clippy 已重跑。
 
 附加测试与常规测试存在重叠，不把上述数量相加作为独立测试总数。未执行的原生 Agent 实装测试仍按其前置条件保留 ignored。
 
