@@ -16,24 +16,29 @@ import release
 
 
 class EventTests(unittest.TestCase):
-    def test_only_version_tag_push_or_explicit_main_dispatch_can_publish(self):
+    def test_version_tags_and_main_can_select_publication(self):
         self.assertEqual(release.event_mode("push", "refs/tags/v0.5.0", {}), ("v0.5.0", False))
         self.assertEqual(release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": {"tag": "v0.5.0"}}), ("v0.5.0", False))
+        self.assertEqual(release.event_mode("push", "refs/heads/main", {}), (None, False))
+        self.assertEqual(release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": {"tag": ""}}), (None, False))
 
     def test_preflight_events_never_select_a_release_tag(self):
-        for event_name, ref, event in (
-            ("workflow_dispatch", "refs/heads/main", {"inputs": {"tag": ""}}),
-            ("create", "refs/heads/release-check", {"ref": "release-check", "ref_type": "branch"}),
-            ("push", "refs/heads/release-check", {"created": False}),
-        ):
-            with self.subTest(event_name=event_name):
-                self.assertEqual(release.event_mode(event_name, ref, event), (None, True))
+        for build_only in (True, "true"):
+            with self.subTest(build_only=build_only):
+                self.assertEqual(release.event_mode("workflow_dispatch", "refs/heads/main",
+                                                   {"inputs": {"build_only": build_only}}), (None, True))
+
+    def test_dispatch_rejects_ambiguous_or_invalid_inputs(self):
+        for inputs in ({"tag": "v0.5.0", "build_only": True}, {"build_only": "yes"}, {"tag": 5}):
+            with self.subTest(inputs=inputs), self.assertRaises(ValueError):
+                release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": inputs})
 
     def test_unrelated_events_and_duplicate_branch_creation_push_are_rejected(self):
         for event_name, ref, event in (
-            ("push", "refs/heads/main", {}),
             ("push", "refs/heads/feature", {}),
             ("push", "refs/heads/release-check", {"created": True}),
+            ("push", "refs/heads/release-check", {"created": False}),
+            ("create", "refs/heads/release-check", {"ref": "release-check", "ref_type": "branch"}),
             ("create", "refs/heads/feature", {"ref": "feature", "ref_type": "branch"}),
             ("create", "refs/tags/v0.5.0", {"ref": "v0.5.0", "ref_type": "tag"}),
             ("create", "refs/heads/release-check", {"ref": "release-check", "ref_type": "tag"}),
@@ -103,6 +108,8 @@ class ReleaseTests(unittest.TestCase):
             release.validate_tag("v0.5.0", self.root)
         with self.assertRaises(subprocess.CalledProcessError):
             release.validate_tag(None, self.root, build_only=True)
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.prepare(automatic=True, root=self.root)
 
     def test_reject_tag_outside_main(self):
         self.git("checkout", "--quiet", "-b", "unmerged")
@@ -114,6 +121,8 @@ class ReleaseTests(unittest.TestCase):
             release.validate_tag("v0.5.0", self.root)
         with self.assertRaises(subprocess.CalledProcessError):
             release.validate_tag(None, self.root, build_only=True)
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.prepare(automatic=True, root=self.root)
 
     def test_reject_wrong_checkout(self):
         (self.root / "change").write_text("later")
@@ -195,16 +204,31 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "installer is missing or differs"):
             release.checksums(self.root)
 
-    def test_legacy_main_prepare_is_always_preflight_even_without_a_tag(self):
+    def test_main_prepare_does_not_create_tag_and_skips_existing_versions(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(release.prepare(automatic=True, root=self.root)["publish"], "false")
             self.git("tag", "-d", "v0.5.0")
             prepared = release.prepare(automatic=True, root=self.root)
-        self.assertEqual(prepared["publish"], "false")
-        self.assertEqual(prepared["create_tag"], "false")
-        self.assertEqual(prepared["tag"], "")
+        self.assertEqual(prepared["publish"], "true")
+        self.assertEqual(prepared["create_tag"], "true")
+        self.assertEqual(prepared["build_only"], "false")
+        self.assertEqual(prepared["tag"], "v0.5.0")
         self.assertEqual(prepared["sha"], self.git("rev-parse", "HEAD"))
         self.assertEqual(self.git("tag", "--list"), "")
+
+    def test_release_notes_select_matching_version_and_preserve_installation(self):
+        installation = release.release_notes(self.root)
+        self.assertIn("cargo install ssmcp --version 0.5.0 --locked --bin ssmcp", installation)
+        self.assertIn("download/install.sh", installation)
+        self.assertIn("download/install.ps1", installation)
+        self.assertIn("SHA256SUMS", installation)
+        docs = self.root / "docs"
+        docs.mkdir()
+        (docs / "release-notes-0.4.1.md").write_text("Previous release\n", encoding="utf-8")
+        self.assertEqual(release.release_notes(self.root), installation)
+        content = "# 0.5.0 升级说明\n\n移除旧参数，保留安装方式。\n"
+        (docs / "release-notes-0.5.0.md").write_text(content, encoding="utf-8")
+        self.assertEqual(release.release_notes(self.root), installation + "\n---\n\n" + content)
 
     def test_validated_tag_push_is_idempotent_and_never_moves_a_tag(self):
         self.git("tag", "-d", "v0.5.0")

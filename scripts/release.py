@@ -74,19 +74,23 @@ def emit(result):
 
 
 def event_mode(event_name, ref, event):
-    """Only a pushed version tag or an explicit main dispatch can publish."""
+    """Select an existing tag, automatic main release, or explicit build-only run."""
     if event_name == "push" and ref.startswith("refs/tags/v"):
         return ref.removeprefix("refs/tags/"), False
+    if event_name == "push" and ref == "refs/heads/main":
+        return None, False
     if event_name == "workflow_dispatch" and ref == "refs/heads/main":
-        tag = (event.get("inputs") or {}).get("tag", "")
+        inputs = event.get("inputs") or {}
+        tag = inputs.get("tag", "")
         if not isinstance(tag, str):
             raise ValueError("the release tag input must be a string")
-        return tag or None, not bool(tag)
-    if ref == "refs/heads/release-check":
-        if event_name == "push" and not event.get("created", False):
-            return None, True
-        if event_name == "create" and event.get("ref_type") == "branch" and event.get("ref") == "release-check":
-            return None, True
+        build_only = inputs.get("build_only", False)
+        if not isinstance(build_only, (bool, str)) or build_only not in (True, False, "true", "false"):
+            raise ValueError("the build_only input must be a boolean")
+        build_only = build_only is True or build_only == "true"
+        if build_only and tag:
+            raise ValueError("build-only validation cannot select a release tag")
+        return tag or None, build_only
     raise ValueError("this event is not an authorized release or main preflight trigger")
 
 
@@ -103,16 +107,30 @@ def validate_tag(tag, root=None, *, build_only=False):
     subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
     return emit({"tag": tag or "", "version": actual, "sha": sha,
                  "prerelease": str("-" in actual).lower(),
-                 "publish": str(not build_only).lower(), "create_tag": "false"})
+                 "publish": str(not build_only).lower(), "create_tag": "false",
+                 "build_only": str(build_only).lower()})
 
 
 def prepare(tag=None, automatic=False, root=None):
-    """Legacy prepare --auto now performs a main preflight without publishing."""
-    if automatic:
-        return validate_tag(tag, root, build_only=True)
-    if tag is None:
-        raise ValueError("provide an existing release tag or --auto for preflight")
-    return validate_tag(tag, root)
+    """Fix the main commit to validate; create its tag only after all gates pass."""
+    if not automatic:
+        if tag is None:
+            raise ValueError("provide an existing release tag or --auto for main")
+        return validate_tag(tag, root)
+    if tag is not None:
+        raise ValueError("automatic main validation cannot select an existing tag")
+    root = root or ROOT
+    actual = validate_package("v" + version(root), root)
+    tag = "v" + actual
+    sha = command("git", "rev-parse", "HEAD", cwd=root)
+    subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"],
+                   cwd=root, check=True)
+    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
+    exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", "refs/tags/" + tag],
+                            cwd=root).returncode == 0
+    return emit({"tag": tag, "version": actual, "sha": sha,
+                 "prerelease": str("-" in actual).lower(), "build_only": "false",
+                 "publish": str(not exists).lower(), "create_tag": str(not exists).lower()})
 
 
 def create_tag(tag, sha, root=None):
@@ -307,6 +325,27 @@ def publish(root=None):
     raise TimeoutError("crates.io has not exposed the uploaded version yet; rerun this tag's release")
 
 
+def release_notes(root=None):
+    root = root or ROOT
+    release_version = version(root)
+    notes = (
+        "Download an archive or use the attached installers. The separate `publish_crates` "
+        "job reports crates.io publication status; after that job succeeds, install with "
+        f"`cargo install ssmcp --version {release_version} --locked --bin ssmcp`.\n\n"
+        "Linux / macOS: `curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh`\n\n"
+        "Windows PowerShell: `irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex`\n\n"
+        "Linux archives include `ssmcp` and `ssmcpd`. macOS and Windows archives include the "
+        "`ssmcp` client; the gateway daemon runs on Linux. Both x86_64 and ARM64 are available "
+        "for each platform.\n\n"
+        "Verify downloads against `SHA256SUMS`. `release-manifest.json` records the source "
+        "commit and SHA-256 digest of every archive.\n"
+    )
+    document = root / "docs" / f"release-notes-{release_version}.md"
+    if document.is_file():
+        notes += "\n---\n\n" + document.read_text(encoding="utf-8").rstrip() + "\n"
+    return notes
+
+
 def release(tag, root=None):
     root = root or ROOT
     validate_tag(tag, root)
@@ -321,17 +360,7 @@ def release(tag, root=None):
             raise RuntimeError(found.stderr.strip())
         with tempfile.TemporaryDirectory(prefix="ssmcp-notes-") as temporary:
             notes = Path(temporary) / "notes.md"
-            notes.write_text(
-                "Download an archive or use the attached installers. The separate `publish_crates` "
-                "job reports crates.io publication status; after that job succeeds, install with "
-                f"`cargo install ssmcp --version {version(root)} --locked --bin ssmcp`.\n\n"
-                "Linux / macOS: `curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh`\n\n"
-                "Windows PowerShell: `irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex`\n\n"
-                "Linux archives include `ssmcp` and `ssmcpd`. macOS and Windows archives include the "
-                "`ssmcp` client; the gateway daemon runs on Linux. Both x86_64 and ARM64 are available "
-                "for each platform.\n\n"
-                "Verify downloads against `SHA256SUMS`. `release-manifest.json` records the source "
-                "commit and SHA-256 digest of every archive.\n", encoding="utf-8")
+            notes.write_text(release_notes(root), encoding="utf-8")
             subprocess.run(["gh", "release", "create", tag, "--repo", repository, "--verify-tag",
                             "--draft", "--title", tag, "--notes-file", str(notes)], cwd=root, check=True)
         metadata = json.loads(command("gh", "api", endpoint, cwd=root))
@@ -406,7 +435,10 @@ def main():
             with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
                 event = json.load(stream)
             tag, build_only = event_mode(os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"], event)
-            validate_tag(tag, build_only=build_only)
+            if tag is None and not build_only:
+                prepare(automatic=True)
+            else:
+                validate_tag(tag, build_only=build_only)
         else:
             validate_tag(args.tag, build_only=args.build_only)
     elif args.command in {"package", "pack"}:
