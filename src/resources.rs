@@ -217,6 +217,14 @@ fn limits() -> Value {
             "execution_location":"ssmcp server isolated process",
             "caller_workspace_access":"requires an explicit connected bridge"
         },
+        "managed_workspaces":{
+            "max_active_syncs":crate::bridge::MAX_ACTIVE_SYNCS,
+            "max_active_ports":crate::bridge::MAX_ACTIVE_PORTS,
+            "max_forwarded_connections":crate::bridge::MAX_CONNECTIONS,
+            "sync_defaults":{"dry_run":true,"delete":false},
+            "port_scope":"loopback only",
+            "code_mode_helpers":["fs","rsync","sync","jobs","ports","resources"]
+        },
         "wire":{
             "version":wire::VERSION,
             "max_frame_bytes":wire::MAX_FRAME,

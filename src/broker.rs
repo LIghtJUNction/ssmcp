@@ -122,6 +122,7 @@ pub struct Broker {
     pub bridges: Arc<crate::bridge::Bridges>,
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
+    pub portal: crate::portal::Portal,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
 }
 
@@ -148,6 +149,7 @@ impl Broker {
             identities: IdentityProviders::new(&public_url, github)?,
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
+            portal: crate::portal::Portal::default(),
             sessions: RwLock::new(HashMap::new()),
         })
     }

@@ -34,6 +34,17 @@ PUBLIC_URL = "https://ssmcp.example"
 PROTOCOL_META = "io.modelcontextprotocol/protocolVersion"
 CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities"
 
+SHELL_TOOLS = frozenset({
+    "terminal.read", "terminal.write", "terminal.resize", "terminal.status",
+})
+BUILTIN_TOOLS = frozenset({
+    "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
+    "ssmcp.net.listen", "ssmcp.net.accept", "ssmcp.net.connect", "ssmcp.net.read",
+    "ssmcp.net.write", "ssmcp.net.shutdown", "ssmcp.net.close", "ssmcp.net.list",
+    "ssmcp.rsync.start", "ssmcp.rsync.read", "ssmcp.rsync.write",
+    "ssmcp.rsync.status", "ssmcp.rsync.close",
+})
+
 
 def free_port() -> int:
     with socket.socket() as sock:
@@ -190,6 +201,33 @@ class Harness:
             raise AssertionError(f"Native tool {name} failed: {result}")
         return result["structuredContent"]
 
+    def workspace_roundtrip(self, directory, *, client_id=None, label="workspace"):
+        """Exercise universal file helpers across actual SSH in a temporary launch root."""
+        payload = bytes(range(256)) * 17 + b"\\x00ssmcp SSH roundtrip\\xff"
+        relative = "workspace-check/nested/binary.dat"
+        code = """
+            const id = %s;
+            await fs.mkdir(id, {path:"workspace-check/nested", parents:true});
+            await fs.write(id, {path:%s, data_base64:%s});
+            const read = await fs.read(id, {path:%s});
+            const stat = await fs.stat(id, {path:%s});
+            const root = await fs.stat(id, {});
+            return {read, stat, root};
+        """ % (
+            json.dumps(client_id or self.client_id), json.dumps(relative),
+            json.dumps(base64.b64encode(payload).decode()), json.dumps(relative),
+            json.dumps(relative),
+        )
+        result = self.public_call("code_mode", {"code": code})["result"]
+        self.check(result["root"]["root"] == str(directory.resolve())
+                   and result["root"]["kind"] == "directory",
+                   f"{label}: fs.stat identifies the SSH client's exact shared root")
+        self.check(base64.b64decode(result["read"]["data_base64"], validate=True) == payload
+                   and result["read"]["eof"] and result["stat"]["kind"] == "file"
+                   and result["stat"]["size"] == len(payload)
+                   and (directory / relative).read_bytes() == payload,
+                   f"{label}: fs.mkdir/write/read/stat preserve binary bytes through real SSH")
+
     def read_until(self, pattern, *, cursor=0, timeout=5.0, client_id=None):
         deadline = time.monotonic() + timeout
         output = ""
@@ -268,7 +306,7 @@ class Harness:
             "authenticationmethods publickey", "passwordauthentication no",
             "kbdinteractiveauthentication no", "disableforwarding yes", "permittty no",
         )
-        self.check(all(item in effective.splitlines() for item in required), "effective sshd config permits public keys only")
+        self.check(all(item in effective.lower().splitlines() for item in required), "effective sshd config permits public keys only")
         daemon = self.spawn("daemon", [
             str(self.binary_dir / "ssmcpd"), "serve", "--listen", f"127.0.0.1:{self.http_port}",
             "--public-url", PUBLIC_URL, "--socket", str(self.socket),
@@ -475,7 +513,7 @@ class Harness:
                    and isinstance(inventory["code_mode"], dict),
                    "list returns client identity, display name, launch cwd, backend type and code API")
         capabilities = self.public_call("list", {"client_id": self.client_id})
-        expected_tools = {"terminal.read", "terminal.write", "terminal.resize", "terminal.status"}
+        expected_tools = SHELL_TOOLS | BUILTIN_TOOLS
         self.check({tool["name"] for tool in capabilities["tools"]} == expected_tools
                    and all(isinstance(tool["inputSchema"], dict) for tool in capabilities["tools"]),
                    "list discovers exact native capability names and schemas for code_mode")
@@ -535,8 +573,9 @@ class Harness:
                    and by_id[sibling_id]["name"] == by_id[self.client_id]["name"],
                    "multiple same-user clients with duplicate display names retain distinct IDs and directories")
         self.call("terminal.write", {"data": "pwd\n"}, client_id=sibling_id)
-        self.read_until(r"(?:\r?\n)" + re.escape(str(workspace)) + r"\r?\n", client_id=sibling_id)
+        self.read_until(r"[\r\n]" + re.escape(str(workspace)) + r"\r?\n", client_id=sibling_id)
         self.check(True, "code_mode routes terminal calls to the selected client ID")
+        self.workspace_roundtrip(workspace, client_id=sibling_id, label="shell sibling")
         result = self.public_call("code_mode", {"code": """
             const states = [];
             for (const client of clients) {
@@ -583,18 +622,18 @@ class Harness:
         self.check("[ssmcp shell input]" in log_path.read_text(errors="replace"), "local transcript records remote input even when PTY echo is disabled")
         self.call("terminal.resize", {"rows": 37, "cols": 91})
         self.call("terminal.write", {"data": "stty size; tty; printf '%s%s:%s\\n' 'SSMCP_' 'SHELL' \"$$\"\n"})
-        match, cursor, output = self.read_until(r"(?:\r?\n)SSMCP_SHELL:(\d+)\r?\n")
+        match, cursor, output = self.read_until(r"[\r\n]SSMCP_SHELL:(\d+)\r?\n")
         shell_pid = int(match.group(1))
         self.check("SSMCP_NOTIFICATION_EXECUTED" not in output, "tool notifications never execute terminal operations")
         self.check("37 91" in output and "/dev/pts/" in output, "resize and tty commands run in a real local PTY")
         self.call("terminal.write", {"data": "printf '%s%s\\n' '中文-' '终端'; cd /; pwd\n"})
-        _, cursor, output = self.read_until(r"(?:\r?\n)中文-终端\r?\n/\r?\n", cursor=cursor)
+        _, cursor, output = self.read_until(r"[\r\n]中文-终端\r?\n/\r?\n", cursor=cursor)
         self.check(True, "UTF-8 output and persistent working directory round-trip")
         self.call("terminal.write", {"data": "sleep 30\n"})
         time.sleep(0.15)
         self.call("terminal.write", {"data": "\u0003"})
         self.call("terminal.write", {"data": "printf '%s%s\\n' 'SSMCP_' 'INTERRUPTED'\n"})
-        _, cursor, _ = self.read_until(r"(?:\r?\n)SSMCP_INTERRUPTED\r?\n", cursor=cursor, timeout=3)
+        _, cursor, _ = self.read_until(r"[\r\n]SSMCP_INTERRUPTED\r?\n", cursor=cursor, timeout=3)
         self.check(True, "Ctrl-C interrupts the foreground process")
 
         # Drain the prompt, then demonstrate that a waiting read does not block a write.
@@ -608,10 +647,10 @@ class Harness:
             result = waiting.result(timeout=3)
             self.check(time.monotonic() - start < 3 and result["next_cursor"] > cursor,
                        "waiting reads allow concurrent writes")
-        _, cursor, _ = self.read_until(r"(?:\r?\n)SSMCP_CONCURRENT\r?\n", cursor=cursor)
+        _, cursor, _ = self.read_until(r"[\r\n]SSMCP_CONCURRENT\r?\n", cursor=cursor)
 
         self.call("terminal.write", {"data": "sleep 300 & printf '%s%s:%s\\n' 'SSMCP_' 'CHILD' \"$!\"\n"})
-        match, cursor, _ = self.read_until(r"(?:\r?\n)SSMCP_CHILD:(\d+)\r?\n", cursor=cursor)
+        match, cursor, _ = self.read_until(r"[\r\n]SSMCP_CHILD:(\d+)\r?\n", cursor=cursor)
         child_pid = int(match.group(1))
         self.call("terminal.write", {"data": "sleep 300\n"})
         time.sleep(0.1)

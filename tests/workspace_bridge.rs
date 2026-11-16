@@ -27,7 +27,7 @@ impl Scratch {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
             "ssmcp-bridge-e2e-{}",
-            format!(
+            format_args!(
                 "{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()

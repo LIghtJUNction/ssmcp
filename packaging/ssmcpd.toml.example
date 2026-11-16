@@ -19,3 +19,7 @@ client_registration_ttl = 31536000
 # [auth.github]
 # client_id = "YOUR_GITHUB_OAUTH_CLIENT_ID"
 # client_secret = "YOUR_GITHUB_OAUTH_CLIENT_SECRET"
+
+# Optional browser portal; reuse auth.github above and the SAME callback.
+# [portal]
+# state_dir = "/var/lib/ssmcpd/portal"

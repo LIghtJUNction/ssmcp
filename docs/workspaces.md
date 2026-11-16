@@ -143,7 +143,7 @@ return await resources.read("ssmcp://guide");
 return await resources.list();
 ```
 
-资源当前采用主动读取，未启用订阅通知。目录中随附 [skills/ssmcp/SKILL.md](../skills/ssmcp/SKILL.md)，可复制到所用 AI 客户端支持的 skills 目录；也可以直接通过 `ssmcp://skill` 读取。它指导 AI 发现客户端、确认环境、预演同步、检查任务状态和关闭映射。
+资源当前采用主动读取，未启用订阅通知。通过 make install 安装时，skill 一并放入安装前缀下的 share/doc/ssmcp/skills/ssmcp。目录中随附 [skills/ssmcp/SKILL.md](../skills/ssmcp/SKILL.md)，可复制到所用 AI 客户端支持的 skills 目录；也可以直接通过 `ssmcp://skill` 读取。它指导 AI 发现客户端、确认环境、预演同步、检查任务状态和关闭映射。
 
 ## 容量与部署
 
