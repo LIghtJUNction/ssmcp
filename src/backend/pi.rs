@@ -1,7 +1,7 @@
 //! Pi's native JSONL control protocol, exposed without reducing it to a prompt wrapper.
 //!
 //! Protocol reference (Pi 1.5.2):
-//! https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc-commands.md
+//! <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc-commands.md>
 //! The generic `pi.rpc` tool also forwards commands added by later Pi releases.
 
 use std::{ffi::OsStr, ffi::OsString, sync::Arc};

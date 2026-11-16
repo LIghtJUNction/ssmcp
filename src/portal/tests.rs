@@ -159,6 +159,8 @@ fn csrf_requires_cookie_origin_and_token_and_strict_fields() {
     );
     let f = HashMap::from([("csrf".into(), csrf)]);
     assert_eq!(p.verify(&h, &f, "https://ssmcp.test"), Err(Problem::Csrf));
+    h.insert(header::ORIGIN, "null".parse().unwrap());
+    assert_eq!(p.verify(&h, &f, "https://ssmcp.test"), Err(Problem::Csrf));
     h.insert(header::ORIGIN, "https://evil.test".parse().unwrap());
     assert_eq!(p.verify(&h, &f, "https://ssmcp.test"), Err(Problem::Csrf));
     h.insert(header::ORIGIN, "https://ssmcp.test".parse().unwrap());
@@ -291,6 +293,7 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .unwrap();
     let home = client.get(&base).send().await.unwrap();
     assert_eq!(home.headers()["cache-control"], "no-store");
+    assert_eq!(home.headers()["referrer-policy"], "same-origin");
     let cookie = home.headers()["set-cookie"]
         .to_str()
         .unwrap()
@@ -332,7 +335,7 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
     assert!(policy.contains("frame-ancestors 'none'"));
     assert!(!policy.contains("'unsafe-inline'"));
     assert_eq!(missing_cookie.headers()["cache-control"], "no-store");
-    assert_eq!(missing_cookie.headers()["referrer-policy"], "no-referrer");
+    assert_eq!(missing_cookie.headers()["referrer-policy"], "same-origin");
     assert!(
         missing_cookie
             .text()
