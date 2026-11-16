@@ -497,10 +497,16 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     let mut broker = Broker::with_identity_config(config.public_url, config.oauth, config.github)?;
     if let Some(path) = config.client_registry {
         broker.oauth.enable_client_registry(&path)?;
-        eprintln!("ssmcpd: durable OAuth client registrations enabled");
+        ssmcp::observability::log(
+            "info",
+            "persistence",
+            &[("event", "durable_client_registry_enabled".into())],
+        );
     } else {
-        eprintln!(
-            "ssmcpd: warning: OAuth client registry is memory-only; configure --client-registry for restart recovery"
+        ssmcp::observability::log(
+            "warn",
+            "persistence",
+            &[("event", "client_registry_memory_only".into())],
         );
     }
     if let Some(path) = config.portal_dir {
@@ -522,17 +528,14 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     tokio::pin!(interrupt);
     let connections = Arc::new(Semaphore::new(128));
     let mut tasks = JoinSet::new();
-    eprintln!(
-        "ssmcpd: listening on {}; control socket {}",
-        config.listen,
-        config.socket.display()
-    );
-    eprintln!(
-        "ssmcpd: OAuth lifetimes (seconds): access={}, refresh idle={}, refresh max={}, client={}",
-        config.oauth.access_token_ttl.as_secs(),
-        config.oauth.refresh_token_idle_ttl.as_secs(),
-        config.oauth.refresh_token_max_ttl.as_secs(),
-        config.oauth.client_registration_ttl.as_secs()
+    ssmcp::observability::log(
+        "info",
+        "session",
+        &[
+            ("event", "listening".into()),
+            ("listen", config.listen.to_string()),
+            ("socket", config.socket.display().to_string()),
+        ],
     );
     let mut server_finished = false;
     let result = loop {
@@ -544,11 +547,11 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
                 let broker = broker.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
-                    if let Err(e) = broker.attach(stream).await { eprintln!("ssmcpd: connection closed: {e}"); }
+                    if broker.attach(stream).await.is_err() { ssmcp::observability::log("warn","session",&[("event","attach_failed".into())]); }
                 });
             }
             Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                if let Err(e) = result { eprintln!("ssmcpd: connection task failed: {e}"); }
+                if result.is_err() { ssmcp::observability::log("error","session",&[("event","connection_task_failed".into())]); }
             }
             result = &mut interrupt => { result?; break Ok(()); }
             _ = terminate.recv() => break Ok(()),

@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::{ChildStdin, Command},
     sync::{Mutex, oneshot},
     task::JoinHandle,
@@ -42,6 +42,7 @@ pub struct Peer {
     process: Mutex<Managed>,
     writer: Mutex<Option<ChildStdin>>,
     reader: SyncMutex<Option<JoinHandle<()>>>,
+    stderr_reader: SyncMutex<Option<JoinHandle<()>>>,
     calls: SyncMutex<HashMap<String, Waiting>>,
     requests: SyncMutex<HashMap<String, Value>>,
     next: AtomicU64,
@@ -58,7 +59,7 @@ impl Peer {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         let mut process = Managed::spawn(&mut command)?;
         let writer = process
             .child
@@ -72,17 +73,37 @@ impl Peer {
                 .take()
                 .ok_or("backend stdout unavailable")?,
         );
+        let mut stderr = process
+            .child
+            .stderr
+            .take()
+            .ok_or("backend stderr unavailable")?;
         let peer = Arc::new(Self {
             dialect,
             process: Mutex::new(process),
             writer: Mutex::new(Some(writer)),
             reader: SyncMutex::new(None),
+            stderr_reader: SyncMutex::new(None),
             calls: SyncMutex::new(HashMap::new()),
             requests: SyncMutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             alive: AtomicBool::new(true),
             events: EventLog::new(label),
         });
+        let events = Arc::downgrade(&peer.events);
+        let stderr_task = tokio::spawn(async move {
+            let mut bytes = [0u8; 4096];
+            while let Ok(n) = stderr.read(&mut bytes).await {
+                if n == 0 {
+                    break;
+                }
+                let Some(events) = events.upgrade() else {
+                    break;
+                };
+                events.push(json!({"type":"stderr","text":String::from_utf8_lossy(&bytes[..n])}));
+            }
+        });
+        *peer.stderr_reader.lock().unwrap() = Some(stderr_task);
         let weak = Arc::downgrade(&peer);
         let task = tokio::spawn(async move {
             loop {
@@ -391,6 +412,11 @@ impl Peer {
         // Closing stdin first lets fast native peers exit and orphan setsid jobs.
         self.process.lock().await.shutdown().await;
         self.writer.lock().await.take();
+        let stderr_task = self.stderr_reader.lock().unwrap().take();
+        if let Some(task) = stderr_task {
+            task.abort();
+            let _ = task.await;
+        }
         let task = self.reader.lock().unwrap().take();
         if let Some(task) = task {
             task.abort();
@@ -402,6 +428,9 @@ impl Peer {
 impl Drop for Peer {
     fn drop(&mut self) {
         self.process.get_mut().terminate();
+        if let Some(task) = self.stderr_reader.get_mut().unwrap().take() {
+            task.abort();
+        }
         if let Some(task) = self.reader.get_mut().unwrap().take() {
             task.abort();
         }

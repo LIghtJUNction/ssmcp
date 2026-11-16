@@ -35,6 +35,7 @@ pub fn router(broker: Arc<Broker>) -> Router {
         .route("/{user}", any(endpoint))
         .with_state(broker)
         .layer(middleware::map_response(no_store))
+        .layer(middleware::from_fn(crate::observability::http))
 }
 
 async fn no_store(mut response: Response) -> Response {
@@ -114,6 +115,17 @@ async fn endpoint(
     let Some(authorization) = broker.authenticate(&user, &access_token).await else {
         return unauthorized(&broker.public_url, &user, true);
     };
+    let subject = match &authorization {
+        Authorization::Identity(identity) => vec![("github_subject_id", identity.subject.clone())],
+        Authorization::Legacy { user, .. } => vec![("user", user.clone())],
+    };
+    let mut fields = vec![
+        ("event", "mcp_call".into()),
+        ("rpc_id", id.to_string()),
+        ("method", request.method.to_owned()),
+    ];
+    fields.extend(subject);
+    crate::observability::log("info", "auth", &fields);
     let result = match action(&request, era) {
         Ok(Action::Reply(result)) => result,
         Ok(Action::List(arguments)) => {
@@ -656,7 +668,11 @@ async fn execute(
             .map(|session| client_info(session))
             .collect::<Vec<_>>()
     );
+    let request_id = crate::observability::REQUEST_ID
+        .try_with(Clone::clone)
+        .unwrap_or_default();
     let host: Host = Arc::new(move |request| {
+        let request_id = request_id.clone();
         let broker = broker.clone();
         let user = user.clone();
         let access_token = access_token.clone();
@@ -682,7 +698,18 @@ async fn execute(
                 .await
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             let session = broker.client(&user, &authorization, &client_id).await?;
-            let result = session.call(operation).await?;
+            crate::observability::log(
+                "debug",
+                "proxy",
+                &[
+                    ("event", "native_dispatch".into()),
+                    ("request_id", request_id.clone()),
+                    ("client_id", client_id.clone()),
+                ],
+            );
+            let result = crate::observability::REQUEST_ID
+                .scope(request_id, session.call(operation))
+                .await?;
             let authorization = broker
                 .authenticate(&user, &access_token)
                 .await
