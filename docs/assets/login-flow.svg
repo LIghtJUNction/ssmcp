@@ -20,7 +20,7 @@
   <circle cx="76" cy="166" r="23" fill="#142033" stroke="#3d5473"/>
   <text x="76" y="173" class="number">1</text>
   <text x="124" y="164" class="step">Choose who may connect</text>
-  <text x="124" y="198" class="detail mono">ssmcp --allow octocat@github -t codex my-server</text>
+  <text x="124" y="198" class="detail mono">ssmcp --allow octocat@github my-server</text>
 
   <circle cx="76" cy="270" r="23" fill="#142033" stroke="#3d5473"/>
   <text x="76" y="277" class="number">2</text>

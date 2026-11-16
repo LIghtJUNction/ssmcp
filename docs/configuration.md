@@ -48,11 +48,8 @@ ssh -G my-ssmcp | awk '$1 ~ /^(hostname|user|port|identityfile|identitiesonly|id
 在你的项目目录中启动客户端：
 
 ```sh
-# 已安装的 0.3.0：显式填写服务器用户名，其他配置继续从 Host 条目读取。
-ssmcp --name ssmcp-project -t codex alice@my-ssmcp
-
-# 0.3.1 起：User 也可直接取自 SSH 配置。
-ssmcp --name ssmcp-project -t codex my-ssmcp
+# User 直接取自 SSH 配置，也可以显式使用 alice@my-ssmcp。
+ssmcp --name ssmcp-project --title "迭代 ssmcp" my-ssmcp
 ```
 
 没有设置 `User` 的裸主机目标，会采用 OpenSSH 自身的用户名规则；通常为本机用户名。想固定账户时，在配置中写明 `User`，或继续使用 `alice@my-ssmcp`。`cwd` 是启动 ssmcp 时的本机目录快照，后续通过 `list` 可以找到它。
@@ -61,7 +58,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 
 ```sh
 # -F 使用另一份 OpenSSH 配置。
-ssmcp -F ~/.ssh/work-config -t codex alice@my-ssmcp
+ssmcp -F ~/.ssh/work-config alice@my-ssmcp
 
 # -p 显式选择端口；-i 提供要使用的私钥路径。
 ssmcp -p 2222 -i ~/.ssh/id_ed25519_work alice@my-ssmcp
@@ -199,7 +196,7 @@ ssmcp -F "$keycheck_config" --name new-key-check alice@new-key-check
 rm -- "$keycheck_config"
 ```
 
-看到新的连接 JSON，说明指定的新私钥通过 SSH 认证并完成后端初始化。需要跳板机时，把对应 `ProxyJump` 及其 Host 配置加入这份独立文件。[客户端启动流程](../src/client.rs)
+看到新的连接摘要或重定向输出的连接 JSON，说明指定的新私钥通过 SSH 认证并完成客户端初始化。需要跳板机时，把对应 `ProxyJump` 及其 Host 配置加入这份独立文件。[客户端启动流程](../src/client.rs)
 
 验证成功后，在服务器管理 shell 中备份 `authorized_keys`，核对旧公钥指纹与条目，再用 `sudoedit` 只删除旧公钥所在行；保留新公钥、其他设备的公钥和各行的授权选项。最后把常用 Host 条目的 `IdentityFile` 改为新私钥。删除旧公钥会阻止它建立新 SSH 连接；已经建立的连接继续存在，需要在对应本机终端按 `Ctrl-C` 结束，关联 OAuth 授权随之撤销。
 
@@ -223,11 +220,11 @@ rm -- "$keycheck_config"
 
 ### GitHub 模式：本机声明允许的用户
 
-先在项目目录检查你选择的后端，再建立连接：
+先在项目目录检查自动发现的工具，再建立连接：
 
 ```sh
-ssmcp -t codex --list-tools
-ssmcp --name ssmcp-project -t codex --allow octocat@github my-ssmcp
+ssmcp --list-tools
+ssmcp --name ssmcp-project --title "迭代 ssmcp" --allow octocat@github my-ssmcp
 
 # 多个用户可以用逗号分隔，也可以重复指定 --allow。
 ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
@@ -235,9 +232,9 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 
 将示例用户名换成获准访问的 GitHub 用户名。参数采用 `用户名@提供方` 格式，目前提供方只支持 `github`；最多 32 个不同用户，大小写不敏感，重复项会合并。GitHub 用户名使用 1–39 个 ASCII 字母、数字及中间的单个连字符。`--allow` 需要 SSH 连接，不能与仅检查本机工具的 `--list-tools` 同用。[参数校验](../src/client.rs) · [身份格式](../src/wire.rs)
 
-Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent 的安装、模型身份和权限在本机由其原生 CLI 管理，见[后端说明](backends.md)。
+每条连接都提供交互式 Shell 和独立命令任务。启动时从 `PATH` 自动发现 `codex`、`claude`、`pi`、`opencode` 并注册成功初始化的原生工具；某个可选 CLI 失败会显示警告，Shell 和其他成功注册的工具继续可用。旧版启动命令中的 `-t`、`--type`、`--backend` 及尾随 Agent 参数需要删除。模型身份、模型选择和权限仍由各原生 CLI 的配置管理。[统一工具目录](backends.md#1-启动客户端)
 
-连接成功后，终端 stdout 输出一行 JSON。例如：
+交互式终端会显示连接地址与登录提示。重定向 stdout 或选择 `--log-format jsonl` 时，连接信息输出为一行 JSON，例如：
 
 ```json
 {
@@ -246,7 +243,8 @@ Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent �
   "allow": ["octocat@github"],
   "client_id": "本次连接的唯一ID",
   "name": "ssmcp-project",
-  "type": "codex",
+  "title": "迭代 ssmcp",
+  "type": "shell",
   "cwd": "/home/alice/projects/ssmcp",
   "hostname": "workstation"
 }
@@ -260,7 +258,7 @@ GitHub 模式只输出连接信息与允许列表，不生成登录码。实时�
 2. ssmcp 登录页显示 MCP 客户端名称、已登记的回调来源和资源 URL。核对后点击“使用 GitHub 登录”，在 GitHub 页面选择账号并完成授权。
 3. 返回 ssmcp 后，核对已验证的 GitHub 身份、当前可访问会话数量和这次请求的 MCP 客户端，再点击“允许连接”或“取消”。GitHub 登录成功后仍需这一步明确同意。
 4. 同意后浏览器返回 MCP 客户端。客户端保存 ssmcp 签发的 access token 和 refresh token；GitHub 的令牌只供服务端读取身份，随后释放。
-5. 调用 `list`，确认目标客户端的 `name`、`type`、`cwd`；随后用其 `client_id` 读取原生工具 schema，并通过 `code_mode` 调用。
+5. 调用 `list`，确认目标客户端的 `title`、`name`、`cwd`；随后用其 `id` 读取原生工具 schema，并通过 `code_mode` 调用。新客户端的 `type` 都为 `shell`，已安装的 Agent 能力以目录为准。
 
 确认页的同意针对当前 OAuth/MCP 客户端，允许它使用当前以及随后明确允许这个 GitHub 身份的连接。允许列表由本机启动参数管理，页面没有逐个后端的勾选配置。没有获准访问的在线客户端时也可完成登录，`list` 会返回空列表；以后出现匹配的在线客户端即可被发现。[授权页面与令牌](../src/oauth.rs) · [按连接检查访问](../src/broker.rs)
 
@@ -269,7 +267,7 @@ GitHub 模式只输出连接信息与允许列表，不生成登录码。实时�
 ### 登录码模式：保留现有使用方法
 
 ```sh
-ssmcp --name ssmcp-project -t codex my-ssmcp
+ssmcp --name ssmcp-project my-ssmcp
 ```
 
 省略 `--allow` 后，终端返回 `/SSH用户名` URL、`login_code` 和 `login_expires_in`。将完整 URL 添加到 MCP 客户端，打开 OAuth 页面，核对客户端名称与回调来源，再输入本次登录码。它从签发起最多有效 1800 秒，输出的剩余秒数已扣除本机后端初始化时间，成功使用一次即消耗。[登录码输出](../src/client.rs)
@@ -355,7 +353,9 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 | `Too many authentication failures` | 为专用 Host 指定 `IdentityFile` 与 `IdentitiesOnly yes`，减少 agent 提供的无关密钥；验证新密钥时使用[独立配置](#rotate-key) |
 | `ssh-copy-id`、SCP/SFTP 挂起或输出协议错误 | 目标账户已被 `ForceCommand` 固定为桥接。改用组外管理账户或控制台安装公钥 |
 | 主机密钥不匹配 | 向管理员核对新指纹与变更原因，再更新对应 known_hosts 条目 |
-| 没有连接 JSON，或提示 backend not found / startup failed | 先运行相应 `--list-tools`，检查原生 CLI、版本、登录配置和 `--backend` 路径；本机后端成功初始化后才发布连接信息 |
+| 需要连接 JSON，终端却显示可读的连接提示 | 重定向 stdout，或使用 `--log-format jsonl`；交互式终端默认显示连接摘要 |
+| 无法建立连接，或 Shell 启动失败 | 先运行 `ssmcp --list-tools` 检查本机初始化；核对 `--shell` 的绝对路径和执行权限，再检查 OpenSSH 认证与服务端日志 |
+| `list` 没有某个原生 Agent 的工具 | 确认该 CLI 在客户端启动环境的 `PATH`，查看发现阶段警告与 `ssmcp.harnesses.list`；修复其版本或配置后重载客户端。可选 CLI 失败不会停用 Shell |
 | `--allow` 被拒绝、服务器未确认 GitHub 策略 | 确认客户端及服务器已更新到 0.4.0，服务器配置了 GitHub OAuth。该错误会停止启动，不会退回登录码授权 |
 | GitHub 身份解析失败 | 检查 `--allow` 用户名、服务端访问 GitHub API 的网络及响应；用户名改名后更新启动参数 |
 | GitHub 登录后 `list` 为空 | 检查浏览器登录的 GitHub 账号与在线客户端 `--allow` 是否一致；未获准的客户端不会显示 |
@@ -364,8 +364,10 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 | 已登录，但客户端从不自动续期 | 检查首次令牌响应是否有 `refresh_token`、客户端是否实现刷新和保存轮换后的新值。旧版登记可重新注册；显式只登记 `authorization_code` 时需修改客户端注册请求 |
 | `oauth_token_invalid_grant` / `invalid_grant` / 要求重新授权 | 检查授权寿命与服务器重启情况，按当前模式重新授权；登录码模式还需检查签发连接是否退出 |
 | 服务重启后仍使用旧 `client_id`，重复授权失败 | MCP 客户端应重新注册；若它继续缓存旧登记，移除该 MCP 连接后用相同完整 URL 重新添加 |
-| 登录成功后 `list` 找不到原来的 `client_id` | 客户端重连会分配新 ID。重新调用 `list`，按名称、模式和目录选取当前在线 ID |
+| 登录成功后 `list` 找不到原来的 `client_id` | 客户端重连会分配新 ID。重新调用 `list`，按标题、名称和目录确认当前在线 ID；标签可能重复 |
 | `list` 正常，`code_mode` 报系统运行环境不可用 | 在服务器检查系统 Node.js、bubblewrap、prlimit 和用户命名空间，见[部署说明](deployment.md#系统代码运行环境) |
+| `exec.run` 返回 `running:true` 或 `wait_timed_out:true` | 保存 `job_id`，继续 `exec.wait` 或 `exec.read`。等待到期只结束本次等待；不要重复启动同一项工作 |
+| `reload` 返回 busy | 先等待在途工具调用结束；重载会停止后台命令与转发，先处理需要保留的工作 |
 
 需要定位 SSH 认证细节时，可在本机运行 `ssh -v -T alice@my-ssmcp` 查看认证阶段日志。受限账户认证成功后进入桥接，手工 SSH 会等待协议数据；看到认证成功后按 `Ctrl-C` 退出，再使用 ssmcp。分享诊断信息前移除登录码、OAuth 令牌和不希望公开的主机或路径信息。
 
@@ -380,14 +382,19 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 - [OpenSSH ssh](https://man.openbsd.org/ssh)、[ssh_config](https://man.openbsd.org/ssh_config)、[sshd_config](https://man.openbsd.org/sshd_config)
 
 
-## 彩色本地活动日志
+## 本地显示与重载
 
-默认在终端显示彩色、分块的活动记录：蓝色请求、绿色成功、红色错误、黄色超时；stdout 和 stderr 分开显示，真正的换行不会被转成整行 JSON 字符串。请求 ID、方法和耗时用于对应同一次调用。统一 diff 使用红色删除、绿色增加及原始行号。
+默认显示留白较多的 `minimal` 界面，连接摘要给出 MCP URL 和登录方式，活动记录写入 stderr。请求、完成、错误和超时使用不同颜色；独立命令按任务标识区分，stdout 与 stderr 分开显示。请求 ID、方法和耗时用于对应同一次调用，统一 diff 显示增加、删除及原始行号。[本地渲染](../src/client/render.rs)
 
-只有传入 `--raw` 才输出未加工的原始事件 JSON。启动时 stdout 的连接信息仍保持机器可读；活动记录走 stderr。`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 时不输出 ANSI 颜色，但仍保留可读分块。更新磁盘上的程序不会改变已经运行的旧进程，需重新启动本机 ssmcp 才能看到新界面。
+`--log-format pretty-verbose` 展开详细事件，`--log-format jsonl` 输出事件 JSON；`--verbose`、`--raw` 分别是两者的别名。重定向 stdout 时，连接信息始终是 JSON。`--no-color`、`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 会禁用 ANSI 颜色。主题、时间戳、折叠行数和 TOML 配置见[日志与显示说明](logging.md)。
 
 ```sh
-ssmcp -t codex --allow octocat@github my-ssmcp
-ssmcp --raw -t codex --allow octocat@github my-ssmcp
-NO_COLOR=1 ssmcp -t codex --allow octocat@github my-ssmcp
+ssmcp --title "检查构建与测试" --allow octocat@github my-ssmcp
+ssmcp --theme nord --timestamps --allow octocat@github my-ssmcp
+ssmcp --log-format jsonl --allow octocat@github my-ssmcp
+NO_COLOR=1 ssmcp --allow octocat@github my-ssmcp
 ```
+
+更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接的命令任务、原生服务和转发；在途调用会导致 busy 拒绝。[重载协议与回归测试](../tests/client_reload.rs)
+
+GitHub 授权在仍有效、且新连接允许同一身份时继续可用。登录码授权绑定旧连接，重载断线后需要新登录码和新 OAuth 授权。调用方应按实际授权方式处理重连，避免把“程序已更新”或“重载已接收”报告为“新版本已经在线”。[重载完整说明](backends.md#9-更新后的客户端重载)

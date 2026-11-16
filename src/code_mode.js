@@ -230,7 +230,7 @@ const bootstrap = `(() => {
       const status = wait_ms === 0 ? started : await execution('wait', id, {job_id:job, wait_ms});
       const output = await execution('read', id, {job_id:job, max_bytes});
       const snapshot = output.snapshot ?? status;
-      return {...snapshot, ...output, snapshot};
+      return {...status, ...snapshot, ...output, snapshot};
     } catch (error) {
       throw new Failure('Command started as ' + job + '; ' + (error?.message ?? text(error))
         + '. Inspect exec.status/exec.read for this job before retrying.');

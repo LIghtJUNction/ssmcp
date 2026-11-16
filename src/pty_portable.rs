@@ -146,9 +146,10 @@ impl Terminal {
                         Ok(n) if n > 0 => {
                             terminal.output.lock().unwrap().push(&data[..n]);
                             if live {
-                                let _ = std::io::stderr().lock().write_all(&data[..n]);
+                                crate::client::render::terminal_output(&data[..n]);
                             }
                         }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                         _ => {
                             let mut output = terminal.output.lock().unwrap();
                             output.eof = true;

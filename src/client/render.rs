@@ -1388,23 +1388,26 @@ mod tests {
             })
         };
         renderer.event(&mut out, "codex", &delta("live")).unwrap();
-        assert_eq!(String::from_utf8_lossy(&out), "[STDOUT] codex\n  live");
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "[STDOUT] codex · running\n  live"
+        );
         renderer
             .event(&mut out, "codex", &delta(" progress"))
             .unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out),
-            "[STDOUT] codex\n  live progress"
+            "[STDOUT] codex · running\n  live progress"
         );
         renderer.event(&mut out, "codex", &delta("\nnext")).unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out),
-            "[STDOUT] codex\n  live progress\n  next"
+            "[STDOUT] codex · running\n  live progress\n  next"
         );
         renderer.finish_group(&mut out, "codex").unwrap();
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "[STDOUT] codex\n  live progress\n  next\n"
+            "[STDOUT] codex · running\n  live progress\n  next\n"
         );
     }
 
@@ -1426,7 +1429,7 @@ mod tests {
         }
         assert_eq!(
             clean(&String::from_utf8_lossy(&out)),
-            "[STDOUT] codex\n  1234567890\n  ab"
+            "[STDOUT] codex · command\n  1234567890\n  ab"
         );
         renderer
             .event(
@@ -1437,7 +1440,7 @@ mod tests {
             .unwrap();
         let text = clean(&String::from_utf8(out).unwrap());
         assert!(
-            text.starts_with("[STDOUT] codex\n  1234567890\n  ab\n[OK  ]"),
+            text.starts_with("[STDOUT] codex · command\n  1234567890\n  ab\n[OK  ]"),
             "{text}"
         );
         assert_eq!(text.matches("1234567890").count(), 1);

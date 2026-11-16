@@ -1,4 +1,4 @@
-# Linux 部署
+# Linux 服务端部署
 
 服务器部署 OpenSSH、`ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp` 及需要控制的 Agent。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
 
@@ -8,7 +8,7 @@ ssmcp 0.4.0 继续使用内部 wire v4，对外只提供 `list`、`code_mode` �
 
 ## 1. 安装程序与服务账户
 
-客户端需要 Linux 5.3 或更新内核以使用 pidfd；源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
+服务端运行于 Linux；客户端支持 Linux、macOS 和 Windows 的 x86_64 / ARM64。Linux 客户端需要 5.3 或更新内核以使用 pidfd，预编译 GNU 包以 glibc 2.35 为基线。源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
 
 ```sh
 # Debian / Ubuntu
@@ -67,7 +67,7 @@ sudo chown ssmcpd:ssmcp /etc/ssmcpd/ssmcpd.toml
 sudo chmod 0600 /etc/ssmcpd/ssmcpd.toml
 ```
 
-服务器以存在的 `/etc/ssmcpd/ssmcpd.toml` 为默认文件，也可通过 `ssmcpd serve --config /absolute/path/ssmcpd.toml` 或 `SSMCP_CONFIG` 显式指定。配置值按 **命令行参数 → 环境变量 → TOML → 内置默认值** 的顺序生效。新安装的环境示例全部使用注释，不会覆盖 TOML。原来的 `/etc/ssmcpd/ssmcpd.env` 仍可由 systemd 读取；迁移到 TOML 时同步清理同名旧环境项，避免它们覆盖新配置。显式指定的文件缺失或解析失败会阻止启动。[配置读取](../src/bin/ssmcpd.rs)
+服务器以存在的 `/etc/ssmcpd/ssmcpd.toml` 为默认文件，也可通过 `ssmcpd serve --config /absolute/path/ssmcpd.toml` 或 `SSMCP_CONFIG` 显式指定。配置值按 **命令行参数 → 环境变量 → TOML → 内置默认值** 的顺序生效。新安装的环境示例全部使用注释，不会覆盖 TOML。原来的 `/etc/ssmcpd/ssmcpd.env` 仍可由 systemd 读取；迁移到 TOML 时同步清理同名旧环境项，避免它们覆盖新配置。显式指定的文件缺失或解析失败会阻止启动。[配置读取](../src/server_main.rs)
 
 只使用原有登录码时，省略整个 `[auth.github]` 节即可。启用 GitHub 后，服务端只请求身份验证所需的公开用户信息，不请求仓库或邮箱 scope。GitHub 返回的 token 用于读取一次已登录用户身份，随后释放；MCP access token 和 refresh token 由 ssmcp 自己签发。[身份提供方实现](../src/identity.rs) · [GitHub OAuth 流程](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps)
 
@@ -138,42 +138,32 @@ MCP 请求存在 `Origin` 时，其值必须等于配置生效后的 `public_url
 
 原生 JSONL 后端的长调用最多等待 15 分钟。若反向代理或 MCP 客户端自定义了请求超时，应与任务时长相容；实时进度使用短等待的事件工具读取。公网入口使用 JSON 响应，不要求代理提供后台 SSE。
 
-## 4. 准备本机后端
+## 4. 准备本机工具
 
-本机安装 `ssmcp`，并安装希望使用的 Agent。运行 Agent 原生 CLI 完成登录、provider、模型和项目权限配置。Shell 模式只依赖系统 shell；Agent 模式的可执行文件及最低接口要求见[后端说明](backends.md#启动参数)。
-
-在本机项目目录先检查工具目录：
+用[跨平台安装器](releases.md)安装 `ssmcp`，并确保系统 OpenSSH 客户端可用。在项目目录执行下列命令，检查始终提供的 Shell 与自动发现的本机工具：
 
 ```sh
-ssmcp -t shell --list-tools
-ssmcp -t codex --list-tools
-ssmcp -t cc --list-tools
-ssmcp -t pi --list-tools -- --no-session
-ssmcp -t opencode --list-tools
+ssmcp --list-tools
 ```
 
-每次只检查需要使用的模式。`--list-tools` 在本机启动并关闭后端，不需要 SSH 目标；OpenCode 必须使用 v2。若可执行文件不在 PATH，使用 `--backend /absolute/path/to/program`。
+该命令在本机启动并关闭工具，不需要 SSH 目标。客户端检查 PATH 中的 `codex`、`claude`、`pi` 和 `opencode`，每个可选工具独立初始化；不存在或失败时显示警告并保留其他能力。OpenCode 需要 v2。若需要编码工具，先用其原生 CLI 完成登录、provider、模型和项目权限配置，再把可执行文件所在目录加入 PATH。[发现与原生接口](backends.md)
 
 ## 5. 建立连接并登录
 
 首次使用时可按 [客户端配置与逐步登录教程](configuration.md#oauth-login) 操作。已有 SSH Host 条目的复用方法见 [SSH 配置](configuration.md#ssh-config)，重新打开后的行为见 [连接与授权生命周期](configuration.md#session-lifetime)。
 
-GitHub 模式在所选后端命令中指定允许的身份；将示例用户名换成实际获准访问的用户：
+GitHub 模式启动时指定允许的身份；将示例用户名换成实际获准访问的用户：
 
 ```sh
-ssmcp --allow octocat@github alice@ssmcp.example.com
-ssmcp -t codex --allow octocat@github alice@ssmcp.example.com
-ssmcp -t cc --allow octocat@github alice@ssmcp.example.com
-ssmcp -t pi --allow octocat@github alice@ssmcp.example.com -- --no-session
-ssmcp -t opencode --allow octocat@github alice@ssmcp.example.com
+ssmcp --name laptop --title "项目开发与测试" --allow octocat@github alice@ssmcp.example.com
 ```
 
-同一服务端用户名最多同时连接 128 个客户端，可以在不同电脑或项目目录中选择不同模式；使用 `--name laptop` 等参数指定显示名称。每条连接有独立的 `client_id`，同名客户端也用 ID 区分。首次连接按 OpenSSH 提示核验主机密钥，或预先配置可信 known_hosts。客户端强制公钥认证，保留私钥口令与 ssh-agent 的原生处理。
+同一服务端用户名最多同时连接 128 个客户端，可以在不同电脑或项目目录启动。每条连接有独立的 `client_id`，同名客户端也用 ID 区分。首次连接按 OpenSSH 提示核验主机密钥，或预先配置可信 known_hosts。客户端强制公钥认证，保留私钥口令与 ssh-agent 的原生处理。
 
-本机后端握手和目录发现成功后，stdout 输出：
+本机工具发现成功后，交互终端显示连接摘要；重定向 stdout 或选择 JSONL 时输出：
 
 ```json
-{"url":"https://ssmcp.example.com/mcp","auth":"github","allow":["octocat@github"],"client_id":"服务端分配的连接ID","name":"laptop","type":"pi","cwd":"/home/alice/project","hostname":"alice-laptop"}
+{"url":"https://ssmcp.example.com/mcp","auth":"github","allow":["octocat@github"],"client_id":"服务端分配的连接ID","name":"laptop","type":"shell","cwd":"/home/alice/project","hostname":"alice-laptop"}
 ```
 
 在 MCP 客户端中添加完整 `/mcp` URL，启用 OAuth 登录。ssmcp 页面显示 MCP 客户端名称、已登记回调来源和资源 URL；点击 GitHub 登录，在 GitHub 完成身份验证后返回 ssmcp。页面显示已验证身份和当前可访问会话数，再由用户点击“允许连接”或“取消”。只完成 GitHub 登录不会自动授权这个 MCP 客户端。[登录步骤](configuration.md#github-allow)
@@ -258,7 +248,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 `http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 只有 `list` 和 `code_mode`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
 
-在 `code_mode` 中通过 `await call(clientId, "terminal.write", {data:"pwd\n"})` 和 `terminal.read` 验证 Shell 执行。Agent 可先用无模型的状态接口检查链路，例如 `pi.get_state` 或 `opencode.server.info`；先通过 `list({client_id})` 查看 schema，再在 `code_mode` 调用。模型任务和审批流程按[后端说明](backends.md)验证。Claude Code 前台 Bash 的输出在调用结束时返回，持续增量观察应使用其原生后台输出路径。
+在 `code_mode` 中通过 `await exec.run(clientId, {command:["git","status","--short"],wait_ms:5000})` 验证命令执行；检查 `running` 和 `exit_code`，长任务沿用返回的 `job_id` 等待或读取。交互式 Shell 使用 `terminal.write/read`。Agent 可先用无模型的状态接口检查链路，例如 `pi.get_state` 或 `opencode.server.info`；先通过 `list({client_id})` 查看 schema，再在 `code_mode` 调用。模型任务和审批流程按[后端说明](backends.md)验证。Claude Code 前台 Bash 的输出在调用结束时返回，持续增量观察应使用其原生后台输出路径。
 
 验证 GitHub 模式时，为两个客户端设置不同 `--allow`，确认当前身份只看到并能调用匹配的客户端；未匹配的 `client_id` 也必须被拒绝。关闭一个客户端后，它应从列表消失；已有 GitHub 授权可以继续访问其他匹配客户端。重连时按新的允许列表重新判断。
 
@@ -275,7 +265,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 更新源码后，需要把新二进制和服务文件安装到实际服务器，并重启守护进程。只更新 GitHub 仓库不会改变运行中的服务。已有 SSH 账户、公钥和客户端 Host 配置可以保留。
 
-1. 安排现有任务退出，构建安装 0.4.0 两端程序；需要 GitHub 模式时，创建 OAuth App，按上面的 callback 和 TOML 示例配置服务器。
+1. 安排现有任务退出，构建安装同一新版的两端程序；需要 GitHub 模式时，创建 OAuth App，按上面的 callback 和 TOML 示例配置服务器。
 2. 确认 TOML 所有权、`0600` 权限、配置优先级与 HTTPS 路径，重启 `ssmcpd`。用实际服务程序的 `--version` 检查版本。
 3. 本机带 `--allow 用户名@github` 重新连接；在 MCP 应用添加 `/mcp`，完成 GitHub 登录并明确同意当前 MCP 客户端。保留登录码方式时继续添加终端返回的 `/SSH用户名` URL。
 4. 确认应用保存并轮换 ssmcp refresh token；调用 `list` 重新选择当前可访问的客户端。如果应用保留已失效的 OAuth 客户端登记，移除旧 MCP 连接后重新添加。
