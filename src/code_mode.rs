@@ -24,6 +24,8 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_TIMEOUT_MS: u64 = 900_000;
 pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
 pub const MAX_LOG_BYTES: usize = 64 * 1024;
+pub const MAX_IMAGES: usize = 4;
+pub const MAX_IMAGE_ENCODED_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CALLS: usize = 128;
 pub const MAX_NATIVE_INFLIGHT: usize = 16;
 pub const MAX_CONCURRENT: usize = 4;
@@ -59,6 +61,7 @@ pub type Host = Arc<
 enum WorkerFrame {
     Call { id: u64, request: HostRequest },
     Log { line: String },
+    Image { content: Value },
     Result { value: Value },
     Error { message: String },
 }
@@ -292,15 +295,22 @@ async fn execute_process(
         stdout: BufReader::new(stdout),
     };
     let mut logs = Vec::new();
+    let mut images = Vec::new();
     let result = tokio::time::timeout(Duration::from_millis(timeout_ms), async {
         send_frame(&mut worker.stdin, &json!({"type":"run", "code":code, "clients":clients})).await?;
-        bridge(&mut worker.stdout, &mut worker.stdin, host, &mut logs).await
+        bridge(&mut worker.stdout, &mut worker.stdin, host, &mut logs, &mut images).await
     }).await.unwrap_or_else(|_| Err("code_mode timed out; an already submitted native operation may continue and its outcome may be unknown. Inspect the client before retrying a mutating call.".into()));
     // Managed also terminates the owned process tree when this future is cancelled.
     worker.process.shutdown().await;
     let diagnostics = diagnostics.await.unwrap_or_default();
     match result {
-        Ok(value) => Ok(json!({"result":value, "logs":logs})),
+        Ok(value) => {
+            let mut output = json!({"result":value, "logs":logs});
+            if !images.is_empty() {
+                output["images"] = images.into();
+            }
+            Ok(output)
+        }
         Err(mut error) => {
             if !diagnostics.trim().is_empty() {
                 error.push_str("\nRuntime: ");
@@ -313,6 +323,46 @@ async fn execute_process(
             Err(error)
         }
     }
+}
+
+/// Build the public MCP response without duplicating image base64 into text or
+/// structuredContent. Only host-validated image frames live at this envelope level.
+pub fn tool_result(result: Result<Value, String>) -> Value {
+    let success = (|| {
+        let mut value = result?;
+        let images = value
+            .as_object_mut()
+            .and_then(|object| object.remove("images"));
+        let mut response = crate::backend::result(value);
+        if let Some(images) = images {
+            let images = images
+                .as_array()
+                .ok_or("invalid code_mode image envelope")?;
+            let mut bytes = 0;
+            if images.len() > MAX_IMAGES {
+                return Err("code_mode images exceed the image count limit".into());
+            }
+            for image in images {
+                crate::output::validate_image_content(image)?;
+                bytes += image["data"].as_str().unwrap().len();
+                if bytes > MAX_IMAGE_ENCODED_BYTES {
+                    return Err("code_mode images exceed 2 MiB of encoded data".into());
+                }
+                response["content"].as_array_mut().unwrap().push(json!({
+                    "type":"image", "mimeType":image["mimeType"], "data":image["data"]
+                }));
+            }
+        }
+        if response.to_string().len() > crate::wire::MAX_FRAME - 8192 {
+            return Err(
+                "code_mode response exceeds 4 MiB; return a smaller summary or fewer images".into(),
+            );
+        }
+        Ok(response)
+    })();
+    success.unwrap_or_else(
+        |message: String| json!({"content":[{"type":"text","text":message}],"isError":true}),
+    )
 }
 
 fn validate_request(request: &HostRequest) -> Result<(), String> {
@@ -363,12 +413,14 @@ async fn bridge<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     writer: &mut W,
     host: Host,
     logs: &mut Vec<String>,
+    images: &mut Vec<Value>,
 ) -> Result<Value, String> {
     let mut partial = Vec::new();
     let mut pending = HashSet::new();
     let mut calls = JoinSet::new();
     let mut count = 0u64;
     let mut log_bytes = 0;
+    let mut image_bytes = 0;
     let result = async {
         loop {
             tokio::select! {
@@ -389,6 +441,15 @@ async fn bridge<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
                         if log_bytes + line.len() + 1 > MAX_LOG_BYTES { return Err(format!("code_mode log output exceeds {MAX_LOG_BYTES} bytes")); }
                         log_bytes += line.len() + 1;
                         logs.push(line);
+                    },
+                    Some(WorkerFrame::Image {content}) => {
+                        crate::output::validate_image_content(&content)?;
+                        let bytes = content["data"].as_str().unwrap().len();
+                        if images.len() >= MAX_IMAGES || image_bytes + bytes > MAX_IMAGE_ENCODED_BYTES {
+                            return Err("code_mode images exceed 4 images or 2 MiB of encoded data".into());
+                        }
+                        image_bytes += bytes;
+                        images.push(json!({"type":"image","mimeType":content["mimeType"],"data":content["data"]}));
                     },
                     Some(WorkerFrame::Result {value}) => {
                         if !pending.is_empty() { return Err("code_mode returned with pending native calls; await every call".into()); }
@@ -558,6 +619,184 @@ mod tests {
             run_code("print('done');").await.unwrap()["result"],
             Value::Null
         );
+    }
+
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=";
+
+    #[tokio::test]
+    async fn native_screenshots_reach_mcp_as_images_without_base64_text_duplication() {
+        let _guard = TESTS.lock().await;
+        let output = crate::output::OutputStore::new_connection().unwrap();
+        let host: Host = Arc::new(move |request| {
+            let output = output.clone();
+            Box::pin(async move {
+                let HostRequest::Call {
+                    name, arguments, ..
+                } = request
+                else {
+                    return Err("unexpected screenshot fixture request".into());
+                };
+                assert_eq!(name, "ssmcp.browser.screenshot");
+                assert_eq!(arguments["target_id"], "tab");
+                Ok(output.guard_result(json!({
+                    "isError":false,
+                    "content":[{"type":"image","mimeType":"image/png","data":PNG}],
+                    "structuredContent":{"width":1,"height":1,"target_id":"tab"}
+                })))
+            })
+        });
+        let output = trusted_execute(
+            "const shot = await browser.screenshot('one',{target_id:'tab'}); image(shot); print('captured'); return shot.structuredContent;".into(),
+            2_000, json!([{"id":"one"}]), host,
+        ).await.unwrap();
+        assert_eq!(output["images"].as_array().unwrap().len(), 1);
+        let response = tool_result(Ok(output));
+        assert_eq!(response["isError"], false);
+        assert_eq!(response["content"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            response["content"][1],
+            json!({"type":"image","mimeType":"image/png","data":PNG})
+        );
+        assert_eq!(response["structuredContent"]["result"]["target_id"], "tab");
+        assert_eq!(response["structuredContent"]["logs"], json!(["captured"]));
+        assert!(response["structuredContent"].get("images").is_none());
+        assert!(
+            !response["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains(PNG)
+        );
+    }
+
+    #[tokio::test]
+    async fn image_api_rejects_invalid_content_and_enforces_per_call_budgets() {
+        let _guard = TESTS.lock().await;
+        let valid = json!({"type":"image","mimeType":"image/png","data":PNG}).to_string();
+        for (code, expected) in [
+            ("image({});".to_owned(), "expects an image"),
+            (
+                format!("image({{isError:true,content:[{valid}]}});"),
+                "failed native",
+            ),
+            (
+                "image({type:'image',mimeType:'image/svg+xml',data:'PHN2Zy8+'});".into(),
+                "PNG or JPEG",
+            ),
+            (
+                "image({type:'image',mimeType:'image/png',data:'not-base64'});".into(),
+                "base64",
+            ),
+            (
+                "image({type:'image',mimeType:'image/png',data:'YWJj'});".into(),
+                "MIME type",
+            ),
+            (
+                "image({type:'image',mimeType:'image/png',data:'A'.repeat(550000)});".into(),
+                "400 KiB",
+            ),
+            (format!("for(let i=0;i<5;i++) image({valid});"), "4 images"),
+        ] {
+            let error = run_code(&code).await.unwrap_err();
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+        let output = run_code(&format!("image({valid}); return 9;"))
+            .await
+            .unwrap();
+        assert_eq!(output["result"], 9);
+        assert_eq!(output["images"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn host_validates_image_frames_independently_of_the_javascript_worker() {
+        let mut input = serde_json::to_vec(&json!({
+            "type":"image","content":{"type":"image","mimeType":"image/png","data":"%%%"}
+        }))
+        .unwrap();
+        input.push(b'\n');
+        let mut logs = Vec::new();
+        let mut images = Vec::new();
+        let error = bridge(
+            input.as_slice(),
+            &mut Vec::new(),
+            host(),
+            &mut logs,
+            &mut images,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("base64"), "{error}");
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn public_image_response_enforces_aggregate_budgets() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut bytes = vec![0u8; crate::output::MAX_IMAGE_BYTES];
+        bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        let image = json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(&bytes)});
+        let response = tool_result(Ok(json!({"result":null,"logs":[],"images":vec![image;4]})));
+        assert_eq!(response["isError"], true);
+        assert!(
+            response["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("2 MiB")
+        );
+        let image = json!({"type":"image","mimeType":"image/png","data":PNG});
+        let response = tool_result(Ok(json!({"result":null,"logs":[],"images":vec![image;5]})));
+        assert_eq!(response["isError"], true);
+        assert!(
+            response["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("count")
+        );
+    }
+
+    #[tokio::test]
+    async fn computer_and_browser_helpers_use_native_routes_without_unwrapping_results() {
+        let _guard = TESTS.lock().await;
+        let host: Host = Arc::new(|request| {
+            Box::pin(async move {
+                let HostRequest::Call {
+                    name, arguments, ..
+                } = request
+                else {
+                    return Err("unexpected fixture request".into());
+                };
+                Ok(crate::backend::result(
+                    json!({"name":name,"arguments":arguments}),
+                ))
+            })
+        });
+        let output = trusted_execute(
+            r#"return {
+                computer:await computer.type('one',{text:'hello'}),
+                browser:await browser.navigate('one',{target_id:'t',url:'about:blank'}),
+                frozen:Object.isFrozen(computer)&&Object.isFrozen(browser),
+                hidden:typeof __ssmcp_image
+            };"#
+            .into(),
+            2_000,
+            json!([]),
+            host,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            output["result"]["computer"]["structuredContent"]["name"],
+            "ssmcp.computer.type"
+        );
+        assert_eq!(
+            output["result"]["computer"]["structuredContent"]["arguments"]["text"],
+            "hello"
+        );
+        assert_eq!(
+            output["result"]["browser"]["structuredContent"]["name"],
+            "ssmcp.browser.navigate"
+        );
+        assert_eq!(output["result"]["frozen"], true);
+        assert_eq!(output["result"]["hidden"], "undefined");
     }
 
     #[tokio::test]
