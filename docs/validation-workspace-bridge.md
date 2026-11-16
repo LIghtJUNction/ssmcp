@@ -2,7 +2,7 @@
 
 验证日期：2026-11-16。
 
-工作区内置能力已在开发机完成本地验收，覆盖真实 HTTP、OAuth、隔离 JavaScript、系统 rsync、TCP 转发和本机 OpenSSH。两套 SSH 脚本分别通过 136 项与 204 项检查；Rust 默认测试通过 171 项，依赖真实运行环境的专项测试另行执行并通过。
+工作区内置能力已在开发机完成本地验收，覆盖真实 HTTP、OAuth、隔离 JavaScript、系统 rsync、TCP 转发和本机 OpenSSH。两套 SSH 脚本分别通过 136 项与 204 项检查；Rust 默认测试通过 179 项，依赖真实运行环境的专项测试另行执行并通过。
 
 本次交付是源码、项目 skill、使用说明及验证记录。生产服务的升级和当前 ChatGPT 沙箱作为客户端的跨主机传输不在本次已完成的验证范围内。
 
@@ -12,14 +12,15 @@
 | --- | --- |
 | cargo fmt --all -- --check | 通过 |
 | cargo clippy --locked --all-targets -- -D warnings | 通过 |
-| cargo test --locked | 171 通过、0 失败、11 忽略 |
+| cargo test --locked | 179 通过、0 失败、11 忽略 |
 | code_mode::tests，包含隔离环境测试 | 9 通过 |
 | two_tools，真实 HTTP 入口及公开工具边界 | 3 通过 |
 | workspace_bridge，系统 rsync、双向端口、活跃任务取消 | 3 通过 |
 | scripts/e2e.py，真实 SSH 基础流程 | 136 项通过 |
 | scripts/e2e_agents.py，5 种后端 | 204 项通过 |
-| scripts/test_portal_ssh.py，合并后的门户安装逻辑 | 5 通过 |
-| cargo package --locked --allow-dirty --offline --no-verify | 通过，包含 80 个文件 |
+| scripts/test_portal_ssh.py，门户安装逻辑 | 5 通过 |
+| scripts/test_registry_restart.py，守护进程重启后的 OAuth 登记 | 8 通过 |
+| cargo package --locked --allow-dirty --no-verify | 通过，0.4.1 包包含 83 个文件 |
 | 项目 skill 的结构校验 | 通过 |
 
 各行记录各自命令的结果，测试覆盖存在重叠。默认忽略的测试涉及实际系统运行环境或后端集成；本次分别显式运行了隔离 JavaScript、HTTP 和工作区桥接测试，并用确定性后端程序执行五种模式的真实 SSH 验收。
@@ -62,7 +63,7 @@ workspace_bridge 测试建立两个独立客户端和共享目录，通过真实
 
 每种后端包含 18 个通用内置能力：5 个文件接口、8 个 TCP 接口、5 个 rsync 接口。OpenCode 实际遍历两页能力目录。Shell 使用真实 Linux PTY，其余后端使用确定性的原生协议测试程序；model_calls=false。
 
-测试确认 Codex 无换行的实时输出在命令结束前可见，Shell 输出遵循 PTY 的 echo 设置并避免重复输入日志。基础脚本用时 3.121 秒，五后端脚本用时 4.083 秒；这些数值记录测试执行时间，不作为性能基准。
+测试确认 Codex 无换行的实时输出在命令结束前可见，Shell 输出遵循 PTY 的 echo 设置并避免重复输入日志。基础脚本用时 3.094 秒，五后端脚本用时 3.842 秒；这些数值记录测试执行时间，不作为性能基准。
 
 ## 运行环境与修复
 
@@ -77,24 +78,24 @@ workspace_bridge 测试建立两个独立客户端和共享目录，通过真实
 
 测试发现原有 RLIMIT_NPROC=128 在创建用户命名空间之前生效：开发机用户已有大量线程时，bubblewrap 返回 Resource temporarily unavailable。修复将这一上限移入已创建的用户命名空间，由 prlimit 设置。CPU、内存、文件描述符及 core dump 限制仍在外层保留；只读挂载、独立网络、禁止嵌套用户命名空间和权限删除继续生效。
 
-SSH 验收还暴露了命令输出的部分行缓冲问题：没有换行的 live 要等到命令结束才显示。修复使普通命令分片立即显示，保留跨分片换行、折行与去重状态；diff 标题和 hunk 继续按行解析。12 个渲染测试及真实 SSH 的完成前输出检查均通过。
+SSH 验收还暴露了命令输出的部分行缓冲问题：没有换行的 live 要等到命令结束才显示。修复使普通命令分片立即显示，保留跨分片换行、折行与去重状态；diff 标题和 hunk 继续按行解析。13 个渲染测试及真实 SSH 的完成前输出检查均通过。
 
 ## 构建来源及日志
 
-本次合入了主分支 f4962ccb 的门户和部署改动。SSH 验收使用独立构建目录，并复制固定二进制后执行，避免并行工作覆盖共享 target/debug 下的同名程序。
+本次合入了主分支 2737081 的门户、部署及 OAuth 登记持久化改动。SSH 验收使用独立构建目录，并复制固定二进制后执行，避免并行工作覆盖共享 target/debug 下的同名程序。
 
-构建时 HEAD 为 1f02965fb1f672c9780c29e1661886204a69feff，待合并父提交为 f4962ccb0cdde6de98354e85dcf2777d7cd96c46，另包含本工作区的渲染修复。后续文档校对不改变上述运行行为。
+构建时 HEAD 为 a23d75287c6244eacfc24d4d81a68ec020bf7062，待合并父提交为 273708129c77f0673b94bebaa08462dc171cf282，包含已解决的合并内容。后续文档校对不改变上述运行行为。
 
 | 二进制 | 验收快照的 SHA-256 |
 | --- | --- |
-| ssmcp | d1e4fad87ec22de978b4c504616791ebd4e8620e8dcbc2479f6203243b3e4da4 |
-| ssmcpd | d49ac8bf96171eb04b16f69e2f711ca0830bdb6a5c80172740c587fb3b242bb7 |
+| ssmcp | eee35150a19c3025459f7e06a79958a07c6f399a7e7d5f6dba162944dcc670a0 |
+| ssmcpd | 9c11cbfbe78ba750d98d1804ab0d6a9e37504381374a18603b2b4aef230781e0 |
 
 开发机工作区：/home/lightjunction/Documents/GITHUB/ssmcp-workspace-bridge。
 
-- target/workspace-validation/final/ 保存 Rust、隔离、HTTP、工作区、打包和门户检查的日志及 results.json。
-- target/workspace-validation/reports/ 保存 ssh-shell.json、ssh-shell.log、ssh-backends.json、ssh-backends.log 和 staged-build.json。
-- staged-build.json 记录构建来源、工作区补丁摘要、二进制摘要和系统程序路径。
+- target/workspace-validation/reports/final-2737081/ 保存最终 Rust、隔离、HTTP、工作区、打包、SSH 和登记重启检查的日志及 JSON 报告。
+- 该目录内的 staged-build.json 记录构建来源、工作区补丁摘要、二进制摘要和系统程序路径。
+- 固定验证二进制位于 target/workspace-validation/bin/；先前门户安装检查的日志保留在 target/workspace-validation/final/。
 
 ## 可复现命令
 
@@ -115,7 +116,8 @@ export CARGO_TARGET_DIR="$PWD/target/workspace-validation/build"
 python3 scripts/e2e.py --bin-dir "$CARGO_TARGET_DIR/debug"
 python3 scripts/e2e_agents.py --bin-dir "$CARGO_TARGET_DIR/debug"
 python3 scripts/test_portal_ssh.py
-"$SSMCP_CARGO" package --locked --allow-dirty --offline --no-verify
+python3 scripts/test_registry_restart.py --bin-dir "$CARGO_TARGET_DIR/debug"
+"$SSMCP_CARGO" package --locked --allow-dirty --no-verify
 ~~~
 
 workspace_bridge 和隔离测试需要相应系统程序及 Linux 命名空间。SSH 脚本另需要 OpenSSH，具体准备方式见项目的部署与验证文档。

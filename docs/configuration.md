@@ -320,7 +320,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 
 ## 4. 重新打开后，还要登录吗？
 
-**GitHub 授权可以跨本机客户端重连继续使用；登录码授权仍绑定其签发连接。** 两者都要求 MCP 客户端保存有效令牌；服务器的 OAuth 状态只在内存中，服务端重启会清空它们。[授权实现](../src/oauth.rs) · [连接与授权检查](../src/broker.rs)
+**GitHub 授权可以跨本机客户端重连继续使用；登录码授权仍绑定其签发连接。** 两者都要求 MCP 客户端保存有效令牌；0.4.1 的安装服务持久化客户端登记；访问令牌、刷新令牌及尚未完成的授权仍在内存中，服务端重启后需要重新授权。[授权实现](../src/oauth.rs) · [连接与授权检查](../src/broker.rs)
 
 | 操作或状态 | GitHub 模式 | 登录码模式 |
 | --- | --- | --- |
@@ -330,7 +330,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 | 当前无可访问的在线客户端 | `list` 为空；授权自身可保持有效 | 签发连接必须在线 |
 | 新增第二个项目客户端 | 每个客户端按自己的 `--allow` 核对稳定身份 ID | 只包括同一 SSH 账户下未设置 `--allow` 的连接 |
 | refresh token 闲置到期或授权达到总期限 | 重新 GitHub 登录并同意 MCP 客户端 | 取得新登录码并重新授权 |
-| 服务端重启 `ssmcpd` | 重新连接、注册和登录 | 同左 |
+| 服务端重启 `ssmcpd` | 重新连接并登录；启用持久化后保留有效登记 | 同左 |
 
 | 凭据 | 用在哪里 | 有效期 |
 | --- | --- | --- |
@@ -340,7 +340,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 | OAuth authorization code | 浏览器回调后由 MCP 客户端兑换 | 60 秒；与客户端及 PKCE 绑定 |
 | access token | MCP 请求的 `Authorization: Bearer` 请求头 | 默认最长 8 小时 |
 | refresh token | MCP 客户端自动续期 | 默认闲置期限 30 天，成功刷新后重新计时；同一授权最长 90 天 |
-| OAuth 客户端登记及密钥 | 客户端自动注册与身份认证 | 默认最长 365 天；服务端重启清空 |
+| OAuth 客户端登记及密钥 | 客户端自动注册与身份认证 | 默认最长 365 天；0.4.1 启用持久化后跨重启保留 |
 
 表中为 0.4.0 默认期限；管理员可以调整访问令牌、刷新闲置期、授权总期限和登记期限。令牌寿命还受登记到期时间约束。GitHub 授权绑定已验证的身份与 MCP 客户端，每次调用仍要匹配目标连接的允许列表；登录码授权另外绑定签发连接。服务重启和授权撤销会使两种方式的令牌提前失效，刷新不会推迟首次授权起算的总期限。[服务端有效期设置](deployment.md#oauth-lifetimes) · [生命周期校验](../src/oauth.rs)
 
@@ -378,3 +378,16 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 - [Linux 部署与升级](deployment.md)
 - [原生后端配置与接口](backends.md)
 - [OpenSSH ssh](https://man.openbsd.org/ssh)、[ssh_config](https://man.openbsd.org/ssh_config)、[sshd_config](https://man.openbsd.org/sshd_config)
+
+
+## 彩色本地活动日志
+
+默认在终端显示彩色、分块的活动记录：蓝色请求、绿色成功、红色错误、黄色超时；stdout 和 stderr 分开显示，真正的换行不会被转成整行 JSON 字符串。请求 ID、方法和耗时用于对应同一次调用。统一 diff 使用红色删除、绿色增加及原始行号。
+
+只有传入 `--raw` 才输出未加工的原始事件 JSON。启动时 stdout 的连接信息仍保持机器可读；活动记录走 stderr。`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 时不输出 ANSI 颜色，但仍保留可读分块。更新磁盘上的程序不会改变已经运行的旧进程，需重新启动本机 ssmcp 才能看到新界面。
+
+```sh
+ssmcp -t codex --allow octocat@github my-ssmcp
+ssmcp --raw -t codex --allow octocat@github my-ssmcp
+NO_COLOR=1 ssmcp -t codex --allow octocat@github my-ssmcp
+```

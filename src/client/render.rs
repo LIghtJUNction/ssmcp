@@ -876,4 +876,12 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn base64_partial_output_is_visible_before_completion() {
+        let mut renderer = Renderer::new(false, false, 100);
+        let mut output = Vec::new();
+        renderer.event(&mut output, "codex", &json!({"method":"command/exec/outputDelta","params":{"deltaBase64":STANDARD.encode("still running")}})).unwrap();
+        assert!(String::from_utf8(output).unwrap().contains("still running"));
+    }
 }

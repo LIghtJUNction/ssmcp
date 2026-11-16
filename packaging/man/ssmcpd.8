@@ -206,3 +206,12 @@ Default installed JavaScript bridge script; changes with the installation prefix
 .BR sshd (8),
 .BR sshd_config (5),
 .BR systemd.service (5)
+
+.SH PERSISTENT CLIENT REGISTRATION
+The installed systemd service uses StateDirectory=ssmcpd (mode 0700).
+OAuth client registrations are stored in oauth-clients.toml (mode 0600).
+Set oauth.client_registry in TOML, SSMCP_CLIENT_REGISTRY, or
+.B --client-registry PATH
+to select another private file. Save failures reject registration with HTTP 503.
+Corrupt files, unsafe permissions, issuer mismatch and lock conflicts fail startup.
+Access tokens, refresh tokens and pending authorization remain process-local.
