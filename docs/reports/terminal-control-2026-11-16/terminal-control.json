@@ -8,8 +8,8 @@
   "preview_kind": "rendered live PTY cells, not a system desktop screenshot",
   "model_invoked": false,
   "binaries": {
-    "ssmcp": "8f69875df98518036ad49b888280118529dd5ab7d8c5c167522a1004ee577bac",
-    "ssmcpd": "f787a1dc97dc3986c801cfca666deb0aa0a87ff0b2dc01a15ff0b0a63f5e14ec",
+    "ssmcp": "7b8acacccc02c75e4d194abf3dc615a0b204dbe8aa6206999c2c47cfcc1aa497",
+    "ssmcpd": "c4f0899fc45570fb28b604a9c8dee424689927290c10e78e35a43cc3b2c84ce4",
     "vt_snapshot": "9cf1fe64b3bae78cf3757166c27e5db562481636162971ace1c45d5a55c17df0"
   },
   "checks": [
@@ -68,32 +68,32 @@
     {
       "label": "build",
       "source": "decoded real physical PTY bytes",
-      "snapshot_sha256": "f845ffb1a1f0b8fba2f8a9e29d18e77b95300bc8c374d834cdc5769f340d6dd5",
+      "snapshot_sha256": "7557b1f82625a22607f02fde87f3d2793f76a61cec8ad29fe7c04b6ababe3bd1",
       "rows": 46,
       "columns": 144,
       "snapshot": "terminal-build.json",
       "preview": "terminal-build.png",
-      "preview_sha256": "8665957824a19d3e4ae25146809ecda4e5fd49c7033263b31bba27f173fc576e"
+      "preview_sha256": "3796458adc2a4a3ae7acc9719e6b2b4365c13be054b4f748e95c7b3d10c506ed"
     },
     {
       "label": "logs",
       "source": "decoded real physical PTY bytes",
-      "snapshot_sha256": "97cb64d3abff9129652311e5ea93aff818d5bd9e6939e0ae842a274bf9469814",
+      "snapshot_sha256": "7a7a8cfe5fe86a1e0f7c2a8ffb5c2eab3b2d2c7d4ddeadaea53a92349e0408af",
       "rows": 46,
       "columns": 144,
       "snapshot": "terminal-logs.json",
       "preview": "terminal-logs.png",
-      "preview_sha256": "68b1143e312fa459c1a4845ed7f5077ab0d0428ea9807a208701a7fe9e8f0dc8"
+      "preview_sha256": "939fb4e3e38f2bfe60663fed5548a6ee3daacfb7bfe0098f4839743c1fceeceb"
     },
     {
       "label": "main",
       "source": "decoded real physical PTY bytes",
-      "snapshot_sha256": "e08bc6f390d8b4ca17c542d929f8a032dca2c93cf5a6ed76ed3023940c61906a",
+      "snapshot_sha256": "9e71a15add49c0173f68a1ad604e0f4fff96ed4551d52788c7afb035b79532d3",
       "rows": 46,
       "columns": 144,
       "snapshot": "terminal-main.json",
       "preview": "terminal-main.png",
-      "preview_sha256": "9ceb10e2b37e3caf37bd547a27df9939a89498682e33cc20733e4f53211a70e9"
+      "preview_sha256": "7aa4fa504a76b8c5d45c9b1fda1289893a7718fd7fb20c5a14415962dee2ec91"
     }
   ],
   "cua_browser": {
@@ -108,15 +108,15 @@
         "height": 513,
         "mime_type": "image/jpeg",
         "scale": 1,
-        "target_id": "B80374B771FBAF02DC03A3DB78AD5759",
+        "target_id": "FB2B77C64B63CFF8A10B39E9B9117794",
         "width": 960
       },
-      "target_id": "B80374B771FBAF02DC03A3DB78AD5759"
+      "target_id": "FB2B77C64B63CFF8A10B39E9B9117794"
     },
     "model_invoked": false,
     "owned_browser_disconnected": true,
     "image": "cua-browser.jpg"
   },
   "script_sha256": "7489418c28d0629764ebe97b680366c896cb3d403b3691d58d2ba06ea4bcb842",
-  "duration_seconds": 7.295
+  "duration_seconds": 9.243
 }
