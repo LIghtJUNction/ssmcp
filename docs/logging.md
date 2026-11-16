@@ -80,7 +80,7 @@ activity_interval_secs = 5
 
 `dashboard` 控制交互式面板，默认 true。`activity_interval_secs` 可设为 0–300 秒，控制行式日志的周期活动提示；0 关闭该提示，面板、开始、完成、文件和原生调用事件仍会更新。两个设置都不改变任务并发或执行超时。
 
-支持 `minimal`、`codex-dark`、`nord`、`solarized` 四种主题。`--theme nord`、`--timestamps` 可直接覆盖。时间戳使用 UTC；终端主题不改变原生工具返回。`NO_COLOR`、`--no-color`、`TERM=dumb` 和重定向 stderr 都关闭日志 ANSI 颜色。真实终端上的交互式 PTY 独立于配色，保留字节与光标、退格等控制序列；JSONL 模式仍输出事件格式。非 TTY 日志输出使用安全可读展示。
+支持 `minimal`、`codex-dark`、`nord`、`solarized` 四种主题。`--theme nord`、`--timestamps` 可直接覆盖。时间戳使用 UTC；终端主题不改变原生工具返回。`NO_COLOR`、`--no-color`、`TERM=dumb` 和重定向 stderr 都关闭日志 ANSI 颜色。交互式 PTY 的原始捕获独立于配色。启用面板时，合成器解析终端状态并在所属区域重绘文字、光标和退格；关闭面板后，真实终端直接接收原始 PTY 字节。JSONL 模式仍输出事件格式。非 TTY 日志输出使用安全可读展示。
 
 ![终端日志渲染器示例](assets/terminal-logs.png)
 

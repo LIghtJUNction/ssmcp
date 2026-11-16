@@ -1,0 +1,638 @@
+{
+  "format": "ssmcp-validation-evidence-v1",
+  "recorded_date": "2026-11-16",
+  "target_version": "0.6.0",
+  "release_commit": null,
+  "status": "partial_evidence_not_final_acceptance",
+  "source_checkout": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work",
+  "confirmed_merge": "bdb0a8d",
+  "current_checks": [
+    {
+      "name": "cargo check --all-targets",
+      "result": "passed",
+      "evidence_file": "resume-check.log",
+      "sha256": "1a29fc5bc86848a8c9097c18d62811ddf16c2d2ded1a3a6450c0f39f47688613"
+    },
+    {
+      "name": "release_client",
+      "result": "passed",
+      "passed": 4,
+      "failed": 0,
+      "evidence_file": "resume-release-client.log",
+      "sha256": "a251e4e3ef5e768e0cedf61740d2c01d5f4906a78774f83fe4ebad3a6d3ee029"
+    },
+    {
+      "name": "DeploymentVersionTests",
+      "result": "passed",
+      "passed": 6,
+      "failed": 0,
+      "environment": "cloud Python temporary filesystem with mocked system services",
+      "duration_seconds": 0.065,
+      "scope": "stage/apply gates and rollback; no real service mutation"
+    },
+    {
+      "name": "Native adapter/process targeted suites",
+      "result": "passed",
+      "evidence_file": "resume-native-results.json",
+      "sha256": "dc27562f1a03ce5845a051f6ec22f45bbc5e326a037d1b8105c90afdc8ab95d2",
+      "results": [
+        {
+          "name": "fmt",
+          "exit": 0,
+          "elapsed": 0.40957191300003615
+        },
+        {
+          "name": "check",
+          "exit": 0,
+          "elapsed": 2.3815264730001218
+        },
+        {
+          "name": "process",
+          "exit": 0,
+          "elapsed": 5.690750949000176
+        },
+        {
+          "name": "shell",
+          "exit": 0,
+          "elapsed": 1.3104565670000738
+        },
+        {
+          "name": "opencode",
+          "exit": 0,
+          "elapsed": 0.19464154200022676
+        },
+        {
+          "name": "rpc",
+          "exit": 0,
+          "elapsed": 0.3506857970000965
+        },
+        {
+          "name": "pi",
+          "exit": 0,
+          "elapsed": 4.028851692999979
+        },
+        {
+          "name": "program",
+          "exit": 0,
+          "elapsed": 0.11020714000005682
+        }
+      ],
+      "confirmed_counts": {
+        "process": {
+          "passed": 7,
+          "ignored": 1
+        },
+        "opencode": {
+          "passed": 14,
+          "ignored": 1
+        },
+        "rpc": {
+          "passed": 7,
+          "ignored": 0
+        }
+      },
+      "scope": "Protocol fixtures and unit tests. The real OpenCode endpoint test is ignored without an explicitly configured service."
+    },
+    {
+      "name": "scripts/test_release.py",
+      "result": "passed",
+      "passed": 46,
+      "environment": "development machine",
+      "evidence_source": "release coordinator reported exec job 6; raw log archive pending",
+      "scope": "Includes the six new deployment control-flow tests; service mutation is mocked"
+    }
+  ],
+  "historical_native_mcp": {
+    "scope": "Prior development checkout; rerun against the final release commit before final acceptance",
+    "evidence_file": "codex-real-mcp-smoke-4.log",
+    "evidence_sha256": "b1797cafff24e6ec2811b737f40695028a2e2639f195571a9a4cccf8820c2808",
+    "test": "real_codex_mcp_tool_smoke",
+    "passed": 1,
+    "failed": 0,
+    "duration_seconds": 21.78,
+    "discovery_method": "mcpServerStatus/list",
+    "call_method": "mcpServer/tool/call",
+    "tool_descriptor": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Report Linux Computer Use desktop integration readiness.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "codex.mcp.linux-computer-use.doctor",
+      "outputSchema": {
+        "$defs": {
+          "AccessibilityReport": {
+            "properties": {
+              "at_spi_bus": {
+                "$ref": "#/$defs/Check"
+              },
+              "at_spi_enabled": {
+                "$ref": "#/$defs/Check"
+              },
+              "forced_toolkit_bridge": {
+                "type": "boolean"
+              },
+              "screen_reader_enabled": {
+                "$ref": "#/$defs/Check"
+              },
+              "toolkit_accessibility": {
+                "$ref": "#/$defs/Check"
+              }
+            },
+            "required": [
+              "at_spi_bus",
+              "toolkit_accessibility",
+              "at_spi_enabled",
+              "screen_reader_enabled",
+              "forced_toolkit_bridge"
+            ],
+            "type": "object"
+          },
+          "CapabilityMap": {
+            "properties": {
+              "accessibility": {
+                "description": "Accessibility (element-targeted, non-pointer) backends.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "input": {
+                "description": "Pointer/keyboard injection backends, best-first.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "isolation": {
+                "description": "Display/session isolation contexts the host can provide.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "preferred": {
+                "$ref": "#/$defs/PreferredBackends",
+                "description": "The backend the tool will use by default for each selectable layer."
+              },
+              "screenshot": {
+                "description": "Screen capture backends, best-first.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "window_control": {
+                "description": "Window listing/focus backends available.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "input",
+              "screenshot",
+              "window_control",
+              "accessibility",
+              "isolation",
+              "preferred"
+            ],
+            "type": "object"
+          },
+          "Check": {
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ok",
+              "detail"
+            ],
+            "type": "object"
+          },
+          "InputReport": {
+            "properties": {
+              "pixelflux": {
+                "$ref": "#/$defs/Check",
+                "description": "Selkies pixelflux computer-use server. Detail is the port only."
+              },
+              "uinput": {
+                "$ref": "#/$defs/Check"
+              },
+              "wtype": {
+                "$ref": "#/$defs/Check",
+                "description": "Wayland virtual-keyboard backend for layout-safe Unicode literal text."
+              },
+              "xdotool": {
+                "$ref": "#/$defs/Check",
+                "description": "X11 XTEST keyboard backend. Preferred over ydotool on X11 sessions,\nwhere raw evdev scancodes are re-mapped by the active XKB layout."
+              },
+              "ydotool": {
+                "$ref": "#/$defs/Check"
+              },
+              "ydotool_socket": {
+                "$ref": "#/$defs/Check"
+              },
+              "ydotoold": {
+                "$ref": "#/$defs/Check"
+              }
+            },
+            "required": [
+              "ydotool",
+              "ydotoold",
+              "ydotool_socket",
+              "uinput",
+              "xdotool",
+              "wtype",
+              "pixelflux"
+            ],
+            "type": "object"
+          },
+          "PlatformReport": {
+            "properties": {
+              "arch": {
+                "type": "string"
+              },
+              "dbus_session_bus_address": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "desktop_session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "display": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "gnome_screenshot": {
+                "$ref": "#/$defs/Check"
+              },
+              "gnome_shell_version": {
+                "$ref": "#/$defs/Check"
+              },
+              "os": {
+                "type": "string"
+              },
+              "wayland_display": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "x11_display": {
+                "$ref": "#/$defs/Check",
+                "description": "Native X11 display for the root-window screenshot route. Fails on\nWayland sessions, including XWayland, by design."
+              },
+              "xauthority": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "xdg_current_desktop": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "xdg_runtime_dir": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "xdg_session_type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "os",
+              "arch",
+              "desktop_session",
+              "xdg_session_type",
+              "xdg_current_desktop",
+              "wayland_display",
+              "display",
+              "xauthority",
+              "dbus_session_bus_address",
+              "xdg_runtime_dir",
+              "gnome_shell_version",
+              "gnome_screenshot",
+              "x11_display"
+            ],
+            "type": "object"
+          },
+          "PortalReport": {
+            "properties": {
+              "desktop_portal": {
+                "$ref": "#/$defs/Check"
+              },
+              "input_capture": {
+                "$ref": "#/$defs/Check"
+              },
+              "mutter_remote_desktop": {
+                "$ref": "#/$defs/Check"
+              },
+              "mutter_screencast": {
+                "$ref": "#/$defs/Check"
+              },
+              "remote_desktop": {
+                "$ref": "#/$defs/Check"
+              },
+              "remote_desktop_keyboard": {
+                "$ref": "#/$defs/Check"
+              },
+              "screencast": {
+                "$ref": "#/$defs/Check"
+              },
+              "screenshot": {
+                "$ref": "#/$defs/Check"
+              }
+            },
+            "required": [
+              "desktop_portal",
+              "remote_desktop",
+              "remote_desktop_keyboard",
+              "screencast",
+              "screenshot",
+              "input_capture",
+              "mutter_remote_desktop",
+              "mutter_screencast"
+            ],
+            "type": "object"
+          },
+          "PreferredBackends": {
+            "properties": {
+              "input": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "screenshot": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "window_control": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "input",
+              "screenshot",
+              "window_control"
+            ],
+            "type": "object"
+          },
+          "ReadinessReport": {
+            "properties": {
+              "blockers": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "can_build_accessibility_tree": {
+                "type": "boolean"
+              },
+              "can_capture_screenshots": {
+                "description": "A raw screenshot was successfully captured while producing this report.\nDoctor only detects routes, so this remains false until capture is tested.",
+                "type": "boolean"
+              },
+              "can_focus_apps": {
+                "type": "boolean"
+              },
+              "can_focus_windows": {
+                "type": "boolean"
+              },
+              "can_query_windows": {
+                "type": "boolean"
+              },
+              "can_register_mcp_tools": {
+                "type": "boolean"
+              },
+              "can_send_development_input": {
+                "type": "boolean"
+              },
+              "recommended_next_step": {
+                "type": "string"
+              },
+              "screenshot_capture_status": {
+                "$ref": "#/$defs/ScreenshotCaptureStatus"
+              },
+              "warnings": {
+                "description": "Untested capabilities and optional remediation, without blocking setup.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "can_register_mcp_tools",
+              "can_build_accessibility_tree",
+              "can_query_windows",
+              "can_focus_apps",
+              "can_focus_windows",
+              "can_send_development_input",
+              "can_capture_screenshots",
+              "screenshot_capture_status",
+              "recommended_next_step",
+              "blockers",
+              "warnings"
+            ],
+            "type": "object"
+          },
+          "ScreenshotCaptureStatus": {
+            "oneOf": [
+              {
+                "const": "unavailable",
+                "description": "No backend route was detected; no capture was attempted.",
+                "type": "string"
+              },
+              {
+                "const": "unverified",
+                "description": "At least one route was detected; no capture was attempted.",
+                "type": "string"
+              },
+              {
+                "const": "verified",
+                "description": "A raw screenshot was captured successfully for this report.",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "description": "The raw capture attempted for this report failed.",
+                "type": "string"
+              }
+            ]
+          },
+          "WindowingReport": {
+            "properties": {
+              "backends": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/Check"
+                },
+                "type": "object"
+              },
+              "can_focus_apps": {
+                "type": "boolean"
+              },
+              "can_focus_windows": {
+                "type": "boolean"
+              },
+              "can_list_windows": {
+                "type": "boolean"
+              },
+              "computer_use_linux_gnome_shell_extension": {
+                "$ref": "#/$defs/Check"
+              },
+              "cosmic_helper": {
+                "$ref": "#/$defs/Check"
+              },
+              "gnome_shell_introspect": {
+                "$ref": "#/$defs/Check"
+              },
+              "hyprland": {
+                "$ref": "#/$defs/Check"
+              },
+              "kwin": {
+                "$ref": "#/$defs/Check"
+              },
+              "niri": {
+                "$ref": "#/$defs/Check"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "gnome_shell_introspect",
+              "computer_use_linux_gnome_shell_extension",
+              "cosmic_helper",
+              "kwin",
+              "hyprland",
+              "niri",
+              "backends",
+              "can_list_windows",
+              "can_focus_apps",
+              "can_focus_windows",
+              "note"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "accessibility": {
+            "$ref": "#/$defs/AccessibilityReport"
+          },
+          "capabilities": {
+            "$ref": "#/$defs/CapabilityMap",
+            "description": "Which interchangeable backends this environment supports, per layer, plus\nthe one the tool prefers. Lets an agent (or selector) understand what's\navailable and choose accordingly instead of assuming one fixed path."
+          },
+          "input": {
+            "$ref": "#/$defs/InputReport"
+          },
+          "platform": {
+            "$ref": "#/$defs/PlatformReport"
+          },
+          "portals": {
+            "$ref": "#/$defs/PortalReport"
+          },
+          "readiness": {
+            "$ref": "#/$defs/ReadinessReport"
+          },
+          "windowing": {
+            "$ref": "#/$defs/WindowingReport"
+          }
+        },
+        "required": [
+          "platform",
+          "portals",
+          "accessibility",
+          "windowing",
+          "input",
+          "readiness",
+          "capabilities"
+        ],
+        "type": "object"
+      }
+    },
+    "request_arguments": "not included in this public evidence extract",
+    "response_excerpt": {
+      "isError": false,
+      "content_types": [
+        "text"
+      ],
+      "structuredContent_keys": [
+        "accessibility",
+        "capabilities",
+        "input",
+        "platform",
+        "portals",
+        "readiness",
+        "windowing"
+      ],
+      "readiness": {
+        "can_register_mcp_tools": true,
+        "screenshot_capture_status": "unverified"
+      }
+    },
+    "response_scope": "This is an explicit excerpt, not the complete native response. The private source log retains the original response. Runtime paths and environment details are omitted from the public extract.",
+    "limitations": [
+      "The read-only doctor tool does not exercise an interactive native approval",
+      "A real MCP call does not verify unrelated MCP servers or screenshot consent"
+    ]
+  },
+  "deployment_inventory": {
+    "evidence_file": "resume-deploy-inventory.json",
+    "sha256": "0a1bf31ff445ef04301d6d765570b2518a97fa5cbabe35faa113e4d621f69cbe",
+    "ssh_target": "archczy",
+    "platform": "Arch Linux x86_64",
+    "server_version": "ssmcpd 0.4.1",
+    "package": "ssmcp-git 0.4.1.r70.g655342c-1",
+    "executable": "/usr/bin/ssmcpd",
+    "services": [
+      "ssmcpd.service",
+      "ssmcp-portal.service"
+    ],
+    "status": "observed_before_deployment"
+  },
+  "pending": [
+    "Immutable final release commit and passing CI URLs",
+    "Current-commit real Codex MCP enumeration and forwarding",
+    "Real operator-managed Pi socket and OpenCode endpoint attach",
+    "Final-commit concurrent command/output/audit evidence",
+    "Published release asset and installed client checksum verification",
+    "Actual 0.6.0 server stage/apply and post-restart checks",
+    "Google Drive evidence URL and retained private log/archive path"
+  ],
+  "evidence_root": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task"
+}

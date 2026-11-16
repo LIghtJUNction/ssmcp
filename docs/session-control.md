@@ -48,7 +48,7 @@ return await reload(clientId);
 
 原生工具调用形式为 `await call(clientId, "ssmcp.client.reload", {})`。两种形式都经过现有客户端授权检查，不接受额外参数。[JavaScript 原语](../src/code_mode.js) · [重载实现](../src/client/reload.rs)
 
-重载先确认请求，再关闭旧客户端的资源并重新执行程序。客户端检查启动入口仍可执行；有其他进行中的工具请求时，重载返回 busy。接受请求后，它返回 `accepted: true` 和 `status: "restarting"`，等待服务端回执后再开始重启。后台命令、本机 harness、同步和端口转发会随旧连接停止，不能依靠 `reload` 保留这些运行状态。
+重载先确认请求，再关闭旧客户端的资源并重新执行程序。客户端检查启动入口仍可执行；有其他进行中的工具请求时，重载返回 busy。接受请求后，它返回 `accepted: true` 和 `status: "restarting"`，等待服务端回执后再开始重启。连接拥有的后台命令、同步和端口转发会随旧连接停止，原注册表及请求状态失效，不能依靠 `reload` 保留这些运行状态。客户端创建的原生子进程也会关闭；通过私有 socket 或 loopback 地址连接的既有 Pi/OpenCode 服务仍由操作者管理，ssmcp 仅断开桥接，不终止外部服务。
 
 Unix 使用 `exec` 替换当前进程映像。Windows 启动替代客户端，并让已关闭连接资源的旧进程等待它结束，以保留前台控制台和管道的使用关系；多次重载可能保留多个等待进程，但只有替代客户端维持新的连接。
 
@@ -71,10 +71,17 @@ Unix 使用 `exec` 替换当前进程映像。Windows 启动替代客户端，�
 
 | 来源 | 转储内容与范围 |
 | --- | --- |
-| 交互式 PTY | 整个终端会话的合并输出，包含提示符和终端控制字节；不是单条命令的日志 |
-| 其他超大的原生工具结果 | ssmcp 实际收到的完整 MCP 结果 JSON，`format` 为 `mcp_tool_result_json` |
+| 独立 Shell 命令 | 每个任务的 stdout、stderr 分别捕获；状态中的 artifact 标识各自输出 |
+| 交互式 PTY | 整个终端会话的合并输出，包含提示符和终端控制字节 |
+| 超大的原生 MCP / Harness 结果 | ssmcp 实际收到的完整 MCP 结果 JSON，`format` 为 `mcp_tool_result_json` |
+| OpenCode HTTP / 事件流 | HTTP 正文通过 `body_artifact` 与 `body_format` 保留类型；SSE 原始流单独捕获 |
+| 审计事件与文件 Diff | 脱敏后的 JSONL 事件归档，以及可查询的完整文本 Diff |
 
 PTY 的 `terminal.read` 遇到长输出时返回 `spilled: true`、`artifact` 和 `range`。`range.start`、`range.end` 标记本次请求覆盖的字节区间，`next_cursor` 用于下一次终端读取；需要正文时根据 `artifact.id` 读取转储文件。原生工具自己已经截断或未提供的输出不能通过护卫恢复。[PTY 捕获实现](../src/pty.rs) · [原生结果护卫](../src/runtime.rs)
+
+`exec.read` 返回两条流的独立游标，完整输出引用位于 `snapshot.stdout.artifact` 和 `snapshot.stderr.artifact`。滚动内存尾部被淘汰不代表已保存文件也被丢弃；使用 artifact 分页恢复早期字节。后台输出实时进入终端，查询历史 `read/wait` 不会再作为新输出打印。`start` 成功只代表已启动，最终命令结果仍看状态与退出码。[独立命令](commands.md)
+
+小的结构化返回保留原生类型。OpenCode 大 HTTP 响应保留状态与内容类型，并用 `body_format` 标识 JSON、文本或二进制；不要把所有 artifact 都当作纯文本。SSE 解析错误和原始捕获完整性分别记录。审计 JSONL 使用脱敏副本，MCP 原生返回不会为日志展示而被改写。[适配器](../src/backend/opencode.rs) · [事件归档](../src/backend/events.rs)
 
 ### 如何理解元数据
 
@@ -115,7 +122,7 @@ return await outputs.read(clientId, {
 return await outputs.stat(clientId, { id: artifactId });
 ```
 
-这些操作也能通过 `ssmcp.output.read` 和 `ssmcp.output.stat` 原生工具调用。它们按转储 ID 访问，不接受任意文件路径；工作区文件仍使用 `fs` 原语。
+这些操作也能通过 `ssmcp.output.read` 和 `ssmcp.output.stat` 原生工具调用。它们按转储 ID 访问，不接受任意文件路径；工作区文件仍使用 `fs` 原语。每条连接共享一个 OutputStore，Shell、PTY、Harness、MCP 与审计都使用同一配额和捕获机制。读取时校验 artifact 的连接归属；同一 OS 用户的另一客户端也不能读取该连接的输出、任务或审计记录。
 
 ## 自动清理与容量
 
@@ -137,6 +144,6 @@ return await outputs.stat(clientId, { id: artifactId });
 return await outputs.cleanup(clientId);
 ```
 
-原生调用形式为 `await call(clientId, "ssmcp.output.cleanup", {})`。返回值包含删除文件数、删除字节数、保留字节数和活动文件数；该调用不会无条件清空目录。客户端全部退出期间没有清理任务运行，下次启动会继续清理。重载不会立即删除已结束的输出文件，只要它们尚未过期或被容量策略淘汰，就可以通过新客户端 ID 继续读取。
+原生调用形式为 `await call(clientId, "ssmcp.output.cleanup", {})`。返回值包含删除文件数、删除字节数、保留字节数和活动文件数；该调用不会无条件清空目录。客户端全部退出期间没有清理任务运行，下次启动会继续清理。重载不会立即删除尚在保留期内的已结束文件，但磁盘保留不授予新连接读取旧连接输出的权限。旧 client ID 失效，替代连接具有新的输出归属；在结束或重载前读取需要保留的结果。受控的跨连接持久任务与输出迁移尚未提供。
 
 `--max-inline-output` 控制的是本机日志展示行数，与此处返回给 agent 的 32 KiB / 500 行护卫阈值独立。完整终端展示设置见[日志与主题配置](logging.md)。

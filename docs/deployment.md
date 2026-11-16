@@ -148,7 +148,7 @@ ssmcp --list-tools
 
 该命令检查本机目录后退出，不需要 SSH 目标。Shell 与文件操作不依赖 Harness。客户端分别检查原生入口，完成安全启动检查、版本识别、握手和实际枚举后才注册；失败或无可靠机器接口时显示诊断，保留其他能力。发现不自动安装运行时、依赖或 Harness，也不提交模型请求。[发现与原生接口](backends.md)
 
-需要的原生账户和权限由操作者在各 CLI 中维护。OpenCode 发现只连接操作者已启动的服务：设置 `SSMCP_OPENCODE_URL` 为本机 loopback 地址，通过 `OPENCODE_PASSWORD` 提供原生凭据。未配置时报告 unavailable。OpenCode v2.3.0 服务启动可能初始化调度任务、安装插件或唤起模型，ssmcp 不为枚举能力而启动它；源码依据和协议范围见[OpenCode 发现限制](backends.md#8-opencode从-openapi-发现操作)。Pi 只声明实际可用的四项 RPC 桥接，不伪造内部工具 Schema。
+需要的原生账户和权限由操作者在各 CLI 中维护。OpenCode 发现只连接操作者已启动的服务：设置 `SSMCP_OPENCODE_URL` 为带显式端口的 `http://127.0.0.1:端口/`，通过 `OPENCODE_PASSWORD` 提供非空原生密码；用户名为 `opencode`，不使用代理或重定向。未配置时报告 unavailable。OpenCode v2.3.0 服务启动可能初始化调度任务、安装插件或唤起模型，ssmcp 不为枚举能力而启动它；源码依据和协议范围见[OpenCode 发现限制](backends.md#8-opencode从-openapi-发现操作)。Pi 通过 `SSMCP_PI_RPC_SOCKET` 连接操作者已初始化的私有 Unix JSONL RPC 入口，socket 和直接父目录必须为当前用户所有、没有 group/other 权限且非符号链接，连接后检查 peer UID；未配置安全入口时不可用。适配器只声明四项 RPC 桥接，不伪造内部工具 Schema，不为发现启动 Pi 或禁用用户扩展。断线只关闭既有服务的桥接连接，外部服务仍由操作者管理。
 
 工具目录只包含本机原生接口实际提供的能力。Codex 可发现 MCP 直通工具，Pi 的控制协议不会自动暴露所有内部模型工具；普通文件和命令操作可使用 ssmcp 自带原语。`--context-root` 只增加只读 skills／AGENTS 文档根，不扩大文件写入范围。原生 rsync 端点目前只在 Linux 客户端注册。[接口边界](backends.md#1-启动客户端) · [上下文范围](context.md)
 
@@ -402,7 +402,40 @@ GitHub OAuth App 继续使用同一个 `https://你的域名/oauth/callback/gith
 
 ## 日志和受控升级
 
-客户端日志模式、服务端关联日志、systemd 目录与代理超时策略见 [日志与主题配置](logging.md)。升级使用 `scripts/deploy_server.py`：先在独立端口和独立状态目录执行 `--phase stage`，核验健康、OAuth discovery 和 DCR 重启恢复；再携带同一制品校验值与提交执行 `--phase apply`。生产文件变化会使旧预演凭据失效。安装或健康检查失败时恢复旧包和原文件。
+客户端日志模式、服务端关联日志、systemd 目录与代理超时策略见 [日志与主题配置](logging.md)。Arch 服务器可使用 [`scripts/deploy_server.py`](../scripts/deploy_server.py) 升级已有 `ssmcp-git` 包；它要求 root、pacman、bsdtar 和已配置的服务账户，不适用于直接安装到 `/usr/local/bin` 的服务器。
+
+先固定通过 CI 的完整提交，使用该提交构建包，记录候选包 SHA-256，并保留当前安装版本的回滚包。对于本次 0.6.0，stage 和 apply 都必须指定 `--expected-version 0.6.0`；脚本从 `.PKGINFO` 检查唯一包名与版本，随后分别检查暂存和已安装的 `ssmcpd --version`。文件名不能代替这些检查。
+
+在独立管理 SSH 会话中设置实际路径和摘要，然后预演：
+
+```sh
+# 替换为已经通过 CI 的完整 40 位提交与实际包路径。
+release_commit=FULL_VERIFIED_COMMIT
+candidate=/var/tmp/ssmcp-release/ssmcp-git.pkg.tar.zst
+candidate_sha=EXPECTED_PACKAGE_SHA256
+rollback=/var/cache/pacman/pkg/PREVIOUS_SSMCP_PACKAGE.pkg.tar.zst
+report_dir=/var/lib/ssmcp-rollouts/$release_commit
+sudo install -d -m 0700 "$report_dir"
+
+sudo python3 /var/tmp/ssmcp-release/deploy_server.py \
+  --phase stage --expected-version 0.6.0 --commit "$release_commit" \
+  --package "$candidate" --sha256 "$candidate_sha" \
+  --rollback-package "$rollback" --report "$report_dir/stage.json"
+```
+
+stage 使用 18087 端口与独立状态目录，核验健康、OAuth discovery、DCR 重启恢复和私有文件权限，不重启生产服务。只有 `state: "prepared"` 才表示预演成功。生成的私有 receipt 同时绑定版本、完整提交、包摘要、可选代理摘要和生产状态，最长一小时有效。生产二进制、配置或已安装包发生变化会使旧 receipt 失效；旧脚本的 receipt 缺少版本绑定时需要重新 stage。
+
+确认预演报告后，从同一独立 SSH 会话启动 systemd 托管的 apply：
+
+```sh
+sudo systemd-run --wait --collect --unit="ssmcp-rollout-$release_commit" \
+  /usr/bin/python3 /var/tmp/ssmcp-release/deploy_server.py \
+  --phase apply --expected-version 0.6.0 --commit "$release_commit" \
+  --package "$candidate" --sha256 "$candidate_sha" \
+  --rollback-package "$rollback" --report "$report_dir/apply.json"
+```
+
+apply 在私有 checkpoint 保存原文件，安装候选包，核验本地与公网健康、OAuth 元数据、未授权拒绝、门户及实际运行二进制。它会重启网关两次以验证 DCR 登记跨重启保留；失败时校验回滚包摘要，恢复旧包与原文件，再检查服务健康。检查 report 的 `state`、`checks`、`server_version` 和实际进程摘要；仅有安装命令退出成功不足以宣布部署完成。部署前后证据按版本记录在[验收材料](validation-0.6.0.md)。
 
 生产重启会中断当前 ssmcp 管理连接。升级驱动必须由独立 SSH/systemd 作业持有，结果写入可独立读取的验收报告。服务恢复后重新授权 MCP；不要依赖正在被升级的会话完成回滚。
 

@@ -2,6 +2,8 @@
 
 仓库的 `Release` 工作流负责六个平台的原生测试、预编译归档、crates.io 发布和 GitHub Release。本文描述已配置的流程，不代表某个新版本已经发布；可下载版本以 [GitHub Releases](https://github.com/LIghtJUNction/ssmcp/releases)、[crates.io](https://crates.io/crates/ssmcp) 和对应 [Actions 运行结果](https://github.com/LIghtJUNction/ssmcp/actions/workflows/release.yml) 为准。[工作流](../.github/workflows/release.yml) · [发布脚本](../scripts/release.py)
 
+0.6.0 的客户端不再接受 `-t`、`--type`、`--backend`，改为统一发现和路由原生能力。安装前按[版本迁移说明](release-notes-0.6.0.md)检查启动命令；当前版本的实际发布、安装与部署结果见[0.6.0 验收记录](validation-0.6.0.md)。原有 0.5.1 验证记录继续保留为历史证据。
+
 ## 平台和下载内容
 
 六个目标分别在对应架构的 GitHub runner 上构建。Linux 归档包含客户端 `ssmcp` 和网关 `ssmcpd`；macOS、Windows 归档只包含客户端。网关的 OpenSSH 接入、Unix socket 与代码隔离仍运行在 Linux。[平台入口](../src/bin/ssmcpd.rs)
