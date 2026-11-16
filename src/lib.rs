@@ -8,11 +8,12 @@ pub mod http;
 pub mod identity;
 pub mod oauth;
 pub mod pty;
-pub mod wire;
 pub mod resources;
+pub mod wire;
+pub mod workspace;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
-pub mod workspace;
+pub mod bridge;
 pub mod rsync;
 pub mod runtime;

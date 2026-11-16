@@ -1,5 +1,10 @@
 //! Native backend plus connection-owned workspace utilities.
-use crate::{backend::{self, Backend}, rsync::Rsync, wire::Operation, workspace::Workspace};
+use crate::{
+    backend::{self, Backend},
+    rsync::Rsync,
+    wire::Operation,
+    workspace::Workspace,
+};
 use serde_json::Value;
 use std::{path::PathBuf, sync::Arc};
 
@@ -34,20 +39,31 @@ impl Runtime {
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         match operation {
-            Operation::ListTools { cursor } => backend::page(self.tools().await?, cursor.as_deref()),
+            Operation::ListTools { cursor } => {
+                backend::page(self.tools().await?, cursor.as_deref())
+            }
             Operation::CallTool { name, arguments }
                 if name.starts_with("ssmcp.fs.") || name.starts_with("ssmcp.net.") =>
             {
-                self.workspace.perform(&name, arguments).await.map(backend::result)
+                self.workspace
+                    .perform(&name, arguments)
+                    .await
+                    .map(backend::result)
             }
-            Operation::CallTool { name, arguments } if name.starts_with("ssmcp.rsync.") => {
-                self.rsync.perform(&name, arguments).await.map(backend::result)
-            }
+            Operation::CallTool { name, arguments } if name.starts_with("ssmcp.rsync.") => self
+                .rsync
+                .perform(&name, arguments)
+                .await
+                .map(backend::result),
             operation => self.backend.perform(operation).await,
         }
     }
 
     pub async fn shutdown(&self) {
-        tokio::join!(self.workspace.shutdown(), self.rsync.shutdown(), self.backend.shutdown());
+        tokio::join!(
+            self.workspace.shutdown(),
+            self.rsync.shutdown(),
+            self.backend.shutdown()
+        );
     }
 }

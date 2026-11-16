@@ -119,6 +119,7 @@ impl Session {
 
 pub struct Broker {
     pub public_url: String,
+    pub bridges: Arc<crate::bridge::Bridges>,
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
@@ -146,6 +147,7 @@ impl Broker {
             oauth: crate::oauth::OAuth::with_config(public_url.clone(), config)?,
             identities: IdentityProviders::new(&public_url, github)?,
             public_url,
+            bridges: Arc::new(crate::bridge::Bridges::default()),
             sessions: RwLock::new(HashMap::new()),
         })
     }
@@ -255,6 +257,7 @@ impl Broker {
     }
 
     pub async fn disconnect_all(&self) {
+        self.bridges.shutdown().await;
         let mut sessions = self.sessions.write().await;
         for clients in sessions.values() {
             for session in clients.values() {

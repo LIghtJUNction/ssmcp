@@ -44,7 +44,7 @@ File contents are base64, so binary bytes survive transport. Follow returned off
 
 ## Synchronize with system rsync
 
-Both clients need system `rsync`; install dependencies with the system package manager. Start with a dry run:
+Both clients need system `rsync`; install dependencies with the system package manager. Both selected directories must exist; create the destination with `fs.mkdir` when authorized. The operation copies directory contents, preserving ordinary files, directories and modification times. It skips symlinks, devices, ownership, permission bits and extended attributes. Start with a dry run:
 
 ```js
 return await rsync({
@@ -68,7 +68,7 @@ return await ports.open({
 });
 ```
 
-Read the returned listener address. Swap endpoint IDs for the reverse direction. List mappings with `ports.list()` and close one with `ports.close(id)` when done. Listeners and targets are limited to loopback; the mapping remains managed after the JavaScript invocation finishes and ends on closure, expiry, authorization loss, or disconnection.
+Read the returned listener address on the listening client. A `cleanup_failed` state retains pending handles; retry close or cancel and inspect the result. Swap endpoint IDs for the reverse direction. List mappings with `ports.list()` and close one with `ports.close(id)` when done. Listeners and targets are limited to loopback; the mapping remains managed after the JavaScript invocation finishes and ends on closure, expiry, authorization loss, or disconnection.
 
 ## Verify and report
 
