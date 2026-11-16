@@ -1,10 +1,9 @@
 //! Native backend plus connection-owned workspace utilities.
-#[cfg(target_os = "linux")]
-use crate::rsync::Rsync;
 use crate::{
     backend::{self, Backend},
     context::Context,
     output::OutputStore,
+    rsync::Rsync,
     wire::Operation,
     workspace::Workspace,
 };
@@ -15,7 +14,6 @@ pub struct Runtime {
     backend: Arc<Backend>,
     workspace: Workspace,
     context: Context,
-    #[cfg(target_os = "linux")]
     rsync: Rsync,
     output: Arc<OutputStore>,
 }
@@ -34,7 +32,6 @@ impl Runtime {
             backend,
             workspace: Workspace::new(root.clone())?,
             context: Context::new(root.clone(), context_roots)?,
-            #[cfg(target_os = "linux")]
             rsync: Rsync::new(root)?,
             output: OutputStore::global()?,
         }))
@@ -44,7 +41,6 @@ impl Runtime {
         let mut tools = self.backend.tools().await?;
         tools.extend(Workspace::tools());
         tools.extend(Context::tools());
-        #[cfg(target_os = "linux")]
         tools.extend(Rsync::tools());
         tools.extend(OutputStore::tools());
         tools.push(crate::client::reload::tool());
@@ -87,7 +83,6 @@ impl Runtime {
                 }
                 Ok(backend::result(result))
             }
-            #[cfg(target_os = "linux")]
             Operation::CallTool { name, arguments } if name.starts_with("ssmcp.rsync.") => self
                 .rsync
                 .perform(&name, arguments)
@@ -188,13 +183,10 @@ impl Runtime {
     }
 
     pub async fn shutdown(&self) {
-        #[cfg(target_os = "linux")]
         tokio::join!(
             self.workspace.shutdown(),
             self.rsync.shutdown(),
             self.backend.shutdown()
         );
-        #[cfg(not(target_os = "linux"))]
-        tokio::join!(self.workspace.shutdown(), self.backend.shutdown());
     }
 }

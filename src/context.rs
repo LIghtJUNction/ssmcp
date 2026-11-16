@@ -275,7 +275,7 @@ fn join(directory: &str, name: &str) -> String {
     }
 }
 fn missing(error: &str) -> bool {
-    error.ends_with("(os error 2)")
+    error.ends_with("(os error 2)") || cfg!(windows) && error.ends_with("(os error 3)")
 }
 fn diagnostic(items: &mut Vec<Value>, path: &str, code: &str, message: &str) {
     if items.len() < MAX_DIAGNOSTICS {

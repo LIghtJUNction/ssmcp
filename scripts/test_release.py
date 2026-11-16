@@ -6,11 +6,41 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tarfile
 import unittest
 from unittest import mock
 import urllib.error
+import zipfile
 
 import release
+
+
+class EventTests(unittest.TestCase):
+    def test_only_version_tag_push_or_explicit_main_dispatch_can_publish(self):
+        self.assertEqual(release.event_mode("push", "refs/tags/v0.5.0", {}), ("v0.5.0", False))
+        self.assertEqual(release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": {"tag": "v0.5.0"}}), ("v0.5.0", False))
+
+    def test_preflight_events_never_select_a_release_tag(self):
+        for event_name, ref, event in (
+            ("workflow_dispatch", "refs/heads/main", {"inputs": {"tag": ""}}),
+            ("create", "refs/heads/release-check", {"ref": "release-check", "ref_type": "branch"}),
+            ("push", "refs/heads/release-check", {"created": False}),
+        ):
+            with self.subTest(event_name=event_name):
+                self.assertEqual(release.event_mode(event_name, ref, event), (None, True))
+
+    def test_unrelated_events_and_duplicate_branch_creation_push_are_rejected(self):
+        for event_name, ref, event in (
+            ("push", "refs/heads/main", {}),
+            ("push", "refs/heads/feature", {}),
+            ("push", "refs/heads/release-check", {"created": True}),
+            ("create", "refs/heads/feature", {"ref": "feature", "ref_type": "branch"}),
+            ("create", "refs/tags/v0.5.0", {"ref": "v0.5.0", "ref_type": "tag"}),
+            ("create", "refs/heads/release-check", {"ref": "release-check", "ref_type": "tag"}),
+            ("workflow_dispatch", "refs/heads/release-check", {"inputs": {"tag": "v0.5.0"}}),
+        ):
+            with self.subTest(event_name=event_name, ref=ref), self.assertRaises(ValueError):
+                release.event_mode(event_name, ref, event)
 
 
 class ReleaseTests(unittest.TestCase):
@@ -37,6 +67,24 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result["version"], "0.5.0")
         self.assertEqual(result["sha"], self.git("rev-parse", "HEAD"))
         self.assertEqual(result["prerelease"], "false")
+        self.assertEqual(result["publish"], "true")
+
+    def test_build_only_needs_no_tag_and_never_enables_publication(self):
+        self.git("tag", "-d", "v0.5.0")
+        output = self.root / "action-output"
+        with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}, clear=True):
+            result = release.validate_tag(None, self.root, build_only=True)
+        self.assertEqual(result["tag"], "")
+        self.assertEqual(result["publish"], "false")
+        self.assertIn("publish=false\n", output.read_text())
+        self.assertNotIn("publish=true", output.read_text())
+
+    def test_build_only_rejects_tag_and_still_checks_lockfile(self):
+        with self.assertRaisesRegex(ValueError, "cannot select"):
+            release.validate_tag("v0.5.0", self.root, build_only=True)
+        (self.root / "Cargo.lock").write_text('[[package]]\nname="ssmcp"\nversion="0.4.0"\n')
+        with self.assertRaisesRegex(ValueError, "Cargo.lock"):
+            release.validate_tag(None, self.root, build_only=True)
 
     def test_reject_mismatched_or_unsafe_tag(self):
         for tag in ("v0.5.1", "0.5.0", "v00.5.0", "v0.5.0\n", "v0.5.0/evil", "v0.5.0-01"):
@@ -53,6 +101,8 @@ class ReleaseTests(unittest.TestCase):
             stream.write("# dirty\n")
         with self.assertRaises(subprocess.CalledProcessError):
             release.validate_tag("v0.5.0", self.root)
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.validate_tag(None, self.root, build_only=True)
 
     def test_reject_tag_outside_main(self):
         self.git("checkout", "--quiet", "-b", "unmerged")
@@ -62,6 +112,8 @@ class ReleaseTests(unittest.TestCase):
         self.git("tag", "-f", "v0.5.0")
         with self.assertRaises(subprocess.CalledProcessError):
             release.validate_tag("v0.5.0", self.root)
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.validate_tag(None, self.root, build_only=True)
 
     def test_reject_wrong_checkout(self):
         (self.root / "change").write_text("later")
@@ -81,6 +133,24 @@ class ReleaseTests(unittest.TestCase):
             os.utime(source, (1700100000, 1700100000))
             release.write_archive(stage, second, 1700000000)
             self.assertEqual(release.digest(first), release.digest(second))
+
+    def test_installer_asset_names_and_flat_archive_layout_stay_compatible(self):
+        stage = self.root / "stage"
+        stage.mkdir()
+        (stage / "ssmcp").write_bytes(b"fixture")
+        tar_path, zip_path = self.root / "archive.tar.gz", self.root / "archive.zip"
+        release.write_archive(stage, tar_path, 1700000000)
+        release.write_archive(stage, zip_path, 1700000000)
+        with tarfile.open(tar_path) as archive:
+            self.assertEqual(archive.getnames(), ["ssmcp"])
+        with zipfile.ZipFile(zip_path) as archive:
+            self.assertEqual(archive.namelist(), ["ssmcp"])
+        self.assertEqual(release.archive_name("x86_64-unknown-linux-gnu", "0.5.0"),
+                         "ssmcp-x86_64-unknown-linux-gnu.tar.gz")
+        self.assertEqual(release.archive_name("aarch64-pc-windows-msvc", "0.5.1"),
+                         "ssmcp-aarch64-pc-windows-msvc.zip")
+        with self.assertRaises(ValueError):
+            release.archive_name("unsupported", "0.5.0")
 
     def fixtures(self):
         output = self.root / "dist"
@@ -125,17 +195,18 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "installer is missing or differs"):
             release.checksums(self.root)
 
-    def test_main_prepare_does_not_create_tag_and_skips_existing_versions(self):
+    def test_legacy_main_prepare_is_always_preflight_even_without_a_tag(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(release.prepare(automatic=True, root=self.root)["publish"], "false")
             self.git("tag", "-d", "v0.5.0")
             prepared = release.prepare(automatic=True, root=self.root)
-        self.assertEqual(prepared["publish"], "true")
-        self.assertEqual(prepared["create_tag"], "true")
+        self.assertEqual(prepared["publish"], "false")
+        self.assertEqual(prepared["create_tag"], "false")
+        self.assertEqual(prepared["tag"], "")
         self.assertEqual(prepared["sha"], self.git("rev-parse", "HEAD"))
         self.assertEqual(self.git("tag", "--list"), "")
 
-    def test_validated_tag_is_pushed_once_and_never_moved(self):
+    def test_validated_tag_push_is_idempotent_and_never_moves_a_tag(self):
         self.git("tag", "-d", "v0.5.0")
         sha = self.git("rev-parse", "HEAD")
         with tempfile.TemporaryDirectory(prefix="ssmcp-release-origin-") as remote:
@@ -150,6 +221,17 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "validated checkout"):
                 release.create_tag("v0.5.0", "0" * 40, self.root)
             self.assertEqual(self.git("rev-parse", "refs/tags/v0.5.0^{commit}"), sha)
+
+    def test_tag_retry_pushes_an_existing_local_tag_missing_from_origin(self):
+        sha = self.git("rev-parse", "HEAD")
+        with tempfile.TemporaryDirectory(prefix="ssmcp-release-origin-") as remote:
+            subprocess.run(["git", "init", "--bare", "--quiet", remote], check=True)
+            self.git("remote", "add", "origin", remote)
+            self.git("push", "--quiet", "origin", "main")
+            release.create_tag("v0.5.0", sha, self.root)
+            published = subprocess.check_output(
+                ["git", "--git-dir", remote, "rev-parse", "refs/tags/v0.5.0^{commit}"], text=True).strip()
+            self.assertEqual(published, sha)
 
     def test_bump_updates_manifest_and_lock_together_without_dependency_changes(self):
         manifest = '[package]\nname = "ssmcp"\nversion = "0.5.9"\n\n[dependencies.fixture]\nversion = "0.5.9"\n'

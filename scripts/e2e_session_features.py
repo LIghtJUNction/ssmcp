@@ -16,7 +16,6 @@ import os
 from pathlib import Path
 import re
 import selectors
-import shutil
 import subprocess
 import tempfile
 import time
@@ -69,28 +68,15 @@ class SessionFeatures(Harness):
         self.artifacts = {}
         self.metrics = {}
 
-    def client_tools(self):
-        directory = self.directory / "client-bin"
-        directory.mkdir(exist_ok=True)
-        for name in ("ssh", "stty", "head", "tr"):
-            executable = shutil.which(name)
-            if not executable:
-                raise RuntimeError(f"test requires system {name}")
-            link = directory / name
-            if not link.exists():
-                link.symlink_to(executable)
-        return directory
-
     def titled_client(self, label, title, cwd):
         command = [
-            shutil.which("env") or "/usr/bin/env",
-            f"PATH={self.client_tools()}", "ENV=/dev/null", "BASH_ENV=/dev/null",
             str(self.binary_dir / "ssmcp"),
             "-F", str(self.directory / "ssh_config"),
             "--name", label, "--title", title, "--shell", "/bin/sh",
             "ssmcp-e2e",
         ]
-        process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd)
+        process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd,
+                             env=self.client_environment(label))
         reader = ConnectionReader(process)
         credentials = reader.read()
         self.sensitive.append(credentials.get("login_code", ""))

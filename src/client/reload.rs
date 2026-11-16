@@ -2,7 +2,10 @@
 use crate::wire::Operation;
 use serde_json::{Value, json};
 #[cfg(unix)]
-use std::os::unix::{fs::MetadataExt, process::CommandExt};
+use std::os::unix::{
+    fs::{MetadataExt, PermissionsExt},
+    process::CommandExt,
+};
 use std::{
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
@@ -53,14 +56,13 @@ impl Restart {
         let mut args = std::env::args_os();
         let entry = args.next().ok_or("client executable path is missing")?;
         let cwd = std::env::current_dir()?;
-        let current = std::env::current_exe()?;
         #[cfg(target_os = "linux")]
-        let running = std::fs::metadata("/proc/self/exe")?;
+        let running = PathBuf::from("/proc/self/exe");
         #[cfg(not(target_os = "linux"))]
-        let running = std::fs::metadata(&current)?;
+        let running = std::env::current_exe()?;
         let program = resolve_entry(&entry, &cwd, std::env::var_os("PATH").as_deref())
             .and_then(|path| {
-                if same_executable(&path, &current, &running) {
+                if same_executable(&path, &running).map_err(|error| error.to_string())? {
                     // Compare the resolved file identity but retain the entry
                     // path, so changing its installation symlink still works.
                     Ok(path)
@@ -71,8 +73,9 @@ impl Restart {
             .or_else(|_| {
                 // exec -a can supply any display name, including the name of
                 // another program in PATH. Only the actual client is a fallback.
-                validate_executable(&current)?;
-                Ok::<_, String>(current)
+                let path = std::env::current_exe().map_err(|error| error.to_string())?;
+                validate_executable(&path)?;
+                Ok::<_, String>(path)
             })?;
         Ok(Self {
             program,
@@ -99,49 +102,40 @@ impl Restart {
     }
 
     pub(crate) fn execute(&self) -> crate::Result<()> {
-        let mut command = std::process::Command::new(&self.program);
-        command.args(&self.arguments).current_dir(&self.cwd);
-        #[cfg(unix)]
-        {
-            let error = command.exec();
-            Err(format!(
-                "could not reload client from {}: {error}",
-                self.program.display()
-            )
-            .into())
-        }
+        validate_executable(&self.program)?;
         #[cfg(windows)]
         {
-            // Windows has no exec. Keep the original console invocation alive
-            // while its replacement uses the same inherited standard handles.
-            let status = command.status().map_err(|error| {
-                format!(
-                    "could not reload client from {}: {error}",
-                    self.program.display()
-                )
-            })?;
+            // Windows has no exec. All old backends have already stopped; keep
+            // the original foreground invocation alive while its replacement
+            // inherits the console, pipes, environment, arguments, and cwd.
+            // Returning immediately would let the calling shell reuse stdin.
+            let status = std::process::Command::new(&self.program)
+                .args(&self.arguments)
+                .current_dir(&self.cwd)
+                .status()
+                .map_err(|error| {
+                    format!(
+                        "could not reload client from {}: {error}",
+                        self.program.display()
+                    )
+                })?;
             if status.success() {
                 Ok(())
             } else {
                 Err(format!("reloaded client exited with {status}").into())
             }
         }
-    }
-}
-
-fn same_executable(candidate: &Path, _current: &Path, running: &std::fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        std::fs::metadata(candidate).is_ok_and(|metadata| {
-            metadata.dev() == running.dev() && metadata.ino() == running.ino()
-        })
-    }
-    #[cfg(windows)]
-    {
-        let _ = running;
-        match (candidate.canonicalize(), _current.canonicalize()) {
-            (Ok(candidate), Ok(current)) => candidate == current,
-            _ => false,
+        #[cfg(unix)]
+        {
+            let error = std::process::Command::new(&self.program)
+                .args(&self.arguments)
+                .current_dir(&self.cwd)
+                .exec();
+            Err(format!(
+                "could not reload client from {}: {error}",
+                self.program.display()
+            )
+            .into())
         }
     }
 }
@@ -153,13 +147,75 @@ fn validate_executable(path: &Path) -> Result<(), String> {
             path.display()
         )
     })?;
-    if !metadata.is_file() || !crate::platform::is_executable(path) {
+    let executable = metadata.is_file();
+    #[cfg(unix)]
+    let executable = executable && metadata.permissions().mode() & 0o111 != 0;
+    #[cfg(windows)]
+    let executable = executable && valid_windows_image(path).map_err(|error| error.to_string())?;
+    if !executable {
         return Err(format!(
             "reload target {} is not an executable file",
             path.display()
         ));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn same_executable(candidate: &Path, running: &Path) -> std::io::Result<bool> {
+    let candidate = std::fs::metadata(candidate)?;
+    let running = std::fs::metadata(running)?;
+    Ok(candidate.dev() == running.dev() && candidate.ino() == running.ino())
+}
+
+#[cfg(windows)]
+fn same_executable(candidate: &Path, running: &Path) -> std::io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    fn identity(path: &Path) -> std::io::Result<(u32, u32, u32)> {
+        let file = std::fs::File::open(path)?;
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+        ))
+    }
+    Ok(identity(candidate)? == identity(running)?)
+}
+
+#[cfg(windows)]
+fn valid_windows_image(path: &Path) -> std::io::Result<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    if !path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+        return Ok(false);
+    }
+    let mut file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    if size < 64 {
+        return Ok(false);
+    }
+    let mut dos = [0u8; 64];
+    file.read_exact(&mut dos)?;
+    if &dos[..2] != b"MZ" {
+        return Ok(false);
+    }
+    let offset = u32::from_le_bytes(dos[60..64].try_into().unwrap()) as u64;
+    if offset < 64 || offset.saturating_add(24) > size {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::Start(offset))?;
+    let mut header = [0u8; 24];
+    file.read_exact(&mut header)?;
+    Ok(&header[..4] == b"PE\0\0" && u16::from_le_bytes([header[22], header[23]]) & 2 != 0)
 }
 
 fn resolve_entry(entry: &OsStr, cwd: &Path, path: Option<&OsStr>) -> Result<PathBuf, String> {
@@ -176,6 +232,20 @@ fn resolve_entry(entry: &OsStr, cwd: &Path, path: Option<&OsStr>) -> Result<Path
     } else {
         std::env::split_paths(path.unwrap_or_default())
             .map(|directory| absolute(directory.join(entry)))
+            .flat_map(|candidate| {
+                #[cfg(windows)]
+                {
+                    let mut candidates = vec![candidate.clone()];
+                    if candidate.extension().is_none() {
+                        candidates.push(candidate.with_extension("exe"));
+                    }
+                    candidates
+                }
+                #[cfg(unix)]
+                {
+                    [candidate]
+                }
+            })
             .find(|candidate| validate_executable(candidate).is_ok())
             .ok_or("cannot resolve the client executable in PATH for reload")?
     };
@@ -194,7 +264,7 @@ mod tests {
         let restart = Restart {
             program: std::env::current_exe().unwrap(),
             arguments: Vec::new(),
-            cwd: std::env::temp_dir(),
+            cwd: std::env::current_dir().unwrap(),
         };
         assert!(
             restart
@@ -208,8 +278,8 @@ mod tests {
         assert_eq!(ack["structuredContent"]["client_id"], "old");
     }
 
-    #[test]
     #[cfg(unix)]
+    #[test]
     fn reload_resolves_path_without_canonicalizing_the_installation_entry() {
         assert_eq!(
             resolve_entry(OsStr::new("/bin/sh"), Path::new("/tmp"), None).unwrap(),

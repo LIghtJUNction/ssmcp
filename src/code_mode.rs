@@ -6,7 +6,6 @@ use std::{
     collections::HashSet,
     future::Future,
     io,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     pin::Pin,
     process::Stdio,
@@ -89,13 +88,7 @@ fn bounded(mut text: String, max: usize) -> String {
     text
 }
 
-fn executable(name: &str) -> Result<PathBuf, String> {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|directory| directory.join(name))
-        .find(|path| std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
-        .and_then(|path| path.canonicalize().ok())
-        .ok_or_else(|| format!("code_mode requires system {name}; install nodejs, bubblewrap, and util-linux with your system package manager"))
-}
+pub(crate) use crate::platform::executable;
 
 fn runner_path() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("SSMCP_CODE_MODE_RUNNER") {

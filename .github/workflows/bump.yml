@@ -4,15 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       level:
-        description: Version component to increment
+        description: Version component to increment, commit, tag and publish
         required: true
         default: patch
         type: choice
         options: [patch, minor, major]
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 concurrency:
   group: bump-main
@@ -23,11 +22,18 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
       - name: Bump package and lockfile together
         id: version
         env:
@@ -42,8 +48,24 @@ jobs:
           git add Cargo.toml Cargo.lock
           git commit -m "chore: release $RELEASE_TAG"
           git push origin HEAD:main
-      - name: Start release validation and publishing
+      - name: Create the requested release tag without moving an existing tag
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: python3 scripts/release.py tag "$RELEASE_TAG" "$(git rev-parse HEAD)"
+
+  dispatch_release:
+    needs: bump
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Start checks and publishing for the new tag
         env:
           GH_TOKEN: ${{ github.token }}
-        # A push made by GITHUB_TOKEN does not trigger another push workflow.
-        run: gh workflow run release.yml --ref main
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.bump.outputs.tag }}
+        # A tag pushed with GITHUB_TOKEN does not start a push workflow.
+        # workflow_dispatch does, and the explicit tag keeps empty-input runs as preflight only.
+        run: gh workflow run release.yml --ref main -f "tag=$RELEASE_TAG"

@@ -1,5 +1,6 @@
-//! Compact local visibility for file and skill operations; wire results stay unchanged.
-use super::{MAX_FILE_BYTES, Root, Workspace};
+//! Bounded file and skill audit events, mirrored to the local client display.
+use super::{Root, Workspace, whole_file};
+use crate::backend::events::EventLog;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -29,10 +30,10 @@ fn write_audit_lock(path: &Path) -> Arc<Mutex<()>> {
 }
 
 impl Workspace {
-    pub async fn snapshot_file(&self, path: &str) -> Option<String> {
+    pub async fn snapshot_file(&self, path: &str) -> Option<Vec<u8>> {
         let root = self.root.clone();
         let path = path.to_owned();
-        tokio::task::spawn_blocking(move || root.snapshot_text(&path))
+        tokio::task::spawn_blocking(move || root.snapshot(&path))
             .await
             .ok()
             .flatten()
@@ -44,40 +45,40 @@ impl Workspace {
         harness: &str,
         tool: &str,
         path: &str,
-        before: Option<&str>,
-        after: Option<&str>,
+        before: Option<&[u8]>,
+        after: Option<&[u8]>,
     ) {
-        file_event(kind, harness, tool, path, before, after);
+        self.events
+            .push(file_event(kind, harness, tool, path, before, after));
     }
 
     pub fn audit_harness_skill(&self, harness: &str, tool: &str, skill: Option<&str>) {
-        crate::client::render::event(
-            harness,
-            &json!({"type":"ssmcp.skill_use","tool":tool,"skill":skill}),
-        );
+        self.events
+            .push(json!({"type":"ssmcp.skill_use","harness":harness,
+            "tool":tool,"skill":skill}));
     }
 }
 
 impl Root {
-    fn snapshot_text(&self, path: &str) -> Option<String> {
+    fn snapshot(&self, path: &str) -> Option<Vec<u8>> {
         let path = Path::new(path);
         let path = if path.is_absolute() {
             path.strip_prefix(&self.path).ok()?
         } else {
             path
         };
-        let result = self
-            .perform(
-                "ssmcp.fs.read_text",
-                json!({"path":path,"max_bytes":MAX_FILE_BYTES}),
-            )
-            .ok()?;
-        (result["eof"] == true)
-            .then(|| result["text"].as_str().map(str::to_owned))
-            .flatten()
+        let mut file = self.file(path.to_str()?).ok()?;
+        // whole_file rejects special files, concurrent changes and files over
+        // MAX_FILE_BYTES before allocating an unbounded preview.
+        whole_file(&mut file).ok()
     }
 
-    pub(super) fn perform_audited(&self, name: &str, args: Value) -> Result<Value, String> {
+    pub(super) fn perform_audited(
+        &self,
+        name: &str,
+        args: Value,
+        events: &EventLog,
+    ) -> Result<Value, String> {
         let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
         let write = matches!(
             name,
@@ -96,22 +97,22 @@ impl Root {
         let create_only = matches!(name, "ssmcp.fs.write" | "ssmcp.fs.write_text")
             && args.get("overwrite").and_then(Value::as_bool) != Some(true);
         let before = if write {
-            path.as_deref().and_then(|path| self.snapshot_text(path))
+            path.as_deref().and_then(|path| self.snapshot(path))
         } else {
             None
         };
-        let result = self.perform(name, args)?;
+        let mut result = self.perform(name, args)?;
         if let Some(path) = path {
             if write {
                 // Success with overwrite=false proves the old file was absent.
-                // A missing snapshot otherwise means unknown, not empty text.
+                // A missing snapshot otherwise means unknown, not empty bytes.
                 let before = before
-                    .or_else(|| create_only.then(String::new))
-                    .filter(|text| snapshot_matches(text, &result, "previous_sha256"));
+                    .or_else(|| create_only.then(Vec::new))
+                    .filter(|bytes| snapshot_matches(bytes, &result, "previous_sha256"));
                 let after = self
-                    .snapshot_text(&path)
-                    .filter(|text| snapshot_matches(text, &result, "sha256"));
-                file_event(
+                    .snapshot(&path)
+                    .filter(|bytes| snapshot_matches(bytes, &result, "sha256"));
+                let event = file_event(
                     "filechange",
                     "files",
                     name,
@@ -119,18 +120,22 @@ impl Root {
                     before.as_deref(),
                     after.as_deref(),
                 );
+                result["diff"] = event["diff"].clone();
+                result["diff_truncated"] = event["diff_truncated"].clone();
+                result["preview_available"] = event["preview_available"].clone();
+                events.push(event);
             } else if read {
-                file_event("fileread", "files", name, &path, None, None);
+                events.push(file_event("fileread", "files", name, &path, None, None));
             }
         }
         Ok(result)
     }
 }
 
-fn snapshot_matches(text: &str, result: &Value, field: &str) -> bool {
+fn snapshot_matches(bytes: &[u8], result: &Value, field: &str) -> bool {
     result[field]
         .as_str()
-        .is_none_or(|expected| super::sha256(text.as_bytes()) == expected)
+        .is_none_or(|expected| super::sha256(bytes) == expected)
 }
 
 fn file_event(
@@ -138,21 +143,22 @@ fn file_event(
     harness: &str,
     tool: &str,
     path: &str,
-    before: Option<&str>,
-    after: Option<&str>,
-) {
+    before: Option<&[u8]>,
+    after: Option<&[u8]>,
+) -> Value {
+    let available = before.is_some() && after.is_some();
     let (diff, truncated) = match (kind, before, after) {
-        ("filechange", Some(before), Some(after)) => unified_diff(path, before, after),
+        ("filechange", Some(before), Some(after)) if before != after => {
+            match (std::str::from_utf8(before), std::str::from_utf8(after)) {
+                (Ok(before), Ok(after)) => unified_diff(path, before, after),
+                _ => ("Binary file changed".into(), false),
+            }
+        }
         _ => (String::new(), false),
     };
-    crate::client::render::event(
-        harness,
-        &json!({
-            "type":format!("ssmcp.{kind}"), "tool":tool, "path":path,
-            "diff":diff, "diff_truncated":truncated,
-            "preview_available":kind != "filechange" || (before.is_some() && after.is_some())
-        }),
-    );
+    json!({"type":format!("ssmcp.{kind}"),"harness":harness,"tool":tool,"path":path,
+        "diff":diff,"diff_truncated":truncated,
+        "preview_available":kind != "filechange" || available})
 }
 
 /// A single replacement hunk with context. Bounded display never alters the edit.
@@ -255,7 +261,10 @@ mod tests {
     #[test]
     fn unrelated_readback_is_not_attributed_to_the_edit() {
         let result = json!({"sha256":super::super::sha256(b"our change")});
-        assert!(snapshot_matches("our change", &result, "sha256"));
-        assert!(!snapshot_matches("another change", &result, "sha256"));
+        assert!(snapshot_matches(b"our change", &result, "sha256"));
+        assert!(!snapshot_matches(b"another change", &result, "sha256"));
+        let binary = json!({"sha256":super::super::sha256(b"\0\xff")});
+        assert!(snapshot_matches(b"\0\xff", &binary, "sha256"));
+        assert!(!snapshot_matches(b"\0\xef\xbf\xbd", &binary, "sha256"));
     }
 }

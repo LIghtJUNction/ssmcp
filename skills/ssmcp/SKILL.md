@@ -1,6 +1,6 @@
 ---
 name: ssmcp
-description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel commands, background process management, bounded waits, client reload, native coding tools, scoped files and instruction discovery, system-rsync transfers, and loopback TCP forwarding.
+description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for independent shell commands, automatically discovered coding harnesses, scoped file access and audit, skills and instruction discovery, Linux rsync transfers, and loopback TCP forwarding.
 ---
 
 # ssmcp workspaces
@@ -35,7 +35,7 @@ The default root is the client's startup workspace. An operator may add up to ei
 Use `exec` for independent commands with exit status and separate stdout/stderr. Pass argv arrays, an optional existing absolute `cwd`, and optional `env` overrides. For pipelines or shell expansion, invoke the platform shell explicitly. A command does not inherit later `cd` or environment changes inside the interactive terminal.
 
 ```js
-const client = clients.find(c => c.name === "development");
+const client = clients.find(c => c.id === "CLIENT_ID_FROM_LIST");
 if (!client) throw new Error("Select an online client from list");
 return await exec.run(client.id, {
   command: ["git", "status", "--short"],
@@ -70,12 +70,14 @@ Expect at most 32 running jobs and 128 retained records per client. On reaching 
 ## Execute other native tools
 
 ```js
-const client = clients.find(c => c.name === "development");
+const client = clients.find(c => c.id === "CLIENT_ID_FROM_LIST");
 if (!client) throw new Error("Select an online client from list");
 return await tools(client.id);
 ```
 
 Call a discovered operation with `await call(clientId, toolName, arguments)`. Check `isError` and read `structuredContent` when present. Short results remain inline; oversized backend results return artifact metadata instead of the full body. Await every call. Return only the output needed for the task. Never start an agent or model through a native backend unless the user authorized that delegation.
+
+When connected to an older server without `exec` helpers, call the discovered `ssmcp.exec.*` tools with `call(clientId, toolName, arguments)` and inspect the full MCP result. The tool schemas remain authoritative.
 
 ## Reload an updated client
 
@@ -89,7 +91,7 @@ Check `spilled` and `artifact` in long-output results. PTY captures contain the 
 
 Use `outputs.stat(clientId,{id})` to refresh file size, SHA-256, line count and completion metadata. A live capture can grow after a snapshot; `complete:false` or `error` must not be reported as a complete log. Underlying backend truncation cannot be recovered.
 
-Expect automatic spilling above 32 KiB or 500 lines, up to 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live in the client's private temporary ssmcp directory, normally `/tmp/ssmcp/<uid>` on Linux. Use returned metadata rather than assuming a path on other platforms. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. An unexpired artifact may remain readable through the reconnected client ID.
+Expect automatic spilling above 32 KiB or 500 lines, up to 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live in the client's private storage, normally `/tmp/ssmcp/<uid>` on Unix and `%LOCALAPPDATA%\ssmcp\output` on Windows. Use returned metadata rather than assuming a path on other platforms. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. An unexpired artifact may remain readable through the reconnected client ID.
 
 ## Read and write workspace files
 
@@ -104,6 +106,8 @@ return await fs.read(clients[0].id, {
 Use fs.readText/writeText/editText for UTF-8 text without base64. For an existing-file change, read the complete file, confirm eof and non-null sha256, then pass expected_sha256 to the write or edit. editText requires exactly one nonempty literal match and rejects ambiguous or stale changes. Text pagination follows next_offset without splitting UTF-8 characters.
 
 Binary file contents are base64, so binary bytes survive transport. Follow returned offsets for chunked reads. Write helpers replace a bounded file atomically; set `overwrite:true` only for an intended replacement. Use rsync for directory trees and large files.
+
+Read `ssmcp.fs.events` for bounded access and edit history. Writes include a unified diff when the before/after text fits the audit limits. Harness file activity is recorded only when its native schemas expose recognizable paths or skill operations; do not claim complete observation of a harness's internal filesystem access. On macOS and Windows, hash-precondition writes serialize cooperating calls within one client process; they do not lock out other processes.
 
 ## Synchronize with system rsync
 

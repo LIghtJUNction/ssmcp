@@ -4,8 +4,7 @@
 
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
-[![Linux](https://img.shields.io/badge/Linux-x86__64%20%C2%B7%20arm64-64748b?style=flat)](.github/workflows/ci.yml)
-[![Clients](https://img.shields.io/badge/Clients-macOS%20%C2%B7%20Windows-64748b?style=flat)](docs/releases.md)
+[![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-x86__64%20%C2%B7%20ARM64-64748b?style=flat)](docs/releases.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat)](LICENSE)
 
 一条 SSH 连接，两个 MCP 工具。`list` 找到在线客户端，`code_mode` 调用它们的原生能力；命令、输出和智能体事件实时显示在本机终端。项目、模型配置和后端工具执行都留在本机。[工作原理](docs/backends.md)
@@ -196,7 +195,7 @@ ssmcp --name dev --title "完善客户端重载和输出转储" --allow octocat@
 
 安装新版客户端后，在 `code_mode` 中使用 `return await reload(clientId)` 重新加载原启动入口。请求确认后旧连接关闭，后台命令、harness 和转发随之停止；再调用 `list` 获取新客户端 ID。有效的 `--allow` GitHub 授权可继续使用，登录码模式需要重新完成 OAuth 登录。
 
-输出超过 32 KiB 或 500 行时自动转储，返回路径、SHA-256、行数和完成状态。Linux 使用客户端的 `/tmp/ssmcp/<uid>/`；其他平台使用本机用户的私有临时目录，以实际返回的 `path` 为准。按需读取正文：
+输出超过 32 KiB 或 500 行时自动转储，返回路径、SHA-256、行数和完成状态。Linux 使用客户端的 `/tmp/ssmcp/<uid>/`；其他平台使用本机用户的私有输出目录，以实际返回的 `path` 为准。按需读取正文：
 
 ```javascript
 return await outputs.read(clientId, { id: artifactId, offset: 0, max_bytes: 16384 });
@@ -291,7 +290,7 @@ sudo pacman -S openssh nodejs bubblewrap util-linux
 sudo dnf install openssh-server nodejs bubblewrap util-linux
 ```
 
-`ssmcpd serve` 发布 HTTPS 后面的 MCP 服务；SSH 登录后的 `ssmcpd attach` 转发连接数据。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js、bubblewrap 和 prlimit。需要目录同步的客户端应另行安装系统 rsync。
+`ssmcpd serve` 发布 HTTPS 后面的 MCP 服务；SSH 登录后的 `ssmcpd attach` 转发连接数据。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js、bubblewrap 和 prlimit。需要目录同步的 Linux 客户端应另行安装系统 rsync。
 
 0.4.0 继续使用私有桥接协议 v4，保留旧客户端的登录码方式。使用 `--allow` 需要更新两端，并在服务端配置 GitHub OAuth；遇到不支持该策略的旧服务器时，新客户端会拒绝继续启动后端。
 
@@ -311,7 +310,7 @@ python3 scripts/e2e.py --bin-dir target/debug
 python3 scripts/e2e_agents.py --bin-dir target/debug
 ```
 
-CI 在 Linux x86_64 / ARM64 上运行服务端、隔离环境和真实 SSH 链路测试，在 macOS 与 Windows 的两种架构上运行原生客户端检查和测试。SSH 测试使用临时密钥、独立 sshd、临时 known_hosts 和 loopback 端口；harness 链路使用确定性协议 fixture，不发起模型推理。默认测试中需要系统隔离或单独安装原生 CLI 的探针会明确标为 ignored。发布工作流复用 CI，再构建六个平台的安装包并验证安装和升级。[测试范围](docs/validation.md) · [CI 工作流](.github/workflows/ci.yml) · [发布工作流](.github/workflows/release.yml)
+日常验证在本机执行，CI 保留手动和发布复用入口。CI 在 Linux x86_64 / ARM64 上运行服务端、隔离环境和真实 SSH 链路测试，在 macOS 与 Windows 的两种架构上运行原生客户端检查和测试。SSH 测试使用临时密钥、独立 sshd、临时 known_hosts 和 loopback 端口；harness 链路使用确定性协议 fixture，不发起模型推理。默认测试中需要系统隔离或单独安装原生 CLI 的探针会明确标为 ignored。发布工作流复用 CI，再构建六个平台的安装包并验证安装和升级。[测试范围](docs/validation.md) · [CI 工作流](.github/workflows/ci.yml) · [发布工作流](.github/workflows/release.yml)
 
 ## 文档导航
 
@@ -320,6 +319,7 @@ CI 在 Linux x86_64 / ARM64 上运行服务端、隔离环境和真实 SSH 链�
 | 复用 SSH 配置、首次登记公钥、更新密钥 | [配置教程](docs/configuration.md) |
 | 登录 ChatGPT / MCP，恢复过期授权 | [登录与恢复](docs/configuration.md#登录流程) |
 | 设置 `--allow`，了解哪些客户端会被看到 | [GitHub 身份与访问规则](docs/configuration.md#github-allow) |
+| 下载平台包、创建版本 tag、检查自动发布 | [发布与安装](docs/releases.md) |
 | 安装服务端、配置 systemd / SSH / HTTPS | [Linux 部署](docs/deployment.md) |
 | 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
 | 设置任务标题、重载客户端、按需读取长输出 | [会话与输出管理](docs/session-control.md) |

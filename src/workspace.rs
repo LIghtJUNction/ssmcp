@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    fs::{File, OpenOptions},
+    fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Component, Path, PathBuf},
@@ -15,7 +15,7 @@ use std::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -27,15 +27,18 @@ use tokio::{
     time::timeout,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(target_os = "linux")]
 use std::{
     ffi::CString,
-    os::fd::{AsRawFd, FromRawFd},
-    time::Instant,
+    fs::OpenOptions,
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::fs::OpenOptionsExt,
+    },
 };
 #[cfg(not(target_os = "linux"))]
 #[path = "workspace/portable.rs"]
@@ -51,6 +54,8 @@ struct Root {
     path: PathBuf,
     #[cfg(target_os = "linux")]
     directory: File,
+    #[cfg(not(target_os = "linux"))]
+    directory: cap_std::fs::Dir,
 }
 struct Listener {
     socket: TcpListener,
@@ -97,6 +102,7 @@ impl Handle {
 /// Handles belong to one live SSH client and never grant access to another workspace.
 pub struct Workspace {
     root: Arc<Root>,
+    events: Arc<crate::backend::events::EventLog>,
     handles: StdMutex<HashMap<String, Handle>>,
     slots: Arc<Semaphore>,
     nonce: String,
@@ -113,12 +119,12 @@ impl Workspace {
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&path)
             .map_err(error)?;
+        #[cfg(not(target_os = "linux"))]
+        let directory = cap_std::fs::Dir::open_ambient_dir(&path, cap_std::ambient_authority())
+            .map_err(error)?;
         Ok(Self {
-            root: Arc::new(Root {
-                path,
-                #[cfg(target_os = "linux")]
-                directory,
-            }),
+            root: Arc::new(Root { path, directory }),
+            events: crate::backend::events::EventLog::new("workspace"),
             handles: StdMutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(MAX_HANDLES)),
             nonce: random_id().map_err(error)?,
@@ -251,6 +257,13 @@ impl Workspace {
                 true,
             ),
         ];
+        tools.push(tool(
+            "ssmcp.fs.events",
+            "Read bounded file access and edit audit events, including diff previews for successful writes.",
+            crate::backend::events::schema()["properties"].clone(),
+            &[],
+            true,
+        ));
         for item in &mut tools {
             item["annotations"]["openWorldHint"] = json!(false);
         }
@@ -261,12 +274,18 @@ impl Workspace {
         if self.closed.load(Ordering::Acquire) {
             return Err("workspace is closed".into());
         }
+        if name == "ssmcp.fs.events" {
+            return self.events.read(arguments).await;
+        }
         if name.starts_with("ssmcp.fs.") {
             let root = self.root.clone();
+            let events = self.events.clone();
             let name = name.to_owned();
-            return tokio::task::spawn_blocking(move || root.perform_audited(&name, arguments))
-                .await
-                .map_err(|e| e.to_string())?;
+            return tokio::task::spawn_blocking(move || {
+                root.perform_audited(&name, arguments, &events)
+            })
+            .await
+            .map_err(|e| e.to_string())?;
         }
         match name {
             "ssmcp.net.listen" => self.listen(parse(arguments)?).await,
@@ -475,6 +494,7 @@ impl Workspace {
     fn close_all(&self) {
         let mut handles = self.handles.lock().unwrap();
         self.closed.store(true, Ordering::Release);
+        self.events.close();
         for (_, handle) in handles.drain() {
             handle.close();
         }

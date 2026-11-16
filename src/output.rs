@@ -6,24 +6,42 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(any(unix, test))]
+use std::path::Path;
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{self, Read, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(windows)]
-use std::os::windows::fs::{FileExt, MetadataExt, OpenOptionsExt};
+use crate::platform::windows;
+#[cfg(windows)]
+use std::os::windows::fs::FileExt;
 #[cfg(unix)]
 use std::{
     ffi::CString,
+    fs::OpenOptions,
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
 };
+#[cfg(unix)]
+type Directory = File;
+#[cfg(windows)]
+type Directory = cap_std::fs::Dir;
+
+#[derive(Clone, Copy)]
+enum Access {
+    Read,
+    ReadWrite,
+    CreateReadWrite,
+    CreateNewWrite,
+    CreateNewReadWrite,
+}
 
 pub const INLINE_BYTES: usize = 32 * 1024;
 pub const INLINE_LINES: u64 = 500;
@@ -80,8 +98,7 @@ pub struct ArtifactMetadata {
 
 pub struct OutputStore {
     directory: PathBuf,
-    #[cfg_attr(windows, allow(dead_code))]
-    directory_fd: File,
+    directory_fd: Directory,
     policy: Policy,
 }
 
@@ -90,6 +107,15 @@ impl OutputStore {
         static STORE: OnceLock<Result<Arc<OutputStore>, String>> = OnceLock::new();
         STORE
             .get_or_init(|| {
+                #[cfg(windows)]
+                {
+                    let base = std::env::var_os("LOCALAPPDATA")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(std::env::temp_dir)
+                        .join("ssmcp");
+                    std::fs::create_dir_all(&base).map_err(error)?;
+                    Self::at(base.join("output"), Policy::default())
+                }
                 #[cfg(unix)]
                 {
                     let base = Path::new("/tmp/ssmcp");
@@ -115,34 +141,29 @@ impl OutputStore {
                     }
                     Self::at(base.join(uid.to_string()), Policy::default())
                 }
-                #[cfg(windows)]
-                {
-                    let base = std::env::var_os("LOCALAPPDATA")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(std::env::temp_dir)
-                        .join("ssmcp");
-                    std::fs::create_dir_all(&base).map_err(error)?;
-                    Self::at(base.join("output"), Policy::default())
-                }
             })
             .clone()
     }
 
     fn at(directory: PathBuf, policy: Policy) -> Result<Arc<Self>, String> {
-        match crate::platform::private_directory(&directory) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(error(e)),
-        }
-        let directory_fd = open_directory(&directory).map_err(error)?;
+        #[cfg(windows)]
+        let directory_fd = windows::private_directory(&directory).map_err(error)?;
         #[cfg(unix)]
-        let metadata = directory_fd.metadata().map_err(error)?;
-        #[cfg(unix)]
-        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-            return Err(
-                "output directory must be owned by this user with private permissions".into(),
-            );
-        }
+        let directory_fd = {
+            match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(error(e)),
+            }
+            let directory_fd = open_directory(&directory).map_err(error)?;
+            let metadata = directory_fd.metadata().map_err(error)?;
+            if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+                return Err(
+                    "output directory must be owned by this user with private permissions".into(),
+                );
+            }
+            directory_fd
+        };
         let store = Arc::new(Self {
             directory,
             directory_fd,
@@ -180,70 +201,74 @@ impl OutputStore {
         }
     }
 
-    #[cfg(unix)]
-    fn open(&self, name: &str, flags: i32) -> io::Result<File> {
-        let name = CString::new(name).map_err(io::Error::other)?;
-        // SAFETY: the directory fd is live; names are single, checked components.
-        let fd = unsafe {
-            libc::openat(
-                self.directory_fd.as_raw_fd(),
-                name.as_ptr(),
-                flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-                0o600,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: openat returned a newly owned descriptor.
-        let file = unsafe { File::from_raw_fd(fd) };
-        let metadata = file.metadata()?;
-        if !metadata.is_file()
-            || metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.mode() & 0o077 != 0
-            || metadata.nlink() != 1
+    fn open(&self, name: &str, access: Access) -> io::Result<File> {
+        #[cfg(windows)]
         {
-            return Err(io::Error::other(
-                "output artifact is not a private, singly linked regular file",
-            ));
+            use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+            let mut options = cap_std::fs::OpenOptions::new();
+            options.follow(FollowSymlinks::No);
+            match access {
+                Access::Read => {
+                    options.read(true);
+                }
+                Access::ReadWrite => {
+                    options.read(true).write(true);
+                }
+                Access::CreateReadWrite => {
+                    options.read(true).write(true).create(true);
+                }
+                Access::CreateNewWrite => {
+                    options.write(true).create_new(true);
+                }
+                Access::CreateNewReadWrite => {
+                    options.read(true).write(true).create_new(true);
+                }
+            }
+            let file = self.directory_fd.open_with(name, &options)?.into_std();
+            windows::verify_file(&file)?;
+            Ok(file)
         }
-        Ok(file)
-    }
-
-    #[cfg(windows)]
-    fn open(&self, name: &str, flags: i32) -> io::Result<File> {
-        if name.contains(['/', '\\', ':']) || name == "." || name == ".." {
-            return Err(io::Error::other("invalid output filename"));
-        }
-        let path = self.directory.join(name);
-        let mut options = OpenOptions::new();
-        let access = flags & (libc::O_RDWR | libc::O_WRONLY);
-        options
-            .read(access != libc::O_WRONLY)
-            .write(access != libc::O_RDONLY);
-        if flags & libc::O_EXCL != 0 {
-            options.create_new(true);
-        } else {
-            options.create(flags & libc::O_CREAT != 0);
-        }
-        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
-        let file = options.open(path)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_file()
-            || metadata.file_attributes()
-                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-                != 0
+        #[cfg(unix)]
         {
-            return Err(io::Error::other(
-                "output artifact must be a regular file without reparse points",
-            ));
+            let flags = match access {
+                Access::Read => libc::O_RDONLY,
+                Access::ReadWrite => libc::O_RDWR,
+                Access::CreateReadWrite => libc::O_RDWR | libc::O_CREAT,
+                Access::CreateNewWrite => libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                Access::CreateNewReadWrite => libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+            };
+            let name = CString::new(name).map_err(io::Error::other)?;
+            // SAFETY: the directory fd is live; names are single, checked components.
+            let fd = unsafe {
+                libc::openat(
+                    self.directory_fd.as_raw_fd(),
+                    name.as_ptr(),
+                    flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                    0o600,
+                )
+            };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: openat returned a newly owned descriptor.
+            let file = unsafe { File::from_raw_fd(fd) };
+            let metadata = file.metadata()?;
+            if !metadata.is_file()
+                || metadata.uid() != unsafe { libc::geteuid() }
+                || metadata.mode() & 0o077 != 0
+                || metadata.nlink() != 1
+            {
+                return Err(io::Error::other(
+                    "output artifact is not a private, singly linked regular file",
+                ));
+            }
+            Ok(file)
         }
-        Ok(file)
     }
 
     fn directory_lock(&self) -> Result<File, String> {
         let file = self
-            .open(".cleanup.lock", libc::O_RDWR | libc::O_CREAT)
+            .open(".cleanup.lock", Access::CreateReadWrite)
             .map_err(error)?;
         lock(&file, false).map_err(error)?;
         Ok(file)
@@ -276,10 +301,7 @@ impl OutputStore {
                 max_bytes: self.policy.artifact_bytes,
                 error: None,
             };
-            let mut manifest = match self.open(
-                &manifest_name(&id),
-                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-            ) {
+            let mut manifest = match self.open(&manifest_name(&id), Access::CreateNewWrite) {
                 Ok(file) => file,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(error(e)),
@@ -288,7 +310,7 @@ impl OutputStore {
                 self.unlink(&manifest_name(&id));
                 return Err(error.to_string());
             }
-            match self.open(&name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL) {
+            match self.open(&name, Access::CreateNewReadWrite) {
                 Ok(file) => {
                     lock(&file, true).map_err(error)?;
                     return Ok(Artifact {
@@ -311,9 +333,7 @@ impl OutputStore {
 
     fn manifest(&self, id: &str) -> Result<ArtifactMetadata, String> {
         validate_id(id)?;
-        let file = self
-            .open(&manifest_name(id), libc::O_RDONLY)
-            .map_err(error)?;
+        let file = self.open(&manifest_name(id), Access::Read).map_err(error)?;
         if file.metadata().map_err(error)?.len() > MAX_MANIFEST_BYTES {
             return Err("output manifest exceeds its size limit".into());
         }
@@ -328,11 +348,15 @@ impl OutputStore {
         let _guard = self.directory_lock()?;
         let temporary = format!("output-{}.meta.tmp", metadata.id);
         let mut file = self
-            .open(&temporary, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)
+            .open(&temporary, Access::CreateNewWrite)
             .map_err(error)?;
         let result = (|| {
             serde_json::to_writer(&mut file, metadata).map_err(error)?;
             file.flush().map_err(error)?;
+            #[cfg(windows)]
+            self.directory_fd
+                .rename(&temporary, &self.directory_fd, manifest_name(&metadata.id))
+                .map_err(error)?;
             #[cfg(unix)]
             {
                 let source = CString::new(temporary.as_str()).unwrap();
@@ -350,15 +374,6 @@ impl OutputStore {
                     return Err(error(io::Error::last_os_error()));
                 }
             }
-            #[cfg(windows)]
-            {
-                drop(file);
-                std::fs::rename(
-                    self.directory.join(&temporary),
-                    self.directory.join(manifest_name(&metadata.id)),
-                )
-                .map_err(error)?;
-            }
             Ok(())
         })();
         if result.is_err() {
@@ -367,18 +382,19 @@ impl OutputStore {
         result
     }
 
-    #[cfg(unix)]
     fn unlink(&self, name: &str) -> bool {
-        let Ok(name) = CString::new(name) else {
-            return false;
-        };
-        // SAFETY: the fd is owned; unlinkat does not follow the final component.
-        unsafe { libc::unlinkat(self.directory_fd.as_raw_fd(), name.as_ptr(), 0) == 0 }
-    }
-
-    #[cfg(windows)]
-    fn unlink(&self, name: &str) -> bool {
-        std::fs::remove_file(self.directory.join(name)).is_ok()
+        #[cfg(windows)]
+        {
+            self.directory_fd.remove_file(name).is_ok()
+        }
+        #[cfg(unix)]
+        {
+            let Ok(name) = CString::new(name) else {
+                return false;
+            };
+            // SAFETY: the fd is owned; unlinkat does not follow the final component.
+            unsafe { libc::unlinkat(self.directory_fd.as_raw_fd(), name.as_ptr(), 0) == 0 }
+        }
     }
 
     /// Evict expired and oldest completed artifacts; held writer locks always win.
@@ -388,14 +404,8 @@ impl OutputStore {
         let mut files = Vec::new();
         let mut active = 0u64;
         // Read through the opened directory, not a possibly replaced pathname.
-        #[cfg(target_os = "linux")]
-        let directory = PathBuf::from(format!("/proc/self/fd/{}", self.directory_fd.as_raw_fd()));
-        #[cfg(not(target_os = "linux"))]
-        let directory = self.directory.clone();
-        let entries = std::fs::read_dir(directory).map_err(error)?;
-        for entry in entries {
-            let entry = entry.map_err(error)?;
-            let name = entry.file_name();
+        let entries = directory_entries(&self.directory_fd).map_err(error)?;
+        for name in entries {
             let Some(name) = name.to_str() else { continue };
             if let Some(id) = name
                 .strip_prefix("output-")
@@ -404,9 +414,9 @@ impl OutputStore {
                 if validate_id(id).is_ok()
                     && self.manifest(id).is_ok()
                     && self
-                        .open(&artifact_name(id), libc::O_RDONLY)
+                        .open(&artifact_name(id), Access::Read)
                         .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
-                    && let Ok(file) = self.open(name, libc::O_RDONLY)
+                    && let Ok(file) = self.open(name, Access::Read)
                     && let Ok(metadata) = file.metadata()
                     && let Ok(modified) = metadata.modified()
                     && current.saturating_sub(timestamp(modified)) >= self.policy.retention_secs
@@ -424,7 +434,7 @@ impl OutputStore {
             if validate_id(id).is_err() || self.manifest(id).is_err() {
                 continue;
             }
-            let Ok(file) = self.open(name, libc::O_RDWR) else {
+            let Ok(file) = self.open(name, Access::ReadWrite) else {
                 continue;
             };
             if lock(&file, true).is_err() {
@@ -448,7 +458,7 @@ impl OutputStore {
             if self.unlink(&artifact_name(&id)) {
                 self.unlink(&manifest_name(&id));
                 let temporary = format!("output-{id}.meta.tmp");
-                if self.open(&temporary, libc::O_RDONLY).is_ok() {
+                if self.open(&temporary, Access::Read).is_ok() {
                     self.unlink(&temporary);
                 }
                 retained = retained.saturating_sub(bytes);
@@ -505,7 +515,7 @@ impl OutputStore {
                 }
                 let metadata = self.manifest(&args.id)?;
                 let file = self
-                    .open(&artifact_name(&args.id), libc::O_RDONLY)
+                    .open(&artifact_name(&args.id), Access::Read)
                     .map_err(error)?;
                 let file_metadata = file.metadata().map_err(error)?;
                 let size = file_metadata.len();
@@ -536,7 +546,7 @@ impl OutputStore {
                 let args: Id = serde_json::from_value(arguments).map_err(error)?;
                 let mut metadata = self.manifest(&args.id)?;
                 let file = self
-                    .open(&artifact_name(&args.id), libc::O_RDONLY)
+                    .open(&artifact_name(&args.id), Access::Read)
                     .map_err(error)?;
                 let file_metadata = file.metadata().map_err(error)?;
                 let size = file_metadata.len();
@@ -885,30 +895,83 @@ fn open_directory(path: &Path) -> io::Result<File> {
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
 }
-#[cfg(windows)]
-fn open_directory(path: &Path) -> io::Result<File> {
-    use windows_sys::Win32::Storage::FileSystem::*;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)?;
-    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(io::Error::other(
-            "output directory cannot be a reparse point",
-        ));
+
+#[cfg(unix)]
+fn directory_entries(directory: &Directory) -> io::Result<Vec<std::ffi::OsString>> {
+    use std::os::unix::ffi::OsStringExt;
+    // openat(".") gives this scan an independent directory cursor. Dup would
+    // share the retained descriptor's offset and miss entries on later scans.
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            c".".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
     }
-    Ok(file)
+    let stream = unsafe { libc::fdopendir(fd) };
+    if stream.is_null() {
+        let error = io::Error::last_os_error();
+        unsafe {
+            libc::close(fd);
+        }
+        return Err(error);
+    }
+    struct Stream(*mut libc::DIR);
+    impl Drop for Stream {
+        fn drop(&mut self) {
+            unsafe {
+                libc::closedir(self.0);
+            }
+        }
+    }
+    let stream = Stream(stream);
+    let mut names = Vec::new();
+    loop {
+        #[cfg(target_os = "linux")]
+        let errno = unsafe { libc::__errno_location() };
+        #[cfg(target_os = "macos")]
+        let errno = unsafe { libc::__error() };
+        // SAFETY: errno is thread-local and stream is an owned live DIR pointer.
+        unsafe {
+            *errno = 0;
+        }
+        let entry = unsafe { libc::readdir(stream.0) };
+        if entry.is_null() {
+            if unsafe { *errno } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            break;
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if name != b"." && name != b".." {
+            names.push(std::ffi::OsString::from_vec(name.to_vec()));
+        }
+    }
+    Ok(names)
 }
-fn read_at(file: &File, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+
+#[cfg(windows)]
+fn directory_entries(directory: &Directory) -> io::Result<Vec<std::ffi::OsString>> {
+    directory
+        .entries()?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect()
+}
+
+fn read_at(file: &File, data: &mut [u8], offset: u64) -> io::Result<usize> {
     #[cfg(unix)]
     {
-        file.read_at(bytes, offset)
+        file.read_at(data, offset)
     }
     #[cfg(windows)]
     {
-        file.seek_read(bytes, offset)
+        file.seek_read(data, offset)
     }
 }
+
 fn lock(file: &File, nonblocking: bool) -> io::Result<()> {
     crate::platform::lock_file(file, nonblocking)
 }
@@ -955,7 +1018,7 @@ mod portable_tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1014,6 +1077,7 @@ mod tests {
         assert_eq!(metadata.lines, 3);
         assert_eq!(metadata.sha256, format!("{:x}", Sha256::digest(&bytes)));
         assert!(metadata.complete);
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&metadata.path).unwrap().mode() & 0o777,
             0o600
@@ -1086,6 +1150,7 @@ mod tests {
         assert!(!fixture.path.join(manifest_name(&metadata.id)).exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn cleanup_preserves_unrelated_files_and_symlinks() {
         let fixture = Fixture::new(Policy {
@@ -1151,6 +1216,28 @@ mod tests {
             stat["sha256"],
             format!("{:x}", Sha256::digest(b"a\0\xff\nb"))
         );
+    }
+
+    #[test]
+    fn output_artifacts_reject_additional_hard_links() {
+        let fixture = Fixture::new(Policy {
+            inline_bytes: 1,
+            ..Policy::default()
+        });
+        let mut capture = fixture.store.capture("stdout");
+        capture.push(b"private output").unwrap();
+        capture.finish().unwrap();
+        let metadata = capture.metadata().unwrap();
+        let linked = fixture.path.join("unrelated-hardlink");
+        std::fs::hard_link(&metadata.path, &linked).unwrap();
+        assert!(
+            fixture
+                .store
+                .perform_sync("ssmcp.output.read", json!({"id":metadata.id}))
+                .is_err()
+        );
+        assert_eq!(fixture.store.cleanup().unwrap()["removed_files"], 0);
+        assert_eq!(std::fs::read(linked).unwrap(), b"private output");
     }
 
     #[test]

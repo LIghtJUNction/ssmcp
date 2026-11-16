@@ -41,7 +41,7 @@ SHELL_TOOLS = frozenset({
 })
 BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
-    "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text",
+    "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text", "ssmcp.fs.events",
     "ssmcp.context.roots", "ssmcp.skills.list", "ssmcp.skills.read", "ssmcp.skills.view",
     "ssmcp.agents.list", "ssmcp.agents.read", "ssmcp.agents.resolve",
     "ssmcp.net.listen", "ssmcp.net.accept", "ssmcp.net.connect", "ssmcp.net.read",
@@ -414,32 +414,55 @@ class Harness:
 
         wait_for(ssh_ready, description="isolated sshd")
 
-    def start_client(self, label="client", *, name="workstation", cwd=None, mode=None,
-                     backend=None, backend_args=(), destination=None, harnesses=()):
-        # Discover only fixtures and ordinary test commands. Inheriting PATH here
-        # would also register a developer's real coding harnesses.
-        tools = self.directory / f"{label}-bin"
-        tools.mkdir(mode=0o700)
-        for executable in ("ssh", "sh", "stty", "sleep", "tty", "python3", "rsync", "head", "tr", "cat", "env"):
-            program = shutil.which(executable)
-            if program:
-                (tools / executable).symlink_to(program)
+    def client_environment(self, label, *, harness=None, fixture=None, fixture_args=(), harnesses=()):
+        """Expose only shell utilities and the explicitly selected local fixture.
+
+        The production client discovers coding harnesses from PATH. Never inherit
+        installed harnesses here: the tests must not start a real model account.
+        """
+        directory = self.directory / f"{label}-bin"
+        directory.mkdir(mode=0o700)
+        for name in ("ssh", "stty", "tty", "sleep", "head", "tr"):
+            executable = shutil.which(name)
+            if not executable:
+                raise RuntimeError(f"test requires system {name}")
+            (directory / name).symlink_to(Path(executable).absolute())
+        # Fixtures have env-based shebangs; retain the running interpreter even
+        # when the rest of the host PATH is deliberately unavailable.
+        (directory / "python3").symlink_to(Path(sys.executable).absolute())
         installed = list(harnesses)
-        if backend is not None:
-            installed.append((mode, backend, backend_args))
-        programs = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode"}
+        if harness is not None:
+            installed.append((harness, fixture, fixture_args))
+        elif fixture is not None or fixture_args:
+            raise ValueError("fixture arguments require an explicit harness")
+        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode"}
         for kind, program, arguments in installed:
-            entry = tools / programs[kind]
-            fixture = " ".join(shlex.quote(str(value)) for value in [sys.executable, program])
-            extra = " ".join(shlex.quote(str(value)) for value in arguments)
-            entry.write_text(f'#!/bin/sh\nexec {fixture} "$@" {extra}\n')
-            entry.chmod(0o700)
-        environment = dict(os.environ, PATH=str(tools), ENV="/dev/null", BASH_ENV="/dev/null")
+            if kind not in names or program is None:
+                raise ValueError("a known harness and local fixture must be supplied together")
+            wrapper = directory / names[kind]
+            if wrapper.exists():
+                raise ValueError(f"duplicate harness fixture: {kind}")
+            command = shlex.join([sys.executable, str(Path(program).resolve())])
+            extra = shlex.join([str(argument) for argument in arguments])
+            wrapper.write_text(f'#!/bin/sh\nexec {command} "$@" {extra}\n')
+            wrapper.chmod(0o700)
+        return {
+            **os.environ,
+            "PATH": str(directory.resolve()),
+            "ENV": "/dev/null",
+            "BASH_ENV": "/dev/null",
+        }
+
+    def start_client(self, label="client", *, name="workstation", cwd=None, harness=None,
+                     fixture=None, fixture_args=(), destination=None, harnesses=()):
         command = [
             str(self.binary_dir / "ssmcp"), "-F", str(self.directory / "ssh_config"),
             "--name", name, "--shell", "/bin/sh",
+            destination or f"{self.user}@ssmcp-e2e",
         ]
-        command += [destination or f"{self.user}@ssmcp-e2e"]
+        environment = self.client_environment(
+            label, harness=harness, fixture=fixture, fixture_args=fixture_args, harnesses=harnesses
+        )
         process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd, env=environment)
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)

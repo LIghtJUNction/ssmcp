@@ -15,7 +15,7 @@ use crate::{
 use serde_json::json;
 use std::{
     ffi::OsString,
-    io::{self},
+    io,
     path::PathBuf,
     process::{ExitStatus, Stdio},
     sync::Arc,
@@ -77,8 +77,8 @@ Independent commands run concurrently and support status, output, wait and cance
 Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
 Unified diffs show old/new line numbers. --raw and --raw-events select jsonl.
 --verbose expands folded output and shows the full original JSON event.
-Workspace file operations are rooted at the startup directory. System rsync
-transfers and loopback TCP forwards are available to every backend.
+Workspace file operations are rooted at the startup directory. Loopback TCP
+forwards work on every client; system rsync transfers require Linux clients.
 Skill summaries and AGENTS.md views stay inside the workspace unless an operator
 adds --context-root. These extra roots expose context documents, not file writes.
 Keep this process running; Ctrl-C disconnects and stops local harnesses and jobs.

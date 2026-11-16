@@ -4,11 +4,11 @@
 
 服务器已经部署好时，可直接阅读 [配置、SSH 公钥与登录](configuration.md)：复用 `~/.ssh/config`、添加和轮换公钥、完成 OAuth 登录，以及处理重新打开后的授权状态。
 
-ssmcp 0.4.0 继续使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。旧客户端可继续使用登录码；新的 `--allow 用户名@github` 需要两端更新，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
+当前实现使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。客户端始终提供 shell 和独立命令，并自动发现 PATH 中的编程 harness。旧客户端可继续使用登录码；`--allow 用户名@github` 需要两端支持，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
 
 ## 1. 安装程序与服务账户
 
-服务端运行于 Linux；客户端支持 Linux、macOS 和 Windows 的 x86_64 / ARM64。Linux 客户端需要 5.3 或更新内核以使用 pidfd，预编译 GNU 包以 glibc 2.35 为基线。源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
+服务端运行于 Linux；客户端支持 Linux、macOS 和 Windows 的 x86_64 / ARM64。Linux 客户端需要 5.3 或更新内核以使用 pidfd，预编译 GNU 包以 glibc 2.35 为基线；具体归档与安装方法见[发布与平台支持](releases.md)。源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
 
 ```sh
 # Debian / Ubuntu
@@ -148,6 +148,8 @@ ssmcp --list-tools
 
 该命令在本机启动并关闭工具，不需要 SSH 目标。客户端检查 PATH 中的 `codex`、`claude`、`pi` 和 `opencode`，每个可选工具独立初始化；不存在或失败时显示警告并保留其他能力。OpenCode 需要 v2。若需要编码工具，先用其原生 CLI 完成登录、provider、模型和项目权限配置，再把可执行文件所在目录加入 PATH。[发现与原生接口](backends.md)
 
+工具目录只包含本机原生接口实际提供的能力。Codex 可发现 MCP 直通工具，Pi 的控制协议不会自动暴露所有内部模型工具；普通文件和命令操作可使用 ssmcp 自带原语。`--context-root` 只增加只读 skills／AGENTS 文档根，不扩大文件写入范围。原生 rsync 端点目前只在 Linux 客户端注册。[接口边界](backends.md#1-启动客户端) · [上下文范围](context.md)
+
 ## 5. 建立连接并登录
 
 首次使用时可按 [客户端配置与逐步登录教程](configuration.md#oauth-login) 操作。已有 SSH Host 条目的复用方法见 [SSH 配置](configuration.md#ssh-config)，重新打开后的行为见 [连接与授权生命周期](configuration.md#session-lifetime)。
@@ -163,7 +165,7 @@ ssmcp --name laptop --title "项目开发与测试" --allow octocat@github alice
 本机工具发现成功后，交互终端显示连接摘要；重定向 stdout 或选择 JSONL 时输出：
 
 ```json
-{"url":"https://ssmcp.example.com/mcp","auth":"github","allow":["octocat@github"],"client_id":"服务端分配的连接ID","name":"laptop","type":"shell","cwd":"/home/alice/project","hostname":"alice-laptop"}
+{"url":"https://ssmcp.example.com/mcp","auth":"github","allow":["octocat@github"],"client_id":"服务端分配的连接ID","name":"laptop","title":"项目开发与测试","type":"shell","cwd":"/home/alice/project","hostname":"alice-laptop"}
 ```
 
 在 MCP 客户端中添加完整 `/mcp` URL，启用 OAuth 登录。ssmcp 页面显示 MCP 客户端名称、已登记回调来源和资源 URL；点击 GitHub 登录，在 GitHub 完成身份验证后返回 ssmcp。页面显示已验证身份和当前可访问会话数，再由用户点击“允许连接”或“取消”。只完成 GitHub 登录不会自动授权这个 MCP 客户端。[登录步骤](configuration.md#github-allow)
@@ -248,7 +250,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 `http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 只有 `list` 和 `code_mode`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
 
-在 `code_mode` 中通过 `await exec.run(clientId, {command:["git","status","--short"],wait_ms:5000})` 验证命令执行；检查 `running` 和 `exit_code`，长任务沿用返回的 `job_id` 等待或读取。交互式 Shell 使用 `terminal.write/read`。Agent 可先用无模型的状态接口检查链路，例如 `pi.get_state` 或 `opencode.server.info`；先通过 `list({client_id})` 查看 schema，再在 `code_mode` 调用。模型任务和审批流程按[后端说明](backends.md)验证。Claude Code 前台 Bash 的输出在调用结束时返回，持续增量观察应使用其原生后台输出路径。
+在 `code_mode` 中通过 `await exec.run(clientId, {command:["git","status","--short"],wait_ms:5000})` 验证命令执行；检查 `running` 和 `exit_code`，长任务沿用返回的 `job_id` 等待或读取；`wait_timed_out` 只表示本次等待到期，不会停止命令，不应重新启动同一工作。[独立命令与等待](commands.md)交互式 Shell 使用 `terminal.write/read`。Agent 可先用无模型的状态接口检查链路，例如 `pi.get_state` 或 `opencode.server.info`；先通过 `list({client_id})` 查看 schema，再在 `code_mode` 调用。模型任务和审批流程按[后端说明](backends.md)验证。Claude Code 前台 Bash 的输出在调用结束时返回，持续增量观察应使用其原生后台输出路径。
 
 验证 GitHub 模式时，为两个客户端设置不同 `--allow`，确认当前身份只看到并能调用匹配的客户端；未匹配的 `client_id` 也必须被拒绝。关闭一个客户端后，它应从列表消失；已有 GitHub 授权可以继续访问其他匹配客户端。重连时按新的允许列表重新判断。
 
