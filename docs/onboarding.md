@@ -94,15 +94,19 @@ ssmcp --name my-laptop <终端打印的SSH别名>
 | macOS | 优先使用系统自带工具；需要补齐时使用已有 Homebrew 下载并安装 OpenSSH bottle 与依赖。没有 Homebrew 或当前平台缺少可用 bottle 时，按诊断修复系统工具或自行安装适合该平台的 OpenSSH，再重试。 |
 | Windows | 从 Microsoft 的 `PowerShell/Win32-OpenSSH` 官方 Release 元数据取得当前架构的便携包及 SHA-256。验证后放入 `%LOCALAPPDATA%\ssmcp\openssh\packages\`，由 ssmcp 直接选用，不需要安装 SSH 服务或修改全局 PATH。终端显示实际版本标签，包括上游标签中的 Preview。 |
 
-Windows 下载后的 ZIP 校验需要 `ZipArchiveEntry.ExternalAttributes` 能力。使用 Windows PowerShell 5.1 时，要求 .NET Framework 4.7.2 或更高版本，例如 4.8；仅有“PowerShell 5.1”版本号不足以证明满足条件。安装器和便携 SSH 解压器会先检查该属性，缺少时明确停止，不跳过条目类型与属性验证。[Microsoft API 适用范围](https://learn.microsoft.com/en-us/dotnet/api/system.io.compression.ziparchiveentry.externalattributes?view=netframework-4.8.1)
+Windows 下载后的 ZIP 校验需要 `ZipArchiveEntry.ExternalAttributes` 能力。便携 SSH 解压优先使用已安装的 PowerShell 7（`pwsh`），再查找 Windows PowerShell。使用 Windows PowerShell 5.1 时，要求 .NET Framework 4.7.2 或更高版本，例如 4.8；仅有“PowerShell 5.1”版本号不足以证明满足条件。安装器和便携 SSH 解压器会先检查该属性，缺少时明确停止，不跳过条目类型与属性验证。[Microsoft API 适用范围](https://learn.microsoft.com/en-us/dotnet/api/system.io.compression.ziparchiveentry.externalattributes?view=netframework-4.8.1)
 
 Windows 的便携 SSH 依赖补齐和 ssmcp 自身的 Release 安装器是两个流程。前者管理专用 SSH 工具；后者安装 `ssmcp.exe`，默认可以把 ssmcp 的安装目录加入用户 PATH。参见[安装与发布说明](releases.md)。
 
 ## 下载期限、镜像与可信摘要
 
-公开二进制下载按“官方源 → `ghfast.top` → `gh-proxy.com`”顺序尝试。下载失败、停滞、持续低速或摘要不符时，丢弃该次结果并继续下一条公开下载路径。**可信摘要必须先从官方来源取得**：ssmcp 安装器使用官方 Release 的 `SHA256SUMS`；Windows SSH 依赖使用 GitHub 官方 API 提供的 SHA-256 asset digest。取不到可信摘要时停止安装，不把镜像提供的摘要作为替代信任依据。[Windows 依赖下载](../src/client/onboarding/dependencies.rs) · [Shell 安装器](../scripts/install.sh) · [PowerShell 安装器](../scripts/install.ps1)
+ssmcp Release 和 Windows 便携 SSH 包按“官方源 → `ghfast.top` → `gh-proxy.com`”顺序尝试。下载失败、停滞、持续低速或摘要不符时，丢弃该次结果并继续下一条公开下载路径。**可信摘要必须先从官方来源取得**：ssmcp 安装器使用官方 Release 的 `SHA256SUMS`；Windows SSH 依赖使用 GitHub 官方 API 提供的 SHA-256 asset digest。取不到可信摘要时停止安装，不把镜像提供的摘要作为替代信任依据。[Windows 依赖下载](../src/client/onboarding/dependencies.rs) · [Shell 安装器](../scripts/install.sh) · [PowerShell 安装器](../scripts/install.ps1)
 
 镜像只接收公开文件 URL。GitHub 登录、设备授权秘密和公钥登记请求只发给选定的门户，不通过下载镜像。门户 API 拒绝重定向；客户端还会检查浏览器授权 URL 与所选门户同源。
+
+macOS Homebrew 的 bottle 下载按官方源、TUNA、USTC 顺序尝试。回退只在本次子进程中更换 `HOMEBREW_BOTTLE_DOMAIN`，公式元数据和校验值仍沿用 Homebrew 的官方或本机既有来源；不会把 `HOMEBREW_API_DOMAIN` 改为公共镜像。子进程清空私有 registry 凭据，避免把它们转发给自动选择的镜像。若 `brew.env` 中的下载或凭据配置会覆盖这项策略，向导报告对应文件并停止，不修改或绕过集中配置。[Homebrew 回退实现与 fixture](../src/client/onboarding/dependencies/macos_brew.rs) · [Homebrew 环境变量说明](https://docs.brew.sh/Manpage#environment)
+
+Debian／Ubuntu 的 APT 路径先解析具体包、大小和 SHA-256，再下载相同内容。对已识别的官方仓库地址，按原地址的 HTTPS 版本、TUNA、USTC 顺序回退；其他公开仓库只尝试原主机的 HTTPS 地址，不映射到公共镜像。APT 下载沿用本机进程的代理配置。下载后再次解析依赖计划，任何计划、大小或摘要变化都会停止。最终应用仍由正常 APT 路径验证仓库信任与包内容，缺失缓存不能联网补包；仅取得一个下载计划并不等于已经通过仓库认证。pacman 和 dnf 继续使用发行版既有的仓库与镜像配置。[APT 实现与 fixture](../src/client/onboarding/dependencies/linux_apt.rs)
 
 下表列出主要网络预算；“每条路径总时间”包含该次下载的连接与正文读取，失败后下一条路径重新计时。KiB 和 MiB 分别按 1024 和 1024² 字节计算。
 
@@ -111,10 +115,11 @@ Windows 的便携 SSH 依赖补齐和 ssmcp 自身的 Release 安装器是两个
 | Linux/macOS 的 ssmcp Release 安装器 | 连接最多 8 秒 | 连续 12 秒低于 64 KiB/s | 每条路径最多 180 秒；摘要文件 256 KiB，压缩包 128 MiB。独立文件写入上限同时约束不声明长度的响应。 |
 | Windows 的 ssmcp Release 安装器 | 每次连接与响应头最多 8 秒；正文每次等待读取最多 10 秒 | 8 秒窗口内平均低于 64 KiB/s | 每条路径最多 180 秒，重定向共享该期限；摘要文件 256 KiB，压缩包 128 MiB。使用 .NET 流式计数，在超限字节写盘前停止。 |
 | Windows 的便携 SSH 包 | 连接 8 秒；从请求开始最多 12 秒收到首字节；后续停滞最多 10 秒 | 8 秒窗口内平均低于 64 KiB/s | 每条路径最多 180 秒；受官方声明大小限制，且不超过 64 MiB。官方元数据最多 30 秒、1 MiB，低速阈值为 1 KiB/s。 |
-| Linux 原生包下载 | apt HTTP/HTTPS 超时 10 秒；dnf 超时 10 秒；pacman 的 curl 连接超时 8 秒 | dnf 为 64 KiB/s；pacman 连续 12 秒低于 64 KiB/s 时停止 | 下载命令最多 150 秒，终止宽限 5 秒；pacman 单次 curl 最多 120 秒。重用发行版配置的仓库与镜像。 |
-| macOS Homebrew 下载 | curl 连接最多 8 秒 | 连续 12 秒低于 64 KiB/s | 单次 curl 最多 180 秒；整个 fetch 阶段最多 600 秒，停止时清理其下载子进程。 |
+| APT 包下载 | 连接最多 8 秒；每次响应头最多 12 秒；正文停滞最多 12 秒 | 12 秒窗口达到后，在下一数据块检查平均速度是否低于 64 KiB/s | 每个包的每条路径最多 120 秒；整组包共享 600 秒。每包最多 64 MiB，计划最多 128 包／256 MiB；两次解析计划各最多 20 秒。 |
+| pacman／dnf 包下载 | dnf 超时 10 秒；pacman 的 curl 连接超时 8 秒 | dnf 为 64 KiB/s；pacman 连续 12 秒低于 64 KiB/s 时停止 | 下载命令最多 150 秒，终止宽限 5 秒；pacman 单次 curl 最多 120 秒。重用发行版配置的仓库与镜像。 |
+| macOS Homebrew 下载 | curl 配置为 8 秒；Homebrew 的部分镜像请求另设 15 秒 | 连续 12 秒低于 64 KiB/s | 每条 fetch 路径硬限 180 秒；三条路径共享 480 秒预算，另留已有进程清理宽限。成功后才开始安装。 |
 
-发行版和 Homebrew 路径继续使用各自的仓库校验机制与镜像配置。Linux/macOS 的下载截止时间用于获取阶段；**已经开始的本机包应用事务没有网络计时器强行终止**。Windows 解压在专用临时目录执行，校验路径并限制条目，验证工具可运行后才切换专用版本。
+发行版和 Homebrew 路径继续使用各自的仓库校验机制。Linux/macOS 的下载截止时间用于获取阶段；**已经开始的本机包应用事务没有网络计时器强行终止**。Windows 解压在专用临时目录执行，校验路径并限制条目，验证工具可运行后才切换专用版本。
 
 ssmcp Release 的下载或校验失败保留已有安装。所有公开镜像均失败时，修复官方网络访问或按[发布说明](releases.md)手动取得并核验对应平台包后重试。下载耗时导致十分钟设备授权过期时，可以重新运行 `setup`；它会重新检查已安装的 SSH 工具和本机已有密钥。
 
