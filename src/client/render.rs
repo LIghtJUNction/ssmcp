@@ -6,6 +6,14 @@ use super::{
 };
 #[path = "activity.rs"]
 mod activity;
+#[path = "command.rs"]
+mod command;
+#[cfg(test)]
+#[path = "command_process_tests.rs"]
+mod command_process_tests;
+#[cfg(test)]
+#[path = "readable_log_fixture.rs"]
+mod readable_log_fixture;
 use activity::{Activities, key as activity_key, short_id};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -206,7 +214,8 @@ struct Renderer {
     width: usize,
     ui: Ui,
     streams: HashMap<String, Lines>,
-    requests: HashMap<String, (String, Instant)>,
+    requests: HashMap<String, Request>,
+    deferred_commands: HashMap<String, Option<String>>,
     activities: Activities,
     last_activity_summary: Instant,
     last_pty_output: Option<Instant>,
@@ -219,6 +228,13 @@ struct Renderer {
     discovery_success: HashMap<String, Value>,
 }
 
+struct Request {
+    method: String,
+    started: Instant,
+    command: Option<String>,
+    process_id: Option<String>,
+}
+
 impl Renderer {
     fn new(raw: bool, color: bool, width: usize) -> Self {
         Self {
@@ -229,6 +245,7 @@ impl Renderer {
             ui: Ui::default(),
             streams: HashMap::new(),
             requests: HashMap::new(),
+            deferred_commands: HashMap::new(),
             activities: Activities::default(),
             last_activity_summary: Instant::now(),
             last_pty_output: None,
@@ -363,6 +380,22 @@ impl Renderer {
             .cloned()
             .collect::<Vec<_>>();
         for key in keys {
+            if self.current_stream.as_deref() != Some(&key)
+                && self
+                    .streams
+                    .get(&key)
+                    .is_some_and(|lines| !lines.pending.is_empty() || lines.folded_bytes > 0)
+            {
+                self.heading(
+                    out,
+                    &format!("{label} · {}", short_id(id)),
+                    if key.ends_with("\0stderr") {
+                        "stderr"
+                    } else {
+                        "stdout"
+                    },
+                )?;
+            }
             self.finish(out, &key)?;
         }
         self.current_stream = None;
@@ -458,6 +491,12 @@ impl Renderer {
                         self.ui.theme.color("gray"),
                         &format!("       cwd {}\n", clean(&self.path_label(cwd))),
                     )?;
+                }
+                let details = command::Command::new(&value["command"]);
+                if details.script.is_some()
+                    || details.invocation.chars().count() > self.width.saturating_sub(25)
+                {
+                    self.command_details(out, label, &value["command"])?;
                 }
                 self.last_activity_summary = Instant::now();
                 if self.activities.len() > 1 {
@@ -721,6 +760,42 @@ impl Renderer {
                     .map(|v| compact(v, 0))
                     .unwrap_or_default();
                 let key = activity_key("call", provider, &call_id);
+                if value["rpc_correlation"] == true && value["command_rpc_expected"] == true {
+                    if kind.ends_with(".started") {
+                        // The exact native request supplies the useful command.
+                        // Keep a pending activity so a blocked dispatch remains visible.
+                        if self.deferred_commands.len() < 2048 {
+                            self.deferred_commands.insert(key.clone(), None);
+                            self.activities.start(
+                                key,
+                                format!("{provider}:{}", short_id(&call_id)),
+                                format!("{tool_name} · awaiting command"),
+                                None,
+                                Instant::now(),
+                            );
+                            return Ok(true);
+                        }
+                    } else {
+                        self.activities.finish(&key);
+                        if let Some(Some(request_key)) = self.deferred_commands.remove(&key) {
+                            self.activities.finish(&request_key);
+                            if value["command_rpc_completed"] != true {
+                                if let Some(key) = request_key.strip_prefix("rpc\0") {
+                                    if let Some(request) = self.requests.remove(key) {
+                                        if let Some(process) = request.process_id {
+                                            self.finish_process(out, provider, &process)?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if value["command_rpc_completed"] == true {
+                            // Native status (including nonzero exit) is authoritative.
+                            // Verbose/JSONL still retain the wrapper audit event.
+                            return Ok(true);
+                        }
+                    }
+                }
                 if kind.ends_with(".started") {
                     if !call_id.is_empty() {
                         self.activities.start(
@@ -825,10 +900,30 @@ impl Renderer {
             String::new()
         };
         if let Some(method) = v.get("method").and_then(Value::as_str) {
+            let params = &v["params"];
+            let params = params.get("arguments").unwrap_or(params);
+            let command = params.get("command").or_else(|| params.get("cmd"));
+            let command_description = (method == "command/exec")
+                .then(|| command.map(command_label))
+                .flatten();
             if self.requests.len() >= 2048 {
+                for request_key in self.requests.keys() {
+                    self.activities.finish(&format!("rpc\0{request_key}"));
+                }
                 self.requests.clear();
             }
-            self.requests.insert(key, (method.into(), Instant::now()));
+            self.requests.insert(
+                key,
+                Request {
+                    method: method.into(),
+                    started: Instant::now(),
+                    command: command_description.clone(),
+                    process_id: params
+                        .get("processId")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                },
+            );
             if value["internal_discovery"] == true
                 && !self.verbose
                 && self
@@ -837,13 +932,40 @@ impl Renderer {
             {
                 return Ok(true);
             }
-            self.summary(out, label, "Request", &format!("{method}{id_text}"))?;
-            let params = &v["params"];
-            let params = params.get("arguments").unwrap_or(params);
-            if let Some(command) = params.get("command").or_else(|| params.get("cmd")) {
-                let command = command_label(command);
-                self.text(out, label, &format!("cmd={command}\n"))?;
+            if let Some(description) = &command_description {
+                let request_key = activity_key("rpc", label, &id);
+                if let Some(call_id) = value.get("harness_call_id") {
+                    let call_key = activity_key("call", label, &compact(call_id, 0));
+                    if let Some(request) = self.deferred_commands.get_mut(&call_key) {
+                        self.activities.finish(&call_key);
+                        *request = Some(request_key.clone());
+                    }
+                }
+                self.activities.start(
+                    request_key,
+                    format!("{label}:{}", short_id(&id)),
+                    description.clone(),
+                    params["cwd"].as_str().map(str::to_owned),
+                    Instant::now(),
+                );
+                self.summary(
+                    out,
+                    label,
+                    "Running",
+                    &format!(
+                        "{}{description}",
+                        if id_text.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{}  ", id_text.trim())
+                        }
+                    ),
+                )?;
+                self.last_activity_summary = Instant::now();
+            } else {
+                self.summary(out, label, "Request", &format!("{method}{id_text}"))?;
             }
+            let mut context = Vec::new();
             for field in ["cwd", "name", "tool", "processId"] {
                 if let Some(v) = params.get(field).filter(|v| !v.is_null()) {
                     let text = match (field, v.as_str()) {
@@ -851,7 +973,7 @@ impl Renderer {
                         ("processId", Some(id)) => short_id(id),
                         _ => compact(v, 0),
                     };
-                    self.text(out, label, &format!("{field}={text}\n"))?;
+                    context.push(format!("{field}={text}"));
                 }
             }
             if let Some(ms) = params
@@ -859,17 +981,33 @@ impl Renderer {
                 .or_else(|| params.get("timeout_ms"))
                 .and_then(Value::as_u64)
             {
-                self.text(out, label, &format!("timeout={:.3}s\n", ms as f64 / 1000.0))?;
+                context.push(format!("timeout={:.3}s", ms as f64 / 1000.0));
+            }
+            if !context.is_empty() {
+                self.text(out, label, &format!("{}\n", context.join("  ·  ")))?;
+            }
+            if let Some(command) = command {
+                self.command_details(out, label, command)?;
             }
             self.finish(out, label)?;
             return Ok(true);
         }
         if v.get("result").is_some() || v.get("error").is_some() {
-            let (method, elapsed) = self
-                .requests
-                .remove(&key)
-                .map(|(m, t)| (m, format!("  {:.2}s", t.elapsed().as_secs_f64())))
+            let request = self.requests.remove(&key);
+            let method = request.as_ref().map(|r| r.method.as_str()).unwrap_or("");
+            let command = request.as_ref().and_then(|r| r.command.as_deref());
+            let elapsed = request
+                .as_ref()
+                .map(|r| format!("  {:.2}s", r.started.elapsed().as_secs_f64()))
                 .unwrap_or_default();
+            if command.is_some() {
+                let process = request
+                    .as_ref()
+                    .and_then(|r| r.process_id.as_deref())
+                    .unwrap_or(&id);
+                self.finish_process(out, label, process)?;
+                self.activities.finish(&activity_key("rpc", label, &id));
+            }
             let result = v["result"].get("structuredContent").unwrap_or(&v["result"]);
             let exit = result
                 .get("exitCode")
@@ -907,6 +1045,8 @@ impl Renderer {
                 "Timeout"
             } else if failed {
                 "Error"
+            } else if method == "command/exec" && exit.is_none() {
+                "Warning"
             } else {
                 "Success"
             };
@@ -939,11 +1079,18 @@ impl Renderer {
             if timed_out {
                 meta += "  command timeout";
             }
+            if method == "command/exec" && exit.is_none() && !failed {
+                meta += "  exit unknown";
+            }
             self.summary(
                 out,
                 label,
                 title,
-                &format!("{method}{id_text}{elapsed}{meta}"),
+                &if let Some(command) = command {
+                    format!("{}{meta}{elapsed} · {command}", id_text.trim())
+                } else {
+                    format!("{method}{id_text}{elapsed}{meta}")
+                },
             )?;
             if let Some(code) = v.pointer("/error/code") {
                 self.summary(
@@ -1096,6 +1243,105 @@ impl Renderer {
         self.finish(out, label)
     }
 
+    fn command_details(
+        &mut self,
+        out: &mut impl Write,
+        label: &str,
+        value: &Value,
+    ) -> io::Result<()> {
+        let command = command::Command::new(value);
+        self.text(
+            out,
+            label,
+            &format!("cmd={}\n", self.source_excerpt(&command.invocation)),
+        )?;
+        let Some(script) = command.script else {
+            return self.finish(out, label);
+        };
+        let total = script.lines().count();
+        self.text(out, label, &format!("script · {total} lines\n"))?;
+        self.finish(out, label)?;
+        let limit = if self.verbose {
+            usize::MAX
+        } else {
+            self.ui.max_inline_output
+        };
+        let shown = total.min(limit);
+        let tail = if total > limit { limit / 3 } else { 0 };
+        let head = shown - tail;
+        let digits = total.max(1).to_string().len();
+        for (index, line) in script.lines().enumerate() {
+            if index >= head && index < total - tail && total > limit {
+                if index == head {
+                    self.text(out, label, &format!(
+                        "... lines {}–{} folded ({} lines); --verbose or --max-inline-output {}\n",
+                        head + 1, total - tail, total - shown, total,
+                    ))?;
+                    self.finish(out, label)?;
+                }
+                continue;
+            }
+            self.source_line(out, index + 1, digits, &self.source_excerpt(line))?;
+        }
+        Ok(())
+    }
+
+    fn source_excerpt(&self, text: &str) -> String {
+        if self.verbose || text.chars().count() <= 512 {
+            text.into()
+        } else {
+            format!(
+                "{} … ({} chars folded; --verbose)",
+                text.chars().take(512).collect::<String>(),
+                text.chars().count() - 512
+            )
+        }
+    }
+
+    fn source_line(
+        &self,
+        out: &mut impl Write,
+        number: usize,
+        digits: usize,
+        text: &str,
+    ) -> io::Result<()> {
+        let prefix = format!("  {number:>digits$} │ ");
+        let continuation = format!("  {:>digits$} │ ", "");
+        let available = self
+            .width
+            .saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str()))
+            .max(2);
+        painted(out, self.color, self.ui.theme.color("gray"), &prefix)?;
+        let mut column = 0;
+        let mut fragment = String::new();
+        for c in clean(text).chars() {
+            // Tabs in source are expanded at tab stops so both the terminal and
+            // plain transcript agree on the continuation column.
+            let expanded = if c == '\t' {
+                " ".repeat(4 - column % 4)
+            } else {
+                c.to_string()
+            };
+            for c in expanded.chars() {
+                let cells = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                if c == '\n' || column + cells > available {
+                    painted(out, self.color, "0", &fragment)?;
+                    fragment.clear();
+                    writeln!(out)?;
+                    painted(out, self.color, self.ui.theme.color("gray"), &continuation)?;
+                    column = 0;
+                    if c == '\n' {
+                        continue;
+                    }
+                }
+                fragment.push(c);
+                column += cells;
+            }
+        }
+        painted(out, self.color, "0", &fragment)?;
+        writeln!(out)
+    }
+
     fn value(
         &mut self,
         out: &mut impl Write,
@@ -1208,9 +1454,19 @@ impl Renderer {
             // Fresh output already tells the user that work is advancing.
             self.last_activity_summary = Instant::now();
             if self.current_stream.as_deref() != Some(&key) {
+                let prefix = format!("{label}\0");
+                let request_id = self.requests.iter().find_map(|(key, request)| {
+                    (request.process_id.as_deref() == Some(process))
+                        .then(|| key.strip_prefix(&prefix))
+                        .flatten()
+                });
+                let process_label = request_id
+                    .filter(|id| *id != process)
+                    .map(|id| format!("{} · {}", short_id(id), short_id(process)))
+                    .unwrap_or_else(|| short_id(process));
                 self.heading(
                     out,
-                    &format!("{label} · {}", short_id(process)),
+                    &format!("{label} · {process_label}"),
                     if stream == "stderr" {
                         "stderr"
                     } else {
@@ -1552,35 +1808,7 @@ fn debug_metadata(value: &Value) -> Value {
 
 /// A bounded description, never a giant JSON dump in the default transcript.
 fn command_label(command: &Value) -> String {
-    let Some(args) = command.as_array() else {
-        return activity::single_line(command.as_str().unwrap_or("command"), 140);
-    };
-    let mut shown = Vec::new();
-    let mut previous = "";
-    for (index, value) in args.iter().enumerate() {
-        let arg = value.as_str().unwrap_or("");
-        if index == 0 {
-            shown.push(arg.rsplit(['/', '\\']).next().unwrap_or(arg).to_owned());
-        } else if matches!(
-            previous,
-            "-c" | "-e" | "--eval" | "-Command" | "-EncodedCommand" | "--command"
-        ) && (arg.contains('\n') || arg.chars().count() > 100)
-        {
-            shown.push(format!(
-                "[inline script · {} lines]",
-                arg.lines().count().max(1)
-            ));
-        } else {
-            let arg = activity::single_line(arg, 72);
-            shown.push(if arg.chars().any(char::is_whitespace) {
-                format!("'{arg}'")
-            } else {
-                arg
-            });
-        }
-        previous = value.as_str().unwrap_or("");
-    }
-    activity::single_line(&shown.join(" "), 160)
+    command::Command::new(command).summary()
 }
 
 fn json_record(text: &str) -> bool {
@@ -2070,7 +2298,7 @@ mod tests {
             true,
         );
         for expected in [
-            "command/exec id=r1",
+            "[RUN ] codex id=r1",
             "cmd=sh -c",
             "cwd=/project",
             "timeout=1.000s",
@@ -2837,21 +3065,26 @@ mod tests {
     }
 
     #[test]
-    fn pretty_bounds_inline_scripts_and_long_ids_without_changing_jsonl() {
-        let script = "script_statement_not_for_pretty();\n".repeat(200);
+    fn pretty_previews_inline_scripts_with_explicit_folding_and_keeps_jsonl() {
+        let script = "script_statement_visible();\n".repeat(200);
         let id = format!("request-{}-17", "a".repeat(128));
         let events = [
             json!({"type":"exec.started","job_id":"81","command":["python3","-c",script],"cwd":"/work"}),
             json!({"id":id,"method":"command/exec","params":{"command":["python3","-c",script]}}),
         ];
         let pretty = render(&events, false, false);
-        assert!(pretty.contains("python3 -c [inline script"), "{pretty}");
+        assert!(pretty.contains("python3 -c <script>"), "{pretty}");
         assert!(pretty.contains("200 lines"), "{pretty}");
-        assert!(!pretty.contains("script_statement_not_for_pretty"));
+        assert!(pretty.contains("script_statement_visible"));
+        assert!(
+            pretty.contains("lines 9–196 folded (188 lines)"),
+            "{pretty}"
+        );
+        assert!(pretty.contains("--max-inline-output 200"), "{pretty}");
         assert!(!pretty.contains(&"a".repeat(64)));
-        assert!(pretty.len() < 600, "{pretty}");
+        assert!(pretty.len() < 4000, "{pretty}");
         let raw = render(&events, true, false);
-        assert!(raw.contains("script_statement_not_for_pretty") && raw.contains(&id));
+        assert!(raw.contains("script_statement_visible") && raw.contains(&id));
     }
 
     #[test]
