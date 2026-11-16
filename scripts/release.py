@@ -370,9 +370,13 @@ def release(tag, root=None):
                             "--draft", "--title", tag, "--notes-file", str(notes)], cwd=root, check=True)
         metadata = find_release(repository, tag, root)
         if metadata is None:
-            raise RuntimeError(f"created release {tag} is not visible; retry without creating another draft")
-    # Keep using the same release object while it is still an unpublished draft.
+            raise RuntimeError(f"created draft for {tag} is not visible in the authenticated releases list")
+    # Keep the resolved identity throughout upload and verification; a draft is
+    # intentionally not available through /releases/tags/<tag> yet.
     endpoint = f"repos/{repository}/releases/{metadata['id']}"
+    metadata = json.loads(command("gh", "api", endpoint, cwd=root))
+    if metadata["tag_name"] != tag:
+        raise ValueError("resolved release ID does not match the requested tag")
     assets = {a["name"]: a for a in metadata["assets"]}
     for path in sorted((root / "dist").iterdir()):
         if not path.is_file():
