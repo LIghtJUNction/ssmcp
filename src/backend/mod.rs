@@ -184,7 +184,7 @@ fn terminal_tools() -> Value {
 }
 
 // The cursor binds to catalog names/schema content, so list changes cannot silently skip tools.
-fn page(tools: Vec<Value>, cursor: Option<&str>) -> Result<Value, String> {
+pub(crate) fn page(tools: Vec<Value>, cursor: Option<&str>) -> Result<Value, String> {
     let encoded = serde_json::to_vec(&tools).map_err(|e| e.to_string())?;
     // A non-cryptographic fingerprint is sufficient: this is stale-page detection, not auth.
     let hash = encoded.iter().fold(0xcbf29ce484222325u64, |h, b| {
