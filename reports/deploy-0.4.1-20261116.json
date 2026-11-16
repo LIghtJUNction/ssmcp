@@ -1,10 +1,11 @@
 {
-  "state": "verifying",
+  "state": "deployed",
   "commit": "fff47d191136198b38f154804115c9e9f9f89b35",
   "binary_source_commit": "fff47d191136198b38f154804115c9e9f9f89b35",
   "version": "0.4.1",
   "checks": {
-    "development_client_installed": true
+    "development_client_installed": true,
+    "replacement_GitHub_client_connected": true
   },
   "started_unix": 1794807061,
   "stage": {
@@ -59,5 +60,46 @@
     "server_version": "ssmcpd 0.4.1",
     "started_unix": 1794807067,
     "state": "deployed"
-  }
+  },
+  "client_display": "new terminal window",
+  "client": {
+    "name": "light-codex-github-041",
+    "type": "codex",
+    "url": "https://ssmcp.lmm.best/mcp",
+    "cwd": "/home/lightjunction/Documents/GITHUB/ssmcp",
+    "client_id": "710babeadea03cfa508fcbe0897f43a4d7a0711368a076c4426a47c245fd2f1f",
+    "auth": "github",
+    "allow": [
+      "lightjunction@github"
+    ]
+  },
+  "smoke": {
+    "status": "passed",
+    "checks": [
+      "temporary_SSH_client_connected",
+      "public_DCR_registration",
+      "public_OAuth_form",
+      "browser_bound_authorization_form",
+      "authorization_code_returned",
+      "callback_and_issuer_binding",
+      "PKCE_exchange_and_refresh_grant",
+      "MCP_initialize",
+      "MCP_tools_list",
+      "exactly_two_public_tools",
+      "MCP_tools_call",
+      "connected_client_discovery",
+      "MCP_tools_call",
+      "real_code_mode_and_native_terminal",
+      "refresh_token_rotation",
+      "MCP_tools_call",
+      "refreshed_token_controls_same_session",
+      "public_DCR_registration",
+      "public_OAuth_form",
+      "browser_bound_authorization_form",
+      "GitHub_redirect_callback_and_PKCE",
+      "temporary_session_disconnect_revokes_access"
+    ],
+    "GitHub_browser_consent": "not performed; interactive user action required"
+  },
+  "finished_unix": 1794807113
 }
