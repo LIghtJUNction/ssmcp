@@ -74,11 +74,9 @@ def emit(result):
 
 
 def event_mode(event_name, ref, event):
-    """Select an existing tag, automatic main release, or explicit build-only run."""
+    """Only a pushed version tag or an explicit main dispatch can publish."""
     if event_name == "push" and ref.startswith("refs/tags/v"):
         return ref.removeprefix("refs/tags/"), False
-    if event_name == "push" and ref == "refs/heads/main":
-        return None, False
     if event_name == "workflow_dispatch" and ref == "refs/heads/main":
         inputs = event.get("inputs") or {}
         tag = inputs.get("tag", "")
@@ -87,10 +85,15 @@ def event_mode(event_name, ref, event):
         build_only = inputs.get("build_only", False)
         if not isinstance(build_only, (bool, str)) or build_only not in (True, False, "true", "false"):
             raise ValueError("the build_only input must be a boolean")
-        build_only = build_only is True or build_only == "true"
-        if build_only and tag:
+        if (build_only is True or build_only == "true") and tag:
             raise ValueError("build-only validation cannot select a release tag")
-        return tag or None, build_only
+        # False is not authorization to publish main; only an explicit tag is.
+        return tag or None, not bool(tag)
+    if ref == "refs/heads/release-check":
+        if event_name == "push" and not event.get("created", False):
+            return None, True
+        if event_name == "create" and event.get("ref_type") == "branch" and event.get("ref") == "release-check":
+            return None, True
     raise ValueError("this event is not an authorized release or main preflight trigger")
 
 
@@ -112,25 +115,12 @@ def validate_tag(tag, root=None, *, build_only=False):
 
 
 def prepare(tag=None, automatic=False, root=None):
-    """Fix the main commit to validate; create its tag only after all gates pass."""
-    if not automatic:
-        if tag is None:
-            raise ValueError("provide an existing release tag or --auto for main")
-        return validate_tag(tag, root)
-    if tag is not None:
-        raise ValueError("automatic main validation cannot select an existing tag")
-    root = root or ROOT
-    actual = validate_package("v" + version(root), root)
-    tag = "v" + actual
-    sha = command("git", "rev-parse", "HEAD", cwd=root)
-    subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"],
-                   cwd=root, check=True)
-    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
-    exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", "refs/tags/" + tag],
-                            cwd=root).returncode == 0
-    return emit({"tag": tag, "version": actual, "sha": sha,
-                 "prerelease": str("-" in actual).lower(), "build_only": "false",
-                 "publish": str(not exists).lower(), "create_tag": str(not exists).lower()})
+    """Legacy prepare --auto now performs a main preflight without publishing."""
+    if automatic:
+        return validate_tag(tag, root, build_only=True)
+    if tag is None:
+        raise ValueError("provide an existing release tag or --auto for preflight")
+    return validate_tag(tag, root)
 
 
 def create_tag(tag, sha, root=None):
@@ -312,7 +302,7 @@ def publish(root=None):
         return
     release_version = version(root)
     checksum = digest(root / "target/package" / f"ssmcp-{release_version}.crate")
-    # The workflow already verified this source package with cargo publish --dry-run.
+    # The finalize job already verified this source package with cargo package --locked.
     subprocess.run(["cargo", "publish", "--locked", "--no-verify"], cwd=root, check=True)
     for _ in range(18):
         existing = registry_checksum(release_version)
@@ -435,10 +425,7 @@ def main():
             with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
                 event = json.load(stream)
             tag, build_only = event_mode(os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"], event)
-            if tag is None and not build_only:
-                prepare(automatic=True)
-            else:
-                validate_tag(tag, build_only=build_only)
+            validate_tag(tag, build_only=build_only)
         else:
             validate_tag(args.tag, build_only=args.build_only)
     elif args.command in {"package", "pack"}:

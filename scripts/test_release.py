@@ -16,29 +16,29 @@ import release
 
 
 class EventTests(unittest.TestCase):
-    def test_version_tags_and_main_can_select_publication(self):
+    def test_only_version_tag_push_or_explicit_main_dispatch_can_publish(self):
         self.assertEqual(release.event_mode("push", "refs/tags/v0.5.0", {}), ("v0.5.0", False))
         self.assertEqual(release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": {"tag": "v0.5.0"}}), ("v0.5.0", False))
-        self.assertEqual(release.event_mode("push", "refs/heads/main", {}), (None, False))
-        self.assertEqual(release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": {"tag": ""}}), (None, False))
 
     def test_preflight_events_never_select_a_release_tag(self):
-        for build_only in (True, "true"):
-            with self.subTest(build_only=build_only):
-                self.assertEqual(release.event_mode("workflow_dispatch", "refs/heads/main",
-                                                   {"inputs": {"build_only": build_only}}), (None, True))
-
-    def test_dispatch_rejects_ambiguous_or_invalid_inputs(self):
-        for inputs in ({"tag": "v0.5.0", "build_only": True}, {"build_only": "yes"}, {"tag": 5}):
-            with self.subTest(inputs=inputs), self.assertRaises(ValueError):
-                release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": inputs})
+        for event_name, ref, event in (
+            ("workflow_dispatch", "refs/heads/main", {"inputs": {"tag": ""}}),
+            ("workflow_dispatch", "refs/heads/main", {}),
+            ("workflow_dispatch", "refs/heads/main", {"inputs": {"build_only": False}}),
+            ("workflow_dispatch", "refs/heads/main", {"inputs": {"build_only": "false"}}),
+            ("workflow_dispatch", "refs/heads/main", {"inputs": {"build_only": True}}),
+            ("workflow_dispatch", "refs/heads/main", {"inputs": {"build_only": "true"}}),
+            ("create", "refs/heads/release-check", {"ref": "release-check", "ref_type": "branch"}),
+            ("push", "refs/heads/release-check", {"created": False}),
+        ):
+            with self.subTest(event_name=event_name):
+                self.assertEqual(release.event_mode(event_name, ref, event), (None, True))
 
     def test_unrelated_events_and_duplicate_branch_creation_push_are_rejected(self):
         for event_name, ref, event in (
+            ("push", "refs/heads/main", {}),
             ("push", "refs/heads/feature", {}),
             ("push", "refs/heads/release-check", {"created": True}),
-            ("push", "refs/heads/release-check", {"created": False}),
-            ("create", "refs/heads/release-check", {"ref": "release-check", "ref_type": "branch"}),
             ("create", "refs/heads/feature", {"ref": "feature", "ref_type": "branch"}),
             ("create", "refs/tags/v0.5.0", {"ref": "v0.5.0", "ref_type": "tag"}),
             ("create", "refs/heads/release-check", {"ref": "release-check", "ref_type": "tag"}),
@@ -48,23 +48,47 @@ class EventTests(unittest.TestCase):
                 release.event_mode(event_name, ref, event)
 
 
+    def test_dispatch_rejects_ambiguous_or_invalid_inputs(self):
+        for inputs in ({"tag": "v0.5.0", "build_only": True},
+                       {"tag": "v0.5.0", "build_only": "true"},
+                       {"build_only": "yes"}, {"build_only": 1}, {"tag": 5}):
+            with self.subTest(inputs=inputs), self.assertRaises(ValueError):
+                release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": inputs})
+
+
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
+        # Local fixture repositories must not inherit developer signing, hooks,
+        # templates, or GIT_DIR/GIT_CONFIG_* overrides from the invoking shell.
+        self.git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        self.git_env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+                             "GIT_TERMINAL_PROMPT": "0"})
+        environment = mock.patch.dict(os.environ, self.git_env, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temporary = tempfile.TemporaryDirectory(prefix="ssmcp-release-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         (self.root / "Cargo.toml").write_text('[package]\nname = "ssmcp"\nversion = "0.5.0"\n')
         (self.root / "Cargo.lock").write_text('version = 4\n[[package]]\nname = "ssmcp"\nversion = "0.5.0"\n')
-        self.git("init", "--quiet", "-b", "main")
+        self.git("init", "--quiet", "--template=", "-b", "main")
         self.git("config", "user.name", "Release test")
         self.git("config", "user.email", "release-test@example.invalid")
+        self.git("config", "commit.gpgSign", "false")
+        self.git("config", "tag.gpgSign", "false")
+        self.git("config", "core.hooksPath", os.devnull)
         self.git("add", ".")
         self.git("commit", "--quiet", "-m", "fixture")
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.git("tag", "v0.5.0")
 
     def git(self, *args):
-        return subprocess.check_output(["git", *args], cwd=self.root, text=True, stderr=subprocess.PIPE).strip()
+        try:
+            return subprocess.check_output(["git", *args], cwd=self.root, env=self.git_env,
+                                           text=True, stderr=subprocess.PIPE).strip()
+        except subprocess.CalledProcessError as error:
+            self.fail(f"fixture git {args!r} failed with exit {error.returncode} in {self.root}\n"
+                      f"stdout: {error.output}\nstderr: {error.stderr}")
 
     def test_validate_tag_and_locked_version(self):
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -204,15 +228,15 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "installer is missing or differs"):
             release.checksums(self.root)
 
-    def test_main_prepare_does_not_create_tag_and_skips_existing_versions(self):
+    def test_legacy_main_prepare_is_always_preflight_even_without_a_tag(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(release.prepare(automatic=True, root=self.root)["publish"], "false")
             self.git("tag", "-d", "v0.5.0")
             prepared = release.prepare(automatic=True, root=self.root)
-        self.assertEqual(prepared["publish"], "true")
-        self.assertEqual(prepared["create_tag"], "true")
-        self.assertEqual(prepared["build_only"], "false")
-        self.assertEqual(prepared["tag"], "v0.5.0")
+        self.assertEqual(prepared["publish"], "false")
+        self.assertEqual(prepared["build_only"], "true")
+        self.assertEqual(prepared["create_tag"], "false")
+        self.assertEqual(prepared["tag"], "")
         self.assertEqual(prepared["sha"], self.git("rev-parse", "HEAD"))
         self.assertEqual(self.git("tag", "--list"), "")
 
@@ -234,7 +258,7 @@ class ReleaseTests(unittest.TestCase):
         self.git("tag", "-d", "v0.5.0")
         sha = self.git("rev-parse", "HEAD")
         with tempfile.TemporaryDirectory(prefix="ssmcp-release-origin-") as remote:
-            subprocess.run(["git", "init", "--bare", "--quiet", remote], check=True)
+            self.git("init", "--bare", "--quiet", "--template=", remote)
             self.git("remote", "add", "origin", remote)
             self.git("push", "--quiet", "origin", "main")
             release.create_tag("v0.5.0", sha, self.root)
@@ -249,7 +273,7 @@ class ReleaseTests(unittest.TestCase):
     def test_tag_retry_pushes_an_existing_local_tag_missing_from_origin(self):
         sha = self.git("rev-parse", "HEAD")
         with tempfile.TemporaryDirectory(prefix="ssmcp-release-origin-") as remote:
-            subprocess.run(["git", "init", "--bare", "--quiet", remote], check=True)
+            self.git("init", "--bare", "--quiet", "--template=", remote)
             self.git("remote", "add", "origin", remote)
             self.git("push", "--quiet", "origin", "main")
             release.create_tag("v0.5.0", sha, self.root)
