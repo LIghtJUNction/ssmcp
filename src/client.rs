@@ -36,11 +36,15 @@ use tokio::{
 const HELP: &str = r#"ssmcp — expose a local shell and every installed coding harness over SSH
 
 Usage: ssmcp [options] [user@]host
+       ssmcp sessions <list|status|start|stop|restart|logs|auth|remove> [NAME]
 
   -i identity          SSH private key file
   -p port              SSH port
   -F ssh_config        OpenSSH configuration file
   --name NAME          Display name (default: hostname-pid)
+  --daemon             Start a quiet, user-owned native background service
+  --watchdog           Retry disconnected/failed connections until explicitly stopped
+  --reconnect-delay N  Seconds between retries, 1..=3600 (default 5; needs --watchdog)
   --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (at most 32 distinct users; case-insensitive)
@@ -66,6 +70,9 @@ Examples:
   ssmcp -F ~/.ssh/work_config my-server
   ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
   ssmcp --allow octocat@github,alice@github my-server
+  ssmcp --daemon --watchdog --name workstation --allow octocat@github my-server
+  ssmcp sessions status workstation
+  ssmcp sessions stop workstation
 
 Redirected stdout (or jsonl mode) emits one connection JSON object.
 Interactive stdout shows the MCP URL and OAuth login instructions.
@@ -88,11 +95,26 @@ adds --context-root. These extra roots expose context documents, not file writes
 Keep this process running; Ctrl-C disconnects and stops local harnesses and jobs.
 Without --allow, disconnecting revokes this connection's OAuth grants and
 reconnecting needs a new OAuth login. An MCP app restart can reuse valid tokens.
+Background services use systemd --user on Linux, launchd on macOS, and a current-
+user Scheduled Task on Windows. They do not enable startup at boot or login.
+Use sessions auth NAME to read private OAuth connection details explicitly.
+Background logs use JSONL without terminal colors; foreground display options
+do not change service logging. Stopping a session suppresses its watchdog.
+Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.
 "#;
 
 // A single reader owns every partial frame after Ready, including while a native
 // backend starts. A separate persistent status channel records a closed bridge
 // even when its frame queue has not yet been consumed.
+// A reconnect owns its stderr reader, including early failures.
+struct SshStderr(JoinHandle<()>);
+
+impl Drop for SshStderr {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 struct Incoming {
     frames: mpsc::Receiver<io::Result<Option<Frame>>>,
     closed: watch::Receiver<Option<String>>,
@@ -184,6 +206,9 @@ struct Options {
     allow: Vec<String>,
     context_roots: Vec<PathBuf>,
     list_tools: bool,
+    daemon: bool,
+    watchdog: bool,
+    reconnect_delay_secs: u64,
     log_format: Option<render::LogFormat>,
     ui_config: Option<PathBuf>,
     theme: Option<ui::Theme>,
@@ -205,6 +230,9 @@ impl Options {
         let mut allow = Vec::new();
         let mut context_roots = Vec::new();
         let mut list_tools = false;
+        let mut daemon = false;
+        let mut watchdog = false;
+        let mut reconnect_delay_secs = None;
         let mut log_format = None;
         let mut ui_config = None;
         let mut theme = None;
@@ -279,6 +307,18 @@ impl Options {
                     context_roots.push(path);
                 }
                 Some("--list-tools") => list_tools = true,
+                Some("--daemon") => daemon = true,
+                Some("--watchdog") => watchdog = true,
+                Some("--reconnect-delay") => {
+                    reconnect_delay_secs = Some(
+                        args.next()
+                            .and_then(|value| {
+                                value.to_str().and_then(|value| value.parse::<u64>().ok())
+                            })
+                            .filter(|value| (1..=3600).contains(value))
+                            .ok_or("--reconnect-delay must be in 1..=3600 seconds")?,
+                    );
+                }
                 Some("--log-format") => {
                     let value = args
                         .next()
@@ -337,6 +377,12 @@ impl Options {
         if list_tools && destination.is_some() {
             return Err("--list-tools is local and does not take an SSH destination".into());
         }
+        if list_tools && (daemon || watchdog || reconnect_delay_secs.is_some()) {
+            return Err("--list-tools cannot be combined with --daemon or --watchdog".into());
+        }
+        if reconnect_delay_secs.is_some() && !watchdog {
+            return Err("--reconnect-delay requires --watchdog".into());
+        }
         if list_tools && !allow.is_empty() {
             return Err(
                 "--allow requires an SSH connection and cannot be used with --list-tools".into(),
@@ -358,6 +404,9 @@ impl Options {
             allow,
             context_roots,
             list_tools,
+            daemon,
+            watchdog,
+            reconnect_delay_secs: reconnect_delay_secs.unwrap_or(5),
             log_format,
             ui_config,
             theme,
@@ -390,6 +439,61 @@ impl Options {
         };
         metadata.validate()?;
         Ok(metadata)
+    }
+
+    /// Store only validated connection settings. Service stdout/stderr have a
+    /// fixed non-interactive format, so display themes are deliberately omitted.
+    fn session_spec(&self) -> crate::Result<crate::session::SessionSpec> {
+        let metadata = self.metadata()?;
+        let mut args = vec![OsString::from("--name"), OsString::from(&metadata.name)];
+        for (flag, value) in [("-i", &self.identity), ("-F", &self.config)] {
+            if let Some(value) = value {
+                args.extend([OsString::from(flag), value.clone()]);
+            }
+        }
+        if let Some(port) = self.port {
+            args.extend([OsString::from("-p"), OsString::from(port.to_string())]);
+        }
+        if let Some(title) = &self.title {
+            args.extend([OsString::from("--title"), OsString::from(title)]);
+        }
+        for principal in &self.allow {
+            args.extend([OsString::from("--allow"), OsString::from(principal)]);
+        }
+        for path in &self.context_roots {
+            args.extend([
+                OsString::from("--context-root"),
+                path.clone().into_os_string(),
+            ]);
+        }
+        args.extend([
+            OsString::from("--shell"),
+            self.shell.clone().into_os_string(),
+        ]);
+        if self.watchdog {
+            args.extend([
+                OsString::from("--watchdog"),
+                OsString::from("--reconnect-delay"),
+                OsString::from(self.reconnect_delay_secs.to_string()),
+            ]);
+        }
+        args.push(OsString::from(
+            self.destination.as_ref().ok_or("missing SSH destination")?,
+        ));
+        let args = args
+            .into_iter()
+            .map(|arg| {
+                arg.into_string()
+                    .map_err(|_| "background session arguments must be UTF-8".into())
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        Ok(crate::session::SessionSpec {
+            name: metadata.name,
+            cwd: PathBuf::from(metadata.cwd),
+            args,
+            watchdog: self.watchdog,
+            reconnect_delay_secs: self.reconnect_delay_secs,
+        })
     }
 
     fn command(&self) -> Command {
@@ -486,10 +590,58 @@ pub async fn run() -> crate::Result<()> {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__rsync-transport")) {
         return crate::rsync::transport_main().await;
     }
-    let Some(options) = Options::parse(std::env::args_os().skip(1))? else {
+    let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "sessions") {
+        return crate::session::manage(args.into_iter().skip(1).collect()).await;
+    }
+    let mut service = if args.first().is_some_and(|arg| arg == "__session-run") {
+        if args.len() != 2 {
+            return Err("internal session runner requires exactly one session name".into());
+        }
+        let name = args[1].to_str().ok_or("session name must be UTF-8")?;
+        let runner = crate::session::Runner::open(name)?;
+        if runner.stop_requested() {
+            runner.record("stopped", 0, None, None, None)?;
+            return Ok(());
+        }
+        std::env::set_current_dir(&runner.spec().cwd)?;
+        args = runner.spec().args.iter().map(OsString::from).collect();
+        Some(runner)
+    } else {
+        None
+    };
+    let Some(options) = Options::parse(args)? else {
         return Ok(());
     };
-    let mut ui = ui::Ui::load(options.ui_config.as_deref())?;
+    if let Some(runner) = &service
+        && (options.daemon
+            || options.list_tools
+            || options.watchdog != runner.spec().watchdog
+            || options.reconnect_delay_secs != runner.spec().reconnect_delay_secs)
+    {
+        return Err("saved background session options do not match its manifest".into());
+    }
+    if options.daemon {
+        let result = crate::session::start(options.session_spec()?).await?;
+        use std::io::IsTerminal;
+        if io::stdout().is_terminal() {
+            let name = result
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("session");
+            println!(
+                "Started background session {name}. Check connection: ssmcp sessions status {name}"
+            );
+        } else {
+            println!("{result}");
+        }
+        return Ok(());
+    }
+    let mut ui = if service.is_some() {
+        ui::Ui::default()
+    } else {
+        ui::Ui::load(options.ui_config.as_deref())?
+    };
     if let Some(format) = options.log_format {
         ui.log_format = format;
     }
@@ -501,6 +653,12 @@ pub async fn run() -> crate::Result<()> {
     }
     ui.timestamps |= options.timestamps;
     ui.color &= !options.no_color;
+    if service.is_some() {
+        ui.dashboard = false;
+        ui.color = false;
+        ui.log_format = render::LogFormat::Jsonl;
+        ui.show_raw_json = false;
+    }
     render::configure(ui.clone());
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
@@ -530,6 +688,113 @@ pub async fn run() -> crate::Result<()> {
         println!("{}", json!({"type":"shell","tools":tools?}));
         return Ok(());
     }
+    let mut attempt = 0u64;
+    loop {
+        if let Some(runner) = &service
+            && runner.stop_requested()
+        {
+            runner.record("stopped", attempt, None, None, None)?;
+            return Ok(());
+        }
+        attempt = attempt.saturating_add(1);
+        if let Some(runner) = &service {
+            runner.record("starting", attempt, None, None, None)?;
+        }
+        let result = match connect(&options, &ui, service.as_ref(), attempt).await {
+            Ok(ConnectionExit::Reload { restart, output }) => {
+                // The ACK and broker receipt were sent before connect cleaned
+                // up every old task. Stop wins over a reload arriving at exit.
+                let stopped = tokio::select! {
+                    biased;
+                    _ = interrupt.recv() => true,
+                    _ = terminate.recv() => true,
+                    _ = std::future::ready(()) => service.as_ref().is_some_and(|runner| runner.stop_requested()),
+                };
+                if stopped {
+                    if let Some(runner) = &service {
+                        runner.record("stopped", attempt, None, None, None)?;
+                    }
+                    return Ok(());
+                }
+                if let Some(runner) = &service {
+                    runner.record("reconnecting", attempt, None, None, None)?;
+                }
+                // Windows waits for its replacement rather than exec'ing.
+                // Release the old service lease before the new runner opens it.
+                drop(service.take());
+                return restart.execute(output);
+            }
+            other => other,
+        };
+        if matches!(result, Ok(ConnectionExit::Stopped)) {
+            if let Some(runner) = &service {
+                runner.record("stopped", attempt, None, None, None)?;
+            }
+            return Ok(());
+        }
+        let error = result.as_ref().err().map(ToString::to_string);
+        if !options.watchdog {
+            if let Some(runner) = &service {
+                runner.record("disconnected", attempt, None, None, error.as_deref())?;
+            }
+            return result.map(|_| ());
+        }
+        if let Some(runner) = &service {
+            if runner.stop_requested() {
+                runner.record("stopped", attempt, None, None, None)?;
+                return Ok(());
+            }
+            runner.record(
+                "reconnecting",
+                attempt,
+                Some(options.reconnect_delay_secs),
+                None,
+                error.as_deref(),
+            )?;
+        }
+        if let Some(error) = &error {
+            report_error(error);
+        }
+        render::status(
+            "watchdog",
+            "Progress",
+            &format!(
+                "Disconnected; retrying in {}s (attempt {}). Stop with Ctrl-C or ssmcp sessions stop NAME.",
+                options.reconnect_delay_secs,
+                attempt.saturating_add(1)
+            ),
+        );
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(options.reconnect_delay_secs)) => {},
+            _ = interrupt.recv() => {
+                if let Some(runner) = &service { runner.record("stopped", attempt, None, None, None)?; }
+                return Ok(());
+            },
+            _ = terminate.recv() => {
+                if let Some(runner) = &service { runner.record("stopped", attempt, None, None, None)?; }
+                return Ok(());
+            },
+        }
+    }
+}
+
+enum ConnectionExit {
+    Stopped,
+    Disconnected,
+    Reload {
+        restart: reload::Restart,
+        output: Arc<crate::output::OutputStore>,
+    },
+}
+
+async fn connect(
+    options: &Options,
+    ui: &ui::Ui,
+    service: Option<&crate::session::Runner>,
+    attempt: u64,
+) -> crate::Result<ConnectionExit> {
+    let mut interrupt = interrupt_signal()?;
+    let mut terminate = terminate_signal()?;
     let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
     render::status(
@@ -540,12 +805,31 @@ pub async fn run() -> crate::Result<()> {
             options.destination.as_deref().unwrap_or("configured host")
         ),
     );
-    let mut ssh = options
-        .command()
+    let mut command = options.command();
+    if service.is_some() {
+        // No terminal exists for a service to answer SSH authentication prompts.
+        // Existing keys, agents and host-key policy still decide access.
+        // Insert before the destination: OpenSSH parses options in order.
+        let arguments = command
+            .as_std()
+            .get_args()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let mut background = Command::new("ssh");
+        background
+            .args(["-o", "BatchMode=yes"])
+            .args(arguments)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        command = background;
+    }
+    let mut ssh = command
         .spawn()
         .map_err(|e| format!("could not start OpenSSH ssh: {e}"))?;
-    if let Some(mut stderr) = ssh.stderr.take() {
-        tokio::spawn(async move {
+    let _stderr_pump = ssh.stderr.take().map(|mut stderr| {
+        SshStderr(tokio::spawn(async move {
             let mut bytes = [0u8; 4096];
             while let Ok(n) = stderr.read(&mut bytes).await {
                 if n == 0 {
@@ -556,8 +840,8 @@ pub async fn run() -> crate::Result<()> {
                     &json!({"stderr":String::from_utf8_lossy(&bytes[..n])}),
                 );
             }
-        });
-    }
+        }))
+    });
     let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
     let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
     write_frame(
@@ -571,8 +855,8 @@ pub async fn run() -> crate::Result<()> {
     .await?;
     let ready = tokio::select! {
         result = timeout(Duration::from_secs(120),read_frame(&mut reader)) => result.map_err(|_| "SSH authentication timed out")??,
-        _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(()); },
-        _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
+        _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
+        _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
     };
     let (url, login_code, login_expires_in, client_id) = match ready {
         Some(Frame::Ready { url, login_code, login_expires_in, client_id }) => (url, login_code, login_expires_in, client_id),
@@ -593,7 +877,7 @@ pub async fn run() -> crate::Result<()> {
         return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
     }
     let login_received_at = std::time::Instant::now();
-    let display_session = match terminal::Session::start(&ui) {
+    let display_session = match terminal::Session::start(ui) {
         Ok(session) => session,
         Err(error) => {
             render::status(
@@ -614,8 +898,8 @@ pub async fn run() -> crate::Result<()> {
         biased;
         error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(error.into()); },
         status = ssh.wait() => return Err(ssh_ended(status).into()),
-        _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(()); },
-        _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
+        _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
+        _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = match Runtime::with_context_roots(
@@ -637,8 +921,8 @@ pub async fn run() -> crate::Result<()> {
         biased;
         error = incoming.disconnected() => Err(error),
         status = ssh.wait() => Err(ssh_ended(status)),
-        _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(()); },
-        _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(()); },
+        _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
+        _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         result = timeout(Duration::from_secs(120), backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
     };
     if let Err(error) = discovered.and_then(|_| incoming.ensure_open(&mut ssh)) {
@@ -660,12 +944,17 @@ pub async fn run() -> crate::Result<()> {
         output["login_code"] = json!(login_code);
         output["login_expires_in"] = json!(login_expires_in);
     }
-    if let Err(error) = render::connection(&output) {
+    let published: crate::Result<()> = if let Some(runner) = service {
+        runner.record("connected", attempt, None, Some(&output), None)
+    } else {
+        render::connection(&output).map_err(Into::into)
+    };
+    if let Err(error) = published {
         let _ = ssh.start_kill();
         backend.shutdown().await;
         incoming.stop().await;
         let _ = ssh.wait().await;
-        return Err(error.into());
+        return Err(error);
     }
     render::status(
         "shell",
@@ -702,8 +991,17 @@ pub async fn run() -> crate::Result<()> {
     let writer = Arc::new(Mutex::new(writer));
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
     let mut reload_requested = false;
+    let mut intentionally_stopped = false;
+    let mut service_updates = tokio::time::interval(Duration::from_secs(1));
+    service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result: crate::Result<()> = 'connected: loop {
         tokio::select! {
+            _ = service_updates.tick(), if service.is_some() => {
+                if service.expect("guarded service runner").stop_requested() {
+                    intentionally_stopped = true;
+                    break Ok(());
+                }
+            },
             _ = ui_updates.tick(), if git_status.is_some() => {
                 if let Some(observer) = &git_status {
                     render::set_git_status(observer.snapshot());
@@ -795,8 +1093,8 @@ pub async fn run() -> crate::Result<()> {
                 Some(Err(error)) => break Err(error.into()),
                 None => {},
             },
-            _ = interrupt.recv() => break Ok(()),
-            _ = terminate.recv() => break Ok(()),
+            _ = interrupt.recv() => { intentionally_stopped = true; break Ok(()); },
+            _ = terminate.recv() => { intentionally_stopped = true; break Ok(()); },
         }
     };
     if let Some(input) = local_input {
@@ -815,9 +1113,18 @@ pub async fn run() -> crate::Result<()> {
     drop(display_session);
     render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {
-        return restart.execute(backend.output());
+        return Ok(ConnectionExit::Reload {
+            restart,
+            output: backend.output(),
+        });
     }
-    result
+    result.map(|()| {
+        if intentionally_stopped {
+            ConnectionExit::Stopped
+        } else {
+            ConnectionExit::Disconnected
+        }
+    })
 }
 
 /// Print a terminal failure using the selected client log format.
@@ -828,6 +1135,86 @@ pub fn report_error(error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_and_watchdog_options_have_bounded_explicit_lifecycles() {
+        let normal = Options::parse(["host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert!(!normal.daemon && !normal.watchdog);
+        let retry = Options::parse(["--watchdog", "host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.reconnect_delay_secs, 5);
+        for delay in ["1", "3600"] {
+            let options = Options::parse(
+                ["--daemon", "--watchdog", "--reconnect-delay", delay, "host"].map(OsString::from),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(options.daemon && options.watchdog);
+            assert_eq!(options.reconnect_delay_secs.to_string(), delay);
+        }
+        for delay in ["0", "3601", "-1", "five"] {
+            assert!(
+                Options::parse(
+                    ["--watchdog", "--reconnect-delay", delay, "host"].map(OsString::from)
+                )
+                .is_err()
+            );
+        }
+        assert!(Options::parse(["--reconnect-delay", "5", "host"].map(OsString::from)).is_err());
+        for flag in ["--daemon", "--watchdog"] {
+            assert!(Options::parse([flag, "--list-tools"].map(OsString::from)).is_err());
+        }
+    }
+
+    #[test]
+    fn background_manifest_retains_native_connection_arguments_without_recursing() {
+        let options = Options::parse(
+            [
+                "--daemon",
+                "--watchdog",
+                "--reconnect-delay",
+                "7",
+                "--name",
+                "workstation",
+                "--title",
+                "--daemon",
+                "--allow",
+                "OctoCat@GitHub",
+                "-i",
+                "key with spaces",
+                "-F",
+                "config with spaces",
+                "-p",
+                "2222",
+                "--theme",
+                "nord",
+                "user@host",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        let spec = options.session_spec().unwrap();
+        assert_eq!(spec.name, "workstation");
+        assert!(spec.cwd.is_absolute());
+        assert!(spec.watchdog);
+        assert_eq!(spec.reconnect_delay_secs, 7);
+        let restored = Options::parse(spec.args.into_iter().map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert!(!restored.daemon);
+        assert_eq!(restored.title.as_deref(), Some("--daemon"));
+        assert_eq!(restored.allow, ["octocat@github"]);
+        assert_eq!(restored.identity, options.identity);
+        assert_eq!(restored.config, options.config);
+        assert_eq!(restored.port, options.port);
+        assert_eq!(restored.destination, options.destination);
+        assert_eq!(restored.shell, options.shell);
+        assert!(restored.theme.is_none());
+    }
 
     #[test]
     fn log_format_options_only_select_display_and_are_not_forwarded() {

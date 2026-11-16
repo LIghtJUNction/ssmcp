@@ -857,13 +857,29 @@ mod tests {
                 std::future::pending().await
             })
         });
-        let task = tokio::spawn(trusted_execute(
+        let entered_notice = entered.notified();
+        tokio::pin!(entered_notice);
+        entered_notice.as_mut().enable();
+        let mut task = tokio::spawn(trusted_execute(
             "await call('one','wait',{});".into(),
             MAX_TIMEOUT_MS,
             json!([]),
             host,
         ));
-        entered.notified().await;
+        tokio::select! {
+            biased;
+            _ = &mut entered_notice => {},
+            result = &mut task => {
+                // This branch already joined the worker; polling it again would panic.
+                task.abort();
+                panic!("code_mode worker exited before entering the pending host call: {result:?}");
+            },
+            _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                task.abort();
+                let result = task.await;
+                panic!("code_mode worker did not enter the pending host call within 15 seconds; aborted worker: {result:?}");
+            },
+        }
         task.abort();
         let _ = task.await;
         tokio::time::timeout(Duration::from_secs(2), async {
