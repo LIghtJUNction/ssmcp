@@ -73,6 +73,7 @@ fn session_capacity_recycles_only_idle_anonymous_visitors() {
         digest("pending"),
         Pending {
             browser: digest("1"),
+            return_to: None,
             verifier: "fixture".to_owned(),
             expires: now + LOGIN_TTL,
         },

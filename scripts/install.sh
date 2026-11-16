@@ -93,23 +93,60 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-download() {
-    curl --fail --silent --show-error --location --retry 3 --connect-timeout 15 \
-        --max-time 300 --proto '=https' --proto-redir '=https' --tlsv1.2 \
-        "$release_url/$1" --output "$work_dir/$1"
+# Metadata is fetched only from the official release. Public binary mirrors
+# never supply the trust root, and curl's user config cannot add credentials.
+download_url() {
+    # Older curl only checks --max-filesize when the server declares a size.
+    # POSIX /bin/sh uses 512-byte ulimit blocks; the kernel also bounds unknown
+    # or chunked transfers. A fresh shell keeps each limit out of later phases,
+    # even when the installer itself was invoked using non-POSIX bash.
+    /bin/sh -c '
+        case "$3" in ""|*[!0-9]*) exit 1 ;; esac
+        [ "$3" -gt 0 ] && [ "$(($3 % 512))" -eq 0 ] || exit 1
+        ulimit -c 0 || exit 1
+        ulimit -f "$(($3 / 512))" || {
+            printf "%s\n" "ssmcp install: cannot enforce the download file-size limit" >&2
+            exit 1
+        }
+        exec curl --disable --fail --silent --show-error --location \
+            --connect-timeout 8 --speed-time 12 --speed-limit 65536 \
+            --max-time 180 --max-filesize "$3" \
+            --proto "=https" --proto-redir "=https" --tlsv1.2 \
+            "$1" --output "$2"
+    ' ssmcp-download "$1" "$2" "$3"
 }
-printf 'Downloading ssmcp for %s…\n' "$target"
-download SHA256SUMS
-download "$archive"
+digest_file() {
+    if [ "$hash_command" = sha256sum ]; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+printf 'Downloading trusted checksums for %s…\n' "$target"
+download_url "$release_url/SHA256SUMS" "$work_dir/SHA256SUMS" 262144 \
+    || fail 'could not fetch trusted checksums from the official release'
 expected=$(awk -v name="$archive" '$2 == name { print $1; count++ } END { if (count != 1) exit 1 }' "$work_dir/SHA256SUMS") \
     || fail 'release checksum entry is missing or duplicated'
 printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || fail 'invalid release checksum'
-if [ "$hash_command" = sha256sum ]; then
-    actual=$(sha256sum "$work_dir/$archive" | awk '{print $1}')
-else
-    actual=$(shasum -a 256 "$work_dir/$archive" | awk '{print $1}')
-fi
-[ "$actual" = "$expected" ] || fail 'download checksum mismatch; existing installation was preserved'
+verified=false
+for download_source in \
+    "$release_url/$archive" \
+    "https://ghfast.top/$release_url/$archive" \
+    "https://gh-proxy.com/$release_url/$archive"; do
+    rm -f "$work_dir/$archive"
+    printf 'Downloading public archive: %s\n' "$download_source"
+    if download_url "$download_source" "$work_dir/$archive" 134217728; then
+        actual=$(digest_file "$work_dir/$archive")
+        if [ "$actual" = "$expected" ]; then
+            verified=true
+            break
+        fi
+        printf 'ssmcp install: checksum mismatch; rejecting this source\n' >&2
+    else
+        printf 'ssmcp install: download failed, stalled or stayed too slow; trying the next source\n' >&2
+    fi
+done
+[ "$verified" = true ] || fail 'all public download routes failed verification; existing installation was preserved'
 
 tar -xzf "$work_dir/$archive" -C "$work_dir" ssmcp
 binary=$work_dir/ssmcp

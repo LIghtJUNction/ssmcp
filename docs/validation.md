@@ -1,5 +1,7 @@
 # ssmcp 0.4.0 GitHub 登录与会话权限验收
 
+本页保留 0.4.0 初版的源码与自动化验收记录。生产服务后续已更新至 0.4.1，2026-11-16 的公网登录、权限隔离与 RT 轮换补验全部通过；当前版本、登记持久化和验证边界见[生产环境补充验收](oauth-production-20261116.md)。
+
 0.4.0 增加每个会话的 `--allow 用户名@github` 策略。本机仍通过 SSH 公钥连接，GitHub 登录发生在浏览器中的 MCP 授权流程；服务器验证 GitHub 身份后，还要求用户明确同意当前 MCP 客户端。发现、读取工具 schema 和实际调用均按目标会话的允许列表检查。[实现提交](https://github.com/LIghtJUNction/ssmcp/commit/95fa57967c4622705a2aba761ea4bed73663b451) · [配置教程](configuration.md#github-allow)
 
 ## 版本与测试依据

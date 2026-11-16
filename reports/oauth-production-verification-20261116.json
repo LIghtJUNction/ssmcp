@@ -1,0 +1,64 @@
+{
+  "checks": {
+    "disconnected_family_rejected": true,
+    "github_schema_denied": true,
+    "legacy_inventory_filtered": true,
+    "legacy_smoke_ready": true,
+    "mcp_initialize": true,
+    "mcp_public_tools": true,
+    "native_terminal_status": true,
+    "oauth_dcr_refresh_default": true,
+    "oauth_discovery": true,
+    "oauth_pkce_login": true,
+    "production_smoke_passed": true,
+    "refresh_rotated": true,
+    "refreshed_token_usable": true,
+    "restricted_client_closed": true,
+    "restricted_github_ready": true,
+    "temporary_client_closed": true
+  },
+  "error_step": null,
+  "finished_at": "2026-11-16T18:20:03.823211+00:00",
+  "fixture_correction": "Require one distinct transaction_id when GitHub and login-code forms share an authorization transaction.",
+  "live_client_version": "0.4.1",
+  "origin_deployment_report": "reports/deploy-0.4.0-20261116.json",
+  "schema_version": 1,
+  "scope": "OAuth production smoke only; no package installation or service restart",
+  "started_at": "2026-11-16T18:19:45.071720+00:00",
+  "state": "passed",
+  "public_url": "https://ssmcp.lmm.best",
+  "callback_url": "https://ssmcp.lmm.best/oauth/callback/github",
+  "source_reference": {
+    "github_oauth_commit": "95fa57967c4622705a2aba761ea4bed73663b451",
+    "configuration_docs_commit": "65b044403ec8ab58fef7a5f008d49d0c26209f89",
+    "main_at_review": "eeb7588cbbb0ad49d2cf0d05d90a0f3de8667c70"
+  },
+  "live_environment": {
+    "daemon_version": "0.4.1",
+    "system_client_version": "0.4.1",
+    "service_active": true,
+    "service_pid_unchanged": true,
+    "configuration_path": "/etc/ssmcpd/ssmcpd.toml",
+    "configuration_owner": "ssmcpd",
+    "configuration_mode": "0600",
+    "github_oauth_configured": true,
+    "client_registry_path": "/var/lib/ssmcpd/oauth-clients.toml",
+    "client_registry_present": true,
+    "client_registry_mode": "0600",
+    "state_directory": "ssmcpd",
+    "public_health": "ok",
+    "observed_access_token_expires_in_seconds": 28800,
+    "configured_oauth_lifetimes_seconds": {
+      "access_token_ttl": 28800,
+      "client_registration_ttl": 31536000,
+      "refresh_token_idle_ttl": 2592000,
+      "refresh_token_max_ttl": 7776000
+    }
+  },
+  "validation_limits": [
+    "No package installation, service restart, or changes to existing client sessions during this verification.",
+    "Real user GitHub browser consent was not replayed; GitHub ACL resolution and the live MCP protocol were checked.",
+    "ChatGPT automatic refresh scheduling was not observed; production token rotation and use of the replacement access token passed.",
+    "Client registration persistence was observed in configuration and an existing private registry file; no restart test was performed in this verification."
+  ]
+}
