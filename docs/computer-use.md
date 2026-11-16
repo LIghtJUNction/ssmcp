@@ -55,6 +55,41 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.computer.status", {});
 
 旧服务器连接新客户端时仍可通过工具目录和 `call` 使用原生接口。`computer`、`browser`、`omarchy` 便捷命名空间及 `image()` 图片显示通道需要同步更新服务端。
 
+## CUA 入口与 Codex 工具
+
+`code_mode` 内置 `cua`，用于直接操作连接开发机的桌面和浏览器。桌面方法与 `computer` 共用实现，`cua.browser` 与 `browser` 是同一组方法；两种写法接收相同参数、返回相同的完整 MCP 结果。截图、点击、移动、拖拽、按键、文字输入和滚动都直接调用客户端原生工具。
+
+先读取能力，再根据返回的截图和坐标映射操作：
+
+```javascript
+const id = "CLIENT_ID_FROM_LIST";
+const status = await cua.status(id);
+if (status.isError) return status;
+
+const shot = await cua.screenshot(id, { max_width: 1600 });
+image(shot);
+return { status: status.structuredContent, screenshot: shot.structuredContent };
+```
+
+`image(shot)` 使用现有图片通道显示截图，`shot.structuredContent` 保留尺寸、裁剪区域和 `image_to_desktop` 映射。截图失败时，`image()` 会抛出包含原生错误的异常；也可以先检查 `shot.isError` 自行处理。图片不需要转成文本日志。
+
+电脑接口表中的所有方法都能以 `cua` 调用，例如 `cua.click(id, {x, y})`、`cua.key(id, {key: "Return"})`、`cua.type(id, {text: "你好"})`。浏览器使用 `cua.browser.snapshot(id, {target_id})` 等方法，参数仍以客户端工具目录为准。输入动作按观察结果顺序执行；后台命令使用 `exec.start`，独立命令的并行编排使用 `exec.parallel`。
+
+**Codex 已连接的 CUA MCP 工具继续按其原始 schema 调用。** ssmcp 的 Codex 适配器读取本机 Codex 公开的工具目录，把其中的 MCP 工具注册为 `codex.mcp.*`。工具名可能包含转义或散列，必须复制 `list({client_id})` 返回的完整名称，不能根据服务名称拼接。相应结果中的 `isError`、图片、`structuredContent` 和扩展字段由适配器原样保留，截图可继续交给 `image()`：
+
+```javascript
+const id = "CLIENT_ID_FROM_LIST";
+const shot = await call(id, "EXACT_CODEX_MCP_TOOL_NAME_FROM_LIST", {
+  // 填入该工具实际 inputSchema 要求的截图参数。
+});
+image(shot);
+return shot.structuredContent ?? null;
+```
+
+`cua` 入口提供的是 ssmcp 原生电脑能力；Codex MCP 转发只覆盖当前安装版本实际公开的工具。没有被 Codex 枚举的内部 CUA 接口不会被标为可用。这两条调用路径都不需要启动模型回合；原生权限和审批仍由对应工具执行。
+
+运行 `node --test scripts/test_cua_facade.mjs` 可验证真实 `code_mode` JavaScript worker 的路由、完整结果、图片通道和错误传播。该测试使用本地协议桩，不操作真实桌面，也不证明特定平台的截图与输入权限可用；平台运行证据仍以本文的验收记录为准。
+
 ## 截图与坐标
 
 `image()` 将截图作为真正的 MCP 图片内容块返回。截图元信息独立作为 JSON 返回，图片编码不会重复写入文本日志。
