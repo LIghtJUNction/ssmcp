@@ -6,6 +6,235 @@ use serde_json::{Value, json};
 use ssmcp::backend::pi::Pi;
 use tokio::time::timeout;
 
+// Persistent real Unix transport; it never launches a Harness, model or package
+// manager. Unknown model/startup commands deliberately fail the fixture.
+struct SocketFixture {
+    root: PathBuf,
+    path: PathBuf,
+    requests: Arc<std::sync::Mutex<Vec<Value>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl SocketFixture {
+    fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("ssmcp-pi-socket-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("native.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = requests.clone();
+        let task = tokio::spawn(async move {
+            let mut connection = 0;
+            let mut previous_state = None;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                connection += 1;
+                let (reader, mut writer) = stream.into_split();
+                let mut lines = BufReader::new(reader).lines();
+                let mut pending: Option<Value> = None;
+                let mut first = true;
+                while let Some(line) = lines.next_line().await.unwrap() {
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    observed.lock().unwrap().push(request.clone());
+                    let response = match request["type"].as_str().unwrap() {
+                        "fixture_approval" => {
+                            pending = Some(request.clone());
+                            json!({"type":"extension_ui_request","id":format!("native-{}",request["id"].as_str().unwrap()),"method":"confirm","title":"Native fixture approval","message":"Explicit answer required"})
+                        }
+                        "extension_ui_response" => {
+                            let original = pending.take().unwrap();
+                            json!({"type":"response","id":original["id"],"command":original["type"],"success":true,"data":{"answer":request}})
+                        }
+                        "fixture_failure" => {
+                            json!({"type":"response","id":request["id"],"command":request["type"],"success":false,"error":"native fixture refusal","nativeExtra":{"opaque":[1,true]}})
+                        }
+                        "get_state" => {
+                            if first && let Some(stale) = &previous_state {
+                                let encoded = format!("{stale}\n");
+                                if writer.write_all(encoded.as_bytes()).await.is_err() {
+                                    break;
+                                }
+                            }
+                            let current = json!({"type":"response","id":request["id"],"command":"get_state","success":true,"data":{"isStreaming":false,"connection":connection}});
+                            previous_state = Some(current.clone());
+                            current
+                        }
+                        other => panic!("unexpected startup/model command {other}"),
+                    };
+                    first = false;
+                    let encoded = response.to_string() + "\n";
+                    if writer.write_all(encoded.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        Self {
+            root,
+            path,
+            requests,
+            task,
+        }
+    }
+    async fn attach(&self) -> Arc<Pi> {
+        Pi::attach_with_output(
+            &self.path,
+            ssmcp::output::OutputStore::new_connection().unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+}
+impl Drop for SocketFixture {
+    fn drop(&mut self) {
+        self.task.abort();
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[tokio::test]
+async fn existing_socket_preserves_native_approvals_errors_and_service_lifetime() {
+    let fixture = SocketFixture::new();
+    let pi = fixture.attach().await;
+    assert_eq!(pi.tools().await.unwrap().len(), 4);
+    assert_eq!(pi.diagnostics().await["transport"], "existing_unix_socket");
+    let first_id = fixture.requests.lock().unwrap()[0]["id"].clone();
+    let failed = call(&pi, "pi.rpc", json!({"type":"fixture_failure"})).await;
+    assert_eq!(failed["isError"], true);
+    assert_eq!(payload(&failed)["nativeExtra"], json!({"opaque":[1,true]}));
+    assert_eq!(payload(&failed)["error"], "native fixture refusal");
+
+    let waiting = pi.clone();
+    let approval = tokio::spawn(async move {
+        waiting
+            .call("pi.rpc", json!({"type":"fixture_approval"}))
+            .await
+    });
+    let dialog = wait_event(&pi, "extension_ui_request").await;
+    let pending = call(&pi, "ssmcp.pi.requests", json!({})).await;
+    assert_eq!(payload(&pending)["requests"][0]["id"], dialog["id"]);
+    call(&pi, "pi.get_state", json!({})).await;
+    assert!(!approval.is_finished());
+    assert!(
+        !fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request["type"] == "extension_ui_response")
+    );
+    call(
+        &pi,
+        "ssmcp.pi.respond",
+        json!({"id":dialog["id"],"confirmed":false}),
+    )
+    .await;
+    let refused = approval.await.unwrap().unwrap();
+    assert_eq!(payload(&refused)["data"]["answer"]["confirmed"], false);
+
+    let waiting = pi.clone();
+    let abandoned = tokio::spawn(async move {
+        waiting
+            .call("pi.rpc", json!({"type":"fixture_approval"}))
+            .await
+    });
+    timeout(Duration::from_secs(5), async {
+        while payload(&call(&pi, "ssmcp.pi.requests", json!({})).await)["requests"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    pi.shutdown().await;
+    assert!(abandoned.await.unwrap().is_err());
+    assert!(
+        !fixture.task.is_finished(),
+        "disconnect must not terminate an attached native service"
+    );
+    let next_index = fixture.requests.lock().unwrap().len();
+    let reconnected = fixture.attach().await;
+    let requests = fixture.requests.lock().unwrap().clone();
+    assert_ne!(
+        requests[next_index]["id"], first_id,
+        "connections must use different request ID namespaces"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request["type"] == "extension_ui_response")
+            .count(),
+        1,
+        "disconnect must not fabricate another native approval response"
+    );
+    reconnected.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_socket_reconnect_cannot_match_a_previous_connection_response() {
+    use ssmcp::backend::rpc::{Dialect, Peer};
+    let fixture = SocketFixture::new();
+    for expected in [1, 2] {
+        let peer = Peer::connect_unix_with_output(
+            &fixture.path,
+            "pi-nonce",
+            Dialect::Pi,
+            ssmcp::output::OutputStore::new_connection().unwrap(),
+        )
+        .await
+        .unwrap();
+        let result = timeout(Duration::from_secs(5), peer.request("get_state", json!({})))
+            .await
+            .unwrap()
+            .unwrap();
+        // On reconnect the fixture deliberately sends the previous connection's
+        // response first. Reusing ssmcp-1 would resolve this call with stale data.
+        assert_eq!(result["data"]["connection"], expected);
+        peer.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn existing_socket_rejects_public_permissions_symlinks_and_non_socket_paths() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let fixture = SocketFixture::new();
+    let output = ssmcp::output::OutputStore::new_connection().unwrap();
+    assert!(
+        Pi::attach_with_output(std::path::Path::new("relative.sock"), output.clone())
+            .await
+            .is_err()
+    );
+    let file = fixture.root.join("ordinary-file");
+    std::fs::write(&file, b"not a socket").unwrap();
+    assert!(Pi::attach_with_output(&file, output.clone()).await.is_err());
+    let link = fixture.root.join("symlink.sock");
+    symlink(&fixture.path, &link).unwrap();
+    assert!(Pi::attach_with_output(&link, output.clone()).await.is_err());
+    std::fs::set_permissions(&fixture.path, std::fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(
+        Pi::attach_with_output(&fixture.path, output.clone())
+            .await
+            .is_err()
+    );
+    std::fs::set_permissions(&fixture.path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(&fixture.root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(Pi::attach_with_output(&fixture.path, output).await.is_err());
+    assert!(fixture.requests.lock().unwrap().is_empty());
+    std::fs::set_permissions(&fixture.root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    fixture.attach().await.shutdown().await;
+}
+
 async fn start() -> Arc<Pi> {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi_rpc.py");
     Pi::start(fixture.as_os_str(), &[]).await.unwrap()
@@ -411,6 +640,13 @@ async fn real_pi_cli_smoke() {
 async fn discovery_reports_control_scope_without_inventing_native_tool_schemas() {
     let pi = start().await;
     let before = call(&pi, "pi.get_state", json!({})).await;
+    assert_eq!(payload(&before)["data"]["pi_offline"], "1");
+    let args = payload(&before)["data"]["startup_args"].as_array().unwrap();
+    assert!(args.iter().any(|arg| arg == "--offline"));
+    assert!(
+        !args.iter().any(|arg| arg == "--no-extensions"),
+        "native approval extensions must not be disabled"
+    );
     let tools = pi.tools().await.unwrap();
     let names: std::collections::BTreeSet<_> = tools
         .iter()
