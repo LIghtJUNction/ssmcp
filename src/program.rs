@@ -344,7 +344,7 @@ mod tests {
         std::fs::copy(std::env::current_exe().unwrap(), &runtime).unwrap();
         assert_eq!(
             resolve("node", bin.as_os_str(), Some(&root)).unwrap(),
-            runtime
+            runtime.canonicalize().unwrap()
         );
         assert!(!root.join("downloaded").exists());
         std::fs::remove_dir_all(root).unwrap();
@@ -362,7 +362,7 @@ mod tests {
         let path = std::env::join_paths([shims, bin.clone()]).unwrap();
         assert_eq!(
             resolve("node", &path, Some(&root)).unwrap(),
-            bin.join("node")
+            bin.join("node").canonicalize().unwrap()
         );
         assert!(!native_binary(b"#!/bin/sh\nexec mise"));
         std::fs::remove_dir_all(root).unwrap();
@@ -383,7 +383,10 @@ mod tests {
         let binary = root.join(".local/share/mise/installs/pi/1.5.0/pi/pi");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
-        assert_eq!(resolve("pi", bin.as_os_str(), Some(&root)).unwrap(), binary);
+        assert_eq!(
+            resolve("pi", bin.as_os_str(), Some(&root)).unwrap(),
+            binary.canonicalize().unwrap()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

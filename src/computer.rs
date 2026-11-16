@@ -1744,7 +1744,11 @@ if root.exists():
         let case = std::env::var("SSMCP_COMPUTER_FOCUS_CASE").unwrap();
         assert_eq!(
             crate::program::executable("hyprctl").unwrap(),
-            root.parent().unwrap().join("bin/hyprctl")
+            root.parent()
+                .unwrap()
+                .join("bin/hyprctl")
+                .canonicalize()
+                .unwrap()
         );
         let computer = Computer {
             root: root.clone(),
