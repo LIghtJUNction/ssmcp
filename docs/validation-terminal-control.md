@@ -57,6 +57,14 @@ python3 scripts/e2e_terminal_control.py --bin-dir target/debug \
 ```
 
 
+## 合并 main 后的回归
+
+在功能与画面验收通过后，合并了 main 的 `663b2cdf`，保留期间新增的 OAuth 文档和首次连接向导。Cargo.toml、README.md、src/client.rs 及工具目录夹具完成三方合并，没有覆盖其他工作的内容；基础 e2e 脚本的可执行权限保持原样。
+
+合并后重新构建，并通过 client_startup 的 **9 个测试**及首次连接向导的 **5 个端到端场景**。后者包括初次连接失败后的 Ctrl-C、交互式禁用向导、非交互失败、终止信号清理，以及真实约 30 秒注册期限后的 SSH/ProxyCommand 清理。对应场景使用隔离配置和本地测试门户，没有打开真实浏览器或改变用户 SSH 配置。最后再次通过格式检查和 Clippy 全目标零警告检查。
+
+[合并后检查记录](reports/terminal-control-2026-11-16/merge-gates.json)保存命令与退出状态；[首次连接运行记录](reports/terminal-control-2026-11-16/onboarding-merge.json)保存五个场景、清理观察和实际二进制哈希。这些回归验证新增向导与本轮终端生命周期的交界，不重复计入前面的 467 项 Rust 统计。
+
 ## 兼容与交付边界
 
 旧的 `terminal.read/write/status/resize` 调用未提供 `terminal_id` 时仍指向 `main`，不受本机 F7 选择影响。后台任务属于客户端连接，连接断开或重载会停止其拥有的进程；它们不是跨断线持久服务。外层 `code_mode` 超时不会自动取消已经提交的任务，可根据 `job_id` 继续查询。

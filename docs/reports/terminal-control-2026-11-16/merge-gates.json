@@ -1,0 +1,84 @@
+[
+  {
+    "name": "merge-format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0,
+    "duration_seconds": 1.128,
+    "log": "merge-format.log"
+  },
+  {
+    "name": "merge-diff",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_code": 0,
+    "duration_seconds": 0.015,
+    "log": "merge-diff.log"
+  },
+  {
+    "name": "merge-build",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--bins",
+      "--example",
+      "vt_snapshot"
+    ],
+    "exit_code": 0,
+    "duration_seconds": 42.386,
+    "log": "merge-build.log"
+  },
+  {
+    "name": "merge-client-startup",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--test",
+      "client_startup",
+      "--",
+      "--test-threads=4"
+    ],
+    "exit_code": 0,
+    "duration_seconds": 6.727,
+    "log": "merge-client-startup.log"
+  },
+  {
+    "name": "merge-onboarding",
+    "command": [
+      "python3",
+      "scripts/e2e_onboarding.py",
+      "--binary",
+      "/home/lightjunction/Documents/GITHUB/ssmcp/target/debug/ssmcp",
+      "--output",
+      "/home/lightjunction/Documents/GITHUB/ssmcp/target/cua-parallel-task/acceptance/onboarding-merge.json"
+    ],
+    "exit_code": 0,
+    "duration_seconds": 35.53,
+    "log": "merge-onboarding.log"
+  },
+  {
+    "name": "merge-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "duration_seconds": 72.734,
+    "log": "merge-clippy.log"
+  }
+]
