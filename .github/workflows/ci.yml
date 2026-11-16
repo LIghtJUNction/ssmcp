@@ -29,7 +29,7 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends openssh-server nodejs bubblewrap apparmor-profiles
+          sudo apt-get install --yes --no-install-recommends openssh-server nodejs bubblewrap util-linux rsync apparmor-profiles
           if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
             if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
               sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
@@ -43,6 +43,7 @@ jobs:
         run: |
           cargo test --locked --lib code_mode::tests -- --include-ignored
           cargo test --locked --test two_tools -- --include-ignored
+          cargo test --locked --test workspace_bridge -- --ignored --test-threads=1
       - name: Exercise runtime under installed service restrictions
         run: |
           runtime_test="$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"

@@ -1,0 +1,12 @@
+[Unit]
+Description=Synchronize ssmcp portal public keys to restricted SSH accounts
+After=ssmcpd.service
+ConditionPathExists=/var/lib/ssmcpd/portal/accounts.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/ssmcp/sync_portal_ssh.py
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
