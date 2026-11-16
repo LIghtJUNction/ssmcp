@@ -122,6 +122,8 @@ def main():
             stage_root.mkdir(parents=True,exist_ok=True,mode=0o755)
             os.chmod('/opt/ssmcp',0o755);os.chmod('/opt/ssmcp/releases',0o755);stage_root.chmod(0o755)
             run(['bsdtar','-xpf',str(args.package),'-C',str(stage_root),'usr/bin/ssmcp','usr/bin/ssmcpd','usr/libexec/ssmcp/code-mode.js'])
+            for directory in ['usr','usr/bin','usr/libexec','usr/libexec/ssmcp']:
+                (stage_root/directory).chmod(0o755)
             check('staged_binary_version',run([str(stage_root/'usr/bin/ssmcpd'),'--version'])=='ssmcpd 0.4.1')
             command=['systemd-run','--quiet','--collect','--unit='+stage_unit,'--uid=ssmcpd','--gid=ssmcp',
                 '--property=StateDirectory='+state_name,'--property=StateDirectoryMode=0700',
