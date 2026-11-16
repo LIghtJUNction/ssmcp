@@ -205,3 +205,18 @@ CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、�
 | 看真实终端操作 | [演示视频，英文说明](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk) |
 
 [MIT License](LICENSE) · [OpenSSH](https://www.openssh.com/) · [MCP](https://modelcontextprotocol.io/)
+
+### 客户端终端输出
+
+连接凭据仍以单行 JSON 输出到 stdout；实时活动显示在 stderr，默认使用易读分块，区分助手文本、工具/命令、文件差异、错误、状态和 token usage。终端自动着色；设置 `NO_COLOR=1` 或重定向 stderr 时不输出 ANSI。JSON 字符串中的换行正常显示，源码中的字面 `\n` 保留。
+
+Unified diff 的文件 header 加粗、hunk 青色、增加行绿色、删除行红色，并显示旧/新行号；流式分片会先拼成完整行，最后的未换行内容在事件结束或断开时刷新。普通长文本按终端宽度换行，diff 保持原行布局。
+
+```sh
+ssmcp -t codex my-server                    # 默认 pretty
+NO_COLOR=1 ssmcp -t codex my-server         # 无颜色
+ssmcp -t codex my-server 2> activity.log    # 可读日志，无 ANSI
+ssmcp --raw -t codex my-server             # 原始事件序列化，每个事件一行
+```
+
+`--raw` 仅改变展示：直接输出传入 EventLog 的原始事件序列化（不添加标签或派生字段），不影响事件缓存、工具结果或 SSH/MCP 协议。
