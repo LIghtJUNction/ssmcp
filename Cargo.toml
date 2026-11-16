@@ -21,6 +21,7 @@ include = [
     "/scripts/sync_portal_ssh.py",
     "/scripts/test_portal_ssh.py",
     "/packaging/ssmcp-portal-ssh.*",
+    "/packaging/ssmcp-portal.service",
     "/packaging/sshd-ssmcp-portal.conf",
     "/docs/backends.md",
     "/docs/configuration.md",
