@@ -41,7 +41,7 @@ ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
 | ssmcp | 交互式终端、独立后台进程、文件、上下文原语 | 不依赖安装 coding harness；文件读写与命令执行直接在本机完成 |
 | Codex | `codex app-server --listen stdio://`，并须支持 `app-server generate-json-schema --experimental` | App Server 方法；成功发现时注册 `codex.mcp.*`，通过原生 MCP 调用接口转发 |
 | Claude Code | `claude mcp serve` | 该入口实际返回的 MCP 工具目录，统一加 `claude.` 前缀 |
-| Pi | 通过安全启动检查后使用 JSONL RPC | `pi.rpc` 与事件、请求、回复四项桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
+| Pi | 显式连接已初始化的本机私有 Unix RPC socket | `pi.rpc` 与事件、请求、回复四项桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
 | OpenCode | 操作者已启动的本机 HTTP 服务；显式配置 loopback 地址 | 从 `/api/info` 握手和 `/openapi.json` 发现操作；发现阶段不代为启动服务 |
 
 发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend/mod.rs)
@@ -76,7 +76,7 @@ ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
 
 `list` 与 `tools` 共享同一注册表。注册项保留提供者、原生名称、完整 Schema、可用状态与代号；不同来源使用独立命名空间。目录中的工具不因名称相同而互相覆盖；调用时仍验证当前提供者和代号，陈旧快照不会授予已失效工具的调用权。
 
-每条客户端连接最多保留四份目录快照，按序列化 JSON 计合计不超过 64 MiB，每份有效 120 秒。新的扫描可能淘汰旧快照；过期或被淘汰的游标会明确要求从无游标请求重新开始。游标只属于对应的客户端连接，重连后需用新的 ID 重新扫描。
+每条客户端连接最多保留四份目录快照，按序列化 JSON 计合计不超过 64 MiB。成功读取分页会续期 120 秒的空闲时限，但自创建起最长保留 900 秒。无效游标不会续期，复用未变化的目录也不会重置创建时间；LRU 和容量限制可能提前淘汰快照。过期或被淘汰的游标会明确要求从无游标请求重新开始。游标只属于对应的客户端连接，重连后需用新的 ID 重新扫描。
 
 ```json
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST","cursor":"NEXT_CURSOR_FROM_RESULT"}}
@@ -131,7 +131,7 @@ return states;
 
 分步操作、完整输出读取和故障恢复见[独立命令指南](commands.md)。
 
-普通命令通过 `exec` 执行，每项任务有独立 `job_id`、退出码和输出流。`command` 是 argv 数组，第一个元素是程序，其余元素是参数；不会隐式解析管道、重定向或变量展开。需要 Shell 语法时，显式运行该平台的 Shell，例如 Unix 的 `["sh", "-c", "printf hello"]` 或 Windows 的 `["cmd.exe", "/d", "/s", "/c", "echo hello"]`。默认目录是客户端启动目录；显式 `cwd` 必须是授权工作区内已有目录，不能借助 `..` 或符号链接越过根目录。`env` 是对继承环境的覆盖，审计日志不会展示环境变量映射。[命令实现](../src/backend/shell.rs) · [JavaScript helper](../src/code_mode.js)
+普通命令通过 `exec` 执行，每项任务有独立 `job_id`、退出码和输出流。`command` 是 argv 数组，第一个元素是程序，其余元素是参数；不会隐式解析管道、重定向或变量展开。需要 Shell 语法时，显式运行该平台的 Shell，例如 Unix 的 `["sh", "-c", "printf hello"]` 或 Windows 的 `["cmd.exe", "/d", "/s", "/c", "echo hello"]`。默认目录是客户端启动目录；显式 `cwd` 必须是授权工作区内已有目录，不能用父目录穿越或符号链接把工作目录设置到根目录之外。`env` 是对继承环境的覆盖，审计日志不会展示环境变量映射。[命令实现](../src/backend/shell.rs) · [JavaScript helper](../src/code_mode.js)
 
 ```js
 const c = clients.find(c => c.name === "dev");
@@ -271,13 +271,17 @@ return await call(c.id, "pi.rpc", {type: "get_state", arguments: {}});
 
 `get_state` 用于协议握手，发现不会发送 prompt。扩展对话通过 `ssmcp.pi.requests` 读取，`ssmcp.pi.respond` 保留原始 ID；实际字段和互斥条件以目录 Schema 为准。收到回复确认只表示交给了 Pi，不证明任务完成。
 
-Pi 的启动可能加载用户配置与扩展。只有能确认发现期间不安装包、不发起模型请求的启动方式才可使用；不满足条件时，诊断应为 unavailable。不能通过临时禁用用户插件，宣称枚举了原配置中的完整能力，也不能用离线包缓存替代“禁止安装”的约束。
+自动发现不启动新的 Pi 进程。操作者需事先初始化原生 JSONL RPC 会话，并通过 `SSMCP_PI_RPC_SOCKET` 显式提供本机私有 Unix socket 入口。ssmcp 核对已安装程序与版本；socket 路径必须为绝对路径，socket 和直接父目录不能是符号链接，必须由当前 UID 拥有且没有 group/other 权限。连接后再次核对 peer UID，并在 5 秒内完成原生 `get_state` 握手。只有 `success: true`、`command: "get_state"` 且 `data` 为对象的响应才被接受。未配置安全的既有入口时保持 unavailable；保留已安装与不可连接的诊断，不禁用用户扩展，也不替代其原生审批。ssmcp 不模拟终端交互来创建这一接口。[连接与发现](../src/backend/mod.rs)
+
+Pi 1.5.0 的原生包解析器在 `PI_OFFLINE=1` 时跳过缺失包安装，但扩展代码仍可执行。RPC 模式在处理第一条 `get_state` 前先绑定扩展，发出 `session_start` 并运行资源发现钩子；仅配置离线模式不能证明启动无安装或模型副作用。[包解析](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/core/package-manager.ts) · [RPC 启动顺序](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/modes/rpc/rpc-mode.ts) · [扩展绑定](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/core/agent-session.ts)
+
+既有会话由操作者管理。断线或 reload 关闭 ssmcp 的 RPC 连接与本地请求状态，不杀死外部 Pi 服务；每条连接使用新的 128 位随机请求前缀，避免旧响应与重连后的请求重号。上述四项是适配器的协议范围，实际是否已注册仍以当前目录和握手结果为准。
 
 ## 8. OpenCode：从 OpenAPI 发现操作
 
 OpenCode 适配器从原生 OpenAPI 文档发现 `opencode.<operationId>`。参数按 `path`、`query`、`headers`、`body` 分组，关联 Schema 与完整文档可通过 `opencode.schema` 查询；`opencode.api` 保留原生操作调用入口。[OpenCode 适配器](../src/backend/opencode.rs)
 
-自动发现不会启动新的 OpenCode 服务。操作者需先按原生方式启动服务，再用 `SSMCP_OPENCODE_URL` 指定本机 loopback 地址，并通过 `OPENCODE_PASSWORD` 提供该服务的凭据。没有已配置端点时，提供者报告 unavailable。发现阶段只查询 `/api/info` 与 `/openapi.json`，不创建会话、不提交 prompt；后续调用仍遵循原生权限审批。真实连接与版本兼容性必须在部署环境分别验证。
+自动发现不会启动新的 OpenCode 服务。操作者需先按原生方式启动服务，再用 `SSMCP_OPENCODE_URL` 指定 `http://127.0.0.1:端口/`，并通过 `OPENCODE_PASSWORD` 提供非空、最多 4096 字节的原生密码；Basic 用户名固定为 `opencode`。端口必须显式指定，不接受其他主机、userinfo、非根路径、query 或 fragment，也不使用环境代理或跟随重定向。没有已配置端点时，提供者报告 unavailable。发现阶段只查询 `/api/info` 与 `/openapi.json`，要求原生信息为 v2 主版本并包含正数 PID；不创建会话、不提交 prompt，也不订阅 SSE。首次明确调用原生操作或 `opencode.events` 时才连接 `/api/event`。后续调用仍遵循原生权限审批；断线和 reload 只关闭本桥接连接。真实连接与版本兼容性必须在部署环境分别验证。
 
 这一限制来自 OpenCode v2.3.0 的启动路径：服务会启动调度器；调度步骤会初始化会话 location，插件解析可进一步安装缺失包，到期任务也可能唤起模型。关闭更新、模型列表抓取或 npm 网络访问不能证明这些行为已经停止。固定版本的源码依据见 [服务启动](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/server/src/process.ts)、[调度器](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/core/src/schedule.ts)、[插件管理](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/core/src/plugin/supervisor.ts)、[插件安装](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/core/src/plugin/module.ts)。
 
@@ -293,7 +297,7 @@ HTTP 响应保留状态、内容类型和原生数据。短 JSON 仍为原生对
 
 ## 9. 更新后的客户端重载
 
-更新磁盘上的 ssmcp 后，在当前工具目录确认 `ssmcp.client.reload` 可用，再通过 `code_mode` 调用 `await reload(clientId)`。helper 返回原生重载应答；`accepted:true` 表示请求已经被接收，仍须再次调用公开 `list` 验证新连接。支持此协议的客户端会等待服务器确认应答已收取，随后停止本连接的后台任务、原生适配器和转发，并从原安装入口启动更新后的程序，保留参数、cwd、环境与允许列表。[重载握手](../src/client.rs) · [重启实现](../src/client/reload.rs)
+更新磁盘上的 ssmcp 后，在当前工具目录确认 `ssmcp.client.reload` 可用，再通过 `code_mode` 调用 `await reload(clientId)`。helper 返回原生重载应答；`accepted:true` 表示请求已经被接收，仍须再次调用公开 `list` 验证新连接。支持此协议的客户端会等待服务器确认应答已收取，随后停止本连接拥有的后台任务与转发、关闭原生适配器连接，并从原安装入口启动更新后的程序，保留参数、cwd、环境与允许列表。[重载握手](../src/client.rs) · [重启实现](../src/client/reload.rs)
 
 重载时存在未结束的内部调用会返回 busy，应先等调用完成。已返回 `job_id` 的后台任务不属于在途请求，但会在重载时被终止；先完成或取消需要保留结果的任务。`reload` 不安装新版本，也不迁移进程和会话状态；它使用当前安装路径上的程序。初次从不支持该能力的旧版升级，需要在本机普通重启一次。
 
@@ -326,7 +330,7 @@ Context 的 `ssmcp.skill.discovered` 表示返回具体技能元数据，`ssmcp.
 
 终端摘要、详细日志、JSONL 与持久化审计使用脱敏副本，隐藏环境映射、凭据字段、敏感路径正文和可识别的秘密格式。原生调用返回及结构化结果保持各自类型；这不构成对任意未知秘密的完整识别保证。[脱敏](../src/audit.rs) · [渲染](../src/client/render.rs)
 
-输出、任务、工具代号和审计游标属于各自连接；每次调用重新检查授权与提供者。文件存储在共享用户目录不意味着另一连接可读取它。断线与 reload 会清理连接拥有的进程和路由，旧连接 ID 不再可用。
+输出、任务、工具代号和审计游标属于各自连接；每次调用重新检查授权与提供者。文件存储在共享用户目录不意味着另一连接可读取它。断线与 reload 会清理连接拥有的进程和路由，旧连接 ID 不再可用。Pi/OpenCode 的既有外部服务不属于连接拥有的进程；ssmcp 关闭与它们的桥接，不终止这些服务。
 
 GitHub 模式在客户端接入时，把 `--allow` 中的用户名解析为稳定的 GitHub 用户 ID；浏览器登录取得的身份只能访问明确允许此 ID 的在线客户端。同一授权可发现随后接入且允许该身份的客户端，也可以在尚无可访问客户端时完成授权，此时 `list` 为空。身份绑定只保留到本条 SSH 连接结束，重连会重新解析用户名。GitHub 授权不绑定某一条 SSH 来源连接；客户端离线会移除它自身，但不会因此撤销 GitHub OAuth 令牌。[身份解析](../src/identity.rs) · [访问控制](../src/broker.rs)
 

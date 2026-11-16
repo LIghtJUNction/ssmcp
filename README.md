@@ -1,6 +1,6 @@
 # ssmcp
 
-**通过 SSH，把本机 Shell 和编码智能体接入 MCP。**
+**通过 SSH，把本机命令和原生工具统一接入 MCP。**
 
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
@@ -9,7 +9,7 @@
 
 一条 SSH 连接，两个 MCP 工具。`list` 找到在线客户端，`code_mode` 调用它们的原生能力；命令、输出和智能体事件实时显示在本机终端。项目、模型配置和后端工具执行都留在本机。[工作原理](docs/backends.md)
 
-本工具有意模仿ssh，尽可能保持功能简洁。
+0.6.0 移除了后端选择参数：客户端始终提供 Shell，后台独立发现可用原生接口。升级方法见[迁移与发行说明](docs/release-notes-0.6.0.md)，本轮已验证范围与未覆盖项见[验收记录](docs/validation-0.6.0.md)。
 
 ![本机工具通过 SSH 连接服务器，MCP 客户端经 HTTPS 和 OAuth 发现并调用工具；结果沿原连接返回。](docs/assets/connection-flow.svg)
 
@@ -115,7 +115,7 @@ ssmcp 自己签发的 access token 默认有效 **8 小时**。refresh token 每
 | Shell | 始终提供 | 有状态的 PTY 与独立、可并行的命令任务 |
 | Codex | 版本匹配的 App Server Schema 与原生握手 | `codex.*`，以及由 `mcpServerStatus/list` 动态发现并由 `mcpServer/tool/call` 调用的 MCP 工具 |
 | Claude Code | `claude mcp serve` 的实际 MCP 目录 | `claude.*`，保留原生 Schema 和结果 |
-| Pi | 通过安全启动检查后的 JSONL RPC | 四项 RPC 桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
+| Pi | 显式连接已初始化的本机私有 Unix RPC socket | 四项 RPC 桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
 | OpenCode | 显式连接已运行的本机原生服务 | 从 `/api/info` 与 `/openapi.json` 握手和发现；自动发现不启动服务 |
 
 `ssmcp.harnesses.list` 返回提供者状态、工具数量和诊断。调用始终按服务端分配的客户端 ID 路由；`--name` 是显示名称，`cwd` 是启动目录。同一账号最多同时在线 128 个客户端。Agent 的安装、登录、模型配置和原生权限在本机完成，支持范围以实际 schema 为准。[后端要求与示例](docs/backends.md)
@@ -129,7 +129,7 @@ ssmcp -F ~/.ssh/work_config my-ssmcp
 ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
 ```
 
-旧的 `-t`、`--type`、`--backend` 和后端透传参数已移除，传入会提示迁移。发现不安装运行时、依赖或 Harness，不提交模型请求；无法确认安全启动的提供者保持 unavailable。OpenCode 需要显式配置已有 loopback 服务，具体限制见[原生接口与发现策略](docs/backends.md)。
+旧的 `-t`、`--type`、`--backend` 和后端透传参数已移除，传入会提示迁移。发现不安装运行时、依赖或 Harness，不提交模型请求；无法确认安全启动的提供者保持 unavailable。Pi 需要 `SSMCP_PI_RPC_SOCKET` 指向已初始化的本机私有 RPC 入口，OpenCode 需要 `SSMCP_OPENCODE_URL` 指向已有 loopback 服务。未配置时保留不可用诊断；具体限制见[原生接口与发现策略](docs/backends.md)。
 
 ## 两个工具就够了
 
@@ -195,7 +195,7 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 ssmcp --name dev --title "完善客户端重载和输出转储" --allow octocat@github my-ssmcp
 ```
 
-安装新版客户端后，在 `code_mode` 中使用 `return await reload(clientId)` 重新加载原启动入口。请求确认后旧连接关闭，后台命令、harness 和转发随之停止；再调用 `list` 获取新客户端 ID。有效的 `--allow` GitHub 授权可继续使用，登录码模式需要重新完成 OAuth 登录。
+安装新版客户端后，在 `code_mode` 中使用 `return await reload(clientId)` 重新加载原启动入口。请求确认后旧连接关闭，连接拥有的后台命令与转发随之停止，Harness 桥接随之关闭；再调用 `list` 获取新客户端 ID。外部 Pi/OpenCode 服务继续由操作者管理。有效的 `--allow` GitHub 授权可继续使用，登录码模式需要重新完成 OAuth 登录。
 
 输出超过 32 KiB 或 500 行时自动转储，返回路径、SHA-256、行数和完成状态。Linux 使用客户端的 `/tmp/ssmcp/<uid>/`；其他平台使用本机用户的私有输出目录，以实际返回的 `path` 为准。按需读取正文：
 

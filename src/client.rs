@@ -532,6 +532,14 @@ pub async fn run() -> crate::Result<()> {
     }
     let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
+    render::status(
+        "ssh",
+        "Progress",
+        &format!(
+            "Connecting to {} with OpenSSH",
+            options.destination.as_deref().unwrap_or("configured host")
+        ),
+    );
     let mut ssh = options
         .command()
         .spawn()

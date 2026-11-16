@@ -21,10 +21,12 @@ test:
 	$(CARGO) test --locked --test two_tools -- --include-ignored
 	$(CARGO) test --locked --test workspace_bridge -- --ignored --test-threads=1
 	$(CARGO) test --locked --test context_helpers -- --ignored --test-threads=1
-	$(CARGO) build --locked
+	$(CARGO) build --locked --bins --example vt_snapshot
 	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
 	python3 scripts/e2e_session_features.py --bin-dir $(CARGO_TARGET_DIR)/debug
 	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug
+	python3 scripts/e2e_unified.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/unified.json
+	python3 scripts/e2e_dashboard.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/dashboard.json
 
 install:
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/man/man8

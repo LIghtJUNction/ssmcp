@@ -1,0 +1,129 @@
+{
+  "status": "passed_for_native_codex_catalog_schema_and_readonly_call",
+  "tested_at_unix_ms": 1794837306998,
+  "client": {
+    "id": "0311702930b931fbd21bb996cd37d6a1db8274c8fa01a562dd090286d2854915",
+    "name": "ssmcp-visible-work",
+    "pid": 326341,
+    "pid_role": "client",
+    "version": "ssmcp 0.6.0",
+    "running_binary_sha256": "f4f64248fa447e1cb40e8e76636a6467a0a24d4d28cae5422e999d80ad6b8e4d",
+    "created_by_validation": false
+  },
+  "catalog": {
+    "pages": 23,
+    "tools": 1416,
+    "codex_mcp_tools": 1154,
+    "unique_route_names": 1416,
+    "new_snapshot_created_once": true,
+    "pagination_elapsed_ms": 232205,
+    "complete": true
+  },
+  "selected_tool": {
+    "route": "codex.mcp.linux-computer-use.doctor",
+    "native_server": "linux-computer-use",
+    "native_name": "doctor",
+    "input_schema_preserved": true,
+    "full_native_tool_preserved_except_routing_name": true,
+    "native_server_tools": 19
+  },
+  "output": {
+    "source": "native MCP status result",
+    "artifact_id": "a0179522da9875d4c72c255339430d94",
+    "bytes": 409879,
+    "sha256": "2f44a840e928ef50c955166a29cd2241ec1dd73bb6b892f6fec1edd653c4e8e2",
+    "sha256_verified": true,
+    "read_pages": 13,
+    "complete": true,
+    "retention_secs": 86400,
+    "expires_at_unix": 1794923403,
+    "lines": 1,
+    "observed_bytes": 409879,
+    "artifact_path": "/tmp/ssmcp/1000/output-a0179522da9875d4c72c255339430d94.log"
+  },
+  "call": {
+    "stage": "doctor",
+    "elapsed_ms": 2542,
+    "native_is_error": false,
+    "spilled": false,
+    "content_types": [
+      "text"
+    ],
+    "structured_result_type": "object",
+    "route": "codex.mcp.linux-computer-use.doctor",
+    "top_level_keys": [
+      "content",
+      "isError",
+      "structuredContent"
+    ],
+    "structured_keys": [
+      "accessibility",
+      "capabilities",
+      "input",
+      "platform",
+      "portals",
+      "readiness",
+      "windowing"
+    ],
+    "stored_native_result_sha256": "efd6f22c765fda087492ad3f425ce32a7b102d010a275026cf439c9bcf60187c",
+    "stored_native_result_bytes": 18124,
+    "stored_digest_scope": "complete JSON evidence file, including its final newline"
+  },
+  "approvals": {
+    "pending_before": 0,
+    "pending_after": 0,
+    "responses_sent": 0,
+    "scope_note": "The real readonly tool required no approval. Pending/request/response propagation for approval-required tools is covered by separate protocol fixtures."
+  },
+  "providers": [
+    {
+      "provider": "codex",
+      "status": "ready",
+      "tools": 1342,
+      "version": "codex-cli 0.169.0",
+      "scope": "MCP tools enumerated by Codex mcpServerStatus/list and forwarded through mcpServer/tool/call"
+    },
+    {
+      "provider": "claude",
+      "status": "ready",
+      "tools": 27,
+      "version": "2.1.325 (Claude Code)",
+      "scope": "native MCP tools"
+    },
+    {
+      "provider": "pi",
+      "status": "unavailable",
+      "tools": 0,
+      "version": "1.5.2",
+      "reason": "Pi automatic launch is unavailable: native RPC runs user extension session_start hooks before its first reply. Disabling those extensions could bypass approval. Set SSMCP_PI_RPC_SOCKET only for an already initialized native RPC session; ssmcp will not launch Pi or dependencies."
+    },
+    {
+      "provider": "opencode",
+      "status": "unavailable",
+      "tools": 0,
+      "version": "opencode v2.3.0",
+      "reason": "OpenCode is installed; set SSMCP_OPENCODE_URL to an already-running native loopback service. Discovery does not start scheduled work."
+    }
+  ],
+  "model_requests_sent": 0,
+  "validation_client_cleanup": "No validation client was created; shared work client remains owned by the main task.",
+  "scope_note": "Protocol verification of the running 0.6.0 image with the first UI and catalog-cache fixes; sidebar changes and final release image require their separate checks. No claim of desktop screenshot/input readiness or completion of all 12 project acceptance items.",
+  "private_raw_results": "Retained privately; this summary excludes native result values and environment details.",
+  "previous_scans": [
+    {
+      "scan": "scan1",
+      "status": "incomplete",
+      "reason": "compound code_mode persistence timed out"
+    },
+    {
+      "scan": "scan2",
+      "status": "incomplete",
+      "reason": "compound code_mode persistence timed out"
+    },
+    {
+      "scan": "scan3",
+      "status": "incomplete",
+      "reason": "145.6s idle interruption exceeded documented 120s idle timeout"
+    }
+  ]
+}

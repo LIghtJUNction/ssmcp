@@ -1,4 +1,4 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.5.1" "User Commands"
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.6.0" "User Commands"
 .SH NAME
 ssmcp \- bridge local tools and independent commands through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
@@ -39,7 +39,8 @@ results, errors and approval requests retain their meaning through namespaced
 routes. Each call checks the live connection, provider and current authorization.
 .PP
 Keep the program running while its tools are in use. Ending the connection
-stops its owned background jobs and native providers. Login-code grants issued by that
+stops its owned background jobs and closes native provider connections.
+Operator-managed external Pi and OpenCode services are not terminated. Login-code grants issued by that
 connection are revoked. GitHub identity grants remain subject to their own
 lifetimes and each currently connected client's allow policy.
 .SH OPTIONS
@@ -154,15 +155,25 @@ prefixed with claude.; their schemas and results are preserved. Native MCP tool
 calls do not imply the interactive terminal's confirmation behavior.
 .TP
 .B pi
-A limited native JSONL RPC bridge, registered only after a safe startup and
-successful handshake. The exposed operations are pi.rpc, ssmcp.pi.events,
-ssmcp.pi.requests and ssmcp.pi.respond. Internal model, plugin and MCP tool
-schemas are not inferred from a known control-command list.
+A limited native JSONL RPC bridge attached to an already initialized session
+through SSMCP_PI_RPC_SOCKET. The socket path must be absolute. The socket and its direct parent must be
+owned by the current UID, have no group/other permissions and not be symbolic
+links. The connected peer UID is checked. The installed binary and version
+must also be recognized; the get_state handshake has a five-second deadline.
+Discovery sends get_state but does not spawn Pi or disable user extensions.
+Without a safe existing endpoint this provider remains unavailable.
+The exposed operations are pi.rpc, ssmcp.pi.events, ssmcp.pi.requests and
+ssmcp.pi.respond. Internal model, plugin and MCP tool schemas are not inferred
+from a known control-command list.
 .TP
 .B opencode
 Attach to an operator-managed existing local service using SSMCP_OPENCODE_URL
-and OPENCODE_PASSWORD. Discovery reads /api/info and /openapi.json; it does not
-start a service, create sessions or submit prompts. OpenCode v2.3.0 service
+and OPENCODE_PASSWORD. The URL must be http://127.0.0.1:PORT/ with an explicit
+port, no userinfo, other path, query or fragment. Proxies and redirects are not
+used. The native Basic username is opencode and the password must be nonempty.
+Discovery reads /api/info and /openapi.json, checks native major version 2 and
+a positive PID, and does not start a service, create sessions or submit prompts.
+The /api/event stream is connected lazily on an explicit operation or events call. OpenCode v2.3.0 service
 startup can initialize schedules and install configured plugins, so automatic
 spawn is unavailable. HTTP, SSE and WebSocket operations require successful
 native discovery and retain native permission decisions.
@@ -306,7 +317,8 @@ The request uses the existing client authorization and accepts no arguments.
 Reload is refused while other tool requests are in flight or the entry point
 is unavailable. On acceptance it returns accepted:true and status:restarting,
 waits for the server acknowledgement, stops the old connection's background
-commands, harnesses and forwards, and re-executes the installed entry point.
+commands and forwards, closes Harness bridges, and re-executes the installed
+entry point. Existing external Pi/OpenCode services remain operator-managed.
 .PP
 Startup arguments, working directory and environment are preserved, including
 title and allow policy. Reload does not download, build or install an update.
