@@ -62,11 +62,11 @@ DisableForwarding yes
 PermitTTY no
 PermitUserRC no
 """
-        for prefix in ['/usr/local', '/usr', '/opt/SSMCP']:
+        for prefix, config in [('/usr/local', '/etc'), ('/usr', '/etc'), ('/opt/SSMCP', '/opt/SSMCP/etc')]:
             with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as tmp:
                 stage = Path(tmp)
                 subprocess.run(['make', 'install-portal', f'DESTDIR={stage}',
-                                f'PREFIX={prefix}'], cwd=root, check=True,
+                                f'PREFIX={prefix}', f'SYSCONFDIR={config}'], cwd=root, check=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 installed = stage / prefix.lstrip('/') / 'libexec/ssmcp/sync_portal_ssh.py'
                 module = runpy.run_path(str(installed))
@@ -75,6 +75,12 @@ PermitUserRC no
                 unit = (stage / 'usr/lib/systemd/system/ssmcp-portal-ssh.service').read_text()
                 self.assertIn(f'ExecStart=/usr/bin/python3 -I {prefix}/libexec/ssmcp/sync_portal_ssh.py', unit)
                 self.assertTrue((stage / prefix.lstrip('/') / 'share/doc/ssmcp/examples/sshd-ssmcp-portal.conf').is_file())
+                portal = (stage / 'usr/lib/systemd/system/ssmcp-portal.service').read_text()
+                self.assertIn(f'EnvironmentFile=-{config}/ssmcpd/ssmcpd.env', portal)
+                self.assertIn(f'ExecStart={prefix}/bin/ssmcpd serve --config {config}/ssmcpd/ssmcpd.toml', portal)
+                self.assertIn('--listen 127.0.0.1:8086 --socket /run/ssmcp-portal/control.sock', portal)
+                self.assertIn('--portal-state-dir /var/lib/ssmcpd/portal', portal)
+                self.assertIn('RuntimeDirectory=ssmcp-portal', portal)
                 with patch.object(sync.subprocess, 'check_output', return_value=effective.format(command=expected)):
                     module['verify_sshd']('gh-123')
                 for wrong in ['/bin/sh', expected + ' --unsafe', expected.replace('SSMCP', 'ssmcp')]:
