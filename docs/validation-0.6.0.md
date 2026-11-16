@@ -1,12 +1,12 @@
 # ssmcp 0.6.0 验收记录
 
-记录日期：2026-11-16。目标版本：0.6.0。本文按证据来源区分实现、协议测试、实机操作、发布与部署，不把其中一项的成功代替其他项。
+记录日期：2026-11-16，最新证据更新于 14:51 UTC。目标版本：0.6.0。本文按证据来源区分实现、协议测试、实机操作、发布与部署，不把其中一项的成功代替其他项。
 
-**当前是交付过程中的证据快照，尚未签署统一 Harness 架构全部完成。** 历史合并基础为 `bdb0a8d`。本轮 Rust 结果绑定远程头 `7d3bd590c38f972e83b56d98dfe6015bac352c1c` 加工作区 Diff 摘要，而不是已发布提交；之后的 Linux 终端检查另以运行二进制摘要记录；最终提交绑定、CI、安装与部署仍需分别完成。0.5.1 的已发布结论保留在[历史记录](validation-0.5.1.md)，不能代替本轮验证。
+**当前是交付过程中的证据快照，尚未签署统一 Harness 架构全部完成。** 代码已回到 `main`：PR #7 的合并提交为 `07e2bccead43f682d1937f6da9d780489411f0ff`，新增 Git 历史侧栏的提交为 [`dd252ff91547776fc52dafe8d2134152e12040c4`](https://github.com/LIghtJUNction/ssmcp/commit/dd252ff91547776fc52dafe8d2134152e12040c4)。原工作区也已快进到该提交。历史 Rust 全目标结果、后续定向门禁、73 项与 76 项 Linux 终端运行分别保留自己的源码或二进制身份。CI、安装、发布与生产部署仍需独立结论；版本号和 main 合并不能代替这些证据。0.5.1 的已发布结论保留在[历史记录](validation-0.5.1.md)。
 
 [最终门禁与交付记录](reports/final-0.6.0-gates.json) 保存每项检查的状态、命令、源码身份、结果与证据位置。`passed` 只适用于该项记录的源码快照；`pending` 表示尚未形成相应证据，不等于测试失败；`partial` 表示该组合场景已有实测，但表中仍列有未覆盖的部分。未执行项目的次数、退出码和耗时保持空值，不预填 0。
 
-2026-11-16 的 GitHub 插件查询确认 [PR #7](https://github.com/LIghtJUNction/ssmcp/pull/7) 为 open、`draft:false`、`mergeable:true`，头提交为上述 `7d3bd590…`。合并冲突状态不表示测试或发布条件已经满足；精确观察字段见机器可读记录。
+2026-11-16 13:46 UTC 的 GitHub 插件查询曾记录 [PR #7](https://github.com/LIghtJUNction/ssmcp/pull/7) 为 open、`draft:false`、`mergeable:true`，当时头提交为 `7d3bd590…`；这条历史观察保留在机器记录中。PR 随后已合并，当前候选提交为上述 `dd252ff9…`。[CI 运行 43889879804](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804)绑定该 SHA，首轮已因测试可移植性问题失败：Windows 的 cwd 断言遇到普通路径与 canonical verbatim 路径的表示差异，macOS 的两处 `openpty` 测试调用存在 const/mut 参数签名差异。正在准备最小的测试修正与新一轮 CI；这份记录不据此推断生产功能故障，也不将总验收标为完成。
 
 ## 已核实证据
 
@@ -25,7 +25,7 @@
 | Codex 真实 MCP 工具 | 历史实机 1 passed、0 failed；`codex-real-mcp-smoke-4.log` | 同一次测试实际发现工具 Schema，并通过原生调用接口得到非错误结果；最终提交需复验 |
 | 部署前服务器清单 | Arch Linux x86_64，`ssmcpd 0.4.1` | `resume-deploy-inventory.json`；这是升级前状态，不是 0.6.0 部署成功证据 |
 
-### 本轮 Rust 门禁
+### 先前的 Rust 全目标门禁
 
 本轮任务 `4f753a35d9e2f723431a9a34fb8d945f-e` 的最终退出码为 0，耗时 69.368 秒；已直接核对 `target/acceptance/rust-gates.json` 和同一连接的完整 stdout。8 个步骤均通过：
 
@@ -54,6 +54,22 @@
 stderr 对应完整 artifact `68aa1acc8b0d21e2c68bb9fe2d764122`，共 3,997 行，`complete:true`。归档文件权限为 0600；私钥头、Bearer、GitHub/AWS 凭据形状和敏感赋值的初步模式检查均为 0 个匹配，这不证明任意秘密都已排除。公开仓库与 Drive 只保存脱敏摘要、校验值和必要证据；原始日志留在受控目录。
 
 日志焦点的同批次切换与极矮窗口恢复已追加修复；下述 Linux 真实 PTY 检查通过了这两个操作场景。独立 Rust 定向结果仍应按对应日志记录，旧界面的端到端检查数量不能沿用为新面板的实机验收。
+
+### Git 历史侧栏的增量门禁
+
+[`dd252ff9…`](https://github.com/LIghtJUNction/ssmcp/commit/dd252ff91547776fc52dafe8d2134152e12040c4)将任务、工作区与最近提交顺排，移除 Git 上方的固定空窗。提交来自本地实际 HEAD，最多五条，按可用高度显示短 SHA、相对时间与最多两行标题。HEAD 变化、空仓库和过期状态都有明确显示。[操作说明](logging.md#固定状态区与窗口尺寸)
+
+[本轮定向门禁报告](reports/git-history-gates-20261116.json)的五步均 exit 0：
+
+| 步骤 | 实际结果 | 门禁步骤耗时 |
+| --- | --- | --- |
+| 格式检查 | exit 0 | 0.902 秒 |
+| Git 历史观察测试 | 7 passed、0 failed、0 ignored | 4.700 秒 |
+| 侧栏测试 | 9 passed、0 failed、0 ignored | 0.300 秒 |
+| clippy | exit 0 | 6.067 秒 |
+| 构建 | exit 0 | 8.053 秒 |
+
+测试时的基础提交为 `07e2bccead43f682d1937f6da9d780489411f0ff`，工作区 Diff SHA-256 为 `289619134ab2b0fefef8b6a8f3b72f4dc01f912ef6cf86797838b99558ce6b46`；随后四个改动文件提交为 `dd252ff9…`。门禁报告 SHA-256 为 `f55946e9ce92ac6d752a4b408bc1dfbcc81566586bf63bd2be7dc5aaf6dcc86f`。这是增量定向测试，不能称为重新执行了上节全部测试；最终全平台 CI 仍以对应运行的结论为准。
 
 部署版本测试具体覆盖：必填稳定版本号；拒绝错误或重复的包身份字段；暂存二进制版本不符时不启动服务；成功 stage 绑定版本、提交和包摘要；拒绝旧版本、不同提交、不同包或过期 receipt；安装后版本不符时恢复旧包与 checkpoint。它们在 [`scripts/test_release.py`](../scripts/test_release.py) 中，随现有发布脚本检查运行。
 
@@ -129,8 +145,8 @@ stage/apply 使用同一 `--expected-version 0.6.0`、提交和候选包摘要�
 | SSH / OAuth / PTY 与统一执行审计 | 有前序协议与端到端结果 | 最终版本的对应日志，不能替代新前端的实机交互 |
 | Codex 真实目录与调用 | 有历史真实样本 | 最终二进制同一次发现、Schema 与调用结果 |
 | Pi / OpenCode 真实外部服务 | pending | 实际端点接入，或保留具体不可用原因与支持范围 |
-| 新面板真实终端交互 | Linux 73 项断言通过，14.173 秒 | 已绑定运行二进制；下表明确区分完整场景与部分覆盖，其他平台仍待实际记录 |
-| 六平台 CI | pending | 最终源码 SHA、workflow URL 与各平台 job 结果 |
+| 新面板真实终端交互 | 先前 73 项通过；新增 Git 历史后 76 项通过，20.389 秒 | 两份报告分别绑定运行二进制；下表仍保留未覆盖的组合场景，其他平台待实际记录 |
+| 六平台 CI | 首轮失败，等待测试修正后的新运行 | [首轮运行 URL](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804) 保留；失败涉及 Windows 路径比较与 macOS 测试签名，新运行尚未记录 |
 | GitHub Release / crates.io | pending | 分别记录公开版本、制品清单与摘要 |
 | 客户端安装与 reload | pending | 安装入口、版本、二进制摘要及新连接 |
 | 服务端 stage/apply 与线上复验 | pending | 同一版本、提交和包摘要；运行版本、授权、健康及恢复记录 |
@@ -138,9 +154,13 @@ stage/apply 使用同一 `--expected-version 0.6.0`、提交和候选包摘要�
 
 ### 真实终端交互验收
 
-[Linux 实机报告](reports/dashboard-20261116-report.json)来自开发机上的受控前台 PTY，使用独立 OpenSSH 公钥认证、OAuth 和 VT 屏幕解码器检查实际进程与终端行为。73 项断言全部通过，耗时 14.173 秒；其中包含不同前端模式重复运行的登录检查，不能称为 73 个互不重复的 UI 场景。本次没有调用已安装 Harness 的模型。
+[首轮 Linux 实机报告（73 项）](reports/dashboard-20261116-report.json)来自开发机上的受控前台 PTY，使用独立 OpenSSH 公钥认证、OAuth 和 VT 屏幕解码器检查实际进程与终端行为。73 项断言全部通过，耗时 14.173 秒；其中包含不同前端模式重复运行的登录检查，不能称为 73 个互不重复的 UI 场景。本次没有调用已安装 Harness 的模型。
 
 运行客户端 SHA-256 为 `6d114b685c644a510c674118d612156ebd5e2ee9f7b53717758a2272bc0f9821`，Broker 为 `e81a099e690c06e57ef21c8dd85af88a020081af167fcd9a38a0ac93fb2137ae`；报告 SHA-256 为 `e589ecb15ece149a64f28cfd1f401373a9f8864e3ed5b2214c2ce18fbbf8e8ab`。记录覆盖 106、80、160 列与极矮窗口，原始显示捕获为 85,432 字节，完整摘要保存在报告中。原始 PTY 内容未随公共报告上传。
+
+新增 Git 历史后，又执行了同一真实终端流程。[新的 76 项报告](reports/dashboard-git-history-20261116-report.json)全部通过，耗时 20.389 秒，运行器最终退出码为 0，stderr 为空。新增三项检查从测试拥有的真实 Git 仓库读取期望值：短 SHA 与标题对应实际 HEAD；未提交文件修改不改变提交历史；创建一个测试提交后，新 HEAD 显示在其父提交之前。没有使用 main 仓库的固定 SHA，也没有向主仓库写测试提交。
+
+这次客户端 SHA-256 为 `2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4`，Broker 为 `fa9b36549e02de97957529b031974642f00e08817238cb6bd254190f584f083f`；脚本 SHA-256 为 `d88f63ac0e25f93561ed3bcffb42f50aecc4c0a257a5b3e37e95784493079d62`，报告 SHA-256 为 `0d4e985d39477aad61e023ca4e0ff345baf8291e08fcad9118acc9fdd75c9cfd`。新旧报告各自保留，既不覆盖旧身份，也不把 73 与 76 相加为独立测试数量。
 
 | 编号 | 场景与判定 | 状态 |
 | --- | --- | --- |
@@ -153,7 +173,7 @@ stage/apply 使用同一 `--expected-version 0.6.0`、提交和候选包摘要�
 | U07 | 两个独立任务及超过 6 秒的静默计时已验证，无伪百分比；真实 total 和跨来源同号的实测未纳入本报告 | 部分覆盖 |
 | U08 | stdout/stderr 在执行中各显示一次，read/wait 不重放，也不覆盖手工 Shell | Linux 通过 |
 | U09 | 成功的实际文件写入显示审计和 Diff；技能状态、失败写入及完整 Diff 查询的证据另列 | 部分覆盖 |
-| U10 | 真实仓库观察和修改后的状态刷新已验证；冲突、过期与不可用状态未在本次注入 | 部分覆盖 |
+| U10 | 真实仓库状态、修改刷新、HEAD 短 SHA/标题、未提交修改保持历史及新提交排序均已验证；冲突、过期与不可用状态未在此实机流程注入 | 部分覆盖 |
 | U11 | NO_COLOR、关闭面板、JSONL、非 TTY 与内层 clear/alternate screen 隔离已验证；敏感字段注入的证据另列 | 部分覆盖 |
 | U12 | Ctrl-C 正常退出恢复屏幕、光标、输入模式和原始 termios；受控失败与任务清理另行记录 | 部分覆盖 |
 
@@ -161,7 +181,7 @@ Windows 与 macOS 的真实交互结果必须单独记录，构建成功不能�
 
 ### PR 讨论与自动审阅状态
 
-只读查询返回 6 条 PR 时间线消息，没有返回带文件行号的修改建议。Sourcery 因改动超过其 150,000 字符限制未完成审阅；Codex Security Review 在 `31c3323` 上报告 failed，配套消息说明付费账户已达到用量限制。自动审阅因此没有形成完成结论，也不能被记为安全检查通过。摘要中的 unresolved 标记没有附带可核查的具体 finding；保留原状态和原因，未发送评论、重试审阅或触发模型。[审阅摘要](https://github.com/LIghtJUNction/ssmcp/pull/7#issuecomment-6912712325) · [额度说明](https://github.com/LIghtJUNction/ssmcp/pull/7#issuecomment-6916701956) · [大小限制](https://github.com/LIghtJUNction/ssmcp/pull/7#issuecomment-6916700732)
+2026-11-16 13:46 UTC 的只读查询返回 6 条 PR 时间线消息，没有返回带文件行号的修改建议。Sourcery 因改动超过其 150,000 字符限制未完成审阅；Codex Security Review 在 `31c3323` 上报告 failed，配套消息说明付费账户已达到用量限制。自动审阅因此没有形成完成结论，也不能被记为安全检查通过。摘要中的 unresolved 标记没有附带可核查的具体 finding；保留原状态和原因，未发送评论、重试审阅或触发模型。[审阅摘要](https://github.com/LIghtJUNction/ssmcp/pull/7#issuecomment-6912712325) · [额度说明](https://github.com/LIghtJUNction/ssmcp/pull/7#issuecomment-6916701956) · [大小限制](https://github.com/LIghtJUNction/ssmcp/pull/7#issuecomment-6916700732)
 
 ## 材料归档
 

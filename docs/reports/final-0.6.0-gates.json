@@ -1,6 +1,6 @@
 {
   "format": "ssmcp-final-gates-v1",
-  "recorded_at_utc": "2026-11-16T14:07:05Z",
+  "recorded_at_utc": "2026-11-16T14:51:41Z",
   "target_version": "0.6.0",
   "status": "pending_final_acceptance",
   "release_commit": null,
@@ -176,6 +176,124 @@
         "sha256": "8eca03f369491fe5cfff550fb8b6ba37ff440786c0decd01d7bbeba354a1af17",
         "bytes": 1160
       }
+    },
+    {
+      "id": "git_history_increment_gates",
+      "status": "passed",
+      "candidate_commit": "dd252ff91547776fc52dafe8d2134152e12040c4",
+      "source_ref_kind": "base_commit_plus_working_diff",
+      "source_base": "07e2bccead43f682d1937f6da9d780489411f0ff",
+      "working_diff_sha256": "289619134ab2b0fefef8b6a8f3b72f4dc01f912ef6cf86797838b99558ce6b46",
+      "evidence_path": "docs/reports/git-history-gates-20261116.json",
+      "report_sha256": "f55946e9ce92ac6d752a4b408bc1dfbcc81566586bf63bd2be7dc5aaf6dcc86f",
+      "report_bytes": 2478,
+      "steps": [
+        {
+          "name": "format",
+          "exit_code": 0,
+          "seconds": 0.902,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/git-history-gates-r2/format.log",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "passed": null,
+          "failed": null,
+          "ignored": null
+        },
+        {
+          "name": "git-history",
+          "exit_code": 0,
+          "seconds": 4.7,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/git-history-gates-r2/git-history.log",
+          "log_sha256": "847a90f45a5e116e58019a306fa7f3078dad91a809c4a9fc9a96e72e04984f3d",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "name": "panel",
+          "exit_code": 0,
+          "seconds": 0.3,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/git-history-gates-r2/panel.log",
+          "log_sha256": "1bff3e85f3e26dbd309fa19527f5a73b67f70b74afbd36be4970c9c11c614a38",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "name": "clippy",
+          "exit_code": 0,
+          "seconds": 6.067,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/git-history-gates-r2/clippy.log",
+          "log_sha256": "1d414f65a9a608aa0968fc5d7849c6a17a3dee3e5417b3f974d86b4b4f52a5d3",
+          "passed": null,
+          "failed": null,
+          "ignored": null
+        },
+        {
+          "name": "build",
+          "exit_code": 0,
+          "seconds": 8.053,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/git-history-gates-r2/build.log",
+          "log_sha256": "3f7437d5bc675559476c2c1da8d37c6c043e9d420f60511b61e61e6d35656cb7",
+          "passed": null,
+          "failed": null,
+          "ignored": null
+        }
+      ],
+      "scope": "Format, seven Git history tests, nine panel tests, clippy and build for the recorded increment. This does not relabel the earlier all-targets result as a new all-targets run."
+    },
+    {
+      "id": "linux_dashboard_git_history",
+      "status": "passed",
+      "platform": "Linux",
+      "transport": "isolated OpenSSH public-key + OAuth + owned physical PTY + independent vt100 decoder",
+      "candidate_commit": "dd252ff91547776fc52dafe8d2134152e12040c4",
+      "source_ref_kind": "running_binary_sha256",
+      "binaries": {
+        "ssmcp": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4",
+        "ssmcpd": "fa9b36549e02de97957529b031974642f00e08817238cb6bd254190f584f083f",
+        "vt_snapshot": "fc622bc653270b3929f3a22d4df324d46b1904ebad9ed5d6f02935d2df65aac1"
+      },
+      "sources": {
+        "e2e_dashboard.py": "d88f63ac0e25f93561ed3bcffb42f50aecc4c0a257a5b3e37e95784493079d62",
+        "e2e.py": "c66ae9a013f4cb1237f3a047c50a774d3dff14b6a32d14342e18e3675b3b65f7"
+      },
+      "passed_assertions": 76,
+      "failed_assertions": 0,
+      "duration_seconds": 20.389,
+      "exit_code": 0,
+      "exit_code_source": "Coordinator reported the final runner result",
+      "evidence_path": "docs/reports/dashboard-git-history-20261116-report.json",
+      "private_report_path": "target/acceptance/dashboard-git-history-report.json",
+      "report_sha256": "0d4e985d39477aad61e023ca4e0ff345baf8291e08fcad9118acc9fdd75c9cfd",
+      "report_bytes": 6135,
+      "capture": {
+        "bytes": 102915,
+        "sha256": "58f278887a72d6fcc0eca87d7de08e7f701fe26dd1fc8440b6ed8b527bab54aa",
+        "native_query_replies": {
+          "cpr": "\u001b[3;4R",
+          "size": "\u001b[8;18;77t",
+          "status": "\u001b[0n",
+          "device": "\u001b[?1;2c"
+        }
+      },
+      "new_checks": [
+        "sidebar recent commits match the real owned Git HEAD and subject",
+        "uncommitted workspace changes preserve the observed commit history",
+        "a real owned commit refreshes HEAD and is displayed before its parent"
+      ],
+      "scope": "Same real Linux PTY workflow plus three assertions using an owned Git fixture. The original 73-assertion report remains unchanged with its own binary identity."
+    },
+    {
+      "id": "ci_first_git_history_run",
+      "status": "failed",
+      "source_commit": "dd252ff91547776fc52dafe8d2134152e12040c4",
+      "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804",
+      "source": "Coordinator inspected the actual failed CI checks",
+      "findings": [
+        "Windows shell cwd assertion compares ordinary and canonical verbatim paths",
+        "Two macOS openpty test calls need platform-appropriate const/mut argument types"
+      ],
+      "action": "Minimal test-only fixes under preparation; rerun not yet recorded"
     }
   ],
   "gates": [
@@ -585,33 +703,26 @@
       "scope": "宽窄窗口、快捷键、并发、输入和退出恢复",
       "status": "passed",
       "source_commit": null,
-      "command": [
-        "/usr/bin/python3",
-        "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/dashboard-20261116T140306Z-52c35725/scripts/e2e_dashboard.py",
-        "--bin-dir",
-        "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/dashboard-20261116T140306Z-52c35725/bin",
-        "--report",
-        "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/dashboard-20261116T140306Z-52c35725/report.json"
-      ],
+      "command": null,
       "started_at_utc": null,
-      "duration_seconds": 14.173,
+      "duration_seconds": 20.389,
       "exit_code": 0,
-      "passed": 73,
+      "passed": 76,
       "failed": 0,
       "ignored": null,
       "ignored_reasons": [],
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json",
-        "target/acceptance/dashboard-20261116T140306Z-52c35725/report.json",
-        "target/acceptance/dashboard-20261116T140306Z-52c35725/run.json"
+        "docs/reports/dashboard-git-history-20261116-report.json",
+        "target/acceptance/dashboard-git-history-report.json"
       ],
-      "sha256": "e589ecb15ece149a64f28cfd1f401373a9f8864e3ed5b2214c2ce18fbbf8e8ab",
-      "notes": "Passed the 73 recorded assertions on an owned Linux foreground PTY and isolated public-key SSH/OAuth broker; final release binding remains pending. Wider matrix rows retain partial/pending for unexercised subcases.",
+      "sha256": "0d4e985d39477aad61e023ca4e0ff345baf8291e08fcad9118acc9fdd75c9cfd",
+      "notes": "Latest run: 76 recorded assertions passed, including three Git history assertions. Exact binary and script hashes are in the immutable report; prior 73-assertion evidence remains in observations/linux_dashboard_physical_pty. Wider matrix subcases remain partial where not exercised.",
       "source_ref_kind": "running_binary_sha256",
-      "binary_sha256": "6d114b685c644a510c674118d612156ebd5e2ee9f7b53717758a2272bc0f9821",
+      "binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4",
       "result_count_kind": "assertions, including setup repetitions",
-      "job_id": "2d1ba1d845dad5d03755ad400c894372-11",
-      "runner_duration_seconds": 14.296
+      "job_id": null,
+      "runner_duration_seconds": null,
+      "candidate_commit": "dd252ff91547776fc52dafe8d2134152e12040c4"
     },
     {
       "id": "platform_interaction",
@@ -635,8 +746,8 @@
       "id": "ci_six_platform",
       "title": "六平台 CI",
       "scope": "运行 URL、完整源码 SHA、每个 job 的结果",
-      "status": "pending",
-      "source_commit": null,
+      "status": "failed",
+      "source_commit": "dd252ff91547776fc52dafe8d2134152e12040c4",
       "command": null,
       "started_at_utc": null,
       "duration_seconds": null,
@@ -647,7 +758,11 @@
       "ignored_reasons": [],
       "evidence_paths": [],
       "sha256": null,
-      "notes": null
+      "notes": "First CI run failed on test portability: a Windows cwd comparison between ordinary and verbatim canonical paths, and two macOS openpty test calls with const/mut signature differences. Test-only fixes and a new run are pending; this record does not infer a production feature failure.",
+      "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804",
+      "conclusion": "failure",
+      "failure_scope": "Test portability",
+      "rerun_url": null
     },
     {
       "id": "github_release",
@@ -768,9 +883,11 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
-      "observed": "Real 106×58 PTY with 77-column left panes, one separator and 28-column sidebar; translated shell cursor verified."
+      "observed": "Real 106×58 PTY with 77-column left panes, one separator and 28-column sidebar; translated shell cursor verified.",
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U02",
@@ -781,7 +898,8 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
       "observed": "106→80→160→106 column SIGWINCH and child stty sizes verified.",
       "remaining_coverage": [
@@ -804,7 +922,8 @@
           "rows": 58,
           "columns": 106
         }
-      ]
+      ],
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U03",
@@ -815,9 +934,11 @@
       "physical_rows": 4,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
-      "observed": "Shrinking from log focus to 4 rows restored visible shell focus; restoring height restored the 18×77 child viewport."
+      "observed": "Shrinking from log focus to 4 rows restored visible shell focus; restoring height restored the 18×77 child viewport.",
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U04",
@@ -828,12 +949,14 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
       "observed": "F6/PageUp/Home/End/Escape with actual retained stream output verified.",
       "remaining_coverage": [
         "PageDown has not yet been tied to this report's named assertions."
-      ]
+      ],
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U05",
@@ -844,9 +967,11 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
-      "observed": "One keyboard input chunk F6→PageUp→text restored shell input and the live log tail."
+      "observed": "One keyboard input chunk F6→PageUp→text restored shell input and the live log tail.",
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U06",
@@ -857,12 +982,14 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
       "observed": "Real wide and combining Unicode, manual shell isolation from streams and forwarded ordinary input verified.",
       "remaining_coverage": [
         "Editing/backspace and bracketed paste during continuous output are not explicitly listed in this report."
-      ]
+      ],
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U07",
@@ -873,12 +1000,14 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
       "observed": "Two independent tasks and over-six-second silent elapsed state verified without fabricated completion percentage.",
       "remaining_coverage": [
         "A native valid total and cross-provider duplicate native IDs were not exercised by this dashboard run; renderer/unit evidence is separate."
-      ]
+      ],
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U08",
@@ -889,9 +1018,11 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
-      "observed": "stdout and stderr appeared once during execution; read/wait did not replay them or overwrite the shell."
+      "observed": "stdout and stderr appeared once during execution; read/wait did not replay them or overwrite the shell.",
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U09",
@@ -902,12 +1033,14 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
       "observed": "A successful real file write produced visible audit and diff.",
       "remaining_coverage": [
         "Skill discovery/read distinctions, failed write audit and full diff lookup are not exercised by this dashboard report."
-      ]
+      ],
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U10",
@@ -918,12 +1051,14 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
-      "observed": "Read-only Git observation and refresh after a real workspace modification verified.",
+      "observed": "Real repository status and workspace-file refresh verified; actual Git HEAD short hash and subject displayed, an uncommitted edit preserved history, and a new owned commit appeared before its parent.",
       "remaining_coverage": [
         "Staged/conflict and unavailable/stale/unknown states were not injected by this dashboard run."
-      ]
+      ],
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U11",
@@ -934,12 +1069,14 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
       "observed": "NO_COLOR layout, dashboard-disabled, JSONL and non-TTY behavior verified; inner clear/alternate screen/extreme cursor movement stayed within the PTY pane.",
       "remaining_coverage": [
         "Known-secret and hostile sidebar text injection are covered by separate tests, not explicitly by this physical PTY report."
-      ]
+      ],
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     },
     {
       "id": "U12",
@@ -950,12 +1087,14 @@
       "physical_rows": 58,
       "physical_columns": 106,
       "evidence_paths": [
-        "docs/reports/dashboard-20261116-report.json"
+        "docs/reports/dashboard-20261116-report.json",
+        "docs/reports/dashboard-git-history-20261116-report.json"
       ],
       "observed": "Ctrl-C normal frontend exit restored alternate screen, cursor, input modes and exact original termios.",
       "remaining_coverage": [
         "Controlled compositor failure and residual process cleanup are not exercised by this report."
-      ]
+      ],
+      "latest_binary_sha256": "2b062b123f37bd791616db4161c912de4e8566960b64c967b2ec7f31b1b61bc4"
     }
   ],
   "artifacts": {
@@ -1303,5 +1442,14 @@
       }
     ],
     "actions_taken": "Read only; no comment, review trigger, or model request sent"
+  },
+  "candidate_commit": "dd252ff91547776fc52dafe8d2134152e12040c4",
+  "repository_state": {
+    "branch": "main",
+    "head_sha": "dd252ff91547776fc52dafe8d2134152e12040c4",
+    "pr_7_merged": true,
+    "merge_commit": "07e2bccead43f682d1937f6da9d780489411f0ff",
+    "source": "Coordinator verified main push and fast-forward of the original workspace",
+    "source_scope": "Code integration state; not a published release or production deployment"
   }
 }
