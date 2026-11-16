@@ -35,17 +35,25 @@ pub struct Context {
 
 impl Context {
     pub fn new(root: PathBuf, extra_roots: Vec<PathBuf>) -> Result<Self, String> {
+        Self::with_output(root, extra_roots, crate::output::OutputStore::global()?)
+    }
+
+    pub fn with_output(
+        root: PathBuf,
+        extra_roots: Vec<PathBuf>,
+        output: std::sync::Arc<crate::output::OutputStore>,
+    ) -> Result<Self, String> {
         if extra_roots.len() > 8 {
             return Err("at most 8 additional context roots are allowed".into());
         }
         let mut roots = vec![ContextRoot {
             id: "workspace".into(),
-            workspace: Workspace::new(root)?,
+            workspace: Workspace::with_output(root, output.clone())?,
         }];
         for (index, path) in extra_roots.into_iter().enumerate() {
             roots.push(ContextRoot {
                 id: format!("context-{}", index + 1),
-                workspace: Workspace::new(path)?,
+                workspace: Workspace::with_output(path, output.clone())?,
             });
         }
         Ok(Self { roots })

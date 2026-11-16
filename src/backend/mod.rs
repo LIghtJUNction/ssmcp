@@ -1,4 +1,4 @@
-//! Local shell and installed native harness tools on one authenticated connection.
+//! One authenticated shell with independently discovered native providers.
 pub mod cc;
 pub mod codex;
 pub mod events;
@@ -9,296 +9,410 @@ pub mod rpc;
 pub mod shell;
 
 use crate::{
+    output::OutputStore,
     pty::Terminal,
+    registry::{Provider, RegisteredTool, Registry},
     wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE, Operation},
 };
 use serde_json::{Value, json};
-use std::{ffi::OsString, future::Future, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+use tokio::{io::AsyncReadExt, sync::Notify, task::JoinHandle};
+
+#[derive(Clone)]
+enum Driver {
+    Codex(Arc<codex::Codex>),
+    Claude(Arc<cc::Claude>),
+    Pi(Arc<pi::Pi>),
+    OpenCode(Arc<opencode::OpenCode>),
+}
+impl Driver {
+    async fn tools(&self) -> Result<Vec<Value>, String> {
+        match self {
+            Self::Codex(d) => d.tools().await,
+            Self::Claude(d) => d.tools().await,
+            Self::Pi(d) => d.tools().await,
+            Self::OpenCode(d) => d.tools().await,
+        }
+    }
+    async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
+        match self {
+            Self::Codex(d) => d.call(name, args).await,
+            Self::Claude(d) => d.call(name, args).await,
+            Self::Pi(d) => d.call(name, args).await,
+            Self::OpenCode(d) => d.call(name, args).await,
+        }
+    }
+    async fn shutdown(&self) {
+        match self {
+            Self::Codex(d) => d.shutdown().await,
+            Self::Claude(d) => d.shutdown().await,
+            Self::Pi(d) => d.shutdown().await,
+            Self::OpenCode(d) => d.shutdown().await,
+        }
+    }
+    async fn details(&self) -> Value {
+        match self {
+            Self::Codex(d) => d.diagnostics().await,
+            Self::Pi(d) => d.diagnostics().await,
+            Self::Claude(_) => json!({"scope":"native MCP tools"}),
+            Self::OpenCode(_) => json!({"scope":"native OpenAPI operations"}),
+        }
+    }
+}
 
 pub struct Backend {
     terminal: Arc<Terminal>,
     shell: Arc<shell::Shell>,
-    codex: Option<Arc<codex::Codex>>,
-    claude: Option<Arc<cc::Claude>>,
-    pi: Option<Arc<pi::Pi>>,
-    opencode: Option<Arc<opencode::OpenCode>>,
+    pub(crate) registry: Arc<Registry>,
+    output: Arc<OutputStore>,
+    drivers: StdMutex<BTreeMap<Provider, Driver>>,
+    diagnostics: StdMutex<BTreeMap<Provider, Value>>,
+    tasks: StdMutex<Vec<JoinHandle<()>>>,
+    closed: AtomicBool,
+    initial: AtomicUsize,
+    discovered: Notify,
 }
-
-async fn discover<T, F: Future<Output = crate::Result<T>>>(
-    name: &str,
-    seconds: u64,
-    start: impl FnOnce(OsString) -> F,
-) -> Option<T> {
-    let program = crate::platform::executable(name).ok()?.into_os_string();
-    match tokio::time::timeout(Duration::from_secs(seconds), start(program)).await {
-        Ok(Ok(driver)) => {
-            crate::client::render::status("harness", "Result", &format!("{name} tools registered"));
-            Some(driver)
-        }
-        Ok(Err(error)) => {
-            crate::client::render::status(
-                "harness",
-                "Warning",
-                &format!("{name} unavailable: {error}"),
-            );
-            None
-        }
-        Err(_) => {
-            crate::client::render::status(
-                "harness",
-                "Warning",
-                &format!("{name} discovery timed out; shell remains available"),
-            );
-            None
-        }
-    }
-}
-
 impl Backend {
     pub async fn start(shell_path: &Path) -> crate::Result<Arc<Self>> {
-        let terminal = Terminal::spawn_live(shell_path)?;
-        let shell = shell::Shell::new();
-        let (codex, claude, pi, opencode) = tokio::join!(
-            discover("codex", 90, |program| async move {
-                codex::Codex::start(&program, &[]).await
-            }),
-            discover("claude", 45, |program| async move {
-                cc::Claude::start(&program, &[]).await
-            }),
-            discover("pi", 30, |program| async move {
-                pi::Pi::start(&program, &[]).await
-            }),
-            discover("opencode", 45, |program| async move {
-                opencode::OpenCode::start(&program, &[]).await
-            }),
-        );
-        Ok(Arc::new(Self {
+        Self::with_output(
+            shell_path,
+            std::env::current_dir()?,
+            OutputStore::new_connection()?,
+        )
+        .await
+    }
+    pub async fn with_output(
+        shell_path: &Path,
+        root: PathBuf,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let terminal = Terminal::spawn_live_with_store(shell_path, output.clone())?;
+        let shell = shell::Shell::with_workspace(root, output.clone())?;
+        let registry = Registry::new();
+        registry.replace(
+            Provider::Terminal,
+            terminal_tools().as_array().unwrap().clone(),
+        )?;
+        registry.replace(Provider::Exec, shell::Shell::tools())?;
+        registry.replace(Provider::Harnesses,vec![json!({
+            "name":"ssmcp.harnesses.list",
+            "description":"Inspect actual discovery status, installed version, protocol scope and diagnostics for each native provider. A ready RPC bridge does not imply enumerable model tools.",
+            "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
+            "annotations":{"readOnlyHint":true,"destructiveHint":false}
+        })])?;
+        let backend = Arc::new(Self {
             terminal,
             shell,
-            codex,
-            claude,
-            pi,
-            opencode,
-        }))
+            registry,
+            output,
+            drivers: StdMutex::new(BTreeMap::new()),
+            diagnostics: StdMutex::new(BTreeMap::new()),
+            tasks: StdMutex::new(Vec::new()),
+            closed: AtomicBool::new(false),
+            initial: AtomicUsize::new(4),
+            discovered: Notify::new(),
+        });
+        for (provider, name) in [
+            (Provider::Codex, "codex"),
+            (Provider::Claude, "claude"),
+            (Provider::Pi, "pi"),
+            (Provider::OpenCode, "opencode"),
+        ] {
+            backend
+                .diagnostics
+                .lock()
+                .unwrap()
+                .insert(provider, json!({"status":"discovering","provider":name}));
+            let weak = Arc::downgrade(&backend);
+            let task = tokio::spawn(async move {
+                let mut first = true;
+                let mut installed: Option<(PathBuf, u64, std::time::SystemTime)> = None;
+                loop {
+                    let Some(backend) = weak.upgrade() else { break };
+                    if backend.closed.load(Ordering::Acquire) {
+                        break;
+                    }
+                    backend.refresh(provider, name, &mut installed).await;
+                    if first {
+                        first = false;
+                        backend.initial.fetch_sub(1, Ordering::AcqRel);
+                        backend.discovered.notify_waiters();
+                    }
+                    drop(backend);
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+            });
+            backend.tasks.lock().unwrap().push(task);
+        }
+        Ok(backend)
+    }
+    pub fn output(&self) -> Arc<OutputStore> {
+        self.output.clone()
+    }
+    pub async fn wait_discovery(&self) {
+        loop {
+            let notified = self.discovered.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.initial.load(Ordering::Acquire) == 0 || self.closed.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+    pub async fn tools(&self) -> Result<Vec<Value>, String> {
+        self.registry.catalog()
+    }
+    pub fn terminal(&self) -> Arc<Terminal> {
+        self.terminal.clone()
     }
 
-    pub async fn tools(&self) -> Result<Vec<Value>, String> {
-        let mut tools = terminal_tools().as_array().unwrap().clone();
-        tools.extend(shell::Shell::tools());
-        if let Some(driver) = &self.codex {
-            append_catalog(&mut tools, "codex", driver.tools().await);
-        }
-        if let Some(driver) = &self.claude {
-            append_catalog(&mut tools, "claude", driver.tools().await);
-        }
-        if let Some(driver) = &self.pi {
-            append_catalog(&mut tools, "pi", driver.tools().await);
-        }
-        if let Some(driver) = &self.opencode {
-            append_catalog(&mut tools, "opencode", driver.tools().await);
-        }
-        tools.push(json!({
-            "name":"ssmcp.harnesses.list",
-            "description":"List installed coding harnesses and the number of native tools registered for each.",
-            "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
-            "annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}
-        }));
-        if tools.len() > 8192 {
-            return Err("combined native tool catalog exceeds 8192 tools".into());
-        }
-        let mut names = std::collections::HashSet::new();
-        for tool in &tools {
-            let name = tool
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or("native tool has no name")?;
-            if name.is_empty()
-                || name.len() > 128
-                || !name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-            {
-                return Err(format!("native tool name is not MCP compatible: {name:?}"));
+    async fn refresh(
+        &self,
+        provider: Provider,
+        name: &str,
+        installed: &mut Option<(PathBuf, u64, std::time::SystemTime)>,
+    ) {
+        let outcome=async {
+            let program=crate::program::executable(name)?;
+            let metadata=std::fs::metadata(&program).map_err(|e|e.to_string())?;
+            let identity=(program.clone(),metadata.len(),metadata.modified().map_err(|e|e.to_string())?);
+            if installed.as_ref()!=Some(&identity) {
+                self.registry.invalidate(provider);
+                let old=self.drivers.lock().unwrap().remove(&provider);
+                if let Some(old)=old {old.shutdown().await}
+                *installed=None;
             }
-            if !names.insert(name) {
-                return Err(format!(
-                    "installed harnesses expose a duplicate tool name: {name}"
-                ));
+            let mut driver=self.drivers.lock().unwrap().get(&provider).cloned();
+            let version = if driver.is_none() {
+                let version=probe_version(&program).await?;
+                let output=self.output.clone();
+                let future=async {
+                    match provider {
+                        Provider::Codex=>codex::Codex::start_with_output(program.as_os_str(),&[],output).await.map(Driver::Codex),
+                        Provider::Claude=>cc::Claude::start_with_output(program.as_os_str(),&[],output).await.map(Driver::Claude),
+                        Provider::Pi=>pi::Pi::start_with_output(program.as_os_str(),&[],output).await.map(Driver::Pi),
+                        Provider::OpenCode=>opencode::OpenCode::start_with_output(program.as_os_str(),&[],output).await.map(Driver::OpenCode),
+                        _=>unreachable!(),
+                    }
+                };
+                let opened=tokio::time::timeout(Duration::from_secs(90),future).await
+                    .map_err(|_|"native protocol handshake timed out".to_owned())?
+                    .map_err(|e|e.to_string())?;
+                driver=Some(opened);
+                Some(version)
+            } else {self.diagnostics.lock().unwrap().get(&provider).and_then(|d|d["version"].as_str().map(str::to_owned))};
+            let driver=driver.unwrap();
+            let catalog=match tokio::time::timeout(Duration::from_secs(75),driver.tools()).await {
+                Ok(Ok(catalog))=>catalog,
+                result=>{
+                    driver.shutdown().await;
+                    return Err(match result {Ok(Err(error))=>error,_=>"native capability enumeration timed out".into()});
+                }
+            };
+            let count=catalog.len();
+            let details=driver.details().await;
+            // Publish only after the destination is installed. Hold the driver lock through
+            // publication so a concurrent caller cannot observe a catalog without its route.
+            let published = {
+                let mut drivers = self.drivers.lock().unwrap();
+                drivers.insert(provider,driver.clone());
+                let published = self.registry.replace(provider,catalog);
+                if published.is_err() { drivers.remove(&provider); }
+                published
+            };
+            if let Err(error)=published {driver.shutdown().await;return Err(error)}
+            *installed=Some(identity);
+            Ok(json!({"provider":name,"status":"ready","executable":program,"version":version,"tools":count,"details":details}))
+        }.await;
+        let diagnostic = match outcome {
+            Ok(value) => value,
+            Err(error) => {
+                self.registry.invalidate(provider);
+                let old = self.drivers.lock().unwrap().remove(&provider);
+                if let Some(old) = old {
+                    old.shutdown().await
+                }
+                *installed = None;
+                json!({"provider":name,"status":"unavailable","reason":error,"tools":0})
             }
-            if !tool.get("inputSchema").is_some_and(Value::is_object) {
-                return Err(format!("native tool {name} has no input schema"));
-            }
+        };
+        let changed = {
+            let mut diagnostics = self.diagnostics.lock().unwrap();
+            let changed = diagnostics.get(&provider) != Some(&diagnostic);
+            diagnostics.insert(provider, diagnostic.clone());
+            changed
+        };
+        if changed {
+            crate::client::render::status(
+                "detect",
+                if diagnostic["status"] == "ready" {
+                    "Result"
+                } else {
+                    "Warning"
+                },
+                &format!(
+                    "{name} {} · {} tools{}",
+                    diagnostic["status"].as_str().unwrap_or("unavailable"),
+                    diagnostic["tools"],
+                    diagnostic["reason"]
+                        .as_str()
+                        .map(|s| format!(" · {s}"))
+                        .unwrap_or_default()
+                ),
+            );
         }
-        Ok(tools)
     }
 
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         match operation {
-            Operation::ListTools { cursor } => page(self.tools().await?, cursor.as_deref()),
+            Operation::ListTools { cursor } => page(self.registry.catalog()?, cursor.as_deref()),
             Operation::CallTool { name, arguments } => {
-                if name.starts_with("terminal.") {
-                    return self
-                        .terminal
-                        .perform(terminal_operation(&name, arguments)?)
-                        .await
-                        .map(result);
-                }
-                if name.starts_with("ssmcp.exec.") {
-                    return self.shell.call(&name, arguments).await.map(result);
-                }
-                if name == "ssmcp.harnesses.list" {
-                    if !arguments.as_object().is_some_and(|args| args.is_empty()) {
-                        return Err("ssmcp.harnesses.list takes no arguments".into());
-                    }
-                    let tools = self.tools().await?;
-                    let counts = ["codex.", "cc.", "pi.", "opencode."]
-                        .iter()
-                        .map(|prefix| {
-                            let count = tools
-                                .iter()
-                                .filter(|tool| {
-                                    tool["name"].as_str().is_some_and(|n| n.starts_with(prefix))
-                                })
-                                .count();
-                            (prefix.trim_end_matches('.').to_owned(), json!(count))
-                        })
-                        .collect::<serde_json::Map<String, Value>>();
-                    return Ok(result(json!({"harnesses":counts})));
-                }
-                if name.starts_with("codex.") || name.starts_with("ssmcp.codex.") {
-                    self.audit_harness("codex", &name, &arguments);
-                    return self
-                        .codex
-                        .as_ref()
-                        .ok_or("Codex is not installed or failed native startup")?
-                        .call(&name, arguments)
-                        .await;
-                }
-                if name.starts_with("cc.") || name.starts_with("ssmcp.cc.") {
-                    self.audit_harness("claude-code", &name, &arguments);
-                    return self
-                        .claude
-                        .as_ref()
-                        .ok_or("Claude Code is not installed or failed native startup")?
-                        .call(&name, arguments)
-                        .await;
-                }
-                if name.starts_with("pi.") || name.starts_with("ssmcp.pi.") {
-                    self.audit_harness("pi", &name, &arguments);
-                    return self
-                        .pi
-                        .as_ref()
-                        .ok_or("Pi is not installed or failed native startup")?
-                        .call(&name, arguments)
-                        .await;
-                }
-                if name.starts_with("opencode.") {
-                    self.audit_harness("opencode", &name, &arguments);
-                    return self
-                        .opencode
-                        .as_ref()
-                        .ok_or("OpenCode is not installed or failed native startup")?
-                        .call(&name, arguments)
-                        .await;
-                }
-                Err(format!("unknown registered tool: {name}"))
+                let tool = self.registry.lookup(&name)?;
+                self.dispatch(&tool, arguments).await
             }
-            operation => self.terminal.perform(operation).await.map(result),
+            operation => {
+                if self.closed.load(Ordering::Acquire) {
+                    return Err("client connection is closed".into());
+                }
+                self.terminal.perform(operation).await.map(result)
+            }
         }
     }
-
-    fn audit_harness(&self, harness: &str, tool: &str, arguments: &Value) {
-        let lower = tool.to_ascii_lowercase();
-        let path = ["file_path", "filePath", "path", "file"]
-            .iter()
-            .find_map(|key| arguments.get(*key).and_then(Value::as_str));
-        let skill = ["skill", "skill_name", "skillName", "name"]
-            .iter()
-            .find_map(|key| arguments.get(*key).and_then(Value::as_str));
-        let kind = if lower.contains("skill") {
-            "skill_used"
-        } else if path.is_some()
-            && (lower.contains("write") || lower.contains("edit") || lower.contains("patch"))
-        {
-            "file_change"
-        } else if path.is_some()
-            && (lower.contains("read") || lower.ends_with(".get") || lower.contains("file"))
-        {
-            "file_read"
-        } else {
-            "harness_tool_call"
-        };
-        self.shell.audit(json!({"type":kind,"harness":harness,"tool":tool,"path":path,"skill":if lower.contains("skill"){skill}else{None}}));
+    pub async fn dispatch(&self, tool: &RegisteredTool, arguments: Value) -> Result<Value, String> {
+        self.registry.validate(tool)?;
+        match tool.provider {
+            Provider::Terminal => self
+                .terminal
+                .perform(terminal_operation(&tool.native_name, arguments)?)
+                .await
+                .map(result),
+            Provider::Exec => self
+                .shell
+                .call(&tool.native_name, arguments)
+                .await
+                .map(result),
+            Provider::Harnesses => {
+                if !arguments.as_object().is_some_and(|a| a.is_empty()) {
+                    return Err("ssmcp.harnesses.list takes no arguments".into());
+                }
+                let harnesses: Vec<_> =
+                    self.diagnostics.lock().unwrap().values().cloned().collect();
+                Ok(result(
+                    json!({"harnesses":harnesses,"generation":self.registry.generation()}),
+                ))
+            }
+            provider if provider.is_harness() => {
+                let driver = self
+                    .drivers
+                    .lock()
+                    .unwrap()
+                    .get(&provider)
+                    .cloned()
+                    .ok_or("provider is no longer connected; refresh tools")?;
+                self.registry.validate(tool)?;
+                driver.call(&tool.native_name, arguments).await
+            }
+            _ => Err("provider belongs to the workspace runtime".into()),
+        }
     }
-
     pub async fn shutdown(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.registry.close();
+        self.discovered.notify_waiters();
+        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap());
+        for task in &tasks {
+            task.abort()
+        }
+        for task in tasks {
+            let _ = task.await;
+        }
+        let drivers = std::mem::take(&mut *self.drivers.lock().unwrap());
+        let futures = drivers
+            .into_values()
+            .map(|driver| async move { driver.shutdown().await });
         tokio::join!(
             self.terminal.shutdown(),
             self.shell.shutdown(),
-            async {
-                if let Some(driver) = &self.codex {
-                    driver.shutdown().await;
-                }
-            },
-            async {
-                if let Some(driver) = &self.claude {
-                    driver.shutdown().await;
-                }
-            },
-            async {
-                if let Some(driver) = &self.pi {
-                    driver.shutdown().await;
-                }
-            },
-            async {
-                if let Some(driver) = &self.opencode {
-                    driver.shutdown().await;
-                }
-            },
+            futures_util::future::join_all(futures)
         );
     }
 }
-
-// Optional harness discovery must not take the shell or the other harnesses
-// offline. Validate the entire incoming catalog before extending the live view.
-fn append_catalog(tools: &mut Vec<Value>, harness: &str, catalog: Result<Vec<Value>, String>) {
-    let catalog = catalog.and_then(|catalog| {
-        if tools.len() + catalog.len() >= 8192 {
-            return Err("combined tool catalog exceeds 8192 tools".into());
+impl Drop for Backend {
+    fn drop(&mut self) {
+        self.registry.close();
+        for task in self
+            .tasks
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+        {
+            task.abort()
         }
-        let mut names: std::collections::HashSet<_> = tools
-            .iter()
-            .filter_map(|tool| tool["name"].as_str())
-            .collect();
-        for tool in &catalog {
-            let name = tool["name"].as_str().ok_or("tool has no name")?;
-            if name.is_empty()
-                || name.len() > 128
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
-                || !tool["inputSchema"].is_object()
-            {
-                return Err(format!("invalid tool schema: {name:?}"));
-            }
-            if !names.insert(name) {
-                return Err(format!("duplicate tool name: {name}"));
-            }
-        }
-        drop(names);
-        Ok(catalog)
-    });
-    match catalog {
-        Ok(catalog) => tools.extend(catalog),
-        Err(error) => crate::client::render::status(
-            "harness",
-            "Warning",
-            &format!(
-                "{harness} tool discovery failed: {error}; shell and other harnesses remain available"
-            ),
-        ),
     }
+}
+
+async fn probe_version(program: &Path) -> Result<String, String> {
+    use std::process::Stdio;
+    let mut command = tokio::process::Command::new(program);
+    crate::program::configure(&mut command);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut process = process::Managed::spawn(&mut command).map_err(|e| e.to_string())?;
+    let mut stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or("version stdout unavailable")?
+        .take(16385);
+    let mut stderr = process
+        .child
+        .stderr
+        .take()
+        .ok_or("version stderr unavailable")?
+        .take(16385);
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let checked = tokio::time::timeout(Duration::from_secs(5), async {
+        let (a, b, status) = tokio::join!(
+            stdout.read_to_end(&mut out),
+            stderr.read_to_end(&mut err),
+            process.wait()
+        );
+        a.map_err(|e| e.to_string())?;
+        b.map_err(|e| e.to_string())?;
+        let status = status.map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(format!("version check failed ({status})"));
+        }
+        if out.len() > 16384 || err.len() > 16384 {
+            return Err("version output exceeds 16 KiB".into());
+        }
+        let text = String::from_utf8_lossy(if out.is_empty() { &err } else { &out });
+        let version = text
+            .lines()
+            .find(|line| line.chars().any(|c| c.is_ascii_digit()) && line.contains('.'))
+            .filter(|line| line.len() <= 512)
+            .ok_or("version check returned no recognizable installed version")?;
+        Ok(version.trim().to_owned())
+    })
+    .await
+    .map_err(|_| "version check timed out".to_owned())
+    .and_then(|v| v);
+    process.shutdown().await;
+    checked
 }
 
 /// Convert a shell capability into a validated private wire operation.
@@ -384,10 +498,10 @@ pub(crate) fn page(tools: Vec<Value>, cursor: Option<&str>) -> Result<Value, Str
     let mut bytes = 0;
     while end < tools.len() && end - start < 64 {
         let length = tools[end].to_string().len();
-        if length > crate::wire::MAX_FRAME / 2 {
+        if length > 896 * 1024 {
             return Err("one tool schema exceeds the transport limit".into());
         }
-        if bytes + length > crate::wire::MAX_FRAME / 2 {
+        if end > start && bytes + length > 512 * 1024 {
             break;
         }
         bytes += length;
@@ -436,29 +550,6 @@ mod tests {
         );
         assert!(terminal_operation("terminal.resize", json!({"rows":0,"cols":80})).is_err());
         assert!(terminal_operation("unknown", json!({})).is_err());
-    }
-
-    #[tokio::test]
-    async fn shell_calls_reach_the_terminal_through_generic_native_dispatch() {
-        let terminal = Terminal::spawn(&crate::platform::default_shell()).unwrap();
-        let backend = Backend {
-            terminal: terminal.clone(),
-            shell: shell::Shell::new(),
-            codex: None,
-            claude: None,
-            pi: None,
-            opencode: None,
-        };
-        let result = backend
-            .perform(Operation::CallTool {
-                name: "terminal.status".into(),
-                arguments: json!({}),
-            })
-            .await
-            .unwrap();
-        assert_eq!(result["isError"], false);
-        assert_eq!(result["structuredContent"]["running"], true);
-        terminal.shutdown().await;
     }
 
     #[test]

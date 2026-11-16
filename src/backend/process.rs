@@ -1,7 +1,7 @@
 //! Owned process sessions. Keep the leader unreaped until all ordinary jobs are stopped.
-use std::io;
 #[cfg(target_os = "linux")]
 use std::os::fd::OwnedFd;
+use std::{io, process::ExitStatus};
 use tokio::process::{Child, Command};
 
 pub struct Managed {
@@ -77,6 +77,50 @@ impl Managed {
             job,
             stopped: false,
         })
+    }
+
+    /// Observe exit without releasing the Unix session leader before cleanup.
+    /// Keeping its identity also prevents signalling a reused process-group ID.
+    pub async fn wait(&mut self) -> io::Result<ExitStatus> {
+        if self.stopped {
+            return self.child.wait().await;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: the duplicated pidfd stays owned until readiness completes.
+            let ready = unsafe { tokio::io::unix::AsyncFd::register(self.leader.try_clone()?) }?;
+            let _ready = ready.readable().await?;
+        }
+        #[cfg(all(unix, not(target_os = "linux")))]
+        loop {
+            // SAFETY: waitid writes initialized child status without reaping it.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    self.pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            };
+            if result != 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if info.si_pid != 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        #[cfg(unix)]
+        self.terminate();
+        let result = self.child.wait().await;
+        #[cfg(windows)]
+        self.terminate();
+        result
     }
 
     /// Stop owned descendants while their parent is still alive and identifiable.
@@ -201,5 +245,39 @@ time.sleep(300)
         })
         .await
         .expect("owned child must stop even when it called setsid");
+    }
+    #[tokio::test]
+    async fn natural_exit_cleans_background_children_before_reaping_the_leader() {
+        let mut command = Command::new("python3");
+        command.args(["-u", "-c", "import subprocess,sys; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(child.pid,flush=True)"])
+            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        let mut process = Managed::spawn(&mut command).unwrap();
+        let mut stdout = BufReader::new(process.child.stdout.take().unwrap());
+        let mut line = String::new();
+        timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        let pid: i32 = line.trim().parse().unwrap();
+        let status = timeout(Duration::from_secs(5), process.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(status.success());
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let running = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .is_some_and(|s| {
+                        s.rsplit_once(')').unwrap().1.split_whitespace().next() != Some("Z")
+                    });
+                if !running {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("background child survived the completed command");
     }
 }

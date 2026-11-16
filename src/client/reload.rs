@@ -97,9 +97,13 @@ impl Restart {
         Ok(acknowledgement(client_id, github_auth))
     }
 
-    pub(crate) fn execute(&self) -> crate::Result<()> {
+    pub(crate) fn execute(
+        &self,
+        output: std::sync::Arc<crate::output::OutputStore>,
+    ) -> crate::Result<()> {
         let mut command = std::process::Command::new(&self.program);
         command.args(&self.arguments).current_dir(&self.cwd);
+        let _resume = output.prepare_reload(&mut command)?;
         #[cfg(unix)]
         {
             let error = command.exec();

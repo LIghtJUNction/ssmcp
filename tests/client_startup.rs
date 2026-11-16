@@ -16,6 +16,7 @@ import json, os, pathlib, sys, time
 print("warning: fixture stderr",file=sys.stderr,flush=True)
 directory = pathlib.Path(os.environ["SSMCP_STARTUP_DIR"])
 scenario = os.environ["SSMCP_STARTUP_SCENARIO"]
+phase = os.environ["SSMCP_STARTUP_PHASE"]
 hello = json.loads(sys.stdin.readline())
 assert hello["type"] == "hello"
 (directory / "hello.json").write_text(json.dumps(hello))
@@ -29,36 +30,77 @@ elif scenario == "github-bad-ttl":
 print(json.dumps({"type":"ready", "url":"https://ssmcp.example/mcp" if github else "https://ssmcp.example/alice",
                   "login_code":code, "login_expires_in":expires,
                   "client_id":"b"*64}), flush=True)
-deadline = time.monotonic() + 5
-while not (directory / "native-request").exists():
-    assert time.monotonic() < deadline, "native startup was never reached"
-    time.sleep(0.005)
+
+def wait_for(predicate, description):
+    deadline = time.monotonic() + 4
+    while not predicate():
+        assert time.monotonic() < deadline, description
+        time.sleep(0.005)
+
+wait_for(lambda: (directory / "native-request").exists(), "shell launch was never requested")
 if scenario.endswith("healthy"):
-    # A partial frame must survive native startup and tool discovery.
+    # Keep a partial SSH frame open until a native handshake is actually pending.
     frame = json.dumps({"type":"call", "id":7, "operation":{"op":"list_tools"}}) + "\n"
     split = len(frame) // 2
     sys.stdout.write(frame[:split]); sys.stdout.flush()
-    time.sleep(0.1)
+    wait_for(lambda: (directory / "native-request").read_text() in ("startup", "discovery"),
+             "background native handshake was never reached")
     sys.stdout.write(frame[split:]); sys.stdout.flush()
     reply = json.loads(sys.stdin.readline())
     (directory / "reply.json").write_text(json.dumps(reply))
+    # Shell capabilities must be served while native discovery is still blocked.
+    assert not (directory / "release-native").exists()
+    assert not (directory / "native-response").exists()
+    (directory / "catalog-before-native").write_text("confirmed")
+    (directory / "release-native").write_text("continue")
+
+    provider = "claude" if phase == "discovery" else "pi"
+    expected = "unavailable" if scenario == "catalog-error-healthy" else "ready"
+    deadline = time.monotonic() + 4
+    identifier = 8
+    while True:
+        assert time.monotonic() < deadline, "background discovery did not settle"
+        print(json.dumps({"type":"call","id":identifier,"operation":{
+            "op":"call_tool","name":"ssmcp.harnesses.list","arguments":{}}}), flush=True)
+        response = json.loads(sys.stdin.readline())
+        result = response["result"]["Ok"]
+        data = result.get("structuredContent", result)
+        state = next(item for item in data["harnesses"] if item["provider"] == provider)
+        if state["status"] != "discovering":
+            assert state["status"] == expected, state
+            (directory / "harnesses.json").write_text(json.dumps(data))
+            break
+        identifier += 1
 elif scenario == "partial-eof":
     sys.stdout.write('{"type":'); sys.stdout.flush()
-# Closing SSH here must cancel a pending native initialization/tools/list.
+# Closing SSH cancels discovery and stops every owned native process.
 "#;
 
 const NATIVE: &str = r#"#!/usr/bin/python3
 import json, os, pathlib, sys, time
-print("warning: fixture stderr",file=sys.stderr,flush=True)
 directory = pathlib.Path(os.environ["SSMCP_STARTUP_DIR"])
 scenario = os.environ["SSMCP_STARTUP_SCENARIO"]
 phase = os.environ["SSMCP_STARTUP_PHASE"]
+with (directory / "native-pids").open("a") as pids:
+    pids.write(str(os.getpid()) + "\n")
+if sys.argv[1:] == ["--version"]:
+    (directory / "version-probe").write_text("completed")
+    print("startup-fixture 1.0.0", flush=True)
+    raise SystemExit(0)
+print("warning: fixture stderr",file=sys.stderr,flush=True)
 (directory / "native-pid").write_text(str(os.getpid()))
+
+def wait_for_release():
+    deadline = time.monotonic() + 4
+    while not (directory / "release-native").exists():
+        assert time.monotonic() < deadline, "shell catalog was blocked by native discovery"
+        time.sleep(0.005)
+
 for line in sys.stdin:
     request = json.loads(line)
     if request.get("type") == "get_state":
         (directory / "native-request").write_text("startup")
-        time.sleep(1.2 if scenario.endswith("healthy") else 0.4)
+        wait_for_release()
         response = {"type":"response", "id":request["id"], "command":"get_state",
                     "success":True, "data":{}}
     elif request.get("method") == "initialize":
@@ -68,7 +110,7 @@ for line in sys.stdin:
                     "serverInfo":{"name":"startup-fixture", "version":"1"}}}
     elif request.get("method") == "tools/list":
         (directory / "native-request").write_text("discovery")
-        time.sleep(0.4)
+        wait_for_release()
         if scenario == "catalog-error-healthy":
             response = {"jsonrpc":"2.0", "id":request["id"],
                         "error":{"code":-32000, "message":"fixture catalog unavailable"}}
@@ -76,6 +118,8 @@ for line in sys.stdin:
             response = {"jsonrpc":"2.0", "id":request["id"], "result":{"tools":[]}}
     else:
         continue
+    if request.get("type") == "get_state" or request.get("method") == "tools/list":
+        (directory / "native-response").write_text("released")
     print(json.dumps(response), flush=True)
 "#;
 
@@ -133,10 +177,14 @@ impl Fixture {
     }
 
     async fn assert_native_stopped(&self) {
-        assert!(
-            !self.0.join("native-pid").exists(),
-            "shell-only startup must not spawn a selected native backend"
-        );
+        let pids = std::fs::read_to_string(self.0.join("native-pids")).unwrap_or_default();
+        timeout(Duration::from_secs(2), async {
+            while pids.lines().any(running) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background discovery left an owned native process running");
     }
 }
 
@@ -152,18 +200,23 @@ fn running(pid: &str) -> bool {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        // A failed regression must not strand its fixture. Confirm the unique
-        // executable path still belongs to this PID before touching it.
-        if let Ok(pid) = std::fs::read_to_string(self.0.join("native-pid"))
-            && let Ok(number) = pid.parse::<i32>()
-            && let Ok(command) = std::fs::read(format!("/proc/{number}/cmdline"))
-            && command
-                .split(|byte| *byte == 0)
-                .any(|argument| argument == self.0.join("native").as_os_str().as_bytes())
-        {
-            // SAFETY: number names the fixture with our unique executable path.
-            unsafe {
-                libc::kill(number, libc::SIGKILL);
+        // A failed regression must not strand a probe or native service. Confirm
+        // the unique fixture executable path before touching a recorded PID.
+        if let Ok(pids) = std::fs::read_to_string(self.0.join("native-pids")) {
+            for pid in pids.lines() {
+                if let Ok(number) = pid.parse::<i32>()
+                    && let Ok(command) = std::fs::read(format!("/proc/{number}/cmdline"))
+                    && command.split(|byte| *byte == 0).any(|argument| {
+                        ["native", "claude", "pi"]
+                            .iter()
+                            .any(|name| argument == self.0.join(name).as_os_str().as_bytes())
+                    })
+                {
+                    // SAFETY: number names a process in our unique fixture.
+                    unsafe {
+                        libc::kill(number, libc::SIGKILL);
+                    }
+                }
             }
         }
         let _ = std::fs::remove_dir_all(&self.0);
@@ -211,8 +264,9 @@ async fn live_ssh_preserves_partial_frames_and_publishes_shell_capabilities() {
     assert_eq!(ready["client_id"], "b".repeat(64));
     assert!(ready.get("auth").is_none());
     assert!(ready.get("allow").is_none());
+    assert!(fixture.0.join("catalog-before-native").exists());
     assert_eq!(ready["login_code"].as_str().unwrap().len(), 64);
-    assert!((1..600).contains(&ready["login_expires_in"].as_u64().unwrap()));
+    assert!((1..=600).contains(&ready["login_expires_in"].as_u64().unwrap()));
     let reply: Value =
         serde_json::from_slice(&std::fs::read(fixture.0.join("reply.json")).unwrap()).unwrap();
     assert_eq!(reply["type"], "reply");
@@ -246,9 +300,29 @@ async fn an_unavailable_optional_harness_catalog_keeps_shell_tools_online() {
     assert!(
         tools
             .iter()
-            .all(|tool| !tool["name"].as_str().unwrap().starts_with("cc."))
+            .all(|tool| !tool["name"].as_str().unwrap().starts_with("claude."))
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("fixture catalog unavailable"));
+    let diagnostics: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("harnesses.json")).unwrap()).unwrap();
+    assert!(
+        diagnostics["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["provider"] == "claude"
+                && entry["status"] == "unavailable"
+                && entry["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("fixture catalog unavailable")))
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Pretty logging wraps at terminal columns, including within a long native
+    // diagnostic. Keep the complete reason assertion independent of line layout.
+    let visible: String = stderr.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        visible.contains("fixturecatalogunavailable"),
+        "native catalog failure was absent from the terminal transcript: {stderr}"
+    );
     fixture.assert_native_stopped().await;
 }
 
@@ -320,6 +394,8 @@ async fn github_allow_fails_closed_before_backend_start_if_server_returns_legacy
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(!fixture.0.join("native-pid").exists());
+        assert!(!fixture.0.join("version-probe").exists());
+        assert!(!fixture.0.join("native-pids").exists());
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(error.contains("did not acknowledge the --allow"), "{error}");
         assert!(!error.contains(&"a".repeat(64)));
