@@ -170,18 +170,38 @@ const bootstrap = `(() => {
     return dispatch('tools', id, '', cursor);
   };
   const builtin = (name, args = {}) => dispatch('builtin', '_', name, args);
-  const file = async (name, id, args = {}) => {
-    const reply = await call(id, 'ssmcp.fs.' + name, args);
-    if (reply.isError) throw new Failure('workspace file operation failed; inspect the native result');
+  const workspaceResult = async (id, name, args = {}) => {
+    const reply = await call(id, name, args);
+    if (reply.isError) {
+      const detail = reply.content?.find(item => item.type === 'text')?.text;
+      throw new Failure(typeof detail === 'string' ? detail.slice(0, 4096) : 'workspace operation failed');
+    }
     if (!reply.structuredContent) throw new Failure('workspace client returned no structured result');
     return reply.structuredContent;
   };
+  const file = (name, id, args) => workspaceResult(id, 'ssmcp.fs.' + name, args);
   const fs = freeze({
     list: (id, args) => file('list', id, args),
     stat: (id, args) => file('stat', id, args),
     read: (id, args) => file('read', id, args),
     write: (id, args) => file('write', id, args),
     mkdir: (id, args) => file('mkdir', id, args),
+    readText: (id, args) => file('read_text', id, args),
+    writeText: (id, args) => file('write_text', id, args),
+    editText: (id, args) => file('edit_text', id, args),
+  });
+  const context = freeze({
+    roots: id => workspaceResult(id, 'ssmcp.context.roots'),
+  });
+  const skills = freeze({
+    list: (id, args) => workspaceResult(id, 'ssmcp.skills.list', args),
+    read: (id, args) => workspaceResult(id, 'ssmcp.skills.read', args),
+    view: (id, args) => workspaceResult(id, 'ssmcp.skills.view', args),
+  });
+  const agents = freeze({
+    list: (id, args) => workspaceResult(id, 'ssmcp.agents.list', args),
+    read: (id, args) => workspaceResult(id, 'ssmcp.agents.read', args),
+    resolve: (id, args) => workspaceResult(id, 'ssmcp.agents.resolve', args),
   });
   const rsync = (args) => builtin('sync', args);
   const jobs = freeze({
@@ -209,6 +229,9 @@ const bootstrap = `(() => {
     call: { value: call, enumerable: true },
     tools: { value: tools, enumerable: true },
     fs: { value: fs, enumerable: true },
+    context: { value: context, enumerable: true },
+    skills: { value: skills, enumerable: true },
+    agents: { value: agents, enumerable: true },
     rsync: { value: rsync, enumerable: true },
     sync: { value: rsync, enumerable: true },
     jobs: { value: jobs, enumerable: true },

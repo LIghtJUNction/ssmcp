@@ -1,6 +1,7 @@
 //! Native backend plus connection-owned workspace utilities.
 use crate::{
     backend::{self, Backend},
+    context::Context,
     rsync::Rsync,
     wire::Operation,
     workspace::Workspace,
@@ -11,14 +12,24 @@ use std::{path::PathBuf, sync::Arc};
 pub struct Runtime {
     backend: Arc<Backend>,
     workspace: Workspace,
+    context: Context,
     rsync: Rsync,
 }
 
 impl Runtime {
     pub fn new(backend: Arc<Backend>, root: PathBuf) -> Result<Arc<Self>, String> {
+        Self::with_context_roots(backend, root, Vec::new())
+    }
+
+    pub fn with_context_roots(
+        backend: Arc<Backend>,
+        root: PathBuf,
+        context_roots: Vec<PathBuf>,
+    ) -> Result<Arc<Self>, String> {
         Ok(Arc::new(Self {
             backend,
             workspace: Workspace::new(root.clone())?,
+            context: Context::new(root.clone(), context_roots)?,
             rsync: Rsync::new(root)?,
         }))
     }
@@ -26,6 +37,7 @@ impl Runtime {
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         let mut tools = self.backend.tools().await?;
         tools.extend(Workspace::tools());
+        tools.extend(Context::tools());
         tools.extend(Rsync::tools());
         let mut names = std::collections::HashSet::new();
         for tool in &tools {
@@ -46,6 +58,16 @@ impl Runtime {
                 if name.starts_with("ssmcp.fs.") || name.starts_with("ssmcp.net.") =>
             {
                 self.workspace
+                    .perform(&name, arguments)
+                    .await
+                    .map(backend::result)
+            }
+            Operation::CallTool { name, arguments }
+                if name.starts_with("ssmcp.skills.")
+                    || name.starts_with("ssmcp.agents.")
+                    || name.starts_with("ssmcp.context.") =>
+            {
+                self.context
                     .perform(&name, arguments)
                     .await
                     .map(backend::result)

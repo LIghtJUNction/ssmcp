@@ -4,6 +4,7 @@ pub mod backend;
 pub mod broker;
 pub mod client;
 pub mod code_mode;
+pub mod context;
 pub mod http;
 pub mod identity;
 pub mod oauth;
