@@ -1,0 +1,2171 @@
+{
+  "schema": "ssmcp.computer-use.validation.v1",
+  "report_id": "computer-use-20261117",
+  "status": "implementation_and_runtime_verified_final_ci_blocked_by_locked_keyring",
+  "updated_utc": "2026-11-16T20:06:10Z",
+  "repository": "https://github.com/LIghtJUNction/ssmcp",
+  "revision": {
+    "final_code_commit": "dbb98b020b8a35f1e7ff2184540fbebdf0e3d7f1",
+    "final_code_url": "https://github.com/LIghtJUNction/ssmcp/commit/dbb98b020b8a35f1e7ff2184540fbebdf0e3d7f1",
+    "final_git_tree": "fb7f5de0fc048c5ff5feab80fc24e0a2e735d8f6",
+    "final_source_set_sha256": null,
+    "final_client_binary_sha256": null,
+    "local_product_commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+    "local_product_source_set_sha256": "b69c7dc15971ab7cf2dcd6e13248e63c7df99884a0bf56f72c132c0ec9c4040c",
+    "local_test_client_binary_sha256": "a87130337ce6278cf060aa5af01bb4b2a9d96b7475ba1e75ac3f46c380e6503b",
+    "runtime_source_commit": "592b0a3ab729c403d6380d7169775bd8979ef5d1",
+    "runtime_client_binary_sha256": "874c27a7989c541a724c86a5f660ec895926e4f6f25e038347b3709e8aa4ff5c",
+    "note": "dbb98b changes only four test fixtures relative to be42; existing be42 binaries remain the product under the final local CLI test. The deployed wire-4-compatible runtime is independently built from 592b, not the final source commit. Each result retains its own immutable revision and digest."
+  },
+  "implementation": {
+    "desktop_platforms": [
+      "Linux (Hyprland and X11)",
+      "Windows (Win32)",
+      "macOS (Quartz and Accessibility)"
+    ],
+    "browser": "Native CDP adapter",
+    "omarchy_primitives": 21,
+    "public_tool_namespaces": [
+      "ssmcp.computer.*",
+      "ssmcp.browser.*",
+      "ssmcp.omarchy.*"
+    ],
+    "naming": "computer-use; dedicated client/service ssmcp-computer-use",
+    "specification": "../computer-use.md"
+  },
+  "evidence_levels": {
+    "implemented": "Platform adapters and bounded operations are present in the source.",
+    "native_runner": "Compilation, Clippy and permission-free tests run on the stated operating system.",
+    "live_desktop": "Interactive screenshots, focus, mouse, keyboard, permissions and DPI must be checked in a real unlocked desktop session."
+  },
+  "ci_command_set": {
+    "client": [
+      [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--lib",
+        "--bin",
+        "ssmcp",
+        "--test",
+        "release_client",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--bin",
+        "ssmcp",
+        "--test",
+        "release_client"
+      ],
+      [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "ssmcp"
+      ]
+    ],
+    "note": "A failed test step prevents subsequent client build/startup steps; job success is not inferred from successful Clippy."
+  },
+  "ci_runs": [
+    {
+      "commit": "2b8e5397685d0ba90cc3b30548636358d68f720e",
+      "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920293970",
+      "run_id": 43920293970,
+      "stage": "first_checkpoint",
+      "jobs": [
+        {
+          "platform": "Windows x86_64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920293970/job/133485448748",
+          "conclusion": "success",
+          "elapsed_seconds": null,
+          "counts": null
+        },
+        {
+          "platform": "Windows ARM64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920293970/job/133485448710",
+          "conclusion": "success",
+          "elapsed_seconds": null,
+          "counts": null
+        },
+        {
+          "platform": "macOS (both matrix architectures)",
+          "conclusion": "failure",
+          "failure": "E0509: struct update syntax moved Vec fields from InputRelease, a Drop type.",
+          "elapsed_seconds": null,
+          "counts": null,
+          "known_failure_job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920293970/job/133485448866"
+        },
+        {
+          "platform": "Linux (both matrix architectures)",
+          "conclusion": "failure",
+          "failure": "Core E2E expected tool catalog omitted the 21 newly registered Omarchy tools.",
+          "elapsed_seconds": null,
+          "counts": null
+        }
+      ]
+    },
+    {
+      "commit": "835250df57405042492fed3d3183525439546f61",
+      "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920977650",
+      "run_id": 43920977650,
+      "stage": "second_checkpoint",
+      "clients_only": true,
+      "jobs": [
+        {
+          "platform": "Windows x86_64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920977650/job/133487861954",
+          "conclusion": "success",
+          "elapsed_seconds": null,
+          "counts": {
+            "lib": {
+              "passed": 225,
+              "failed": 0,
+              "ignored": 1
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "windows_specific": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "limits": [
+            "Windows-specific image tests use memory GDI/BGRA/JPEG fixtures, without screen capture or input injection."
+          ]
+        },
+        {
+          "platform": "Windows ARM64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920977650/job/133487862801",
+          "conclusion": "success",
+          "elapsed_seconds": null,
+          "counts": {
+            "lib": {
+              "passed": 225,
+              "failed": 0,
+              "ignored": 1
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "windows_specific": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "limits": [
+            "No live desktop input acceptance."
+          ]
+        },
+        {
+          "platform": "macOS ARM64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920977650/job/133487862467",
+          "conclusion": "failure",
+          "clippy": "passed",
+          "elapsed_seconds": null,
+          "counts": {
+            "lib": {
+              "passed": 248,
+              "failed": 1,
+              "ignored": 3
+            },
+            "macos_specific": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "failure": "Linux Hyprland focus fixture was gated by cfg(unix), so macOS received an invalid Linux window ID.",
+          "limits": [
+            "Permission-free macOS tests passed; real Accessibility, Screen Recording, Retina and mixed-DPI behavior were not exercised."
+          ]
+        },
+        {
+          "platform": "macOS x86_64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43920977650/job/133487862565",
+          "conclusion": "failure",
+          "elapsed_seconds": null,
+          "counts": {
+            "lib": {
+              "passed": 225,
+              "failed": 24,
+              "ignored": 3
+            },
+            "macos_specific": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "clippy": "passed",
+          "test_elapsed_seconds": 9.04,
+          "failure": "One Linux Hyprland fixture failed; 23 further tests reused a cached OutputStore::global initialization error: open output cleanup lock returned ENOENT.",
+          "limits": [
+            "The association with Darwin's reported cold openat(O_CREAT) race is an inference, not a kernel trace.",
+            "Final native CI must validate the exclusive-create/plain-open fix and cold-start fixture."
+          ]
+        }
+      ]
+    },
+    {
+      "commit": "663b2cdf4628237546b65a251d37b88f48c64a10",
+      "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43929965349",
+      "run_id": 43929965349,
+      "stage": "onboarding_and_process_cleanup_candidate",
+      "clients_only": true,
+      "conclusion": "failure",
+      "limits": [
+        "This checkpoint does not include the final Unix mirror fallback modules or later pwsh preference."
+      ],
+      "jobs": [
+        {
+          "platform": "Windows x86_64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43929965349/job/133519432790",
+          "conclusion": "success",
+          "elapsed_seconds": null,
+          "counts": {
+            "lib": {
+              "passed": 244,
+              "failed": 0,
+              "ignored": 1
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "windows_specific": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "powershell_helpers": {
+            "pwsh": "passed",
+            "builtin_powershell_5_1": "passed"
+          },
+          "binary_version": "ssmcp 0.6.1",
+          "log_sha256": "85db6e71aa83b03b53a14c84ff52b2820909910cea5e1743e991381fcef322a0",
+          "limits": [
+            "No live desktop capture or input."
+          ]
+        },
+        {
+          "platform": "Windows ARM64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43929965349/job/133519433360",
+          "conclusion": "success",
+          "elapsed_seconds": null,
+          "counts": {
+            "lib": {
+              "passed": 244,
+              "failed": 0,
+              "ignored": 1
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "windows_specific": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "powershell_helpers": {
+            "pwsh": "passed",
+            "builtin_powershell_5_1": "passed"
+          },
+          "binary_version": "ssmcp 0.6.1",
+          "log_sha256": "7dbbfc2fe5134bd05cb939e024c996e3581747e113b34dfd9091484497e40eaf",
+          "limits": [
+            "No live desktop capture or input."
+          ]
+        },
+        {
+          "platform": "macOS x86_64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43929965349/job/133519433298",
+          "conclusion": "failure",
+          "clippy": "passed",
+          "counts": null,
+          "failure": "Test compilation E0308: Darwin libc::openpty expects mutable pointers for termios/winsize; the probe fixture used null() rather than null_mut()."
+        },
+        {
+          "platform": "macOS ARM64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43929965349/job/133519433389",
+          "conclusion": "failure",
+          "clippy": "passed",
+          "counts": null,
+          "failure": "Same Darwin-only fixture pointer-type compile error; no tests executed at this stage."
+        }
+      ]
+    },
+    {
+      "commit": "592b0a3ab729c403d6380d7169775bd8979ef5d1",
+      "run_id": 43935775400,
+      "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43935775400",
+      "stage": "first_full_six_platform_candidate",
+      "conclusion": "failure",
+      "jobs": [
+        {
+          "platform": "Windows x86_64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43935775400/job/133539855760",
+          "conclusion": "success",
+          "counts": {
+            "lib": {
+              "passed": 257,
+              "failed": 0,
+              "ignored": 1
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "windows_specific": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "powershell_helpers": {
+            "pwsh": "passed",
+            "builtin_powershell_5_1": "passed"
+          },
+          "log_sha256": "313d73b8fb3b7a0d5035c089fc118575837b077d06ac10816f92ee956c567a6e"
+        },
+        {
+          "platform": "Windows ARM64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43935775400/job/133539855521",
+          "conclusion": "success",
+          "counts": {
+            "lib": {
+              "passed": 257,
+              "failed": 0,
+              "ignored": 1
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "windows_specific": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "powershell_helpers": {
+            "pwsh": "passed",
+            "builtin_powershell_5_1": "passed"
+          },
+          "log_sha256": "b2a84e8d46b4a79670a1c85396ff389a89672ece70c397913ec9f18165d24aee"
+        },
+        {
+          "platform": "macOS ARM64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43935775400/job/133539855709",
+          "conclusion": "failure",
+          "clippy": "passed",
+          "build": "passed",
+          "counts": {
+            "lib": {
+              "passed": 299,
+              "failed": 0,
+              "ignored": 2
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "macos_specific": {
+              "passed": 7,
+              "failed": 0
+            },
+            "macos_brew": {
+              "passed": 5,
+              "failed": 0
+            },
+            "ssh_config": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "test_elapsed_seconds": 6.82,
+          "release_client_elapsed_seconds": 0.05,
+          "installer_fixture": {
+            "tests_run": 3,
+            "failed_subtests": 2,
+            "test_elapsed_seconds": 36.06
+          },
+          "failure": "Final installer fixture observed 131072 bytes for a 65536-byte cap under both outer shells."
+        },
+        {
+          "platform": "macOS x86_64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43935775400/job/133539855350",
+          "conclusion": "failure",
+          "clippy": "passed",
+          "build": "passed",
+          "counts": {
+            "lib": {
+              "passed": 299,
+              "failed": 0,
+              "ignored": 2
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            }
+          },
+          "test_elapsed_seconds": 9.8,
+          "release_client_elapsed_seconds": 0.09,
+          "installer_fixture": {
+            "tests_run": 3,
+            "failed_subtests": 2,
+            "test_elapsed_seconds": 36.548
+          },
+          "failure": "Same final installer file-size-unit failure; native Rust tests passed."
+        },
+        {
+          "platform": "Linux x86_64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43935775400/job/133539855517",
+          "conclusion": "failure",
+          "failure": "Terminal dashboard real-PTY fixture failed; a separate targeted correction is tracked by the parent."
+        },
+        {
+          "platform": "Linux ARM64",
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43935775400/job/133539854817",
+          "conclusion": "failure",
+          "failure": "Same terminal dashboard real-PTY fixture failure."
+        }
+      ]
+    },
+    {
+      "commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+      "run_id": 43938106333,
+      "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43938106333",
+      "stage": "be42 native platform validation before final fixture corrections",
+      "conclusion": "failure",
+      "jobs": [
+        {
+          "platform": "Linux x86_64",
+          "job_id": 133547987175,
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43938106333/job/133547987175",
+          "conclusion": "failure",
+          "failure": "The HTTP test harness had a 10-second transport timeout, shorter than browser.launch's 20-second product deadline and code_mode's 30-second deadline. Corrected to 35 seconds only in the fixture.",
+          "counts": null
+        },
+        {
+          "platform": "Linux ARM64",
+          "job_id": 133547987900,
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43938106333/job/133547987900",
+          "conclusion": "success",
+          "counts": null
+        },
+        {
+          "platform": "Windows x86_64",
+          "job_id": 133547987728,
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43938106333/job/133547987728",
+          "conclusion": "failure",
+          "counts": {
+            "lib": {
+              "passed": 271,
+              "failed": 2,
+              "ignored": 1
+            }
+          },
+          "failure": "Two inherited stdin tests inferred pipe saturation from a 2 ms timeout. Final test-only correction retains a genuinely Pending write and held stdin lock to test cancellation/deadline notification."
+        },
+        {
+          "platform": "Windows ARM64",
+          "job_id": 133547987558,
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43938106333/job/133547987558",
+          "conclusion": "success",
+          "counts": {
+            "lib": {
+              "passed": 273,
+              "failed": 0,
+              "ignored": 1
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "windows_adapter": {
+              "passed": 7,
+              "failed": 0
+            }
+          },
+          "test_elapsed_seconds": 4.9,
+          "powershell_helpers": {
+            "pwsh": "passed",
+            "windows_powershell_5_1": "passed"
+          }
+        },
+        {
+          "platform": "macOS ARM64",
+          "job_id": 133547988111,
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43938106333/job/133547988111",
+          "conclusion": "success",
+          "counts": {
+            "lib": {
+              "passed": 317,
+              "failed": 0,
+              "ignored": 2
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "macos_adapter": {
+              "passed": 7,
+              "failed": 0
+            },
+            "macos_brew": {
+              "passed": 5,
+              "failed": 0
+            },
+            "ssh_config": {
+              "passed": 7,
+              "failed": 0
+            },
+            "installer_fixture": {
+              "passed": 3,
+              "failed": 0
+            }
+          },
+          "test_elapsed_seconds": 6.92,
+          "release_client_elapsed_seconds": 0.05,
+          "installer_test_elapsed_seconds": 35.948
+        },
+        {
+          "platform": "macOS Intel",
+          "job_id": 133547987718,
+          "job_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43938106333/job/133547987718",
+          "conclusion": "success",
+          "counts": {
+            "lib": {
+              "passed": 317,
+              "failed": 0,
+              "ignored": 2
+            },
+            "release_client": {
+              "passed": 4,
+              "failed": 0
+            },
+            "macos_adapter": {
+              "passed": 7,
+              "failed": 0
+            },
+            "macos_brew": {
+              "passed": 5,
+              "failed": 0
+            },
+            "ssh_config": {
+              "passed": 7,
+              "failed": 0
+            },
+            "installer_fixture": {
+              "passed": 3,
+              "failed": 0
+            }
+          },
+          "test_elapsed_seconds": 8.35,
+          "release_client_elapsed_seconds": 0.09,
+          "installer_test_elapsed_seconds": 36.573
+        }
+      ],
+      "macos_summary": {
+        "path": "ci-43938106333/macos-summary.json",
+        "sha256": "46041e2eae6db1194a4f3ea1f2c6050b060219cecc122d79d385f46385c5a29a"
+      },
+      "limits": [
+        "Individual successful jobs are not a passing six-platform run.",
+        "Permission-free native tests do not exercise a real unlocked desktop or package installation."
+      ]
+    }
+  ],
+  "final_ci": {
+    "commit": "dbb98b020b8a35f1e7ff2184540fbebdf0e3d7f1",
+    "run_id": null,
+    "run_url": null,
+    "status": "blocked_external_authentication",
+    "conclusion": null,
+    "jobs": [],
+    "exact_sha_run_count": 0,
+    "dispatch_completed": false,
+    "evidence_path": "final-ci-auth-block.json",
+    "evidence_sha256": "aa5dbee6f02b2fc9823ee77a8123b87bb44b1b408d02e67acf85369addb6d400",
+    "observed_at_utc": "2026-11-16T20:03:46.172Z",
+    "official_api_network_probe": {
+      "http_status": 200,
+      "elapsed_seconds": 0.24056
+    },
+    "github_plugin": {
+      "repository_writes": "available and completed",
+      "workflow_dispatch_tool": "not exposed"
+    },
+    "credential_store": {
+      "provider": "org.freedesktop.secrets",
+      "login_collection_locked": true,
+      "matching_configured_account_unlocked_items": 0,
+      "matching_configured_account_locked_items": 1,
+      "credential_values_exposed": false
+    },
+    "bounded_attempts_stopped": true,
+    "required_user_action": "Unlock the existing login keyring on the development machine, then dispatch the existing workflow for the exact source SHA.",
+    "retry_command": "gh workflow run ci.yml --repo LIghtJUNction/ssmcp --ref main -f ref=dbb98b020b8a35f1e7ff2184540fbebdf0e3d7f1",
+    "limits": [
+      "No workflow run was produced for dbb98b; the previous four successful platform jobs are not evidence that this final six-platform revision passed.",
+      "Windows test-only correction was cross-compiled and linked locally but has not been executed by a final native Windows runner."
+    ]
+  },
+  "final_local_gates": {
+    "status": "passed_for_product_be42",
+    "evidence_path": "linux-final-validation-attempt2-gates.json",
+    "evidence_sha256": "be318f8746f0cccab99a52ef316d342038e617d076eed996674d1b70d6c04264",
+    "commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+    "started_utc": "2026-11-16T19:20:12Z",
+    "finished_utc": "2026-11-16T19:23:54Z",
+    "source_file_count": 121,
+    "source_set_sha256": "b69c7dc15971ab7cf2dcd6e13248e63c7df99884a0bf56f72c132c0ec9c4040c",
+    "source_set_unchanged": true,
+    "exit_code": 0,
+    "execution_env": {
+      "CARGO_BUILD_JOBS": "1",
+      "RUST_TEST_THREADS": "2"
+    },
+    "unchanged_download_fixtures_skipped": false,
+    "commands": [
+      {
+        "step": "format",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 1.234
+      },
+      {
+        "step": "clippy",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "clippy",
+          "--offline",
+          "--locked",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 26.382
+      },
+      {
+        "step": "library",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--lib"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 79.344,
+        "counts": {
+          "passed": 444,
+          "failed": 0,
+          "ignored": 7
+        },
+        "test_elapsed_seconds": 21.8
+      },
+      {
+        "step": "binary-unit",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--bins"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 34.385,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        }
+      },
+      {
+        "step": "integrations",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--test",
+          "cc_backend",
+          "--test",
+          "client_reload",
+          "--test",
+          "client_startup",
+          "--test",
+          "codex_backend",
+          "--test",
+          "context",
+          "--test",
+          "context_helpers",
+          "--test",
+          "oauth_security",
+          "--test",
+          "pi_backend",
+          "--test",
+          "release_client",
+          "--test",
+          "resources",
+          "--test",
+          "rsync",
+          "--test",
+          "terminals",
+          "--test",
+          "two_tools",
+          "--test",
+          "workspace_bridge"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 64.136,
+        "counts": {
+          "passed": 81,
+          "failed": 0,
+          "ignored": 14,
+          "targets": 14
+        }
+      },
+      {
+        "step": "build",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "build",
+          "--offline",
+          "--locked",
+          "--bins",
+          "--example",
+          "vt_snapshot"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 1.519,
+        "binaries": {
+          "ssmcp": {
+            "path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug/ssmcp",
+            "sha256": "a87130337ce6278cf060aa5af01bb4b2a9d96b7475ba1e75ac3f46c380e6503b",
+            "bytes": 80857376
+          },
+          "ssmcpd": {
+            "path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug/ssmcpd",
+            "sha256": "70d8ab0b57c7c2124c8ac1ac47f143a752d09d7392a1b5a2fa28ed1b50cd1152",
+            "bytes": 70531608
+          },
+          "examples/vt_snapshot": {
+            "path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug/examples/vt_snapshot",
+            "sha256": "cb7c8833429fa395b961d29741bfaece749189fddabb9827742c6f9bce153c35",
+            "bytes": 6444728
+          }
+        }
+      },
+      {
+        "step": "core-e2e",
+        "command": [
+          "/usr/bin/python3",
+          "scripts/e2e.py",
+          "--bin-dir",
+          "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug",
+          "--report",
+          "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/evidence/linux-final-core-e2e-attempt2.json"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 6.626,
+        "counts": {
+          "passed": 143,
+          "failed": 0
+        },
+        "report_path": "linux-final-core-e2e-attempt2.json",
+        "report_sha256": "87f434218be06f3167ffbf4397e37f2123f7f1e89f2b64f783a1678d76560cb3",
+        "test_elapsed_seconds": 6.419
+      },
+      {
+        "step": "computer-use-e2e",
+        "command": [
+          "/usr/bin/python3",
+          "scripts/e2e_computer_use.py",
+          "--bin-dir",
+          "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug",
+          "--evidence-dir",
+          "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/evidence/linux-final-computer-use-attempt2",
+          "--report",
+          "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/evidence/linux-final-computer-use-e2e-attempt2.json"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 7.179,
+        "counts": {
+          "passed": 47,
+          "failed": 0
+        },
+        "report_path": "linux-final-computer-use-e2e-attempt2.json",
+        "report_sha256": "75f5eabdf37ad1d25e8034f32d6398b44d8697b29a78b691181a3a0df350ba2a",
+        "test_elapsed_seconds": 6.981,
+        "desktop_exercised": false,
+        "omarchy_available": true,
+        "browser": "Chrome/157.0.8103.38"
+      },
+      {
+        "step": "omarchy-readonly",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--lib",
+          "omarchy::tests::readonly_live_smoke",
+          "--",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.686,
+        "counts": {
+          "passed": 1,
+          "failed": 0,
+          "getters": 11
+        },
+        "test_elapsed_seconds": 0.41
+      }
+    ],
+    "limits": [
+      "This complete gate is bound to be42, before four final test-only corrections.",
+      "No --desktop option was used."
+    ]
+  },
+  "supplementary_evidence": [
+    {
+      "id": "portal_http_tests",
+      "path": "portal/result.json",
+      "sha256": "ee16f06f1f8b0a92e598a1abc429f5764be73544b60df32c6ae2a4cb3a66a826",
+      "command": null,
+      "command_record": "Early evidence stores the label 'tests', not exact argv.",
+      "exit_code": 0,
+      "counts": {
+        "passed": 16,
+        "failed": 0,
+        "ignored": 0
+      },
+      "elapsed_seconds": 13.015,
+      "scope": "Portal tests include real loopback HTTP fixtures for grant consent, CSRF, account isolation, expiry, replay, key idempotency and callback binding.",
+      "revision_binding": "Earlier working snapshot; final full suite must supersede this result."
+    },
+    {
+      "id": "portal_clippy",
+      "path": "portal/result.json",
+      "sha256": "ee16f06f1f8b0a92e598a1abc429f5764be73544b60df32c6ae2a4cb3a66a826",
+      "command": null,
+      "command_record": "Early evidence stores the label 'clippy', not exact argv.",
+      "exit_code": 0,
+      "elapsed_seconds": 16.136,
+      "revision_binding": "Earlier working snapshot."
+    },
+    {
+      "id": "shell_unknown_length_byte_cap",
+      "path": "dependencies/shell-download-bounds.json",
+      "sha256": "0d64c8b6400e1c46d8620f469c78f205378de2ba827a944985231048cb130d65",
+      "command": [
+        "/usr/bin/python3",
+        "scripts/test_installer_download_bounds.py"
+      ],
+      "exit_code": 0,
+      "counts": {
+        "passed": 3,
+        "failed": 0
+      },
+      "elapsed_seconds": 0.899,
+      "source_sha256": {
+        "scripts/install.sh": "019f49eb1c4a3210804407a61fb637775611b577fbeed42bd58e001ce40e2c52",
+        "scripts/test_installer_download_bounds.py": "b2d50177247ef82b8fd1dc8e83cca6300ea35b4ae8518b1e851c13c8fa3c0caa"
+      },
+      "limits": [
+        "This early result is Linux-only. Native macOS CI on 592b0a3 later exposed the different ulimit unit; the corrective candidate has its own evidence below."
+      ]
+    },
+    {
+      "id": "installer_update_and_integrity",
+      "path": "installer-review-final.json",
+      "sha256": "cabec017aa06ef0ef2c2ec7500e9b920538191eb44f5c6775fa3b1653c0e0ce7",
+      "command": null,
+      "entry_point": "scripts/test_installers.py",
+      "exit_code": 0,
+      "elapsed_seconds": null,
+      "scope": "Synthetic executable fixture: install/update, mirror fallback, stalls, tampering, version mismatch, and existing-binary preservation.",
+      "limits": [
+        "A behavior fixture, not a real end-user installation."
+      ]
+    },
+    {
+      "id": "powershell_production_helpers",
+      "path": "powershell-helper-tests.json",
+      "sha256": "35f6323f6ecf1e66670cc279a9478b6a34579a7dc6bf6994fb0658689f25ae5d",
+      "command": null,
+      "entry_point": "scripts/test_installer_helpers.ps1",
+      "exit_code": 0,
+      "elapsed_seconds": null,
+      "runtime": "Verified portable PowerShell 7.7 on Linux",
+      "runtime_archive_sha256": "c89d9c682d2c403dfe726f3df948e359675235a5bd6fab535776de69729ca0cb",
+      "counts": {
+        "openssh_path_alias_fixtures": 15
+      },
+      "scope": "Real production helper code: byte cap, idle/header/total/low-rate deadlines, exact-root extraction, duplicates and OpenSSH normalized aliases.",
+      "limits": [
+        "This local helper run is not a native Windows operating-system execution."
+      ]
+    },
+    {
+      "id": "powershell_public_https",
+      "path": "powershell-https-test.json",
+      "sha256": "e04c657092443aeab6966239e7a1fbbe0e1313586e30d75bed942d62c006e1d6",
+      "command": null,
+      "exit_code": 0,
+      "elapsed_seconds": null,
+      "counts": {
+        "downloaded_metadata_bytes": 21052
+      },
+      "scope": "Public HTTPS metadata read only.",
+      "limits": [
+        "No package installation or key transfer."
+      ]
+    },
+    {
+      "id": "onboarding_cli_fixture_self_test",
+      "path": "onboarding-cli-fixture-self-test.json",
+      "sha256": "f795ff6b940914e4c041c56bab3d099e0c607a3ad544e06284fcdb19592e6dcc",
+      "command": null,
+      "entry_point": "scripts/e2e_onboarding.py --self-test",
+      "exit_code": 0,
+      "elapsed_seconds": null,
+      "scope": "Fixture self-test only; real CLI PTY result is recorded separately after the fresh binary gate."
+    },
+    {
+      "id": "output_lock_cold_creation",
+      "path": "macos-output-lock-gates.json",
+      "sha256": "d4427abeac594091cf1e34cd1ffa661e92373b18f36ad45549fcd7fb53973909",
+      "platform": "Linux development machine",
+      "source_sha256": {
+        "src/output.rs": "b05b99e2f1ebabd3794685aa9ae652ab0a1a52f2869b2dead2db902e66710eb9"
+      },
+      "commands": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--lib",
+            "output::",
+            "--",
+            "--nocapture"
+          ],
+          "exit_code": 0,
+          "counts": {
+            "passed": 18,
+            "failed": 0,
+            "ignored": 0
+          },
+          "elapsed_seconds": 104.708,
+          "test_elapsed_seconds": 0.44
+        },
+        {
+          "command": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--lib",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 5.791
+        },
+        {
+          "command": [
+            "git",
+            "diff",
+            "--check",
+            "--",
+            "src/output.rs"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.044
+        }
+      ],
+      "scope": "16 cold rounds with eight barrier-synchronized initializers, distinct owners, common-lock exclusion and Unix inode/UID/mode/link assertions, within the existing bounded child fixture.",
+      "limits": [
+        "Linux regression evidence only; macOS-native correction awaits the final CI."
+      ],
+      "revision_binding": "Historical equivalent candidate; root adopts upstream PR #8 output.rs with a 32x8 cold-create fixture and 20 tests. Final merged gate supersedes these 18-test results."
+    },
+    {
+      "id": "ssh_config_inherited_lock_proof",
+      "path": "ssh-config-lock-inheritance-proof.json",
+      "sha256": "456effa894c99c360f140dd7f92b92c943cb319e9560298ebd33d5569a8bf8e7",
+      "command": null,
+      "exit_code": 0,
+      "scope": "Real Unix fork comparison: closing a locked CLOEXEC descriptor retains its flock through a live inherited descriptor; explicit LOCK_UN releases it before that child exits.",
+      "limits": [
+        "Private temporary files and owned processes only; not a Windows lock test."
+      ]
+    },
+    {
+      "id": "ssh_config_explicit_unlock_candidate",
+      "path": "ssh-config-lock-gates.json",
+      "sha256": "b467f78e54676b3dea39ba354c2d177157cad95c7f6cba3327c7380683307bc1",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--lib",
+        "client::onboarding::ssh_config::tests",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "counts": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0
+      },
+      "elapsed_seconds": 113.082,
+      "test_elapsed_seconds": 0,
+      "source_sha256": {
+        "src/client/onboarding/ssh_config.rs": "4c7d8ac824347d35fa7606b9543776c3ac20f0309edf44fe2acf97889986af94"
+      },
+      "scope": "Actual save remains exclusive while the guard lives, then succeeds with a duplicate descriptor still open; repeated save is idempotent.",
+      "limits": [
+        "After this candidate run, cfg(unix) was added around the guard and test to preserve Windows byte-range lock semantics; exact final hash awaits the merged final gate."
+      ]
+    },
+    {
+      "id": "powershell_zip_runtime_capability",
+      "path": "powershell-zip-runtime-guard-tests.json",
+      "sha256": "4a51bba6527856b334d1d720463652b1b27dfd4f1577e66d88e3f544421a0dce",
+      "command": null,
+      "exit_code": 0,
+      "elapsed_seconds": 29.355,
+      "scope": "Production installer and exact Rust extraction helpers check ZipArchiveEntry.ExternalAttributes before trusting ZIP attributes.",
+      "limits": [
+        "This particular evidence ran on portable PowerShell 7.7/Linux; actual builtin Windows PowerShell 5.1 results are recorded separately under CI.",
+        "Windows PowerShell 5.1 needs .NET Framework 4.7.2 or later for this ZIP API."
+      ]
+    },
+    {
+      "id": "apt_native_install_authentication_gate",
+      "path": "apt-review/apt_install_gate_fixture.json",
+      "sha256": "ac8a2c488713fd0bf623da49b5776f7585cc42c245e43dc8595f38521a52d4ba",
+      "fixture_sha256": "29775e59a2ed34542850698130205a2a9d16a01e445c07c9869e3dd4ebccabb8",
+      "command": null,
+      "exit_code": 0,
+      "counts": {
+        "passed": 5,
+        "failed": 0
+      },
+      "scope": "APT 3.0.3 real normal install path with an owned dpkg sentinel: authenticated valid cache reaches the sentinel; untrusted index, inherited authentication bypass, missing cache and tampered cache are rejected before dpkg.",
+      "limits": [
+        "The sentinel does not install packages; this is not an actual system software installation."
+      ]
+    },
+    {
+      "id": "unix_dependency_fallback_candidates",
+      "path": "dependency-final-gates.json",
+      "sha256": "fb37b35a3f0d9ea8fd2cba3744637f7f9bef6ec5da0aa00f9b164021bafd8b3b",
+      "commands": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--lib",
+            "client::onboarding::dependencies::"
+          ],
+          "exit_code": 0,
+          "counts": {
+            "passed": 19,
+            "failed": 0,
+            "ignored": 0
+          },
+          "elapsed_seconds": 85.926,
+          "test_elapsed_seconds": 5.03
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--lib",
+            "client::onboarding::ssh_config::"
+          ],
+          "exit_code": 0,
+          "counts": {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          "elapsed_seconds": 0.406,
+          "test_elapsed_seconds": 0
+        },
+        {
+          "command": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 73.659
+        }
+      ],
+      "source_sha256": {
+        "src/client/onboarding/dependencies.rs": "baa61ebe75820e4c79cdd00e0008abf7816c8241ee4348ff7d679f36c88276dc",
+        "src/client/onboarding/dependencies/linux_apt.rs": "0784dc7ae735a221fdba1591afef2d0d08c53ffb4bdeb6b580ee1ba60ab36627",
+        "src/client/onboarding/dependencies/macos_brew.rs": "72234373be6944709dd55113843ee73478af4507d08e0e337120ed3e968f6a59",
+        "src/client/onboarding/ssh_config.rs": "1f4dcbf42fd82e791eca21b8a91ad3e64e1e32c5d722b6f88fb67d7b9ddd7760"
+      },
+      "scope": "Five actual fake-brew process cases exercise route order, failed verification preventing install, per-route timeout fallback, shared deadline and untimed package apply, plus seven APT plan/cache/HTTP cases and existing download/process fixtures.",
+      "limits": [
+        "No Homebrew or system package installation was performed.",
+        "After this candidate gate, APT's production HTTP client was changed to inherit existing proxy settings; final_local_gates records complete coverage of the resulting be42 source."
+      ]
+    },
+    {
+      "id": "darwin_file_limit_unit_repair_linux_candidate",
+      "path": "shell-byte-cap-darwin-unit-gates-attempt2.json",
+      "sha256": "eb92fcc2942d3d9adee020efeca1e359e041cbf2994003d5e671c558cd06bae5",
+      "source_sha256": {
+        "scripts/install.sh": "9da5692e6f6bc26b04012e6fcecabb6a6f07c13d8e8151fc0323f5daaeac2853",
+        "scripts/test_installer_download_bounds.py": "3fcfb38a277716cc2d1c2b3231d9217236abfec6a5fe3b5fc972dae9dc364217"
+      },
+      "commands": [
+        {
+          "command": [
+            "/bin/sh",
+            "-n",
+            "scripts/install.sh"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.003
+        },
+        {
+          "command": [
+            "python3",
+            "scripts/test_installer_download_bounds.py"
+          ],
+          "exit_code": 0,
+          "counts": {
+            "passed": 3,
+            "failed": 0
+          },
+          "elapsed_seconds": 0.849,
+          "test_elapsed_seconds": 0.731
+        },
+        {
+          "command": [
+            "git",
+            "diff",
+            "--check",
+            "--",
+            "scripts/install.sh",
+            "scripts/test_installer_download_bounds.py"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.009
+        }
+      ],
+      "limits": [
+        "Linux test execution only; Darwin's 1024-byte branch awaits native CI.",
+        "An earlier optional test_installers.py invocation omitted its required target argument and exited 2 before running any installer case; it is retained in shell-byte-cap-darwin-unit-gates.json and is not counted as validation."
+      ]
+    },
+    {
+      "id": "be42_browser_transport_fixture_correction",
+      "path": "computer-use-transport-fix-gate.json",
+      "sha256": "9f628634667de94d0c0d18d967100ce068c73f9a4ec99c984d8a3c61b0cf6f5e",
+      "report_path": "computer-use-transport-fix-e2e.json",
+      "report_sha256": "b2dbcbd399d93e68d4289198ad4f63d18f60d78c6e353219a87033efd2b58360",
+      "command": null,
+      "exit_code": 0,
+      "elapsed_seconds": 6.108,
+      "test_elapsed_seconds": 5.975,
+      "counts": {
+        "passed": 47,
+        "failed": 0
+      },
+      "scope": "35-second fixture HTTP budget covers native 20-second browser and 30-second code-mode product deadlines; the product deadlines and 47 assertions are unchanged.",
+      "product_commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+      "desktop_exercised": false
+    },
+    {
+      "id": "be42_terminal_dashboard",
+      "path": "dashboard-e2e-final-0.6.json",
+      "sha256": "f888295a9e68ec7bb835149120c30fb59e384b13a226c2602356d52f1f00fec7",
+      "summary_path": "dashboard-e2e-final-0.6.1-be42-summary.json",
+      "summary_sha256": "4f0bb9f8781f322fcbfb554b8cd8ef863b17bb033d425e42722b1ee4ea266892",
+      "product_commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+      "command": null,
+      "exit_code": 0,
+      "elapsed_seconds": 16.773,
+      "counts": {
+        "passed": 76,
+        "failed": 0
+      },
+      "limits": [
+        "The original report filename was shortened by an external wrapper's Path.with_suffix; this records the actual preserved path."
+      ]
+    },
+    {
+      "id": "compatible_runtime_build_and_e2e",
+      "path": "runtime-compatible-gates.json",
+      "sha256": "68004da6d317978f52fa76af3df3babd919a88563128973f42997d8f98256389",
+      "commit": "592b0a3ab729c403d6380d7169775bd8979ef5d1",
+      "wire_protocol": 4,
+      "source_set_sha256": "99f6878472dfdb3a0f51636072d0f060cc90a7021cc761e2570e194aad68a1be",
+      "source_set_unchanged": true,
+      "be42_archives_unchanged": true,
+      "exit_code": 0,
+      "commands": [
+        {
+          "step": "build",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "build",
+            "--offline",
+            "--locked",
+            "--bins"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 29.197,
+          "binaries": {
+            "ssmcp": {
+              "path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/artifacts/592b0a3ab729c403d6380d7169775bd8979ef5d1/ssmcp",
+              "build_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug/ssmcp",
+              "bytes": 78346432,
+              "sha256": "874c27a7989c541a724c86a5f660ec895926e4f6f25e038347b3709e8aa4ff5c"
+            },
+            "ssmcpd": {
+              "path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/artifacts/592b0a3ab729c403d6380d7169775bd8979ef5d1/ssmcpd",
+              "build_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug/ssmcpd",
+              "bytes": 69016200,
+              "sha256": "a77ea68636cd0ea34e0b1e7abe48c67b82a94256982f217bc5be2b01608a425e"
+            }
+          }
+        },
+        {
+          "step": "core-e2e",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/e2e.py",
+            "--bin-dir",
+            "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/artifacts/592b0a3ab729c403d6380d7169775bd8979ef5d1",
+            "--report",
+            "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/evidence/runtime-compatible-core-e2e.json"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 5.21,
+          "counts": {
+            "passed": 143,
+            "failed": 0
+          },
+          "test_elapsed_seconds": 5.044,
+          "report_path": "runtime-compatible-core-e2e.json",
+          "report_sha256": "18aa622b43e9e2e0952d5409811a783b439fa3590266c92565d4ec5b89913dc8"
+        },
+        {
+          "step": "computer-use-e2e",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/e2e_computer_use.py",
+            "--bin-dir",
+            "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/artifacts/592b0a3ab729c403d6380d7169775bd8979ef5d1",
+            "--evidence-dir",
+            "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/evidence/runtime-compatible-computer-use",
+            "--report",
+            "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/evidence/runtime-compatible-computer-use-e2e.json"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 5.906,
+          "counts": {
+            "passed": 47,
+            "failed": 0
+          },
+          "test_elapsed_seconds": 5.781,
+          "report_path": "runtime-compatible-computer-use-e2e.json",
+          "report_sha256": "acf409575cc7eac8059221e69d365a4e4e650d8392ab5e805ef0aa6798cb0c0d",
+          "desktop_exercised": false
+        }
+      ],
+      "limits": [
+        "The 143-check core fixture belongs to 592b; the 47-check computer-use fixture uses main's corrected 35-second transport timeout.",
+        "No physical desktop input or public broker deployment."
+      ],
+      "feature_comparison": {
+        "path": "runtime-compatible-feature-comparison.json",
+        "sha256": "68501160df0d3fd72cc99ddb89a139fe880d2edb8c00147872d75dbdffda71b9",
+        "critical_files": 12,
+        "all_identical_to_be42": true
+      }
+    },
+    {
+      "id": "windows_stdin_fixture_cross_compile",
+      "path": "windows-stdin-fixture-lib-check.json",
+      "sha256": "994a43a1b5f65b6f15f460d754ae7d02c926a07bdb708bc70d41b573550bc807",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--target",
+        "x86_64-pc-windows-gnu"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 19.693,
+      "source_sha256": {
+        "src/backend/shell.rs": "c4aff01b4bff893d3797838154bb294ce1012615e71e1b12e89917e522967c05"
+      },
+      "scope": "The actual Windows library test PE compiled and linked on Linux; product source bytes did not change.",
+      "limits": [
+        "No Windows runtime execution is inferred from cross-compilation."
+      ]
+    }
+  ],
+  "portal_ui": {
+    "evidence_path": "portal/ui-review.json",
+    "evidence_sha256": "08a67fc1d60b4162a326bcab5e0a83e9b09351b5b1c6de4660c9bcdddd0e5edf",
+    "transport": "ssmcp native browser tools over SSH",
+    "page": "Synthetic account and comparison code, rendered from the production consent page.",
+    "desktop": {
+      "image_path": "portal/consent-desktop-final.jpg",
+      "width": 1265,
+      "height": 873,
+      "bytes": 48726,
+      "sha256": "7042f5cbec9a8fa2d5aca6d1b2f56a7346722de9bd433b62c4740e1fae91f392",
+      "repository_image_path": "../assets/computer-use-consent-desktop.jpg"
+    },
+    "narrow": {
+      "image_path": "portal/consent-narrow.jpg",
+      "width": 500,
+      "height": 1113,
+      "bytes": 37636,
+      "sha256": "99289f0c8895bac65ed6db0e123ef05c8d691cea4600e46603e5f443b846f5b1",
+      "repository_image_path": "../assets/computer-use-consent-narrow.jpg"
+    },
+    "findings": [
+      "No horizontal overflow at the observed widths.",
+      "Distinct primary authorize action and secondary deny action.",
+      "Owned browser/client/server were closed after review."
+    ],
+    "limits": [
+      "Chromium enforced 500 px minimum width; 390 px mobile layout was not validated.",
+      "No real login, real consent, or physical desktop input."
+    ]
+  },
+  "cli_pty": {
+    "status": "passed_final_product_with_final_fixture",
+    "initial_failure": {
+      "binary_sha256": "1eb919ef09c746cf7f8514f2e69731723ebf2e6bd2f7875a03c703b899375722",
+      "exit_code": 1,
+      "elapsed_seconds": 36.807,
+      "scope": "Real OpenSSH and Linux PTY with a pending-only local portal.",
+      "cases": [
+        {
+          "name": "auto_setup_ctrl_c",
+          "passed": true,
+          "elapsed_seconds": 0.385,
+          "process_exit_code": 0
+        },
+        {
+          "name": "no_setup_tty",
+          "passed": true,
+          "elapsed_seconds": 0.147,
+          "process_exit_code": 1
+        },
+        {
+          "name": "non_tty",
+          "passed": true,
+          "elapsed_seconds": null,
+          "process_exit_code": 1
+        },
+        {
+          "name": "probe_term_proxy_cleanup",
+          "passed": true,
+          "elapsed_seconds": 0.215,
+          "process_exit_code": 0
+        },
+        {
+          "name": "probe_deadline_proxy_cleanup",
+          "passed": false,
+          "elapsed_seconds": null,
+          "failure": "ProxyCommand survived the outer probe deadline before PTY close."
+        }
+      ],
+      "limits": [
+        "The fixture cleaned up its owned processes after the failure.",
+        "Post-fix candidate and final-product results are recorded separately below.",
+        "Synthetic portal fixtures and owned keys only; no real account authorization."
+      ]
+    },
+    "candidate_pass": {
+      "path": "onboarding-cli-e2e-after-probe-fix-attempt2.json",
+      "sha256": "4b34f8047a16ef6a223d2e95cc4d03ecee270d8b82e939da707bc5fb17e63f47",
+      "summary_path": "onboarding-cli-e2e-after-probe-fix-attempt2-summary.json",
+      "summary_sha256": "0d21113807df53ce0f10af208c613469ea93a109a5cd1c71ccceb05ab99f8651",
+      "command": [
+        "python3",
+        "scripts/e2e_onboarding.py",
+        "--binary",
+        "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug/ssmcp",
+        "--expect-sha256",
+        "56789e3dec9a6e54252eaabc542fcd6a577d67dae6428d2ba731119fda9d1598",
+        "--with-ssh-prompts",
+        "--output",
+        "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/evidence/onboarding-cli-e2e-after-probe-fix-attempt2.json"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 43.752,
+      "counts": {
+        "passed": 8,
+        "failed": 0
+      },
+      "binary_sha256": "56789e3dec9a6e54252eaabc542fcd6a577d67dae6428d2ba731119fda9d1598",
+      "binary_version": "ssmcp 0.6.0",
+      "fixture_sha256": "de77cd59d52b90a6a24567176f92b800e27c819120e0bf8ad7a084186e4d5ce9",
+      "scope": "Real CLI/OpenSSH/PTY, pending-only loopback portal, surviving outer keeper under TERM/deadline, temporary sshd and encrypted-key host-key/passphrase prompts.",
+      "observations": [
+        "SSH and ProxyCommand exited before PTY closure while keeper stayed alive.",
+        "No secret echo; all three prompt cases restored terminal modes.",
+        "Fixture-owned keys/configuration/processes only."
+      ],
+      "limits": [
+        "This historical 0.6.0 run predates the final isolated-HOME fixture; the final 0.6.1 product run is recorded separately below."
+      ]
+    },
+    "preserved_intermediate_failure": {
+      "path": "onboarding-cli-e2e-after-probe-fix.json",
+      "sha256": "5b0c19d2ea08ad498c6d42a7ddb811ba30991a614e1d589a6c894e16c5edadc6",
+      "scope": "Fixture expectation adaptation failure retained, not counted as passed."
+    },
+    "final": {
+      "path": "onboarding-cli-e2e-be42-after-atomic-marker.json",
+      "sha256": "65e7691111e051dc4913ea8b53219fa31dc7f87cb2f43e0682fba19e606137ed",
+      "summary_path": "onboarding-cli-e2e-be42-after-atomic-marker-summary.json",
+      "summary_sha256": "1da72c878d68dc82b7797e445afc59e4de0302651e1b15fc5f1e9ba0ca396516",
+      "command": [
+        "python3",
+        "scripts/e2e_onboarding.py",
+        "--binary",
+        "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/artifacts/be42b03fc2651b830ff0f0f3ee1427590344f730/ssmcp",
+        "--expect-sha256",
+        "a87130337ce6278cf060aa5af01bb4b2a9d96b7475ba1e75ac3f46c380e6503b",
+        "--with-ssh-prompts",
+        "--output",
+        "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/evidence/onboarding-cli-e2e-be42-after-atomic-marker.json"
+      ],
+      "started_utc": "2026-11-16T19:51:05.224282+00:00",
+      "exit_code": 0,
+      "elapsed_seconds": 38.241,
+      "counts": {
+        "passed": 8,
+        "failed": 0
+      },
+      "binary_version": "ssmcp 0.6.1",
+      "product_commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+      "binary_sha256": "a87130337ce6278cf060aa5af01bb4b2a9d96b7475ba1e75ac3f46c380e6503b",
+      "fixture_commit": "dbb98b020b8a35f1e7ff2184540fbebdf0e3d7f1",
+      "fixture_sha256": "97d752fd88b0f011a78fbc5c671460f5a5268259757dbc483411ed63aedf6480",
+      "fixture_unchanged": true,
+      "cases": [
+        {
+          "name": "auto_setup_ctrl_c",
+          "passed": true,
+          "process_exit_code": 0,
+          "elapsed_seconds": 0.219
+        },
+        {
+          "name": "no_setup_tty",
+          "passed": true,
+          "process_exit_code": 1,
+          "elapsed_seconds": 0.159
+        },
+        {
+          "name": "non_tty",
+          "passed": true,
+          "process_exit_code": 1,
+          "elapsed_seconds": null
+        },
+        {
+          "name": "probe_term_proxy_cleanup",
+          "passed": true,
+          "process_exit_code": 0,
+          "elapsed_seconds": 0.201,
+          "keeper_alive_before_pty_close": true,
+          "ssh_and_proxy_stopped": true
+        },
+        {
+          "name": "probe_deadline_proxy_cleanup",
+          "passed": true,
+          "process_exit_code": 0,
+          "elapsed_seconds": 30.198,
+          "keeper_alive_before_pty_close": true,
+          "ssh_and_proxy_stopped": true
+        },
+        {
+          "name": "ssh_hostkey_cancel",
+          "passed": true,
+          "process_exit_code": 0,
+          "elapsed_seconds": 0.389,
+          "terminal_modes_restored": true
+        },
+        {
+          "name": "ssh_passphrase_cancel",
+          "passed": true,
+          "process_exit_code": 0,
+          "elapsed_seconds": 0.37,
+          "terminal_modes_restored": true
+        },
+        {
+          "name": "ssh_secret_authentication",
+          "passed": true,
+          "process_exit_code": 0,
+          "elapsed_seconds": 0.721,
+          "terminal_modes_restored": true,
+          "authenticated": true
+        }
+      ],
+      "observations": [
+        "Actual OpenSSH and temporary sshd exercised an encrypted key and host-key/passphrase prompts.",
+        "Secret echo was disabled; all three prompt cases restored terminal modes.",
+        "Each CLI child used a fixture-owned private HOME/USERPROFILE/.ssh; caller environment and real keys/configuration were not changed.",
+        "SSH and ProxyCommand stopped while the outer keeper remained alive and before PTY closure.",
+        "Default no-setup and non-TTY expected process exit 1 is a passed assertion, not a failed fixture."
+      ],
+      "limits": [
+        "Loopback-only synthetic account and browser log stub; no real GitHub authorization or real account key registration.",
+        "The final fixture is test-only; the immutable product binary is from be42."
+      ]
+    },
+    "be42_before_atomic_marker": {
+      "path": "onboarding-cli-e2e-be42-before-atomic-marker.json",
+      "sha256": "811e79d6463ad191879348e20d096cd1ea834b1b95330ae96817cee144b23990",
+      "binary_sha256": "a87130337ce6278cf060aa5af01bb4b2a9d96b7475ba1e75ac3f46c380e6503b",
+      "product_commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+      "fixture_sha256": "bb25d7c31315623503dec6ef23ba37ff86efc53460bffe88621e4e1290e46928",
+      "exit_code": 1,
+      "elapsed_seconds": 41.34,
+      "counts": {
+        "passed": 7,
+        "failed": 1
+      },
+      "failure": "ssh_secret_authentication observed a completed-marker path before write_text had written the JSON body.",
+      "change": "Write complete JSON to an owned temporary sibling, then atomically os.replace it into the completion-marker path. No authentication, echo, terminal-restoration or cleanup assertion was removed."
+    }
+  },
+  "live_development_session": {
+    "status": "passed",
+    "path": "development-runtime-verification.json",
+    "sha256": "ca9fc4ad57172c0e73068047520ef051c0c21dd9504134788e05bf1a91f7de4a",
+    "verified_at_utc": "2026-11-16T19:45:32.440Z",
+    "client_name": "ssmcp-computer-use",
+    "service": "ssmcp-computer-use.service",
+    "source_commit": "592b0a3ab729c403d6380d7169775bd8979ef5d1",
+    "binary_sha256": "874c27a7989c541a724c86a5f660ec895926e4f6f25e038347b3709e8aa4ff5c",
+    "wire_protocol": 4,
+    "native_tools": {
+      "computer": 11,
+      "browser": 15,
+      "omarchy": 21,
+      "total": 47
+    },
+    "desktop_status": {
+      "platform": "linux",
+      "session": "hyprland",
+      "coordinate_space": "desktop_logical",
+      "advertised_capabilities_available": 9,
+      "physical_input_exercised": false
+    },
+    "omarchy": {
+      "version": "4.5.0-3",
+      "readonly_getters_passed": 11,
+      "methods": [
+        "status",
+        "themes",
+        "backgrounds",
+        "fonts",
+        "audio",
+        "brightness",
+        "toggles",
+        "workspaces",
+        "apps",
+        "battery",
+        "network"
+      ],
+      "user_settings_changed": false
+    },
+    "model_backends": {
+      "available": 0,
+      "reported_unavailable": 4,
+      "model_tools": 0
+    },
+    "browser": {
+      "status": "passed",
+      "protocol": "CDP",
+      "transport": "ssmcp native browser tools over the live public broker connection",
+      "browser": "Chrome/157.0.8103.38",
+      "owned_headless": true,
+      "checks": [
+        "launch",
+        "open",
+        "snapshot",
+        "fill_unicode",
+        "click",
+        "read_result",
+        "screenshot_image_block",
+        "disconnect"
+      ],
+      "screenshot": {
+        "path": "runtime-browser-live.jpg",
+        "mime_type": "image/jpeg",
+        "width": 800,
+        "height": 413,
+        "bytes": 13711,
+        "sha256": "d19d23713d97c825b09398c6e0050f5262da49d99c7f30941689c2a4ebeaf02e",
+        "repository_image_path": "../assets/computer-use-runtime-browser.jpg"
+      },
+      "connected_after": false,
+      "fixture": "Task-owned local synthetic validation page; not a real GitHub OAuth login or real account consent."
+    },
+    "native_image_helper_available": false,
+    "image_transport": "Native MCP image block; no other browser controller used.",
+    "old_unit_stopped": true,
+    "limits": [
+      "Desktop status is capability discovery, not a physical desktop input test.",
+      "The public broker was not upgraded by this work and has no image() convenience helper.",
+      "Actual runtime is from the independently tested wire-4-compatible 592b commit, not final dbb source."
+    ],
+    "service_switch_completed_utc": "2026-11-16T19:57:18Z",
+    "service_states": {
+      "old_native_controls": {
+        "active_state": "inactive",
+        "sub_state": "dead",
+        "main_pid": 0,
+        "result": "success",
+        "restarts": 0
+      },
+      "new_computer_use": {
+        "active_state": "active",
+        "sub_state": "running",
+        "result": "success",
+        "restarts": 0
+      }
+    }
+  },
+  "fixed_findings": [
+    {
+      "id": "macos_drop_initialization",
+      "observed_in_commit": "2b8e5397685d0ba90cc3b30548636358d68f720e",
+      "change": "Explicitly initialize all InputRelease fields; preserve Drop-based release.",
+      "validation": "Subsequent native macOS Clippy and seven macOS-specific tests passed."
+    },
+    {
+      "id": "hyprland_fixture_platform_gate",
+      "observed_in_commit": "835250df57405042492fed3d3183525439546f61",
+      "change": "Gate the two Linux Hyprland focus tests with cfg(target_os = linux).",
+      "validation": "At be42 both native macOS jobs passed all 317 lib tests, four release-client tests and three real installer byte-bound fixtures; final test-only commit CI is recorded separately."
+    },
+    {
+      "id": "core_e2e_catalog",
+      "observed_in_commit": "2b8e5397685d0ba90cc3b30548636358d68f720e",
+      "change": "Include the 21 Omarchy tools in the exact expected tool catalog.",
+      "validation": "The immutable be42 full local gate passed 444 library tests, five binary tests, 81 integration tests and core/computer-use E2E (143/47). The later four-file patch changes fixtures only."
+    },
+    {
+      "id": "shell_spill_fixture_race",
+      "change": "Initial candidate synchronized output_archived with a finish-file handshake; final integration adopts upstream PR #8 bidirectional socket handshake, preserving output/truncation/recovery assertions.",
+      "validation": "The immutable be42 full local gate passed 444 library tests, five binary tests, 81 integration tests and core/computer-use E2E (143/47). The later four-file patch changes fixtures only."
+    },
+    {
+      "id": "ordinary_ssh_wrapper_precedence",
+      "change": "Keep PATH ssh for ordinary connections even if no paired ssh-keygen exists; setup retains paired dependency checks.",
+      "validation": "The immutable be42 full local gate passed 444 library tests, five binary tests, 81 integration tests and core/computer-use E2E (143/47). The later four-file patch changes fixtures only."
+    },
+    {
+      "id": "explicit_identity_no_fallback",
+      "change": "An invalid explicit -i fails with its path and reason; no default-key fallback, prompts, upload or config write.",
+      "validation": "The immutable be42 full local gate passed 444 library tests, five binary tests, 81 integration tests and core/computer-use E2E (143/47). The later four-file patch changes fixtures only."
+    },
+    {
+      "id": "darwin_cold_lock_creation",
+      "observed_in_commit": "835250df57405042492fed3d3183525439546f61",
+      "observed_failure": "Mac Intel first global output-store initialization returned ENOENT, then OnceLock cached that error for 23 tests.",
+      "diagnosis": "Consistent with the independently reported Darwin openat(O_CREAT) cold-creation race; no kernel trace was collected.",
+      "change": "Exclusive create, then only on AlreadyExists open the existing file without O_CREAT; preserve dirfd, no-follow, UID, mode, link-count and flock checks.",
+      "validation": "At 592b0a3, both native macOS architectures passed all Rust lib tests (299 each), including the merged cold-creation and inode-preservation fixtures; those jobs later failed only in the independent installer bound fixture.",
+      "primary_references": [
+        "https://github.com/golang/go/issues/81246",
+        "https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.121.6/bsd/vfs/vfs_vnops.c",
+        "https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.121.6/bsd/vfs/vfs_lookup.c",
+        "https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.121.6/bsd/vfs/vfs_syscalls.c"
+      ]
+    },
+    {
+      "id": "probe_deadline_descendant_cleanup",
+      "change": "Managed private process session plus a private ASKPASS socket bridge to the foreground terminal, with terminal-state restoration and local terminal-signal masking.",
+      "validation": "Final real CLI/PTY fixture passed all eight cases on product be42/a871… and test fixture dbb98b/97d752… in 38.241 seconds; SSH/proxy exit was observed before PTY close while a separate keeper stayed alive."
+    },
+    {
+      "id": "ssh_config_inherited_flock_lifetime",
+      "change": "Unix ConfigLock Drop explicitly unlocks before closing; Windows keeps its existing non-inherited one-byte lock handle semantics.",
+      "diagnosis": "A real fork proof showed a child can retain an open-file-description flock after the parent closes its CLOEXEC descriptor. A duplicate-descriptor regression exercises actual save exclusion and release.",
+      "validation": "The immutable be42 full local gate passed 444 library tests, five binary tests, 81 integration tests and core/computer-use E2E (143/47). The later four-file patch changes fixtures only."
+    },
+    {
+      "id": "darwin_openpty_fixture_pointer_types",
+      "observed_in_commit": "663b2cdf4628237546b65a251d37b88f48c64a10",
+      "change": "Use null_mut() for the two optional openpty termios/winsize fixture arguments; no product behavior change.",
+      "validation": "At be42 both native macOS jobs passed all 317 lib tests, four release-client tests and three real installer byte-bound fixtures; final test-only commit CI is recorded separately."
+    },
+    {
+      "id": "darwin_installer_file_limit_unit",
+      "observed_in_commit": "592b0a3ab729c403d6380d7169775bd8979ef5d1",
+      "observed_failure": "macOS ARM64's real chunked-download fixture wrote 131072 bytes for a requested 65536-byte cap under both outer /bin/sh and /bin/bash invocations.",
+      "diagnosis": "Apple's published Bash 3.2 ulimit implementation hard-codes a 1024-byte multiplier for -f, whereas the installer assumed POSIX 512-byte units.",
+      "change": "Keep one fresh /bin/sh per download; convert bytes using Darwin's 1024-byte blocks and Linux's 512-byte blocks. Retain exact 65536-byte assertions and check the inherited kernel RLIMIT_FSIZE soft/hard byte values before real curl runs.",
+      "validation": "At be42 both native macOS jobs passed all 317 lib tests, four release-client tests and three real installer byte-bound fixtures; final test-only commit CI is recorded separately.",
+      "primary_references": [
+        "https://github.com/apple-oss-distributions/bash/blob/main/bash-3.2/builtins/ulimit.def",
+        "https://www.gnu.org/software/bash/manual/bash.html"
+      ],
+      "apple_source_blob_sha": "c91785e85b778ee90761744ed3469a02cc374b62"
+    },
+    {
+      "id": "cli_authentication_marker_race",
+      "observed_in_commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+      "change": "Publish a complete JSON marker with atomic sibling replacement before the reader observes its existence.",
+      "validation": "All eight final CLI cases passed with the immutable be42 product binary and the final dbb fixture; the original 7/8 failure is preserved."
+    },
+    {
+      "id": "windows_stdin_fixture_pending_handshake",
+      "observed_in_commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+      "change": "Keep the same genuinely Pending stdin-write future and held stdin lock while waiting for the stop notification; remove the 2 ms pipe-saturation guess without changing product code.",
+      "validation": "The real Windows library test executable compiled and linked locally for x86_64-pc-windows-gnu in 19.693 seconds (exit 0). Final native Windows execution is blocked by the existing locked login keyring preventing workflow dispatch.",
+      "limits": [
+        "Cross-compilation alone is not Windows runtime verification."
+      ]
+    },
+    {
+      "id": "browser_fixture_transport_budget",
+      "observed_in_commit": "be42b03fc2651b830ff0f0f3ee1427590344f730",
+      "change": "Increase only the HTTP fixture timeout from 10 to 35 seconds to cover the existing native/browser execution deadlines.",
+      "validation": "47 computer-use checks passed again with the be42 binary in 6.108 seconds. Final native CI for the test-only commit was not dispatched because the existing login keyring is locked."
+    }
+  ],
+  "deployment": {
+    "public_broker": {
+      "updated_by_this_work": false,
+      "status": "not_deployed",
+      "observed_wire_protocol": 4,
+      "setup_probe": {
+        "method": "GET",
+        "path": "/setup",
+        "status": 401,
+        "body": "empty",
+        "meaning": "Authentication is required; this observation does not establish the deployed setup API revision."
+      },
+      "limit": "New setup endpoints and main's wire-5 protocol require a matching server update; no public deployment is claimed."
+    },
+    "development_client": {
+      "status": "active_native_verification_passed_old_service_stopped",
+      "service": "ssmcp-computer-use.service",
+      "source_commit": "592b0a3ab729c403d6380d7169775bd8979ef5d1",
+      "binary_sha256": "874c27a7989c541a724c86a5f660ec895926e4f6f25e038347b3709e8aa4ff5c",
+      "reason_for_compatible_runtime": "Parallel main changes require wire 5, while the public broker accepts wire 4. A genuine older compatible commit was built independently; no protocol number was falsified and main was not reverted.",
+      "critical_feature_files_identical_to_be42": 12,
+      "old_service_stopped": true,
+      "restarts": 0
+    },
+    "release": {
+      "published_by_this_report": false,
+      "status": "not_published_by_this_work"
+    }
+  },
+  "limitations": [
+    "The exact final dbb98b source has no CI run because the configured existing login keyring is locked. The required user action and immutable retry command are recorded in final_ci.",
+    "No live physical-desktop click/type/drag acceptance was performed for this revision on any platform.",
+    "The live browser fill/click test used an owned synthetic headless page and is distinct from physical desktop input.",
+    "Historical desktop evidence in validation-native-control.md remains tied to its old revision.",
+    "Native Windows and macOS runners do not establish unlocked-desktop permissions, focus, screenshots, Retina/mixed-DPI or physical input release behavior.",
+    "Omarchy live checks are read-only; themes, audio, workspace and other user settings were not changed.",
+    "Source, test-fixture and runtime revisions are recorded separately; no old SHA's success is transferred to a newer SHA.",
+    "The public broker and a formal release were not deployed by this work.",
+    "Earlier evidence with sources_unchanged=false is not treated as a frozen final gate.",
+    "Absent timings, counts or exact argv remain null rather than being inferred."
+  ],
+  "local_snapshot_runs": [
+    {
+      "evidence_path": "linux-final-gates.json",
+      "evidence_sha256": "492e80ac4e9a37b462dc4cb4654db741f748e1600009cdee2eea9924416f69ca",
+      "snapshot_base_commit": "835250df57405042492fed3d3183525439546f61",
+      "final_commit": false,
+      "started_utc": "2026-11-16T17:53:12Z",
+      "finished_utc": "2026-11-16T17:54:35Z",
+      "source_set_sha256": "fe62f98d69170ebc98c954f1e4ed184eb72af959d2074e0e7223edb3ff3b9192",
+      "source_set_unchanged": true,
+      "exit_code": 0,
+      "commands": [
+        {
+          "step": "reload",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--test",
+            "client_reload"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 10.075,
+          "counts": {
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0,
+            "test_targets": 1
+          }
+        },
+        {
+          "step": "client-related",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--lib",
+            "client::"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 10.774,
+          "counts": {
+            "passed": 114,
+            "failed": 0,
+            "ignored": 0,
+            "test_targets": 1
+          }
+        },
+        {
+          "step": "integrations",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--test",
+            "cc_backend",
+            "--test",
+            "client_startup",
+            "--test",
+            "codex_backend",
+            "--test",
+            "context",
+            "--test",
+            "context_helpers",
+            "--test",
+            "oauth_security",
+            "--test",
+            "pi_backend",
+            "--test",
+            "release_client",
+            "--test",
+            "resources",
+            "--test",
+            "rsync",
+            "--test",
+            "two_tools",
+            "--test",
+            "workspace_bridge"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 36.226,
+          "counts": {
+            "passed": 71,
+            "failed": 0,
+            "ignored": 14,
+            "test_targets": 12
+          }
+        },
+        {
+          "step": "format",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 2.31,
+          "counts": null
+        },
+        {
+          "step": "clippy",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 8.54,
+          "counts": null
+        },
+        {
+          "step": "build",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "build",
+            "--offline",
+            "--locked",
+            "--bins"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.396,
+          "counts": null,
+          "binaries": {
+            "ssmcp": {
+              "sha256": "1eb919ef09c746cf7f8514f2e69731723ebf2e6bd2f7875a03c703b899375722",
+              "bytes": 76710328
+            },
+            "ssmcpd": {
+              "sha256": "8af6f9fcc218443fefdf1dafcf3b20317c61d31b210c5c6d1a4ad5c648396899",
+              "bytes": 68243552
+            }
+          }
+        },
+        {
+          "step": "core-e2e",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/e2e.py",
+            "--bin-dir",
+            "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug",
+            "--report",
+            "../evidence/core-e2e.json"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 6.507,
+          "counts": {
+            "checks_passed": 143,
+            "checks_failed": 0
+          },
+          "inner_elapsed_seconds": 6.247,
+          "evidence_path": "core-e2e.json",
+          "evidence_sha256": "14aed7828514ed0ca1257c7384fa88d36593f5fd266335e9bc42a3727178f93b"
+        },
+        {
+          "step": "computer-use-e2e",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/e2e_computer_use.py",
+            "--bin-dir",
+            "/home/lightjunction/Documents/GITHUB/ssmcp/target/computer-use-task/build/debug",
+            "--evidence-dir",
+            "../evidence/computer-use",
+            "--report",
+            "../evidence/computer-use-e2e.json"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 6.711,
+          "counts": {
+            "checks_passed": 47,
+            "checks_failed": 0,
+            "native_tools": 47
+          },
+          "inner_elapsed_seconds": 6.479,
+          "evidence_path": "computer-use-e2e.json",
+          "evidence_sha256": "efad7e10497fec2acba80b74bc910dda4a1937627b2b8a2f4cbf1c2c0f3ab9b1",
+          "desktop_exercised": false,
+          "omarchy_available": true,
+          "browser": "Chromium 157.0.8103.38"
+        },
+        {
+          "step": "omarchy-readonly",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--lib",
+            "omarchy::tests::readonly_live_smoke",
+            "--",
+            "--ignored",
+            "--nocapture"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 0.689,
+          "counts": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "test_targets": 1
+          },
+          "getter_checks": 11
+        }
+      ],
+      "limits": [
+        "This snapshot predates the output lock and ASKPASS probe fixes.",
+        "Its client subset and integrations were rerun after one dependency-selection change; the complete 390-pass lib run belongs to attempt2."
+      ]
+    },
+    {
+      "evidence_path": "linux-final-attempt2-gates.json",
+      "evidence_sha256": "b252747f88a0125920a9efbc95e66cf508190b8735a0c18ca1d4c51d03b799e2",
+      "snapshot_base_commit": "835250df57405042492fed3d3183525439546f61",
+      "final_commit": false,
+      "started_utc": "2026-11-16T17:47:48Z",
+      "finished_utc": "2026-11-16T17:49:05Z",
+      "source_set_sha256": "e4d539b8759164e5ca888bc6accac647923820c63980b126124227788058b330",
+      "source_set_unchanged": true,
+      "exit_code": 101,
+      "commands": [
+        {
+          "step": "format",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 2.004,
+          "counts": null
+        },
+        {
+          "step": "clippy",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 18.886,
+          "counts": null
+        },
+        {
+          "step": "spill-sync-test",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--lib",
+            "backend::shell::tests::spilled_output_remains_live_before_completion_and_is_not_replayed"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 26.408,
+          "counts": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "test_targets": 1
+          }
+        },
+        {
+          "step": "tests",
+          "command": [
+            "/home/lightjunction/.cargo/bin/cargo",
+            "test",
+            "--offline",
+            "--locked"
+          ],
+          "exit_code": 101,
+          "elapsed_seconds": 29.082,
+          "counts": {
+            "passed": 400,
+            "failed": 6,
+            "ignored": 8,
+            "test_targets": 5
+          }
+        }
+      ],
+      "limits": [
+        "The lib target passed 390 tests with 7 ignored, but the overall cargo test command failed on all six reload integration tests.",
+        "Do not represent this command as a complete-suite pass."
+      ]
+    },
+    {
+      "id": "linux_592b_gate_interrupted",
+      "path": "linux-final-validation-gates.json",
+      "sha256": "a2d77778c3568ec7804b92ccbaf9fe7a247f82a2ab84dcbb7d56efe6a69d7e3e",
+      "commit": "592b0a3ab729c403d6380d7169775bd8979ef5d1",
+      "source_set_sha256": "99f6878472dfdb3a0f51636072d0f060cc90a7021cc761e2570e194aad68a1be",
+      "status": "interrupted_by_systemd_oomd",
+      "exit_code": null,
+      "commands": [
+        {
+          "name": "fmt",
+          "exit_code": 0,
+          "elapsed_seconds": 1.578
+        },
+        {
+          "name": "all_targets_clippy",
+          "exit_code": 0,
+          "elapsed_seconds": 23.721
+        },
+        {
+          "name": "library_tests",
+          "exit_code": null,
+          "counts": null
+        }
+      ],
+      "interruption": {
+        "observed_utc": "2026-11-16T19:09:47Z",
+        "cause": "systemd-oomd killed the native client service and its process group; automatic service restart followed.",
+        "affected_processes": 146,
+        "unit_observation_path": "linux-final-validation-unit-observation.json",
+        "unit_observation_sha256": "8acd7966fa3dc531f0464cfc4b47ff5da5ff8fca55a2ce60bc755f44fca95607",
+        "interruption_path": "linux-final-validation-interruption.json",
+        "interruption_sha256": "fb68ad4577945597d1462b69c3e15cb705490a4be7614665592ae1c00d72ba47"
+      },
+      "limits": [
+        "No library pass/fail conclusion was produced; this interruption is not counted as a successful gate or an assertion failure."
+      ]
+    }
+  ],
+  "next_required_action": {
+    "owner": "user",
+    "environment": "development_machine",
+    "action": "unlock_existing_login_keyring",
+    "then_command": "gh workflow run ci.yml --repo LIghtJUNction/ssmcp --ref main -f ref=dbb98b020b8a35f1e7ff2184540fbebdf0e3d7f1",
+    "scope": "Complete the final six-platform CI; implementation, existing local verification and the deployed native runtime remain recorded separately."
+  }
+}
