@@ -7,12 +7,22 @@ on:
         description: Exact commit to validate
         required: false
         type: string
+      clients_only:
+        description: Validate native macOS and Windows clients only
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       ref:
         description: Exact commit to validate for a release
         required: false
         type: string
+      clients_only:
+        description: Validate native macOS and Windows clients only
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,6 +33,7 @@ concurrency:
 
 jobs:
   linux:
+    if: ${{ !inputs.clients_only }}
     strategy:
       fail-fast: false
       matrix:
