@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(
             background_paths(&json!({"content":[{"type":"text","text":
                 json!({"backgroundOutputPath":path}).to_string()}]})),
-            [path.clone()]
+            std::slice::from_ref(&path)
         );
         assert!(
             background_paths(&json!({"content":[

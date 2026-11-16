@@ -47,6 +47,19 @@ pub(super) struct Store {
     failed: bool,
 }
 
+impl Drop for Store {
+    fn drop(&mut self) {
+        // A concurrent fork can briefly inherit this open file description even
+        // with O_CLOEXEC. Closing our descriptor alone would then keep the lock
+        // alive until that child execs. Store owns the writer lease, so release
+        // it explicitly before its fields close.
+        // SAFETY: the descriptor remains open for this Drop implementation.
+        unsafe {
+            libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 fn private_file(file: &File) -> crate::Result<()> {
     let m = file.metadata()?;
     // SAFETY: geteuid has no preconditions.
@@ -268,4 +281,35 @@ fn validate(database: &Database) -> crate::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_store_releases_lock_despite_an_inherited_descriptor() {
+        struct Temporary(PathBuf);
+        impl Drop for Temporary {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+        let temporary = Temporary(std::env::temp_dir().join(format!(
+            "ssmcp-portal-lock-{}",
+            super::super::random().unwrap()
+        )));
+        let store = Store::open(&temporary.0).unwrap();
+        // dup and fork share the same open file description and flock lease.
+        // Keep a duplicate alive to model a child between fork and exec.
+        let inherited = store._lock.try_clone().unwrap();
+        assert!(Store::open(&temporary.0).is_err());
+        drop(store);
+        let reopened = Store::open(&temporary.0).unwrap();
+        assert!(Store::open(&temporary.0).is_err());
+        drop(inherited);
+        assert!(Store::open(&temporary.0).is_err());
+        drop(reopened);
+        assert!(Store::open(&temporary.0).is_ok());
+    }
 }

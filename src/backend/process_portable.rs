@@ -74,25 +74,19 @@ impl Managed {
             return self.child.wait().await;
         }
         #[cfg(unix)]
-        loop {
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            // SAFETY: the child is owned and info is writable. WNOWAIT preserves
-            // its PID until terminate has stopped the original process group.
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    self.pid as libc::id_t,
-                    &mut info,
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            };
-            if result != 0 {
-                return Err(io::Error::last_os_error());
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            // Register before checking, so exit between the check and await
+            // cannot be lost. siginfo_t stays entirely inside the sync helper.
+            let mut exited = signal(SignalKind::child())?;
+            loop {
+                if crate::platform::wait_unix_child_unreaped(self.pid, true)? {
+                    break;
+                }
+                if exited.recv().await.is_none() {
+                    return Err(io::Error::other("child exit notification closed"));
+                }
             }
-            if info.si_pid != 0 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         #[cfg(unix)]
         self.terminate();
@@ -108,11 +102,7 @@ impl Managed {
         }
         #[cfg(unix)]
         if self.child.id().is_some() {
-            // SAFETY: spawn created this process group. wait preserves the leader
-            // until cleanup; never signal a group after callers reaped the child.
-            unsafe {
-                libc::kill(-self.pid, libc::SIGKILL);
-            }
+            crate::platform::stop_unix_descendants(self.pid);
         }
         #[cfg(windows)]
         self.job.terminate();

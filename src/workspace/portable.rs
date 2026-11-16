@@ -66,10 +66,10 @@ impl Root {
                     .as_ref()
                     .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
             {
-                if let Err(e) = directory.create_dir(part) {
-                    if e.kind() != io::ErrorKind::AlreadyExists {
-                        return Err(error(e));
-                    }
+                if let Err(e) = directory.create_dir(part)
+                    && e.kind() != io::ErrorKind::AlreadyExists
+                {
+                    return Err(error(e));
                 }
                 next = directory.open_dir_nofollow(part);
             }

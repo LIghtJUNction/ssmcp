@@ -92,6 +92,14 @@ def catalog(harness, mode):
                   f"{mode}: shell capabilities coexist with the installed harness catalog")
     harness.check(all(isinstance(tool.get("inputSchema"), dict) for tool in tools),
                   f"{mode}: all discovered tools retain JSON schemas")
+    event_schema = next(tool["inputSchema"] for tool in tools if tool["name"] == "ssmcp.exec.events")
+    harness.check(set(event_schema["properties"]) == {"cursor", "max_events", "wait_ms"}
+                  and all(parameter.get("type") == "integer" for parameter in event_schema["properties"].values()),
+                  f"{mode}: command event schema exposes cursor, limit and wait parameters directly")
+    event_page = harness.call("ssmcp.exec.events", {"max_events": 1, "wait_ms": 0})
+    harness.check(isinstance(event_page["events"], list) and len(event_page["events"]) <= 1
+                  and isinstance(event_page["next_cursor"], int),
+                  f"{mode}: command events accept the discovered parameters")
     harness.check(harness.call("terminal.status")["running"], f"{mode}: the shell stays available")
     counts = harness.call("ssmcp.harnesses.list")["harnesses"]
     harness.check(counts == {
@@ -366,6 +374,28 @@ def combined_harnesses_and_commands(harness):
     harness.client_id = credentials["client_id"]
     harness.oauth_login(credentials)
     tools, pages = catalog(harness, "all")
+    # The Claude fixture changes its DynamicN tool on every fresh native scan.
+    # Two interleaved public scans must each keep one generation across pages.
+    older = harness.public_call("list", {"client_id": harness.client_id})
+    newer = harness.public_call("list", {"client_id": harness.client_id})
+
+    def finish_catalog(first):
+        result = list(first["tools"])
+        cursor = first.get("nextCursor")
+        while cursor is not None:
+            page = harness.public_call("list", {"client_id": harness.client_id, "cursor": cursor})
+            result.extend(page["tools"])
+            cursor = page.get("nextCursor")
+        return {tool["name"] for tool in result}
+
+    older_names = finish_catalog(older)
+    newer_names = finish_catalog(newer)
+    older_dynamic = {name for name in older_names if name.startswith("cc.Dynamic")}
+    newer_dynamic = {name for name in newer_names if name.startswith("cc.Dynamic")}
+    harness.check(len(older_dynamic) == len(newer_dynamic) == 1
+                  and older_dynamic != newer_dynamic
+                  and older_names - older_dynamic == newer_names - newer_dynamic,
+                  "all: interleaved catalog scans preserve their snapshots and a new scan sees native changes")
     client_id = json.dumps(harness.client_id)
     code = """
         const id = %s;
