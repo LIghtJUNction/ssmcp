@@ -6,7 +6,6 @@ use std::{
     collections::HashSet,
     future::Future,
     io,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     pin::Pin,
     process::Stdio,
@@ -90,53 +89,7 @@ fn bounded(mut text: String, max: usize) -> String {
 }
 
 pub(crate) fn executable(name: &str) -> Result<PathBuf, String> {
-    let candidate = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|directory| directory.join(name))
-        .find(|path| {
-            std::fs::metadata(path)
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
-        .and_then(|path| {
-            let resolved = path.canonicalize().ok()?;
-            if resolved.file_name().is_some_and(|v| v == "mise") {
-                let home = std::env::var_os("HOME").map(PathBuf::from)?;
-                return home
-                    .join(".local/share/mise/installs")
-                    .join(name)
-                    .join("global/bin")
-                    .join(name)
-                    .canonicalize()
-                    .ok();
-            }
-            Some(resolved)
-        })
-        .ok_or_else(|| format!("required executable {name} is not installed"))?;
-    if candidate.file_name().is_some_and(|v| v == "mise") {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or("HOME is unavailable while resolving mise shim")?;
-        let root = home.join(".local/share/mise/installs").join(name);
-        for alias in ["global", "latest"] {
-            let binary = root.join(alias).join("bin").join(name);
-            if binary.is_file() {
-                return binary.canonicalize().map_err(|e| e.to_string());
-            }
-        }
-        let mut versions = std::fs::read_dir(&root)
-            .map_err(|e| format!("mise has no installed {name}: {e}"))?
-            .flatten()
-            .map(|entry| entry.path().join("bin").join(name))
-            .filter(|path| path.is_file())
-            .collect::<Vec<_>>();
-        versions.sort();
-        if let Some(binary) = versions.pop() {
-            return binary.canonicalize().map_err(|e| e.to_string());
-        }
-        return Err(format!(
-            "mise shim for {name} exists, but no installed executable was found"
-        ));
-    }
-    Ok(candidate)
+    if name == "node" { crate::program::node() } else { crate::program::executable(name) }
 }
 
 fn runner_path() -> Result<PathBuf, String> {
@@ -167,13 +120,7 @@ fn runner_path() -> Result<PathBuf, String> {
 }
 
 fn node_arguments(command: &mut Command) {
-    command.args([
-        "--jitless",
-        "--no-addons",
-        "--max-old-space-size=32",
-        "--max-semi-space-size=1",
-        "--stack-size=256",
-    ]);
+    command.args(crate::program::NODE_FLAGS);
 }
 
 fn sandbox_command() -> Result<Command, String> {

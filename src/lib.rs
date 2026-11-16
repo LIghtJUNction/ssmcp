@@ -13,6 +13,7 @@ pub mod identity;
 pub mod oauth;
 pub mod output;
 pub mod platform;
+pub mod program;
 #[cfg(target_os = "linux")]
 pub mod portal;
 #[cfg(target_os = "linux")]

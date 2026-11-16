@@ -503,6 +503,7 @@ pub async fn run() -> crate::Result<()> {
             _ = terminate.recv() => return Ok(()),
         };
         let backend = Runtime::with_context_roots(
+            backend,
             std::env::current_dir()?,
             options.context_roots.clone(),
         )?;
