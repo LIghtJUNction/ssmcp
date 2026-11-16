@@ -1,6 +1,6 @@
 //! Upstream identity verification. Provider tokens are used once and never retained.
 //!
-//! GitHub OAuth: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
+//! GitHub OAuth: <https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps>
 //! A GitHub numeric user ID is the authorization subject; a login is display metadata.
 use crate::wire::{MAX_ALLOWED_PRINCIPALS, canonical_github_principal};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
