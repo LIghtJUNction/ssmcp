@@ -6,7 +6,10 @@ use serde_json::{Value, json};
 use std::{
     path::PathBuf,
     process::Stdio,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -18,6 +21,8 @@ const IMAGE_LIMIT: usize = 400 * 1024;
 const CAPTURE_LIMIT: usize = 16 * 1024 * 1024;
 const TEXT_LIMIT: usize = 256 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(10);
+const RELEASE_HELPER_TIMEOUT: Duration = Duration::from_secs(3);
+const RELEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Session {
@@ -32,6 +37,7 @@ pub struct Computer {
     session: Session,
     serial: Mutex<()>,
     closed: AtomicBool,
+    releases: Arc<ReleaseTasks>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq)]
@@ -223,6 +229,7 @@ impl Computer {
             session,
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
+            releases: Arc::new(ReleaseTasks::default()),
         })
     }
 
@@ -316,6 +323,7 @@ impl Computer {
         if self.closed.load(Ordering::Acquire) {
             return Err("computer connection is closed".into());
         }
+        self.releases.wait(RELEASE_WAIT_TIMEOUT).await?;
         let operation = async {
             match name {
                 "ssmcp.computer.status" => {
@@ -391,9 +399,17 @@ impl Computer {
             .map_err(|_| "computer operation timed out after 30 seconds".to_owned())?
     }
 
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> Result<(), String> {
         self.closed.store(true, Ordering::Release);
-        let _lock = self.serial.lock().await;
+        tokio::time::timeout(RELEASE_WAIT_TIMEOUT, async {
+            let _lock = self.serial.lock().await;
+            self.releases.wait(RELEASE_WAIT_TIMEOUT).await
+        })
+        .await
+        .map_err(|_| {
+            "computer shutdown deadline exceeded; active input or release cleanup remains tracked"
+                .to_owned()
+        })?
     }
 
     async fn run(
@@ -662,7 +678,7 @@ impl Computer {
         } else {
             return Err("No desktop input session is available".into());
         };
-        let mut guard = ReleaseGuard::new(program, release.clone())?;
+        let mut guard = ReleaseGuard::new(program, release.clone(), &self.releases)?;
         let outcome = self.run(program, &args, None, TEXT_LIMIT).await;
         if outcome.is_ok() || self.run(program, &release, None, TEXT_LIMIT).await.is_ok() {
             guard.disarm();
@@ -704,7 +720,7 @@ impl Computer {
             return Err("Dragging requires Hyprland or X11".into());
         };
         self.move_pointer(v.path[0]).await?;
-        let mut guard = ReleaseGuard::new(program, up.clone())?;
+        let mut guard = ReleaseGuard::new(program, up.clone(), &self.releases)?;
         let outcome = async {
             self.run(program, &down, None, TEXT_LIMIT).await?;
             for p in &v.path[1..] {
@@ -750,7 +766,11 @@ impl Computer {
                 let mut chord = v.modifiers.clone();
                 chord.push(v.key);
                 let chord = chord.join("+");
-                let mut guard = ReleaseGuard::new("xdotool", vec!["keyup".into(), chord.clone()])?;
+                let mut guard = ReleaseGuard::new(
+                    "xdotool",
+                    vec!["keyup".into(), chord.clone()],
+                    &self.releases,
+                )?;
                 let outcome = self
                     .text("xdotool", &["key", "--clearmodifiers", &chord])
                     .await;
@@ -1161,19 +1181,131 @@ async fn run_helper(
     outcome
 }
 
+#[derive(Default)]
+struct ReleaseTasks {
+    state: StdMutex<ReleaseState>,
+}
+
+#[derive(Default)]
+struct ReleaseState {
+    tasks: Vec<std::thread::JoinHandle<Result<(), String>>>,
+    failure: Option<String>,
+}
+
+impl ReleaseTasks {
+    fn start(self: &Arc<Self>, program: PathBuf, args: Vec<String>, deadline: Duration) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // Keep the tracker alive even if a failed shutdown drops the Computer.
+        // A task is complete only after its owned helper has actually been reaped.
+        let keepalive = self.clone();
+        match std::thread::Builder::new()
+            .name("ssmcp-input-release".into())
+            .spawn(move || {
+                let result = release_helper(program, args, deadline);
+                drop(keepalive);
+                result
+            }) {
+            Ok(task) => state.tasks.push(task),
+            Err(error) => {
+                state.failure = Some(format!("could not start input release cleanup: {error}"));
+            }
+        }
+    }
+
+    async fn wait(&self, limit: Duration) -> Result<(), String> {
+        let deadline = tokio::time::Instant::now() + limit;
+        loop {
+            let (pending, failure) = {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut index = 0;
+                while index < state.tasks.len() {
+                    if !state.tasks[index].is_finished() {
+                        index += 1;
+                        continue;
+                    }
+                    let outcome =
+                        state.tasks.swap_remove(index).join().unwrap_or_else(|_| {
+                            Err("input release cleanup thread panicked".into())
+                        });
+                    if let Err(error) = outcome {
+                        state.failure.get_or_insert(error);
+                    }
+                }
+                (state.tasks.len(), state.failure.clone())
+            };
+            if pending == 0 {
+                return failure.map_or(Ok(()), Err);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "input release cleanup deadline exceeded; {pending} helper(s) remain tracked until reaped"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+fn release_helper(program: PathBuf, args: Vec<String>, deadline: Duration) -> Result<(), String> {
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("could not start input release helper: {error}"))?;
+    let until = std::time::Instant::now() + deadline;
+    let mut failure = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return failure.map_or_else(
+                    || {
+                        if status.success() {
+                            Ok(())
+                        } else {
+                            Err(format!("input release helper failed ({status})"))
+                        }
+                    },
+                    Err,
+                );
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= until {
+                    failure.get_or_insert_with(|| "input release helper timed out".to_owned());
+                    // A failed kill is not proof of exit. Keep tracking and
+                    // reaping; the async waiter has its own bounded deadline.
+                    let _ = child.kill();
+                }
+            }
+            Err(error) => {
+                failure
+                    .get_or_insert_with(|| format!("could not reap input release helper: {error}"));
+                let _ = child.kill();
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Cancellation can drop a future while a persistent virtual input device has a
-/// held button. Release through an independent bounded helper in that case.
+/// held button. Register cleanup synchronously before the serial input lock is
+/// released, so later input and shutdown can await the actual helper exit.
 struct ReleaseGuard {
     executable: PathBuf,
     args: Vec<String>,
     armed: bool,
+    releases: Arc<ReleaseTasks>,
+    deadline: Duration,
 }
 impl ReleaseGuard {
-    fn new(program: &str, args: Vec<String>) -> Result<Self, String> {
+    fn new(program: &str, args: Vec<String>, releases: &Arc<ReleaseTasks>) -> Result<Self, String> {
         Ok(Self {
             executable: crate::program::executable(program)?,
             args,
             armed: true,
+            releases: releases.clone(),
+            deadline: RELEASE_HELPER_TIMEOUT,
         })
     }
     fn disarm(&mut self) {
@@ -1182,37 +1314,10 @@ impl ReleaseGuard {
 }
 impl Drop for ReleaseGuard {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
+        if self.armed {
+            self.releases
+                .start(self.executable.clone(), self.args.clone(), self.deadline);
         }
-        let program = self.executable.clone();
-        let args = self.args.clone();
-        let _ = std::thread::Builder::new()
-            .name("ssmcp-input-release".into())
-            .spawn(move || {
-                if let Ok(mut child) = std::process::Command::new(program)
-                    .args(args)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                {
-                    let until = std::time::Instant::now() + Duration::from_secs(3);
-                    loop {
-                        match child.try_wait() {
-                            Ok(Some(_)) => break,
-                            Ok(None) if std::time::Instant::now() < until => {
-                                std::thread::sleep(Duration::from_millis(10))
-                            }
-                            _ => {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
     }
 }
 
@@ -1270,7 +1375,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_revokes_input_before_dispatch() {
         let computer = Computer::new(std::env::temp_dir()).unwrap();
-        computer.shutdown().await;
+        computer.shutdown().await.unwrap();
         assert!(
             computer
                 .perform("ssmcp.computer.move", json!({"x":0,"y":0}))
@@ -1357,6 +1462,7 @@ mod tests {
             session: Session::X11,
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
+            releases: Arc::new(ReleaseTasks::default()),
         };
         assert!(
             computer
@@ -1378,6 +1484,7 @@ mod tests {
             std::fs::read_to_string(root.join("events")).unwrap(),
             "key\nkeyup\nkeyup\n"
         );
+        computer.shutdown().await.unwrap();
     }
 
     #[cfg(unix)]
@@ -1444,5 +1551,172 @@ if events.read_text().count("keyup\n") == 1:
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+    #[cfg(unix)]
+    struct ReleaseFixture(PathBuf);
+
+    #[cfg(unix)]
+    impl ReleaseFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "ssmcp-release-drain-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+
+        fn guard(&self, computer: &Computer, script: &str) -> ReleaseGuard {
+            ReleaseGuard {
+                executable: crate::program::executable("python3").unwrap(),
+                args: vec![
+                    "-c".into(),
+                    script.into(),
+                    self.0.to_string_lossy().into_owned(),
+                ],
+                armed: true,
+                releases: computer.releases.clone(),
+                deadline: Duration::from_secs(10),
+            }
+        }
+
+        async fn started(&self) {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !self.0.join("started").exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("fake release helper must start");
+        }
+
+        fn release(&self) {
+            std::fs::write(self.0.join("continue"), b"go").unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReleaseFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::write(self.0.join("continue"), b"go");
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    const WAITING_RELEASE: &str = r#"import pathlib, sys, time
+root = pathlib.Path(sys.argv[1])
+(root / "started").write_text("started")
+while root.exists() and not (root / "continue").exists():
+    time.sleep(0.01)
+if root.exists():
+    (root / "released").write_text("released")
+"#;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_awaits_release_after_cancelling_an_input_future() {
+        let fixture = ReleaseFixture::new();
+        let computer = Arc::new(Computer::new(fixture.0.clone()).unwrap());
+        let guard = fixture.guard(&computer, WAITING_RELEASE);
+        let entered = AtomicBool::new(false);
+        let mut operation = Box::pin(async {
+            let _serial = computer.serial.lock().await;
+            let _guard = guard;
+            entered.store(true, Ordering::Release);
+            std::future::pending::<()>().await;
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut operation)
+                .await
+                .is_err()
+        );
+        assert!(entered.load(Ordering::Acquire));
+        drop(operation);
+        fixture.started().await;
+
+        let mut shutdown = tokio::spawn({
+            let computer = computer.clone();
+            async move { computer.shutdown().await }
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut shutdown)
+                .await
+                .is_err()
+        );
+        assert!(!fixture.0.join("released").exists());
+        fixture.release();
+        tokio::time::timeout(Duration::from_secs(5), shutdown)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(fixture.0.join("released").exists());
+        assert!(computer.releases.state.lock().unwrap().tasks.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn release_wait_deadlines_preserve_tracking_and_order_later_input() {
+        let fixture = ReleaseFixture::new();
+        let computer = Arc::new(Computer::new(fixture.0.clone()).unwrap());
+        drop(fixture.guard(&computer, WAITING_RELEASE));
+        fixture.started().await;
+        let error = computer
+            .releases
+            .wait(Duration::from_millis(20))
+            .await
+            .unwrap_err();
+        assert!(error.contains("remain tracked"), "{error}");
+        assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                computer.releases.wait(RELEASE_WAIT_TIMEOUT)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
+
+        let mut next = tokio::spawn({
+            let computer = computer.clone();
+            async move {
+                computer
+                    .perform("ssmcp.computer.not_a_tool", json!({}))
+                    .await
+            }
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut next)
+                .await
+                .is_err()
+        );
+        fixture.release();
+        let error = tokio::time::timeout(Duration::from_secs(5), next)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("unknown computer tool"), "{error}");
+        computer.shutdown().await.unwrap();
+        assert!(computer.releases.state.lock().unwrap().tasks.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_preserves_a_failed_release_after_reaping_the_helper() {
+        let fixture = ReleaseFixture::new();
+        let computer = Computer::new(fixture.0.clone()).unwrap();
+        drop(fixture.guard(&computer, "import sys; sys.exit(7)"));
+        let error = computer.shutdown().await.unwrap_err();
+        assert!(error.contains("input release helper failed"), "{error}");
+        assert!(error.contains('7'), "{error}");
+        assert!(computer.releases.state.lock().unwrap().tasks.is_empty());
+        assert_eq!(computer.shutdown().await.unwrap_err(), error);
     }
 }
