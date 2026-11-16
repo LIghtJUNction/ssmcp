@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     io::{self, IsTerminal, Write},
     sync::{Mutex, OnceLock},
+    time::Instant,
 };
 
 static DISPLAY: OnceLock<Mutex<Renderer>> = OnceLock::new();
@@ -20,7 +21,8 @@ fn display() -> &'static Mutex<Renderer> {
             false,
             color_enabled(
                 io::stderr().is_terminal(),
-                std::env::var_os("NO_COLOR").is_some(),
+                std::env::var_os("NO_COLOR").is_some()
+                    || std::env::var("TERM").is_ok_and(|term| term == "dumb"),
             ),
             terminal_width(),
         ))
@@ -46,6 +48,7 @@ fn color_enabled(tty: bool, no_color: bool) -> bool {
 
 pub(crate) fn event(label: &str, value: &Value) {
     let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+    renderer.width = terminal_width();
     let _ = renderer.event(&mut io::stderr().lock(), label, value);
 }
 
@@ -67,6 +70,7 @@ struct Renderer {
     color: bool,
     width: usize,
     streams: HashMap<String, Lines>,
+    requests: HashMap<String, (String, Instant)>,
 }
 
 impl Renderer {
@@ -76,16 +80,108 @@ impl Renderer {
             color,
             width: width.max(12),
             streams: HashMap::new(),
+            requests: HashMap::new(),
         }
     }
 
     fn event(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<()> {
         if self.raw {
             writeln!(out, "{value}")?;
-        } else {
+        } else if !self.rpc(out, label, value)? {
             self.value(out, label, value, "Event", 0)?;
         }
         out.flush()
+    }
+
+    // Keep IDs and method names at the RPC boundary: descending directly into
+    // params/result otherwise loses the context that makes a transcript readable.
+    fn rpc(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<bool> {
+        let v = value
+            .get("request")
+            .or_else(|| value.get("response"))
+            .unwrap_or(value);
+        let Some(id) = v.get("id").filter(|id| !id.is_null()) else {
+            return Ok(false);
+        };
+        let key = id
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| id.to_string());
+        if let Some(method) = v.get("method").and_then(Value::as_str) {
+            // An unresponsive backend must not grow display-only bookkeeping forever.
+            if self.requests.len() >= 2048 {
+                self.requests.clear();
+            }
+            self.requests
+                .insert(key.clone(), (method.into(), Instant::now()));
+            self.block(out, label, "Request", &format!("{key}  {method}"))?;
+            let params = &v["params"];
+            if let Some(argv) = params.get("command").and_then(Value::as_array) {
+                let command = argv
+                    .iter()
+                    .map(|arg| {
+                        let arg = arg.as_str().unwrap_or("");
+                        if !arg.is_empty()
+                            && arg
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || "_./:-".contains(c))
+                        {
+                            arg.to_owned()
+                        } else {
+                            format!("{arg:?}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.block(out, label, "Command", &format!("$ {command}"))?;
+                for field in ["cwd", "timeoutMs"] {
+                    if let Some(v) = params.get(field).filter(|v| !v.is_null()) {
+                        let text = v
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| v.to_string());
+                        self.text(out, label, &format!("{field}: {text}\n"))?;
+                    }
+                }
+            } else {
+                self.value(out, label, params, "Tool", 0)?;
+            }
+            return Ok(true);
+        }
+        if v.get("result").is_some() || v.get("error").is_some() {
+            let (method, elapsed) = self
+                .requests
+                .remove(&key)
+                .map(|(method, started)| (method, Some(started.elapsed())))
+                .unwrap_or_else(|| (String::new(), None));
+            let result = &v["result"];
+            let exit = result
+                .get("exitCode")
+                .or_else(|| result.get("exit_code"))
+                .and_then(Value::as_i64);
+            let error = v.get("error").is_some_and(|v| !v.is_null())
+                || result["isError"] == true
+                || result["success"] == false
+                || exit.is_some_and(|code| code != 0);
+            let title = if exit == Some(124) {
+                "Timeout"
+            } else if error {
+                "Error"
+            } else {
+                "Success"
+            };
+            let duration = elapsed
+                .map(|d| format!("  {:.2}s", d.as_secs_f64()))
+                .unwrap_or_default();
+            self.block(out, label, title, &format!("{key}  {method}{duration}"))?;
+            if let Some(error) = v.get("error").filter(|v| !v.is_null()) {
+                self.value(out, label, error, "Error", 0)?;
+            } else {
+                self.value(out, label, result, title, 0)?;
+            }
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn heading(&mut self, out: &mut impl Write, label: &str, title: &str) -> io::Result<()> {
@@ -94,7 +190,9 @@ impl Renderer {
             "Error" => "31;1",
             "Success" => "32;1",
             "Assistant" => "36;1",
-            "User" => "34;1",
+            "User" | "Request" => "34;1",
+            "stdout" => "35;1",
+            "stderr" | "Timeout" => "33;1",
             "Usage" => "90",
             _ => "33;1",
         };
@@ -283,6 +381,18 @@ impl Renderer {
 
     fn details(&mut self, out: &mut impl Write, label: &str, v: &Value) -> io::Result<bool> {
         let mut shown = false;
+        // Buffered command/exec replies carry output beside exitCode. Render it
+        // explicitly; a displayed status must never suppress either stream.
+        for field in ["stdout", "stderr"] {
+            if let Some(text) = v
+                .get(field)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                self.block(out, label, field, text)?;
+                shown = true;
+            }
+        }
         for (field, title) in [
             ("error", "Error"),
             ("usage", "Usage"),
@@ -296,6 +406,8 @@ impl Renderer {
             if let Some(inner) = v.get(field).filter(|v| !v.is_null()) {
                 let title = if field.starts_with("exit") && inner.as_i64().is_some_and(|n| n != 0) {
                     "Error"
+                } else if field.starts_with("exit") && inner.as_i64() == Some(0) {
+                    "Success"
                 } else {
                     title
                 };
@@ -536,7 +648,10 @@ mod tests {
             "Usage",
             "input_tokens",
         ] {
-            assert!(text.contains(expected), "missing {expected}: {text}");
+            assert!(
+                text.contains(expected) || clean(&text).contains(expected),
+                "missing {expected}: {text}"
+            );
         }
     }
 
@@ -571,5 +686,64 @@ mod tests {
         let long = "x".repeat(1000);
         let wrapped = render(&[json!(long)], false, false);
         assert_eq!(wrapped.chars().filter(|c| *c == 'x').count(), 1001); // label codex includes x
+    }
+    #[test]
+    fn buffered_command_reply_keeps_both_streams_and_request_context() {
+        let text = render(
+            &[
+                json!({"type":"ssmcp.request","request":{"id":"r1","method":"command/exec","params":{"command":["sh","-c","printf hello"],"cwd":"/project","timeoutMs":1000}}}),
+                json!({"id":"r1","result":{"exitCode":0,"stdout":"hello\nsecond\n","stderr":"warning\n"}}),
+            ],
+            false,
+            true,
+        );
+        for expected in [
+            "r1  command/exec",
+            "$ sh -c",
+            "cwd: /project",
+            "timeoutMs: 1000",
+            "stdout",
+            "stderr",
+            "hello\n  second",
+            "warning",
+            "\x1b[34;1m",
+            "\x1b[32;1m",
+        ] {
+            assert!(
+                text.contains(expected) || clean(&text).contains(expected),
+                "missing {expected}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn timeout_still_displays_partial_stdout_and_stderr() {
+        let text = render(
+            &[
+                json!({"id":"r2","result":{"exitCode":124,"stdout":"partial output","stderr":"installing tool"}}),
+            ],
+            false,
+            true,
+        );
+        for expected in [
+            "Timeout",
+            "partial output",
+            "installing tool",
+            "exitCode: 124",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+    }
+
+    #[test]
+    fn rpc_protocol_errors_are_red_and_raw_stays_unmodified() {
+        let event = json!({"id":"r3","error":{"code":-32601,"message":"unsupported method"}});
+        let text = render(std::slice::from_ref(&event), false, true);
+        assert!(text.contains("\x1b[31;1m"));
+        assert!(text.contains("unsupported method"));
+        assert_eq!(
+            render(std::slice::from_ref(&event), true, true),
+            format!("{event}\n")
+        );
     }
 }
