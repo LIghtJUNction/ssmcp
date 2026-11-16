@@ -339,3 +339,42 @@ sudo systemctl enable --now ssmcp-portal-ssh.timer
 同步周期为 15 秒，加上执行和调度时间；失败会在该 service 的 journal 中报错，应监控 timer/service。首次登记和删除公钥并非立即生效；删除不会断开已有连接，需在本机退出。同步失败期间，OpenSSH 保留上次成功同步的公钥，管理员应检查并完成撤销。账户状态文件不得手工删掉或回滚到旧密钥快照，以免重新授权已撤销的密钥。
 
 网页登录使用 Secure/HttpOnly/SameSite cookie，独立随机 CSRF token、精确 Origin 检查、一次性浏览器绑定 OAuth state 和 PKCE；登录后轮换会话。公钥操作仅从服务器会话取得账户 ID，不接收账户或路径参数。仅接受标准 Ed25519 的固定长度 wire blob，拒绝私钥、证书、授权选项、多行、控制字符和重复公钥；页面转义所有显示字段，不接收私钥。全局登录频率和会话容量有界，公网仍应配置代理限流。
+
+
+### 让账户页面与 MCP 连接独立运行
+
+已有 MCP 客户端在线时，可以单独运行账户页面。两个进程使用同一套已安装程序和 GitHub OAuth 配置；更新或重启账户页面不会清空 MCP 网关的连接及授权。
+
+这种部署方式保持主配置中的 `[portal]` 为空，由 `ssmcp-portal.service` 的 `--portal-state-dir` 指定唯一的账户存储目录。不要同时让两个进程打开同一个账户目录；进程锁会拒绝第二个写入者。
+
+安装并检查 SSH 受限账户配置后，启动门户服务与公钥同步计时器：
+
+```sh
+sudo make install-portal
+sudo install -d -o ssmcpd -g ssmcp -m 0700 /var/lib/ssmcpd/portal
+sudo systemctl daemon-reload
+sudo systemctl enable --now ssmcp-portal.service ssmcp-portal-ssh.timer
+```
+
+门户默认只监听 `127.0.0.1:8086`，独立 socket 为 `/run/ssmcp-portal/control.sock`。SSH `ForceCommand` 继续连接原 MCP 网关的 `/run/ssmcpd/control.sock`。现有 `ssmcpd` 无须重启。
+
+反向代理将以下路径转发给门户，其余路径保持原网关：
+
+| 路径 | 上游 |
+| --- | --- |
+| 精确 `/`、`/portal.css`，以及 `/account/` 下的路径 | `127.0.0.1:8086` |
+| `/oauth/callback/github`，且 `state` 为 `portal_` 加 43 位 base64url 字符 | `127.0.0.1:8086` |
+| 其他路径，包括 `/mcp`、插件 OAuth 及原登录码入口 | 原 MCP 网关 |
+
+Nginx 可以在 `http` 上下文用 `map` 选择 GitHub 回调上游：
+
+```nginx
+map $arg_state $ssmcp_github_backend {
+    default 127.0.0.1:8080;
+    "~^portal_[A-Za-z0-9_-]{43}$" 127.0.0.1:8086;
+}
+```
+
+在该站点现有 HTTPS `server` 中，为上表三个门户路径增加对应 `location`，并为精确 `/oauth/callback/github` 设置 `proxy_pass http://$ssmcp_github_backend`。这些 location 采用与原网关一致的 Host、HTTP/1.1、超时和不缓存设置。配置后先运行 `nginx -t`，再 reload Nginx。
+
+GitHub OAuth App 继续使用同一个 `https://你的域名/oauth/callback/github` 地址。网页会话和插件授权分别处理；只允许精确列出的门户路径进入门户上游。验证首页、GitHub 跳转、公钥保存、实际 SSH 接入后，再交付使用。
