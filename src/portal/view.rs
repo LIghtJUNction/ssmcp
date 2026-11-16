@@ -13,17 +13,17 @@ fn escape(s: &str) -> String {
 }
 pub(super) fn page(title: &str, body: &str) -> String {
     format!(
-        r##"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{} · ssmcp</title><link rel="stylesheet" href="/portal.css"></head><body><main><nav><a href="/">ssmcp</a><span><a href="#guide">连接教程</a> · <a href="https://github.com/LIghtJUNction/ssmcp">GitHub</a></span></nav>{body}<footer class="muted">SSH 接入 · GitHub 身份验证 · MCP 工具调用</footer></main></body></html>"##,
+        r##"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{} · ssmcp</title><link rel="stylesheet" href="/portal.css"></head><body><main><nav><a href="/">ssmcp</a><span><a href="/#guide">连接教程</a> · <a href="https://github.com/LIghtJUNction/ssmcp">GitHub</a></span></nav>{body}<footer class="muted">SSH 接入 · GitHub 身份验证 · MCP 工具调用</footer></main></body></html>"##,
         escape(title)
     )
 }
 pub(super) fn home(account: Option<&Account>, csrf: Option<&str>, enabled: bool) -> String {
     let csrf = escape(csrf.unwrap_or(""));
     let mut body = String::from(
-        r##"<section class="hero"><p class="muted">你的电脑，远程可用。</p><h1>把本机工具<br>连接到 ChatGPT。</h1><p>ssmcp 通过 SSH 将本机工具接入 MCP 服务。项目、模型配置和工具执行留在本机；ChatGPT 可操作你明确授权的在线客户端。</p><a class="button" href="#guide">开始连接</a></section><section class="card" id="account"><h2>1. 登录账户</h2>"##,
+        r##"<section class="hero"><p class="muted">你的电脑，远程可用。</p><h1>把本机工具<br>连接到 ChatGPT。</h1><p>ssmcp 通过 SSH 将本机工具接入 MCP 服务。项目、模型配置和工具执行留在本机；ChatGPT 可操作你明确授权的在线客户端。</p><a class="button" href="#account">开始连接</a></section><section class="card" id="account"><h2>1. 登录账户</h2>"##,
     );
     if let Some(a) = account {
-        body.push_str(&format!(r##"<p>已登录 GitHub：<strong>{}</strong></p><p>SSH 用户名：<code>{}</code></p><p class="muted">用户名绑定 GitHub numeric ID；GitHub 改名不会改变这个 SSH 用户名或公钥归属。</p><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary">退出登录</button></form>"##, escape(&a.github_login), escape(&a.username)));
+        body.push_str(&format!(r##"<p>已登录 GitHub：<strong>{}</strong></p><p>SSH 用户名：<code>{}</code></p><p class="muted">SSH 用户名绑定你的 GitHub 账号编号。修改 GitHub 用户名后，SSH 用户名和公钥仍属于你。</p><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary">退出登录</button></form>"##, escape(&a.github_login), escape(&a.username)));
     } else if enabled {
         body.push_str(&format!(r##"<p>使用 GitHub 登录，获取稳定的 SSH 用户名，并管理自己的公钥。</p><form method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button>使用 GitHub 登录</button></form>"##));
     } else {
