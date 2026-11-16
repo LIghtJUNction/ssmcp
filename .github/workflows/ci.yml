@@ -51,6 +51,19 @@ jobs:
           shellcheck scripts/install.sh
           python3 scripts/test_release.py
       - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Render terminal transcript fixture
+        if: matrix.runner == 'ubuntu-24.04'
+        env:
+          SSMCP_RENDER_PREVIEW: ${{ runner.temp }}/ssmcp-terminal.ansi
+        run: cargo test --locked --lib client::render::tests::terminal_preview_fixture -- --exact
+      - name: Save terminal transcript for visual review
+        if: matrix.runner == 'ubuntu-24.04'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: terminal-preview
+          path: ${{ runner.temp }}/ssmcp-terminal.ansi
+          if-no-files-found: error
+          retention-days: 14
       - run: cargo test --locked
       - name: Exercise system Node.js and bubblewrap
         run: |

@@ -41,7 +41,7 @@ ssmcp --title "迭代当前项目" user@host
 
 ## 预编译归档
 
-每个 Release 都包含以下六个归档、两套安装脚本和 `SHA256SUMS`。归档名保持稳定，版本由 Release 的 tag 标识，便于使用 GitHub 的 `latest/download` 地址。
+每个 Release 都包含以下六个归档、两套安装脚本和 `SHA256SUMS`。每个归档另有 `.sha256` 校验文件，`release-manifest.json` 记录源码提交、文件大小和摘要。归档名保持稳定，版本由 Release 的 tag 标识，便于使用 GitHub 的 `latest/download` 地址。
 
 | 系统 | CPU | 归档 | 内容 |
 | --- | --- | --- | --- |
@@ -75,6 +75,8 @@ git push origin v0.5.0
 4. 确认全部归档齐全，生成 `SHA256SUMS`，验证 Cargo 包，再创建缺少的 tag 并发布到 crates.io。
 5. 创建 GitHub Release，附加六个归档、两套安装脚本和校验清单。
 
-仓库需配置 `CARGO_REGISTRY_TOKEN` secret；现有 `CARGO_REGISTY_TOKEN` 拼写也可使用。工作流把凭据只传入 crate 发布步骤。缺少凭据或任一检查失败都会中止发布。[发布脚本](../scripts/release.py)
+仓库需配置 `CARGO_REGISTRY_TOKEN` secret；现有 `CARGO_REGISTY_TOKEN` 拼写也可使用。工作流把凭据只传入 crate 发布检查与上传步骤。新版本缺少凭据或任一检查失败都会中止发布。crates.io 已有相同版本时会核对包内容；有差异或版本被撤回时停止，并要求更换版本。[发布脚本](../scripts/release.py)
+
+GitHub Release 先保持草稿，等所有资产上传并核对完成后才公开。重试会复用内容相同的已有文件；同名资产内容不符时停止，不覆盖已经上传的版本。
 
 检查失败时修复 `main` 后再更新 `Cargo.toml`，或从 **Release** 手动入口不填 tag 重新验证当前 `main`。tag 已经创建后的发布失败，可以重跑失败的 job，也可以在手动入口填写该 tag。若 crates.io 已有该版本，脚本要求当前 Cargo 包的校验值与已发布包一致，再继续上传 Release 资产。已经发布的版本对应不同源码时，需要从 `main` 发布新版本。

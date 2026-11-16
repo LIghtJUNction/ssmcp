@@ -31,8 +31,8 @@ TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def command(*args, cwd=ROOT):
-    return subprocess.check_output(args, cwd=cwd, text=True).strip()
+def command(*args, cwd=None):
+    return subprocess.check_output(args, cwd=cwd or ROOT, text=True).strip()
 
 
 def digest(path):
@@ -40,7 +40,8 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def version(root=ROOT):
+def version(root=None):
+    root = root or ROOT
     with (root / "Cargo.toml").open("rb") as stream:
         package = tomllib.load(stream)["package"]
     if package["name"] != "ssmcp":
@@ -48,7 +49,7 @@ def version(root=ROOT):
     return package["version"]
 
 
-def validate_tag(tag, root=ROOT):
+def validate_package(tag, root):
     match = TAG.fullmatch(tag)
     if not match or any(part.isdigit() and len(part) > 1 and part.startswith("0")
                         for part in (match.group(4) or "").split(".")):
@@ -60,14 +61,10 @@ def validate_tag(tag, root=ROOT):
         locked = [p["version"] for p in tomllib.load(stream)["package"] if p["name"] == "ssmcp"]
     if locked != [actual]:
         raise ValueError("Cargo.lock must contain exactly the manifest's ssmcp version")
-    sha = command("git", "rev-parse", "HEAD", cwd=root)
-    if command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}", cwd=root) != sha:
-        raise ValueError("the checkout must be the requested tag's commit")
-    subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"],
-                   cwd=root, check=True)
-    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
-    result = {"tag": tag, "version": actual, "sha": sha,
-              "prerelease": str("-" in actual).lower()}
+    return actual
+
+
+def emit(result):
     if output := os.environ.get("GITHUB_OUTPUT"):
         with open(output, "a", encoding="utf-8") as stream:
             for key, value in result.items():
@@ -76,9 +73,89 @@ def validate_tag(tag, root=ROOT):
     return result
 
 
+def validate_tag(tag, root=None):
+    root = root or ROOT
+    actual = validate_package(tag, root)
+    sha = command("git", "rev-parse", "HEAD", cwd=root)
+    if command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}", cwd=root) != sha:
+        raise ValueError("the checkout must be the requested tag's commit")
+    subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"],
+                   cwd=root, check=True)
+    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
+    result = {"tag": tag, "version": actual, "sha": sha,
+              "prerelease": str("-" in actual).lower(), "publish": "true", "create_tag": "false"}
+    return emit(result)
+
+
+def prepare(tag=None, automatic=False, root=None):
+    root = root or ROOT
+    if not automatic:
+        if tag is None:
+            raise ValueError("provide an existing release tag or --auto")
+        return validate_tag(tag, root)
+    actual = version(root)
+    tag = "v" + actual
+    validate_package(tag, root)
+    sha = command("git", "rev-parse", "HEAD", cwd=root)
+    subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"], cwd=root, check=True)
+    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
+    exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", "refs/tags/" + tag], cwd=root).returncode == 0
+    return emit({"tag": tag, "version": actual, "sha": sha, "prerelease": str("-" in actual).lower(),
+                 "publish": str(not exists).lower(), "create_tag": "true"})
+
+
+def create_tag(tag, sha, root=None):
+    root = root or ROOT
+    validate_package(tag, root)
+    if sha != command("git", "rev-parse", "HEAD", cwd=root):
+        raise ValueError("tag must identify the validated checkout")
+    command("git", "fetch", "origin", "main", "--tags", cwd=root)
+    subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"], cwd=root, check=True)
+    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
+    exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", "refs/tags/" + tag], cwd=root).returncode == 0
+    if exists:
+        if command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}", cwd=root) != sha:
+            raise ValueError("release tag already points at another commit")
+        return
+    command("git", "config", "user.name", "github-actions[bot]", cwd=root)
+    command("git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com", cwd=root)
+    command("git", "tag", "-a", tag, "-m", "ssmcp " + tag, cwd=root)
+    command("git", "push", "origin", "refs/tags/" + tag, cwd=root)
+
+
+def bump(level, root=None):
+    root = root or ROOT
+    old = version(root)
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", old):
+        raise ValueError("automatic bump expects a stable package version")
+    parts = [int(part) for part in old.split(".")]
+    index = {"major": 0, "minor": 1, "patch": 2}[level]
+    parts[index] += 1
+    parts[index + 1:] = [0] * (2 - index)
+    new = ".".join(map(str, parts))
+    manifest_path, lock_path = root / "Cargo.toml", root / "Cargo.lock"
+    manifest, manifest_count = re.subn(
+        r'(?m)^(version\s*=\s*")' + re.escape(old) + r'("\s*)$',
+        lambda match: match[1] + new + match[2], manifest_path.read_text(encoding="utf-8"), count=1)
+    lock, lock_count = re.subn(
+        r'(\[\[package\]\]\nname = "ssmcp"\nversion = ")' + re.escape(old) + r'("\n)',
+        lambda match: match[1] + new + match[2], lock_path.read_text(encoding="utf-8"))
+    if manifest_count != 1 or lock_count != 1:
+        raise ValueError("expected one matching ssmcp version in Cargo.toml and Cargo.lock")
+    manifest_path.write_text(manifest, encoding="utf-8")
+    lock_path.write_text(lock, encoding="utf-8")
+    return emit({"tag": "v" + new, "version": new})
+
+
 def archive_name(target, release_version):
+    if target not in TARGETS:
+        raise ValueError("unsupported release target: " + target)
     extension = ".zip" if "windows" in target else ".tar.gz"
-    return f"ssmcp-{release_version}-{target}{extension}"
+    return f"ssmcp-{target}{extension}"
+
+
+def asset_name(target):
+    return archive_name(target, version())
 
 
 def write_archive(stage, output, epoch):
@@ -87,7 +164,7 @@ def write_archive(stage, output, epoch):
         stamp = time.gmtime(max(epoch, 315532800))[:6]
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
             for path in files:
-                info = zipfile.ZipInfo(path.relative_to(stage.parent).as_posix(), stamp)
+                info = zipfile.ZipInfo(path.relative_to(stage).as_posix(), stamp)
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = (path.stat().st_mode & 0xFFFF) << 16
                 archive.writestr(info, path.read_bytes())
@@ -95,14 +172,15 @@ def write_archive(stage, output, epoch):
         with output.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
             with tarfile.open(fileobj=gz, mode="w") as archive:
                 for path in files:
-                    info = archive.gettarinfo(path, arcname=path.relative_to(stage.parent).as_posix())
+                    info = archive.gettarinfo(path, arcname=path.relative_to(stage).as_posix())
                     info.mtime, info.uid, info.gid = epoch, 0, 0
                     info.uname = info.gname = ""
                     with path.open("rb") as stream:
                         archive.addfile(info, stream)
 
 
-def package(target, root=ROOT):
+def package(target, root=None):
+    root = root or ROOT
     release_version = version(root)
     output = root / "dist"
     output.mkdir(exist_ok=True)
@@ -121,8 +199,11 @@ def package(target, root=ROOT):
             shutil.copy2(source, stage / filename)
         for filename in ("README.md", "LICENSE"):
             shutil.copy2(root / filename, stage / filename)
+        (stage / "docs").mkdir()
+        shutil.copy2(root / "docs/releases.md", stage / "docs/releases.md")
         if "linux" in target:
             shutil.copy2(root / "src/code_mode.js", stage / "code-mode.js")
+            shutil.copy2(root / "docs/deployment.md", stage / "docs/deployment.md")
             shutil.copytree(root / "packaging", stage / "packaging")
         write_archive(stage, archive, epoch)
     checksum = digest(archive)
@@ -130,14 +211,16 @@ def package(target, root=ROOT):
     print(json.dumps({"archive": archive.name, "sha256": checksum, "bytes": archive.stat().st_size}))
 
 
-def checksums(root=ROOT):
+def checksums(root=None):
+    root = root or ROOT
     release_version = version(root)
     output = root / "dist"
     expected = {archive_name(target, release_version) for target in TARGETS}
     actual = {p.name for p in output.iterdir() if p.name.endswith((".zip", ".tar.gz"))}
     if actual != expected:
         raise ValueError(f"release archive set differs: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
-    allowed = expected | {name + ".sha256" for name in expected} | {"SHA256SUMS", "release-manifest.json"}
+    installers = {"install.sh", "install.ps1"}
+    allowed = expected | installers | {name + ".sha256" for name in expected} | {"SHA256SUMS", "release-manifest.json"}
     unexpected = {p.name for p in output.iterdir()} - allowed
     if unexpected:
         raise ValueError(f"unexpected release files: {sorted(unexpected)}")
@@ -148,11 +231,16 @@ def checksums(root=ROOT):
         if (output / (name + ".sha256")).read_text(encoding="utf-8") != f"{checksum}  {name}\n":
             raise ValueError(f"checksum mismatch for {name}")
         records.append({"name": name, "sha256": checksum, "bytes": path.stat().st_size})
+    for name in sorted(installers):
+        path = output / name
+        if not path.is_file() or digest(path) != digest(root / "scripts" / name):
+            raise ValueError(f"installer is missing or differs from the validated source: {name}")
+        records.append({"name": name, "sha256": digest(path), "bytes": path.stat().st_size})
     (output / "SHA256SUMS").write_text("".join(f"{r['sha256']}  {r['name']}\n" for r in records), encoding="utf-8")
     manifest = {"package": "ssmcp", "version": release_version,
                 "commit": command("git", "rev-parse", "HEAD", cwd=root), "artifacts": records}
     (output / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"Verified {len(records)} target archives")
+    print(f"Verified {len(expected)} target archives and {len(installers)} installers")
 
 
 def registry_checksum(release_version):
@@ -170,18 +258,32 @@ def registry_checksum(release_version):
     return data["checksum"]
 
 
-def publish(root=ROOT):
+def check_registry(root=None):
+    root = root or ROOT
     release_version = version(root)
-    checksum = digest(root / "target/package" / f"ssmcp-{release_version}.crate")
+    path = root / "target/package" / f"ssmcp-{release_version}.crate"
+    if not path.is_file():
+        raise ValueError("run cargo package --locked before publishing")
+    checksum = digest(path)
     existing = registry_checksum(release_version)
     if existing is not None:
         if existing != checksum:
             raise ValueError("crates.io already contains different bytes for this version")
         print(f"crates.io already contains the identical ssmcp {release_version} package")
-        return
+        return True
     if not os.environ.get("CARGO_REGISTRY_TOKEN"):
         raise ValueError("configure repository secret CARGO_REGISTRY_TOKEN (legacy CARGO_REGISTY_TOKEN is also accepted)")
-    subprocess.run(["cargo", "publish", "--locked"], cwd=root, check=True)
+    return False
+
+
+def publish(root=None):
+    root = root or ROOT
+    if check_registry(root):
+        return
+    release_version = version(root)
+    checksum = digest(root / "target/package" / f"ssmcp-{release_version}.crate")
+    # The workflow verified this package before creating its release tag.
+    subprocess.run(["cargo", "publish", "--locked", "--no-verify"], cwd=root, check=True)
     for _ in range(18):
         existing = registry_checksum(release_version)
         if existing is not None:
@@ -193,7 +295,9 @@ def publish(root=ROOT):
     raise TimeoutError("crates.io has not exposed the uploaded version yet; rerun this tag's release")
 
 
-def release(tag, root=ROOT):
+def release(tag, root=None):
+    root = root or ROOT
+    validate_tag(tag, root)
     checksums(root)
     repository = os.environ["GITHUB_REPOSITORY"]
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
@@ -206,8 +310,10 @@ def release(tag, root=ROOT):
         with tempfile.TemporaryDirectory(prefix="ssmcp-notes-") as temporary:
             notes = Path(temporary) / "notes.md"
             notes.write_text(
-                f"Install from crates.io with `cargo install ssmcp --version {version(root)} --locked`, "
-                "or download an archive for your platform.\n\n"
+                f"Install from crates.io with `cargo install ssmcp --version {version(root)} --locked --bin ssmcp`, "
+                "or use the attached installers.\n\n"
+                "Linux / macOS: `curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh`\n\n"
+                "Windows PowerShell: `irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex`\n\n"
                 "Linux archives include `ssmcp` and `ssmcpd`. macOS and Windows archives include the "
                 "`ssmcp` client; the gateway daemon runs on Linux. Both x86_64 and ARM64 are available "
                 "for each platform.\n\n"
@@ -252,19 +358,40 @@ def release(tag, root=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("version")
+    prepare_parser = commands.add_parser("prepare")
+    prepare_parser.add_argument("tag", nargs="?")
+    prepare_parser.add_argument("--auto", action="store_true")
+    tag_parser = commands.add_parser("tag")
+    tag_parser.add_argument("tag")
+    tag_parser.add_argument("sha")
+    commands.add_parser("bump").add_argument("level", choices=["patch", "minor", "major"])
     commands.add_parser("validate").add_argument("--tag", required=True)
     commands.add_parser("package").add_argument("--target", required=True, choices=TARGETS)
+    commands.add_parser("pack").add_argument("target", choices=TARGETS)
     commands.add_parser("checksums")
+    commands.add_parser("check-registry")
     commands.add_parser("publish")
+    commands.add_parser("publish-crate")
     commands.add_parser("release").add_argument("--tag", required=True)
     args = parser.parse_args()
-    if args.command == "validate":
+    if args.command == "version":
+        print(version())
+    elif args.command == "prepare":
+        prepare(args.tag, args.auto)
+    elif args.command == "tag":
+        create_tag(args.tag, args.sha)
+    elif args.command == "bump":
+        bump(args.level)
+    elif args.command == "validate":
         validate_tag(args.tag)
-    elif args.command == "package":
+    elif args.command in {"package", "pack"}:
         package(args.target)
     elif args.command == "checksums":
         checksums()
-    elif args.command == "publish":
+    elif args.command == "check-registry":
+        check_registry()
+    elif args.command in {"publish", "publish-crate"}:
         publish()
     else:
         release(args.tag)
