@@ -34,6 +34,10 @@ static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HostRequest {
+    Builtin {
+        name: String,
+        arguments: Value,
+    },
     Call {
         client_id: String,
         name: String,
@@ -90,7 +94,7 @@ fn executable(name: &str) -> Result<PathBuf, String> {
         .map(|directory| directory.join(name))
         .find(|path| std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
         .and_then(|path| path.canonicalize().ok())
-        .ok_or_else(|| format!("code_mode requires system {name}; install nodejs and bubblewrap with your system package manager"))
+        .ok_or_else(|| format!("code_mode requires system {name}; install nodejs, bubblewrap, and util-linux with your system package manager"))
 }
 
 fn runner_path() -> Result<PathBuf, String> {
@@ -133,6 +137,7 @@ fn node_arguments(command: &mut Command) {
 fn sandbox_command() -> Result<Command, String> {
     let node = executable("node")?;
     let bwrap = executable("bwrap")?;
+    let prlimit = executable("prlimit")?;
     let runner = runner_path()?;
     let mut command = Command::new(bwrap);
     command.env_clear().args([
@@ -168,6 +173,9 @@ fn sandbox_command() -> Result<Command, String> {
         .arg(node)
         .arg("/runtime/node")
         .arg("--ro-bind")
+        .arg(prlimit)
+        .arg("/runtime/prlimit")
+        .arg("--ro-bind")
         .arg(runner)
         .arg("/runner.js")
         .args([
@@ -186,6 +194,9 @@ fn sandbox_command() -> Result<Command, String> {
             "--remount-ro",
             "/",
             "--",
+            "/runtime/prlimit",
+            "--nproc=128:128",
+            "--",
             "/runtime/node",
         ]);
     node_arguments(&mut command);
@@ -198,6 +209,9 @@ fn limit_process(command: &mut Command) {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // NPROC is set by prlimit after bubblewrap enters its user namespace. Applying
+    // a low per-UID process limit here would count all threads owned by the host
+    // user and prevent namespace creation on an otherwise healthy busy machine.
     // SAFETY: after fork this closure only calls async-signal-safe setrlimit.
     unsafe {
         command.pre_exec(|| {
@@ -206,7 +220,6 @@ fn limit_process(command: &mut Command) {
                 (libc::RLIMIT_DATA, 256 * 1024 * 1024),
                 (libc::RLIMIT_AS, 2 * 1024 * 1024 * 1024),
                 (libc::RLIMIT_NOFILE, 64),
-                (libc::RLIMIT_NPROC, 128),
                 (libc::RLIMIT_CORE, 0),
             ] {
                 let limits = libc::rlimit {
@@ -311,6 +324,17 @@ async fn execute_process(
 
 fn validate_request(request: &HostRequest) -> Result<(), String> {
     let client_id = match request {
+        HostRequest::Builtin { name, arguments } => {
+            if name.is_empty()
+                || name.len() > 64
+                || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
+                || !arguments.is_object()
+                || arguments.to_string().len() > crate::wire::MAX_FRAME / 2
+            {
+                return Err("invalid builtin name or arguments".into());
+            }
+            return Ok(());
+        }
         HostRequest::Call {
             client_id,
             name,
@@ -488,6 +512,9 @@ mod tests {
         Arc::new(|request| {
             Box::pin(async move {
                 match request {
+                    HostRequest::Builtin { name, arguments } => {
+                        Ok(json!({"name":name,"arguments":arguments}))
+                    }
                     HostRequest::Call {
                         client_id,
                         name,
@@ -538,6 +565,31 @@ mod tests {
             run_code("print('done');").await.unwrap()["result"],
             Value::Null
         );
+    }
+
+    #[tokio::test]
+    async fn workspace_helpers_dispatch_through_the_authenticated_host_bridge() {
+        let _guard = TESTS.lock().await;
+        let output = run_code(r#"
+            const transfer = await rsync({source:{client_id:'one',path:'src'},destination:{client_id:'two',path:'dst'}});
+            const resource = await resources.read('ssmcp://guide');
+            const file = await fs.read('one',{path:'data.bin',offset:8});
+            const mapping = await ports.list();
+            const job = await jobs.wait('job',{wait_ms:100});
+            return {transfer,resource,file,mapping,job,alias:sync === rsync,
+                frozen:[fs,jobs,ports,resources].every(Object.isFrozen)};
+        "#).await.unwrap();
+        assert_eq!(output["result"]["transfer"]["name"], "sync");
+        assert_eq!(
+            output["result"]["resource"]["arguments"]["uri"],
+            "ssmcp://guide"
+        );
+        assert_eq!(output["result"]["file"]["arguments"]["offset"], 8);
+        assert_eq!(output["result"]["mapping"]["name"], "ports.list");
+        assert_eq!(output["result"]["job"]["arguments"]["wait_ms"], 100);
+        assert_eq!(output["result"]["alias"], true);
+        assert_eq!(output["result"]["frozen"], true);
+        assert!(run_code("return await rsync([]);").await.is_err());
     }
 
     #[tokio::test]
@@ -744,6 +796,14 @@ mod tests {
         assert!(args.iter().any(|v| v == "--unshare-all"));
         assert!(args.iter().any(|v| v == "--unshare-user"));
         assert!(args.iter().any(|v| v == "--disable-userns"));
+        assert!(args.windows(5).any(|window| window
+            == [
+                "--",
+                "/runtime/prlimit",
+                "--nproc=128:128",
+                "--",
+                "/runtime/node"
+            ]));
         assert!(!args.iter().any(|v| matches!(
             v.as_str(),
             "--share-net" | "--proc" | "/proc" | "/etc" | "/home" | "/run" | "/usr"

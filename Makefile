@@ -19,6 +19,7 @@ test:
 	$(CARGO) test --locked
 	$(CARGO) test --locked --lib code_mode::tests -- --include-ignored
 	$(CARGO) test --locked --test two_tools -- --include-ignored
+	$(CARGO) test --locked --test workspace_bridge -- --ignored --test-threads=1
 	$(CARGO) build --locked
 	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
 	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug
@@ -32,6 +33,8 @@ install:
 	install -m 0644 packaging/man/ssmcpd.8 $(DESTDIR)$(PREFIX)/share/man/man8/
 	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/assets
 	install -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/
+	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/skills/ssmcp
+	install -m 0644 skills/ssmcp/SKILL.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/skills/ssmcp/
 	install -m 0644 docs/*.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/
 	install -m 0644 docs/assets/*.svg docs/assets/*.jpg $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/assets/
 	install -m 0644 packaging/sshd-ssmcp.conf packaging/Caddyfile packaging/ssmcpd.env packaging/ssmcpd.toml.example $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
