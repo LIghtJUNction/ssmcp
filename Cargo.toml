@@ -6,6 +6,35 @@ rust-version = "1.88"
 description = "Expose a local shell or coding agent as MCP through SSH public-key authentication"
 license = "MIT"
 repository = "https://github.com/LIghtJUNction/ssmcp"
+include = [
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+    "/Makefile",
+    "/rust-toolchain.toml",
+    "/src/**",
+    "/tests/**",
+    "/scripts/e2e.py",
+    "/scripts/e2e_agents.py",
+    "/scripts/smoke_pi.py",
+    "/scripts/sync_portal_ssh.py",
+    "/scripts/test_portal_ssh.py",
+    "/packaging/ssmcp-portal-ssh.*",
+    "/packaging/sshd-ssmcp-portal.conf",
+    "/docs/backends.md",
+    "/docs/configuration.md",
+    "/docs/deployment.md",
+    "/docs/validation.md",
+    "/docs/validation-portal.md",
+    "/docs/assets/**",
+    "/packaging/man/**",
+    "/packaging/Caddyfile",
+    "/packaging/sshd-ssmcp.conf",
+    "/packaging/ssmcpd.env",
+    "/packaging/ssmcpd.service",
+    "/packaging/ssmcpd.toml.example",
+]
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query"] }

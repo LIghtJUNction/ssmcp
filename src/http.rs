@@ -29,6 +29,7 @@ const CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
 pub fn router(broker: Arc<Broker>) -> Router {
     Router::new()
         .merge(crate::oauth::routes())
+        .merge(crate::portal::routes())
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/{user}", any(endpoint))
         .with_state(broker)
