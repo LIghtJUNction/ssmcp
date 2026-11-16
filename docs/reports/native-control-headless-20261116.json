@@ -1,0 +1,86 @@
+{
+  "status": "passed",
+  "checks": [
+    "effective sshd config permits public keys only",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "native computer and browser tools are discoverable through public list",
+    "control works without a coding-agent provider",
+    "browser starts disconnected without opening a user profile",
+    "native launch owns an isolated system Chromium process",
+    "native tabs include the opened fixture",
+    "snapshot exposes observed input and button references",
+    "browser fill clears text with an empty string",
+    "browser modifier chord and Backspace clear input",
+    "native fill and click modify the real Chromium document",
+    "browser key dispatch produces a real keyboard event",
+    "browser scroll moves the actual viewport",
+    "ssmcp.browser.screenshot returns a visible MCP image (modern=True)",
+    "image is bounded valid JPEG bytes",
+    "image payload is absent from structured metadata and text",
+    "ssmcp.browser.screenshot returns a visible MCP image (modern=False)",
+    "image is bounded valid JPEG bytes",
+    "image payload is absent from structured metadata and text",
+    "browser attach rejects a non-loopback debugger endpoint",
+    "browser click rejects unobserved element references",
+    "navigation invalidates references from the prior document",
+    "close removes only the selected test tab",
+    "disconnect releases owned browser connection",
+    "disconnect stops the browser owned by this connection",
+    "native connect attaches to an existing loopback browser",
+    "disconnect preserves an attached operator-owned browser",
+    "control audit retains the complete requested event range",
+    "native control calls produce completion audit events"
+  ],
+  "metrics": {
+    "browser": {
+      "owned": true,
+      "browser": {
+        "jsVersion": "15.7.112.23",
+        "product": "Chrome/157.0.8103.38",
+        "protocolVersion": "1.3",
+        "revision": "@a733b5afbb3ba618844ff8876b89ad1a774b2f18",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.0.0 Safari/537.36"
+      }
+    },
+    "native_tools": 26,
+    "desktop_exercised": false
+  },
+  "duration_seconds": 5.908,
+  "transport": "OpenSSH public-key + OAuth PKCE + HTTP MCP + native Chromium CDP",
+  "source_commit": "2e5c55b232d2edd726242c38dc390535ac4d5fff",
+  "assertion_count": 45,
+  "provenance": {
+    "source_report": "target/native-control-evidence/final/headless.json",
+    "source_report_sha256": "6a0e0f5b0c4bc25c8e58efa9be9a167ff73e446738a4a873574b29c1abb56e74",
+    "candidate_role": "final_source_candidate",
+    "run_manifest": "docs/reports/native-control-final-gates-20261116.json",
+    "run_manifest_source_sha256": "79907ffaea7bac6248201994d1defa51f51fb048baf8711eb08266a569759e44",
+    "binaries": {
+      "ssmcp": {
+        "bytes": 71464184,
+        "sha256": "a50f5f3f50368f6f086150ea9c8ac29cbe8a660e805f9878eb7c5d4b14b1c738"
+      },
+      "ssmcpd": {
+        "bytes": 64435712,
+        "sha256": "9946901a3c8192a6a9d65eb9cb94da3f5bbde195b1839b5ab1353f366b21eb32"
+      }
+    },
+    "evidence_scope": "automated assertions and runtime metadata"
+  }
+}
