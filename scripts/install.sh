@@ -97,14 +97,20 @@ trap 'exit 129' HUP
 # never supply the trust root, and curl's user config cannot add credentials.
 download_url() {
     # Older curl only checks --max-filesize when the server declares a size.
-    # POSIX /bin/sh uses 512-byte ulimit blocks; the kernel also bounds unknown
-    # or chunked transfers. A fresh shell keeps each limit out of later phases,
-    # even when the installer itself was invoked using non-POSIX bash.
+    # Apple /bin/sh (Bash 3.2) uses 1024-byte file-limit blocks even in POSIX
+    # mode; Linux /bin/sh uses POSIX 512-byte blocks. The kernel also bounds
+    # unknown/chunked transfers. A fresh shell keeps this limit out of later
+    # phases, regardless of which shell invoked the installer.
     /bin/sh -c '
         case "$3" in ""|*[!0-9]*) exit 1 ;; esac
-        [ "$3" -gt 0 ] && [ "$(($3 % 512))" -eq 0 ] || exit 1
+        case "$(uname -s)" in
+            Darwin) file_limit_block=1024 ;;
+            Linux) file_limit_block=512 ;;
+            *) exit 1 ;;
+        esac
+        [ "$3" -gt 0 ] && [ "$(($3 % file_limit_block))" -eq 0 ] || exit 1
         ulimit -c 0 || exit 1
-        ulimit -f "$(($3 / 512))" || {
+        ulimit -f "$(($3 / file_limit_block))" || {
             printf "%s\n" "ssmcp install: cannot enforce the download file-size limit" >&2
             exit 1
         }
