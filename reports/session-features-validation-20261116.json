@@ -1,0 +1,305 @@
+{
+  "schema": "ssmcp.session-features-validation.v1",
+  "date_utc": "2026-11-16",
+  "implementation_commit": "3e6e06a6d81f87f5acda70e5fe10c7dc2732163b",
+  "title_commit": "aa5316c6a9e9e9db43b556cbb3899b71fabda4e5",
+  "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/6",
+  "workflow_run": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43822387229",
+  "status": "passed",
+  "lanes": [
+    {
+      "job_id": 133148229341,
+      "name": "linux (ubuntu-24.04-arm)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Install test dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run cargo fmt --all -- --check",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Run cargo test --locked",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Exercise system Node.js and bubblewrap",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Exercise runtime under installed service restrictions",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Run cargo build --locked",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Preserve DCR through a real daemon restart",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Exercise real SSH, OAuth, HTTP and PTY",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Exercise session title, reload and output artifacts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Exercise all five backends through SSH and OAuth",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Run cargo build --locked --release",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Check staged Linux installation",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Post Run actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 32
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33
+        }
+      ]
+    },
+    {
+      "job_id": 133148229534,
+      "name": "linux (ubuntu-24.04)",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        },
+        {
+          "name": "Run actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3
+        },
+        {
+          "name": "Install test dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4
+        },
+        {
+          "name": "Run cargo fmt --all -- --check",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5
+        },
+        {
+          "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        {
+          "name": "Run cargo test --locked",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7
+        },
+        {
+          "name": "Exercise system Node.js and bubblewrap",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8
+        },
+        {
+          "name": "Exercise runtime under installed service restrictions",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9
+        },
+        {
+          "name": "Run cargo build --locked",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10
+        },
+        {
+          "name": "Preserve DCR through a real daemon restart",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11
+        },
+        {
+          "name": "Exercise real SSH, OAuth, HTTP and PTY",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12
+        },
+        {
+          "name": "Exercise session title, reload and output artifacts",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13
+        },
+        {
+          "name": "Exercise all five backends through SSH and OAuth",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14
+        },
+        {
+          "name": "Run cargo build --locked --release",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15
+        },
+        {
+          "name": "Check staged Linux installation",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16
+        },
+        {
+          "name": "Post Run actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 32
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33
+        }
+      ]
+    }
+  ],
+  "checks_per_architecture": {
+    "default_rust": {
+      "passed": 232,
+      "failed": 0,
+      "ignored": 15
+    },
+    "explicit_runtime_gates": {
+      "code_mode": 9,
+      "two_tools": 7,
+      "workspace_bridge": 3,
+      "context_helpers": 2,
+      "installed_service_sandbox": 1
+    },
+    "actual_ssh_e2e": {
+      "registry_restart": 8,
+      "transport_oauth_pty": 143,
+      "session_features": 66,
+      "five_backend_protocols": 240
+    },
+    "release_build": true,
+    "staged_installation": true
+  },
+  "session_feature_evidence": [
+    "Chinese title is visible in authenticated client discovery",
+    "More than 1.1 MiB of actual terminal command output retains beginning, body and ending",
+    "Artifact byte count, logical lines and SHA-256 match actual stored bytes",
+    "Bounded outputs.read pages reconstruct the full artifact with matching SHA-256",
+    "600 short lines trigger spilling below 32 KiB",
+    "Cleanup preserves active capture",
+    "Actual reload reconnects in the same process with a new client ID, preserving title, name and cwd",
+    "Old connection-bound OAuth token returns HTTP 401",
+    "New authorization accesses the restarted terminal and previous unexpired artifact"
+  ],
+  "regression_coverage": [
+    "Updated installation entry and PATH symlink targets are executed on reload",
+    "exec -a name collision cannot select an unrelated PATH executable",
+    "In-flight calls and invalid reload arguments are rejected",
+    "No exec occurs without the matching broker receipt",
+    "Only successful replies to an explicit reload request receive broker commit",
+    "Unauthorized requests do not dispatch native reload",
+    "Spill thresholds, binary bytes, incomplete capture, safe path handling and retention"
+  ],
+  "defaults": {
+    "inline_bytes": 32768,
+    "inline_lines": 500,
+    "retention_secs": 86400,
+    "completed_quota_bytes": 536870912,
+    "artifact_limit_bytes": 268435456,
+    "cleanup_interval_secs": 60,
+    "output_directory": "/tmp/ssmcp/<uid>"
+  },
+  "external_model_calls": false,
+  "deployment": {
+    "status": "not_deployed",
+    "reason": "No ssmcp clients were online at final deployment availability check; production binaries and live sessions were not updated."
+  },
+  "document_folder": "https://drive.google.com/drive/folders/1XP7Em0aVz9X1S8dyept4nhp8ou0uFRJL",
+  "notes": [
+    "Explicit runtime gates include some default-suite tests and must not be added to 232 as a unique-test total.",
+    "Three real external-backend smoke tests remain excluded; deterministic protocol fixtures are used.",
+    "The final documentation/test-entry commit adds no runtime code after the validated implementation commit."
+  ]
+}
