@@ -1,6 +1,7 @@
 """Publication invariants: reject wrong tags, incomplete artifacts and collisions."""
 
 import json
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -88,15 +89,20 @@ class ReleaseTests(unittest.TestCase):
             path = output / release.archive_name(target, "0.5.0")
             path.write_bytes(target.encode())
             (output / (path.name + ".sha256")).write_text(f"{release.digest(path)}  {path.name}\n")
+        scripts = self.root / "scripts"
+        scripts.mkdir(exist_ok=True)
+        for name in ("install.sh", "install.ps1"):
+            (scripts / name).write_text(name)
+            (output / name).write_text(name)
         return output
 
     def test_checksums_require_every_platform_and_match_manifest(self):
         output = self.fixtures()
         release.checksums(self.root)
         manifest = json.loads((output / "release-manifest.json").read_text())
-        self.assertEqual(len(manifest["artifacts"]), 6)
+        self.assertEqual(len(manifest["artifacts"]), 8)
         self.assertEqual(manifest["commit"], self.git("rev-parse", "HEAD"))
-        self.assertEqual(len((output / "SHA256SUMS").read_text().splitlines()), 6)
+        self.assertEqual(len((output / "SHA256SUMS").read_text().splitlines()), 8)
         next(output.glob("*.zip")).unlink()
         with self.assertRaisesRegex(ValueError, "archive set"):
             release.checksums(self.root)
@@ -113,6 +119,59 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unexpected release files"):
             release.checksums(self.root)
 
+    def test_checksums_reject_changed_installers(self):
+        output = self.fixtures()
+        (output / "install.sh").write_text("not the validated installer")
+        with self.assertRaisesRegex(ValueError, "installer is missing or differs"):
+            release.checksums(self.root)
+
+    def test_main_prepare_does_not_create_tag_and_skips_existing_versions(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(release.prepare(automatic=True, root=self.root)["publish"], "false")
+            self.git("tag", "-d", "v0.5.0")
+            prepared = release.prepare(automatic=True, root=self.root)
+        self.assertEqual(prepared["publish"], "true")
+        self.assertEqual(prepared["create_tag"], "true")
+        self.assertEqual(prepared["sha"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(self.git("tag", "--list"), "")
+
+    def test_validated_tag_is_pushed_once_and_never_moved(self):
+        self.git("tag", "-d", "v0.5.0")
+        sha = self.git("rev-parse", "HEAD")
+        with tempfile.TemporaryDirectory(prefix="ssmcp-release-origin-") as remote:
+            subprocess.run(["git", "init", "--bare", "--quiet", remote], check=True)
+            self.git("remote", "add", "origin", remote)
+            self.git("push", "--quiet", "origin", "main")
+            release.create_tag("v0.5.0", sha, self.root)
+            release.create_tag("v0.5.0", sha, self.root)
+            published = subprocess.check_output(
+                ["git", "--git-dir", remote, "rev-parse", "refs/tags/v0.5.0^{commit}"], text=True).strip()
+            self.assertEqual(published, sha)
+            with self.assertRaisesRegex(ValueError, "validated checkout"):
+                release.create_tag("v0.5.0", "0" * 40, self.root)
+            self.assertEqual(self.git("rev-parse", "refs/tags/v0.5.0^{commit}"), sha)
+
+    def test_bump_updates_manifest_and_lock_together_without_dependency_changes(self):
+        manifest = '[package]\nname = "ssmcp"\nversion = "0.5.9"\n\n[dependencies.fixture]\nversion = "0.5.9"\n'
+        lock = 'version = 4\n\n[[package]]\nname = "ssmcp"\nversion = "0.5.9"\n\n[[package]]\nname = "fixture"\nversion = "0.5.9"\n'
+        for level, expected in (("patch", "0.5.10"), ("minor", "0.6.0"), ("major", "1.0.0")):
+            with self.subTest(level=level), mock.patch.dict(os.environ, {}, clear=True):
+                (self.root / "Cargo.toml").write_text(manifest)
+                (self.root / "Cargo.lock").write_text(lock)
+                release.bump(level, self.root)
+                self.assertEqual(release.version(self.root), expected)
+                self.assertIn('[dependencies.fixture]\nversion = "0.5.9"', (self.root / "Cargo.toml").read_text())
+                updated = (self.root / "Cargo.lock").read_text()
+                self.assertIn('name = "ssmcp"\nversion = "' + expected + '"', updated)
+                self.assertIn('name = "fixture"\nversion = "0.5.9"', updated)
+
+    def test_inconsistent_lockfile_prevents_both_bump_writes(self):
+        (self.root / "Cargo.lock").write_text('[[package]]\nname = "ssmcp"\nversion = "0.4.0"\n')
+        before = {name: (self.root / name).read_bytes() for name in ("Cargo.toml", "Cargo.lock")}
+        with self.assertRaises(ValueError):
+            release.bump("patch", self.root)
+        self.assertEqual(before, {name: (self.root / name).read_bytes() for name in before})
+
     def test_registry_only_treats_404_as_unpublished(self):
         for status in (404, 403, 500):
             error = urllib.error.HTTPError("https://crates.io/test", status, "test", {}, None)
@@ -122,6 +181,22 @@ class ReleaseTests(unittest.TestCase):
                 else:
                     with self.assertRaises(urllib.error.HTTPError):
                         release.registry_checksum("0.5.0")
+
+    def test_registry_rejects_a_yanked_version(self):
+        payload = io.BytesIO(json.dumps({"version": {"yanked": True, "checksum": "ignored"}}).encode())
+        with mock.patch.object(release.urllib.request, "urlopen", return_value=payload), \
+             self.assertRaisesRegex(ValueError, "yanked"):
+            release.registry_checksum("0.5.0")
+
+    def test_uploaded_crate_must_match_the_verified_package(self):
+        path = self.root / "target/package/ssmcp-0.5.0.crate"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"crate")
+        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
+             mock.patch.object(release, "registry_checksum", side_effect=[None, "different"]), \
+             mock.patch.object(release.subprocess, "run"), \
+             self.assertRaisesRegex(ValueError, "published crate checksum differs"):
+            release.publish(self.root)
 
     def test_published_identical_package_is_idempotent_without_secret(self):
         path = self.root / "target/package/ssmcp-0.5.0.crate"

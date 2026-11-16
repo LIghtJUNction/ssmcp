@@ -77,11 +77,11 @@ impl Root {
         Ok(path)
     }
 
-    fn file(&self, path: &str) -> Result<File, String> {
+    pub(super) fn file(&self, path: &str) -> Result<File, String> {
         open_file(&self.file_path(path)?)
     }
 
-    fn stat(&self, args: PathArgs) -> Result<Value, String> {
+    pub(super) fn stat(&self, args: PathArgs) -> Result<Value, String> {
         let metadata = std::fs::symlink_metadata(self.file_path(&args.path)?).map_err(error)?;
         #[cfg(unix)]
         let mode = metadata.mode() & 0o777;
@@ -96,7 +96,7 @@ impl Root {
         )
     }
 
-    fn list(&self, args: ListArgs) -> Result<Value, String> {
+    pub(super) fn list(&self, args: ListArgs) -> Result<Value, String> {
         if args.max_entries == 0 || args.max_entries > MAX_ENTRIES {
             return Err(format!("max_entries must be 1..={MAX_ENTRIES}"));
         }
@@ -145,7 +145,7 @@ impl Root {
         Ok(result)
     }
 
-    fn write_bytes(
+    pub(super) fn write_bytes(
         &self,
         path: &str,
         data: &[u8],
@@ -184,7 +184,7 @@ impl Root {
         replace_file(&target, data, overwrite, permissions)
     }
 
-    fn edit_text(&self, args: TextEditArgs) -> Result<Value, String> {
+    pub(super) fn edit_text(&self, args: TextEditArgs) -> Result<Value, String> {
         validate_hash(args.expected_sha256.as_deref())?;
         if args.old_text.is_empty() {
             return Err("old_text must not be empty".into());
@@ -232,7 +232,7 @@ impl Root {
         )
     }
 
-    fn mkdir(&self, args: MkdirArgs) -> Result<Value, String> {
+    pub(super) fn mkdir(&self, args: MkdirArgs) -> Result<Value, String> {
         let parts = Self::parts(&args.path)?;
         if args.parents {
             self.directory_path(&parts, true)?;
