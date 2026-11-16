@@ -131,8 +131,8 @@ def check_shell(harness, label, tools, _directory):
     match, _, _ = harness.read_until(
         r"SSMCP_SHELL_PID:(\d+)[\s\S]*?SSMCP_CHILD_PID:(\d+)"
     )
-    harness.check("[ssmcp shell input]" in local_log(harness, label),
-                  "shell: local transcript includes the remote command")
+    harness.check("[ssmcp shell input]" not in local_log(harness, label),
+                  "shell: input is not duplicated as a JSON log line")
     harness.check(harness.call("terminal.status")["running"],
                   "shell: status reports the live PTY")
     return [int(match.group(1)), int(match.group(2))]
@@ -172,7 +172,7 @@ def check_codex(harness, label, tools, _directory):
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         running = pool.submit(harness.call, "codex.command_exec", {"command": ["hold"]})
         try:
-            wait_for(lambda: '"ssmcp_output_text":"live"' in local_log(harness, label),
+            wait_for(lambda: '\n  live\n' in local_log(harness, label),
                      description="Codex base64 output decoded on local stderr")
             harness.check(not running.done(), "codex: command bytes are observable while its native call is still running")
         finally:
@@ -208,8 +208,8 @@ def check_cc(harness, label, tools, directory):
              description="Claude native progress on local stderr")
     harness.check(True, "cc: native progress appears on local stderr before event polling")
     full_call(harness, "cc.Bash", {"fixture_mode": "background"})
-    wait_for(lambda: '"type":"background_output"' in local_log(harness, label)
-             and "second\\n" in local_log(harness, label),
+    wait_for(lambda: "background.output" in local_log(harness, label)
+             and "second\n" in local_log(harness, label),
              description="Claude background output on local stderr")
     events, _ = events_until(harness, "ssmcp.cc.events", lambda values: b"second\n" in b"".join(
         base64.b64decode(event["data_base64"])
@@ -247,7 +247,7 @@ def check_pi(harness, label, tools, _directory):
                   "pi: native failures retain their envelope and MCP error flag")
     accepted = harness.call("pi.prompt", {"message": "fixture prompt"})
     harness.check(accepted["data"]["disposition"] == "started", "pi: prompt acceptance is returned separately from completion")
-    wait_for(lambda: '"type":"agent_settled"' in local_log(harness, label),
+    wait_for(lambda: "agent_settled" in local_log(harness, label),
              description="Pi settled event on local stderr")
     harness.check(True, "pi: native completion reaches local stderr before event polling")
     events_until(harness, "ssmcp.pi.events", lambda events: any(
@@ -265,7 +265,7 @@ def check_pi(harness, label, tools, _directory):
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         running = pool.submit(harness.call, "pi.bash", {"command": "fixture-held-command"})
         try:
-            wait_for(lambda: '"type":"bash_execution_update"' in local_log(harness, label),
+            wait_for(lambda: "first\n  second" in local_log(harness, label),
                      description="Pi bash delta on local stderr")
             harness.check(not running.done(), "pi: Bash output is visible before the native command returns")
         finally:

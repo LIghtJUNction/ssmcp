@@ -268,7 +268,10 @@ impl Renderer {
         if let Some(encoded) = v.pointer("/params/deltaBase64").and_then(Value::as_str)
             && let Ok(bytes) = STANDARD.decode(encoded)
         {
-            return self.text(out, label, &String::from_utf8_lossy(&bytes));
+            self.text(out, label, &String::from_utf8_lossy(&bytes))?;
+            // A running command may pause without emitting a newline. Its output
+            // must still reach the local terminal before the command completes.
+            return self.finish(out, label);
         }
         // Native transports wrap useful payloads in these fields.
         for field in [
@@ -745,5 +748,12 @@ mod tests {
             render(std::slice::from_ref(&event), true, true),
             format!("{event}\n")
         );
+    }
+    #[test]
+    fn base64_partial_output_is_visible_before_completion() {
+        let mut renderer = Renderer::new(false, false, 100);
+        let mut output = Vec::new();
+        renderer.event(&mut output, "codex", &json!({"method":"command/exec/outputDelta","params":{"deltaBase64":STANDARD.encode("still running")}})).unwrap();
+        assert!(String::from_utf8(output).unwrap().contains("still running"));
     }
 }
