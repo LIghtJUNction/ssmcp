@@ -611,8 +611,10 @@ fn usage() -> Value {
     json!({
         "language":"javascript",
         "clients":"Online client metadata snapshot; select a client by id from list.",
-        "call":"await call(clientId, toolName, arguments = {}) returns the complete native MCP result (including isError and structuredContent).",
+        "call":"await call(clientId, toolName, arguments = {}) returns short native MCP results unchanged. Long backend output returns artifact metadata in structuredContent; inspect isError, spilled and completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.",
         "tools":"await tools(clientId, cursor?) returns a page of native tool schemas; pass nextCursor to get the next page.",
+        "reload":"await reload(clientId) acknowledges a client restart from the updated installed executable. Stops background work; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.",
+        "outputs":"Long command output spills to private files under /tmp/ssmcp on the client. outputs.read(clientId,{id,offset,max_bytes}), outputs.stat(clientId,{id}), outputs.cleanup(clientId) inspect artifacts by returned ID. Metadata includes SHA-256, bytes, lines, completeness and expiry; automatic retention is 24 hours.",
         "output":"Use print(value) or console.log(value) for logs; return a JSON-serializable value.",
         "fs":"fs.list/stat/read/write/mkdir and fs.readText/writeText/editText(clientId, options) provide rooted binary and UTF-8 file primitives.",
         "skills":"skills.list/read/view(clientId, options) discover metadata summaries or read full SKILL.md documents without invoking a model.",
@@ -707,9 +709,21 @@ async fn execute(
                     ("client_id", client_id.clone()),
                 ],
             );
+            let is_reload = crate::client::reload::is_reload(&operation);
             let result = crate::observability::REQUEST_ID
                 .scope(request_id, session.call(operation))
                 .await?;
+            // The authorized lifecycle action deliberately invalidates its old
+            // connection. Deliver its ACK even if EOF arrives before this task
+            // resumes; it contains no post-disconnect data or reusable authority.
+            if is_reload && crate::client::reload::accepted(&result) {
+                // Only fixed acknowledgement fields survive this exception;
+                // arbitrary native content still requires the normal live check.
+                return Ok(crate::client::reload::acknowledgement(
+                    &client_id,
+                    result["structuredContent"]["auth"] == "github",
+                ));
+            }
             let authorization = broker
                 .authenticate(&user, &access_token)
                 .await
@@ -732,7 +746,7 @@ pub(crate) fn tool_definitions() -> Value {
     json!([
         {
             "name":"list",
-            "description":"List online clients allowed for your authenticated identity and this endpoint, with unique id, name, type, hostname and startup cwd. With client_id, return that client's native tool names, descriptions and input schemas for use inside code_mode; follow nextCursor with cursor to page. Names are display labels; use id to dispatch. Client access policies are checked on every lookup.",
+            "description":"List online clients allowed for your authenticated identity and this endpoint, with unique id, name, optional task title, type, hostname and startup cwd. Use title to identify the intended task, then dispatch by id. With client_id, return that client's native tool names, descriptions and input schemas for code_mode; follow nextCursor with cursor to page. Client access policies are checked on every lookup.",
             "inputSchema":{"type":"object","properties":{
                 "client_id":{"type":"string","minLength":1,"maxLength":64},
                 "cursor":{"type":"string","maxLength":128}
@@ -741,7 +755,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}) returning the complete MCP tool result, await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Includes fs helpers, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS}

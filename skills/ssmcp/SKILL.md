@@ -7,7 +7,7 @@ description: Operate SSH-connected ssmcp workspaces through list and code_mode. 
 
 ## Discover the machines and their capabilities
 
-Call `list` first. Select clients by their returned `id`; names and hostnames are labels. Call `list({client_id})` and follow `nextCursor` before using a native tool. Respect each native backend's permission and approval policy.
+Call `list` first. Use each client's optional `title` to understand its task, then check its `name` and `cwd`. Select clients by their returned `id`; titles, names and hostnames are labels and may repeat. Call `list({client_id})` and follow `nextCursor` before using a native tool. Respect each native backend's permission and approval policy.
 
 Read `ssmcp://guide`, `ssmcp://limits`, and `ssmcp://clients` through MCP resources or `resources.read(uri)` inside `code_mode`. Use `resources.templates()` for client-specific resources. Check current catalogs when a connected client has an older version.
 
@@ -15,7 +15,7 @@ Read `ssmcp://guide`, `ssmcp://limits`, and `ssmcp://clients` through MCP resour
 
 ```sh
 cd /path/to/workspace
-ssmcp --name workspace --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
+ssmcp --name workspace --title "Describe this session's task" --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
 ```
 
 Use the operator's configured SSH destination and authorized identity. Do not copy private SSH keys, disable host-key checks, or work around a network policy. If the caller environment cannot connect, report that exact limitation and continue work on reachable peers.
@@ -36,7 +36,21 @@ if (!client) throw new Error("Select an online client from list");
 return await tools(client.id);
 ```
 
-Call a discovered operation with `await call(clientId, toolName, arguments)`. This returns the complete MCP result; check `isError` and read `structuredContent` when present. Await every call. Return only the output needed for the task. Never start an agent or model through a native backend unless the user authorized that delegation.
+Call a discovered operation with `await call(clientId, toolName, arguments)`. Check `isError` and read `structuredContent` when present. Short results remain inline; oversized backend results return artifact metadata instead of the full body. Await every call. Return only the output needed for the task. Never start an agent or model through a native backend unless the user authorized that delegation.
+
+## Reload an updated client
+
+After installing an update at the client's original executable entry, call `await reload(clientId)`. Check that `ssmcp.client.reload` is available first. Both client and server must support reload; an older client needs an ordinary restart for its first upgrade.
+
+Treat `accepted: true` as acceptance, then call the public `list` again to verify reconnection and obtain the new ID. Match title, name and cwd without assuming labels are unique. Startup arguments, cwd, environment and `--allow` are preserved. Background jobs, harnesses and forwards stop; in-flight calls cause a busy rejection. Login-code authorization must be renewed after reconnection, while valid GitHub identity authorization can discover the new connection under the same allow list. Do not blindly repeat an uncertain reload.
+
+## Read long-output artifacts
+
+Check `spilled` and `artifact` in long-output results. PTY captures contain the full terminal session's merged raw stream; other oversized backend results contain MCP JSON. A spilled terminal read advances `next_cursor` to its returned range end, so read historical bytes with `outputs.read(clientId,{id:artifact.id,offset,max_bytes:16384})` and follow `next_offset`. Use `data_base64` for exact bytes, and do not return every page into the agent context at once.
+
+Use `outputs.stat(clientId,{id})` to refresh file size, SHA-256, line count and completion metadata. A live capture can grow after a snapshot; `complete:false` or `error` must not be reported as a complete log. Underlying backend truncation cannot be recovered.
+
+Expect automatic spilling above 32 KiB or 500 lines, 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live on the client in `/tmp/ssmcp/<uid>`. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. An unexpired artifact may remain readable through the reconnected client ID.
 
 ## Read and write workspace files
 

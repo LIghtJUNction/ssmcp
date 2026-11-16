@@ -1,5 +1,8 @@
 //! A single Linux pseudo-terminal with bounded, cursor-addressed output.
-use crate::wire::Operation;
+use crate::{
+    output::{Capture, INLINE_BYTES, INLINE_LINES, OutputStore},
+    wire::Operation,
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
@@ -30,10 +33,16 @@ struct Output {
     start: u64,
     end: u64,
     eof: bool,
+    capture: Option<Capture>,
 }
 
 impl Output {
     fn push(&mut self, data: &[u8]) {
+        if let Some(capture) = &mut self.capture {
+            // A failed spool remains explicit in every subsequent read/status;
+            // the bounded terminal tail continues to work for interactive use.
+            let _ = capture.push(data);
+        }
         let retained = &data[data.len().saturating_sub(OUTPUT_CAPACITY)..];
         let excess = (self.bytes.len() + retained.len()).saturating_sub(OUTPUT_CAPACITY);
         self.bytes.drain(..excess);
@@ -69,6 +78,7 @@ impl Terminal {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
+        let output_store = OutputStore::global()?;
         let mut master = -1;
         let mut slave = -1;
         let size = libc::winsize {
@@ -135,7 +145,10 @@ impl Terminal {
             child: AsyncMutex::new(Some(child)),
             leader,
             pid,
-            output: Mutex::new(Output::default()),
+            output: Mutex::new(Output {
+                capture: Some(output_store.capture("terminal_session")),
+                ..Output::default()
+            }),
             changed: Notify::new(),
             writer: AsyncMutex::new(()),
             reader: Mutex::new(None),
@@ -166,9 +179,19 @@ impl Terminal {
                             crate::client::render::terminal_output(&data[..n]);
                         }
                     }
-                    _ => {
+                    result => {
                         // Linux PTYs report EIO when the last slave closes.
-                        terminal.output.lock().unwrap().eof = true;
+                        let mut output = terminal.output.lock().unwrap();
+                        output.eof = true;
+                        if let Some(capture) = &mut output.capture {
+                            if let Err(error) = result
+                                && error.raw_os_error() != Some(libc::EIO)
+                            {
+                                capture.fail(format!("terminal read failed: {error}"));
+                            }
+                            let _ = capture.finish();
+                        }
+                        drop(output);
                         terminal.changed.notify_waiters();
                         break;
                     }
@@ -224,9 +247,16 @@ impl Terminal {
             Operation::Status {} => {
                 let running = self.running().await;
                 let output = self.output.lock().unwrap();
-                Ok(
-                    json!({"running":running,"pid":self.pid,"start_cursor":output.start,"next_cursor":output.end,"output_eof":output.eof}),
-                )
+                let mut result = json!({"running":running,"pid":self.pid,"start_cursor":output.start,"next_cursor":output.end,"output_eof":output.eof});
+                if let Some(capture) = &output.capture {
+                    if let Some(artifact) = capture.metadata() {
+                        result["output_artifact"] = json!(artifact);
+                    }
+                    if let Some(error) = capture.error() {
+                        result["output_error"] = json!(error);
+                    }
+                }
+                Ok(result)
             }
         }
     }
@@ -276,24 +306,60 @@ impl Terminal {
                     || self.closed.load(Ordering::Acquire)
                 {
                     let from = cursor.max(output.start);
-                    let bytes: Vec<u8> = output
+                    let pending_lines = output
                         .bytes
                         .iter()
                         .skip((from - output.start) as usize)
-                        .take(max_bytes)
-                        .copied()
-                        .collect();
-                    Some((from, bytes, cursor < output.start, output.eof))
+                        .filter(|byte| **byte == b'\n')
+                        .take(INLINE_LINES as usize + 1)
+                        .count() as u64
+                        + u64::from(
+                            output.end > from
+                                && output.bytes.back().is_some_and(|byte| *byte != b'\n'),
+                        );
+                    let long =
+                        output.end - cursor > INLINE_BYTES as u64 || pending_lines > INLINE_LINES;
+                    if long {
+                        let capture = output
+                            .capture
+                            .as_ref()
+                            .ok_or("terminal output capture unavailable")?;
+                        let artifact = capture.metadata().ok_or_else(|| {
+                            capture
+                                .error()
+                                .unwrap_or("terminal output could not be spilled")
+                                .to_owned()
+                        })?;
+                        let mut result = json!({"text":"","data_base64":"","next_cursor":output.end,
+                            "truncated":capture.error().is_some(),"output_eof":output.eof,"spilled":true,
+                            "range":{"start":cursor,"end":output.end,"stored_end":artifact.bytes.min(output.end)},
+                            "artifact":artifact});
+                        if let Some(error) = capture.error() {
+                            result["output_error"] = json!(error);
+                        }
+                        Some(result)
+                    } else {
+                        let bytes: Vec<u8> = output
+                            .bytes
+                            .iter()
+                            .skip((from - output.start) as usize)
+                            .take(max_bytes)
+                            .copied()
+                            .collect();
+                        let mut result = json!({"text":String::from_utf8_lossy(&bytes),"data_base64":STANDARD.encode(&bytes),
+                            "next_cursor":from + bytes.len() as u64,"truncated":cursor < output.start,"output_eof":output.eof});
+                        if let Some(error) = output.capture.as_ref().and_then(Capture::error) {
+                            result["output_error"] = json!(error);
+                        }
+                        Some(result)
+                    }
                 } else {
                     None
                 }
             };
-            if let Some((from, bytes, truncated, eof)) = snapshot {
-                return Ok(json!({
-                    "text":String::from_utf8_lossy(&bytes), "data_base64":STANDARD.encode(&bytes),
-                    "next_cursor":from + bytes.len() as u64, "truncated":truncated,
-                    "running":self.running().await, "output_eof":eof,
-                }));
+            if let Some(mut snapshot) = snapshot {
+                snapshot["running"] = json!(self.running().await);
+                return Ok(snapshot);
             }
             let _ = timeout_at(deadline, changed).await;
         }
@@ -335,7 +401,15 @@ impl Terminal {
             let _ = reader.await;
         }
         self.master.lock().unwrap().take();
-        self.output.lock().unwrap().eof = true;
+        let mut output = self.output.lock().unwrap();
+        if !output.eof
+            && let Some(capture) = &mut output.capture
+        {
+            capture.fail("terminal was stopped before output EOF; capture may be incomplete");
+            let _ = capture.finish();
+        }
+        output.eof = true;
+        drop(output);
         self.changed.notify_waiters();
     }
 
@@ -689,5 +763,62 @@ mod tests {
                 .collect::<Vec<_>>(),
             b"liat"
         );
+    }
+
+    #[tokio::test]
+    async fn long_terminal_output_keeps_full_prefix_beyond_ring_capacity() {
+        use sha2::{Digest, Sha256};
+        let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
+        terminal.perform(Operation::Write {
+            data: "stty -echo; head -c 1100000 /dev/zero | tr '\\0' x; printf '\\nLONG_DONE\\n'; exit\n".into(),
+        }).await.unwrap();
+        timeout(Duration::from_secs(10), async {
+            loop {
+                if terminal.output.lock().unwrap().eof {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("long terminal command did not finish");
+        let result = terminal
+            .perform(Operation::Read {
+                cursor: 0,
+                max_bytes: 16384,
+                wait_ms: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result["spilled"], true);
+        assert_eq!(result["truncated"], false);
+        assert_eq!(result["text"], "");
+        assert_eq!(result["artifact"]["scope"], "terminal_session");
+        assert_eq!(result["artifact"]["complete"], true);
+        assert_eq!(result["range"]["start"], 0);
+        let bytes = std::fs::read(result["artifact"]["path"].as_str().unwrap()).unwrap();
+        assert!(
+            bytes
+                .windows(1100000)
+                .any(|part| part.iter().all(|byte| *byte == b'x'))
+        );
+        assert!(bytes.windows(9).any(|part| part == b"LONG_DONE"));
+        assert_eq!(result["artifact"]["bytes"], bytes.len());
+        assert_eq!(
+            result["artifact"]["sha256"],
+            format!("{:x}", Sha256::digest(&bytes))
+        );
+        assert_eq!(result["next_cursor"], bytes.len());
+        let empty = terminal
+            .perform(Operation::Read {
+                cursor: bytes.len() as u64,
+                max_bytes: 16384,
+                wait_ms: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(empty["text"], "");
+        assert_eq!(empty["next_cursor"], bytes.len());
+        terminal.shutdown().await;
     }
 }

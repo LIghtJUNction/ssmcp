@@ -1025,6 +1025,7 @@ mod tests {
                     mode: Mode::Shell,
                     metadata: ClientMetadata {
                         name: "cleanup regression".into(),
+                        title: None,
                         cwd: "/workspace".into(),
                         hostname: "fixture".into(),
                         allow: Vec::new(),

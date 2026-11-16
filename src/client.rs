@@ -1,4 +1,5 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
+pub(crate) mod reload;
 pub(crate) mod render;
 mod ui;
 
@@ -7,7 +8,7 @@ use crate::{
     runtime::Runtime,
     wire::{
         ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
-        canonical_github_principal, read_frame, write_frame,
+        canonical_github_principal, read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -38,6 +39,7 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
   -p port              SSH port
   -F ssh_config        OpenSSH configuration file
   --name NAME          Display name (default: hostname-type-pid)
+  --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (at most 32 distinct users; case-insensitive)
   --shell /path        Shell executable (shell mode only)
@@ -59,6 +61,7 @@ Uses only SSH public-key authentication and standard known_hosts checks.
 
 Examples:
   ssmcp --name laptop my-server
+  ssmcp --title "Fix ssmcp client reload" my-server
   ssmcp -t codex -F ~/.ssh/work_config my-server
   ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
   ssmcp --allow octocat@github,alice@github -t codex my-server
@@ -175,6 +178,7 @@ fn ssh_ended(status: io::Result<ExitStatus>) -> String {
 struct Options {
     destination: Option<String>,
     name: Option<String>,
+    title: Option<String>,
     allow: Vec<String>,
     mode: Mode,
     backend: Option<OsString>,
@@ -198,6 +202,7 @@ impl Options {
         let mut args = args.into_iter();
         let mut destination = None;
         let mut name = None;
+        let mut title = None;
         let mut allow = Vec::new();
         let mut mode = Mode::Shell;
         let mut backend = None;
@@ -240,6 +245,17 @@ impl Options {
                             .into_string()
                             .map_err(|_| "client name must be UTF-8")?,
                     );
+                }
+                Some("--title") => {
+                    title = Some(
+                        args.next()
+                            .ok_or("--title requires a session title")?
+                            .into_string()
+                            .map_err(|_| "session title must be UTF-8")?,
+                    );
+                }
+                Some(value) if value.starts_with("--title=") => {
+                    title = Some(value["--title=".len()..].to_owned());
                 }
                 Some("--allow") => {
                     let value = args.next().ok_or("--allow requires username@github")?;
@@ -348,6 +364,7 @@ impl Options {
         if !shell.is_absolute() {
             return Err("--shell requires an absolute path".into());
         }
+        validate_title(title.as_deref())?;
         if let Some(name) = &name
             && (name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control))
         {
@@ -356,6 +373,7 @@ impl Options {
         Ok(Some(Self {
             destination,
             name,
+            title,
             allow,
             mode,
             backend,
@@ -385,6 +403,7 @@ impl Options {
             .map_err(|_| "client cwd must be UTF-8")?;
         let short_hostname: String = hostname.chars().take(24).collect();
         let metadata = ClientMetadata {
+            title: self.title.clone(),
             name: self.name.clone().unwrap_or_else(|| {
                 format!(
                     "{short_hostname}-{}-{}",
@@ -531,6 +550,7 @@ pub async fn run() -> crate::Result<()> {
         println!("{}", json!({"type":options.mode.name(),"tools":tools?}));
         return Ok(());
     }
+    let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
     let mut ssh = options
         .command()
@@ -618,6 +638,9 @@ pub async fn run() -> crate::Result<()> {
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
     let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":options.mode.name()});
+    if let Some(title) = &metadata.title {
+        output["title"] = json!(title);
+    }
     if github_auth {
         output["auth"] = json!("github");
         output["allow"] = json!(metadata.allow);
@@ -654,6 +677,7 @@ pub async fn run() -> crate::Result<()> {
     );
     let writer = Arc::new(Mutex::new(writer));
     let mut requests: JoinSet<io::Result<()>> = JoinSet::new();
+    let mut reload_requested = false;
     let result: crate::Result<()> = 'connected: loop {
         tokio::select! {
             frame = incoming.frames.recv() => match frame {
@@ -664,6 +688,50 @@ pub async fn run() -> crate::Result<()> {
                             Ok(Err(error)) => break 'connected Err(error.into()),
                             Err(error) => break 'connected Err(error.into()),
                         }
+                    }
+                    if reload::is_reload(&operation) {
+                        let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
+                        let response = restart.accept(arguments, requests.len(), &client_id, github_auth);
+                        let accepted = response.is_ok();
+                        let sent = timeout(Duration::from_secs(10), async {
+                            let mut writer = writer.lock().await;
+                            write_frame(&mut *writer, &Frame::Reply { id, result: response }).await
+                        }).await;
+                        match sent {
+                            Ok(Ok(())) => {},
+                            Ok(Err(error)) => break Err(error.into()),
+                            Err(_) => break Err("SSH reload acknowledgement timed out".into()),
+                        }
+                        if accepted {
+                            // Flushing the pipe only hands bytes to local ssh.
+                            // Wait for the broker's receipt before terminating
+                            // that process, so the ACK cannot be lost in transit.
+                            let confirmed = timeout(Duration::from_secs(10), async {
+                                loop {
+                                    match incoming.frames.recv().await {
+                                        Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
+                                        Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
+                                            let mut writer = writer.lock().await;
+                                            write_frame(&mut *writer, &Frame::Reply { id: next_id, result: Err("client reload is already pending; call list after reconnection".into()) }).await?;
+                                        }
+                                        Some(Err(error)) => return Err(error.into()),
+                                        _ => return Err("SSH ended before the server confirmed reload receipt".into()),
+                                    }
+                                }
+                            }).await;
+                            match confirmed {
+                                Ok(Ok(())) => {},
+                                Ok(Err(error)) => break Err(error),
+                                Err(_) => {
+                                    render::status("ssmcp", "Error", "Server did not confirm reload receipt; client remains running. Update ssmcpd before using reload.");
+                                    continue 'connected;
+                                }
+                            }
+                            render::status("ssmcp", "Progress", "Reload accepted; stopping local jobs and restarting the installed client");
+                            reload_requested = true;
+                            break Ok(());
+                        }
+                        continue;
                     }
                     if requests.len() >= MAX_INFLIGHT { break Err("server exceeded the in-flight request limit".into()); }
                     let backend = backend.clone();
@@ -704,6 +772,9 @@ pub async fn run() -> crate::Result<()> {
     backend.shutdown().await;
     let _ = ssh.wait().await;
     render::status(options.mode.name(), "Result", "DISCONNECTED");
+    if reload_requested {
+        return restart.execute();
+    }
     result
 }
 
@@ -809,6 +880,75 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn session_title_preserves_unicode_task_context_without_becoming_an_ssh_argument() {
+        let title = "修复会话重启 · issue #42";
+        let options = Options::parse(
+            ["--name", "workstation", "--title", title, "user@host"].map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        let metadata = options.metadata().unwrap();
+        assert_eq!(metadata.name, "workstation");
+        assert_eq!(metadata.title.as_deref(), Some(title));
+        assert!(
+            !options
+                .command()
+                .as_std()
+                .get_args()
+                .any(|arg| arg == title)
+        );
+
+        let equals = Options::parse(["--title=修复客户端", "host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(equals.title.as_deref(), Some("修复客户端"));
+        let absent = Options::parse(["host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert!(absent.title.is_none());
+        assert!(
+            serde_json::to_value(absent.metadata().unwrap())
+                .unwrap()
+                .get("title")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn session_title_rejects_missing_blank_controls_and_utf8_byte_overflow() {
+        use std::os::unix::ffi::OsStringExt;
+
+        assert!(Options::parse([OsString::from("--title")]).is_err());
+        for title in [
+            "".to_owned(),
+            "  ".to_owned(),
+            "bad\ntitle".to_owned(),
+            "bad\u{1b}[31mtitle".to_owned(),
+            "a".repeat(crate::wire::MAX_TITLE_BYTES + 1),
+            "界".repeat(crate::wire::MAX_TITLE_BYTES / 3 + 1),
+        ] {
+            assert!(
+                Options::parse([
+                    OsString::from("--title"),
+                    OsString::from(title),
+                    OsString::from("host"),
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            Options::parse([
+                OsString::from("--title"),
+                OsString::from_vec(vec![0xff]),
+                OsString::from("host"),
+            ])
+            .is_err()
+        );
+        let maximum = "a".repeat(crate::wire::MAX_TITLE_BYTES);
+        assert!(Options::parse(["--title", &maximum, "host"].map(OsString::from)).is_ok());
     }
 
     #[test]

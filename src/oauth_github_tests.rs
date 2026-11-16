@@ -222,6 +222,7 @@ impl Fixture {
                 mode: Mode::Codex,
                 metadata: ClientMetadata {
                     name: name.into(),
+                    title: None,
                     cwd: format!("/workspace/{name}"),
                     hostname: "oauth-fixture".into(),
                     allow: allow.iter().map(|value| (*value).into()).collect(),

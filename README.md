@@ -133,7 +133,7 @@ ssmcp -t pi --backend /opt/pi/bin/pi my-ssmcp -- --no-session
 
 | MCP 工具 | 用法 |
 | --- | --- |
-| `list({})` | 列出当前授权可访问的在线客户端：ID、名字、类型、主机和启动目录 |
+| `list({})` | 列出当前授权可访问的在线客户端：ID、名字、任务标题（若设置）、类型、主机和启动目录 |
 | `list({client_id})` | 读取指定客户端的原生工具名称与参数 schema；用 `nextCursor` 分页 |
 | `code_mode({code, timeout_ms})` | 用 JavaScript 调用原生工具，返回结果和日志 |
 
@@ -153,9 +153,29 @@ return await call(client.id, "terminal.read", {
 });
 ```
 
-单次读取可能只有部分输出，继续用返回的 `next_cursor` 读取。调用 Agent 时，先用 `list({client_id})` 或 `await tools(client.id)` 检查实际 schema。`call` 保留原生 `content`、`structuredContent`、`isError` 和审批数据；代码应检查原生错误与任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
+单次读取可能只有部分输出，继续用返回的 `next_cursor` 读取。若 `structuredContent.spilled` 为 `true`，PTY 的 `next_cursor` 已推进至本次输出末尾，正文需根据 `artifact.id` 用 `outputs.read` 读取。
+
+调用 Agent 时，先用 `list({client_id})` 或 `await tools(client.id)` 检查实际 schema。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批数据；原生后端的长结果转为元数据，PTY 保存原始终端流，其他后端结果保存原始 MCP 结果 JSON。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
 
 代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过 SSH 将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
+
+## 会话标题、重载与长输出
+
+启动时用 `--title` 说明任务，agent 通过 `list` 和 `clients` 就能看到标题：
+
+```sh
+ssmcp --name dev --title "完善客户端重载和输出转储" --allow octocat@github my-ssmcp
+```
+
+安装新版客户端后，在 `code_mode` 中使用 `return await reload(clientId)` 重新加载原启动入口。请求确认后旧连接关闭，后台命令、harness 和转发随之停止；再调用 `list` 获取新客户端 ID。有效的 `--allow` GitHub 授权可继续使用，登录码模式需要重新完成 OAuth 登录。
+
+输出超过 32 KiB 或 500 行时，护卫自动转储到客户端的 `/tmp/ssmcp/<uid>/`，返回路径、SHA-256、行数和完成状态。按需读取正文：
+
+```javascript
+return await outputs.read(clientId, { id: artifactId, offset: 0, max_bytes: 16384 });
+```
+
+转储默认保留 24 小时，已结束文件总量上限为 512 MiB，单文件上限为 256 MiB；超限或写入失败会明确标记不完整。清理跳过活动文件，运行期间每 60 秒执行。`outputs.stat` 检查元数据，`outputs.cleanup` 可立即执行相同清理策略。带标题连接和重载原语需先升级两端。[完整接口、兼容性与输出范围](docs/session-control.md)
 
 ## 技能摘要、AGENTS.md 与文本原语
 
@@ -259,6 +279,7 @@ CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、�
 | 设置 `--allow`，了解哪些客户端会被看到 | [GitHub 身份与访问规则](docs/configuration.md#github-allow) |
 | 安装服务端、配置 systemd / SSH / HTTPS | [Linux 部署](docs/deployment.md) |
 | 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
+| 设置任务标题、重载客户端、按需读取长输出 | [会话与输出管理](docs/session-control.md) |
 | 两端同步文件、映射端口、读取动态资源 | [工作区教程](docs/workspaces.md) |
 | 为 AI 提供可复用使用指南 | [ssmcp skill](skills/ssmcp/SKILL.md) |
 | 查看测试、架构与实际验收范围 | [验收记录](docs/validation.md) |

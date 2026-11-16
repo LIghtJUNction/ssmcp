@@ -107,6 +107,7 @@ impl Server {
                 mode: Mode::Shell,
                 metadata: ClientMetadata {
                     name: name.into(),
+                    title: None,
                     cwd: root.to_str().unwrap().into(),
                     hostname: "fixture".into(),
                     allow: Vec::new(),

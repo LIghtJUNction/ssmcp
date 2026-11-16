@@ -8,6 +8,7 @@ pub mod context;
 pub mod http;
 pub mod identity;
 pub mod oauth;
+pub mod output;
 pub mod portal;
 pub mod pty;
 pub mod resources;
