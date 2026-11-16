@@ -19,8 +19,10 @@ A client id identifies one live connection; names are labels, title is optional 
 task context, and cwd is its startup directory. Select the intended task by title, then dispatch by id.\n\n\
 Read ssmcp://clients/{id}/tools to discover native tool names and JSON schemas. \
 Follow nextUri to read the next page of the same directory snapshot. A new cursor-free \
-request discovers current native tools. Each client retains at most four snapshots for \
-120 seconds within 64 MiB; restart listing without a cursor if one expires or is evicted. \
+request discovers current native tools. Each client retains at most four snapshots within \
+64 MiB. Valid continuation pages renew a 120-second idle timeout; every snapshot also has \
+a 15-minute absolute maximum age. Calls still validate the current provider and registration. \
+Restart listing without a cursor if a snapshot expires or is evicted. \
 Do not invent tool names or backend arguments.\n\n\
 New clients always provide a shell and automatically discover installed Codex, Claude Code, \
 Pi and OpenCode tools. ssmcp.harnesses.list reports the registered tool counts.\n\n\
@@ -333,6 +335,9 @@ fn limits() -> Value {
         "tool_catalog":{
             "max_tools_per_page":64,
             "snapshot_seconds":crate::runtime::CATALOG_SNAPSHOT_SECONDS,
+            "snapshot_idle_seconds":crate::runtime::CATALOG_SNAPSHOT_SECONDS,
+            "snapshot_max_age_seconds":crate::runtime::CATALOG_SNAPSHOT_MAX_SECONDS,
+            "snapshot_expiry":"valid continuation renews idle expiry; absolute maximum age and capacity limits still apply",
             "max_snapshots_per_client":crate::runtime::MAX_CATALOG_SNAPSHOTS,
             "max_snapshot_bytes_per_client":crate::runtime::MAX_CATALOG_SNAPSHOT_BYTES,
             "snapshot_size_unit":"serialized JSON bytes",

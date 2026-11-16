@@ -36,6 +36,7 @@ pub enum Dialect {
 
 struct Waiting {
     method: String,
+    internal_discovery: bool,
     reply: oneshot::Sender<Response>,
 }
 
@@ -308,6 +309,21 @@ impl Peer {
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Response {
+        self.request_with_origin(method, params, false).await
+    }
+
+    /// Mark only the audit copies of this exact discovery request and response.
+    /// Native JSON, unrelated notifications and stderr keep their own provenance.
+    pub(crate) async fn request_discovery(&self, method: &str, params: Value) -> Response {
+        self.request_with_origin(method, params, true).await
+    }
+
+    async fn request_with_origin(
+        &self,
+        method: &str,
+        params: Value,
+        internal_discovery: bool,
+    ) -> Response {
         let id = format!(
             "ssmcp-{}-{}",
             self.request_prefix,
@@ -324,6 +340,7 @@ impl Peer {
                 key.clone(),
                 Waiting {
                     method: method.into(),
+                    internal_discovery,
                     reply,
                 },
             );
@@ -357,8 +374,11 @@ impl Peer {
             }
         };
         if !matches!(method, "initialize" | "tools/list") {
-            self.events
-                .push(json!({"type":"ssmcp.request","request":message}));
+            let mut audit = json!({"type":"ssmcp.request","request":message});
+            if internal_discovery {
+                audit["internal_discovery"] = true.into();
+            }
+            self.events.push(audit);
         }
         self.send(message).await?;
         timeout(Duration::from_secs(900), receiver)
@@ -487,7 +507,13 @@ impl Peer {
             let waiting = self.calls.lock().unwrap().remove(&key);
             if let Some(waiting) = waiting {
                 if !matches!(waiting.method.as_str(), "initialize" | "tools/list") {
-                    self.events.push(message.clone());
+                    let mut audit = message.clone();
+                    // A peer cannot claim the bridge's internal provenance.
+                    audit.as_object_mut().unwrap().remove("internal_discovery");
+                    if waiting.internal_discovery {
+                        audit["internal_discovery"] = true.into();
+                    }
+                    self.events.push(audit);
                 }
                 let result = if self.dialect == Dialect::Pi {
                     Ok(message)
@@ -534,7 +560,9 @@ impl Peer {
         {
             self.requests.lock().unwrap().remove(&id.to_string());
         }
-        self.events.push(message);
+        let mut audit = message;
+        audit.as_object_mut().unwrap().remove("internal_discovery");
+        self.events.push(audit);
         Ok(())
     }
 
@@ -656,6 +684,63 @@ for line in sys.stdin:
         Peer::spawn(command, "framing-fixture", Dialect::JsonRpc)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn discovery_provenance_is_bound_to_the_exact_request_and_never_changes_native_json() {
+        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+        command.args(["-u", "-c", r#"
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'internal_discovery':True,
+                      'result':{'echo':request,'internal_discovery':True}}), flush=True)
+    print(json.dumps({'method':'fixture/notification','internal_discovery':True,'params':{}}), flush=True)
+"#]);
+        let peer = Peer::spawn(command, "discovery-provenance", Dialect::JsonRpc)
+            .await
+            .unwrap();
+        let internal = peer
+            .request_discovery("mcpServerStatus/list", json!({"limit":1}))
+            .await
+            .unwrap();
+        let explicit = peer
+            .request("mcpServerStatus/list", json!({"limit":1}))
+            .await
+            .unwrap();
+        for response in [&internal, &explicit] {
+            assert_eq!(response["internal_discovery"], true);
+            assert!(response["echo"].get("internal_discovery").is_none());
+            assert_eq!(response["echo"]["params"], json!({"limit":1}));
+        }
+        let events = peer.events.read(json!({"max_events":64})).await.unwrap();
+        let entries = events["events"].as_array().unwrap();
+        for (response, expected) in [(&internal, true), (&explicit, false)] {
+            let id = &response["echo"]["id"];
+            let matching: Vec<_> = entries
+                .iter()
+                .map(|entry| &entry["event"])
+                .filter(|event| event["request"]["id"] == *id || event["id"] == *id)
+                .collect();
+            assert_eq!(matching.len(), 2);
+            assert!(
+                matching
+                    .iter()
+                    .all(|event| (event["internal_discovery"] == true) == expected)
+            );
+        }
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["event"]["method"] == "fixture/notification")
+        );
+        assert!(
+            entries
+                .iter()
+                .filter(|entry| entry["event"]["method"] == "fixture/notification")
+                .all(|entry| entry["event"].get("internal_discovery").is_none())
+        );
+        peer.shutdown().await;
     }
 
     #[tokio::test]

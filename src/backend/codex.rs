@@ -14,13 +14,14 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{process::Command, sync::Mutex, time::timeout};
 
 type Methods = BTreeMap<String, (String, bool)>;
 const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(60);
 const MCP_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
+const MCP_BACKGROUND_REFRESH: Duration = Duration::from_secs(30);
 const MAX_MCP_PAGES: usize = 128;
 const MAX_MCP_TOOLS: usize = 4096;
 
@@ -44,6 +45,7 @@ struct McpState {
     error: Option<String>,
     generation: u64,
     refreshing: bool,
+    refreshed: Option<Instant>,
 }
 
 pub struct Codex {
@@ -159,15 +161,34 @@ impl Codex {
         state.catalog = McpCatalog::default();
         state.error = Some(error.to_owned());
         state.generation += 1;
+        state.refreshed = None;
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
+        self.catalog_tools(true).await
+    }
+
+    /// Cheap liveness checks run every broker discovery tick; a healthy native
+    /// catalog is polled at most once per interval, independently of user calls.
+    pub async fn background_tools(&self) -> Result<Vec<Value>, String> {
+        self.catalog_tools(false).await
+    }
+
+    async fn catalog_tools(&self, force_refresh: bool) -> Result<Vec<Value>, String> {
         if !self.connected().await {
             self.invalidate_mcp("Codex native process disconnected")
                 .await;
             return Err("Codex native process disconnected".into());
         }
-        let _ = self.refresh_mcp().await;
+        let due = self
+            .mcp
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .refreshed
+            .is_none_or(|last| last.elapsed() >= MCP_BACKGROUND_REFRESH);
+        if force_refresh || due {
+            let _ = self.refresh_mcp().await;
+        }
         if !self.connected().await {
             self.invalidate_mcp("Codex native process disconnected")
                 .await;
@@ -234,6 +255,7 @@ impl Codex {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.refreshing = false;
                 if state.generation == self.generation {
+                    state.refreshed = Some(Instant::now());
                     state.catalog = McpCatalog::default();
                     state.error = Some("Codex MCP discovery was cancelled".into());
                     state.generation += 1;
@@ -254,7 +276,7 @@ impl Codex {
             }
             if thread_id.is_none() {
                 let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-                let response = self.peer.request(
+                let response = self.peer.request_discovery(
                     "thread/start", json!({"cwd":cwd,"ephemeral":true})
                 ).await?;
                 let thread_id = response.pointer("/thread/id")
@@ -274,6 +296,7 @@ impl Codex {
             if state.generation != generation {
                 Err("Codex MCP discovery was invalidated before publication".to_owned())
             } else {
+                state.refreshed = Some(Instant::now());
                 state.generation += 1;
                 match discovered {
                     Ok(catalog) => {
@@ -316,7 +339,7 @@ impl Codex {
         }
         let peer = self.peer.clone();
         *pending = Some(tokio::spawn(async move {
-            peer.request("mcpServerStatus/list", params).await
+            peer.request_discovery("mcpServerStatus/list", params).await
         }));
         match timeout(MCP_PAGE_TIMEOUT, pending.as_mut().unwrap()).await {
             Ok(result) => {
