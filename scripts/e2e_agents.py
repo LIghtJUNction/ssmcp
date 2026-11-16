@@ -49,7 +49,25 @@ def full_call(harness, name, arguments=None, *, expect_error=False):
     return result
 
 
+def pi_call(harness, command, arguments=None):
+    return harness.call("pi.rpc", {"type": command, "args": arguments or {}})
+
+
 def catalog(harness, mode):
+    # Connection readiness does not wait on optional providers.
+    expected = ({"codex", "claude", "pi", "opencode"} if mode == "all"
+                else ({"claude" if mode == "cc" else mode} if mode != "shell" else set()))
+
+    def discovered():
+        rows = harness.call("ssmcp.harnesses.list")["harnesses"]
+        if any(row["status"] == "discovering" for row in rows):
+            return None
+        ready = {row["provider"] for row in rows if row["status"] == "ready"}
+        if ready != expected:
+            raise AssertionError(f"{mode}: unexpected provider discovery: {rows}")
+        return rows
+
+    diagnostics = wait_for(discovered, description=f"{mode} asynchronous native discovery")
     status, value, _ = harness.rpc("tools/list", modern=True)
     harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode"],
                   f"{mode}: public MCP catalog contains exactly list and code_mode")
@@ -82,8 +100,9 @@ def catalog(harness, mode):
     harness.check(bool(names) and len(names) == len(set(names)),
                   f"{mode}: complete tool catalog has unique names")
     kinds = MODES[1:] if mode == "all" else (mode,)
-    prefixes = tuple(prefix for kind in kinds for prefix in (f"{kind}.", f"ssmcp.{kind}."))
-    shared = {name for name in names if name.startswith(("ssmcp.fs.", "ssmcp.net.", "ssmcp.rsync.", "ssmcp.context.", "ssmcp.skills.", "ssmcp.agents.", "ssmcp.output.", "ssmcp.client.", "ssmcp.exec.", "ssmcp.harnesses."))}
+    prefixes = tuple(prefix for kind in kinds for label in ("claude" if kind == "cc" else kind,)
+                     for prefix in (f"{label}.", f"ssmcp.{label}."))
+    shared = {name for name in names if name.startswith(("ssmcp.fs.", "ssmcp.net.", "ssmcp.rsync.", "ssmcp.context.", "ssmcp.skills.", "ssmcp.agents.", "ssmcp.output.", "ssmcp.client.", "ssmcp.exec.", "ssmcp.harnesses.", "ssmcp.audit."))}
     harness.check(shared == BUILTIN_TOOLS,
                   f"{mode}: exact workspace, command, context and rsync capabilities are discoverable")
     native = set(names) - BUILTIN_TOOLS - SHELL_TOOLS
@@ -92,9 +111,20 @@ def catalog(harness, mode):
                   f"{mode}: shell capabilities coexist with the installed harness catalog")
     harness.check(all(isinstance(tool.get("inputSchema"), dict) for tool in tools),
                   f"{mode}: all discovered tools retain JSON schemas")
+    event_schema = next(tool["inputSchema"] for tool in tools if tool["name"] == "ssmcp.exec.events")
+    harness.check(set(event_schema["properties"]) == {"cursor", "max_events", "wait_ms"}
+                  and all(parameter.get("type") == "integer" for parameter in event_schema["properties"].values()),
+                  f"{mode}: command event schema exposes cursor, limit and wait parameters directly")
+    event_page = harness.call("ssmcp.exec.events", {"max_events": 1, "wait_ms": 0})
+    harness.check(isinstance(event_page["events"], list) and len(event_page["events"]) <= 1
+                  and isinstance(event_page["next_cursor"], int),
+                  f"{mode}: command events accept the discovered parameters")
     harness.check(harness.call("terminal.status")["running"], f"{mode}: the shell stays available")
-    counts = harness.call("ssmcp.harnesses.list")["harnesses"]
-    expected = set(MODES[1:]) if mode == "all" else ({mode} if mode != "shell" else set())
+    counts = {row["provider"]: row["tools"] for row in diagnostics}
+    harness.check(counts == {
+        name: sum(tool.startswith((f"{name}.", f"ssmcp.{name}.")) for tool in names)
+        for name in ("codex", "claude", "pi", "opencode")
+    }, f"{mode}: harness counts match the complete registered catalog")
     harness.check({name for name, count in counts.items() if count} == expected,
                   f"{mode}: automatic discovery reports exactly the installed fixture harnesses")
     other_tool = "unknown.fixture" if mode == "all" else ("pi.get_state" if mode != "pi" else "codex.thread_start")
@@ -203,11 +233,11 @@ def check_codex(harness, label, tools, _directory):
 
 def check_cc(harness, label, tools, directory):
     native = json.loads((FIXTURES / "cc-catalog.json").read_text())[0]
-    expected = {**native, "name": "cc." + native["name"]}
+    expected = {**native, "name": "claude." + native["name"]}
     harness.check(next(tool for tool in tools if tool["name"] == expected["name"]) == expected,
                   "cc: native schema, annotations and vendor catalog fields are unchanged")
     arguments = {"nested": [3, 5, 8], "spawn_child": True}
-    result = full_call(harness, "cc.NativeFutureTool", arguments)
+    result = full_call(harness, "claude.NativeFutureTool", arguments)
     harness.check(result == {
         "content": [
             {"type": "text", "text": "native result"},
@@ -220,17 +250,17 @@ def check_cc(harness, label, tools, directory):
         "isError": False, "_meta": {"vendor/result": [1, 2, 3]},
         "futureResultField": {"keep": "this too"},
     }, "cc: full native MCP content, image, resource, metadata and future fields survive SSH")
-    error = full_call(harness, "cc.NativeFutureTool", {"error": True}, expect_error=True)
+    error = full_call(harness, "claude.NativeFutureTool", {"error": True}, expect_error=True)
     harness.check(error["structuredContent"]["future"]["arguments"] == {"error": True},
                   "cc: native tool errors retain their structured result")
     wait_for(lambda: "fixture progress" in local_log(harness, label),
              description="Claude native progress on local stderr")
     harness.check(True, "cc: native progress appears on local stderr before event polling")
-    full_call(harness, "cc.Bash", {"fixture_mode": "background"})
+    full_call(harness, "claude.Bash", {"fixture_mode": "background"})
     wait_for(lambda: log_has_line(harness, label, "first")
              and log_has_line(harness, label, "second"),
              description="Claude background output on local stderr")
-    events, _ = events_until(harness, "ssmcp.cc.events", lambda values: b"second\n" in b"".join(
+    events, _ = events_until(harness, "ssmcp.claude.events", lambda values: b"second\n" in b"".join(
         base64.b64decode(event["data_base64"])
         for event in values if event.get("type") == "background_output"
     ))
@@ -241,13 +271,13 @@ def check_cc(harness, label, tools, directory):
             output += base64.b64decode(event["data_base64"])
     harness.check(output == b"first\nsecond\n", "cc: background output is incremental and preserves exact bytes")
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        running = pool.submit(full_call, harness, "cc.NeedsApproval")
-        request = pending_request(harness, "ssmcp.cc.requests")
+        running = pool.submit(full_call, harness, "claude.NeedsApproval")
+        request = pending_request(harness, "ssmcp.claude.requests")
         received = [json.loads(line) for line in (directory / "received.jsonl").read_text().splitlines()]
         harness.check(not running.done() and not any(
             item.get("id") == request["id"] and ("result" in item or "error" in item) for item in received
         ), "cc: native elicitation is never automatically approved")
-        harness.call("ssmcp.cc.respond", {"id": request["id"], "result": {"action": "decline"}})
+        harness.call("ssmcp.claude.respond", {"id": request["id"], "result": {"action": "decline"}})
         reply = running.result(timeout=5)
         harness.check(reply["structuredContent"]["approval"]["result"] == {"action": "decline"},
                       "cc: an explicit elicitation response reaches the native process")
@@ -255,9 +285,10 @@ def check_cc(harness, label, tools, directory):
 
 
 def check_pi(harness, label, tools, _directory):
-    harness.check(len(tools) == 37 + len(BUILTIN_TOOLS) + len(SHELL_TOOLS),
-                  "pi: all 33 native commands, four bridge helpers and shared builtins are discoverable")
-    state = harness.call("pi.get_state")
+    harness.check({tool["name"] for tool in tools} - BUILTIN_TOOLS - SHELL_TOOLS
+                  == {"pi.rpc", "ssmcp.pi.events", "ssmcp.pi.requests", "ssmcp.pi.respond"},
+                  "pi: only the native RPC bridge and three protocol controls are advertised")
+    state = pi_call(harness, "get_state")
     harness.check(state["success"] and state["command"] == "get_state", "pi: full native response envelope is preserved")
     future = harness.call("pi.rpc", {"type": "future_control", "args": {"future": {"nested": [2, 7]}}})
     harness.check(future["data"] == {"future": {"nested": [2, 7]}}, "pi: generic RPC preserves future native fields")
@@ -265,7 +296,7 @@ def check_pi(harness, label, tools, _directory):
     harness.check(error["structuredContent"]["success"] is False
                   and error["structuredContent"]["error"] == "native fixture rejection",
                   "pi: native failures retain their envelope and MCP error flag")
-    accepted = harness.call("pi.prompt", {"message": "fixture prompt"})
+    accepted = pi_call(harness, "prompt", {"message": "fixture prompt"})
     harness.check(accepted["data"]["disposition"] == "started", "pi: prompt acceptance is returned separately from completion")
     wait_for(lambda: log_has_line(harness, label, "agent_settled"),
              description="Pi settled event on local stderr")
@@ -274,22 +305,22 @@ def check_pi(harness, label, tools, _directory):
         event.get("type") == "agent_settled" for event in events
     ))
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        running = pool.submit(harness.call, "pi.prompt", {"message": "/dialog confirm"})
+        running = pool.submit(pi_call, harness, "prompt", {"message": "/dialog confirm"})
         request = pending_request(harness, "ssmcp.pi.requests")
-        harness.check(not running.done() and harness.call("pi.get_state")["data"]["answers"] == 0,
+        harness.check(not running.done() and pi_call(harness, "get_state")["data"]["answers"] == 0,
                       "pi: extension UI waits for an explicit answer")
         harness.call("ssmcp.pi.respond", {"id": request["id"], "confirmed": False})
         reply = running.result(timeout=5)
         harness.check(reply["data"]["answer"]["confirmed"] is False,
                       "pi: explicit extension-UI rejection reaches the native process")
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        running = pool.submit(harness.call, "pi.bash", {"command": "fixture-held-command"})
+        running = pool.submit(pi_call, harness, "bash", {"command": "fixture-held-command"})
         try:
             wait_for(lambda: log_has_line(harness, label, "first"),
                      description="Pi bash delta on local stderr")
             harness.check(not running.done(), "pi: Bash output is visible before the native command returns")
         finally:
-            harness.call("pi.abort_bash")
+            pi_call(harness, "abort_bash")
         reply = running.result(timeout=5)
         harness.check(reply["data"]["cancelled"] is True and reply["data"]["exitCode"] == 130,
                       "pi: abort remains usable while a native command is pending")
@@ -362,12 +393,39 @@ def combined_harnesses_and_commands(harness):
     harness.client_id = credentials["client_id"]
     harness.oauth_login(credentials)
     tools, pages = catalog(harness, "all")
+    # The Claude fixture changes its DynamicN tool on every fresh native scan.
+    # Two interleaved public scans must each keep one generation across pages.
+    older = harness.public_call("list", {"client_id": harness.client_id})
+    old_first_dynamic = {tool["name"] for tool in older["tools"] if tool["name"].startswith("claude.Dynamic")}
+    def changed_catalog():
+        candidate = harness.public_call("list", {"client_id": harness.client_id})
+        names = {tool["name"] for tool in candidate["tools"] if tool["name"].startswith("claude.Dynamic")}
+        return candidate if names and names != old_first_dynamic else None
+    newer = wait_for(changed_catalog, description="background native catalog refresh")
+
+    def finish_catalog(first):
+        result = list(first["tools"])
+        cursor = first.get("nextCursor")
+        while cursor is not None:
+            page = harness.public_call("list", {"client_id": harness.client_id, "cursor": cursor})
+            result.extend(page["tools"])
+            cursor = page.get("nextCursor")
+        return {tool["name"] for tool in result}
+
+    older_names = finish_catalog(older)
+    newer_names = finish_catalog(newer)
+    older_dynamic = {name for name in older_names if name.startswith("claude.Dynamic")}
+    newer_dynamic = {name for name in newer_names if name.startswith("claude.Dynamic")}
+    harness.check(len(older_dynamic) == len(newer_dynamic) == 1
+                  and older_dynamic != newer_dynamic
+                  and older_names - older_dynamic == newer_names - newer_dynamic,
+                  "all: interleaved catalog scans preserve their snapshots and a new scan sees native changes")
     client_id = json.dumps(harness.client_id)
     code = """
         const id = %s;
         return await Promise.all([
             call(id,'terminal.status',{}), call(id,'codex.server_diagnostics',{}),
-            call(id,'pi.get_state',{}), call(id,'opencode.server.info',{})
+            call(id,'pi.rpc',{type:'get_state',args:{}}), call(id,'opencode.server.info',{})
         ]);
     """ % client_id
     replies = harness.public_call("code_mode", {"code": code})["result"]
@@ -443,8 +501,10 @@ def run(harness):
         backend = FIXTURES / fixture if fixture else None
         arguments = ("--fixture-dir", directory) if mode in ("cc", "opencode") else ()
         label = f"client-{mode}"
-        client, credentials = harness.start_client(label, mode=mode, backend=backend,
-                                                   backend_args=arguments, name=f"{mode}-fixture", cwd=directory)
+        client, credentials = harness.start_client(
+            label, harness=mode if fixture else None, fixture=backend,
+            fixture_args=arguments, name=f"{mode}-fixture", cwd=directory,
+        )
         harness.client = client
         harness.client_id = credentials["client_id"]
         harness.check(credentials.get("type") == "shell"

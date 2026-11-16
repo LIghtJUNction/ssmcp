@@ -371,25 +371,28 @@ async fn tail_background(peer: &Peer, path: &Path) -> io::Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[test]
     fn background_path_must_be_an_explicit_top_level_native_result_field() {
+        let path = std::env::temp_dir().join("ssmcp-test-output");
         assert_eq!(
             background_paths(&json!({"content":[{"type":"text","text":
-                "{\"backgroundOutputPath\":\"/tmp/ssmcp-test-output\"}"}]})),
-            [PathBuf::from("/tmp/ssmcp-test-output")]
+                json!({"backgroundOutputPath":path}).to_string()}]})),
+            std::slice::from_ref(&path)
         );
         assert!(
             background_paths(&json!({"content":[
-                {"type":"text","text":"backgroundOutputPath: /etc/passwd"},
-                {"type":"text","text":"{\"stdout\":{\"backgroundOutputPath\":\"/etc/passwd\"}}"},
+                {"type":"text","text":format!("backgroundOutputPath: {}", path.display())},
+                {"type":"text","text":json!({"stdout":{"backgroundOutputPath":path}}).to_string()},
                 {"type":"text","text":"{\"backgroundOutputPath\":\"relative-output\"}"}
             ]}))
             .is_empty()
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn output_watcher_rejects_symlinks_directories_and_shared_writable_files() {
         let unique = std::time::SystemTime::now()

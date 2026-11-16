@@ -113,7 +113,9 @@ fi
 
 tar -xzf "$work_dir/$archive" -C "$work_dir" ssmcp
 binary=$work_dir/ssmcp
-[ -f "$binary" ] && [ ! -L "$binary" ] || fail 'release archive does not contain a regular ssmcp executable'
+if [ ! -f "$binary" ] || [ -L "$binary" ]; then
+    fail 'release archive does not contain a regular ssmcp executable'
+fi
 chmod 755 "$binary"
 reported=$("$binary" --version) || fail 'downloaded executable cannot run on this system'
 printf '%s\n' "$reported" | grep -Eq '^ssmcp [0-9]+\.[0-9]+\.[0-9]+$' || fail 'unexpected executable version output'

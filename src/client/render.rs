@@ -60,26 +60,22 @@ fn display() -> &'static Mutex<Renderer> {
     })
 }
 
-#[cfg(unix)]
 fn terminal_width() -> usize {
-    let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
-    // SAFETY: ioctl writes a winsize into valid, aligned storage.
-    if unsafe { libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) } == 0 {
-        // SAFETY: successful TIOCGWINSZ initialized the structure.
-        let columns = unsafe { size.assume_init() }.ws_col;
-        if columns > 8 {
-            return usize::from(columns);
+    #[cfg(unix)]
+    {
+        let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
+        // SAFETY: ioctl writes into valid aligned winsize storage.
+        if unsafe { libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) } == 0 {
+            let columns = unsafe { size.assume_init() }.ws_col;
+            if columns > 8 {
+                return usize::from(columns);
+            }
         }
     }
-    100
-}
-
-#[cfg(not(unix))]
-fn terminal_width() -> usize {
     std::env::var("COLUMNS")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|v| *v > 8)
+        .and_then(|s| s.parse().ok())
+        .filter(|n: &usize| *n > 8 && *n <= 1000)
         .unwrap_or(100)
 }
 

@@ -925,4 +925,89 @@ mod tests {
         assert!(event["removed_lines"].is_null());
         assert_eq!(event["diff_complete"], false);
     }
+
+    #[test]
+    fn diff_keeps_newline_only_changes_visible() {
+        let diff = unified_diff("a", "line", "line\n", false, false).unwrap();
+        assert!(
+            diff.text
+                .contains("-line\n\\ No newline at end of file\n+line\n")
+        );
+        assert_eq!((diff.added, diff.removed), (1, 1));
+        let diff = unified_diff("a", "line\n", "line", false, false).unwrap();
+        assert!(
+            diff.text
+                .contains("-line\n+line\n\\ No newline at end of file\n")
+        );
+        assert_eq!((diff.added, diff.removed), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn concurrent_audits_on_distinct_files_keep_their_own_snapshots() {
+        let scratch = Scratch::new();
+        std::fs::write(scratch.0.join("a"), "before-a\n").unwrap();
+        std::fs::write(scratch.0.join("b"), "before-b\n").unwrap();
+        let left = scratch.workspace(OutputStore::global().unwrap());
+        let right = scratch.workspace(OutputStore::global().unwrap());
+        let (a, b) = tokio::join!(
+            left.perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"a","text":"after-a\n","overwrite":true})
+            ),
+            right.perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"b","text":"after-b\n","overwrite":true})
+            ),
+        );
+        a.unwrap();
+        b.unwrap();
+        for (workspace, path) in [(&left, "a"), (&right, "b")] {
+            let page = workspace
+                .perform("ssmcp.fs.events", json!({}))
+                .await
+                .unwrap();
+            let events = page["events"].as_array().unwrap();
+            assert_eq!(events.len(), 2);
+            let diff = &events[1]["event"];
+            assert_eq!(diff["path"], path);
+            assert_eq!(
+                diff["before"]["sha256"],
+                sha256(format!("before-{path}\n").as_bytes())
+            );
+            assert_eq!(
+                diff["after"]["sha256"],
+                sha256(format!("after-{path}\n").as_bytes())
+            );
+            assert_eq!(diff["added_lines"], 1);
+            assert_eq!(diff["removed_lines"], 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn unrelated_readback_is_not_attributed_to_the_edit() {
+        let scratch = Scratch::new();
+        let events = EventLog::new("test");
+        let audit = FileAudit::new(events.clone(), OutputStore::global().unwrap());
+        // A later external mutation must not replace the committed bytes in an
+        // earlier native write's evidence. No post-write readback is used.
+        std::fs::write(scratch.0.join("file"), "another change").unwrap();
+        audit.written(
+            "write",
+            "file",
+            Snapshot::Text("before".into()),
+            b"our change",
+        );
+        audit.written("write", "binary", Snapshot::Missing, b"\0\xff");
+        let page = events.read(json!({})).await.unwrap();
+        let event = &page["events"][1]["event"];
+        assert_eq!(event["after"]["sha256"], sha256(b"our change"));
+        assert_ne!(
+            event["after"]["sha256"],
+            sha256(&std::fs::read(scratch.0.join("file")).unwrap())
+        );
+        let binary = &page["events"][3]["event"];
+        assert_eq!(binary["after"]["state"], "unknown");
+        assert!(binary["diff"].is_null());
+        assert!(binary["added_lines"].is_null());
+    }
 }

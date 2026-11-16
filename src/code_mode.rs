@@ -632,7 +632,9 @@ mod tests {
                         }
                         "ssmcp.exec.wait" => {
                             tokio::time::sleep(Duration::from_millis(25)).await;
-                            snapshot
+                            let mut waited = snapshot;
+                            waited["wait_timed_out"] = json!(id == "live");
+                            waited
                         }
                         "ssmcp.exec.read" => {
                             assert_eq!(arguments["max_bytes"], 2048);
@@ -672,6 +674,7 @@ mod tests {
         assert_eq!(results[2]["status"], "fulfilled");
         assert_eq!(results[2]["value"]["exit_code"], 7);
         assert_eq!(results[3]["value"]["running"], true);
+        assert_eq!(results[3]["value"]["wait_timed_out"], true);
         assert_eq!(results[3]["value"]["job_id"], "live");
         assert_eq!(results[3]["value"]["snapshot"]["stdout"]["next_cursor"], 4);
         assert_eq!(output["result"]["frozen"], true);

@@ -56,6 +56,8 @@ if scenario.endswith("healthy"):
 
     provider = "claude" if phase == "discovery" else "pi"
     expected = "unavailable" if scenario == "catalog-error-healthy" else "ready"
+    if scenario == "catalog-timeout-healthy":
+        expected = "discovering"
     deadline = time.monotonic() + 4
     identifier = 8
     while True:
@@ -66,7 +68,7 @@ if scenario.endswith("healthy"):
         result = response["result"]["Ok"]
         data = result.get("structuredContent", result)
         state = next(item for item in data["harnesses"] if item["provider"] == provider)
-        if state["status"] != "discovering":
+        if state["status"] != "discovering" or expected == "discovering":
             assert state["status"] == expected, state
             (directory / "harnesses.json").write_text(json.dumps(data))
             break
@@ -111,6 +113,9 @@ for line in sys.stdin:
     elif request.get("method") == "tools/list":
         (directory / "native-request").write_text("discovery")
         wait_for_release()
+        if scenario == "catalog-timeout-healthy":
+            # Keep the native process alive but never acknowledge a catalog request.
+            continue
         if scenario == "catalog-error-healthy":
             response = {"jsonrpc":"2.0", "id":request["id"],
                         "error":{"code":-32000, "message":"fixture catalog unavailable"}}
@@ -170,7 +175,12 @@ impl Fixture {
             .env("SSMCP_STARTUP_SCENARIO", scenario)
             .env("SSMCP_STARTUP_PHASE", phase)
             .kill_on_drop(true);
-        timeout(Duration::from_secs(5), command.output())
+        let limit = if scenario == "catalog-timeout-healthy" {
+            Duration::from_secs(15)
+        } else {
+            Duration::from_secs(5)
+        };
+        timeout(limit, command.output())
             .await
             .expect("ssmcp did not stop after SSH ended")
             .unwrap()
@@ -284,7 +294,13 @@ async fn live_ssh_preserves_partial_frames_and_publishes_shell_capabilities() {
 #[tokio::test]
 async fn an_unavailable_optional_harness_catalog_keeps_shell_tools_online() {
     let fixture = Fixture::new();
-    let output = fixture.run("catalog-error-healthy", "discovery").await;
+    let output = fixture
+        .run_with_args(
+            "catalog-error-healthy",
+            "discovery",
+            &["--log-format", "jsonl", "--no-color"],
+        )
+        .await;
     assert!(
         output.status.success(),
         "{}",
@@ -315,14 +331,67 @@ async fn an_unavailable_optional_harness_catalog_keeps_shell_tools_online() {
                     .as_str()
                     .is_some_and(|reason| reason.contains("fixture catalog unavailable")))
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    // Pretty logging wraps at terminal columns, including within a long native
-    // diagnostic. Keep the complete reason assertion independent of line layout.
-    let visible: String = stderr.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(warning_contains(
+        &output.stderr,
+        "fixture catalog unavailable"
+    ));
+    fixture.assert_native_stopped().await;
+}
+
+fn warning_contains(stderr: &[u8], text: &str) -> bool {
+    String::from_utf8_lossy(stderr).lines().any(|line| {
+        serde_json::from_str::<Value>(line).is_ok_and(|event| {
+            event["type"] == "ssmcp.status"
+                && event["level"] == "Warning"
+                && event["message"].as_str().is_some_and(|s| s.contains(text))
+        })
+    })
+}
+
+#[tokio::test]
+async fn an_unresponsive_optional_catalog_keeps_shell_online_and_cancels_on_disconnect() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .run_with_args(
+            "catalog-timeout-healthy",
+            "discovery",
+            &["--log-format", "jsonl"],
+        )
+        .await;
     assert!(
-        visible.contains("fixturecatalogunavailable"),
-        "native catalog failure was absent from the terminal transcript: {stderr}"
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(ready["type"], "shell");
+    assert_eq!(ready["client_id"], "b".repeat(64));
+    let reply: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("reply.json")).unwrap()).unwrap();
+    let tools = reply["result"]["Ok"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "terminal.status"));
+    assert!(tools.iter().any(|tool| tool["name"] == "ssmcp.exec.start"));
+    assert!(
+        tools
+            .iter()
+            .all(|tool| !tool["name"].as_str().unwrap().starts_with("claude."))
+    );
+    assert!(fixture.0.join("catalog-before-native").exists());
+    assert!(!fixture.0.join("native-response").exists());
+    let diagnostics: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("harnesses.json")).unwrap()).unwrap();
+    assert!(
+        diagnostics["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["provider"] == "claude" && entry["status"] == "discovering")
+    );
+    // Every native request is still pending when SSH closes. The client must
+    // clean up discovery without waiting for its full catalog timeout.
+    for line in String::from_utf8_lossy(&output.stderr).lines() {
+        serde_json::from_str::<Value>(line).expect("every stderr line is JSON");
+    }
     fixture.assert_native_stopped().await;
 }
 

@@ -1,14 +1,14 @@
-# Linux 部署
+# Linux 服务端部署
 
 服务器部署 OpenSSH、`ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp`，需要调用某个 Harness 时再安装和配置它。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
 
 服务器已经部署好时，可直接阅读 [配置、SSH 公钥与登录](configuration.md)：复用 `~/.ssh/config`、添加和轮换公钥、完成 OAuth 登录，以及处理重新打开后的授权状态。
 
-ssmcp 0.4.0 继续使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。旧客户端可继续使用登录码；新的 `--allow 用户名@github` 需要两端更新，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
+当前实现使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。客户端始终提供 shell 和独立命令，并自动发现 PATH 中的编程 harness。旧客户端可继续使用登录码；`--allow 用户名@github` 需要两端支持，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
 
 ## 1. 安装程序与服务账户
 
-客户端需要 Linux 5.3 或更新内核以使用 pidfd；源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
+服务端运行于 Linux；客户端支持 Linux、macOS 和 Windows 的 x86_64 / ARM64。Linux 客户端需要 5.3 或更新内核以使用 pidfd，预编译 GNU 包以 glibc 2.35 为基线；具体归档与安装方法见[发布与平台支持](releases.md)。源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
 
 ```sh
 # Debian / Ubuntu
@@ -67,7 +67,7 @@ sudo chown ssmcpd:ssmcp /etc/ssmcpd/ssmcpd.toml
 sudo chmod 0600 /etc/ssmcpd/ssmcpd.toml
 ```
 
-服务器以存在的 `/etc/ssmcpd/ssmcpd.toml` 为默认文件，也可通过 `ssmcpd serve --config /absolute/path/ssmcpd.toml` 或 `SSMCP_CONFIG` 显式指定。配置值按 **命令行参数 → 环境变量 → TOML → 内置默认值** 的顺序生效。新安装的环境示例全部使用注释，不会覆盖 TOML。原来的 `/etc/ssmcpd/ssmcpd.env` 仍可由 systemd 读取；迁移到 TOML 时同步清理同名旧环境项，避免它们覆盖新配置。显式指定的文件缺失或解析失败会阻止启动。[配置读取](../src/bin/ssmcpd.rs)
+服务器以存在的 `/etc/ssmcpd/ssmcpd.toml` 为默认文件，也可通过 `ssmcpd serve --config /absolute/path/ssmcpd.toml` 或 `SSMCP_CONFIG` 显式指定。配置值按 **命令行参数 → 环境变量 → TOML → 内置默认值** 的顺序生效。新安装的环境示例全部使用注释，不会覆盖 TOML。原来的 `/etc/ssmcpd/ssmcpd.env` 仍可由 systemd 读取；迁移到 TOML 时同步清理同名旧环境项，避免它们覆盖新配置。显式指定的文件缺失或解析失败会阻止启动。[配置读取](../src/server_main.rs)
 
 只使用原有登录码时，省略整个 `[auth.github]` 节即可。启用 GitHub 后，服务端只请求身份验证所需的公开用户信息，不请求仓库或邮箱 scope。GitHub 返回的 token 用于读取一次已登录用户身份，随后释放；MCP access token 和 refresh token 由 ssmcp 自己签发。[身份提供方实现](../src/identity.rs) · [GitHub OAuth 流程](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps)
 
@@ -138,35 +138,37 @@ MCP 请求存在 `Origin` 时，其值必须等于配置生效后的 `public_url
 
 原生 JSONL 后端的长调用最多等待 15 分钟。若反向代理或 MCP 客户端自定义了请求超时，应与任务时长相容；实时进度使用短等待的事件工具读取。公网入口使用 JSON 响应，不要求代理提供后台 SSE。
 
-## 4. 准备本机客户端与 Harness
+## 4. 准备本机工具
 
-本机安装 ssmcp。客户端以 Shell / PTY 入口连接，探测本机已安装的 Codex、Claude Code、Pi 和 OpenCode。按需通过 Harness 原生 CLI 配置身份与项目权限；发现阶段不应安装软件或发起模型请求。迁移旧命令时删除 `-t`、`--type` 和 `--backend`。接口及实际支持范围见[统一客户端与 Harness 注册](backends.md)。
+用[跨平台安装器](releases.md)安装 `ssmcp`，并确保系统 OpenSSH 客户端可用。在项目目录执行下列命令，检查始终提供的 Shell 与自动发现的本机工具：
 
-本机可先检查当前可发现的工具目录，无需 SSH 目标：
-
-~~~sh
+```sh
 ssmcp --list-tools
-~~~
+```
 
-检查每个 Harness 的发现结果与诊断；未安装或未完成原生初始化的能力不应作为可调用工具使用。OpenCode 适配器使用 v2 接口。工具数量、Schema 和可用状态以当前目录为准。
+该命令检查本机目录后退出，不需要 SSH 目标。Shell 与文件操作不依赖 Harness。客户端分别检查原生入口，完成安全启动检查、版本识别、握手和实际枚举后才注册；失败或无可靠机器接口时显示诊断，保留其他能力。发现不自动安装运行时、依赖或 Harness，也不提交模型请求。[发现与原生接口](backends.md)
+
+需要的原生账户和权限由操作者在各 CLI 中维护。OpenCode 发现只连接操作者已启动的服务：设置 `SSMCP_OPENCODE_URL` 为本机 loopback 地址，通过 `OPENCODE_PASSWORD` 提供原生凭据。未配置时报告 unavailable。OpenCode v2.3.0 服务启动可能初始化调度任务、安装插件或唤起模型，ssmcp 不为枚举能力而启动它；源码依据和协议范围见[OpenCode 发现限制](backends.md#8-opencode从-openapi-发现操作)。Pi 只声明实际可用的四项 RPC 桥接，不伪造内部工具 Schema。
+
+工具目录只包含本机原生接口实际提供的能力。Codex 可发现 MCP 直通工具，Pi 的控制协议不会自动暴露所有内部模型工具；普通文件和命令操作可使用 ssmcp 自带原语。`--context-root` 只增加只读 skills／AGENTS 文档根，不扩大文件写入范围。原生 rsync 端点目前只在 Linux 客户端注册。[接口边界](backends.md#1-启动客户端) · [上下文范围](context.md)
 
 ## 5. 建立连接并登录
 
 首次使用时可按[客户端配置与逐步登录教程](configuration.md#oauth-login)操作。已有 SSH Host 条目的复用方法见[SSH 配置](configuration.md#ssh-config)，重新打开后的行为见[连接与授权生命周期](configuration.md#session-lifetime)。
 
-GitHub 模式在客户端连接命令中指定允许的身份；将示例用户名换成实际获准访问的用户：
+GitHub 模式启动时指定允许的身份；将示例用户名换成实际获准访问的用户：
 
-~~~sh
-ssmcp --allow octocat@github alice@ssmcp.example.com
-~~~
+```sh
+ssmcp --name laptop --title "项目开发与测试" --allow octocat@github alice@ssmcp.example.com
+```
 
-同一服务端用户名最多同时连接 128 个 Shell 客户端，可以在不同电脑或项目目录中启动多个客户端；使用 --name laptop 等参数指定显示名称。每条连接有独立的 client_id，同名客户端也用 ID 区分。首次连接按 OpenSSH 提示核验主机密钥，或预先配置可信 known_hosts。客户端强制公钥认证，保留私钥口令与 ssh-agent 的原生处理。
+同一服务端用户名最多同时连接 128 个客户端，可以在不同电脑或项目目录启动。每条连接有独立的 `client_id`，同名客户端也用 ID 区分。首次连接按 OpenSSH 提示核验主机密钥，或预先配置可信 known_hosts。客户端强制公钥认证，保留私钥口令与 ssh-agent 的原生处理。
 
-本机 Shell 初始化后，stdout 输出连接信息：
+本机工具发现成功后，交互终端显示连接摘要；重定向 stdout 或选择 JSONL 时输出：
 
-~~~json
-{"url":"https://ssmcp.example.com/mcp","auth":"github","allow":["octocat@github"],"client_id":"服务端分配的连接ID","name":"laptop","type":"shell","cwd":"/home/alice/project","hostname":"alice-laptop"}
-~~~
+```json
+{"url":"https://ssmcp.example.com/mcp","auth":"github","allow":["octocat@github"],"client_id":"服务端分配的连接ID","name":"laptop","title":"项目开发与测试","type":"shell","cwd":"/home/alice/project","hostname":"alice-laptop"}
+```
 
 在 MCP 客户端中添加完整 `/mcp` URL，启用 OAuth 登录。ssmcp 页面显示 MCP 客户端名称、已登记回调来源和资源 URL；点击 GitHub 登录，在 GitHub 完成身份验证后返回 ssmcp。页面显示已验证身份和当前可访问会话数，再由用户点击“允许连接”或“取消”。只完成 GitHub 登录不会自动授权这个 MCP 客户端。[登录步骤](configuration.md#github-allow)
 
@@ -246,11 +248,19 @@ ssmcpd serve --public-url https://ssmcp.example.com \
 
 OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项默认最长 365 天；最多保留 2048 个授权事务，每项最长 30 分钟。其他令牌状态也有容量上限，容量不足时返回 `503`。项目本身没有按请求来源限流；公网部署可根据实际负载在反向代理配置速率和并发限制。[容量定义](../src/oauth.rs)
 
+### 桥接能力的验收记录
+
+对同一在线客户端分别保存 `list` 与 `tools` 的目录快照；检查原生 Schema、提供者命名空间和不可用诊断。Codex MCP 要同时验证 `mcpServerStatus/list` 的内部工具枚举，以及 `mcpServer/tool/call` 的真实工具调用。只验证服务器名称或 fixture 不构成该实机验收。
+
+独立命令至少验证两项并发任务、实时且分离的 stdout/stderr、最终退出码、超时取消与断线清理。文件审计检查成功读取、实际写入 Diff、未知快照与技能“发现/读取”的区别；外部文件副作用保持 unknown。长输出通过同一 OutputStore 分页读回，按返回字节数验证 SHA-256，并检查完整性、配额与连接归属。测试只使用无模型的协议和工具路径。
+
+发布材料记录具体提交、CI 运行、实际客户端版本、工具枚举、真实调用、终端事件及未覆盖项。已有测试入口见[验收指南](validation.md)；部署后重新检查线上版本，不能将仓库提交或重载确认视为部署完成。
+
 ## 6. 检查与升级
 
 `http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 只有 `list` 和 `code_mode`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
 
-先通过 `list({client_id})` 查看当前 Schema，再用 `ssmcp.exec.start` 启动 `pwd`，检查最终状态、退出码和分离的 stdout/stderr。用 `terminal.write/read` 单独验证交互式 PTY。Harness 验证选择实时发现的无模型状态接口和只读工具，保留原生结果与审批记录；不要为了发现或测试工具而发起模型请求。可观察的增量输出取决于原生接口，具体范围见[后端说明](backends.md)。
+在 `code_mode` 中通过 `await exec.run(clientId, {command:["git","status","--short"],wait_ms:5000})` 验证命令执行；检查 `running` 和 `exit_code`，长任务沿用返回的 `job_id` 等待或读取；`wait_timed_out` 只表示本次等待到期，不会停止命令，不应重新启动同一工作。[独立命令与等待](commands.md)。交互式 Shell 使用 `terminal.write/read`。Harness 链路使用实时目录中确认无模型的状态接口，例如已注册 `pi.rpc` 时传入 `{type:"get_state",arguments:{}}`。先通过 `list({client_id})` 查看 Schema；工具真实调用与原生审批传播分别保留证据，不为开发或测试提交模型任务。Claude Code 前台 Bash 的输出在调用结束时返回，后台增量观察只跟随原生结果明确返回的输出路径。
 
 验证 GitHub 模式时，为两个客户端设置不同 `--allow`，确认当前身份只看到并能调用匹配的客户端；未匹配的 `client_id` 也必须被拒绝。关闭一个客户端后，它应从列表消失；已有 GitHub 授权可以继续访问其他匹配客户端。重连时按新的允许列表重新判断。
 
@@ -267,7 +277,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 更新源码后，需要把新二进制和服务文件安装到实际服务器，并重启守护进程。只更新 GitHub 仓库不会改变运行中的服务。已有 SSH 账户、公钥和客户端 Host 配置可以保留。
 
-1. 安排现有任务退出，构建安装 0.4.0 两端程序；需要 GitHub 模式时，创建 OAuth App，按上面的 callback 和 TOML 示例配置服务器。
+1. 安排现有任务退出，构建安装同一新版的两端程序；需要 GitHub 模式时，创建 OAuth App，按上面的 callback 和 TOML 示例配置服务器。
 2. 确认 TOML 所有权、`0600` 权限、配置优先级与 HTTPS 路径，重启 `ssmcpd`。用实际服务程序的 `--version` 检查版本。
 3. 本机带 `--allow 用户名@github` 重新连接；在 MCP 应用添加 `/mcp`，完成 GitHub 登录并明确同意当前 MCP 客户端。保留登录码方式时继续添加终端返回的 `/SSH用户名` URL。
 4. 确认应用保存并轮换 ssmcp refresh token；调用 `list` 重新选择当前可访问的客户端。如果应用保留已失效的 OAuth 客户端登记，移除旧 MCP 连接后重新添加。
@@ -278,7 +288,9 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 ## 系统代码运行环境
 
-服务端从 PATH 查找系统 `node` 和 `bwrap`。每次 `code_mode` 请求启动独立子进程，使用受限资源和有界 JSON 管道；Rust 侧验证请求并转发到指定客户端。脚本由 ssmcp 安装，运行时由系统包管理器维护。自定义脚本路径时，在服务环境中用 `SSMCP_CODE_MODE_RUNNER` 指定绝对路径。
+服务端从 PATH 解析已安装的真实 `node` 二进制与 `bwrap`。mise、asdf、Volta 等 shim 不能直接作为 Node 运行时传入 `--jitless`；解析必须落到现有入口，并验证运行参数兼容性。缺失或不兼容时明确失败，不触发版本管理器下载。[可执行程序解析](../src/program.rs)
+
+每次 `code_mode` 请求启动独立子进程，使用受限资源和有界 JSON 管道；Rust 侧验证请求并转发到指定客户端。脚本由 ssmcp 安装，运行时由系统包管理器维护。自定义脚本路径时，在服务环境中用 `SSMCP_CODE_MODE_RUNNER` 指定绝对路径。
 
 bubblewrap 需要系统允许创建用户和网络命名空间。Ubuntu 24.04 启用 AppArmor 用户命名空间限制时，安装 `apparmor-profiles`，并加载发行版提供的 `bwrap-userns-restrict` profile；不需要关闭全局 AppArmor。服务单元允许 bubblewrap 配置隔离网络所需的 `AF_NETLINK`。[Ubuntu 用户命名空间说明](https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces)
 

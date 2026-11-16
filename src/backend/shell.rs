@@ -29,6 +29,11 @@ const MAX_COMMAND_ARGS: usize = 256;
 const MAX_WAIT: u64 = 60_000;
 const MAX_TIMEOUT: u64 = 900_000;
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
+const PID_ROLE: &str = if cfg!(target_os = "linux") {
+    "supervisor"
+} else {
+    "command"
+};
 
 struct Output {
     bytes: VecDeque<u8>,
@@ -87,6 +92,7 @@ impl Output {
 struct State {
     running: bool,
     exit_code: Option<i32>,
+    exit_signal: Option<i32>,
     cancelled: bool,
     timed_out: bool,
     error: Option<String>,
@@ -109,9 +115,9 @@ impl Job {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
     fn snapshot_locked(&self, state: &State) -> Value {
-        json!({"job_id":self.id,"id":self.id,"pid":self.pid,"command":self.command,"cwd":self.cwd,
+        json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":PID_ROLE,"command":self.command,"cwd":self.cwd,
             "state":if state.running {"running"} else if state.cancelled {"cancelled"} else if state.timed_out {"timed_out"} else if state.error.is_some() {"failed"} else {"completed"},
-            "running":state.running,"exit_code":state.exit_code,"cancelled":state.cancelled,
+            "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
             "duration_ms":state.finished.unwrap_or_else(Instant::now).duration_since(self.started).as_millis() as u64,
             "stdout":state.stdout.metadata(),"stderr":state.stderr.metadata()})
@@ -229,7 +235,7 @@ impl Shell {
             tool(
                 "ssmcp.exec.events",
                 "Read bounded execution events also shown on the client terminal.",
-                super::events::schema(),
+                super::events::schema()["properties"].clone(),
                 &[],
                 true,
             ),
@@ -373,16 +379,12 @@ impl Shell {
             return Err("shell command manager is closed".into());
         }
         let evicted = if registry.jobs.len() >= MAX_RETAINED {
-            let oldest = registry
+            registry
                 .jobs
                 .values()
                 .filter(|job| !job.state().running)
                 .min_by_key(|job| job.started)
-                .map(|job| job.id.clone());
-            if let Some(id) = &oldest {
-                registry.jobs.remove(id);
-            }
-            oldest
+                .map(|job| job.id.clone())
         } else {
             None
         };
@@ -424,6 +426,7 @@ impl Shell {
             state: Mutex::new(State {
                 running: true,
                 exit_code: None,
+                exit_signal: None,
                 cancelled: false,
                 timed_out: false,
                 error: None,
@@ -434,9 +437,13 @@ impl Shell {
             changed: Notify::new(),
             cancel,
         });
+        // A failed spawn must leave the retained history untouched.
+        if let Some(id) = &evicted {
+            registry.jobs.remove(id);
+        }
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
-        self.events.push(json!({"type":"exec.started","job_id":id,"pid":pid,"command":job.command,"cwd":job.cwd}));
+        self.events.push(json!({"type":"exec.started","job_id":id,"pid":pid,"pid_role":PID_ROLE,"command":job.command,"cwd":job.cwd}));
         let events = self.events.clone();
         let worker = job.clone();
         tokio::spawn(async move {
@@ -445,14 +452,14 @@ impl Shell {
             let mut cancel_rx = cancel_rx;
             let outcome = tokio::select! {
                 biased;
-                _=cancel_rx.changed() => (None,true,false,None),
+                _=cancel_rx.changed() => (None,true,false,None,None),
                 result=async {
                     if args.timeout_ms==0 { Ok(process.wait().await) }
                     else { timeout(Duration::from_millis(args.timeout_ms),process.wait()).await }
                 } => match result {
-                    Ok(Ok(status)) => (status.code(),false,false,None),
-                    Ok(Err(error)) => (None,false,false,Some(error.to_string())),
-                    Err(_) => (None,false,true,None),
+                    Ok(Ok(status)) => (status.code(),false,false,None,exit_signal(&status)),
+                    Ok(Err(error)) => (None,false,false,Some(error.to_string()),None),
+                    Err(_) => (None,false,true,None,None),
                 }
             };
             process.shutdown().await;
@@ -467,6 +474,7 @@ impl Shell {
                 state.cancelled = outcome.1;
                 state.timed_out = outcome.2;
                 state.error = outcome.3;
+                state.exit_signal = outcome.4;
                 state.finished = Some(Instant::now());
             }
             // Release the running slot before publishing completion to waiters.
@@ -495,6 +503,20 @@ impl Shell {
         self.events.close();
     }
 }
+
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
 impl Drop for Shell {
     fn drop(&mut self) {
         let registry = self.registry.get_mut().unwrap_or_else(|e| e.into_inner());
@@ -550,6 +572,7 @@ async fn capture<R: AsyncRead + Unpin>(
                 finish_output(&job, stream, None);
                 break;
             }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => {
                 finish_output(
                     &job,
@@ -600,14 +623,22 @@ fn finish_output(job: &Job, stream: &str, error: Option<String>) {
     job.changed.notify_waiters();
 }
 async fn drain(handle: &mut JoinHandle<()>, job: &Job, stream: &str) {
-    if timeout(Duration::from_secs(2), &mut *handle).await.is_err() {
-        handle.abort();
-        let _ = handle.await;
-        finish_output(
+    match timeout(Duration::from_secs(2), &mut *handle).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => finish_output(
             job,
             stream,
-            Some("output pipe remained open after command exit; capture stopped".into()),
-        );
+            Some(format!("{stream} capture task failed: {error}")),
+        ),
+        Err(_) => {
+            handle.abort();
+            let _ = handle.await;
+            finish_output(
+                job,
+                stream,
+                Some("output pipe remained open after command exit; capture stopped".into()),
+            );
+        }
     }
 }
 fn tool(
@@ -673,6 +704,86 @@ fn default_bytes() -> usize {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::Write;
+
+    fn completed_job(store: &Arc<OutputStore>) -> Arc<Job> {
+        let id = format!("test-{}", NEXT_JOB.fetch_add(1, Ordering::Relaxed));
+        let (cancel, _) = watch::channel(false);
+        let mut stdout = Output::new(store, format!("job:{id}:stdout"));
+        let mut stderr = Output::new(store, format!("job:{id}:stderr"));
+        stdout.finish(None);
+        stderr.finish(None);
+        Arc::new(Job {
+            id,
+            pid: 0,
+            command: vec!["completed fixture".into()],
+            cwd: std::env::current_dir().unwrap(),
+            started: Instant::now(),
+            state: Mutex::new(State {
+                running: false,
+                exit_code: Some(0),
+                exit_signal: None,
+                cancelled: false,
+                timed_out: false,
+                error: None,
+                finished: Some(Instant::now()),
+                stdout,
+                stderr,
+            }),
+            changed: Notify::new(),
+            cancel,
+        })
+    }
+
+    #[tokio::test]
+    async fn failed_start_preserves_the_full_retained_history() {
+        let shell = Shell::new();
+        let store = OutputStore::global().unwrap();
+        let jobs: Vec<_> = (0..MAX_RETAINED).map(|_| completed_job(&store)).collect();
+        for job in &jobs {
+            shell.registry().jobs.insert(job.id.clone(), job.clone());
+        }
+        let missing = std::env::temp_dir().join(format!(
+            "ssmcp-missing-executable-{}-{}",
+            std::process::id(),
+            NEXT_JOB.fetch_add(1, Ordering::Relaxed)
+        ));
+        assert!(
+            shell
+                .call("ssmcp.exec.start", json!({"command":[missing]}))
+                .await
+                .is_err()
+        );
+        let registry = shell.registry();
+        assert_eq!(registry.jobs.len(), MAX_RETAINED);
+        assert!(jobs.iter().all(|job| registry.jobs.contains_key(&job.id)));
+        assert_eq!(shell.slots.available_permits(), MAX_JOBS);
+    }
+
+    #[tokio::test]
+    async fn aborted_capture_is_finalized_as_incomplete() {
+        let store = OutputStore::global().unwrap();
+        let job = completed_job(&store);
+        {
+            let mut state = job.state();
+            state.stdout = Output::new(&store, "aborted-capture-test".into());
+            state
+                .stdout
+                .append(&vec![b'x'; crate::output::INLINE_BYTES + 1]);
+        }
+        let mut collector = tokio::spawn(std::future::pending::<()>());
+        collector.abort();
+        drain(&mut collector, &job, "stdout").await;
+        let snapshot = job.snapshot();
+        assert_eq!(snapshot["stdout"]["eof"], true);
+        assert_eq!(snapshot["stdout"]["artifact"]["complete"], false);
+        assert!(
+            snapshot["stdout"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("capture task failed")
+        );
+    }
 
     async fn start(shell: &Shell, command: &[&str], timeout_ms: u64) -> String {
         shell
@@ -689,22 +800,67 @@ mod tests {
             .to_owned()
     }
 
-    #[cfg(unix)]
+    const OUTPUT_START: &str = "SSMCP_SHELL_FIXTURE_OUTPUT\n";
+
+    async fn start_fixture(shell: &Shell, fixture: &str, timeout_ms: u64) -> String {
+        shell
+            .call(
+                "ssmcp.exec.start",
+                json!({
+                    "command":[std::env::current_exe().unwrap(),"--exact",
+                        "backend::shell::tests::fixture_process","--nocapture"],
+                    "env":{"SSMCP_SHELL_TEST_FIXTURE":fixture},
+                    "timeout_ms":timeout_ms
+                }),
+            )
+            .await
+            .unwrap()["job_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn output(value: &Value) -> &str {
+        value["stdout"]
+            .as_str()
+            .unwrap()
+            .split_once(OUTPUT_START)
+            .expect("the native command did not emit its output boundary")
+            .1
+    }
+
+    // Re-exec the Rust test binary so the same process lifecycle regressions run
+    // on Windows without relying on sh, sleep, printf or an external interpreter.
+    #[test]
+    fn fixture_process() {
+        let Ok(fixture) = std::env::var("SSMCP_SHELL_TEST_FIXTURE") else {
+            return;
+        };
+        let (stdout, stderr) = match fixture.as_str() {
+            "alpha" | "beta" => {
+                std::thread::sleep(Duration::from_millis(250));
+                (fixture.clone(), format!("{fixture}-err"))
+            }
+            "retained" | "next" => (fixture, String::new()),
+            "wait" => {
+                std::thread::sleep(Duration::from_secs(60));
+                (String::new(), String::new())
+            }
+            _ => panic!("unknown native command fixture"),
+        };
+        print!("{OUTPUT_START}{stdout}");
+        eprint!("{stderr}");
+        std::io::stdout().flush().unwrap();
+        std::io::stderr().flush().unwrap();
+        // Avoid libtest's trailing report so bytes after the boundary are exact.
+        std::process::exit(0);
+    }
+
     #[tokio::test]
     async fn independent_jobs_run_concurrently_and_keep_streams_separate() {
         let shell = Shell::new();
-        let a = start(
-            &shell,
-            &["sh", "-c", "sleep 0.25; printf alpha; printf alpha-err >&2"],
-            5000,
-        )
-        .await;
-        let b = start(
-            &shell,
-            &["sh", "-c", "sleep 0.25; printf beta; printf beta-err >&2"],
-            5000,
-        )
-        .await;
+        let a = start_fixture(&shell, "alpha", 5000).await;
+        let b = start_fixture(&shell, "beta", 5000).await;
         let status = shell
             .call("ssmcp.exec.status", json!({"job_id":a}))
             .await
@@ -726,9 +882,9 @@ mod tests {
             .call("ssmcp.exec.read", json!({"job_id":b}))
             .await
             .unwrap();
-        assert_eq!(first["stdout"], "alpha");
+        assert_eq!(output(&first), "alpha");
         assert_eq!(first["stderr"], "alpha-err");
-        assert_eq!(second["stdout"], "beta");
+        assert_eq!(output(&second), "beta");
         assert_eq!(second["stderr"], "beta-err");
         assert_eq!(
             shell
@@ -740,12 +896,11 @@ mod tests {
         shell.shutdown().await;
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn jobs_support_timeout_cancellation_and_client_isolation() {
         let one = Shell::new();
         let two = Shell::new();
-        let timeout_job = start(&one, &["sh", "-c", "sleep 5"], 100).await;
+        let timeout_job = start_fixture(&one, "wait", 100).await;
         let timed = one
             .call(
                 "ssmcp.exec.wait",
@@ -754,7 +909,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(timed["timed_out"], true);
-        let cancel_job = start(&one, &["sh", "-c", "sleep 5"], 5000).await;
+        let cancel_job = start_fixture(&one, "wait", 5000).await;
         assert!(
             two.call("ssmcp.exec.status", json!({"job_id":cancel_job}))
                 .await
@@ -770,6 +925,9 @@ mod tests {
     }
     fn python() -> &'static str {
         if cfg!(windows) { "python" } else { "python3" }
+    }
+    fn newline() -> &'static str {
+        if cfg!(windows) { "\r\n" } else { "\n" }
     }
     async fn py(shell: &Shell, code: &str) -> String {
         start(shell, &[python(), "-u", "-c", code], 0).await
@@ -799,7 +957,7 @@ mod tests {
             .call("ssmcp.exec.read", json!({"job_id":id}))
             .await
             .unwrap();
-        assert_eq!(first["stdout"], "retained\n");
+        assert_eq!(first["stdout"], format!("retained{}", newline()));
         assert_eq!(first["exit_code"], 0);
         assert_eq!(first["snapshot"]["state"], "completed");
         assert_eq!(
@@ -882,7 +1040,9 @@ mod tests {
             .call("ssmcp.exec.read", json!({"job_id":id}))
             .await
             .unwrap();
-        let expected = (0..40).map(|n| format!("{n}\n")).collect::<String>();
+        let expected = (0..40)
+            .map(|n| format!("{n}{}", newline()))
+            .collect::<String>();
         assert_eq!(all["stdout"], expected);
         assert_eq!(all["stderr"], expected);
         shell.shutdown().await;
@@ -1084,14 +1244,14 @@ mod tests {
                 .call("ssmcp.exec.read", json!({"job_id":a}))
                 .await
                 .unwrap()["stdout"],
-            "alpha\n"
+            format!("alpha{}", newline())
         );
         assert_eq!(
             shell
                 .call("ssmcp.exec.read", json!({"job_id":b}))
                 .await
                 .unwrap()["stdout"],
-            "beta\n"
+            format!("beta{}", newline())
         );
         let slow = py(&shell, "import time; time.sleep(10)").await;
         let one = shell
@@ -1120,5 +1280,24 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_signal_and_process_identity_are_explicit_in_status() {
+        let shell = Shell::new();
+        let id = py(
+            &shell,
+            "import os,signal; os.kill(os.getpid(),signal.SIGTERM)",
+        )
+        .await;
+        let done = shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
+            .await
+            .unwrap();
+        assert_eq!(done["running"], false);
+        assert!(done["exit_code"].is_null());
+        assert_eq!(done["exit_signal"], libc::SIGTERM);
+        assert_eq!(done["pid_role"], PID_ROLE);
+        shell.shutdown().await;
     }
 }

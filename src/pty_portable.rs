@@ -1,14 +1,14 @@
-//! Native macOS PTYs and Windows ConPTY with the same cursor and spill protocol.
+//! Native macOS PTYs and Windows ConPTY, with bounded cursor-addressed output.
 use crate::{
     output::{Capture, INLINE_BYTES, INLINE_LINES, OutputStore},
     wire::Operation,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::Path,
     sync::{
         Arc, Mutex,
@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::Notify,
+    sync::{Notify, mpsc, oneshot},
     time::{Instant, timeout, timeout_at},
 };
 
@@ -34,9 +34,10 @@ struct Output {
 
 impl Output {
     fn push(&mut self, data: &[u8]) {
+        if self.eof {
+            return;
+        }
         if let Some(capture) = &mut self.capture {
-            // A failed spool remains explicit in every subsequent read/status;
-            // the bounded terminal tail continues to work for interactive use.
             let _ = capture.push(data);
         }
         let retained = &data[data.len().saturating_sub(OUTPUT_CAPACITY)..];
@@ -48,15 +49,19 @@ impl Output {
     }
 }
 
+struct Input {
+    bytes: Vec<u8>,
+    complete: oneshot::Sender<io::Result<()>>,
+}
+
 pub struct Terminal {
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
-    writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
-    pid: u32,
-    running: AtomicBool,
-    output: Mutex<Output>,
-    changed: Notify,
+    child: Mutex<Option<Box<dyn Child + Send + Sync>>>,
+    input: Mutex<Option<mpsc::Sender<Input>>>,
+    output: Arc<Mutex<Output>>,
+    changed: Arc<Notify>,
     closed: AtomicBool,
+    pid: u32,
     #[cfg(windows)]
     job: crate::platform::WindowsJob,
 }
@@ -65,6 +70,7 @@ impl Terminal {
     pub fn spawn(shell: &Path) -> crate::Result<Arc<Self>> {
         Self::spawn_with_logging(shell, false, OutputStore::global()?)
     }
+
     pub fn spawn_live(shell: &Path) -> crate::Result<Arc<Self>> {
         Self::spawn_with_logging(shell, true, OutputStore::global()?)
     }
@@ -85,16 +91,26 @@ impl Terminal {
             return Err("shell must be an absolute path".into());
         }
         let pair = native_pty_system()
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|error| error.to_string())?;
+            .openpty(PtySize::default())
+            .map_err(io::Error::other)?;
+        let mut reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
+        let mut writer = pair.master.take_writer().map_err(io::Error::other)?;
         let mut command = CommandBuilder::new(shell);
         #[cfg(unix)]
         command.arg("-i");
+        #[cfg(windows)]
+        if shell
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|name| {
+                matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "bash" | "zsh" | "sh" | "fish"
+                )
+            })
+        {
+            command.arg("-i");
+        }
         #[cfg(windows)]
         if shell.file_stem().is_some_and(|name| {
             name.eq_ignore_ascii_case("powershell") || name.eq_ignore_ascii_case("pwsh")
@@ -103,94 +119,161 @@ impl Terminal {
         }
         command.env("TERM", "xterm-256color");
         command.cwd(std::env::current_dir()?);
+        #[allow(unused_mut)]
         let mut child = pair
             .slave
             .spawn_command(command)
-            .map_err(|error| error.to_string())?;
-        let pid = child.process_id().ok_or("shell has no process id")?;
+            .map_err(io::Error::other)?;
+        drop(pair.slave);
+        let pid = child.process_id().ok_or("shell has no process ID")?;
         #[cfg(windows)]
-        let job = {
-            let job = crate::platform::WindowsJob::new()?;
-            if let Err(error) = job.assign_pid(pid) {
+        let job = match child
+            .as_raw_handle()
+            .ok_or_else(|| io::Error::other("shell has no process handle"))
+            .and_then(crate::platform::WindowsJob::attach)
+        {
+            Ok(job) => job,
+            Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(error.into());
             }
-            job
         };
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|error| error.to_string())?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|error| error.to_string())?;
-        drop(pair.slave);
+        let (input, mut input_rx) = mpsc::channel::<Input>(16);
         let terminal = Arc::new(Self {
             master: Mutex::new(Some(pair.master)),
-            writer: Arc::new(Mutex::new(Some(writer))),
-            killer: Mutex::new(child.clone_killer()),
-            pid,
-            running: AtomicBool::new(true),
-            output: Mutex::new(Output {
+            child: Mutex::new(Some(child)),
+            input: Mutex::new(Some(input)),
+            output: Arc::new(Mutex::new(Output {
                 capture: Some(store.capture("terminal_session")),
                 ..Output::default()
-            }),
-            changed: Notify::new(),
+            })),
+            changed: Arc::new(Notify::new()),
             closed: AtomicBool::new(false),
+            pid,
             #[cfg(windows)]
             job,
         });
-        let weak = Arc::downgrade(&terminal);
+        #[cfg(windows)]
+        let (startup_sender, startup_receiver) = std::sync::mpsc::sync_channel(1);
+        #[cfg(windows)]
+        let startup_input = terminal.input.lock().unwrap().clone().unwrap();
+        // Separate OS threads keep blocking native PTY pipes off the async
+        // executor. The reader must drain while ConPTY closes (Windows < 24H2).
+        let output = terminal.output.clone();
+        let changed = terminal.changed.clone();
         std::thread::Builder::new()
-            .name("ssmcp-pty-output".into())
+            .name("ssmcp-pty-read".into())
             .spawn(move || {
-                let mut data = [0u8; 8192];
+                let mut data = [0_u8; 8192];
+                #[cfg(windows)]
+                let mut startup_sender = Some(startup_sender);
+                #[cfg(windows)]
+                let mut startup_input = Some(startup_input);
+                #[cfg(windows)]
+                let mut startup_bytes = Vec::new();
                 loop {
-                    let read = reader.read(&mut data);
-                    let Some(terminal) = weak.upgrade() else {
-                        break;
-                    };
-                    match read {
-                        Ok(n) if n > 0 => {
-                            terminal.output.lock().unwrap().push(&data[..n]);
-                            if live {
-                                let _ = std::io::stderr().lock().write_all(&data[..n]);
-                            }
-                        }
-                        _ => {
-                            let mut output = terminal.output.lock().unwrap();
-                            output.eof = true;
-                            if let Some(capture) = &mut output.capture {
-                                if let Err(error) = read {
-                                    let closed = error.kind() == std::io::ErrorKind::BrokenPipe;
-                                    #[cfg(unix)]
-                                    let closed = closed || error.raw_os_error() == Some(libc::EIO);
-                                    if !closed {
-                                        capture.fail(format!("terminal read failed: {error}"));
+                    match reader.read(&mut data) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            #[cfg(windows)]
+                            let visible = if startup_sender.is_some() {
+                                startup_bytes.extend_from_slice(&data[..n]);
+                                let replied = answer_initial_cursor(
+                                    &mut startup_bytes,
+                                    startup_input.as_ref().unwrap(),
+                                );
+                                match replied {
+                                    Ok(false) if startup_bytes.len() < 65536 => continue,
+                                    Ok(true) => {
+                                        let _ = startup_sender.take().unwrap().send(Ok(()));
+                                        startup_input.take();
+                                        startup_bytes.as_slice()
+                                    }
+                                    other => {
+                                        let error = other.err().unwrap_or_else(|| {
+                                            "ConPTY startup cursor query exceeded its limit".into()
+                                        });
+                                        let _ =
+                                            startup_sender.take().unwrap().send(Err(error.clone()));
+                                        if let Some(capture) = &mut output.lock().unwrap().capture {
+                                            capture.fail(error);
+                                        }
+                                        break;
                                     }
                                 }
-                                let _ = capture.finish();
+                            } else {
+                                &data[..n]
+                            };
+                            #[cfg(unix)]
+                            let visible = &data[..n];
+                            output.lock().unwrap().push(visible);
+                            if live {
+                                crate::client::render::terminal_output(visible);
                             }
-                            drop(output);
-                            terminal.changed.notify_waiters();
+                            #[cfg(windows)]
+                            startup_bytes.clear();
+                            changed.notify_waiters();
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(error) => {
+                            #[cfg(unix)]
+                            let normal_eof = error.raw_os_error() == Some(libc::EIO);
+                            #[cfg(windows)]
+                            let normal_eof = matches!(
+                                error.kind(),
+                                io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof
+                            );
+                            if !normal_eof
+                                && let Some(capture) = &mut output.lock().unwrap().capture
+                            {
+                                capture.fail(format!("terminal read failed: {error}"));
+                            }
                             break;
                         }
                     }
-                    terminal.changed.notify_waiters();
                 }
+                let mut output = output.lock().unwrap();
+                output.eof = true;
+                if let Some(capture) = &mut output.capture {
+                    let _ = capture.finish();
+                }
+                drop(output);
+                changed.notify_waiters();
             })?;
-        let weak = Arc::downgrade(&terminal);
         std::thread::Builder::new()
-            .name("ssmcp-pty-wait".into())
+            .name("ssmcp-pty-write".into())
             .spawn(move || {
-                let _ = child.wait();
-                if let Some(terminal) = weak.upgrade() {
-                    terminal.running.store(false, Ordering::Release);
-                    terminal.changed.notify_waiters();
+                while let Some(input) = input_rx.blocking_recv() {
+                    let result = writer.write_all(&input.bytes).and_then(|()| writer.flush());
+                    let failed = result.is_err();
+                    let _ = input.complete.send(result);
+                    if failed {
+                        break;
+                    }
                 }
             })?;
+        #[cfg(windows)]
+        startup_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|error| format!("ConPTY startup handshake failed: {error}"))??;
+        #[cfg(unix)]
+        {
+            let weak = Arc::downgrade(&terminal);
+            std::thread::Builder::new()
+                .name("ssmcp-pty-exit".into())
+                .spawn(move || {
+                    if matches!(
+                        crate::platform::wait_unix_child_unreaped(pid as libc::pid_t, false),
+                        Ok(true)
+                    ) && let Some(terminal) = weak.upgrade()
+                    {
+                        // stop owns the only transition that moves/reaps the
+                        // child; a concurrent shutdown simply wins that race.
+                        terminal.stop();
+                    }
+                })?;
+        }
         Ok(terminal)
     }
 
@@ -203,33 +286,43 @@ impl Terminal {
                 wait_ms,
             } => self.read(cursor, max_bytes, wait_ms).await,
             Operation::Write { data } => {
-                if !self.running().await {
+                if !self.running() {
                     return Err("terminal has exited".into());
                 }
-                let length = data.len();
-                let writer = self.writer.clone();
-                let write = tokio::task::spawn_blocking(move || {
-                    let mut writer = writer.lock().unwrap();
-                    let writer = writer.as_mut().ok_or("terminal is closed")?;
-                    writer
-                        .write_all(data.as_bytes())
-                        .and_then(|_| writer.flush())
-                        .map_err(|e| e.to_string())
-                });
-                timeout(Duration::from_secs(5), write)
-                    .await
-                    .map_err(|_| {
-                        "terminal write timed out; input may be partially written".to_owned()
-                    })?
-                    .map_err(|error| error.to_string())??;
-                Ok(json!({"written":length}))
+                let sender = self
+                    .input
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .ok_or("terminal is closed")?;
+                let (complete, completed) = oneshot::channel();
+                let bytes = data.len();
+                timeout(Duration::from_secs(5), async {
+                    sender
+                        .send(Input {
+                            bytes: data.into_bytes(),
+                            complete,
+                        })
+                        .await
+                        .map_err(|_| "terminal writer has exited".to_owned())?;
+                    completed
+                        .await
+                        .map_err(|_| "terminal writer has exited".to_owned())?
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                .map_err(|_| {
+                    "terminal write timed out; input may be partially written".to_owned()
+                })??;
+                Ok(json!({"written":bytes}))
             }
             Operation::Resize { rows, cols } => {
-                if !self.running().await {
+                if !self.running() {
                     return Err("terminal has exited".into());
                 }
-                let master = self.master.lock().unwrap();
-                master
+                self.master
+                    .lock()
+                    .unwrap()
                     .as_ref()
                     .ok_or("terminal is closed")?
                     .resize(PtySize {
@@ -242,74 +335,51 @@ impl Terminal {
                 Ok(json!({"rows":rows,"cols":cols}))
             }
             Operation::Status {} => {
+                let running = self.running();
                 let output = self.output.lock().unwrap();
-                let mut value = json!({"running":self.running.load(Ordering::Acquire) && !self.closed.load(Ordering::Acquire),"pid":self.pid,
-                    "start_cursor":output.start,"next_cursor":output.end,"output_eof":output.eof});
+                let mut result = json!({"running":running,"pid":self.pid,"start_cursor":output.start,"next_cursor":output.end,"output_eof":output.eof});
                 if let Some(capture) = &output.capture {
-                    if let Some(metadata) = capture.metadata() {
-                        value["output_artifact"] = json!(metadata);
+                    if let Some(artifact) = capture.metadata() {
+                        result["output_artifact"] = json!(artifact);
                     }
                     if let Some(error) = capture.error() {
-                        value["output_error"] = json!(error);
+                        result["output_error"] = json!(error);
                     }
                 }
-                Ok(value)
+                Ok(result)
             }
-            _ => Err("not a terminal operation".into()),
+            Operation::ListTools { .. } | Operation::CallTool { .. } => {
+                Err("not a terminal operation".into())
+            }
         }
     }
 
-    async fn running(&self) -> bool {
-        self.running.load(Ordering::Acquire) && !self.closed.load(Ordering::Acquire)
-    }
-
-    fn stop(&self) {
+    fn running(&self) -> bool {
+        if self.closed.load(Ordering::Acquire) {
+            return false;
+        }
         #[cfg(windows)]
-        self.job.terminate();
-        #[cfg(unix)]
-        if self.running.load(Ordering::Acquire) {
-            crate::platform::stop_unix_descendants(self.pid as libc::pid_t);
+        {
+            let running = self
+                .child
+                .lock()
+                .unwrap()
+                .as_mut()
+                .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+            if !running {
+                self.stop();
+            }
+            running
         }
-        if self.running.load(Ordering::Acquire) {
-            let _ = self.killer.lock().unwrap().kill();
+        #[cfg(unix)]
+        {
+            matches!(
+                crate::platform::wait_unix_child_unreaped(self.pid as libc::pid_t, true),
+                Ok(false)
+            )
         }
     }
 
-    pub async fn shutdown(&self) {
-        if self.closed.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.stop();
-        // A blocked input writer is released when the owned child and PTY close.
-        self.master.lock().unwrap().take();
-        let writer = self.writer.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            writer.lock().unwrap().take();
-        })
-        .await;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            if !self.running.load(Ordering::Acquire) && self.output.lock().unwrap().eof {
-                break;
-            }
-            if timeout_at(deadline, changed).await.is_err() {
-                break;
-            }
-        }
-        let mut output = self.output.lock().unwrap();
-        if !output.eof
-            && let Some(capture) = &mut output.capture
-        {
-            capture.fail("terminal stopped before output EOF; capture may be incomplete");
-            let _ = capture.finish();
-        }
-        output.eof = true;
-        drop(output);
-        self.changed.notify_waiters();
-    }
     async fn read(&self, cursor: u64, max_bytes: usize, wait_ms: u64) -> Result<Value, String> {
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         loop {
@@ -379,12 +449,94 @@ impl Terminal {
                 }
             };
             if let Some(mut snapshot) = snapshot {
-                snapshot["running"] = json!(self.running().await);
+                snapshot["running"] = json!(self.running());
                 return Ok(snapshot);
             }
             let _ = timeout_at(deadline, changed).await;
         }
     }
+
+    fn stop(&self) -> Option<oneshot::Receiver<()>> {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        #[cfg(windows)]
+        self.job.terminate();
+        #[cfg(unix)]
+        crate::platform::stop_unix_descendants(self.pid as libc::pid_t);
+        self.input.lock().unwrap().take();
+        let mut child = self.child.lock().unwrap().take();
+        if let Some(child) = child.as_mut() {
+            let _ = child.kill();
+        }
+        let master = self.master.lock().unwrap().take();
+        let (complete, completed) = oneshot::channel();
+        // ClosePseudoConsole can wait for its clients on older Windows versions;
+        // the dedicated reader remains alive to drain output during this close.
+        let _ = std::thread::Builder::new()
+            .name("ssmcp-pty-close".into())
+            .spawn(move || {
+                drop(master);
+                if let Some(mut child) = child {
+                    let _ = child.wait();
+                }
+                let _ = complete.send(());
+            });
+        self.changed.notify_waiters();
+        Some(completed)
+    }
+
+    pub async fn shutdown(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        if let Some(completed) = self.stop() {
+            let _ = timeout_at(deadline, completed).await;
+        }
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.output.lock().unwrap().eof {
+                break;
+            }
+            if timeout_at(deadline, changed).await.is_err() {
+                break;
+            }
+        }
+        let mut output = self.output.lock().unwrap();
+        if !output.eof
+            && let Some(capture) = &mut output.capture
+        {
+            capture.fail("terminal was stopped before output EOF; capture may be incomplete");
+            let _ = capture.finish();
+        }
+        output.eof = true;
+        drop(output);
+        self.changed.notify_waiters();
+    }
+}
+
+#[cfg(windows)]
+fn answer_initial_cursor(bytes: &mut Vec<u8>, input: &mpsc::Sender<Input>) -> Result<bool, String> {
+    let Some(offset) = bytes.windows(4).position(|bytes| bytes == b"\x1b[6n") else {
+        return Ok(false);
+    };
+    // portable-pty enables PSEUDOCONSOLE_INHERIT_CURSOR. Reply before opening
+    // the session to user input, otherwise ConPTY will not process that input.
+    let (complete, completed) = oneshot::channel();
+    input
+        .blocking_send(Input {
+            bytes: b"\x1b[1;1R".to_vec(),
+            complete,
+        })
+        .map_err(|_| "terminal writer exited during startup".to_owned())?;
+    completed
+        .blocking_recv()
+        .map_err(|_| "terminal writer exited during startup".to_owned())?
+        .map_err(|error| format!("ConPTY cursor response failed: {error}"))?;
+    // This request was answered locally; forwarding it would cause the user's
+    // own terminal to send an unrelated second response.
+    bytes.drain(offset..offset + 4);
+    Ok(true)
 }
 
 impl Drop for Terminal {
@@ -396,47 +548,185 @@ impl Drop for Terminal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ConPTY is a VT terminal stream, not a line-oriented stdout pipe. Parse the
+    // accumulated bytes so a read may end inside a control sequence or marker.
+    fn visible_text(bytes: &[u8]) -> String {
+        let mut visible = Vec::new();
+        let mut state = 0;
+        for &byte in bytes {
+            state = match (state, byte) {
+                (0, 0x1b) => 1,
+                (0, byte) => {
+                    if !byte.is_ascii_control() || matches!(byte, b'\r' | b'\n' | b'\t') {
+                        visible.push(byte);
+                    }
+                    0
+                }
+                (1, b'[') => 2,
+                (1, b']') => 3,
+                (1, _) => 0,
+                (2, 0x40..=0x7e) => 0,
+                (2, _) => 2,
+                (3, 0x07) | (4, b'\\') => 0,
+                (3, 0x1b) => 4,
+                (3 | 4, _) => 3,
+                _ => unreachable!(),
+            };
+        }
+        String::from_utf8_lossy(&visible).into_owned()
+    }
+
+    #[test]
+    fn terminal_marker_survives_vt_sequences_and_partial_reads() {
+        let chunks: &[&[u8]] = &[
+            b"\x1b]0;cmd.exe",
+            b"\x07\x1b[2J\x1b[HSSMCP_",
+            b"PORTABLE_\x1b[",
+            b"0mOK\x1b[?25h\r\n",
+        ];
+        let mut bytes = Vec::new();
+        for chunk in &chunks[..3] {
+            bytes.extend_from_slice(chunk);
+            assert!(!visible_text(&bytes).contains("SSMCP_PORTABLE_OK"));
+        }
+        bytes.extend_from_slice(chunks[3]);
+        assert!(visible_text(&bytes).contains("SSMCP_PORTABLE_OK"));
+    }
+
+    #[cfg(target_os = "macos")]
     #[tokio::test]
-    async fn native_terminal_executes_and_resizes() {
-        let terminal = Terminal::spawn(&crate::platform::default_shell()).unwrap();
-        terminal
-            .perform(Operation::Resize {
-                rows: 35,
-                cols: 100,
-            })
-            .await
-            .unwrap();
+    async fn exiting_terminal_stops_jobs_in_separate_process_groups() {
+        let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
         terminal
             .perform(Operation::Write {
-                data: "echo SSMCP_PORTABLE_OK\r\n".into(),
+                data: "stty -echo; trap '' HUP; sleep 60 & printf SSMCP_CHILD=; jobs -p; exit\n"
+                    .into(),
             })
             .await
             .unwrap();
+        let mut output = String::new();
         let mut cursor = 0;
-        timeout(Duration::from_secs(10), async {
+        let eof = timeout(Duration::from_secs(5), async {
             loop {
                 let page = terminal
                     .perform(Operation::Read {
                         cursor,
                         max_bytes: 32768,
-                        wait_ms: 500,
+                        wait_ms: 250,
                     })
                     .await
                     .unwrap();
                 cursor = page["next_cursor"].as_u64().unwrap();
-                if page["text"]
-                    .as_str()
-                    .unwrap()
-                    .lines()
-                    .any(|line| line.trim() == "SSMCP_PORTABLE_OK")
-                {
+                output.push_str(page["text"].as_str().unwrap());
+                if page["output_eof"] == true {
                     break;
                 }
             }
         })
-        .await
-        .unwrap();
+        .await;
+        let pid = output.split("SSMCP_CHILD=").skip(1).find_map(|tail| {
+            tail.split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse::<i32>()
+                .ok()
+                .filter(|pid| *pid > 1)
+        });
+        let stopped = if let Some(pid) = pid {
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    let state = tokio::process::Command::new("/bin/ps")
+                        .args(["-o", "stat=", "-p", &pid.to_string()])
+                        .output()
+                        .await
+                        .unwrap();
+                    let state = String::from_utf8_lossy(&state.stdout);
+                    if state.trim().is_empty() || state.trim_start().starts_with('Z') {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .is_ok()
+        } else {
+            false
+        };
+        if !stopped && let Some(pid) = pid {
+            // Do not leave the fixture running if the regression is reintroduced.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
         terminal.shutdown().await;
-        assert!(!terminal.running().await);
+        assert!(eof.is_ok(), "PTY did not reach EOF: {output:?}");
+        assert!(stopped, "background job remained alive: {output:?}");
+    }
+
+    #[tokio::test]
+    async fn native_terminal_executes_and_resizes() {
+        #[cfg(windows)]
+        let shell = std::env::var_os("COMSPEC")
+            .map(std::path::PathBuf::from)
+            .expect("COMSPEC");
+        #[cfg(unix)]
+        let shell = std::path::PathBuf::from("/bin/sh");
+        let terminal = Terminal::spawn(&shell).unwrap();
+        terminal
+            .perform(Operation::Resize {
+                rows: 30,
+                cols: 100,
+            })
+            .await
+            .unwrap();
+        #[cfg(windows)]
+        // Enter is a carriage return in ConPTY's VT input protocol. The escaped
+        // suffix ensures the marker cannot be satisfied by input echo alone.
+        let command = "echo SSMCP_PORTABLE_^O^K\r";
+        #[cfg(unix)]
+        let command = "printf 'SSMCP_PORTABLE_%s\\n' OK\n";
+        assert!(!command.contains("SSMCP_PORTABLE_OK"));
+        terminal
+            .perform(Operation::Write {
+                data: command.into(),
+            })
+            .await
+            .unwrap();
+        let mut cursor = 0;
+        let mut output = Vec::new();
+        let observed = timeout(Duration::from_secs(10), async {
+            loop {
+                let result = terminal
+                    .perform(Operation::Read {
+                        cursor,
+                        max_bytes: 32768,
+                        wait_ms: 500,
+                    })
+                    .await?;
+                cursor = result["next_cursor"].as_u64().unwrap();
+                output.extend_from_slice(
+                    &STANDARD
+                        .decode(result["data_base64"].as_str().unwrap())
+                        .unwrap(),
+                );
+                if visible_text(&output).contains("SSMCP_PORTABLE_OK") {
+                    return Ok::<_, String>(());
+                }
+                if result["output_eof"] == true {
+                    return Err("terminal reached EOF before executing the command".into());
+                }
+            }
+        })
+        .await;
+        let status = terminal.perform(Operation::Status {}).await.unwrap();
+        terminal.shutdown().await;
+        assert!(
+            matches!(observed, Ok(Ok(()))),
+            "PTY execution failed: {observed:?}; status={status}; raw={:?}; visible={:?}",
+            String::from_utf8_lossy(&output),
+            visible_text(&output),
+        );
+        assert_eq!(
+            terminal.perform(Operation::Status {}).await.unwrap()["running"],
+            false
+        );
     }
 }

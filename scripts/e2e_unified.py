@@ -1,0 +1,668 @@
+#!/usr/bin/env python3
+"""Validate the unified client through real local SSH, OAuth and MCP.
+
+Reuses e2e.py's isolated public-key sshd/PKCE harness and the session helper's
+reload reader and output pagination checks. No installed Harness is exposed to
+the client PATH, no model is invoked, and no package or runtime is installed.
+Only generated fixtures and the test's own output artifacts are changed.
+
+Example: python3 scripts/e2e_unified.py --bin-dir target/debug --timeout 240 \
+    --report target/acceptance/unified.json --revision <tested-commit>
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+from collections import defaultdict
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import tempfile
+import time
+
+from e2e import wait_for
+from e2e_session_features import SessionFeatures
+
+
+TITLE = "统一能力验收：独立命令、事件、审计与生命周期"
+LONG_BYTES = 160 * 1024 + 17  # Exceeds both inline storage and the executor's live tail.
+LONG_PREFIX = b"UNIFIED_LONG_BEGIN\n"
+LONG_LIVE = b"\nUNIFIED_LONG_AFTER_SPILL\n"
+LONG_DONE = b"UNIFIED_LONG_DONE\n"
+
+BARRIER_PROGRAM = r'''
+import hashlib, json, os, sys, time
+from pathlib import Path
+name, other = sys.argv[1:]
+pid = os.getpid()
+Path(name + '.ready').write_text(json.dumps({
+    'pid': pid, 'cwd': os.getcwd(),
+    'env_sha256': hashlib.sha256(os.environ['UNIFIED_PROBE'].encode()).hexdigest()}))
+deadline = time.monotonic() + 40
+while not Path(other + '.ready').exists():
+    if time.monotonic() > deadline: raise RuntimeError('independent peer never started')
+    time.sleep(.02)
+print('UNIFIED_%s_OUT_%s' % (name, pid), flush=True)
+print('UNIFIED_%s_ERR_%s' % (name, pid), file=sys.stderr, flush=True)
+while not Path('concurrent.release').exists():
+    if time.monotonic() > deadline: raise RuntimeError('test did not release commands')
+    time.sleep(.02)
+print('UNIFIED_%s_DONE_%s' % (name, pid), flush=True)
+sys.exit(0 if name == 'alpha' else 7)
+'''
+
+LONG_PROGRAM = r'''
+import sys, time
+from pathlib import Path
+sys.stdout.buffer.write(b'UNIFIED_LONG_BEGIN\n' + b'Z' * int(sys.argv[1])
+                        + b'\nUNIFIED_LONG_AFTER_SPILL\n')
+sys.stdout.flush()
+print('UNIFIED_LONG_STDERR', file=sys.stderr, flush=True)
+Path('long.ready').write_text('ready')
+deadline = time.monotonic() + 60
+while not Path('long.release').exists():
+    if time.monotonic() > deadline: raise RuntimeError('test did not release output command')
+    time.sleep(.02)
+print('UNIFIED_LONG_DONE', flush=True)
+'''
+
+TREE_PROGRAM = r'''
+import json, os, subprocess, sys, time
+from pathlib import Path
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'],
+    start_new_session=True, stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+Path(sys.argv[1]).write_text(json.dumps({'parent': os.getpid(), 'child': child.pid}))
+print('UNIFIED_TREE_READY', flush=True)
+time.sleep(120)
+'''
+
+
+def fixture_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def process_identity(pid):
+    """Bind cleanup assertions to a Linux process instance, not a reusable PID."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return {"pid": pid, "start_ticks": int(fields[19]), "state": fields[0]}
+    except FileNotFoundError:
+        return None
+
+
+def still_running(identity):
+    current = process_identity(identity["pid"])
+    return bool(current and current["start_ticks"] == identity["start_ticks"]
+                and current["state"] != "Z")
+
+
+class Unified(SessionFeatures):
+    def __init__(self, directory, binary_dir, evidence_dir):
+        super().__init__(directory, binary_dir)
+        self.evidence_dir = evidence_dir
+        self.evidence_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.sections = {}
+        self.current_section = "startup"
+        self.evidence = []
+        self.exec_cursor = 0
+        self.exec_events = []
+        self.streams = defaultdict(lambda: {"stdout": bytearray(), "stderr": bytearray()})
+        self.tree_identities = []
+        self.python = str(Path(sys.executable).resolve())
+        self.env_marker = "unified-fixture-" + os.urandom(16).hex()
+        self.sensitive.append(self.env_marker)
+
+    def scrub(self, text):
+        for secret in [self.secret, *self.sensitive]:
+            if secret:
+                text = text.replace(secret, "[redacted]")
+        return text
+
+    def save(self, name, value, *, jsonl=False):
+        path = self.evidence_dir / name
+        if isinstance(value, bytes):
+            data = value
+        elif jsonl:
+            data = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in value).encode()
+        else:
+            data = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode()
+        # Evidence contains only generated fixtures, bounded protocol records and
+        # redacted client logs. Credentials are never persisted.
+        if not isinstance(value, bytes):
+            data = self.scrub(data.decode()).encode()
+        path.write_bytes(data)
+        path.chmod(0o600)
+        item = {"path": str(path.resolve()), "bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest()}
+        self.evidence = [entry for entry in self.evidence if entry["path"] != item["path"]]
+        self.evidence.append(item)
+        return item
+
+    def track(self, value):
+        if isinstance(value, dict):
+            if value.get("schema") == "ssmcp.output.v1" and value.get("path"):
+                self.artifact_path(value)
+            for child in value.values():
+                self.track(child)
+        elif isinstance(value, list):
+            for child in value:
+                self.track(child)
+
+    def artifact_bytes(self, metadata, *, client_id=None):
+        self.artifact_path(metadata)
+        result = bytearray()
+        while len(result) < metadata["bytes"]:
+            page = super().call("ssmcp.output.read", {
+                "id": metadata["id"], "offset": len(result), "max_bytes": 32768,
+            }, client_id=client_id)
+            chunk = base64.b64decode(page["data_base64"], validate=True)
+            if (not chunk or page["offset"] != len(result)
+                    or page["next_offset"] != len(result) + len(chunk)
+                    or page["sha256"] != hashlib.sha256(chunk).hexdigest()):
+                raise AssertionError("artifact page lost bytes or returned an invalid cursor/digest")
+            result.extend(chunk)
+        if len(result) != metadata["bytes"] or hashlib.sha256(result).hexdigest() != metadata["sha256"]:
+            raise AssertionError("artifact pages do not reconstruct the advertised snapshot")
+        return bytes(result)
+
+    def call(self, name, arguments=None, **kwargs):
+        value = super().call(name, arguments, **kwargs)
+        self.track(value)
+        if isinstance(value, dict) and value.get("spilled") and value.get("format") == "mcp_tool_result_json":
+            original = json.loads(self.artifact_bytes(value["artifact"], client_id=kwargs.get("client_id")))
+            if original.get("isError"):
+                raise AssertionError(f"Archived native tool {name} failed: {original}")
+            value = original["structuredContent"]
+            self.track(value)
+        return value
+
+    def code(self, source, **kwargs):
+        return self.public_call("code_mode", {"code": source}, **kwargs)["result"]
+
+    def tool_catalog(self, *, through_code=False):
+        if through_code:
+            return self.code("""
+                const collected = [], seen = new Set();
+                let cursor;
+                do {
+                    const page = await tools(%s, cursor);
+                    collected.push(...page.tools);
+                    cursor = page.nextCursor;
+                    if (cursor && seen.has(cursor)) throw Error('catalog cursor repeated');
+                    if (cursor) seen.add(cursor);
+                } while (cursor);
+                return collected;
+            """ % json.dumps(self.client_id))
+        collected, seen, cursor = [], set(), None
+        while True:
+            arguments = {"client_id": self.client_id}
+            if cursor:
+                arguments["cursor"] = cursor
+            page = self.public_call("list", arguments)
+            collected.extend(page["tools"])
+            cursor = page.get("nextCursor")
+            if not cursor:
+                return collected
+            if cursor in seen:
+                raise AssertionError("list repeated a catalog cursor")
+            seen.add(cursor)
+
+    def rejected(self, name, arguments, *, client_id=None, secret=None):
+        result = self.code("""
+            try {
+                const value = await call(%s, %s, %s);
+                return {rejected:value.isError === true, value};
+            } catch (error) { return {rejected:true, message:String(error)}; }
+        """ % (json.dumps(client_id or self.client_id), json.dumps(name), json.dumps(arguments)), secret=secret)
+        if not result.get("rejected"):
+            raise AssertionError(f"{name} unexpectedly accepted a forbidden/stale operation")
+        return result
+
+    def finish_job(self, job, timeout=10):
+        def complete():
+            state = self.call("ssmcp.exec.wait", {"job_id": job["job_id"], "wait_ms": 500})
+            return state if not state["running"] else None
+        return wait_for(complete, timeout=timeout, description="final independent command state")
+
+    def events(self, tool, *, cursor=0, client_id=None):
+        rows = []
+        while True:
+            page = self.call(tool, {"cursor": cursor, "max_events": 8, "wait_ms": 0}, client_id=client_id)
+            if page["truncated"]:
+                raise AssertionError(f"{tool} lost a test event before it could be inspected")
+            batch = page["events"]
+            for row in batch:
+                if row["cursor"] != cursor:
+                    raise AssertionError(f"{tool} event cursor skipped or duplicated an event")
+                cursor += 1
+            if cursor != page["next_cursor"]:
+                raise AssertionError(f"{tool} returned an inconsistent next_cursor")
+            rows.extend(batch)
+            if not batch:
+                return rows, cursor
+
+    def poll_exec(self):
+        rows, self.exec_cursor = self.events("ssmcp.exec.events", cursor=self.exec_cursor)
+        self.exec_events.extend(rows)
+        for row in rows:
+            event = row["event"]
+            if event.get("type") not in ("exec.stdout", "exec.stderr"):
+                continue
+            job_id, params = event["job_id"], event["params"]
+            stream = params["stream"]
+            if event["type"] != "exec." + stream or params["processId"] != job_id:
+                raise AssertionError("execution output lost its job or stdout/stderr source")
+            chunk = base64.b64decode(params["deltaBase64"], validate=True)
+            stored = self.streams[job_id][stream]
+            if params["offset"] != len(stored) or params["next_offset"] != len(stored) + len(chunk):
+                raise AssertionError("execution event bytes were repeated, skipped or reordered")
+            stored.extend(chunk)
+        self.save("execution-events.jsonl", self.exec_events, jsonl=True)
+
+    def wait_stream(self, job_id, stream, marker):
+        def visible():
+            self.poll_exec()
+            return marker in self.streams[job_id][stream]
+        wait_for(visible, timeout=20, description=f"live {stream} before command completion")
+
+    def bootstrap(self):
+        self.prepare()
+        self.workspace = self.directory / "unified-workspace"
+        self.workspace.mkdir()
+        self.client, self.reader, self.original = self.titled_client("unified-primary", TITLE, self.workspace)
+        self.oauth_login(self.original)
+        self.client_id = self.original["client_id"]
+        self.check(self.call("terminal.status")["running"], "a client without any Harness starts its interactive shell")
+
+    def catalog(self):
+        for modern in (False, True):
+            status, result, _ = self.rpc("tools/list", modern=modern)
+            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["list", "code_mode"],
+                       f"public MCP exposes exactly list/code_mode (modern={modern})")
+        def settled():
+            result = self.call("ssmcp.harnesses.list")
+            rows = result["harnesses"]
+            return result if len(rows) == 4 and all(row["status"] != "discovering" for row in rows) else None
+        discovery = wait_for(settled, timeout=10, description="four independent absent-Harness probes")
+        self.check(all(row["status"] == "unavailable" and row["tools"] == 0 for row in discovery["harnesses"]),
+                   "all four absent Harnesses are diagnosed without preventing Shell access")
+        inventory = self.public_call("list")
+        selected = next(client for client in inventory["clients"] if client["id"] == self.client_id)
+        self.check(selected["title"] == TITLE and selected["cwd"] == str(self.workspace.resolve()),
+                   "list preserves the connection title and authorized workspace")
+        listed = self.tool_catalog()
+        invoked = self.tool_catalog(through_code=True)
+        # Compare full descriptors, including complete JSON Schemas/extensions.
+        index = lambda tools: {tool["name"]: tool for tool in tools}
+        self.check(index(listed) == index(invoked) and len(index(listed)) == len(listed),
+                   "list and code_mode tools return one identical collision-free full-schema catalog")
+        self.check(not any(t["name"].startswith(("codex.", "claude.", "pi.", "opencode.")) for t in listed),
+                   "unavailable Harnesses contribute no invented native tools")
+        self.initial_catalog = index(listed)
+        self.save("catalog.json", {"client": selected, "tools": listed, "discovery": discovery})
+
+    def concurrent_commands(self):
+        arguments = [{"command": [self.python, "-u", "-c", BARRIER_PROGRAM, name, other],
+                      "env": {"UNIFIED_PROBE": self.env_marker}}
+                     for name, other in (("alpha", "beta"), ("beta", "alpha"))]
+        jobs = self.code("return await Promise.all(%s.map(async args => { const r=await call(%s, 'ssmcp.exec.start', args); if(r.isError) throw Error(JSON.stringify(r)); return r.structuredContent; }));" %
+                         (json.dumps(arguments), json.dumps(self.client_id)))
+        self.check(len({job["job_id"] for job in jobs}) == 2 and len({job["pid"] for job in jobs}) == 2
+                   and all(job["running"] and job["exit_code"] is None for job in jobs),
+                   "two starts return distinct active processes without claiming command success")
+        self.concurrent_jobs = jobs
+        observations = []
+        for name, job in zip(("alpha", "beta"), jobs):
+            observed = wait_for(lambda: fixture_json(self.workspace / f"{name}.ready"),
+                                timeout=10, description="both command barrier participants")
+            self.check(observed["pid"] == job["pid"] and observed["cwd"] == str(self.workspace.resolve())
+                       and observed["env_sha256"] == hashlib.sha256(self.env_marker.encode()).hexdigest(),
+                       f"{name} runs in the authorized cwd with its explicit environment")
+            for stream, label in (("stdout", "OUT"), ("stderr", "ERR")):
+                marker = f"UNIFIED_{name}_{label}_{job['pid']}".encode()
+                self.wait_stream(job["job_id"], stream, marker)
+            self.check(self.call("ssmcp.exec.status", {"job_id": job["job_id"]})["running"],
+                       f"{name} emits live stdout/stderr while blocked behind the release gate")
+            observations.append(observed)
+        # The interactive shell is independently available while both jobs wait.
+        self.quiet_terminal(self.client_id)
+        self.call("terminal.write", {"data": "printf '%s%s\\n' UNIFIED_PTY_ INDEPENDENT\n"})
+        self.read_until(r"UNIFIED_PTY_INDEPENDENT", timeout=5)
+        log = (self.directory / "unified-primary.log").read_text(errors="replace")
+        self.check(all(log.count(f"UNIFIED_{name}_{label}_{job['pid']}") == 1
+                       for name, job in zip(("alpha", "beta"), jobs) for label in ("OUT", "ERR")),
+                   "the terminal displays each live job/stdout/stderr marker once before any wait completes")
+        self.call("ssmcp.fs.write_text", {"path": "concurrent.release", "text": "release\n"})
+        final = [self.finish_job(job) for job in jobs]
+        self.poll_exec()
+        self.check([state["exit_code"] for state in final] == [0, 7]
+                   and all(not state["running"] for state in final),
+                   "final exit codes distinguish a successful command from a started command that exits 7")
+        for name, job in zip(("alpha", "beta"), jobs):
+            read = self.call("ssmcp.exec.read", {"job_id": job["job_id"]})
+            self.check(base64.b64decode(read["stdout_base64"]) == bytes(self.streams[job["job_id"]]["stdout"])
+                       and base64.b64decode(read["stderr_base64"]) == bytes(self.streams[job["job_id"]]["stderr"]),
+                       f"{name} read-back exactly matches ordered, nonduplicated live events per stream")
+        self.check(self.env_marker not in json.dumps(self.exec_events) and self.env_marker not in log,
+                   "the environment value is absent from audit events and the terminal transcript")
+        rejected = self.rejected("ssmcp.exec.start", {"command": [self.python, "-c", "pass"], "cwd": str(self.directory)})
+        self.save("concurrent-commands.json", {"started": jobs, "observed": observations, "final": final,
+                                               "outside_workspace_rejected": rejected})
+
+    def outputs(self):
+        job = self.call("ssmcp.exec.start", {"command": [self.python, "-u", "-c", LONG_PROGRAM, str(LONG_BYTES)]})
+        self.wait_stream(job["job_id"], "stdout", LONG_LIVE)
+        live = self.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+        self.check(live["running"] and live["stdout"]["artifact"] and not live["stdout"]["artifact"]["complete"],
+                   "output spilling does not stop live events and active capture remains explicitly incomplete")
+        self.call("ssmcp.fs.write_text", {"path": "long.release", "text": "release\n"})
+        done = self.finish_job(job)
+        self.poll_exec()
+        expected = LONG_PREFIX + b"Z" * LONG_BYTES + LONG_LIVE + LONG_DONE
+        artifact = done["stdout"]["artifact"]
+        raw = self.artifact_path(artifact).read_bytes()
+        self.check(raw == expected and bytes(self.streams[job["job_id"]]["stdout"]) == expected,
+                   "long stdout retains its complete prefix/body/tail in both stored bytes and live events")
+        self.check(artifact["complete"] and artifact["bytes"] == len(expected)
+                   and artifact["observed_bytes"] == len(expected)
+                   and artifact["lines"] == expected.count(b"\n")
+                   and artifact["sha256"] == hashlib.sha256(expected).hexdigest()
+                   and artifact["retention_secs"] == 86400 and artifact["expires_at_unix"] > time.time(),
+                   "long-output metadata truthfully reports full integrity, SHA-256, lines and 24-hour retention")
+        pages = self.verify_pagination(self.client_id, artifact)
+        self.retained_artifact = artifact
+        self.save("long-stdout.log", raw)
+        self.save("long-output.json", {"live": live, "final": done, "pages": pages})
+        line_job = self.call("ssmcp.exec.start", {"command": [self.python, "-c", "import sys; sys.stdout.write('x\\n'*600)"]})
+        lines = self.finish_job(line_job)["stdout"]["artifact"]
+        self.check(lines["complete"] and lines["lines"] == 600 and lines["bytes"] < 32768,
+                   "600 short lines independently trigger the existing line threshold")
+        self.expiring_artifact = lines
+        self.artifact_path(lines)
+        typed = "typed-é\n" * 5000
+        (self.workspace / "typed-output.txt").write_text(typed)
+        spilled = super().call("ssmcp.fs.read_text", {"path": "typed-output.txt"})
+        self.check(spilled["spilled"] and spilled["format"] == "mcp_tool_result_json",
+                   "a large structured result is archived with its native result format")
+        native = json.loads(self.artifact_bytes(spilled["artifact"]))
+        self.check(native["isError"] is False and native["structuredContent"]["text"] == typed
+                   and native["structuredContent"]["eof"] is True
+                   and json.loads(native["content"][0]["text"]) == native["structuredContent"],
+                   "retrieval preserves the complete structured result and native MCP fields")
+        self.save("structured-result.json", {"artifact": spilled["artifact"],
+                  "native_keys": sorted(native), "text_sha256": hashlib.sha256(typed.encode()).hexdigest()})
+        cleanup = self.call("ssmcp.output.cleanup")
+        self.check(self.artifact_path(artifact).is_file() and cleanup["retention_secs"] == 86400
+                   and cleanup["max_retained_bytes"] == 512 * 1024 * 1024,
+                   "explicit cleanup preserves fresh output and retains the existing quota policy")
+
+    def workspace_audit(self):
+        before, after = "one\nold\nthree\n", "one\nnew\nextra\nthree\n"
+        created = self.call("ssmcp.fs.write_text", {"path": "audited.txt", "text": before})
+        read = self.call("ssmcp.fs.read_text", {"path": "audited.txt"})
+        self.call("ssmcp.fs.edit_text", {"path": "audited.txt", "old_text": "old\n", "new_text": "new\nextra\n",
+                                        "expected_sha256": read["sha256"]})
+        failure = self.rejected("ssmcp.fs.edit_text", {"path": "audited.txt", "old_text": "new", "new_text": "wrong",
+                                                       "expected_sha256": read["sha256"]})
+        current = self.call("ssmcp.fs.read_text", {"path": "audited.txt"})
+        rows, _ = self.events("ssmcp.fs.events")
+        file_events = [row["event"] for row in rows if row["event"].get("path") == "audited.txt"]
+        writes = [event for event in file_events if event["type"] == "ssmcp.file.write"]
+        diffs = [event for event in file_events if event["type"] == "ssmcp.file.diff"]
+        self.check(current["text"] == after and (self.workspace / "audited.txt").read_text() == after
+                   and len(writes) == 2 and len(diffs) == 2,
+                   "only successful committed writes produce file change events; stale edits leave bytes unchanged")
+        edit = diffs[-1]
+        self.check(edit["added_lines"] == 2 and edit["removed_lines"] == 1 and edit["diff_complete"]
+                   and "-old\n" in edit["diff"] and "+new\n" in edit["diff"] and "+extra\n" in edit["diff"]
+                   and any(event["type"] == "ssmcp.file.read" for event in file_events)
+                   and edit["external_operations"] == "unknown",
+                   "file read and queryable Diff reflect actual bytes without claiming external audit coverage")
+        self.call("ssmcp.fs.write_text", {"path": ".env.unified", "text": "API_TOKEN=" + self.env_marker + "\n"})
+        self.call("ssmcp.fs.read_text", {"path": ".env.unified"})
+        rows, _ = self.events("ssmcp.fs.events")
+        protected = [row["event"] for row in rows if row["event"].get("path") == ".env.unified"]
+        self.check(self.env_marker not in json.dumps(rows)
+                   and all(event.get("diff") is None for event in protected if event["type"] == "ssmcp.file.diff"),
+                   "sensitive-file audit records metadata without storing its contents or a diff preview")
+        skill_path = "skills/unified-fixture/SKILL.md"
+        skill = "---\nname: unified-fixture\ndescription: A local acceptance fixture.\n---\nBODY_ONLY_WHEN_EXPLICITLY_READ\n"
+        self.call("ssmcp.fs.write_text", {"path": skill_path, "text": skill, "create_parents": True})
+        index = self.call("ssmcp.skills.list")
+        discovered, cursor = self.events("ssmcp.audit.events")
+        self.check(any(item["name"] == "unified-fixture" for item in index["skills"])
+                   and "BODY_ONLY_WHEN_EXPLICITLY_READ" not in json.dumps(index)
+                   and any(row["event"]["type"] == "ssmcp.skill.discovered" for row in discovered)
+                   and not any(row["event"]["type"] == "ssmcp.skill.read" for row in discovered),
+                   "skill discovery emits discovery metadata without claiming that a skill was read or invoked")
+        loaded = self.call("ssmcp.skills.read", {"path": skill_path})
+        read_events, _ = self.events("ssmcp.audit.events", cursor=cursor)
+        self.check(loaded["content"] == skill
+                   and any(row["event"]["type"] == "ssmcp.skill.read" and row["event"]["invoked"] is False for row in read_events)
+                   and not any(row["event"].get("invoked") is True for row in discovered + read_events),
+                   "explicit skill reading is recorded separately and never relabeled as invocation")
+        self.save("file-events.jsonl", rows, jsonl=True)
+        self.save("skill-events.jsonl", discovered + read_events, jsonl=True)
+        self.save("file-results.json", {"created": created, "final": current, "failed_edit": failure, "verified_diff": edit})
+
+    def client_isolation(self):
+        sibling_workspace = self.directory / "sibling-workspace"
+        sibling_workspace.mkdir()
+        self.sibling, _, credentials = self.titled_client("unified-sibling", "隔离验收", sibling_workspace)
+        self.sibling_id = credentials["client_id"]
+        token, grant = self.secret, self.oauth_grant
+        self.oauth_login(credentials)
+        self.sibling_token = self.secret
+        self.secret, self.oauth_grant = token, grant
+        self.check(self.call("terminal.status", client_id=self.sibling_id)["running"],
+                   "the sibling is authorized and online before testing its per-client resource boundary")
+        denied = {}
+        for tool in ("ssmcp.output.read", "ssmcp.output.stat"):
+            denied[tool] = self.rejected(tool, {"id": self.retained_artifact["id"]}, client_id=self.sibling_id)
+        denied["job"] = self.rejected("ssmcp.exec.status", {"job_id": self.concurrent_jobs[0]["job_id"]}, client_id=self.sibling_id)
+        self.check(not self.call("ssmcp.exec.list", client_id=self.sibling_id)["jobs"],
+                   "a separate client cannot list or address the first client's tasks")
+        for tool in ("ssmcp.exec.events", "ssmcp.fs.events", "ssmcp.audit.events"):
+            rows, _ = self.events(tool, client_id=self.sibling_id)
+            self.check(not rows, f"{tool} on another client does not expose the first client's audit stream")
+        self.call("ssmcp.output.cleanup", client_id=self.sibling_id)
+        self.check(self.artifact_path(self.retained_artifact).is_file(),
+                   "another client's cleanup leaves the first client's retained artifact intact")
+        self.save("client-isolation.json", {"primary": self.client_id, "sibling": self.sibling_id, "denied": denied})
+
+    def tree(self, label, *, timeout_ms=0):
+        marker = label + ".pids.json"
+        job = self.call("ssmcp.exec.start", {"command": [self.python, "-u", "-c", TREE_PROGRAM, marker],
+                                              "timeout_ms": timeout_ms})
+        observed = wait_for(lambda: fixture_json(self.workspace / marker), timeout=5, description="owned descendant fixture")
+        identities = [process_identity(observed[key]) for key in ("parent", "child")]
+        self.check(all(identity and still_running(identity) for identity in identities)
+                   and observed["parent"] == job["pid"], f"{label} starts an actual parent and a descendant in a separate session")
+        self.tree_identities.extend(identities)
+        return job, identities
+
+    def stopped(self, identities, label):
+        wait_for(lambda: not any(still_running(identity) for identity in identities), timeout=10,
+                 description=f"{label} process and descendant cleanup")
+        self.check(True, f"{label} stops every observed owned process instance")
+
+    def cancellation(self):
+        cancelled, cancel_ids = self.tree("cancel")
+        result = self.call("ssmcp.exec.cancel", {"job_id": cancelled["job_id"]})
+        self.check(result["cancelled"] and not result["running"], "cancel returns a final cancellation state")
+        self.stopped(cancel_ids, "explicit cancellation")
+        timed, timeout_ids = self.tree("timeout", timeout_ms=3000)
+        final = self.finish_job(timed)
+        self.check(final["timed_out"] and not final["running"], "an execution timeout terminates the job and reports timeout")
+        self.stopped(timeout_ids, "execution timeout")
+        self.save("cancel-timeout.json", {"cancel": result, "cancel_pids": cancel_ids, "timeout": final, "timeout_pids": timeout_ids})
+
+    def expiration(self):
+        # Accelerate only the filesystem timestamp of a verified completed test
+        # artifact. The real 24-hour policy and production cleanup code remain intact.
+        artifact = self.expiring_artifact
+        path = self.artifact_path(artifact)
+        self.check(artifact["complete"], "expiration fixture is finalized before its timestamp is aged")
+        old = time.time() - 86460
+        os.utime(path, (old, old), follow_symlinks=False)
+        client, _, _ = self.titled_client("unified-retention", "自动清理验收", self.workspace)
+        wait_for(lambda: not path.exists(), timeout=5, description="automatic retention after a new connection starts")
+        denied = self.rejected("ssmcp.output.stat", {"id": artifact["id"]})
+        self.stop(client)
+        self.check(self.artifact_path(self.retained_artifact).is_file(),
+                   "automatic expiration removes aged completed output while keeping fresh output")
+        self.save("automatic-expiration.json", {"artifact": artifact,
+                  "method": "aged this test artifact mtime by 86460 seconds; no cleanup tool called after aging",
+                  "trigger": "new connection startup / production automatic janitor", "stat_after_expiry": denied})
+
+    def reload_client(self):
+        job, identities = self.tree("reload")
+        old_id, token, pid = self.client_id, self.secret, self.client.pid
+        accepted = self.code("return await reload(%s);" % json.dumps(old_id))
+        self.check(accepted["accepted"] and accepted["client_id"] == old_id,
+                   "reload acknowledgement arrives over SSH before the connection is replaced")
+        replacement = self.reader.read(timeout=30)
+        self.sensitive.append(replacement.get("login_code", ""))
+        self.check(self.client.pid == pid and self.client.poll() is None and replacement["client_id"] != old_id
+                   and all(replacement[field] == self.original[field] for field in ("title", "name", "cwd")),
+                   "reload reconnects the same client process with a new connection ID and preserved metadata")
+        self.stopped(identities, "reload")
+        wait_for(lambda: self.request(body={}, secret=token)[0] == 401, description="old grant revoked after reload")
+        self.oauth_login(replacement)
+        self.client_id = replacement["client_id"]
+        stale = self.rejected("ssmcp.exec.status", {"job_id": job["job_id"]})
+        self.check(not self.call("ssmcp.exec.list")["jobs"], "reload starts with no inherited background job handles")
+        tools = self.tool_catalog(through_code=True)
+        self.check({tool["name"]: tool for tool in tools} == self.initial_catalog,
+                   "reload rebuilds the full no-Harness catalog through the new registry")
+        preserved = self.call("ssmcp.output.stat", {"id": self.retained_artifact["id"]})
+        self.check(preserved["sha256"] == self.retained_artifact["sha256"]
+                   and preserved["bytes"] == self.retained_artifact["bytes"],
+                   "acknowledged reload preserves owned output through the private one-use handoff")
+        self.rejected("ssmcp.output.read", {"id": self.retained_artifact["id"]}, client_id=self.sibling_id)
+        self.save("reload.json", {"acknowledgement": accepted, "old_client_id": old_id,
+                  "new_client_id": self.client_id, "process_pid": pid, "stopped_processes": identities,
+                  "old_job_rejected": stale, "retained_output": preserved, "old_oauth_status": 401})
+
+    def disconnect(self):
+        job, identities = self.tree("disconnect")
+        token = self.secret
+        self.stop(self.client)
+        self.stopped(identities, "connection shutdown")
+        wait_for(lambda: self.request(body={}, secret=token)[0] == 401, description="grant revoked after disconnect")
+        self.check(self.call("terminal.status", client_id=self.sibling_id, secret=self.sibling_token)["running"],
+                   "disconnect cleanup leaves the independently authorized sibling client usable")
+        self.save("disconnect.json", {"job": job, "stopped_processes": identities, "old_oauth_status": 401})
+
+    def run(self):
+        stages = [("ssh_oauth", self.bootstrap), ("catalog_no_harness", self.catalog),
+                  ("concurrent_execution", self.concurrent_commands), ("output_storage", self.outputs),
+                  ("file_skill_audit", self.workspace_audit), ("client_isolation", self.client_isolation),
+                  ("cancel_timeout", self.cancellation), ("automatic_expiration", self.expiration),
+                  ("reload", self.reload_client), ("disconnect", self.disconnect)]
+        for name, action in stages:
+            self.current_section = name
+            started = time.monotonic()
+            self.sections[name] = {"status": "running"}
+            action()
+            self.sections[name] = {"status": "passed", "duration_seconds": round(time.monotonic() - started, 3)}
+
+    def save_logs(self):
+        for path, log in self.logs:
+            if not log.closed:
+                log.flush()
+            self.save("terminal-" + path.name, self.scrub(path.read_text(errors="replace")).encode())
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
+    parser.add_argument("--timeout", type=float, default=240, help="overall test deadline in seconds")
+    parser.add_argument("--report", type=Path, default=Path("target/acceptance/unified.json"))
+    parser.add_argument("--evidence-dir", type=Path)
+    parser.add_argument("--revision", default="unspecified", help="immutable revision used to build these binaries")
+    args = parser.parse_args()
+    if not sys.platform.startswith("linux") or args.timeout <= 0:
+        parser.error("this real sshd/process-identity acceptance suite requires Linux and a positive timeout")
+    args.report = args.report.resolve()
+    evidence = (args.evidence_dir or args.report.with_name(args.report.stem + "-evidence")).resolve()
+    started = time.monotonic()
+    failure = None
+    report = {"schema": "ssmcp.unified-acceptance.v1", "status": "running", "revision": args.revision,
+              "transport": "real local OpenSSH public-key + OAuth PKCE + HTTP MCP + independent processes + PTY",
+              "model_calls_attempted": 0, "installed_harnesses_exposed": [],
+              "scope": "no-Harness unified runtime; installed native Harness discovery/approval needs its separate acceptance runs"}
+    def expired(_signum, _frame):
+        raise TimeoutError(f"unified acceptance exceeded its {args.timeout:g}-second deadline")
+    previous = signal.signal(signal.SIGALRM, expired)
+    with tempfile.TemporaryDirectory(prefix="ssmcp-unified-e2e-") as temporary:
+        harness = Unified(Path(temporary), args.bin_dir, evidence)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, args.timeout)
+            report["binaries"] = {name: {"path": str((args.bin_dir / name).resolve()),
+                                  "sha256": hashlib.sha256((args.bin_dir / name).read_bytes()).hexdigest()}
+                                  for name in ("ssmcp", "ssmcpd")}
+            harness.run()
+            report["status"] = "passed"
+        except Exception as error:
+            failure = error
+            report["status"] = "failed"
+            report["failure"] = harness.scrub(f"{type(error).__name__}: {error}")
+            harness.sections[harness.current_section] = {"status": "failed", "error": report["failure"]}
+            try:
+                harness.diagnostics()
+            except Exception as diagnostic_error:
+                report["diagnostic_error"] = harness.scrub(str(diagnostic_error))
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            cleanup_errors = []
+            for label, action in (("stop clients and sshd", harness.cleanup),
+                                  ("save redacted terminal evidence", harness.save_logs),
+                                  ("remove identified test artifacts", harness.remove_test_artifacts)):
+                try:
+                    action()
+                except Exception as cleanup_error:
+                    cleanup_errors.append(harness.scrub(f"{label}: {cleanup_error}"))
+            remaining = [item for item in harness.tree_identities if still_running(item)]
+            report["remaining_observed_processes"] = remaining
+            if remaining:
+                cleanup_errors.append("an observed test process survived client shutdown")
+                # Record the product failure before removing only the exact test
+                # process instances. A pidfd avoids signalling a reused PID.
+                for identity in remaining:
+                    try:
+                        fd = os.pidfd_open(identity["pid"])
+                        try:
+                            if still_running(identity):
+                                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                        finally:
+                            os.close(fd)
+                    except ProcessLookupError:
+                        pass
+                    except Exception as cleanup_error:
+                        cleanup_errors.append(harness.scrub(f"fixture fallback cleanup: {cleanup_error}"))
+            if cleanup_errors:
+                report["status"] = "failed"
+                report["cleanup_errors"] = cleanup_errors
+                failure = failure or AssertionError("; ".join(cleanup_errors))
+            report.update({"checks": harness.checks, "sections": harness.sections, "evidence": harness.evidence,
+                           "duration_seconds": round(time.monotonic() - started, 3)})
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+            args.report.chmod(0o600)
+            signal.signal(signal.SIGALRM, previous)
+    print(f"\nUnified acceptance {report['status']}: {len(report['checks'])} checks; report {args.report}", flush=True)
+    if failure is not None:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

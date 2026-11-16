@@ -90,6 +90,12 @@ impl OpenCode {
         let password = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random);
         let events = EventLog::with_output("opencode", output.clone());
         let mut command = Command::new(program);
+        crate::program::configure(&mut command);
+        // Native v2 safeguards. Discovery must separately reject server versions
+        // whose startup can install plugins or resume autonomous model work.
+        command
+            .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
+            .env("OPENCODE_DISABLE_MODELS_FETCH", "1");
         command
             .arg("serve")
             .args(args)
