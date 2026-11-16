@@ -268,7 +268,7 @@ class Harness:
             "authenticationmethods publickey", "passwordauthentication no",
             "kbdinteractiveauthentication no", "disableforwarding yes", "permittty no",
         )
-        self.check(all(item in effective.splitlines() for item in required), "effective sshd config permits public keys only")
+        self.check(all(item in effective.lower().splitlines() for item in required), "effective sshd config permits public keys only")
         daemon = self.spawn("daemon", [
             str(self.binary_dir / "ssmcpd"), "serve", "--listen", f"127.0.0.1:{self.http_port}",
             "--public-url", PUBLIC_URL, "--socket", str(self.socket),

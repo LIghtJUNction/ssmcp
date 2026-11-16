@@ -121,6 +121,7 @@ pub struct Broker {
     pub public_url: String,
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
+    pub portal: crate::portal::Portal,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
 }
 
@@ -146,6 +147,7 @@ impl Broker {
             oauth: crate::oauth::OAuth::with_config(public_url.clone(), config)?,
             identities: IdentityProviders::new(&public_url, github)?,
             public_url,
+            portal: crate::portal::Portal::default(),
             sessions: RwLock::new(HashMap::new()),
         })
     }

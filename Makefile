@@ -42,3 +42,12 @@ install-server: install
 	sed 's|/usr/local/bin/|$(PREFIX)/bin/|g; s|/etc/ssmcpd/|$(SYSCONFDIR)/ssmcpd/|g' packaging/ssmcpd.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcpd.service
 	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcpd.service
 	test -e $(DESTDIR)$(SYSCONFDIR)/ssmcpd/ssmcpd.env || install -m 0644 packaging/ssmcpd.env $(DESTDIR)$(SYSCONFDIR)/ssmcpd/ssmcpd.env
+
+# Optional portal integration; does not activate services or modify sshd configuration.
+.PHONY: install-portal
+install-portal:
+	install -d $(DESTDIR)$(PREFIX)/libexec/ssmcp $(DESTDIR)$(SYSTEMD_DIR)
+	install -m 0644 scripts/sync_portal_ssh.py $(DESTDIR)$(PREFIX)/libexec/ssmcp/
+	sed 's|/usr/local/libexec/|$(PREFIX)/libexec/|g' packaging/ssmcp-portal-ssh.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal-ssh.service
+	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal-ssh.service
+	install -m 0644 packaging/ssmcp-portal-ssh.timer $(DESTDIR)$(SYSTEMD_DIR)/
