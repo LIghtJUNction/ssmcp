@@ -102,7 +102,7 @@ return await terminal.list(clientId);
 
 模型名称来自调用方声明，界面标记 caller-reported。MCP clientInfo 只提供应用名称；未传模型时显示 Model unknown，不从应用名或历史请求推断。controller.name/model 至少提供一个，拒绝控制字符和超长字段；source 由服务端生成，不接受调用方指定。
 
-该元数据使用 SSH 协议 v5。新版服务端继续接收 v4 客户端，并省略旧端无法识别的新字段；list 中的 controller_metadata 表明连接是否支持身份显示。升级服务端和客户端后，新建或重载连接即可使用完整接口。
+该元数据使用 SSH 协议 v5。新版服务端继续接收 v4 客户端，并省略旧端无法识别的新字段；list 中的 controller_metadata 表明连接是否支持身份显示。先升级服务端，再升级客户端；随后新建或重载连接即可使用完整接口。以新连接实际返回的工具目录为准，仅更新仓库文件不会替换正在运行的进程。
 
 ## 原生 CUA 与 Codex 工具
 

@@ -28,6 +28,43 @@ const MAX_REQUESTS: usize = 64;
 type Response = Result<Value, String>;
 type NativeWriter = Box<dyn AsyncWrite + Unpin + Send>;
 
+tokio::task_local! {
+    static HARNESS_CALL: HarnessCall;
+}
+
+struct CallObservation {
+    id: u64,
+    command_started: AtomicBool,
+    command_completed: AtomicBool,
+}
+
+/// Correlation belongs to this dispatch future, never to the native protocol.
+/// A shared observation survives the separate task that receives the RPC reply.
+#[derive(Clone)]
+pub(crate) struct HarnessCall(Arc<CallObservation>);
+
+impl HarnessCall {
+    pub(crate) fn new(id: u64) -> Self {
+        Self(Arc::new(CallObservation {
+            id,
+            command_started: AtomicBool::new(false),
+            command_completed: AtomicBool::new(false),
+        }))
+    }
+
+    pub(crate) async fn scope<F: std::future::Future>(&self, future: F) -> F::Output {
+        HARNESS_CALL.scope(self.clone(), future).await
+    }
+
+    pub(crate) fn command_started(&self) -> bool {
+        self.0.command_started.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn command_completed(&self) -> bool {
+        self.0.command_completed.load(Ordering::Acquire)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
     JsonRpc,
@@ -37,6 +74,7 @@ pub enum Dialect {
 struct Waiting {
     method: String,
     internal_discovery: bool,
+    harness_call: Option<HarnessCall>,
     reply: oneshot::Sender<Response>,
 }
 
@@ -324,6 +362,7 @@ impl Peer {
         params: Value,
         internal_discovery: bool,
     ) -> Response {
+        let harness_call = HARNESS_CALL.try_with(Clone::clone).ok();
         let id = format!(
             "ssmcp-{}-{}",
             self.request_prefix,
@@ -341,6 +380,7 @@ impl Peer {
                 Waiting {
                     method: method.into(),
                     internal_discovery,
+                    harness_call: harness_call.clone(),
                     reply,
                 },
             );
@@ -378,7 +418,15 @@ impl Peer {
             if internal_discovery {
                 audit["internal_discovery"] = true.into();
             }
+            if let Some(call) = &harness_call {
+                audit["harness_call_id"] = call.0.id.into();
+            }
             self.events.push(audit);
+            if method == "command/exec"
+                && let Some(call) = &harness_call
+            {
+                call.0.command_started.store(true, Ordering::Release);
+            }
         }
         self.send(message).await?;
         timeout(Duration::from_secs(900), receiver)
@@ -510,10 +558,19 @@ impl Peer {
                     let mut audit = message.clone();
                     // A peer cannot claim the bridge's internal provenance.
                     audit.as_object_mut().unwrap().remove("internal_discovery");
+                    audit.as_object_mut().unwrap().remove("harness_call_id");
                     if waiting.internal_discovery {
                         audit["internal_discovery"] = true.into();
                     }
+                    if let Some(call) = &waiting.harness_call {
+                        audit["harness_call_id"] = call.0.id.into();
+                    }
                     self.events.push(audit);
+                    if waiting.method == "command/exec"
+                        && let Some(call) = &waiting.harness_call
+                    {
+                        call.0.command_completed.store(true, Ordering::Release);
+                    }
                 }
                 let result = if self.dialect == Dialect::Pi {
                     Ok(message)
@@ -524,8 +581,11 @@ impl Peer {
                 };
                 let _ = waiting.reply.send(result);
             } else {
+                let mut audit = message;
+                audit.as_object_mut().unwrap().remove("internal_discovery");
+                audit.as_object_mut().unwrap().remove("harness_call_id");
                 self.events
-                    .push(json!({"type":"ssmcp.late_response","response":message}));
+                    .push(json!({"type":"ssmcp.late_response","response":audit}));
             }
             return Ok(());
         }
@@ -562,6 +622,7 @@ impl Peer {
         }
         let mut audit = message;
         audit.as_object_mut().unwrap().remove("internal_discovery");
+        audit.as_object_mut().unwrap().remove("harness_call_id");
         self.events.push(audit);
         Ok(())
     }
@@ -740,6 +801,115 @@ for line in sys.stdin:
                 .filter(|entry| entry["event"]["method"] == "fixture/notification")
                 .all(|entry| entry["event"].get("internal_discovery").is_none())
         );
+        peer.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn harness_correlation_follows_parallel_requests_without_changing_native_json() {
+        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+        command.args([
+            "-u",
+            "-c",
+            r#"
+import json, sys
+pending = [json.loads(sys.stdin.readline()), json.loads(sys.stdin.readline())]
+print(json.dumps({'method':'fixture/notification','harness_call_id':999,'params':{}}), flush=True)
+for request in reversed(pending):
+    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'harness_call_id':999,
+                      'result':{'echo':request,'harness_call_id':999}}), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'harness_call_id':999,
+                      'result':{'echo':request}}), flush=True)
+"#,
+        ]);
+        let peer = Peer::spawn(command, "harness-correlation", Dialect::JsonRpc)
+            .await
+            .unwrap();
+        let first = HarnessCall::new(110);
+        let second = HarnessCall::new(111);
+        let (a, b) = tokio::join!(
+            first.scope(peer.request("command/exec", json!({"command":["fixture-a"]}))),
+            second.scope(peer.request("command/exec", json!({"command":["fixture-b"]})))
+        );
+        let a = a.unwrap();
+        let b = b.unwrap();
+        for (response, expected) in [(&a, "fixture-a"), (&b, "fixture-b")] {
+            assert_eq!(response["echo"]["params"]["command"], json!([expected]));
+            assert_eq!(response["echo"].as_object().unwrap().len(), 4);
+            assert!(response["echo"].get("harness_call_id").is_none());
+            assert_eq!(response["harness_call_id"], 999);
+        }
+        assert!(first.command_started() && first.command_completed());
+        assert!(second.command_started() && second.command_completed());
+        let lookup = HarnessCall::new(114);
+        let lookup_result = lookup
+            .scope(peer.request("fixture/ping", json!({})))
+            .await
+            .unwrap();
+        assert!(!lookup.command_started() && !lookup.command_completed());
+        // Leaving the scoped future must not associate the next call with it.
+        let unscoped = peer.request("fixture/ping", json!({})).await.unwrap();
+        let events = peer.events.read(json!({"max_events":64})).await.unwrap();
+        let entries = events["events"].as_array().unwrap();
+        for (response, expected) in [
+            (&a, Some(110)),
+            (&b, Some(111)),
+            (&lookup_result, Some(114)),
+            (&unscoped, None),
+        ] {
+            let id = &response["echo"]["id"];
+            let matching: Vec<_> = entries
+                .iter()
+                .map(|entry| &entry["event"])
+                .filter(|event| event["request"]["id"] == *id || event["id"] == *id)
+                .collect();
+            assert_eq!(matching.len(), 2);
+            assert!(
+                matching
+                    .iter()
+                    .all(|event| event["harness_call_id"].as_u64() == expected)
+            );
+        }
+        let notification = entries
+            .iter()
+            .map(|entry| &entry["event"])
+            .find(|event| event["method"] == "fixture/notification")
+            .unwrap();
+        assert!(notification.get("harness_call_id").is_none());
+        peer.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn harness_correlation_keeps_failures_without_a_native_response_visible() {
+        let (transport, _server) = tokio::io::duplex(4096);
+        let (reader, writer) = tokio::io::split(transport);
+        let peer = Peer::from_transport(
+            reader,
+            Box::new(writer),
+            None,
+            "harness-early-failure",
+            Dialect::Pi,
+            crate::output::OutputStore::global().unwrap(),
+        )
+        .unwrap();
+        let rejected = HarnessCall::new(112);
+        let result = rejected
+            .scope(peer.request("command/exec", json!({"id":"forbidden"})))
+            .await;
+        assert!(result.unwrap_err().contains("may not override"));
+        assert!(!rejected.command_started() && !rejected.command_completed());
+
+        peer.fail("fixture disconnected before writing");
+        let failed_send = HarnessCall::new(113);
+        assert!(
+            failed_send
+                .scope(peer.request("command/exec", json!({})))
+                .await
+                .is_err()
+        );
+        assert!(failed_send.command_started());
+        assert!(!failed_send.command_completed());
         peer.shutdown().await;
     }
 

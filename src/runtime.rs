@@ -238,10 +238,18 @@ impl Runtime {
         self.registry.validate(&tool)?;
         let call_id = self.next_call.fetch_add(1, Ordering::Relaxed);
         let started = std::time::Instant::now();
+        let harness_call = tool
+            .provider
+            .is_harness()
+            .then(|| backend::rpc::HarnessCall::new(call_id));
+        let command_rpc_expected = tool.provider == Provider::Codex
+            && (tool.native_name == "codex.command_exec"
+                || (tool.native_name == "codex.rpc" && arguments["method"] == "command/exec"));
         if tool.provider.is_harness() {
             self.audit.push(
                 json!({"type":"ssmcp.harness.tool.started","call_id":call_id,
                 "provider":tool.provider.label(),"tool":name,"generation":tool.generation,
+                "rpc_correlation":true,"command_rpc_expected":command_rpc_expected,
                 "file_audit":"unknown","approval":"native"}),
             );
         }
@@ -284,7 +292,14 @@ impl Runtime {
                 .map(backend::result),
             Provider::Reload => Err("reload requires an acknowledged foreground connection".into()),
             Provider::Audit => self.audit.read(arguments).await.map(backend::result),
-            _ => self.backend.dispatch(&tool, arguments).await,
+            _ => {
+                let dispatch = self.backend.dispatch(&tool, arguments);
+                if let Some(call) = &harness_call {
+                    call.scope(dispatch).await
+                } else {
+                    dispatch.await
+                }
+            }
         };
         if tool.provider.is_harness() {
             self.audit.push(
@@ -292,6 +307,9 @@ impl Runtime {
                 "provider":tool.provider.label(),"tool":name,"generation":tool.generation,
                 "duration_ms":started.elapsed().as_millis() as u64,
                 "success":outcome.as_ref().is_ok_and(|result|result["isError"]!=true),
+                "rpc_correlation":true,"command_rpc_expected":command_rpc_expected,
+                "command_rpc_started":harness_call.as_ref().is_some_and(|call|call.command_started()),
+                "command_rpc_completed":harness_call.as_ref().is_some_and(|call|call.command_completed()),
                 "file_audit":"unknown","approval":"native"}),
             );
         }
