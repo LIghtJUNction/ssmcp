@@ -143,10 +143,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/openapi.json":
             self.reply(200, self.server.document)
         elif path == "/api/info":
-            self.reply(200, {"data": {
+            # Native v2.3.0 HTTP ServerInfo is flat; SDK response wrappers are
+            # not part of the wire body (packages/server/test/process.test.ts).
+            self.reply(200, {
                 "version": "2.3.0", "pid": os.getpid(),
                 "child_pid": self.server.child.pid, "authenticated": True,
-            }}, headers={"X-Fixture-Result": "preserved"})
+            }, headers={"X-Fixture-Result": "preserved"})
         elif path == "/api/event":
             self.stream()
         elif path.startswith("/api/fixture/extra/"):

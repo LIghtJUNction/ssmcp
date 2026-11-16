@@ -358,6 +358,32 @@ async fn mcp_catalog_preserves_full_native_tools_and_stable_names_without_model_
 }
 
 #[tokio::test]
+async fn background_catalog_reads_coalesce_native_enumeration_but_explicit_refresh_still_works() {
+    let codex = start().await;
+    let listed = |stats: &Value| {
+        stats["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|method| **method == "mcpServerStatus/list")
+            .count()
+    };
+    let before = call(&codex, "codex.server_diagnostics", json!({})).await;
+    for _ in 0..4 {
+        assert_eq!(mcp_tools(&codex.background_tools().await.unwrap()).len(), 8);
+    }
+    let cached = call(&codex, "codex.server_diagnostics", json!({})).await;
+    assert_eq!(listed(&cached), listed(&before));
+    mcp_mode(&codex, "updated").await;
+    let changed = codex.tools().await.unwrap();
+    assert!(!mcp_tools(&changed).is_empty());
+    let refreshed = call(&codex, "codex.server_diagnostics", json!({})).await;
+    assert!(listed(&refreshed) > listed(&cached));
+    assert_eq!(refreshed["model_requests"], 0);
+    codex.shutdown().await;
+}
+
+#[tokio::test]
 async fn mcp_calls_keep_original_arguments_results_and_native_error_flag() {
     let codex = start().await;
     let tools = codex.tools().await.unwrap();
@@ -676,6 +702,7 @@ async fn native_peer_exit_invalidates_mcp_routes_and_catalog() {
     })
     .await
     .unwrap();
+    assert!(codex.background_tools().await.is_err());
     assert!(codex.tools().await.is_err());
     assert!(codex.call(&old_name, json!({})).await.is_err());
     let diagnostic = codex.diagnostics().await;

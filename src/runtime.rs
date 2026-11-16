@@ -20,6 +20,7 @@ use std::{
 };
 
 pub(crate) const CATALOG_SNAPSHOT_SECONDS: u64 = 120;
+pub(crate) const CATALOG_SNAPSHOT_MAX_SECONDS: u64 = 15 * 60;
 pub(crate) const MAX_CATALOG_SNAPSHOTS: usize = 4;
 pub(crate) const MAX_CATALOG_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 
@@ -28,6 +29,16 @@ struct CatalogSnapshot {
     tools: Arc<Vec<Value>>,
     bytes: usize,
     created: Instant,
+    accessed: Instant,
+}
+
+impl CatalogSnapshot {
+    fn expired(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.accessed)
+            >= Duration::from_secs(CATALOG_SNAPSHOT_SECONDS)
+            || now.saturating_duration_since(self.created)
+                >= Duration::from_secs(CATALOG_SNAPSHOT_MAX_SECONDS)
+    }
 }
 
 #[derive(Default)]
@@ -37,6 +48,10 @@ struct Catalog {
 
 impl Catalog {
     fn first(&self, tools: Vec<Value>) -> Result<Value, String> {
+        self.first_at(tools, Instant::now())
+    }
+
+    fn first_at(&self, tools: Vec<Value>, now: Instant) -> Result<Value, String> {
         let page = backend::page(&tools, None)?;
         let Some(cursor) = page["nextCursor"].as_str() else {
             return Ok(page);
@@ -47,10 +62,16 @@ impl Catalog {
             return Err("tool catalog exceeds the 64 MiB pagination snapshot limit".into());
         }
         let mut snapshots = self.snapshots.lock().unwrap_or_else(|e| e.into_inner());
-        snapshots.retain(|snapshot| {
-            snapshot.created.elapsed() < Duration::from_secs(CATALOG_SNAPSHOT_SECONDS)
-                && snapshot.fingerprint != fingerprint
-        });
+        snapshots.retain(|snapshot| !snapshot.expired(now));
+        if let Some(index) = snapshots
+            .iter()
+            .position(|snapshot| snapshot.fingerprint == fingerprint)
+        {
+            let mut snapshot = snapshots.remove(index).unwrap();
+            snapshot.accessed = now;
+            snapshots.push_back(snapshot);
+            return Ok(page);
+        }
         let mut retained: usize = snapshots.iter().map(|snapshot| snapshot.bytes).sum();
         while snapshots.len() >= MAX_CATALOG_SNAPSHOTS
             || retained + bytes > MAX_CATALOG_SNAPSHOT_BYTES
@@ -63,7 +84,8 @@ impl Catalog {
             fingerprint,
             tools: Arc::new(tools),
             bytes,
-            created: Instant::now(),
+            created: now,
+            accessed: now,
         });
         Ok(page)
     }
@@ -74,19 +96,27 @@ impl Catalog {
 
     fn next_at(&self, cursor: &str, now: Instant) -> Result<Value, String> {
         let (fingerprint, _) = cursor.split_once(':').ok_or("invalid tool cursor")?;
-        let tools = {
-            let mut snapshots = self.snapshots.lock().unwrap_or_else(|e| e.into_inner());
-            snapshots.retain(|snapshot| {
-                now.saturating_duration_since(snapshot.created)
-                    < Duration::from_secs(CATALOG_SNAPSHOT_SECONDS)
-            });
-            snapshots
-                .iter()
-                .find(|snapshot| snapshot.fingerprint == fingerprint)
-                .map(|snapshot| snapshot.tools.clone())
-                .ok_or("tool catalog snapshot expired or was evicted; restart tools/list without a cursor")?
-        };
-        backend::page_with_fingerprint(tools.as_ref(), Some(cursor), fingerprint)
+        let mut snapshots = self.snapshots.lock().unwrap_or_else(|e| e.into_inner());
+        snapshots.retain(|snapshot| !snapshot.expired(now));
+        let index = snapshots
+            .iter()
+            .position(|snapshot| snapshot.fingerprint == fingerprint)
+            .ok_or(
+                "tool catalog snapshot expired or was evicted; restart tools/list without a cursor",
+            )?;
+        // Renew only after validating the complete cursor. A steady multi-page
+        // read must not expire at its creation time, while malformed cursors
+        // must not pin cache entries. The absolute age and byte/count limits
+        // still bound retained snapshots, independently of current call routing.
+        let page = backend::page_with_fingerprint(
+            snapshots[index].tools.as_ref(),
+            Some(cursor),
+            fingerprint,
+        )?;
+        let mut snapshot = snapshots.remove(index).unwrap();
+        snapshot.accessed = now;
+        snapshots.push_back(snapshot);
+        Ok(page)
     }
 }
 
@@ -364,5 +394,117 @@ mod tests {
                 .contains("expired")
         );
         assert!(catalog.next("invalid").is_err());
+    }
+
+    #[test]
+    fn active_large_catalog_scan_renews_idle_expiry_without_changing_its_tools() {
+        let catalog = Catalog::default();
+        let created = Instant::now();
+        let definitions: Vec<_> = (0..1342)
+            .map(|n| json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":1}))
+            .collect();
+        let mut page = catalog.first_at(definitions, created).unwrap();
+        let mut seen = page["tools"].as_array().unwrap().len();
+        let mut elapsed = 0;
+        while let Some(cursor) = page["nextCursor"].as_str() {
+            elapsed += 30;
+            // Publish a different current view after the original 120-second
+            // creation deadline; it must not prune the actively read old view.
+            if elapsed == 150 {
+                catalog
+                    .first_at(tools(2), created + Duration::from_secs(elapsed))
+                    .unwrap();
+            }
+            page = catalog
+                .next_at(cursor, created + Duration::from_secs(elapsed))
+                .unwrap();
+            let tools = page["tools"].as_array().unwrap();
+            assert!(tools.iter().all(|tool| tool["generation"] == 1));
+            seen += tools.len();
+        }
+        assert!(elapsed > CATALOG_SNAPSHOT_SECONDS);
+        assert_eq!(seen, 1342);
+    }
+
+    #[test]
+    fn snapshot_capacity_evicts_the_least_recent_successful_reader() {
+        let catalog = Catalog::default();
+        let created = Instant::now();
+        let mut pages = Vec::new();
+        for generation in 0..MAX_CATALOG_SNAPSHOTS {
+            pages.push(catalog.first_at(tools(generation), created).unwrap());
+        }
+        let active = pages[0]["nextCursor"].as_str().unwrap();
+        catalog
+            .next_at(active, created + Duration::from_secs(60))
+            .unwrap();
+        catalog
+            .first_at(tools(99), created + Duration::from_secs(61))
+            .unwrap();
+        assert!(
+            catalog
+                .next_at(active, created + Duration::from_secs(62))
+                .is_ok()
+        );
+        assert!(
+            catalog
+                .next_at(
+                    pages[1]["nextCursor"].as_str().unwrap(),
+                    created + Duration::from_secs(62),
+                )
+                .is_err()
+        );
+        assert_eq!(
+            catalog.snapshots.lock().unwrap().len(),
+            MAX_CATALOG_SNAPSHOTS
+        );
+    }
+
+    #[test]
+    fn invalid_continuations_do_not_extend_snapshot_lifetime() {
+        let catalog = Catalog::default();
+        let created = Instant::now();
+        let page = catalog.first_at(tools(0), created).unwrap();
+        let cursor = page["nextCursor"].as_str().unwrap();
+        let fingerprint = cursor.split_once(':').unwrap().0;
+        assert!(
+            catalog
+                .next_at(
+                    &format!("{fingerprint}:invalid"),
+                    created + Duration::from_secs(CATALOG_SNAPSHOT_SECONDS - 1),
+                )
+                .is_err()
+        );
+        assert!(
+            catalog
+                .next_at(
+                    cursor,
+                    created + Duration::from_secs(CATALOG_SNAPSHOT_SECONDS)
+                )
+                .unwrap_err()
+                .contains("expired")
+        );
+    }
+
+    #[test]
+    fn repeated_valid_pages_cannot_retain_a_snapshot_past_its_absolute_age() {
+        let catalog = Catalog::default();
+        let created = Instant::now();
+        let page = catalog.first_at(tools(0), created).unwrap();
+        let cursor = page["nextCursor"].as_str().unwrap();
+        for elapsed in (60..CATALOG_SNAPSHOT_MAX_SECONDS).step_by(60) {
+            catalog
+                .next_at(cursor, created + Duration::from_secs(elapsed))
+                .unwrap();
+        }
+        assert!(
+            catalog
+                .next_at(
+                    cursor,
+                    created + Duration::from_secs(CATALOG_SNAPSHOT_MAX_SECONDS),
+                )
+                .unwrap_err()
+                .contains("expired")
+        );
     }
 }

@@ -36,7 +36,7 @@ enum Driver {
 impl Driver {
     async fn tools(&self) -> Result<Vec<Value>, String> {
         match self {
-            Self::Codex(d) => d.tools().await,
+            Self::Codex(d) => d.background_tools().await,
             Self::Claude(d) => d.tools().await,
             Self::Pi(d) => d.tools().await,
             Self::OpenCode(d) => d.tools().await,
@@ -258,7 +258,9 @@ impl Backend {
         };
         let changed = {
             let mut diagnostics = self.diagnostics.lock().unwrap();
-            let changed = diagnostics.get(&provider) != Some(&diagnostic);
+            let changed = diagnostics
+                .get(&provider)
+                .is_none_or(|previous| diagnostic_changed(previous, &diagnostic));
             diagnostics.insert(provider, diagnostic.clone());
             changed
         };
@@ -370,6 +372,19 @@ impl Drop for Backend {
             task.abort()
         }
     }
+}
+
+fn diagnostic_changed(previous: &Value, current: &Value) -> bool {
+    fn stable(mut value: Value) -> Value {
+        if let Some(details) = value.get_mut("details").and_then(Value::as_object_mut) {
+            // Discovery attempt counters and transient polling activity do not
+            // change a provider's advertised capability or availability.
+            details.remove("generation");
+            details.remove("refreshing");
+        }
+        value
+    }
+    stable(previous.clone()) != stable(current.clone())
 }
 
 async fn probe_version(program: &Path) -> Result<String, String> {
@@ -545,6 +560,23 @@ pub fn result(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovery_attempt_metadata_does_not_repeat_a_stable_provider_status() {
+        let previous = json!({"provider":"codex","status":"ready","tools":1342,
+            "details":{"generation":1,"refreshing":false,"status":"ready","reason":null}});
+        let mut polled = previous.clone();
+        polled["details"]["generation"] = 99.into();
+        polled["details"]["refreshing"] = true.into();
+        assert!(!diagnostic_changed(&previous, &polled));
+        let mut changed = polled.clone();
+        changed["tools"] = 1341.into();
+        assert!(diagnostic_changed(&previous, &changed));
+        changed = polled;
+        changed["details"]["status"] = "unavailable".into();
+        changed["details"]["reason"] = "native discovery failed".into();
+        assert!(diagnostic_changed(&previous, &changed));
+    }
+
     #[test]
     fn shell_capabilities_use_the_same_validated_dispatch_inside_code_mode() {
         assert!(matches!(

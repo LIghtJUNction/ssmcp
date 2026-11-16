@@ -501,7 +501,7 @@ def check_opencode(harness, label, tools, directory):
         for request in requests
     ), "opencode: discovery only reads native info and OpenAPI, without starting an event session")
     info = harness.call("opencode.server.info")
-    process = info["body"]["data"]
+    process = info["body"]
     harness.check(info["status"] == 200 and process["authenticated"]
                   and info["headers"]["x-fixture-result"] == "preserved",
                   "opencode: private authenticated HTTP responses retain status and headers")
@@ -648,8 +648,8 @@ def combined_harnesses_and_commands(harness):
                   and states[3]["status"] == 200,
                   "all: shell and multiple discovered harness tools execute in one parallel code_mode")
     owned_pids = [states[0]["pid"], states[1]["pid"], int((directory / "cc" / "pid").read_text())]
-    external_pids = [states[2]["data"]["pid"], states[3]["body"]["data"]["pid"],
-                     states[3]["body"]["data"]["child_pid"]]
+    external_pids = [states[2]["data"]["pid"], states[3]["body"]["pid"],
+                     states[3]["body"]["child_pid"]]
 
     commands = [
         {"command": ["/bin/sh", "-c", "sleep 0.15; printf alpha; printf alpha-err >&2"]},
