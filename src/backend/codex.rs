@@ -708,7 +708,7 @@ fn load_schemas(root: &Path) -> crate::Result<BTreeMap<String, Value>> {
                     .path()
                     .strip_prefix(root)?
                     .to_string_lossy()
-                    .into_owned();
+                    .replace('\\', "/");
                 schemas.insert(name, serde_json::from_slice(&fs::read(entry.path())?)?);
             }
         }

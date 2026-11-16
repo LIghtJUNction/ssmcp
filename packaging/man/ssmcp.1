@@ -1,6 +1,6 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.4.1" "User Commands"
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.5.1" "User Commands"
 .SH NAME
-ssmcp \- expose a local shell and installed coding harnesses through an SSH-authenticated MCP gateway
+ssmcp \- bridge local tools and independent commands through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
 .B ssmcp
 .RB [ \-\-name " name" ]
@@ -15,24 +15,39 @@ ssmcp \- expose a local shell and installed coding harnesses through an SSH-auth
 .B ssmcp
 .B \-\-list-tools
 .SH DESCRIPTION
-ssmcp authenticates to OpenSSH using a public key and starts one local shell/PTY client. Coding harnesses installed on the client are discovered automatically and their actual native tools are registered in the same code_mode catalog. Supported harness integrations include Codex App Server, Claude Code MCP, Pi RPC and OpenCode v2 API.
+ssmcp authenticates to OpenSSH using a public key and always provides a local
+shell, managed command jobs and file tools. It discovers installed Codex, Claude
+Code, Pi and OpenCode executables on PATH; optional harness failures leave other
+capabilities available. Multiple clients may connect under the same SSH account.
+The server assigns each connection a random client ID. With \-\-allow, it
+returns the global HTTPS /mcp URL for GitHub identity authorization. Without
+\-\-allow, it returns the SSH account's /username URL and a one-time login code.
 .PP
-The server assigns each connection a random client ID. With \-\-allow, it returns the global HTTPS /mcp URL for GitHub identity authorization. Without \-\-allow, it returns the SSH account's /username URL and a one-time login code.
+Interactive standard output shows a connection summary. Redirected output or
+JSONL mode emits one JSON object containing url, client_id, name, type, hostname
+and cwd. The type is shell. GitHub mode adds auth:"github" and the canonical
+allow list; login-code mode adds login_code and login_expires_in. Live activity and
+diagnostics use standard error. The cwd field is the startup directory; it does
+not track shell directory changes or the workspaces of native agent sessions.
 .PP
-One JSON object containing url, client_id, name, type, hostname and cwd, plus title when set, is written to standard output. The type is always shell. GitHub mode adds auth:"github" and the canonical allow list; login-code mode adds login_code and login_expires_in. Live activity and diagnostics use standard error. The cwd field is the startup directory.
+The external MCP catalog contains exactly two tools: list and code_mode.
+Use list to discover clients and their native capabilities. Use code_mode to
+run JavaScript that calls a selected capability over SSH. One registry owns all
+Shell, workspace, Harness and MCP routes. Only usable native interfaces are
+registered; installation alone is not a tool inventory. Native names, schemas,
+results, errors and approval requests retain their meaning through namespaced
+routes. Each call checks the live connection, provider and current authorization.
 .PP
-The external MCP catalog contains exactly two tools: list and code_mode. list discovers clients and their merged native tool catalog. code_mode runs JavaScript that calls a selected capability over SSH. The client uses one shell entry point. Remove obsolete \-t, \-\-type and \-\-backend options when migrating an older command.
-.PP
-Keep the program running while its client is in use. Ctrl-C or SIGTERM closes the SSH connection and stops its harnesses and background jobs. Login-code grants issued by that connection are revoked. GitHub identity grants remain subject to their own lifetimes and each currently connected client's allow policy.
+Keep the program running while its tools are in use. Ending the connection
+stops its owned background jobs and native providers. Login-code grants issued by that
+connection are revoked. GitHub identity grants remain subject to their own
+lifetimes and each currently connected client's allow policy.
 .SH OPTIONS
 .TP
 .BI \-\-name " name"
-Set the client display name. The default combines hostname and process ID. Names are limited to 128 UTF-8 bytes and may not contain control characters. Duplicate names are allowed; use the server-generated client ID to select an unambiguous target.
-.TP
-.BI \-\-allow " username@github[,username@github...]"
-Allow verified GitHub users to access this connection. Repeat this option or separate entries with commas. At most 32 distinct users are accepted; case is normalized and duplicates are removed. Usernames contain 1 to 39 ASCII letters or digits with optional single hyphens between them.
-.PP
-This option requires an SSH destination and cannot accompany \-\-list-tools. No GitHub login is performed in the CLI; existing SSH keys and configuration remain in use. The server must support and configure GitHub OAuth.
+Set the client display name. The default is generated from the host and process. Names are limited to 128 UTF-8 bytes and may not contain control
+characters or consist only of whitespace. Duplicate names are allowed; use the
+server-generated client ID to select an unambiguous target.
 .TP
 .BI \-\-title " title"
 Set the session task shown in client discovery, code_mode's clients snapshot
@@ -45,6 +60,18 @@ A nonempty title requires a server that supports this metadata field.
 .BI \-F " file"
 Use a separate OpenSSH client configuration file.
 .TP
+.BI \-\-allow " username@github[,username@github...]"
+Allow verified GitHub users to access this connection. Repeat this option or
+separate entries with commas. At most 32 distinct users are accepted; case is
+normalized and duplicates are removed. The identity syntax is username@provider;
+github is the currently supported provider. Usernames contain 1 to 39 ASCII
+letters or digits with optional single hyphens between them.
+.PP
+This option requires an SSH destination and cannot accompany \-\-list-tools.
+No GitHub login is performed in the CLI; existing SSH keys and configuration
+remain in use. The server must support and configure GitHub OAuth. An unsupported
+server causes startup to fail before exposing the local backend.
+.TP
 .BI \-i " file"
 Use the specified private key. ssh-agent is also supported.
 .TP
@@ -52,10 +79,13 @@ Use the specified private key. ssh-agent is also supported.
 Connect to the specified SSH port.
 .TP
 .BI \-\-shell " path"
-Run the specified absolute shell path in the local pseudo-terminal. The default is the absolute path in SHELL, or /bin/sh.
+Run the specified absolute shell path in a local pseudo-terminal. The default
+is SHELL or /bin/sh on Unix and COMSPEC or cmd.exe on Windows.
 .TP
 .B \-\-list-tools
-Probe local providers, print the discovered capability catalog and shut them down. Does not connect to SSH and does not accept user@host.
+Start the local shell and discover installed harnesses, print the combined
+native JSON catalog and shut them down. Does not connect to SSH and does not accept user@host. This is
+the native capability catalog, not the two-tool external MCP catalog.
 .TP
 .B \-h, \-\-help
 Print usage information and exit.
@@ -65,20 +95,32 @@ Print the version and exit.
 .SH MCP TOOLS
 .TP
 .B list
-With no arguments, return online client IDs, names, shell type, hostnames and startup directories that the current authorization may access. With client_id, return that client's merged native tool names, descriptions and schemas. Pass a returned nextCursor as cursor to read another capability page.
+With no arguments, return online client IDs, names, backend types, hostnames and
+startup directories that the current authorization may access. With client_id, return
+that client's native tool names, descriptions and schemas. Pass a returned
+nextCursor as cursor to read another capability page.
 .TP
 .B code_mode
-Accept a code string and optional timeout_ms. JavaScript has clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), Promise.all, print, console.log and top-level return. Calls return complete native MCP results, including isError and structuredContent. Inspect isError even when the JavaScript promise resolves.
+Accept a code string and optional timeout_ms. JavaScript has clients (a metadata
+snapshot), await call(clientId, toolName, arguments), await tools(clientId,
+cursor), print, console.log and top-level return. Calls return complete native
+MCP results, including isError and structuredContent. Inspect isError even when
+the JavaScript promise resolves. The code-mode structuredContent has result
+(the script return value) and logs (an array of strings).
 .PP
-The server starts a system-installed Node.js process inside bubblewrap for each
-request. Node.js 18 or newer, bubblewrap 0.8 or newer and util-linux prlimit are
+The server resolves an installed Node.js binary and validates --jitless support
+before starting it inside bubblewrap for each request. Runtime manager shims are
+not passed to Node.js as if they were the runtime, and discovery does not install
+missing runtimes or dependencies. Node.js 18 or newer, bubblewrap 0.8 or newer and util-linux prlimit are
 server dependencies managed by the operating system package manager; no npm package is needed. A client-only
 ssmcp installation does not require these server dependencies. The public
-JavaScript API includes clients, call, tools, logging, reload, outputs.read/stat/cleanup,
+JavaScript API includes clients, call, tools, logging, exec, reload, outputs.read/stat/cleanup,
 fs, context, skills, agents, rsync/sync, jobs, ports and resources. Short native
 results are returned unchanged. Long backend output is replaced by artifact
 metadata; inspect spilled and use outputs.read. PTY artifacts contain raw terminal
-bytes; other oversized backend results contain the saved MCP result JSON.
+bytes; command streams have separate artifacts; oversized MCP results retain
+the saved MCP JSON. OpenCode HTTP responses may expose body_artifact and
+body_format instead of a generic MCP-result artifact.
 Native backend calls execute
 on the selected client with that local user's permissions. Runtime state is
 fresh for each request; backend sessions remain alive.
@@ -91,19 +133,71 @@ or unavailable namespace isolation cause code_mode to fail; list remains usable.
 Timeout stops orchestration, but an already-started native action may continue.
 Inspect native state before retrying a mutating action. Retain output cursors
 and agent session IDs in the calling application for subsequent requests.
-Native capabilities include terminal.*, ssmcp.exec.*, ssmcp.fs.*, ssmcp.skills.*, and tools exposed by installed harnesses. Harness namespaces are codex.*, cc.*, pi.* and opencode.*. Only actually discovered capabilities are registered.
-.SH EXECUTION
+.SH BACKENDS
 .TP
-.B ssmcp.exec.start
-Starts an independent argv process in the background and returns a job ID. stdout and stderr have separate cursors. Observe tasks with ssmcp.exec.list, ssmcp.exec.status, ssmcp.exec.wait, ssmcp.exec.read and ssmcp.exec.events; stop a task with ssmcp.exec.cancel. Use any returned output artifact metadata to read retained bytes.
+.B shell
+Always available: an interactive local shell and PTY with terminal.read,
+terminal.write, terminal.resize and terminal.status. Independent commands use
+ssmcp.exec.start/list/status/read/wait/cancel/forget/events.
 .TP
-.B ssmcp.fs.write
-Atomically writes a workspace-relative file. Inspect the result and available audit events for completion and observable changes. File paths in tool arguments alone do not establish successful reads or writes. Skills discovered by list/view and documents read by skills.read are distinct from a native skill invocation. External operations absent from the native event interface are outside the observable audit scope.
+.B codex
+Codex App Server over stdio. Requires schema generation support. The installed
+CLI's generated client methods, events and approval responses are callable.
+Configured MCP tools are dynamically enumerated with mcpServerStatus/list and
+called through mcpServer/tool/call, under discovered codex.mcp.* routes. Only a
+complete successful catalog replaces the previous snapshot. Missing native
+schemas remain unavailable; the bridge does not synthesize them.
+.TP
+.B claude
+Claude Code's native claude mcp serve entry point. Tools are discovered and
+prefixed with claude.; their schemas and results are preserved. Native MCP tool
+calls do not imply the interactive terminal's confirmation behavior.
+.TP
+.B pi
+A limited native JSONL RPC bridge, registered only after a safe startup and
+successful handshake. The exposed operations are pi.rpc, ssmcp.pi.events,
+ssmcp.pi.requests and ssmcp.pi.respond. Internal model, plugin and MCP tool
+schemas are not inferred from a known control-command list.
+.TP
+.B opencode
+Attach to an operator-managed existing local service using SSMCP_OPENCODE_URL
+and OPENCODE_PASSWORD. Discovery reads /api/info and /openapi.json; it does not
+start a service, create sessions or submit prompts. OpenCode v2.3.0 service
+startup can initialize schedules and install configured plugins, so automatic
+spawn is unavailable. HTTP, SSE and WebSocket operations require successful
+native discovery and retain native permission decisions.
+.SH MANAGED COMMANDS
+Use exec.run(clientId,{command:[program,arg],wait_ms:5000}) for an independent
+command. Results carry job_id, running, exit_code, stdout, stderr and byte
+cursors. A successful start acknowledges launch, not completion. The working
+directory must remain within the authorized workspace. Preserve pid_role when
+reporting a PID; a supervisor PID is distinct from the command PID. Arguments are passed directly; shell syntax requires an explicit shell.
+Use exec.parallel(clientId,commands,{concurrency:4}) to orchestrate commands in
+parallel. Results preserve input order and report fulfilled/rejected per item;
+a fulfilled operation may still have a nonzero process exit code.
 .PP
-Independent jobs do not share the interactive PTY. code_mode supports Promise.all for independent calls. Check each task's final state and exit code; a start acknowledgement only confirms that the process was launched.
+exec.start returns immediately. exec.status, exec.wait and exec.read observe the
+same job ID across code_mode requests. wait_ms is 0..60000 and ends only the
+wait. timeout_ms is 0..900000 and stops the process tree when nonzero; zero is
+unlimited. exec.cancel stops a running job; exec.forget removes a finished record.
+exec.list shows retained jobs. Concurrency limits simultaneous start/wait/read
+orchestrations; jobs still running after a wait can overlap later commands.
 .PP
-Native permissions and approvals remain enforced by the provider. MCP does not guarantee that the caller's model identity is exposed; ssmcp does not infer it.
+At most 32 commands run simultaneously. Capacity is checked before spawning.
+Up to 128 records are retained, evicting the oldest completed record when full.
+Each stream has a 64 KiB memory tail and an independent cursor. Read at most
+32 KiB per stream; truncated flags report missed tail bytes. Long output also
+has a persistent artifact: use outputs.read for its captured prefix and inspect
+capture completeness. Exiting or reloading the client stops its managed work.
+
 .SH AUTHENTICATION
+Only SSH public-key authentication is permitted. Standard OpenSSH host-key
+verification remains enabled. With \-\-allow, add the returned /mcp URL to an
+OAuth-capable MCP client. Sign in with GitHub in the browser, then review the
+verified identity, MCP client name, registered callback origin and resource URL
+on ssmcp's separate consent page. Explicitly allow or cancel that MCP client's
+request. GitHub sign-in alone does not grant the MCP client access.
+.PP
 The server resolves allowed GitHub usernames to stable user IDs when each
 connection attaches. Discovery and calls check that connection's IDs. A rename
 does not change an existing connection's identity match; reconnecting resolves
@@ -162,16 +256,18 @@ login code when a fresh login-code authorization is needed.
 Reopening an MCP application can reuse its saved, valid OAuth tokens. GitHub
 grants survive local client reconnects, while session IDs and backends change;
 the new connection must explicitly allow the identity. Login-code grants require
-their source connection to remain alive. Restarting ssmcpd clears connections and active authorizations, so both modes require a new login. With DCR persistence enabled, unexpired client registrations remain available. Access-token expiry can
+their source connection to remain alive. Access and refresh tokens remain in memory, so restarting ssmcpd requires a new
+login. Configured DCR persistence retains existing client registrations. Access-token expiry can
 be handled by silent refresh. Expired, revoked or replayed refresh tokens produce
 invalid_grant; sign in again using the selected mode. Updating source alone does
 not upgrade the running daemon.
 .PP
 Native agent permissions, request IDs and approval responses remain explicit.
-ssmcp does not automatically answer native requests. Install and configure optional harnesses on the client; the gateway does not need those harnesses installed.
+ssmcp does not automatically answer native requests. Install and configure the
+selected agent on the client; the gateway does not need that agent installed.
 .SH CONTEXT AND TEXT FILES
-Every backend provides native skill metadata, instruction views and UTF-8 file
-primitives through code_mode. Use context.roots, skills.list/read/view,
+The client provides skill metadata, instruction views and UTF-8 file
+primitives through code_mode independently of any Harness. Use context.roots, skills.list/read/view,
 agents.list/read/resolve and fs.readText/writeText/editText.
 The workspace root is the startup directory. Repeat
 .B --context-root PATH
@@ -179,7 +275,27 @@ to add up to eight existing read-only context directories. Select their returned
 root IDs explicitly; these grants do not extend ordinary file writes.
 Skill views index name and description frontmatter. Full documents are read on
 demand. Instruction views follow the selected root to a target and preserve
-source paths and contents. No model is started by these operations.
+source paths and contents. No model is started by these operations. Skill
+selection uses a root and path; discovery and reading do not establish that a
+model invoked or used a skill.
+.SH FILE AND TOOL AUDIT
+Successful native reads emit ssmcp.file.read. Atomic writes and edits capture
+the preimage while holding the write guard and emit ssmcp.file.write and
+ssmcp.file.diff only after commit. Missing, known text and unknown snapshots
+are distinct. Comparable text produces actual added/removed line counts;
+unknown, binary, sensitive or excessive snapshots use null counts and an
+explicit reason. Failed calls do not produce successful access events.
+.PP
+Read ssmcp.fs.events for evidence. Small complete diffs are inline; larger
+diffs use diff_artifact in the shared output store. preview is display-only.
+Inspect diff_complete, diff_unavailable_reason and diff_redacted. External
+file effects remain unknown unless observed through a native interface.
+Harness lifecycle events identify the provider, tool, call, duration and
+success without inferring effects from names or arguments.
+.PP
+Context emits skill.discovered, skill.read and discovery summary events under
+the ssmcp prefix. An invoked state requires explicit native evidence; finding
+a SKILL.md does not execute it.
 
 .SH CLIENT RELOAD
 After installing a replacement at the original client entry point, use
@@ -202,8 +318,9 @@ before using reload. Old clients without the reload tool require a manual
 restart for their first upgrade.
 
 .SH LONG OUTPUT
-Output exceeding 32 KiB or 500 lines is stored on the client under
-.IR /tmp/ssmcp/<uid>/output-<id>.log .
+Output exceeding 32 KiB or 500 lines is stored in a private client directory.
+Linux uses /tmp/ssmcp/<uid>; other platforms use a user-specific temporary
+directory. Use the returned artifact ID and path rather than assuming a path.
 The result carries metadata instead of the full output: ID, path, SHA-256,
 byte and line counts, observed_bytes, complete and expires_at_unix.
 The digest covers the first N bytes at that snapshot, where N is the bytes field.
@@ -213,8 +330,10 @@ integrity, not whether the command succeeded.
 .PP
 A PTY artifact
 covers the whole terminal session's merged raw stream, including terminal control
-bytes. Other oversized native results are stored as the MCP result JSON received
-by ssmcp. Output already truncated by a native harness cannot be recovered.
+bytes. Independent command artifacts preserve stdout and stderr separately. Oversized
+MCP results are stored as their original MCP result JSON. OpenCode HTTP bodies
+retain their body_format and separate body_artifact, and short JSON bodies
+remain structured objects. Output already truncated by a native harness cannot be recovered.
 .PP
 Use outputs.read(clientId,{id,offset,max_bytes}) for a chunk, with byte offsets,
 16 KiB by default and 32 KiB maximum. Reuse next_offset. The result contains text
@@ -230,7 +349,9 @@ prefix incomplete and supplies an error. If artifact creation itself fails,
 the operation reports an error and may have no readable artifact.
 Active captures hold file locks and are skipped
 by cleanup, so their bytes may temporarily exceed the completed-file quota.
-Unrelated files are preserved.
+Unrelated files are preserved. Output access is scoped to the owning
+connection; a new client ID cannot read another connection's artifacts,
+background tasks or audit records merely because it shares the OS account.
 .PP
 Cleanup runs at output-store startup, artifact creation and every 60 seconds
 while the client runs. outputs.cleanup(clientId), or the native
@@ -247,22 +368,38 @@ ssmcp --name build-shell my-server
 ssmcp --name build-shell --title "Fix the client build" my-server
 ssmcp --allow octocat@github --name build-shell my-server
 ssmcp --allow alice@github,bob@github --allow carol@github my-server
+ssmcp --name review --title "Review project" user@host
 ssmcp --list-tools
 .fi
+.PP
+Example JavaScript supplied as code_mode's code argument, using an ID from list:
+.nf
+return await call("CLIENT_ID_FROM_LIST", "terminal.status", {});
+.fi
 .SH FILES
-The bridge script is installed at PREFIX/libexec/ssmcp/code-mode.js, normally /usr/local/libexec/ssmcp/code-mode.js. The server environment variable SSMCP_CODE_MODE_RUNNER may select an absolute script path.
+.TP
+.I ~/.ssh/config
+Default OpenSSH client configuration.
+.TP
+.I ~/.ssh/known_hosts
+Trusted SSH host keys.
 .SH SEE ALSO
+.BR ssmcpd (8),
 .BR ssh (1),
-.BR ssh_config (5),
-.BR ssmcpd (8)
+.BR ssh_config (5)
 
 .SH LOG OUTPUT
 .TP
 .B --log-format pretty|pretty-verbose|jsonl
-Select compact colored summaries, expanded events, or one JSON event per line.
+Select compact colored summaries, expanded event metadata, or one JSON event
+per line. All audit display modes use redacted copies; environment mappings,
+credential fields and recognized sensitive content are omitted from logs.
+Native return values and native permission decisions are unchanged.
 .TP
 .B --no-color
-Disable ANSI colors. NO_COLOR and redirected stderr also disable them.
+Disable ANSI log colors. NO_COLOR and redirected stderr also disable colors.
+Interactive PTY byte passthrough on a real terminal is independent of this
+setting; cursor control and split UTF-8 sequences are preserved.
 .TP
 .B --verbose
 Alias for --log-format pretty-verbose.
@@ -281,3 +418,16 @@ Include UTC timestamps on event headings.
 .TP
 .B --max-inline-output N
 Show at most N lines per buffered output block. Default: 12.
+
+.SH PLATFORMS
+The client supports Linux, macOS and Windows. Linux releases contain ssmcp and
+ssmcpd; macOS and Windows releases contain the client. Windows uses ConPTY and
+requires OpenSSH Client. Rsync endpoints are currently Linux-only.
+Release archives cover x86_64 and ARM64 and include SHA-256 checksums.
+.SH MIGRATION
+Version 0.5 removes -t, --type and --backend; passing them reports migration
+instructions. Existing SSH configuration, public-key authentication, OAuth,
+name, title and allow settings remain applicable. Use --list-tools to inspect
+the current registry. Discovery must not install software or start model
+requests; providers without a verified safe path remain unavailable.
+Explicit native calls may enter model workflows and require task authorization.

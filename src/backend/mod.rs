@@ -361,6 +361,10 @@ impl Drop for Backend {
     }
 }
 
+pub(crate) fn harness_status(level: &str, message: &str) {
+    crate::client::render::status("harness", level, message);
+}
+
 async fn probe_version(program: &Path) -> Result<String, String> {
     use std::process::Stdio;
     let mut command = tokio::process::Command::new(program);
@@ -475,17 +479,26 @@ fn terminal_tools() -> Value {
 }
 
 // The cursor binds to catalog names/schema content, so list changes cannot silently skip tools.
-pub(crate) fn page(tools: Vec<Value>, cursor: Option<&str>) -> Result<Value, String> {
-    let encoded = serde_json::to_vec(&tools).map_err(|e| e.to_string())?;
+pub(crate) fn page(tools: impl AsRef<[Value]>, cursor: Option<&str>) -> Result<Value, String> {
+    let tools = tools.as_ref();
+    let encoded = serde_json::to_vec(tools).map_err(|e| e.to_string())?;
     // A non-cryptographic fingerprint is sufficient: this is stale-page detection, not auth.
     let hash = encoded.iter().fold(0xcbf29ce484222325u64, |h, b| {
         (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
     });
+    page_with_fingerprint(tools, cursor, &format!("{hash:016x}"))
+}
+
+pub(crate) fn page_with_fingerprint(
+    tools: &[Value],
+    cursor: Option<&str>,
+    fingerprint: &str,
+) -> Result<Value, String> {
     let start = match cursor {
         None => 0,
         Some(cursor) => {
-            let (fingerprint, index) = cursor.split_once(':').ok_or("invalid tool cursor")?;
-            if fingerprint != format!("{hash:016x}") {
+            let (requested, index) = cursor.split_once(':').ok_or("invalid tool cursor")?;
+            if requested != fingerprint {
                 return Err("tool catalog changed; restart tools/list without a cursor".into());
             }
             index.parse::<usize>().map_err(|_| "invalid tool cursor")?
@@ -509,7 +522,7 @@ pub(crate) fn page(tools: Vec<Value>, cursor: Option<&str>) -> Result<Value, Str
     }
     let mut page = json!({"tools":&tools[start..end]});
     if end < tools.len() {
-        page["nextCursor"] = json!(format!("{hash:016x}:{end}"));
+        page["nextCursor"] = json!(format!("{fingerprint}:{end}"));
     }
     Ok(page)
 }

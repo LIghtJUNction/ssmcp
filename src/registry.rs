@@ -148,6 +148,13 @@ impl Registry {
             state.generation += 1;
         }
     }
+    pub fn ensure_open(&self) -> Result<(), String> {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        if state.closed {
+            return Err("client connection is closed".into());
+        }
+        Ok(())
+    }
     pub fn catalog(&self) -> Result<Vec<Value>, String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         if state.closed {
@@ -235,6 +242,11 @@ fn prepare(
                 .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
         {
             return Err(format!("invalid {} route: {id}", provider.label()));
+        }
+        if descriptor.to_string().len() > 896 * 1024 {
+            return Err(format!(
+                "native tool {native_name} exceeds the transport schema limit"
+            ));
         }
         let input_schema = descriptor
             .get("inputSchema")

@@ -5,10 +5,10 @@
 ## 三种输出模式
 
 ```sh
-ssmcp -t codex --log-format pretty my-server
-ssmcp -t codex --log-format pretty-verbose my-server
-ssmcp -t codex --log-format jsonl my-server 2>events.jsonl
-ssmcp -t codex --no-color my-server
+ssmcp --log-format pretty my-server
+ssmcp --log-format pretty-verbose my-server
+ssmcp --log-format jsonl my-server 2>events.jsonl
+ssmcp --no-color my-server
 ```
 
 `--verbose` 选择 `pretty-verbose`，展开完整输出并附上原始事件 JSON。`--raw-events` 和原有的 `--raw` 选择 `jsonl`。JSONL 中每个事件独占一行；连接状态、SSH stderr、原生后端 stderr 和 shell PTY 字节输出也通过事件输出。PTY 事件包含原始字节的 base64；原生 JSON 事件保留输入 EventLog 时的原始序列化。启动参数解析或配置加载失败发生在日志配置生效之前，错误使用默认可读格式。
@@ -16,6 +16,12 @@ ssmcp -t codex --no-color my-server
 stdout 用于连接信息。重定向 stdout 或选择 JSONL 时，保留单行连接 JSON，兼容现有脚本；交互终端默认显示 MCP 地址和登录说明。一次性登录码仍是敏感凭据，保存 stdout 时请限制文件权限。OpenSSH 自身通过 `/dev/tty` 发出的主机密钥或私钥口令交互不属于事件日志。
 
 默认每个缓冲 stdout/stderr 块显示最多 12 行，保留开头与末尾，省略处注明折叠数量和展开参数。实时流式输出持续显示；大对象和数组显示有界摘要。`--max-inline-output N` 调整缓冲输出的行数。这里的折叠是日志展示策略，没有引入交互式终端面板；工具结果和事件缓存仍按原有协议保留。
+
+## 命令、文件与技能活动
+
+后台命令开始时显示 `RUN`、任务 ID、命令参数和工作目录；结束时显示退出码、耗时及 `OK` / `ERR` / `WARN` 状态。每个 stdout/stderr 标题包含对应任务 ID，并行任务的片段可以追溯到来源。命令超过内联阈值时显示 `SAVE` 与转储位置，正文按需使用 `outputs.read` 读取。
+
+原生文件读取显示 `READ` 路径，写入和编辑显示 `EDIT` 及有界 diff；技能访问显示 `SKIL` 名称。diff 使用上下文与增删颜色，长内容注明展示截断。终端摘要只用于观察，任务结果、文件内容与完整输出仍通过对应原生工具读取。
 
 ## 本地主题配置
 

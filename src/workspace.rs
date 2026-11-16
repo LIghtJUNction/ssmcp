@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    fs::{File, OpenOptions},
+    fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Component, Path, PathBuf},
@@ -15,7 +15,7 @@ use std::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -27,15 +27,18 @@ use tokio::{
     time::timeout,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(target_os = "linux")]
 use std::{
     ffi::CString,
-    os::fd::{AsRawFd, FromRawFd},
-    time::Instant,
+    fs::OpenOptions,
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::fs::OpenOptionsExt,
+    },
 };
 #[cfg(not(target_os = "linux"))]
 #[path = "workspace/portable.rs"]
@@ -51,6 +54,8 @@ struct Root {
     path: PathBuf,
     #[cfg(target_os = "linux")]
     directory: File,
+    #[cfg(not(target_os = "linux"))]
+    directory: cap_std::fs::Dir,
     audit: audit::FileAudit,
 }
 struct Listener {
@@ -122,11 +127,13 @@ impl Workspace {
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&path)
             .map_err(error)?;
+        #[cfg(not(target_os = "linux"))]
+        let directory = cap_std::fs::Dir::open_ambient_dir(&path, cap_std::ambient_authority())
+            .map_err(error)?;
         let events = crate::backend::events::EventLog::with_output("workspace", output.clone());
         Ok(Self {
             root: Arc::new(Root {
                 path,
-                #[cfg(target_os = "linux")]
                 directory,
                 audit: audit::FileAudit::new(events.clone(), output),
             }),

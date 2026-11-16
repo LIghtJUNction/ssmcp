@@ -1,9 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -28,9 +25,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable action
         with:
           toolchain: 1.100.0
@@ -51,6 +49,19 @@ jobs:
           shellcheck scripts/install.sh
           python3 scripts/test_release.py
       - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Render terminal transcript fixture
+        if: matrix.runner == 'ubuntu-24.04'
+        env:
+          SSMCP_RENDER_PREVIEW: ${{ runner.temp }}/ssmcp-terminal.ansi
+        run: cargo test --locked --lib client::render::tests::terminal_preview_fixture -- --exact
+      - name: Save terminal transcript for visual review
+        if: matrix.runner == 'ubuntu-24.04'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: terminal-preview
+          path: ${{ runner.temp }}/ssmcp-terminal.ansi
+          if-no-files-found: error
+          retention-days: 14
       - run: cargo test --locked
       - name: Exercise system Node.js and bubblewrap
         run: |
@@ -81,7 +92,7 @@ jobs:
         run: python3 scripts/e2e.py --bin-dir target/debug
       - name: Exercise session title, reload and output artifacts
         run: python3 scripts/e2e_session_features.py --bin-dir target/debug
-      - name: Exercise all five backends through SSH and OAuth
+      - name: Exercise discovered harness fixtures through SSH and OAuth
         run: python3 scripts/e2e_agents.py --bin-dir target/debug
       - run: cargo build --locked --release
       - name: Check staged Linux installation
@@ -101,15 +112,19 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable action
         with:
           toolchain: 1.100.0
           components: clippy
-      - run: cargo clippy --locked --lib --bin ssmcp -- -D warnings
-      - run: cargo test --locked --lib --bin ssmcp
+      - run: cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings
+      - run: cargo test --locked --lib --bin ssmcp --test release_client
       - run: cargo build --locked --bin ssmcp
       - name: Check client startup
         shell: bash

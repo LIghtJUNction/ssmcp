@@ -1,5 +1,4 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
-#[cfg(target_os = "linux")]
 use crate::rsync::Rsync;
 use crate::{
     backend::{self, Backend, events::EventLog},
@@ -11,23 +10,96 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
+
+pub(crate) const CATALOG_SNAPSHOT_SECONDS: u64 = 120;
+pub(crate) const MAX_CATALOG_SNAPSHOTS: usize = 4;
+pub(crate) const MAX_CATALOG_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+
+struct CatalogSnapshot {
+    fingerprint: String,
+    tools: Arc<Vec<Value>>,
+    bytes: usize,
+    created: Instant,
+}
+
+#[derive(Default)]
+struct Catalog {
+    snapshots: Mutex<VecDeque<CatalogSnapshot>>,
+}
+
+impl Catalog {
+    fn first(&self, tools: Vec<Value>) -> Result<Value, String> {
+        let page = backend::page(&tools, None)?;
+        let Some(cursor) = page["nextCursor"].as_str() else {
+            return Ok(page);
+        };
+        let fingerprint = cursor.split_once(':').unwrap().0.to_owned();
+        let bytes = serde_json::to_vec(&tools).map_err(|e| e.to_string())?.len();
+        if bytes > MAX_CATALOG_SNAPSHOT_BYTES {
+            return Err("tool catalog exceeds the 64 MiB pagination snapshot limit".into());
+        }
+        let mut snapshots = self.snapshots.lock().unwrap_or_else(|e| e.into_inner());
+        snapshots.retain(|snapshot| {
+            snapshot.created.elapsed() < Duration::from_secs(CATALOG_SNAPSHOT_SECONDS)
+                && snapshot.fingerprint != fingerprint
+        });
+        let mut retained: usize = snapshots.iter().map(|snapshot| snapshot.bytes).sum();
+        while snapshots.len() >= MAX_CATALOG_SNAPSHOTS
+            || retained + bytes > MAX_CATALOG_SNAPSHOT_BYTES
+        {
+            if let Some(evicted) = snapshots.pop_front() {
+                retained -= evicted.bytes;
+            }
+        }
+        snapshots.push_back(CatalogSnapshot {
+            fingerprint,
+            tools: Arc::new(tools),
+            bytes,
+            created: Instant::now(),
+        });
+        Ok(page)
+    }
+
+    fn next(&self, cursor: &str) -> Result<Value, String> {
+        self.next_at(cursor, Instant::now())
+    }
+
+    fn next_at(&self, cursor: &str, now: Instant) -> Result<Value, String> {
+        let (fingerprint, _) = cursor.split_once(':').ok_or("invalid tool cursor")?;
+        let tools = {
+            let mut snapshots = self.snapshots.lock().unwrap_or_else(|e| e.into_inner());
+            snapshots.retain(|snapshot| {
+                now.saturating_duration_since(snapshot.created)
+                    < Duration::from_secs(CATALOG_SNAPSHOT_SECONDS)
+            });
+            snapshots
+                .iter()
+                .find(|snapshot| snapshot.fingerprint == fingerprint)
+                .map(|snapshot| snapshot.tools.clone())
+                .ok_or("tool catalog snapshot expired or was evicted; restart tools/list without a cursor")?
+        };
+        backend::page_with_fingerprint(tools.as_ref(), Some(cursor), fingerprint)
+    }
+}
 
 pub struct Runtime {
     backend: Arc<Backend>,
     registry: Arc<Registry>,
     workspace: Workspace,
     context: Context,
-    #[cfg(target_os = "linux")]
     rsync: Rsync,
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
     next_call: AtomicU64,
+    catalog: Catalog,
 }
 impl Runtime {
     pub fn new(backend: Arc<Backend>, root: PathBuf) -> Result<Arc<Self>, String> {
@@ -42,11 +114,9 @@ impl Runtime {
         let registry = backend.registry.clone();
         let workspace = Workspace::with_output(root.clone(), output.clone())?;
         let context = Context::with_output(root.clone(), context_roots, output.clone())?;
-        #[cfg(target_os = "linux")]
         let rsync = Rsync::new(root)?;
         registry.replace(Provider::Workspace, Workspace::tools())?;
         registry.replace(Provider::Context, Context::tools())?;
-        #[cfg(target_os = "linux")]
         registry.replace(Provider::Rsync, Rsync::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
         registry.replace(Provider::Reload, vec![crate::client::reload::tool()])?;
@@ -61,11 +131,11 @@ impl Runtime {
             registry,
             workspace,
             context,
-            #[cfg(target_os = "linux")]
             rsync,
             audit: EventLog::with_output("audit", output.clone()),
             output,
             next_call: AtomicU64::new(1),
+            catalog: Catalog::default(),
         }))
     }
     pub fn output(&self) -> Arc<OutputStore> {
@@ -89,9 +159,17 @@ impl Runtime {
     }
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
+        self.registry.ensure_open()?;
         let (name, arguments) = match operation {
-            Operation::ListTools { cursor } => {
-                return backend::page(self.registry.catalog()?, cursor.as_deref());
+            // Continuations retain an immutable view of the one registry. Calls
+            // still validate the current provider and registration generation.
+            Operation::ListTools { cursor: None } => {
+                return self.catalog.first(self.registry.catalog()?);
+            }
+            Operation::ListTools {
+                cursor: Some(cursor),
+            } => {
+                return self.catalog.next(&cursor);
             }
             Operation::CallTool { name, arguments } => (name, arguments),
             Operation::Read {
@@ -134,7 +212,6 @@ impl Runtime {
                 .perform(&tool.native_name, arguments)
                 .await
                 .map(backend::result),
-            #[cfg(target_os = "linux")]
             Provider::Rsync => self
                 .rsync
                 .perform(&tool.native_name, arguments)
@@ -210,14 +287,82 @@ impl Runtime {
     }
     pub async fn shutdown(&self) {
         self.registry.close();
-        #[cfg(target_os = "linux")]
+        self.catalog
+            .snapshots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         tokio::join!(
             self.workspace.shutdown(),
             self.rsync.shutdown(),
             self.backend.shutdown()
         );
-        #[cfg(not(target_os = "linux"))]
-        tokio::join!(self.workspace.shutdown(), self.backend.shutdown());
         self.audit.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tools(generation: usize) -> Vec<Value> {
+        (0..150)
+            .map(|n| json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":generation}))
+            .collect()
+    }
+
+    #[test]
+    fn concurrent_catalog_scans_keep_their_original_generation_until_the_last_page() {
+        let catalog = Catalog::default();
+        let first = catalog.first(tools(1)).unwrap();
+        let newer = catalog.first(tools(2)).unwrap();
+        let second = catalog.next(first["nextCursor"].as_str().unwrap()).unwrap();
+        assert_eq!(second["tools"][0]["name"], "tool64");
+        assert_eq!(second["tools"][0]["generation"], 1);
+        let newer_second = catalog.next(newer["nextCursor"].as_str().unwrap()).unwrap();
+        assert_eq!(newer_second["tools"][0]["generation"], 2);
+        let last = catalog
+            .next(second["nextCursor"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(last["tools"].as_array().unwrap().len(), 22);
+        assert!(
+            last["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool["generation"] == 1)
+        );
+        assert!(last.get("nextCursor").is_none());
+    }
+
+    #[test]
+    fn expired_or_evicted_catalog_cursors_require_a_new_scan() {
+        let catalog = Catalog::default();
+        let first = catalog.first(tools(0)).unwrap();
+        for generation in 1..=MAX_CATALOG_SNAPSHOTS {
+            catalog.first(tools(generation)).unwrap();
+        }
+        assert_eq!(
+            catalog.snapshots.lock().unwrap().len(),
+            MAX_CATALOG_SNAPSHOTS
+        );
+        assert!(
+            catalog
+                .next(first["nextCursor"].as_str().unwrap())
+                .unwrap_err()
+                .contains("restart tools/list")
+        );
+        let latest = catalog.first(tools(99)).unwrap();
+        assert!(
+            catalog
+                .next_at(
+                    latest["nextCursor"].as_str().unwrap(),
+                    Instant::now() + Duration::from_secs(CATALOG_SNAPSHOT_SECONDS + 1),
+                )
+                .unwrap_err()
+                .contains("expired")
+        );
+        assert!(catalog.next("invalid").is_err());
     }
 }

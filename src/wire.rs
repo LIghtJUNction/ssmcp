@@ -68,23 +68,32 @@ impl ClientMetadata {
     }
 }
 
-// Metadata crosses operating systems: the Linux gateway must accept Windows
-// drive and UNC paths without interpreting them as paths on the gateway itself.
+// The relay validates client metadata on Linux, including native Windows paths.
+// This is display metadata; it never resolves a path on the relay host.
 fn absolute_client_path(path: &str) -> bool {
+    if path.starts_with('/') {
+        return true;
+    }
+    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
     let bytes = path.as_bytes();
-    if path.starts_with('/')
-        || (bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'/' | b'\\'))
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
     {
         return true;
     }
-    path.strip_prefix("\\\\").is_some_and(|rest| {
-        let mut parts = rest.split('\\');
-        parts.next().is_some_and(|server| !server.is_empty())
-            && parts.next().is_some_and(|share| !share.is_empty())
-    })
+    let unc = path
+        .strip_prefix(r"\\")
+        .or_else(|| path.strip_prefix(r"UNC\"));
+    if let Some(unc) = unc {
+        let mut parts = unc.split(['/', '\\']);
+        return parts
+            .next()
+            .is_some_and(|p| !p.is_empty() && p != "." && p != "?")
+            && parts.next().is_some_and(|p| !p.is_empty());
+    }
+    false
 }
 
 pub fn validate_title(title: Option<&str>) -> Result<(), String> {
@@ -361,6 +370,22 @@ mod tests {
             }) if name == "dev" && title.is_none() && cwd == "/project" && hostname == "localhost" && allow.is_empty()
         ));
     }
+    #[test]
+    fn client_paths_are_validated_independently_of_relay_os() {
+        for path in [
+            "/home/alice/project",
+            r"C:\Users\Alice\project",
+            r"C:/work/project",
+            r"\\server\share\project",
+            r"\\?\C:\work",
+        ] {
+            assert!(absolute_client_path(path), "{path}");
+        }
+        for path in ["project", r"C:project", r"\work", r"\\server", r"\\.\pipe"] {
+            assert!(!absolute_client_path(path), "{path}");
+        }
+    }
+
     #[test]
     fn client_metadata_rejects_relative_paths_controls_and_unbounded_fields() {
         let valid = ClientMetadata {
