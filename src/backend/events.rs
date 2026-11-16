@@ -40,6 +40,7 @@ impl EventLog {
     }
 
     pub fn push(&self, mut event: Value) {
+        crate::client::render::event(&self.label, &event);
         // Codex command streaming carries bytes as base64. Keep the original event
         // and add readable text so both the local transcript and MCP consumers can inspect it.
         if event["method"] == "command/exec/outputDelta"
@@ -49,8 +50,7 @@ impl EventLog {
             event["ssmcp_output_text"] = json!(String::from_utf8_lossy(&bytes));
         }
         let encoded = event.to_string();
-        // stderr is the human transcript; stdout is reserved for the endpoint credentials.
-        eprintln!("[ssmcp {}] {encoded}", self.label);
+
         if encoded.len() > MAX_EVENT {
             let mut end = MAX_EVENT / 2;
             while !encoded.is_char_boundary(end) {
@@ -75,6 +75,7 @@ impl EventLog {
     }
 
     pub fn close(&self) {
+        crate::client::render::finish(&self.label);
         self.buffer.lock().unwrap().closed = true;
         self.changed.notify_waiters();
     }

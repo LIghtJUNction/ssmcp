@@ -1,4 +1,6 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
+pub(crate) mod render;
+
 use crate::{
     backend::Backend,
     wire::{
@@ -38,6 +40,7 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
                        (at most 32 distinct users; case-insensitive)
   --shell /path        Shell executable (shell mode only)
   --backend PROGRAM    Override the native agent executable
+  --raw                Show unmodified event payloads instead of the pretty transcript
   --list-tools         Discover local tools as JSON, then exit without SSH
 
 Uses system OpenSSH and ~/.ssh/config, including Host aliases, User,
@@ -58,7 +61,9 @@ of a login_code. Add url to the MCP client and sign in with an allowed GitHub
 account in the browser. The CLI needs no GitHub login; SSH keys stay unchanged.
 --allow requires a server that supports GitHub authorization and cannot be
 combined with --list-tools.
-Live input, output and native agent events appear on stderr.
+Live input, output and native agent events appear on stderr as readable blocks.
+Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
+Unified diffs show old/new line numbers. --raw disables display parsing only.
 Keep this process running; Ctrl-C disconnects and stops its local backend.
 Without --allow, disconnecting revokes this connection's OAuth grants and
 reconnecting needs a new OAuth login. An MCP app restart can reuse valid tokens.
@@ -159,6 +164,7 @@ struct Options {
     backend: Option<OsString>,
     backend_args: Vec<OsString>,
     list_tools: bool,
+    raw: bool,
     identity: Option<OsString>,
     port: Option<u16>,
     config: Option<OsString>,
@@ -175,6 +181,7 @@ impl Options {
         let mut backend = None;
         let mut backend_args = Vec::new();
         let mut list_tools = false;
+        let mut raw = false;
         let mut explicit_shell = false;
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = std::env::var_os("SHELL")
@@ -214,6 +221,7 @@ impl Options {
                     )?;
                 }
                 Some("--list-tools") => list_tools = true,
+                Some("--raw") => raw = true,
                 Some("--") => {
                     backend_args.extend(args);
                     break;
@@ -276,6 +284,7 @@ impl Options {
             backend,
             backend_args,
             list_tools,
+            raw,
             identity,
             port,
             config,
@@ -401,6 +410,7 @@ pub async fn run() -> crate::Result<()> {
     let Some(options) = Options::parse(std::env::args_os().skip(1))? else {
         return Ok(());
     };
+    render::configure(options.raw);
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     if options.list_tools {
@@ -569,6 +579,22 @@ pub async fn run() -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_only_selects_display_and_is_not_forwarded() {
+        let pretty = Options::parse(["host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        let raw = Options::parse(["--raw", "host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert!(!pretty.raw);
+        assert!(raw.raw);
+        assert_eq!(
+            pretty.command().as_std().get_args().collect::<Vec<_>>(),
+            raw.command().as_std().get_args().collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn destination_validation_rejects_shell_and_option_injection() {
