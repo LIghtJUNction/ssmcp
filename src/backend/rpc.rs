@@ -478,7 +478,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_retains_native_stdin_until_descendant_cleanup_can_start() {
-        let mut command = Command::new("python3");
+        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
         command.args(["-c", "import sys; sys.stdin.read()"]);
         let peer = Peer::spawn(command, "cleanup-fixture", Dialect::JsonRpc)
             .await
@@ -507,6 +507,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn dropping_peer_stops_separate_session_before_stdin_eof_orphans_it() {
         use std::os::fd::{AsRawFd, OwnedFd};
@@ -541,7 +542,7 @@ mod tests {
             }
         }
 
-        let mut command = Command::new("python3");
+        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
         command.args([
             "-u",
             "-c",

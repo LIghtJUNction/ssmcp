@@ -19,17 +19,38 @@ A client id identifies one live connection; names are labels, title is optional 
 task context, and cwd is its startup directory. Select the intended task by title, then dispatch by id.\n\n\
 Read ssmcp://clients/{id}/tools to discover native tool names and JSON schemas. \
 Follow nextUri to read the next page. Do not invent tool names or backend arguments.\n\n\
+New clients always provide a shell and automatically discover installed Codex, Claude Code, \
+Pi and OpenCode tools. ssmcp.harnesses.list reports the registered tool counts.\n\n\
 Use code_mode with clients, await call(clientId, toolName, arguments), \
 await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
 Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
+Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
+command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
+incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \
+and only limits waiting; the command keeps running when this wait expires. Set code_mode \
+timeout_ms above wait_ms. A command timeout_ms of 0, the default, has no time limit; a positive \
+timeout_ms terminates the process tree after that interval.\n\n\
+Use exec.start(clientId,options) to launch background work, exec.list(clientId) to find jobs, \
+exec.status(clientId,jobId) to inspect one, exec.wait(clientId,jobId,{wait_ms:60000}) to wait, \
+and exec.read(clientId,jobId,{stdout_cursor,stderr_cursor,max_bytes}) to read new output. \
+Each stream has its own byte cursor. exec.cancel stops a running process tree; exec.forget \
+releases a completed job's retained state. These command jobs survive code_mode completion \
+and stop when the client disconnects or reloads.\n\n\
+Use exec.parallel(clientId,[{command:[\"cargo\",\"test\"]},{command:[\"git\",\"status\"]}], \
+{concurrency:4}) to execute up to 32 commands with 1..8 workers. Results retain input order \
+and use fulfilled/value or rejected/reason records. A failed start does not discard other \
+results; inspect value.exit_code for commands that ran. Parallel output defaults to 2048 \
+bytes per stream per command. Command arguments are argv arrays; for shell syntax invoke \
+the platform shell explicitly. Existing jobs.* helpers manage file-transfer jobs.\n\n\
 Use await reload(clientId) after installing an updated client binary. The client acknowledges \
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
 must finish first. Call list again for the new ID. GitHub --allow access persists; login-code \
 connections need new OAuth login. Both client and server must support reload.\n\n\
-Long command output is streamed to private files under /tmp/ssmcp on the client. Read the \
+Long command output is streamed to private files in the client's temporary ssmcp directory \
+(normally /tmp/ssmcp on Linux). Read the \
 returned artifact metadata, including SHA-256, bytes, lines, complete and expiry. Use \
 outputs.read(clientId,{id,offset,max_bytes}) for bounded chunks, outputs.stat(clientId,{id}) \
 for a fresh snapshot, and outputs.cleanup(clientId) for retention cleanup. Automatic cleanup \
@@ -286,7 +307,9 @@ fn limits() -> Value {
                 "fs","fs.readText","fs.writeText","fs.editText",
                 "context.roots","skills.list","skills.read","skills.view",
                 "agents.list","agents.read","agents.resolve",
-                "rsync","sync","jobs","ports","resources","reload","outputs"
+                "rsync","sync","jobs","ports","resources","reload","outputs",
+                "exec.start","exec.list","exec.status","exec.wait","exec.read",
+                "exec.cancel","exec.forget","exec.events","exec.run","exec.parallel"
             ],
             "text_files":{
                 "max_write_bytes":262144,
@@ -299,6 +322,16 @@ fn limits() -> Value {
                 "model_invocation":false,
                 "additional_roots":"explicit --context-root directories; read-only context access"
             }
+        },
+        "command_jobs":{
+            "default_wait_ms":5000,
+            "max_wait_ms":60000,
+            "default_command_timeout_ms":0,
+            "max_parallel_commands":32,
+            "default_parallel_workers":4,
+            "max_parallel_workers":8,
+            "parallel_default_read_bytes_per_stream":2048,
+            "lifetime":"client connection; survives code_mode completion"
         },
         "wire":{
             "version":wire::VERSION,

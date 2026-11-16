@@ -14,7 +14,6 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
     io,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -28,6 +27,11 @@ use tokio::{
     process::Command,
     task::JoinHandle,
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 
 const MAX_TOOL_PAGES: usize = 256;
 const MAX_BACKGROUND_WATCHERS: usize = 32;
@@ -289,21 +293,27 @@ async fn open_background(path: &Path) -> io::Result<File> {
             "output path is not absolute",
         ));
     }
-    let file = tokio::fs::OpenOptions::new()
-        .read(true)
-        // A substituted FIFO must not block the client; symlinks are not output
-        // files. Hold this fd rather than reopening an attacker-replaced path.
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .await?;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).await?;
     let metadata = file.metadata().await?;
-    if !metadata.is_file()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o022 != 0
-    {
+    let regular = metadata.is_file();
+    #[cfg(unix)]
+    let regular =
+        regular && metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o022 == 0;
+    #[cfg(windows)]
+    let regular = regular
+        && metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            == 0;
+    if !regular {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "output must be a regular file owned by this user and not writable by other users",
+            "output must be a regular file owned by this user without unsafe links or permissions",
         ));
     }
     Ok(file)
@@ -329,7 +339,12 @@ async fn tail_background(peer: &Peer, path: &Path) -> io::Result<()> {
             continue;
         }
         let metadata = file.metadata().await?;
+        #[cfg(unix)]
         if metadata.nlink() == 0 {
+            return Ok(());
+        }
+        #[cfg(windows)]
+        if !path.try_exists()? {
             return Ok(());
         }
         if metadata.len() < offset {
@@ -345,7 +360,7 @@ async fn tail_background(peer: &Peer, path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};

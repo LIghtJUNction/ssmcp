@@ -174,9 +174,9 @@ const bootstrap = `(() => {
     const reply = await call(id, name, args);
     if (reply.isError) {
       const detail = reply.content?.find(item => item.type === 'text')?.text;
-      throw new Failure(typeof detail === 'string' ? detail.slice(0, 4096) : 'workspace operation failed');
+      throw new Failure(typeof detail === 'string' ? detail.slice(0, 4096) : name + ' failed');
     }
-    if (!reply.structuredContent) throw new Failure('workspace client returned no structured result');
+    if (!reply.structuredContent) throw new Failure(name + ' returned no structured result');
     return reply.structuredContent;
   };
   const file = (name, id, args) => workspaceResult(id, 'ssmcp.fs.' + name, args);
@@ -209,6 +209,77 @@ const bootstrap = `(() => {
     read: (id, args) => workspaceResult(id, 'ssmcp.agents.read', args),
     resolve: (id, args) => workspaceResult(id, 'ssmcp.agents.resolve', args),
   });
+  const execution = (name, id, args) => workspaceResult(id, 'ssmcp.exec.' + name, args);
+  const executeCommand = async (id, args) => {
+    if (!args || typeof args !== 'object' || isArray(args)) {
+      throw new Failure('exec.run requires a command options object');
+    }
+    const {wait_ms = 5000, max_bytes = 16384, ...startArgs} = args;
+    if (!Number.isSafeInteger(wait_ms) || wait_ms < 0 || wait_ms > 60000) {
+      throw new Failure('exec.run wait_ms must be 0..=60000; it never cancels the command');
+    }
+    if (!Number.isSafeInteger(max_bytes) || max_bytes < 1 || max_bytes > 32768) {
+      throw new Failure('exec.run max_bytes must be 1..=32768 per stream');
+    }
+    const started = await execution('start', id, startArgs);
+    const job = started.job_id;
+    if (typeof job !== 'string' || !job) {
+      throw new Failure('Command start returned no job_id; inspect exec.list before retrying');
+    }
+    try {
+      const status = wait_ms === 0 ? started : await execution('wait', id, {job_id:job, wait_ms});
+      const output = await execution('read', id, {job_id:job, max_bytes});
+      const snapshot = output.snapshot ?? status;
+      return {...snapshot, ...output, snapshot};
+    } catch (error) {
+      throw new Failure('Command started as ' + job + '; ' + (error?.message ?? text(error))
+        + '. Inspect exec.status/exec.read for this job before retrying.');
+    }
+  };
+  const parallelCommands = async (id, commands, options = {}) => {
+    if (!isArray(commands) || commands.length > 32) {
+      throw new Failure('exec.parallel accepts an array of at most 32 command options objects');
+    }
+    if (!options || typeof options !== 'object' || isArray(options)
+        || keys(options).some(key => key !== 'concurrency')) {
+      throw new Failure('exec.parallel options only accept concurrency');
+    }
+    const concurrency = options.concurrency ?? 4;
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) {
+      throw new Failure('exec.parallel concurrency must be 1..=8');
+    }
+    const results = new Array(commands.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < commands.length) {
+        const index = next++;
+        try {
+          const command = commands[index];
+          if (!command || typeof command !== 'object' || isArray(command)) {
+            throw new Failure('each parallel command must be an options object');
+          }
+          const value = await executeCommand(id, {max_bytes:2048, ...command});
+          results[index] = {status:'fulfilled', value};
+        } catch (error) {
+          results[index] = {status:'rejected', reason:(error?.message ?? text(error)).slice(0, 4096)};
+        }
+      }
+    };
+    await Promise.all(Array.from({length:Math.min(concurrency, commands.length)}, worker));
+    return results;
+  };
+  const exec = freeze({
+    start: (id, args) => execution('start', id, args),
+    list: id => execution('list', id),
+    status: (id, job) => execution('status', id, {job_id:job}),
+    wait: (id, job, args = {}) => execution('wait', id, {...args, job_id:job}),
+    read: (id, job, args = {}) => execution('read', id, {...args, job_id:job}),
+    cancel: (id, job) => execution('cancel', id, {job_id:job}),
+    forget: (id, job) => execution('forget', id, {job_id:job}),
+    events: (id, args) => execution('events', id, args),
+    run: executeCommand,
+    parallel: parallelCommands,
+  });
   const rsync = (args) => builtin('sync', args);
   const jobs = freeze({
     list: () => builtin('jobs.list'),
@@ -240,6 +311,7 @@ const bootstrap = `(() => {
     context: { value: context, enumerable: true },
     skills: { value: skills, enumerable: true },
     agents: { value: agents, enumerable: true },
+    exec: { value: exec, enumerable: true },
     rsync: { value: rsync, enumerable: true },
     sync: { value: rsync, enumerable: true },
     jobs: { value: jobs, enumerable: true },

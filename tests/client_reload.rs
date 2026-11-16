@@ -198,8 +198,6 @@ impl Fixture {
             std::fs::copy(executable, &entry).unwrap();
         }
         let mut arguments: Vec<String> = [
-            "-t",
-            "shell",
             "--shell",
             "/bin/sh",
             "--name",
@@ -225,10 +223,6 @@ impl Fixture {
         }
         arguments.push("alice@fixture".into());
 
-        let mut paths = vec![self.0.clone()];
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
         let mut command = Command::new(if scenario == "symlink" {
             PathBuf::from("ssmcp-reload-client")
         } else {
@@ -237,7 +231,8 @@ impl Fixture {
         command
             .args(&arguments)
             .current_dir(self.0.join("working directory"))
-            .env("PATH", std::env::join_paths(paths).unwrap())
+            // Only fixture tools are visible; never start installed real harnesses.
+            .env("PATH", &self.0)
             .env("SSMCP_RELOAD_DIR", &self.0)
             .env("SSMCP_RELOAD_SCENARIO", scenario)
             .env("SSMCP_RELOAD_BINARY", executable)
