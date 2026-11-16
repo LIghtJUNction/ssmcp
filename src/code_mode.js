@@ -92,6 +92,12 @@ function bridge(kind, clientId, name, encoded) {
       return failure('invalid native tool name or arguments');
     }
     request = { op: 'call', client_id: clientId, name, arguments: args };
+  } else if (kind === 'builtin') {
+    if (typeof name !== 'string' || !/^[A-Za-z0-9.]{1,64}$/.test(name)
+        || !args || typeof args !== 'object' || Array.isArray(args)) {
+      return failure('invalid builtin name or arguments');
+    }
+    request = { op: 'builtin', name, arguments: args };
   } else if (kind === 'tools') {
     if (args !== null && (typeof args !== 'string' || bytes(args, 'utf8') > 128)) {
       return failure('tool cursor must be null or a string of at most 128 bytes');
@@ -163,6 +169,37 @@ const bootstrap = `(() => {
     }
     return dispatch('tools', id, '', cursor);
   };
+  const builtin = (name, args = {}) => dispatch('builtin', '_', name, args);
+  const file = async (name, id, args = {}) => {
+    const reply = await call(id, 'ssmcp.fs.' + name, args);
+    if (reply.isError) throw new Failure('workspace file operation failed; inspect the native result');
+    if (!reply.structuredContent) throw new Failure('workspace client returned no structured result');
+    return reply.structuredContent;
+  };
+  const fs = freeze({
+    list: (id, args) => file('list', id, args),
+    stat: (id, args) => file('stat', id, args),
+    read: (id, args) => file('read', id, args),
+    write: (id, args) => file('write', id, args),
+    mkdir: (id, args) => file('mkdir', id, args),
+  });
+  const rsync = (args) => builtin('sync', args);
+  const jobs = freeze({
+    list: () => builtin('jobs.list'),
+    status: id => builtin('jobs.status', {id}),
+    wait: (id, args = {}) => builtin('jobs.wait', {...args, id}),
+    cancel: id => builtin('jobs.cancel', {id}),
+  });
+  const ports = freeze({
+    open: args => builtin('ports.open', args),
+    list: () => builtin('ports.list'),
+    close: id => builtin('ports.close', {id}),
+  });
+  const resources = freeze({
+    list: (cursor = null) => builtin('resources.list', {cursor}),
+    read: uri => builtin('resources.read', {uri}),
+    templates: () => builtin('resources.templates'),
+  });
   const print = (...args) => {
     const line = args.map(value => typeof value === 'string' ? value : stringify(value) ?? text(value)).join(' ');
     if (!output(line)) throw new Failure('code_mode log output exceeds 65536 bytes');
@@ -171,6 +208,12 @@ const bootstrap = `(() => {
     clients: { value: clients, enumerable: true },
     call: { value: call, enumerable: true },
     tools: { value: tools, enumerable: true },
+    fs: { value: fs, enumerable: true },
+    rsync: { value: rsync, enumerable: true },
+    sync: { value: rsync, enumerable: true },
+    jobs: { value: jobs, enumerable: true },
+    ports: { value: ports, enumerable: true },
+    resources: { value: resources, enumerable: true },
     print: { value: print, enumerable: true },
     console: { value: freeze({ log: print, warn: print, error: print }), enumerable: true },
   });

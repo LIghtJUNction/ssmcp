@@ -157,9 +157,37 @@ return await call(client.id, "terminal.read", {
 
 代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过 SSH 将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
 
+## 文件同步、端口映射和动态资源
+
+每个客户端同时提供受启动目录限制的文件能力。通过 `code_mode` 使用 `fs.list/stat/read/write/mkdir`，不需要为简单文件操作拼接命令。目录同步调用系统 rsync，端口转发在所选客户端的回环地址之间传送 TCP。
+
+| 内置接口 | 用途 |
+| --- | --- |
+| `rsync(options)` / `sync(options)` | 两个客户端之间同步目录内容；默认预演，不删除目标多余文件 |
+| `jobs.status/wait/cancel/list` | 观察和取消同步任务；任务在本次编排结束后继续 |
+| `ports.open/list/close` | 指定监听端和服务端；交换客户端即可反向映射 |
+| `resources.list/read/templates` | 读取指南、限制、在线客户端及原生工具参数 |
+
+`code_mode` 在服务器运行。ChatGPT 沙箱需要在自己的环境中启动并注册客户端，才能作为文件或端口操作的一端。路径和端口始终属于显式指定的客户端，不能把服务器的目录当成调用方目录。
+
+源目录和目标目录必须已存在。先预演，核对变更后将 `dry_run` 改为 `false`；两边同时修改同一文件时先处理冲突。
+
+```js
+return await rsync({
+  source: { client_id: developmentId, path: "src/" },
+  destination: { client_id: workspaceId, path: "src/" },
+  dry_run: true,
+  delete: false
+});
+```
+
+服务器还提供标准 MCP 动态资源，可从 `ssmcp://guide` 开始读取。项目自带 [ssmcp skill](skills/ssmcp/SKILL.md)，也能从 `ssmcp://skill` 获取。
+
+[工作区完整教程](docs/workspaces.md) · [验证记录与覆盖范围](docs/validation-workspace-bridge.md)
+
 ## 安装与升级
 
-当前支持 Linux 5.3+，仓库固定构建工具链为 Rust 1.100.0。客户端需要 OpenSSH 和所选本机后端；服务端需要 OpenSSH Server、系统 Node.js 18+、bubblewrap 0.8+ 及 HTTPS 反向代理。[完整部署教程](docs/deployment.md)
+当前支持 Linux 5.3+，仓库固定构建工具链为 Rust 1.100.0。客户端需要 OpenSSH 和所选本机后端；服务端需要 OpenSSH Server、系统 Node.js 18+、bubblewrap 0.8+、util-linux 的 prlimit 及 HTTPS 反向代理。[完整部署教程](docs/deployment.md)
 
 ```sh
 # 在仓库目录构建，并安装程序、运行脚本、man page 和文档。
@@ -171,14 +199,14 @@ sudo make install
 
 ```sh
 # Debian / Ubuntu
-sudo apt install openssh-server nodejs bubblewrap
+sudo apt install openssh-server nodejs bubblewrap util-linux
 # Arch Linux
-sudo pacman -S openssh nodejs bubblewrap
+sudo pacman -S openssh nodejs bubblewrap util-linux
 # Fedora
-sudo dnf install openssh-server nodejs bubblewrap
+sudo dnf install openssh-server nodejs bubblewrap util-linux
 ```
 
-`ssmcpd serve` 发布 HTTPS 后面的 MCP 服务；SSH 登录后的 `ssmcpd attach` 转发连接数据。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js 和 bubblewrap。
+`ssmcpd serve` 发布 HTTPS 后面的 MCP 服务；SSH 登录后的 `ssmcpd attach` 转发连接数据。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js、bubblewrap 和 prlimit。需要目录同步的客户端应另行安装系统 rsync。
 
 0.4.0 继续使用私有桥接协议 v4，保留旧客户端的登录码方式。使用 `--allow` 需要更新两端，并在服务端配置 GitHub OAuth；遇到不支持该策略的旧服务器时，新客户端会拒绝继续启动后端。
 
@@ -209,6 +237,8 @@ CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、�
 | 设置 `--allow`，了解哪些客户端会被看到 | [GitHub 身份与访问规则](docs/configuration.md#github-allow) |
 | 安装服务端、配置 systemd / SSH / HTTPS | [Linux 部署](docs/deployment.md) |
 | 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
+| 两端同步文件、映射端口、读取动态资源 | [工作区教程](docs/workspaces.md) |
+| 为 AI 提供可复用使用指南 | [ssmcp skill](skills/ssmcp/SKILL.md) |
 | 查看测试、架构与实际验收范围 | [验收记录](docs/validation.md) |
 | 看真实终端操作 | [演示视频，英文说明](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk) |
 

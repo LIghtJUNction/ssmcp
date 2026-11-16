@@ -114,8 +114,8 @@ the JavaScript promise resolves. The code-mode structuredContent has result
 (the script return value) and logs (an array of strings).
 .PP
 The server starts a system-installed Node.js process inside bubblewrap for each
-request. Node.js 18 or newer and bubblewrap 0.8 or newer are server dependencies
-managed by the operating system package manager; no npm package is needed. A client-only
+request. Node.js 18 or newer, bubblewrap 0.8 or newer and util-linux prlimit are
+server dependencies managed by the operating system package manager; no npm package is needed. A client-only
 ssmcp installation does not require these server dependencies. The public
 JavaScript API is clients, call, tools and logging. Native backend calls execute
 on the selected client with that local user's permissions. Runtime state is
