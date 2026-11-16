@@ -46,6 +46,8 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.net.write", "ssmcp.net.shutdown", "ssmcp.net.close", "ssmcp.net.list",
     "ssmcp.rsync.start", "ssmcp.rsync.read", "ssmcp.rsync.write",
     "ssmcp.rsync.status", "ssmcp.rsync.close",
+    "ssmcp.client.reload",
+    "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
 })
 
 

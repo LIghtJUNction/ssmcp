@@ -239,6 +239,11 @@ pub enum Frame {
         id: u64,
         result: std::result::Result<Value, String>,
     },
+    /// Confirms that the broker received a successful client reload ACK.
+    /// Only sent for an explicitly requested, accepted reload operation.
+    ReloadCommit {
+        id: u64,
+    },
     Reject {
         message: String,
     },
@@ -455,8 +460,17 @@ mod tests {
         assert!(metadata.validate().is_ok());
         let value = serde_json::to_value(&metadata).unwrap();
         assert_eq!(value["title"], "排查构建失败 · #42");
-        assert_eq!(serde_json::from_value::<ClientMetadata>(value).unwrap(), metadata);
-        for title in ["".into(), "   ".into(), "bad\ttitle".into(), "bad\0title".into(), "界".repeat(171)] {
+        assert_eq!(
+            serde_json::from_value::<ClientMetadata>(value).unwrap(),
+            metadata
+        );
+        for title in [
+            "".into(),
+            "   ".into(),
+            "bad\ttitle".into(),
+            "bad\0title".into(),
+            "界".repeat(171),
+        ] {
             metadata.title = Some(title);
             assert!(metadata.validate().is_err());
         }

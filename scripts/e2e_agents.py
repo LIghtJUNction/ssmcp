@@ -82,7 +82,7 @@ def catalog(harness, mode):
     harness.check(bool(names) and len(names) == len(set(names)),
                   f"{mode}: complete tool catalog has unique names")
     prefixes = ("terminal.",) if mode == "shell" else (f"{mode}.", f"ssmcp.{mode}.")
-    shared = {name for name in names if name.startswith(("ssmcp.fs.", "ssmcp.net.", "ssmcp.rsync.", "ssmcp.context.", "ssmcp.skills.", "ssmcp.agents."))}
+    shared = {name for name in names if name.startswith(("ssmcp.fs.", "ssmcp.net.", "ssmcp.rsync.", "ssmcp.context.", "ssmcp.skills.", "ssmcp.agents.", "ssmcp.output.", "ssmcp.client."))}
     harness.check(shared == BUILTIN_TOOLS,
                   f"{mode}: exact universal workspace, context and rsync capabilities are discoverable")
     native = set(names) - BUILTIN_TOOLS
