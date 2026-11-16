@@ -1,0 +1,283 @@
+{
+  "version": "0.5.1",
+  "tag": "v0.5.1",
+  "source_sha": "c75309a9acab27c684c0beaaf9d22fd991200760",
+  "verified_at": "2026-11-16 09:43:38 UTC",
+  "run": {
+    "id": 43838379446,
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43838379446",
+    "event": "push",
+    "conclusion": "success",
+    "attempt": 2
+  },
+  "preflight": {
+    "id": 43836961970,
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43836961970",
+    "source_sha": "57f90e746a61e579868aec7f4953b27626388f33",
+    "conclusion": "success"
+  },
+  "release": {
+    "id": 446823489,
+    "url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.5.1",
+    "published_at": "2026-11-16T09:33:57Z",
+    "draft": false,
+    "latest": true,
+    "assets": [
+      {
+        "name": "install.ps1",
+        "bytes": 5181,
+        "sha256": "7b8cb831c0a7b1bb75a497b2b1af4e1dc69e8b5eae92a001919856867c919be3",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/install.ps1"
+      },
+      {
+        "name": "install.sh",
+        "bytes": 4757,
+        "sha256": "90db704d79628e14d0a553ea761b2a8ed295f7fb756267d5c9427ab5537243a4",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/install.sh"
+      },
+      {
+        "name": "release-manifest.json",
+        "bytes": 1448,
+        "sha256": "c6fbf596377412d0479548cc69f382f29677da9f2caaedcebcffda568e5d12e6",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/release-manifest.json"
+      },
+      {
+        "name": "SHA256SUMS",
+        "bytes": 762,
+        "sha256": "94528cf6f399bac0e17659bb53f25a74ed9ceba6dae79b5319973188473ac350",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/SHA256SUMS"
+      },
+      {
+        "name": "ssmcp-aarch64-apple-darwin.tar.gz",
+        "bytes": 2685960,
+        "sha256": "69d6bb7ce56aa8bfc484516de683a43b09395b0c7c621a6f3933ae51b464bfdf",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-aarch64-apple-darwin.tar.gz"
+      },
+      {
+        "name": "ssmcp-aarch64-apple-darwin.tar.gz.sha256",
+        "bytes": 100,
+        "sha256": "429747c8008ee106d45a55b8c3682cf664bc982d5e46a8ac87e9090495cf84ef",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-aarch64-apple-darwin.tar.gz.sha256"
+      },
+      {
+        "name": "ssmcp-aarch64-pc-windows-msvc.zip",
+        "bytes": 2864027,
+        "sha256": "03d307683f8a905bc8e46ff29876f848e549cbe85cc80d64015302b06634e972",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-aarch64-pc-windows-msvc.zip"
+      },
+      {
+        "name": "ssmcp-aarch64-pc-windows-msvc.zip.sha256",
+        "bytes": 101,
+        "sha256": "de47cbfee80c94a1377da65c08f5fb5fe635694dc6dcf808fd0640c35fbc78b5",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-aarch64-pc-windows-msvc.zip.sha256"
+      },
+      {
+        "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+        "bytes": 5353752,
+        "sha256": "b40626c44ae860a26bae0653edd91aa7454a0122707f2da3c021479ff8974600",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-aarch64-unknown-linux-gnu.tar.gz"
+      },
+      {
+        "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256",
+        "bytes": 105,
+        "sha256": "4c9dac2fdeb3ec7d64cdaacb8b0add29c17b1283f6ac89f6750acb06dd02e1d1",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256"
+      },
+      {
+        "name": "ssmcp-x86_64-apple-darwin.tar.gz",
+        "bytes": 2868551,
+        "sha256": "03513d47e56260a49ed7f6a97376c8bba288138e91ec6593d5aaac11447170d4",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-x86_64-apple-darwin.tar.gz"
+      },
+      {
+        "name": "ssmcp-x86_64-apple-darwin.tar.gz.sha256",
+        "bytes": 99,
+        "sha256": "cc3624cc6fc1c3ce461a310edf4b9046dabedba2ebb6f83b6355d57cfbd45f3c",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-x86_64-apple-darwin.tar.gz.sha256"
+      },
+      {
+        "name": "ssmcp-x86_64-pc-windows-msvc.zip",
+        "bytes": 3066273,
+        "sha256": "25bf7d6d9c3df799ad4393caa0ef108f708992b58c9543e645432e19593a2ca6",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-x86_64-pc-windows-msvc.zip"
+      },
+      {
+        "name": "ssmcp-x86_64-pc-windows-msvc.zip.sha256",
+        "bytes": 100,
+        "sha256": "3cd710f90c9bb1aabcc09042d7cd9495b63e4555cdb3d603633185ca60be5d74",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-x86_64-pc-windows-msvc.zip.sha256"
+      },
+      {
+        "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+        "bytes": 5664950,
+        "sha256": "1829b50022a442c4d4083bcafd33433b12e48d8cd2565d020e6c010197580ad8",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-x86_64-unknown-linux-gnu.tar.gz"
+      },
+      {
+        "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256",
+        "bytes": 104,
+        "sha256": "9efed98259d84214cf525ab86bcee975155d7b756396a8f3d19a0028a224e85e",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.5.1/ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256"
+      }
+    ]
+  },
+  "crate": {
+    "url": "https://crates.io/crates/ssmcp/0.5.1",
+    "checksum": "290b276de95d2bfd20792338445cd1e48c48dd2c356704277261c38bbeb04fb9",
+    "source_sha": "c75309a9acab27c684c0beaaf9d22fd991200760",
+    "registry_publication_verified": true,
+    "download_checksum_verified": true,
+    "embedded_vcs_sha_verified": true
+  },
+  "downloaded_assets": {
+    "count": 16,
+    "all_sizes_and_digests_verified": true,
+    "manifest_and_checksum_files_verified": true
+  },
+  "host_smoke": {
+    "ssmcp": "ssmcp 0.5.1",
+    "ssmcpd": "ssmcpd 0.5.1",
+    "help_commands_passed": true
+  },
+  "jobs": [
+    {
+      "name": "validate",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:21Z",
+      "completed_at": "2026-11-16T09:17:40Z"
+    },
+    {
+      "name": "Build x86_64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:44Z",
+      "completed_at": "2026-11-16T09:22:07Z"
+    },
+    {
+      "name": "Build aarch64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:44Z",
+      "completed_at": "2026-11-16T09:20:02Z"
+    },
+    {
+      "name": "Build aarch64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:45Z",
+      "completed_at": "2026-11-16T09:19:21Z"
+    },
+    {
+      "name": "Build aarch64-pc-windows-msvc",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:43Z",
+      "completed_at": "2026-11-16T09:20:54Z"
+    },
+    {
+      "name": "Build x86_64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:43Z",
+      "completed_at": "2026-11-16T09:19:20Z"
+    },
+    {
+      "name": "Build x86_64-pc-windows-msvc",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:43Z",
+      "completed_at": "2026-11-16T09:20:17Z"
+    },
+    {
+      "name": "checks / linux (ubuntu-24.04-arm)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:45Z",
+      "completed_at": "2026-11-16T09:21:29Z"
+    },
+    {
+      "name": "checks / Client (macos-15)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:44Z",
+      "completed_at": "2026-11-16T09:19:31Z"
+    },
+    {
+      "name": "checks / Client (windows-2025)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:43Z",
+      "completed_at": "2026-11-16T09:19:15Z"
+    },
+    {
+      "name": "checks / Client (windows-11-arm)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:43Z",
+      "completed_at": "2026-11-16T09:20:09Z"
+    },
+    {
+      "name": "checks / Client (macos-15-intel)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:45Z",
+      "completed_at": "2026-11-16T09:23:40Z"
+    },
+    {
+      "name": "checks / linux (ubuntu-24.04)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:17:44Z",
+      "completed_at": "2026-11-16T09:21:36Z"
+    },
+    {
+      "name": "finalize",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:23:45Z",
+      "completed_at": "2026-11-16T09:24:43Z"
+    },
+    {
+      "name": "publish_release",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:35:05Z",
+      "completed_at": "2026-11-16T09:35:26Z"
+    },
+    {
+      "name": "publish_crates",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-16T09:24:47Z",
+      "completed_at": "2026-11-16T09:25:18Z"
+    }
+  ],
+  "local_validation": {
+    "source_sha": "c75309a9acab27c684c0beaaf9d22fd991200760",
+    "state": "passed",
+    "checks": [
+      "cargo fmt --all -- --check",
+      "python3 -m unittest discover -s scripts -p test_release.py",
+      "cargo clippy --locked --all-targets -- -D warnings",
+      "cargo test --locked --all-targets",
+      "code_mode tests including ignored isolation tests",
+      "two_tools, workspace_bridge, context_helpers including ignored tests",
+      "cargo build --locked",
+      "test_registry_restart.py",
+      "e2e.py",
+      "e2e_session_features.py",
+      "e2e_agents.py",
+      "cargo publish --locked --dry-run"
+    ]
+  },
+  "automation_fix": {
+    "sha": "95f24966fdd7dfe16bbb79f8dfce93f0b9a36d52",
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/95f24966fdd7dfe16bbb79f8dfce93f0b9a36d52",
+    "script_tests": {
+      "command": "python -m unittest discover -s scripts -p 'test_*.py'",
+      "passed": 45
+    },
+    "note": "The original validated artifacts were used to resume the existing GitHub draft. The tag and published crate were not replaced."
+  }
+}
