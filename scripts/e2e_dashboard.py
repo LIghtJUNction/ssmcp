@@ -344,7 +344,7 @@ class Dashboard(Harness):
         self.pane_size(front, (18, 77), "DASH_SIZE_106")
         initial = front.snapshot(cells=True)
         self.check("Tasks · 0 running" in region(initial, 0, 57, 78, 106)
-                   and "Shell · 77×18" in region(initial, 38, 39, 0, 77),
+                   and "Shell · 1/1 · main · F7 Next · 77×18" in region(initial, 38, 39, 0, 77),
                    "106-column physical screen has distinct 77-column left panes and 28-column sidebar")
         self.check(initial["cursor"][0] >= 39 and initial["cursor"][1] < 77,
                    "physical cursor is translated into the interactive shell pane")

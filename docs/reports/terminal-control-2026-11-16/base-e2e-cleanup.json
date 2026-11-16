@@ -1,0 +1,9 @@
+{
+  "matching_fixture_processes": [],
+  "lifecycle_and_catalog_checks": [
+    "list discovers exact native capability names and schemas for code_mode",
+    "code_mode discovers native capability schemas through tools(client_id)",
+    "disconnect cleans up shell and terminal jobs"
+  ],
+  "all_passed": true
+}

@@ -38,6 +38,7 @@ CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities"
 
 SHELL_TOOLS = frozenset({
     "terminal.read", "terminal.write", "terminal.resize", "terminal.status",
+    "terminal.open", "terminal.list", "terminal.select", "terminal.close",
 })
 BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
@@ -51,7 +52,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.client.reload",
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
-    "ssmcp.exec.read", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
+    "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.audit.events",
     "ssmcp.browser.status",
     "ssmcp.browser.launch",
@@ -79,6 +80,27 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.computer.key",
     "ssmcp.computer.type",
     "ssmcp.computer.scroll",
+    "ssmcp.omarchy.status",
+    "ssmcp.omarchy.themes",
+    "ssmcp.omarchy.theme_set",
+    "ssmcp.omarchy.backgrounds",
+    "ssmcp.omarchy.background_set",
+    "ssmcp.omarchy.fonts",
+    "ssmcp.omarchy.font_set",
+    "ssmcp.omarchy.audio",
+    "ssmcp.omarchy.audio_set",
+    "ssmcp.omarchy.brightness",
+    "ssmcp.omarchy.brightness_set",
+    "ssmcp.omarchy.toggles",
+    "ssmcp.omarchy.toggle_set",
+    "ssmcp.omarchy.workspaces",
+    "ssmcp.omarchy.workspace_switch",
+    "ssmcp.omarchy.window_action",
+    "ssmcp.omarchy.apps",
+    "ssmcp.omarchy.app_launch",
+    "ssmcp.omarchy.menu",
+    "ssmcp.omarchy.battery",
+    "ssmcp.omarchy.network",
 })
 
 
