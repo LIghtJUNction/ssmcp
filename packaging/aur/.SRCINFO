@@ -1,20 +1,25 @@
 pkgbase = ssmcp-git
 	pkgdesc = Expose a local shell or coding agent as MCP through SSH public-key authentication
-	pkgver = 0.4.0.r24.g95fa579
+	pkgver = 0.4.1.r0
 	pkgrel = 1
 	url = https://github.com/LIghtJUNction/ssmcp
 	arch = x86_64
 	arch = aarch64
 	license = MIT
+	checkdepends = python
+	checkdepends = rsync
 	makedepends = git
 	makedepends = rust
 	makedepends = cargo
-	checkdepends = python
 	depends = gcc-libs
 	depends = glibc
 	depends = openssh
 	depends = nodejs>=18
 	depends = bubblewrap>=0.8
+	depends = util-linux
+	optdepends = rsync: synchronize workspace directory contents
+	optdepends = python: GitHub account portal SSH synchronization
+	optdepends = shadow: provision restricted portal SSH accounts
 	provides = ssmcp
 	conflicts = ssmcp
 	backup = etc/ssmcpd/ssmcpd.env
