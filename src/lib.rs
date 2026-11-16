@@ -1,5 +1,6 @@
 pub(crate) mod audit;
 pub mod backend;
+pub mod computer;
 #[cfg(target_os = "linux")]
 pub mod broker;
 pub mod client;
