@@ -15,12 +15,27 @@ const MAX_URI_BYTES: usize = 1024;
 
 const GUIDE: &str = "# Using ssmcp\n\n\
 Read ssmcp://clients for the clients currently available to your identity and endpoint. \
-A client id identifies one live connection; names are labels and cwd is its startup directory.\n\n\
+A client id identifies one live connection; names are labels, title is optional operator-supplied \
+task context, and cwd is its startup directory. Select the intended task by title, then dispatch by id.\n\n\
 Read ssmcp://clients/{id}/tools to discover native tool names and JSON schemas. \
 Follow nextUri to read the next page. Do not invent tool names or backend arguments.\n\n\
 Use code_mode with clients, await call(clientId, toolName, arguments), \
 await tools(clientId, cursor), print/console.log and an explicit return. \
-Native results preserve isError and structuredContent; inspect them before claiming success.\n\n\
+Short native results are returned unchanged. Long backend output returns artifact metadata in \
+structuredContent; inspect isError, spilled and capture completeness before claiming success. \
+Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
+Use await reload(clientId) after installing an updated client binary. The client acknowledges \
+the request, waits for the server's receipt, stops local background work, and executes its \
+installed entry point with the original arguments, cwd and environment. In-flight requests \
+must finish first. Call list again for the new ID. GitHub --allow access persists; login-code \
+connections need new OAuth login. Both client and server must support reload.\n\n\
+Long command output is streamed to private files under /tmp/ssmcp on the client. Read the \
+returned artifact metadata, including SHA-256, bytes, lines, complete and expiry. Use \
+outputs.read(clientId,{id,offset,max_bytes}) for bounded chunks, outputs.stat(clientId,{id}) \
+for a fresh snapshot, and outputs.cleanup(clientId) for retention cleanup. Automatic cleanup \
+retains completed artifacts for up to 24 hours within a 512 MiB budget. Each artifact is \
+capped at 256 MiB with explicit partial/error metadata. Active captures are not deleted. \
+PTY artifacts describe the cumulative terminal session, not individual shell commands.\n\n\
 Read ssmcp://clients/{id}/context for configured context roots, /skills for skill metadata, \
  and /agents for the applicable AGENTS.md chain. skills pages accept root and cursor; agents \
  accepts root and a workspace-relative path. Follow skills nextUri without changing its cursor. \
@@ -271,7 +286,7 @@ fn limits() -> Value {
                 "fs","fs.readText","fs.writeText","fs.editText",
                 "context.roots","skills.list","skills.read","skills.view",
                 "agents.list","agents.read","agents.resolve",
-                "rsync","sync","jobs","ports","resources"
+                "rsync","sync","jobs","ports","resources","reload","outputs"
             ],
             "text_files":{
                 "max_write_bytes":262144,
@@ -289,6 +304,17 @@ fn limits() -> Value {
             "version":wire::VERSION,
             "max_frame_bytes":wire::MAX_FRAME,
             "max_inflight_per_client":wire::MAX_INFLIGHT
+        },
+        "client_output_guard":{
+            "directory":"/tmp/ssmcp/<uid>",
+            "inline_bytes":crate::output::INLINE_BYTES,
+            "inline_lines":crate::output::INLINE_LINES,
+            "retention_seconds":crate::output::RETENTION_SECS,
+            "completed_artifacts_max_bytes":crate::output::RETAINED_BYTES,
+            "artifact_max_bytes":crate::output::ARTIFACT_BYTES,
+            "read_max_bytes":crate::output::READ_BYTES,
+            "scope":"terminal_session archives the cumulative PTY stream; native_tool_result_json contains the native MCP result",
+            "overflow":"partial artifact with explicit error; active artifacts are never deleted by cleanup"
         },
         "resources":{
             "page_size":PAGE_SIZE,

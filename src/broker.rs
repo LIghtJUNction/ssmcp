@@ -422,7 +422,7 @@ impl Broker {
         );
         let result: crate::Result<()> = async {
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone() }).await?;
-            let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant)> = HashMap::new();
+            let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant, bool)> = HashMap::new();
             let mut next_id = 0u64;
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
             loop {
@@ -440,11 +440,12 @@ impl Broker {
                                 continue;
                             }
                             next_id = next_id.checked_add(1).ok_or("request id exhausted")?;
-                            pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation)));
+                            let reload = crate::client::reload::is_reload(&call.operation);
+                            pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation), reload));
                             timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::Call { id:next_id, operation:call.operation })).await??;
                         }
                         _ = expiry.tick() => {
-                            if pending.values().any(|(_, deadline)| Instant::now() >= *deadline) {
+                            if pending.values().any(|(_, deadline, _)| Instant::now() >= *deadline) {
                                 return Err("client response timeout".into());
                             }
                         }
@@ -452,7 +453,12 @@ impl Broker {
                 };
                 match received {
                     Some(Frame::Reply {id, result}) => {
-                        if let Some((reply, _)) = pending.remove(&id) { let _ = reply.send(result); }
+                        if let Some((reply, _, reload)) = pending.remove(&id) {
+                            if reload && result.as_ref().is_ok_and(crate::client::reload::accepted) {
+                                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::ReloadCommit { id })).await??;
+                            }
+                            let _ = reply.send(result);
+                        }
                     }
                     None => break,
                     _ => return Err("unexpected frame from client".into()),

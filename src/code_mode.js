@@ -180,6 +180,12 @@ const bootstrap = `(() => {
     return reply.structuredContent;
   };
   const file = (name, id, args) => workspaceResult(id, 'ssmcp.fs.' + name, args);
+  const reload = id => workspaceResult(id, 'ssmcp.client.reload');
+  const outputs = freeze({
+    read: (id, args) => workspaceResult(id, 'ssmcp.output.read', args),
+    stat: (id, args) => workspaceResult(id, 'ssmcp.output.stat', args),
+    cleanup: id => workspaceResult(id, 'ssmcp.output.cleanup'),
+  });
   const fs = freeze({
     list: (id, args) => file('list', id, args),
     stat: (id, args) => file('stat', id, args),
@@ -228,6 +234,8 @@ const bootstrap = `(() => {
     clients: { value: clients, enumerable: true },
     call: { value: call, enumerable: true },
     tools: { value: tools, enumerable: true },
+    reload: { value: reload, enumerable: true },
+    outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
     context: { value: context, enumerable: true },
     skills: { value: skills, enumerable: true },

@@ -5,6 +5,7 @@ ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP g
 .B ssmcp
 .RB [ \-t " shell|codex|cc|pi|opencode" ]
 .RB [ \-\-name " name" ]
+.RB [ \-\-title " title" ]
 .RB [ \-\-allow " username@github[,username@github...]" ]
 .RB [ \-F " ssh_config" ]
 .RB [ \-i " identity" ]
@@ -53,6 +54,14 @@ Set the client display name. The default combines hostname, backend type and
 process ID. Names are limited to 128 UTF-8 bytes and may not contain control
 characters or consist only of whitespace. Duplicate names are allowed; use the
 server-generated client ID to select an unambiguous target.
+.TP
+.BI \-\-title " title"
+Set the session task shown in client discovery, code_mode's clients snapshot
+and connection output. Accepts Unicode and spaces, with at most 512 UTF-8 bytes.
+Empty, whitespace-only and control-character titles are rejected.
+The title is independent of the display name and client ID; it does not execute
+commands or change access policy. When omitted, no title field is sent.
+A nonempty title requires a server that supports this metadata field.
 .TP
 .BI \-F " file"
 Use a separate OpenSSH client configuration file.
@@ -117,7 +126,12 @@ The server starts a system-installed Node.js process inside bubblewrap for each
 request. Node.js 18 or newer, bubblewrap 0.8 or newer and util-linux prlimit are
 server dependencies managed by the operating system package manager; no npm package is needed. A client-only
 ssmcp installation does not require these server dependencies. The public
-JavaScript API is clients, call, tools and logging. Native backend calls execute
+JavaScript API includes clients, call, tools, logging, reload, outputs.read/stat/cleanup,
+fs, context, skills, agents, rsync/sync, jobs, ports and resources. Short native
+results are returned unchanged. Long backend output is replaced by artifact
+metadata; inspect spilled and use outputs.read. PTY artifacts contain raw terminal
+bytes; other oversized backend results contain the saved MCP result JSON.
+Native backend calls execute
 on the selected client with that local user's permissions. Runtime state is
 fresh for each request; backend sessions remain alive.
 .PP
@@ -240,10 +254,70 @@ Skill views index name and description frontmatter. Full documents are read on
 demand. Instruction views follow the selected root to a target and preserve
 source paths and contents. No model is started by these operations.
 
+.SH CLIENT RELOAD
+After installing a replacement at the original client entry point, use
+.B await reload(clientId)
+inside code_mode. The native equivalent is
+.BR "call(clientId, \(dqssmcp.client.reload\(dq, {})" .
+The request uses the existing client authorization and accepts no arguments.
+Reload is refused while other tool requests are in flight or the entry point
+is unavailable. On acceptance it returns accepted:true and status:restarting,
+waits for the server acknowledgement, stops the old connection's background
+commands, harnesses and forwards, and re-executes the installed entry point.
+.PP
+Startup arguments, working directory and environment are preserved, including
+title and allow policy. Reload does not download, build or install an update.
+Use list again to confirm reconnection and select the new client ID by title,
+name and cwd. A restarting acknowledgement is not proof of reconnection.
+Valid GitHub identity grants can continue accessing the matching new connection;
+login-code mode requires a fresh OAuth login. Upgrade both client and server
+before using reload. Old clients without the reload tool require a manual
+restart for their first upgrade.
+
+.SH LONG OUTPUT
+Output exceeding 32 KiB or 500 lines is stored on the client under
+.IR /tmp/ssmcp/<uid>/output-<id>.log .
+The result carries metadata instead of the full output: ID, path, SHA-256,
+byte and line counts, observed_bytes, complete and expires_at_unix.
+The digest covers the first N bytes at that snapshot, where N is the bytes field.
+Lines count newline
+records and a final nonempty unterminated record. Complete describes capture
+integrity, not whether the command succeeded.
+.PP
+A PTY artifact
+covers the whole terminal session's merged raw stream, including terminal control
+bytes. Other oversized native results are stored as the MCP result JSON received
+by ssmcp. Output already truncated by a native harness cannot be recovered.
+.PP
+Use outputs.read(clientId,{id,offset,max_bytes}) for a chunk, with byte offsets,
+16 KiB by default and 32 KiB maximum. Reuse next_offset. The result contains text
+and exact data_base64; its SHA-256 covers only the returned chunk. EOF refers to
+the current size and does not mean an active capture has finished.
+Use outputs.stat(clientId,{id}) for current metadata and a whole-file snapshot
+digest. The native tools are ssmcp.output.read and ssmcp.output.stat.
+.PP
+Retention is 24 hours from the latest write or completion. Completed artifacts
+are limited to 512 MiB in total, with oldest files evicted first. Each artifact
+is limited to 256 MiB; exceeding it or failing to write marks an existing saved
+prefix incomplete and supplies an error. If artifact creation itself fails,
+the operation reports an error and may have no readable artifact.
+Active captures hold file locks and are skipped
+by cleanup, so their bytes may temporarily exceed the completed-file quota.
+Unrelated files are preserved.
+.PP
+Cleanup runs at output-store startup, artifact creation and every 60 seconds
+while the client runs. outputs.cleanup(clientId), or the native
+ssmcp.output.cleanup tool with empty arguments, runs the same policy immediately
+and returns removed and retained counts. It does not unconditionally empty the
+directory. Cleanup resumes at next startup if all clients have exited.
+The local --max-inline-output display setting does not change these agent-facing
+output thresholds.
+
 .SH EXAMPLES
 .nf
 ssmcp --name build-shell user@host
 ssmcp --name build-shell my-server
+ssmcp --name build-shell --title "Fix the client build" my-server
 ssmcp --allow octocat@github --name build-shell my-server
 ssmcp --allow alice@github,bob@github --allow carol@github my-server
 ssmcp -t codex --name review-codex user@host

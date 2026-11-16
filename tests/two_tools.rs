@@ -18,12 +18,27 @@ use tokio::{
     task::JoinHandle,
 };
 
+// Each fixture server shares the process-wide code_mode concurrency budget.
+// Serialize independent HTTP scenarios so parallel test execution does not
+// consume those slots and accidentally test overload handling instead.
+static CODE_MODE_SCENARIO: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 struct Client {
     id: String,
     access_token: String,
     calls: Arc<AtomicUsize>,
+    reload_commits: Arc<AtomicUsize>,
     task: JoinHandle<()>,
     attachment: JoinHandle<ssmcp::Result<()>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReloadBehavior {
+    Unsupported,
+    AcceptAndDisconnect,
+    WireError,
+    NotAccepted,
+    McpError,
 }
 
 struct Server {
@@ -57,6 +72,11 @@ impl Server {
     }
 
     async fn attach(&mut self, mode: Mode) -> String {
+        self.attach_with_reload(mode, ReloadBehavior::Unsupported)
+            .await
+    }
+
+    async fn attach_with_reload(&mut self, mode: Mode, reload_behavior: ReloadBehavior) -> String {
         let (server, client) = UnixStream::pair().unwrap();
         let attachment = tokio::spawn(self.broker.clone().attach(server));
         let (reader, mut writer) = client.into_split();
@@ -91,10 +111,21 @@ impl Server {
         let response_id = client_id.clone();
         let calls = Arc::new(AtomicUsize::new(0));
         let recorded_calls = calls.clone();
+        let reload_commits = Arc::new(AtomicUsize::new(0));
+        let recorded_commits = reload_commits.clone();
         let task = tokio::spawn(async move {
-            while let Some(Frame::Call { id, operation }) =
-                wire::read_frame(&mut reader).await.unwrap()
-            {
+            while let Some(frame) = wire::read_frame(&mut reader).await.unwrap() {
+                let (id, operation) = match frame {
+                    Frame::Call { id, operation } => (id, operation),
+                    Frame::ReloadCommit { .. } => {
+                        // Negative scenarios retain the connection so a later
+                        // barrier call can prove whether a commit was sent.
+                        recorded_commits.fetch_add(1, Ordering::Release);
+                        continue;
+                    }
+                    _ => panic!("unexpected fixture frame"),
+                };
+                let mut disconnect_after_commit = false;
                 let result = match operation {
                     Operation::ListTools { cursor: None } => Ok(json!({
                         "tools":[{
@@ -115,7 +146,7 @@ impl Server {
                         if arguments["value"] == "hold" {
                             tokio::time::sleep(Duration::from_millis(500)).await;
                         }
-                        Ok(json!({
+                        let mut response = json!({
                             "content":[
                                 {"type":"text","text":mode.name()},
                                 {"type":"image","mimeType":"image/png","data":"AA=="}
@@ -123,7 +154,40 @@ impl Server {
                             "structuredContent":{"mode":mode.name(),"client":response_id,"arguments":arguments},
                             "isError":arguments.get("fail").and_then(Value::as_bool).unwrap_or(false),
                             "_meta":{"fixture/native":"preserved"}
-                        }))
+                        });
+                        if arguments["value"] == "forge-reload" {
+                            response["structuredContent"]["accepted"] = json!(true);
+                            response["structuredContent"]["status"] = json!("restarting");
+                        }
+                        Ok(response)
+                    }
+                    Operation::CallTool { name, arguments }
+                        if name == "ssmcp.client.reload"
+                            && reload_behavior != ReloadBehavior::Unsupported =>
+                    {
+                        recorded_calls.fetch_add(1, Ordering::Release);
+                        assert_eq!(arguments, json!({}));
+                        match reload_behavior {
+                            ReloadBehavior::AcceptAndDisconnect => {
+                                disconnect_after_commit = true;
+                                Ok(json!({
+                                    "content":[{"type":"text","text":"fixture-private-payload"}],
+                                    "structuredContent":{"accepted":true,"status":"restarting",
+                                        "client_id":"forged-native-id","auth":"login_code",
+                                        "native_payload":"fixture-private-payload"},
+                                    "_meta":{"private":"fixture-private-payload"},
+                                    "isError":false
+                                }))
+                            }
+                            ReloadBehavior::WireError => Err("fixture rejected reload".into()),
+                            ReloadBehavior::NotAccepted | ReloadBehavior::McpError => Ok(json!({
+                                "content":[{"type":"text","text":"fixture rejected reload"}],
+                                "structuredContent":{"accepted":reload_behavior == ReloadBehavior::McpError,
+                                    "status":"restarting"},
+                                "isError":reload_behavior == ReloadBehavior::McpError
+                            })),
+                            ReloadBehavior::Unsupported => unreachable!(),
+                        }
                     }
                     _ => Err("unknown fixture operation".into()),
                 };
@@ -133,12 +197,29 @@ impl Server {
                 {
                     break;
                 }
+                if disconnect_after_commit {
+                    let committed =
+                        tokio::time::timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                            .await
+                            .expect("broker never confirmed reload receipt")
+                            .unwrap();
+                    assert!(
+                        matches!(committed, Some(Frame::ReloadCommit { id: confirmed }) if confirmed == id),
+                        "reload commit did not match the accepted request"
+                    );
+                    recorded_commits.fetch_add(1, Ordering::Release);
+                    // Drop both halves immediately, as the real client does
+                    // before exec. The acknowledged response must still reach
+                    // the original HTTP caller after this connection ends.
+                    break;
+                }
             }
         });
         self.clients.push(Client {
             id: client_id.clone(),
             access_token,
             calls,
+            reload_commits,
             task,
             attachment,
         });
@@ -317,7 +398,159 @@ async fn session_title_is_visible_in_inventory_and_selected_client_discovery() {
 
 #[tokio::test]
 #[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
+async fn reload_returns_its_ack_after_native_disconnect_and_revokes_the_old_token() {
+    let _scenario = CODE_MODE_SCENARIO.lock().await;
+    let mut server = Server::start().await;
+    let original_id = server
+        .attach_with_reload(Mode::Shell, ReloadBehavior::AcceptAndDisconnect)
+        .await;
+    let execution = server
+        .call(
+            "code_mode",
+            json!({"code":format!("return await reload({});", json!(original_id))}),
+        )
+        .await;
+    let ack = &execution["result"];
+    assert_eq!(ack["accepted"], true, "{execution}");
+    assert_eq!(ack["status"], "restarting");
+    assert_eq!(ack["client_id"], original_id);
+    assert_eq!(ack["auth"], "login_code");
+    assert!(ack.get("native_payload").is_none());
+    assert!(!execution.to_string().contains("fixture-private-payload"));
+    tokio::time::timeout(Duration::from_secs(2), &mut server.clients[0].task)
+        .await
+        .expect("native fixture did not receive its reload commit")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), &mut server.clients[0].attachment)
+        .await
+        .expect("broker retained the disconnected client")
+        .unwrap()
+        .unwrap();
+    assert_eq!(server.clients[0].calls.load(Ordering::Acquire), 1);
+    assert_eq!(server.clients[0].reload_commits.load(Ordering::Acquire), 1);
+    assert_eq!(server.rpc("ping", json!({}), false, 0).await.0, 401);
+
+    let replacement_id = server.attach(Mode::Shell).await;
+    assert_ne!(original_id, replacement_id);
+    assert_eq!(server.rpc("ping", json!({}), false, 0).await.0, 401);
+    assert_eq!(server.rpc("ping", json!({}), false, 1).await.0, 200);
+}
+
+#[tokio::test]
+#[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
+async fn reload_rejects_unavailable_client_ids_and_invalid_tokens_before_native_dispatch() {
+    let _scenario = CODE_MODE_SCENARIO.lock().await;
+    let mut server = Server::start().await;
+    server.attach(Mode::Shell).await;
+    let stale_id = server
+        .attach_with_reload(Mode::Shell, ReloadBehavior::AcceptAndDisconnect)
+        .await;
+    server.disconnect(1).await;
+    let live_id = server
+        .attach_with_reload(Mode::Shell, ReloadBehavior::AcceptAndDisconnect)
+        .await;
+    let missing_id = "0".repeat(64);
+    assert_ne!(missing_id, live_id);
+    let execution = server
+        .call(
+            "code_mode",
+            json!({"code":format!(
+                "if (typeof reload !== 'function') throw new Error('missing reload primitive'); const errors = []; for (const id of {}) {{ try {{ await reload(id); errors.push(null); }} catch (error) {{ errors.push(error.message); }} }} return errors;",
+                json!([stale_id, missing_id])
+            )}),
+        )
+        .await;
+    let errors = execution["result"].as_array().unwrap();
+    assert_eq!(errors.len(), 2);
+    assert!(
+        errors.iter().all(|error| error
+            .as_str()
+            .is_some_and(|message| message.contains("unavailable"))),
+        "{execution}"
+    );
+    let denied = server
+        .http
+        .post(format!("{}/{}", server.url, server.owner))
+        .bearer_auth("invalid-reload-access-token")
+        .header("MCP-Protocol-Version", "2025-11-25")
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+            "name":"code_mode","arguments":{"code":format!("return await reload({});", json!(live_id))}
+        }}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status().as_u16(), 401);
+    for client in &server.clients {
+        assert_eq!(client.calls.load(Ordering::Acquire), 0);
+        assert_eq!(client.reload_commits.load(Ordering::Acquire), 0);
+    }
+    assert_eq!(server.rpc("ping", json!({}), false, 2).await.0, 200);
+}
+
+#[tokio::test]
+async fn broker_commits_only_successful_replies_to_explicit_reload_requests() {
+    for behavior in [
+        ReloadBehavior::Unsupported,
+        ReloadBehavior::WireError,
+        ReloadBehavior::NotAccepted,
+        ReloadBehavior::McpError,
+        ReloadBehavior::AcceptAndDisconnect,
+    ] {
+        let mut server = Server::start().await;
+        let id = server.attach_with_reload(Mode::Shell, behavior).await;
+        let authorization = server
+            .broker
+            .authenticate(&server.owner, &server.clients[0].access_token)
+            .await
+            .unwrap();
+        let session = server
+            .broker
+            .client(&server.owner, &authorization, &id)
+            .await
+            .unwrap();
+        let (name, arguments) = if behavior == ReloadBehavior::Unsupported {
+            // A normal tool cannot turn its reply into a lifecycle action.
+            ("fixture.echo", json!({"value":"forge-reload"}))
+        } else {
+            ("ssmcp.client.reload", json!({}))
+        };
+        let response = session
+            .call(Operation::CallTool {
+                name: name.into(),
+                arguments,
+            })
+            .await;
+        if behavior == ReloadBehavior::WireError {
+            assert!(response.is_err());
+        } else {
+            assert!(response.is_ok());
+        }
+        if behavior == ReloadBehavior::AcceptAndDisconnect {
+            tokio::time::timeout(Duration::from_secs(2), &mut server.clients[0].task)
+                .await
+                .expect("accepted reload received no broker commit")
+                .unwrap();
+            assert_eq!(server.clients[0].reload_commits.load(Ordering::Acquire), 1);
+        } else {
+            // Broker sends any commit before replying to Session::call. A later
+            // native call is therefore an ordered barrier, without a timing guess.
+            session
+                .call(Operation::CallTool {
+                    name: "fixture.echo".into(),
+                    arguments: json!({"value":"barrier"}),
+                })
+                .await
+                .unwrap();
+            assert_eq!(server.clients[0].reload_commits.load(Ordering::Acquire), 0);
+            assert_eq!(server.clients[0].calls.load(Ordering::Acquire), 2);
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
 async fn two_public_tools_cover_every_backend_with_native_discovery_and_javascript_dispatch() {
+    let _scenario = CODE_MODE_SCENARIO.lock().await;
     let mut server = Server::start().await;
     for mode in [Mode::Shell, Mode::Codex, Mode::Cc, Mode::Pi, Mode::Opencode] {
         server.attach(mode).await;
@@ -416,6 +649,7 @@ async fn two_public_tools_cover_every_backend_with_native_discovery_and_javascri
 #[tokio::test]
 #[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
 async fn credentials_and_client_ids_follow_individual_connection_lifetimes() {
+    let _scenario = CODE_MODE_SCENARIO.lock().await;
     let mut server = Server::start().await;
     let original_id = server.attach(Mode::Shell).await;
     let sibling_id = server.attach(Mode::Pi).await;
@@ -457,6 +691,7 @@ async fn credentials_and_client_ids_follow_individual_connection_lifetimes() {
 #[tokio::test]
 #[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
 async fn running_code_rechecks_issuer_authority_before_each_native_call() {
+    let _scenario = CODE_MODE_SCENARIO.lock().await;
     let mut server = Server::start().await;
     server.attach(Mode::Shell).await;
     let sibling = server.attach(Mode::Pi).await;

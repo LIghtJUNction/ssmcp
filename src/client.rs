@@ -1,4 +1,5 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
+pub(crate) mod reload;
 pub(crate) mod render;
 mod ui;
 
@@ -549,6 +550,7 @@ pub async fn run() -> crate::Result<()> {
         println!("{}", json!({"type":options.mode.name(),"tools":tools?}));
         return Ok(());
     }
+    let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
     let mut ssh = options
         .command()
@@ -675,6 +677,7 @@ pub async fn run() -> crate::Result<()> {
     );
     let writer = Arc::new(Mutex::new(writer));
     let mut requests: JoinSet<io::Result<()>> = JoinSet::new();
+    let mut reload_requested = false;
     let result: crate::Result<()> = 'connected: loop {
         tokio::select! {
             frame = incoming.frames.recv() => match frame {
@@ -685,6 +688,50 @@ pub async fn run() -> crate::Result<()> {
                             Ok(Err(error)) => break 'connected Err(error.into()),
                             Err(error) => break 'connected Err(error.into()),
                         }
+                    }
+                    if reload::is_reload(&operation) {
+                        let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
+                        let response = restart.accept(arguments, requests.len(), &client_id, github_auth);
+                        let accepted = response.is_ok();
+                        let sent = timeout(Duration::from_secs(10), async {
+                            let mut writer = writer.lock().await;
+                            write_frame(&mut *writer, &Frame::Reply { id, result: response }).await
+                        }).await;
+                        match sent {
+                            Ok(Ok(())) => {},
+                            Ok(Err(error)) => break Err(error.into()),
+                            Err(_) => break Err("SSH reload acknowledgement timed out".into()),
+                        }
+                        if accepted {
+                            // Flushing the pipe only hands bytes to local ssh.
+                            // Wait for the broker's receipt before terminating
+                            // that process, so the ACK cannot be lost in transit.
+                            let confirmed = timeout(Duration::from_secs(10), async {
+                                loop {
+                                    match incoming.frames.recv().await {
+                                        Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
+                                        Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
+                                            let mut writer = writer.lock().await;
+                                            write_frame(&mut *writer, &Frame::Reply { id: next_id, result: Err("client reload is already pending; call list after reconnection".into()) }).await?;
+                                        }
+                                        Some(Err(error)) => return Err(error.into()),
+                                        _ => return Err("SSH ended before the server confirmed reload receipt".into()),
+                                    }
+                                }
+                            }).await;
+                            match confirmed {
+                                Ok(Ok(())) => {},
+                                Ok(Err(error)) => break Err(error),
+                                Err(_) => {
+                                    render::status("ssmcp", "Error", "Server did not confirm reload receipt; client remains running. Update ssmcpd before using reload.");
+                                    continue 'connected;
+                                }
+                            }
+                            render::status("ssmcp", "Progress", "Reload accepted; stopping local jobs and restarting the installed client");
+                            reload_requested = true;
+                            break Ok(());
+                        }
+                        continue;
                     }
                     if requests.len() >= MAX_INFLIGHT { break Err("server exceeded the in-flight request limit".into()); }
                     let backend = backend.clone();
@@ -725,6 +772,9 @@ pub async fn run() -> crate::Result<()> {
     backend.shutdown().await;
     let _ = ssh.wait().await;
     render::status(options.mode.name(), "Result", "DISCONNECTED");
+    if reload_requested {
+        return restart.execute();
+    }
     result
 }
 
@@ -843,15 +893,28 @@ mod tests {
         let metadata = options.metadata().unwrap();
         assert_eq!(metadata.name, "workstation");
         assert_eq!(metadata.title.as_deref(), Some(title));
-        assert!(!options.command().as_std().get_args().any(|arg| arg == title));
+        assert!(
+            !options
+                .command()
+                .as_std()
+                .get_args()
+                .any(|arg| arg == title)
+        );
 
         let equals = Options::parse(["--title=修复客户端", "host"].map(OsString::from))
             .unwrap()
             .unwrap();
         assert_eq!(equals.title.as_deref(), Some("修复客户端"));
-        let absent = Options::parse(["host"].map(OsString::from)).unwrap().unwrap();
+        let absent = Options::parse(["host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
         assert!(absent.title.is_none());
-        assert!(serde_json::to_value(absent.metadata().unwrap()).unwrap().get("title").is_none());
+        assert!(
+            serde_json::to_value(absent.metadata().unwrap())
+                .unwrap()
+                .get("title")
+                .is_none()
+        );
     }
 
     #[test]
@@ -867,17 +930,23 @@ mod tests {
             "a".repeat(crate::wire::MAX_TITLE_BYTES + 1),
             "界".repeat(crate::wire::MAX_TITLE_BYTES / 3 + 1),
         ] {
-            assert!(Options::parse([
-                OsString::from("--title"),
-                OsString::from(title),
-                OsString::from("host"),
-            ]).is_err());
+            assert!(
+                Options::parse([
+                    OsString::from("--title"),
+                    OsString::from(title),
+                    OsString::from("host"),
+                ])
+                .is_err()
+            );
         }
-        assert!(Options::parse([
-            OsString::from("--title"),
-            OsString::from_vec(vec![0xff]),
-            OsString::from("host"),
-        ]).is_err());
+        assert!(
+            Options::parse([
+                OsString::from("--title"),
+                OsString::from_vec(vec![0xff]),
+                OsString::from("host"),
+            ])
+            .is_err()
+        );
         let maximum = "a".repeat(crate::wire::MAX_TITLE_BYTES);
         assert!(Options::parse(["--title", &maximum, "host"].map(OsString::from)).is_ok());
     }
