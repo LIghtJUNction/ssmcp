@@ -1,0 +1,180 @@
+{
+  "source_commit": "2e5c55b232d2edd726242c38dc390535ac4d5fff",
+  "recorded_at_utc": "2026-11-16T15:57:09.402067+00:00",
+  "status": "passed",
+  "steps": [
+    {
+      "name": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.817,
+      "log": "target/native-control-evidence/final/format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 11.036,
+      "log": "target/native-control-evidence/final/clippy.log",
+      "log_sha256": "9cc726132bd2acfe8f8195da80c135e9db6f9efb622bdf7208224bf1c867d539"
+    },
+    {
+      "name": "all_targets",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--all-targets",
+        "--quiet"
+      ],
+      "exit_code": 0,
+      "seconds": 64.272,
+      "log": "target/native-control-evidence/final/all_targets.log",
+      "log_sha256": "c585fc0a854eb2d204c8d4a4b591b9edc810fb359863e3dd4b8d59a8c9f06e46",
+      "test_summaries": [
+        "test result: ok. 337 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 6.13s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.13s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.31s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s",
+        "test result: ok. 14 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 20.17s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+        "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s",
+        "test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.43s",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+        "test result: ok. 2 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "code_mode_isolation",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "code_mode::tests",
+        "--",
+        "--include-ignored"
+      ],
+      "exit_code": 0,
+      "seconds": 4.277,
+      "log": "target/native-control-evidence/final/code_mode_isolation.log",
+      "log_sha256": "b41a13fa82da6b96db448b9d2881d8bff6d330f906e1290f0d264eacf2daf9a5",
+      "test_summaries": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 327 filtered out; finished in 3.84s"
+      ]
+    },
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bins"
+      ],
+      "exit_code": 0,
+      "seconds": 0.164,
+      "log": "target/native-control-evidence/final/build.log",
+      "log_sha256": "59639588a6f1826f129cbcd121edc07279dab94786f5fa5bde6b3439b2e845cc"
+    },
+    {
+      "name": "protocol",
+      "command": [
+        "/usr/bin/python3",
+        "scripts/e2e.py",
+        "--report",
+        "target/native-control-evidence/final/protocol.json"
+      ],
+      "exit_code": 0,
+      "seconds": 4.724,
+      "log": "target/native-control-evidence/final/protocol.log",
+      "log_sha256": "60fb51a9a35bb02df04f601e7aa02785a4c7b56c05d491c29ec05bb6bfbc68a4"
+    },
+    {
+      "name": "headless",
+      "command": [
+        "/usr/bin/python3",
+        "scripts/e2e_native_control.py",
+        "--evidence-dir",
+        "target/native-control-evidence/final",
+        "--report",
+        "target/native-control-evidence/final/headless.json"
+      ],
+      "exit_code": 0,
+      "seconds": 6.027,
+      "log": "target/native-control-evidence/final/headless.log",
+      "log_sha256": "186541a15312f62c7b06938d0af57657b2a6c0275ef8f3b94f152d6fb34e66a3"
+    }
+  ],
+  "desktop_input_repeated": false,
+  "desktop_previous_report": "target/native-control-evidence/desktop.json",
+  "binaries": {
+    "ssmcp": {
+      "bytes": 71464184,
+      "sha256": "a50f5f3f50368f6f086150ea9c8ac29cbe8a660e805f9878eb7c5d4b14b1c738"
+    },
+    "ssmcpd": {
+      "bytes": 64435712,
+      "sha256": "9946901a3c8192a6a9d65eb9cb94da3f5bbde195b1839b5ab1353f366b21eb32"
+    }
+  },
+  "source_sha256": {
+    "src/browser.rs": "e71c0418b9e40012401509596f8533f63407b6fa10f80912cb04ad7ebf6713d4",
+    "src/computer.rs": "25f607e98845a54e86a671dcc1b8e2bd121d6eeec04d67af244647ad08361717",
+    "src/code_mode.js": "b2bb18b591c82d7a212d5bde754dc02ba78b7c36802b2546a3e9844ce664ecd7",
+    "src/code_mode.rs": "409815c558dad07b0ce5559e9442c102c5e28c1fad919cd51b6a31b764ce6342",
+    "src/output.rs": "52bd4f8adc54f9f004385f7d5264c5d94b587e3aa3d0395769fdc8c87759cdbe",
+    "src/client.rs": "69405ebfd458410ec40ff9ecef6b96eb7f30120a6d837b46b66fc165a9d33d37",
+    "src/session.rs": "801be62b8646fe5832327cc9f1f75bddd73441371b2506bb18be0e97efa38d59",
+    "src/lib.rs": "ccee3cbba5c8af78cc5e26255cedc3a10d7ea9cbe20d01a9691a82aa588bca52",
+    "src/http.rs": "83b00f0f1c394f0747c6e490969d739a0a85486a2370138e99b7a53c8f80d2cf",
+    "src/registry.rs": "09d83e0c7de655decfe0fd22f71f326b24938d090e1f7b2a025adb9d05cacfb4",
+    "src/runtime.rs": "3fc4350d91950ad3e832ba42e83835848c08e631c2d44ffcd3ce13f756f9b5d3",
+    "src/resources.rs": "6cd5a280f8db48c39b4e90c1ee06563d3d7785b84b2c88228881734fe56ffcf4",
+    "scripts/e2e.py": "4e066ef7319d083f87d8bc3070c91aa1f8376b3dca6fab342f3b81555fe9dcf2",
+    "scripts/e2e_native_control.py": "2ccbc61a30d8628637e68e3c80734950c789913fc8347409a7d5accc2e481f97",
+    "tests/client_startup.rs": "70d239f86414039945b1c30ad164575d4f66bc9e453e407ea16ab0861870199f",
+    "Cargo.toml": "071c7d46e56dfbaddf8149d0b696897a7eae5c2ebc08f3f711211f7e1e577680",
+    "Cargo.lock": "033df469fe9daf5f02d2c575720b8276620187bddaa1a3020e1470ff2c647c4d"
+  },
+  "provenance": {
+    "source_report": "target/native-control-evidence/final/gates.json",
+    "source_report_sha256": "79907ffaea7bac6248201994d1defa51f51fb048baf8711eb08266a569759e44",
+    "candidate_role": "final_source_candidate",
+    "evidence_scope": "automated assertions, commands, durations, source and binary digests"
+  },
+  "test_totals": {
+    "all_targets": {
+      "passed": 419,
+      "failed": 0,
+      "ignored": 20
+    },
+    "code_mode_isolation": {
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "counting_note": "The code_mode isolation run overlaps the all-target suite. Do not add its count as distinct tests."
+  }
+}

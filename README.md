@@ -1,6 +1,6 @@
 # ssmcp
 
-**通过 SSH，把本机命令和原生工具统一接入 MCP。**
+**通过 SSH，把本机命令、电脑控制和浏览器原生能力统一接入 MCP。**
 
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
@@ -120,11 +120,13 @@ ssmcp 自己签发的 access token 默认有效 **8 小时**。refresh token 每
 
 ## 一个客户端，自动发现本机工具
 
-每条连接始终提供 Shell、独立命令任务、文件与上下文工具，后台并行检查本机能力。可选工具只有通过版本、安全启动、原生握手和目录检查才会注册；未安装、拒绝访问或失效时记录诊断，其他能力继续使用。所有能力通过同一注册表进入 `code_mode`，不会增加顶层 MCP 工具数量。[统一注册](src/backend/mod.rs)
+每条连接始终提供 Shell、独立命令任务、文件、上下文以及电脑和浏览器原生接口，具体桌面或浏览器能力由 `status` 报告。客户端后台并行检查外部提供者；Codex、Claude 等可选工具通过版本、安全启动、原生握手和目录检查后才会注册，未安装、拒绝访问或失效时记录诊断。所有能力通过同一注册表进入 `code_mode`，不会增加顶层 MCP 工具数量。[统一注册](src/backend/mod.rs)
 
 | 本机能力 | 发现方式 | 运行内容 |
 | --- | --- | --- |
 | Shell | 始终提供 | 有状态的 PTY 与独立、可并行的命令任务 |
+| 电脑控制 | 原生桌面会话与系统依赖探测 | `ssmcp.computer.*`：截图、窗口、鼠标、键盘和滚轮；Hyprland / X11 |
+| 浏览器控制 | 原生 Chromium CDP | `ssmcp.browser.*`：启动与附着、页面快照、标签页、点击填表和截图 |
 | Codex | 版本匹配的 App Server Schema 与原生握手 | `codex.*`，以及由 `mcpServerStatus/list` 动态发现并由 `mcpServer/tool/call` 调用的 MCP 工具 |
 | Claude Code | `claude mcp serve` 的实际 MCP 目录 | `claude.*`，保留原生 Schema 和结果 |
 | Pi | 显式连接已初始化的本机私有 Unix RPC socket | 四项 RPC 桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
@@ -142,6 +144,20 @@ ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
 ```
 
 旧的 `-t`、`--type`、`--backend` 和后端透传参数已移除，传入会提示迁移。发现不安装运行时、依赖或 Harness，不提交模型请求；无法确认安全启动的提供者保持 unavailable。Pi 需要 `SSMCP_PI_RPC_SOCKET` 指向已初始化的本机私有 RPC 入口，OpenCode 需要 `SSMCP_OPENCODE_URL` 指向已有 loopback 服务。未配置时保留不可用诊断；具体限制见[原生接口与发现策略](docs/backends.md)。
+
+## 原生电脑与浏览器控制
+
+电脑和浏览器接口直接内置于 ssmcp 客户端，使用原有 SSH 连接与访问控制。浏览器由 Rust 直接连接系统 Chromium 的 CDP，桌面由当前会话的系统接口执行操作。两组能力均不调用模型。
+
+```javascript
+const shot = await computer.screenshot("CLIENT_ID_FROM_LIST", { max_width: 1600 });
+image(shot);
+return shot.structuredContent;
+```
+
+截图返回真正的 MCP 图片内容块，并附带显示缩放与坐标映射。浏览器可以启动独立临时 profile，也可以连接已开启调试的本机浏览器；页面快照生成可用于点击和填表的元素引用。
+
+先读取 `computer.status` 查看桌面能力。完整工具表、系统依赖、浏览器示例和平台范围见[原生控制指南](docs/native-control.md)，实机结果见[验收记录](docs/validation-native-control.md)。`image()` 和两组便捷方法需要同步更新服务端。
 
 ## 两个工具就够了
 

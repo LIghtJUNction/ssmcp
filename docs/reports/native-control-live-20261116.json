@@ -1,0 +1,140 @@
+{
+  "recorded_at_utc": "2026-11-16 16:04:24 UTC",
+  "status": "passed_for_reported_checks",
+  "source_commit": "2e5c55b232d2edd726242c38dc390535ac4d5fff",
+  "client_name": "ssmcp-native-controls",
+  "binary": {
+    "path": "target/native-control-runtime/ssmcp-2e5c55b2",
+    "sha256": "a50f5f3f50368f6f086150ea9c8ac29cbe8a660e805f9878eb7c5d4b14b1c738"
+  },
+  "service": {
+    "name": "ssmcp-native-controls.service",
+    "active": true,
+    "restart": "always",
+    "restart_count_at_observation": 0,
+    "native_tools_only": true
+  },
+  "catalog": {
+    "pages": 2,
+    "total_tools": 73,
+    "control_tools": 26,
+    "names": [
+      "ssmcp.browser.click",
+      "ssmcp.browser.close",
+      "ssmcp.browser.connect",
+      "ssmcp.browser.disconnect",
+      "ssmcp.browser.evaluate",
+      "ssmcp.browser.fill",
+      "ssmcp.browser.key",
+      "ssmcp.browser.launch",
+      "ssmcp.browser.navigate",
+      "ssmcp.browser.open",
+      "ssmcp.browser.screenshot",
+      "ssmcp.browser.scroll",
+      "ssmcp.browser.snapshot",
+      "ssmcp.browser.status",
+      "ssmcp.browser.tabs",
+      "ssmcp.computer.click",
+      "ssmcp.computer.drag",
+      "ssmcp.computer.focus",
+      "ssmcp.computer.key",
+      "ssmcp.computer.monitors",
+      "ssmcp.computer.move",
+      "ssmcp.computer.screenshot",
+      "ssmcp.computer.scroll",
+      "ssmcp.computer.status",
+      "ssmcp.computer.type",
+      "ssmcp.computer.windows"
+    ],
+    "external_tools": []
+  },
+  "native_status": {
+    "platform": "linux",
+    "session": "hyprland",
+    "coordinate_space": "desktop_logical",
+    "capabilities": {
+      "click": {
+        "available": true,
+        "backend": "ydotool",
+        "reason": null
+      },
+      "drag": {
+        "available": true,
+        "backend": "hyprctl + ydotool",
+        "reason": null
+      },
+      "key": {
+        "available": true,
+        "backend": "wtype",
+        "reason": null
+      },
+      "monitors": {
+        "available": true,
+        "backend": "hyprctl",
+        "reason": null
+      },
+      "move": {
+        "available": true,
+        "backend": "hyprctl",
+        "reason": null
+      },
+      "screenshot": {
+        "available": true,
+        "backend": "grim",
+        "reason": null
+      },
+      "scroll": {
+        "available": true,
+        "backend": "ydotool",
+        "reason": null
+      },
+      "type": {
+        "available": true,
+        "backend": "wtype",
+        "reason": null
+      },
+      "windows": {
+        "available": true,
+        "backend": "Hyprland",
+        "reason": null
+      }
+    },
+    "browser": {
+      "native": true,
+      "protocol": "cdp",
+      "connect_supported": true,
+      "connected": false
+    }
+  },
+  "current_broker": {
+    "raw_call_verified": true,
+    "convenience_helpers": {
+      "browser": "undefined",
+      "computer": "undefined",
+      "image": "undefined"
+    },
+    "production_broker_updated_by_this_task": false
+  },
+  "earlier_live_browser_verification": {
+    "source_code_commit": "6f18aba2c9e2665c734143b357f03115050e545c",
+    "browser_source_sha256": "e71c0418b9e40012401509596f8533f63407b6fa10f80912cb04ad7ebf6713d4",
+    "browser_module_unchanged_in_final_commit": true,
+    "transport": "current ssmcp plugin -> SSH -> native Rust CDP provider -> system Chromium",
+    "headful_fill_and_click": true,
+    "headless_fill_click_screenshot": true,
+    "image": {
+      "mime_type": "image/jpeg",
+      "width": 1000,
+      "height": 673,
+      "bytes": 26357
+    },
+    "image_visually_inspected": true,
+    "owned_browser_closed": true
+  },
+  "observed_boundaries": [
+    "An initial development instance ended after an SSH keepalive timeout; the replacement service uses Restart=always.",
+    "A manual desktop input attempt did not reach the owned test page while foreground window state was changing. Subsequent physical input was stopped; this attempt is not marked passed. The final focus implementation requires an observed target-address match.",
+    "A crop outside current desktop bounds was rejected. A headful offscreen screenshot timed out; the headless native screenshot succeeded."
+  ],
+  "validation_scope": "Final binary: catalog and capability status through the current plugin; full final protocol and headless tests in separate reports. Physical desktop actions: preceding candidate's 59-assertion report; not repeated on the final binary while independent desktop focus changes were observed."
+}
