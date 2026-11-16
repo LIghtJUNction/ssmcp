@@ -1,0 +1,133 @@
+{
+  "format": "ssmcp-daemon-local-gates-v1",
+  "recorded_at_utc": "2026-11-16T15:53:12Z",
+  "status": "passed",
+  "platform": "Linux",
+  "source_commit": "c3d83ee87706b26db6ed77afb8bb1d5e67b67e13",
+  "source_ref_kind": "clean_commit_and_recorded_source_file_hashes",
+  "tracked_source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "source_diff_note": "The recorded tracked diff is empty; source-file hashes are preserved in the original gate manifest. This is not a release or CI result.",
+  "original_report": {
+    "path": "target/acceptance/daemon-gates-r4/report.json",
+    "bytes": 7604,
+    "sha256": "d2ec48ab419e949007b08652157201da0347fa2c810eaa181c0f116491e48934"
+  },
+  "steps": [
+    {
+      "name": "format",
+      "exit_code": 0,
+      "seconds": 0.956,
+      "log": "target/acceptance/daemon-gates-r4/format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "rust",
+      "exit_code": 0,
+      "seconds": 58.52,
+      "log": "target/acceptance/daemon-gates-r4/rust.log",
+      "sha256": "ffbe459f2319ce834c342614bbf05a598c5b7ae181dddee02e769fb234be50bf"
+    },
+    {
+      "name": "code-mode",
+      "exit_code": 0,
+      "seconds": 3.571,
+      "log": "target/acceptance/daemon-gates-r4/code-mode.log",
+      "sha256": "6d8243f5f26967c3aae1ef19a44c95f58047a0ef2a9baad01cdbb6f4618f5bec"
+    },
+    {
+      "name": "clippy",
+      "exit_code": 0,
+      "seconds": 9.689,
+      "log": "target/acceptance/daemon-gates-r4/clippy.log",
+      "sha256": "c5108168eb2cd8dd90704154d57e93205e72b46178423f39b6467c7083d9ebfd"
+    },
+    {
+      "name": "build",
+      "exit_code": 0,
+      "seconds": 0.51,
+      "log": "target/acceptance/daemon-gates-r4/build.log",
+      "sha256": "60cb7206ea62c42bcb2cecd3c34b8234279e10b68fa2c0b6c156c86ba6af06d5"
+    }
+  ],
+  "test_summaries": {
+    "rust": {
+      "suites": 17,
+      "passed": 418,
+      "failed": 0,
+      "ignored": 19
+    },
+    "code-mode": {
+      "suites": 1,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "counting_note": "The 16 code_mode tests include that suite's ignored tests and overlap the all-targets run. Do not add these counts as unique tests. The 19 ignored all-targets tests are not all claimed as rerun here.",
+  "binaries": {
+    "ssmcp": "fd7133489a257a4c152f27ee959172200fcffc8c6edb459abc6241e98e7d88d2",
+    "ssmcpd": "72b986e7dce3dcfbd27c44308063b99831c011b933ca3ed724ea25ad34b5fca8",
+    "examples/vt_snapshot": "fc622bc653270b3929f3a22d4df324d46b1904ebad9ed5d6f02935d2df65aac1"
+  },
+  "daemon": {
+    "status": "passed",
+    "assertions_passed": 145,
+    "exit_code": 0,
+    "duration_seconds": 26.848,
+    "report": {
+      "path": "docs/reports/daemon-20261116-r4-report.json",
+      "expected_bytes": 21719,
+      "expected_sha256": "b9c059ddeb3a014ae55b908f70cdb97b7ad5f032c7c972ff501e57665f968ee5"
+    },
+    "scope": "actual Linux user-manager lifecycle + loopback SSH public keys + OAuth PKCE + MCP; no Harness/model request or installation",
+    "cleanup_confirmed": true,
+    "cleanup_errors": [],
+    "metrics": {
+      "ssh_reconnect_seconds": 2.056,
+      "observed_watchdog_wait_seconds": 2.011,
+      "native_crash_reconnect_seconds": 3.626,
+      "manual_stop_windows": [
+        {
+          "seconds": 2.75,
+          "samples": 20
+        },
+        {
+          "seconds": 2.75,
+          "samples": 19
+        }
+      ],
+      "unavailable_manager_injection": {
+        "changed_environment_keys": [
+          "XDG_RUNTIME_DIR",
+          "DBUS_SESSION_BUS_ADDRESS"
+        ],
+        "native_probe_exit_code": 1
+      },
+      "journal_runner_records": 87
+    },
+    "not_covered": [
+      "macOS launchd actual lifecycle",
+      "Windows Task Scheduler actual lifecycle",
+      "cross-platform CI",
+      "GitHub identity-provider login",
+      "logout/reboot startup"
+    ]
+  },
+  "dashboard": {
+    "status": "passed",
+    "assertions_passed": 76,
+    "exit_code": 0,
+    "exit_code_source": "Coordinator inspected the final runner result.",
+    "duration_seconds": 16.221,
+    "report": {
+      "path": "docs/reports/dashboard-daemon-20261116-r4-report.json",
+      "expected_bytes": 6134,
+      "expected_sha256": "3092bf54979f41434ed98a88c358df8ada65166a6a2478ed653796440e0101b3"
+    },
+    "scope": "real dashboard behavior; no installed coding harness or model is invoked",
+    "counting_note": "This is a new run on the daemon image, preserving the prior 73- and 76-assertion reports unchanged. Repeated OAuth assertions are not distinct UI cases."
+  },
+  "current_ci_status": "pending_separate_record",
+  "release_status": "pending",
+  "deployment_status": "pending"
+}

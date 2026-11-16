@@ -1,12 +1,12 @@
 # ssmcp 0.6.0 验收记录
 
-记录日期：2026-11-16，最新证据更新于 14:51 UTC。目标版本：0.6.0。本文按证据来源区分实现、协议测试、实机操作、发布与部署，不把其中一项的成功代替其他项。
+记录日期：2026-11-16，最新证据更新于 15:53 UTC。目标版本：0.6.0。本文按证据来源区分实现、协议测试、实机操作、发布与部署，不把其中一项的成功代替其他项。
 
-**当前是交付过程中的证据快照，尚未签署统一 Harness 架构全部完成。** 代码已回到 `main`：PR #7 的合并提交为 `07e2bccead43f682d1937f6da9d780489411f0ff`，新增 Git 历史侧栏的提交为 [`dd252ff91547776fc52dafe8d2134152e12040c4`](https://github.com/LIghtJUNction/ssmcp/commit/dd252ff91547776fc52dafe8d2134152e12040c4)。原工作区也已快进到该提交。历史 Rust 全目标结果、后续定向门禁、73 项与 76 项 Linux 终端运行分别保留自己的源码或二进制身份。CI、安装、发布与生产部署仍需独立结论；版本号和 main 合并不能代替这些证据。0.5.1 的已发布结论保留在[历史记录](validation-0.5.1.md)。
+**当前是交付过程中的证据快照，尚未签署统一 Harness 架构全部完成。** 最新本地 daemon 与终端复验绑定干净源码 `c3d83ee87706b26db6ed77afb8bb1d5e67b67e13`；相关结果见下节。后续 CI 与发布提交另行记录。 代码已回到 `main`：PR #7 的合并提交为 `07e2bccead43f682d1937f6da9d780489411f0ff`，新增 Git 历史侧栏的提交为 [`dd252ff91547776fc52dafe8d2134152e12040c4`](https://github.com/LIghtJUNction/ssmcp/commit/dd252ff91547776fc52dafe8d2134152e12040c4)。当时原工作区也已快进到该提交；它是 Git 历史功能的先前身份，不是本轮 daemon 的源码。历史 Rust 全目标结果、后续定向门禁、73 项与 76 项 Linux 终端运行分别保留自己的源码或二进制身份。CI、安装、发布与生产部署仍需独立结论；版本号和 main 合并不能代替这些证据。0.5.1 的已发布结论保留在[历史记录](validation-0.5.1.md)。
 
 [最终门禁与交付记录](reports/final-0.6.0-gates.json) 保存每项检查的状态、命令、源码身份、结果与证据位置。`passed` 只适用于该项记录的源码快照；`pending` 表示尚未形成相应证据，不等于测试失败；`partial` 表示该组合场景已有实测，但表中仍列有未覆盖的部分。未执行项目的次数、退出码和耗时保持空值，不预填 0。
 
-2026-11-16 13:46 UTC 的 GitHub 插件查询曾记录 [PR #7](https://github.com/LIghtJUNction/ssmcp/pull/7) 为 open、`draft:false`、`mergeable:true`，当时头提交为 `7d3bd590…`；这条历史观察保留在机器记录中。PR 随后已合并，当前候选提交为上述 `dd252ff9…`。[CI 运行 43889879804](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804)绑定该 SHA，首轮已因测试可移植性问题失败：Windows 的 cwd 断言遇到普通路径与 canonical verbatim 路径的表示差异，macOS 的两处 `openpty` 测试调用存在 const/mut 参数签名差异。正在准备最小的测试修正与新一轮 CI；这份记录不据此推断生产功能故障，也不将总验收标为完成。
+2026-11-16 13:46 UTC 的 GitHub 插件查询曾记录 [PR #7](https://github.com/LIghtJUNction/ssmcp/pull/7) 为 open、`draft:false`、`mergeable:true`，当时头提交为 `7d3bd590…`；这条历史观察保留在机器记录中。PR 随后已合并，当时的候选提交为上述 `dd252ff9…`。[CI 运行 43889879804](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804)绑定该 SHA，首轮已因测试可移植性问题失败：Windows 的 cwd 断言遇到普通路径与 canonical verbatim 路径的表示差异，macOS 的两处 `openpty` 测试调用存在 const/mut 参数签名差异。这些测试修正已随 `a0430ba10b2cfdc360ec770c4066769a7f1ffc7a` 入库，后续 daemon 提交的 CI 仍需另行记录；这份记录不据此推断生产功能故障，也不将总验收标为完成。
 
 ## 已核实证据
 
@@ -24,6 +24,38 @@
 | 发布与部署脚本 | 开发机完整测试 46 passed（协调执行任务 6）；新增部署测试在 Cloud 另有 6 passed | stage/apply 逻辑使用临时目录与 mock 系统服务，覆盖版本闸与回滚；未修改任何服务器，完整开发机日志待归档 |
 | Codex 真实 MCP 工具 | 历史实机 1 passed、0 failed；`codex-real-mcp-smoke-4.log` | 同一次测试实际发现工具 Schema，并通过原生调用接口得到非错误结果；最终提交需复验 |
 | 部署前服务器清单 | Arch Linux x86_64，`ssmcpd 0.4.1` | `resume-deploy-inventory.json`；这是升级前状态，不是 0.6.0 部署成功证据 |
+
+### Daemon、watchdog 与同镜像终端复验
+
+最新本地门禁绑定干净源码 [`c3d83ee87706b26db6ed77afb8bb1d5e67b67e13`](https://github.com/LIghtJUNction/ssmcp/commit/c3d83ee87706b26db6ed77afb8bb1d5e67b67e13)。[门禁摘要](reports/daemon-gates-20261116-r4.json)记录了源码、二进制、日志摘要和下列结果；它不代表后续提交、全平台 CI 或生产部署已经通过。
+
+| 检查 | 本次实际结果 | 范围 |
+| --- | --- | --- |
+| 格式、全目标 Rust、code_mode、clippy、构建 | 五步均 exit 0 | Rust 的 17 个 suite 合计 418 passed、0 failed、19 ignored；其中库测试 336 passed、5 ignored |
+| code_mode 单独复跑 | 16 passed、0 failed、0 ignored | 包含该组的 ignored；与全目标测试有重叠，不将两次计数相加，也不称其覆盖了全部 19 项 ignored |
+| Linux daemon 真实端到端 | 145 项断言全部通过，exit 0，26.848 秒 | 已存在的 systemd 用户管理器、隔离的真实 OpenSSH 公钥认证、OAuth PKCE 与 MCP；没有安装或调用 Harness 模型 |
+| 同一二进制的真实终端复验 | 76 项断言全部通过，exit 0，16.221 秒 | 真实 PTY、窗口缩放、并行活动、Git 历史与退出恢复；旧 73 项和旧 76 项报告保持不变 |
+
+[Daemon 原始结构化报告](reports/daemon-20261116-r4-report.json)按场景列出实际断言。145 是执行断言数，包含重连后的重复认证检查，不能称为 145 个独立功能场景。测试将连接重试设为 2 秒以验证时间关系：观察到 SSH 重新连接用时 2.056 秒，其中明确的等待为 2.011 秒；原生服务进程崩溃后的恢复为 3.626 秒。两个手动停止观察窗口均为 2.75 秒，分别取得 20 和 19 次状态样本，窗口内没有复活。CLI 默认值仍是 5 秒，不能把测试参数写成产品默认值。
+
+| 场景 | 实际验证 | 状态 |
+| --- | --- | --- |
+| 参数与默认前台行为 | 无效组合报错；普通前台仍有真实 PTY，且不创建后台会话 | Linux 通过 |
+| 后台启动与授权 | manager 状态与 connection 状态分列；显式 auth 取得私有登录码，经真实 OAuth 后调用工具 | Linux 通过 |
+| SSH 延时重连 | 终止本测试拥有的 SSH 后，同一服务进程按延时建立新连接；旧客户端 ID、授权与任务不可沿用 | Linux 通过 |
+| 原生进程崩溃恢复 | 终止本测试拥有的服务 PID 后，systemd 创建新进程；恢复等待期间不显示旧 connected | Linux 通过 |
+| 手动停止与重试中停止 | stop、重复 stop、重试期间 stop 均保持 inactive；不影响另一测试会话 | Linux 通过 |
+| 并发与连接清理 | 两个独立命令和一个 PTY 任务真实重叠；断线清理其子进程；另一会话不能读取其任务 | Linux 通过 |
+| 管理命令与可执行快照 | list、start、reload、restart、active remove；删除临时源二进制后已保存的快照继续工作 | Linux 通过 |
+| 私有状态与日志 | 状态目录、文件和二进制权限正确；journal 含真实 stdout；普通输出、状态与日志不含测试登录码或 OAuth 凭据 | Linux 通过 |
+| 管理器不可用 | 先证明原生命令不可达，再验证不留下半创建会话；测试结束清理确认成功 | Linux 通过 |
+| macOS / Windows 原生管理器 | 本轮未执行 launchd / Task Scheduler 的实际生命周期 | pending；编译或单元测试不能代替实机操作 |
+
+Linux journal 核验读取到 87 条实际 runner 记录，并检查 JSONL、无终端控制序列和真实命令输出。`sessions logs` 的 Linux journal 与明确降级的 lifecycle、其他平台 lifecycle-only 范围见[会话管理](session-control.md)和[日志说明](logging.md)。此轮不覆盖 GitHub 身份提供方的实际登录、退出系统或重启机器；后台会话也不使连接任务持久化。
+
+两份实机报告使用相同客户端 SHA-256 `fd7133489a257a4c152f27ee959172200fcffc8c6edb459abc6241e98e7d88d2` 和 Broker SHA-256 `72b986e7dce3dcfbd27c44308063b99831c011b933ca3ed724ea25ad34b5fca8`。[同镜像终端报告](reports/dashboard-daemon-20261116-r4-report.json)单独保存，不能覆盖先前报告的身份或把三轮断言相加。
+
+首轮 daemon 测试的 127 项断言通过后，管理器不可用的负例失败：当时只修改 D-Bus 地址，并未阻断 systemd 的本地连接。[修正说明与来源清单](reports/daemon-first-20261116-provenance.json)保留原报告 SHA、实际二进制和清理结果。[四组只读探测](reports/daemon-manager-transport-20261116.json)证明正常环境与仅改 D-Bus 都返回 0，使用空的短路径运行目录后才返回 1。修正只涉及测试夹具；原报告中的 a0430ba 是基础提交，附带的 tracked Diff 又未包括当时未跟踪的两个新文件，因此不把它误称为精确源码身份。
 
 ### 先前的 Rust 全目标门禁
 
@@ -140,13 +172,14 @@ stage/apply 使用同一 `--expected-version 0.6.0`、提交和候选包摘要�
 
 | 项目 | 当前记录 | 仍需形成的交付证据 |
 | --- | --- | --- |
-| Rust 格式、clippy、全目标测试、构建 | 已通过上述工作区快照 | 最终提交绑定；键盘边界修复的定向复验 |
+| Rust 格式、clippy、全目标测试、构建 | c3d83ee 的本地五步门禁通过；418 passed、19 ignored，另有 code_mode 16 项通过 | 后续最终发布提交及全平台 CI 绑定；各组 ignored 的范围保持独立 |
 | 发布与部署脚本 | 既有开发机 46 项通过 | 与最终提交绑定的日志 |
 | SSH / OAuth / PTY 与统一执行审计 | 有前序协议与端到端结果 | 最终版本的对应日志，不能替代新前端的实机交互 |
 | Codex 真实目录与调用 | 有历史真实样本 | 最终二进制同一次发现、Schema 与调用结果 |
 | Pi / OpenCode 真实外部服务 | pending | 实际端点接入，或保留具体不可用原因与支持范围 |
-| 新面板真实终端交互 | 先前 73 项通过；新增 Git 历史后 76 项通过，20.389 秒 | 两份报告分别绑定运行二进制；下表仍保留未覆盖的组合场景，其他平台待实际记录 |
-| 六平台 CI | 首轮失败，等待测试修正后的新运行 | [首轮运行 URL](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804) 保留；失败涉及 Windows 路径比较与 macOS 测试签名，新运行尚未记录 |
+| 新面板真实终端交互 | 先前 73 / 76 项报告保留；c3d83ee 同镜像再次 76 项通过，16.221 秒 | 三份报告分别绑定运行二进制；下表仍保留未覆盖的组合场景，其他平台待实际记录 |
+| Daemon 与 watchdog | Linux 实际用户管理器 145 项断言通过，26.848 秒；最终清理成功 | macOS / Windows 原生生命周期、登录或系统重启未在本轮验证 |
+| 六平台 CI | 首轮失败已保留；修正已入库，最新运行待记录 | [首轮运行 URL](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804) 保留；失败涉及 Windows 路径比较与 macOS 测试签名，新运行尚未记录 |
 | GitHub Release / crates.io | pending | 分别记录公开版本、制品清单与摘要 |
 | 客户端安装与 reload | pending | 安装入口、版本、二进制摘要及新连接 |
 | 服务端 stage/apply 与线上复验 | pending | 同一版本、提交和包摘要；运行版本、授权、健康及恢复记录 |
