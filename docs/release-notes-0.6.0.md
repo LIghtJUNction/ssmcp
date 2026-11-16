@@ -46,6 +46,14 @@ Linux 使用监督进程管理任务和后代，状态中的 `pid_role` 为 `sup
 
 任务、请求和工作区路径使用短摘要，stdout/stderr 保留来源；长内联脚本与 JSON 对象在默认 pretty 中折叠。已标明来源的内部发现重复成功摘要会收敛，错误和显式用户调用继续显示。JSONL 保留脱敏事件，输出原文仍按原有存储与查询契约读取。终端模式与控制字符处理不因 `NO_COLOR` 改变。[布局](../src/client/panel.rs) · [终端合成](../src/client/terminal.rs)
 
+## 后台会话与显式重连
+
+新增 `--daemon` 和本地 `ssmcp sessions` 管理命令，可列出、查询、启动、停止、重启、读取日志、显式读取登录码或移除保存的会话。`--watchdog` 在连接失败或断开后重试；`--reconnect-delay SECONDS` 默认 5 秒、范围 1–3600，必须同时启用 watchdog。默认不配置开机或登录自启，手动 stop 会抑制自动恢复。
+
+状态分别报告原生管理器与 Broker 连接；启动成功不表示已在线。后台会话固定保存创建时的可执行文件和 SHA-256，升级须 remove 后重新创建，restart/reload 仍使用保存版本。断线会清理原连接任务，重连重新发现工具，不提供跨连接持久任务。
+
+Linux 使用用户级 transient systemd service，macOS 使用当前用户 launchd，Windows 使用当前登录用户计划任务。Windows 原生进程崩溃恢复最少间隔 60 秒、最多 255 次，与进程内按配置间隔进行的 SSH 重连分开。Linux `sessions logs` 查询实际 unit journal，无法取得时明确退回生命周期记录；macOS/Windows 当前仅提供生命周期记录。后台会话实机验证与跨平台门禁分别记录，既有终端报告不能代替新增后台能力的验收。[操作与升级](session-control.md#后台运行与延时重连) · [日志范围](logging.md#后台会话日志)
+
 ## 审计基于已观察结果
 
 文件读取、成功提交的写入及实际文本 Diff 各有事件；快照区分存在、缺失与未知，无法读取的内容不会被当作空文件来猜测增删行数。完整 Diff 可内联或通过同一输出存储查询。技能发现、正文读取与实际调用分别记录；发现 `SKILL.md` 不表示 AI 已使用技能。Harness 调用保留开始、结束、提供者、耗时和原生审批信息，对原生接口无法观察的外部文件副作用标记 unknown。[文件审计](../src/workspace/audit.rs) · [日志说明](logging.md)

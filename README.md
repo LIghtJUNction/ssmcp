@@ -68,7 +68,7 @@ ssmcp --name ssmcp-project --title "改进项目与运行测试" --allow octocat
 ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 ```
 
-启动成功后，交互终端显示清晰的地址与登录提示。重定向 stdout 或选择 JSONL 时，输出连接 JSON：
+前台启动成功后，交互终端显示清晰的地址与登录提示。重定向 stdout 或选择 JSONL 时，输出连接 JSON：
 
 ```json
 {
@@ -87,6 +87,18 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 将 `url` 添加到支持 OAuth 的 MCP 客户端，选择 GitHub 登录。返回 ssmcp 后，核对 GitHub 身份、MCP 客户端名称和回调来源，点击“允许连接”。随后调用 `list` 查看获准访问的在线客户端，再用 `list({client_id})` 读取原生工具及参数。**保持本机 ssmcp 进程运行，才能继续操作它的后端。** [逐步登录教程](docs/configuration.md#登录流程)
 
 需要原有登录码方式时，省略 `--allow`。终端返回 `https://ssmcp.example.com/SSH用户名` 和一次性 `login_code`，在对应 OAuth 页面填写即可。该授权只覆盖同一 SSH 账号下未设置 `--allow` 的客户端。[两种授权方式](docs/configuration.md#authorization-modes)
+
+需要在退出本机终端后继续运行客户端时，可创建后台会话，并显式开启断线重连：
+
+```sh
+ssmcp --daemon --watchdog --name workstation \
+  --title "修复项目并执行测试" --allow octocat@github my-ssmcp
+ssmcp sessions status workstation --json
+ssmcp sessions logs workstation --lines 100
+ssmcp sessions stop workstation
+```
+
+`--watchdog` 默认每 5 秒重试连接；`--reconnect-delay SECONDS` 可指定 1–3600 秒的整数值，必须同时启用 watchdog。`--daemon` 本身不启用重试或开机/登录自启。管理器已经运行不代表 Broker 已连通，以 `connection_state` 和 MCP `list` 为准。手动 stop 后不会自动复活；后台会话使用保存的二进制副本，升级需 remove 后重新创建。连接断开仍会清理它拥有的任务。[会话管理、平台差异与升级](docs/session-control.md#后台运行与延时重连)
 
 ## SSH 连接，OAuth 授权
 
@@ -326,7 +338,7 @@ python3 scripts/e2e_agents.py --bin-dir target/debug
 | 下载平台包、创建版本 tag、检查自动发布 | [发布与安装](docs/releases.md) |
 | 安装服务端、配置 systemd / SSH / HTTPS | [Linux 部署](docs/deployment.md) |
 | 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
-| 设置任务标题、重载客户端、按需读取长输出 | [会话与输出管理](docs/session-control.md) |
+| 设置标题、管理后台会话与重连、重载及读取长输出 | [会话与输出管理](docs/session-control.md) |
 | 两端同步文件、映射端口、读取动态资源 | [工作区教程](docs/workspaces.md) |
 | 为 AI 提供可复用使用指南 | [ssmcp skill](skills/ssmcp/SKILL.md) |
 | 查看测试、架构与实际验收范围 | [验收记录](docs/validation.md) |

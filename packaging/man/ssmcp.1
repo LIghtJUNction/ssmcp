@@ -10,10 +10,17 @@ ssmcp \- bridge local tools and independent commands through an SSH-authenticate
 .RB [ \-i " identity" ]
 .RB [ \-p " port" ]
 .RB [ \-\-shell " path" ]
+.RB [ \-\-daemon ]
+.RB [ \-\-watchdog ]
+.RB [ \-\-reconnect-delay " seconds" ]
 .I [user@]host
 .PP
 .B ssmcp
 .B \-\-list-tools
+.PP
+.B ssmcp sessions
+.IR "list | status NAME | start NAME | stop NAME | restart NAME | logs NAME | remove NAME | auth NAME"
+.RB [ \-\-json ]
 .SH DESCRIPTION
 ssmcp authenticates to OpenSSH using a public key and always provides a local
 shell, managed command jobs and file tools. It discovers installed Codex, Claude
@@ -23,7 +30,7 @@ The server assigns each connection a random client ID. With \-\-allow, it
 returns the global HTTPS /mcp URL for GitHub identity authorization. Without
 \-\-allow, it returns the SSH account's /username URL and a one-time login code.
 .PP
-Interactive standard output shows a connection summary. Redirected output or
+For foreground clients, interactive standard output shows a connection summary. Redirected output or
 JSONL mode emits one JSON object containing url, client_id, name, type, hostname
 and cwd. The type is shell. GitHub mode adds auth:"github" and the canonical
 allow list; login-code mode adds login_code and login_expires_in. Live activity and
@@ -87,6 +94,22 @@ is SHELL or /bin/sh on Unix and COMSPEC or cmd.exe on Windows.
 Start the local shell and discover installed harnesses, print the combined
 native JSON catalog and shut them down. Does not connect to SSH and does not accept user@host. This is
 the native capability catalog, not the two-tool external MCP catalog.
+.TP
+.B \-\-daemon
+Save a private session definition and an executable copy, and ask the current
+user's native manager to start it. Does not enable boot/login startup or watchdog.
+A successful launch request is not proof of an SSH or Broker connection.
+Cannot accompany \-\-list-tools. Existing saved names are not overwritten.
+.TP
+.B \-\-watchdog
+Retry failed or disconnected SSH connections until explicitly stopped. Can be
+used in the foreground or with \-\-daemon; cannot accompany \-\-list-tools.
+Background sessions also configure native recovery after process failure.
+.TP
+.BI \-\-reconnect-delay " seconds"
+Set the delay between connection attempts to an integer from 1 through 3600.
+Defaults to 5 seconds and requires \-\-watchdog. Native Windows process-failure
+recovery has a separate minimum interval of 60 seconds.
 .TP
 .B \-h, \-\-help
 Print usage information and exit.
@@ -328,6 +351,82 @@ Valid GitHub identity grants can continue accessing the matching new connection;
 login-code mode requires a fresh OAuth login. Upgrade both client and server
 before using reload. Old clients without the reload tool require a manual
 restart for their first upgrade.
+.PP
+A saved background session reloads its saved executable, not an independently
+updated installation path. Remove and recreate that session to change its image.
+
+.SH BACKGROUND SESSIONS
+Run sessions commands on the client machine. They manage saved configuration
+names, not Broker client IDs, and do not add public MCP tools. All commands accept
+\-\-json. A saved name is 1 to 128 UTF-8 bytes, cannot start with a hyphen,
+and cannot contain control characters, path separators or surrounding whitespace.
+Quote names containing internal spaces. Saved names are unique within the chosen
+state directory; ordinary foreground display names may still repeat.
+.TP
+.B ssmcp sessions list
+List saved sessions, including stopped sessions.
+.TP
+.BI "ssmcp sessions status " NAME
+Report manager_state, manager_active and manager_pid separately from
+connection_state. The latter is connected, disconnected or unknown. An active
+manager or a zero CLI exit does not prove Broker readiness. The phase and attempt
+fields record observed lifecycle progress; a new connection gets a new client ID.
+.TP
+.BI "ssmcp sessions start " NAME
+Start a stopped session using its saved executable and configuration.
+.TP
+.BI "ssmcp sessions stop " NAME
+Request stop, suppress automatic recovery and confirm native termination.
+The watchdog does not revive an explicitly stopped session.
+.TP
+.BI "ssmcp sessions restart " NAME
+Stop and start the same saved configuration. Does not install an updated image.
+.TP
+.BI "ssmcp sessions logs " "NAME [--lines N]"
+Read bounded logs; N defaults to 50 and accepts 1 through 1000. JSON includes
+source, fallback, warning, coverage, unit, events, limit and truncated. Linux
+uses the owned unit's actual journal; unavailable or empty journal queries fall
+back explicitly to lifecycle records. Journal events contain timestamp_us, pid
+and an audited event parsed from MESSAGE, without journal environment or command
+metadata. macOS and Windows currently expose lifecycle_only coverage. Sources
+are not concatenated; lifecycle records are not proof of complete tool output.
+.TP
+.BI "ssmcp sessions auth " NAME
+Explicitly read a current login code from the private auth record. Ordinary
+status and lifecycle logs do not contain it. Normal disconnect handling clears
+the record; auth refuses a session without a current connected observation.
+GitHub-authorized connections do not issue login codes.
+.TP
+.BI "ssmcp sessions remove " NAME
+Stop the session and remove only its saved definition, executable and lifecycle
+records. Connection output files retain their separate retention policy.
+.PP
+Linux uses an existing user systemd manager and a transient service; macOS uses a
+current-user launchd agent; Windows uses a current logged-in user's scheduled
+task, without administrator or SYSTEM credentials. No implicit boot/login
+trigger or Linux linger setting is created. Continued operation after logout
+depends on the existing user manager and login session.
+.PP
+With watchdog, Linux configures Restart=on-failure and the selected RestartSec;
+macOS uses unsuccessful-exit recovery and the selected ThrottleInterval.
+Windows native failure recovery uses max(60, reconnect-delay) seconds and up to
+255 restarts. This native limit is separate from ongoing SSH retries inside a
+live client. Manual stop takes precedence over either form of recovery.
+.PP
+Default state roots are $XDG_STATE_HOME/ssmcp/sessions, or
+~/.local/state/ssmcp/sessions on Linux; ~/Library/Application Support/ssmcp/sessions
+on macOS; and %LOCALAPPDATA%\essmcp\esessions on Windows.
+SSMCP_SESSION_HOME may select a private absolute path; use the same value when
+creating and managing sessions. Unix directories and records are private to
+their owner. The saved image is checked against its SHA-256.
+.PP
+The definition records cwd, foreground arguments and PATH/SSH_AUTH_SOCK references;
+it does not copy the launching shell's entire environment. HOME comes from the
+user manager. Keep the workspace, SSH files and tool paths available.
+To upgrade, preserve the arguments and needed results, remove the saved session,
+then recreate it with the newly installed binary from its intended workspace.
+Disconnect still cleans old jobs, PTY, forwarding and tool routes; watchdog does
+not provide persistent cross-connection commands or output authorization.
 
 .SH LONG OUTPUT
 Output exceeding 32 KiB or 500 lines is stored in a private client directory.

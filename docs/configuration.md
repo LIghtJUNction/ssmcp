@@ -356,6 +356,16 @@ ssmcp --name ssmcp-project my-ssmcp
 
 <a id="troubleshooting"></a>
 
+### 后台客户端与自动重连
+
+`--daemon` 使用当前用户的原生管理器运行客户端；`--watchdog` 在连接失败或断开后持续重试，默认间隔 5 秒。`--reconnect-delay SECONDS` 接受 1–3600 秒的整数，必须与 `--watchdog` 一起使用。这些是 CLI 选项，不是 `[ui]` 配置字段，也不能与 `--list-tools` 一起使用。[启动与会话命令](session-control.md#后台运行与延时重连)
+
+后台启动没有交互式 SSH 凭据输入窗口。先确认已有公钥配置可用，并在需要时准备可访问的 ssh-agent；不要把私钥正文或口令写入参数。保存的会话保留启动目录、SSH 参数、`--allow`、标题，以及 `PATH`、`SSH_AUTH_SOCK` 环境引用；不会复制当前 Shell 的全部环境。HOME 与用户服务环境由原生管理器提供，配置原生 Harness 或既有 Pi/OpenCode 入口时也需核对它们实际可见的环境。
+
+使用 `ssmcp sessions status NAME --json` 分别检查 `manager_state` 与 `connection_state`。服务运行、CLI 成功或 OAuth 令牌仍有效，都不能单独证明目标已在线。重连产生新的客户端 ID；GitHub 授权仍按新连接的 `--allow` 判断，登录码授权随签发连接关闭而失效。确需新的登录码时在本机执行 `ssmcp sessions auth NAME`，不要把该输出加入普通诊断记录。
+
+默认不启用开机或登录自启。Windows 原生进程崩溃恢复最少间隔 60 秒、最多配置 255 次；存活客户端内的 SSH 重连仍使用所设秒数。`sessions stop` 会抑制自动恢复；`sessions start` 才会再次启动保存的会话。后台版本升级须 remove 后重新创建，普通 `restart` 或 MCP `reload` 不替换保存的可执行文件。[平台与状态目录](session-control.md#平台状态与版本)
+
 ## 5. 排查问题
 
 | 现象 | 检查与处理 |
@@ -380,6 +390,9 @@ ssmcp --name ssmcp-project my-ssmcp
 | `list` 正常，`code_mode` 报系统运行环境不可用 | 在服务器检查系统 Node.js、bubblewrap、prlimit 和用户命名空间，见[部署说明](deployment.md#系统代码运行环境) |
 | `exec.run` 返回 `running:true` 或 `wait_timed_out:true` | 保存 `job_id`，继续 `exec.wait` 或 `exec.read`。等待到期只结束本次等待；不要重复启动同一项工作 |
 | `reload` 返回 busy | 先等待在途工具调用结束；重载会停止后台命令与转发，先处理需要保留的工作 |
+| 后台会话 active，但 MCP 看不到客户端 | 检查 `sessions status NAME --json` 的 `connection_state`、阶段和错误，再查看 `sessions logs` 的实际来源；active 只表示管理器状态 |
+| 同名 `--daemon` 创建被拒绝 | 已有配置不会被覆盖；继续运行用 `sessions start`，修改配置或版本先 remove 后重新创建 |
+| `sessions logs` 提示 lifecycle-only 或 fallback | 当前只有生命周期证据；Linux 检查该用户 journal 是否可用，不能把生命周期记录当成完整工具输出 |
 
 需要定位 SSH 认证细节时，可在本机运行 `ssh -v -T alice@my-ssmcp` 查看认证阶段日志。受限账户认证成功后进入桥接，手工 SSH 会等待协议数据；看到认证成功后按 `Ctrl-C` 退出，再使用 ssmcp。分享诊断信息前移除登录码、OAuth 令牌和不希望公开的主机或路径信息。
 

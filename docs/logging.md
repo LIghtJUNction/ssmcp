@@ -90,6 +90,25 @@ activity_interval_secs = 5
 
 上图由项目的真实渲染器运行固定测试事件生成，展示排版与颜色；它是可复现的渲染示例，不是生产命令耗时记录。
 
+## 后台会话日志
+
+`--daemon` 的服务进程关闭面板与颜色，使用 JSONL 输出；创建命令中的前台显示选项不会改变服务日志。普通 `sessions status` 和生命周期记录不包含登录码。确需登录码时才在本机显式调用 `sessions auth NAME`；其私有输出应只用于登录。[后台会话与权限](session-control.md#后台运行与延时重连)
+
+```sh
+ssmcp sessions logs workstation --lines 100
+ssmcp sessions logs workstation --lines 100 --json
+```
+
+`--lines` 默认 50，范围为 1–1000。JSON 返回 `source`、`fallback`、`warning`、`coverage`、`unit`、`events`、`limit` 和 `truncated`，读取时先判断来源：
+
+| 来源与覆盖 | `events` 内容 | 如何解释 |
+| --- | --- | --- |
+| Linux：`source:"journal"`、`coverage:"native_events"` | 对应 unit 的实际 journal 消息；每项包含 `timestamp_us`、`pid`、`event` | `event` 为 MESSAGE 解析出的 JSON 或普通字符串，经过审计脱敏；时间或 PID 不可用时为 null |
+| Linux 降级：`source:"lifecycle"`、`fallback:true` | 原始生命周期观测字段，如 `phase`、`attempt`、`retry_after_secs`、`observed_at` | journal 不可用或无记录，`warning` 会说明；不能据此确认完整工具输出 |
+| macOS / Windows：`source:"lifecycle"`、`coverage:"lifecycle_only"` | 生命周期观测 | 这是当前支持范围，`warning` 明确说明；`fallback:false` 不表示具有完整原生输出 |
+
+两种来源不会拼接，以免把同一次活动重复显示。`truncated:true` 表示受本次读取界限约束，返回的事件不是完整历史。该接口不导出 journal 的环境变量、完整命令行等附加字段；也不会读取私有 `auth.json`。Linux 原生 journal 的保留策略由主机管理，ssmcp 的生命周期文件有独立容量界限；命令和 MCP 的完整结果仍按原有 OutputStore 策略保存、分页读取。[本地日志实现](../src/session.rs) · [连接输出保留](session-control.md#长输出自动转储)
+
 ## 服务端日志
 
 `ssmcpd` 使用单行 `key=value` 结构，分类包括 `auth`、`oauth`、`identity`、`session`、`mcp`、`proxy`、`timeout` 和 `persistence`。运行日志只写入允许的元信息字段，不记录 HTTP 请求体、查询字符串、OAuth token、client secret 或后端输出。请求 ID 由服务器生成，并在 `X-Request-ID` 响应头返回；身份授权日志包含 GitHub 稳定 subject ID，转发日志包含 client/session ID。
