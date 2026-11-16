@@ -583,6 +583,32 @@ impl Computer {
                     &["dispatch", "focuswindow", &format!("address:{id}")],
                 )
                 .await?;
+                // A successful dispatcher call only acknowledges the request. Confirm
+                // focus through read-only queries; never repeat the action on failure.
+                let mut active = "unavailable".to_owned();
+                tokio::time::timeout(Duration::from_millis(500), async {
+                    loop {
+                        let window = self.hypr_json("activewindow").await.map_err(|e| {
+                            format!("Could not verify Hyprland focus for {id}: {e}")
+                        })?;
+                        let address = window["address"].as_str().unwrap_or("");
+                        if address == id {
+                            return Ok::<(), String>(());
+                        }
+                        active = if address.is_empty() {
+                            "none".into()
+                        } else {
+                            bounded(address, 64)
+                        };
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                })
+                .await
+                .map_err(|_| {
+                    format!(
+                        "Hyprland did not focus window {id} within 500 ms (active window: {active})"
+                    )
+                })??;
             }
             Session::X11 => {
                 self.text("xdotool", &["windowactivate", "--sync", id])
@@ -1444,5 +1470,155 @@ if events.read_text().count("keyup\n") == 1:
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "subprocess fixture with a fake compositor helper"]
+    async fn hyprland_focus_observation_fixture() {
+        let Ok(root) = std::env::var("SSMCP_COMPUTER_FOCUS_FIXTURE") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let case = std::env::var("SSMCP_COMPUTER_FOCUS_CASE").unwrap();
+        assert_eq!(
+            crate::program::executable("hyprctl").unwrap(),
+            root.parent().unwrap().join("bin/hyprctl")
+        );
+        let computer = Computer {
+            root: root.clone(),
+            session: Session::Hyprland,
+            serial: Mutex::new(()),
+            closed: AtomicBool::new(false),
+        };
+        let start = std::time::Instant::now();
+        let outcome = computer
+            .perform("ssmcp.computer.focus", json!({"window_id":"0x123"}))
+            .await;
+        match case.as_str() {
+            "immediate" | "delayed" => {
+                assert_eq!(outcome.unwrap()["structuredContent"]["focused"], "0x123");
+            }
+            "mismatch" | "unresponsive" => {
+                let error = outcome.unwrap_err();
+                assert!(error.contains("did not focus window 0x123 within 500 ms"));
+                if case == "mismatch" {
+                    assert!(error.contains("active window: 0x999"));
+                }
+                assert!(
+                    start.elapsed() < Duration::from_secs(2),
+                    "focus verification must not inherit the helper's 10 second deadline"
+                );
+            }
+            _ => panic!("unknown focus fixture case"),
+        }
+        let events: Vec<Vec<String>> = std::fs::read_to_string(root.join("events"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            events.iter().filter(|args| args[0] == "eval").count(),
+            1,
+            "focus must be dispatched exactly once"
+        );
+        let reads = events
+            .iter()
+            .filter(|args| args.as_slice() == ["-j", "activewindow"])
+            .count();
+        match case.as_str() {
+            "immediate" | "unresponsive" => assert_eq!(reads, 1),
+            "delayed" => assert_eq!(reads, 3),
+            "mismatch" => assert!(reads >= 2),
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hyprland_focus_requires_observed_active_window() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "ssmcp-focus-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let python = crate::program::executable("python3").unwrap();
+        let helper = bin.join("hyprctl");
+        std::fs::write(
+            &helper,
+            format!(
+                "#!{}\n{}",
+                python.display(),
+                r#"import json, os, pathlib, sys, time
+root = pathlib.Path(os.environ["SSMCP_COMPUTER_FOCUS_FIXTURE"])
+case = os.environ["SSMCP_COMPUTER_FOCUS_CASE"]
+args = sys.argv[1:]
+with (root / "events").open("a") as f:
+    f.write(json.dumps(args) + "\n")
+if args == ["-j", "clients"]:
+    print(json.dumps([{"address": "0x123", "mapped": True, "hidden": False}]))
+elif args == ["repl", "return type(hl.dsp.cursor.move)"]:
+    print("function")
+elif args == ["eval", 'hl.dispatch(hl.dsp.focus({window="address:0x123"}))']:
+    print("ok")
+elif args == ["-j", "activewindow"]:
+    counter = root / "reads"
+    reads = int(counter.read_text()) + 1 if counter.exists() else 1
+    counter.write_text(str(reads))
+    if case == "unresponsive":
+        time.sleep(10)
+    focused = case == "immediate" or (case == "delayed" and reads >= 3)
+    print(json.dumps({"address": "0x123" if focused else "0x999"}))
+else:
+    sys.exit("unexpected fake compositor command")
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let path = std::env::join_paths(paths).unwrap();
+        let mut failures = Vec::new();
+        for case in ["immediate", "delayed", "mismatch", "unresponsive"] {
+            let case_root = root.join(case);
+            std::fs::create_dir_all(&case_root).unwrap();
+            let output = tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "computer::tests::hyprland_focus_observation_fixture",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("SSMCP_COMPUTER_FOCUS_FIXTURE", &case_root)
+                    .env("SSMCP_COMPUTER_FOCUS_CASE", case)
+                    .env("PATH", &path)
+                    .stdin(Stdio::null())
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await;
+            match output {
+                Ok(Ok(output)) if output.status.success() => {}
+                Ok(Ok(output)) => failures.push(format!(
+                    "{case}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                )),
+                other => failures.push(format!("{case}: {other:?}")),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
