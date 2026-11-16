@@ -26,9 +26,9 @@ import urllib.request
 
 from e2e import Harness, wait_for, free_port
 
-TITLE = "ssmcp Native Control Fixture"
+TITLE = "ssmcp Computer Use Fixture"
 FIXTURE = r"""<!doctype html><html><head><meta charset="utf-8">
-<title>ssmcp Native Control Fixture</title>
+<title>ssmcp Computer Use Fixture</title>
 <style>
 *{box-sizing:border-box}body{margin:0;padding:42px;background:#111318;color:#f4f5f8;font:18px system-ui}
 main{max-width:750px;margin:auto}p{color:#b3b9c6;line-height:1.6}h1{font-size:38px;letter-spacing:-1px}
@@ -37,7 +37,7 @@ button{margin-top:22px;padding:12px 24px;border:0;border-radius:7px;background:#
 #drag{margin-top:28px;padding:26px;border:1px dashed #626b7e;border-radius:8px;user-select:none}
 output{display:block;margin-top:22px;color:#b3efc2;white-space:pre-wrap}footer{padding-top:800px;color:#8da5cd}
 </style></head><body><main>
-<p>SSMCP / NATIVE CONTROL</p><h1>Browser and desktop verification</h1>
+<p>SSMCP / COMPUTER USE</p><h1>Browser and desktop verification</h1>
 <p>This temporary page records input received through the native ssmcp tools.</p>
 <label for="message">Test message</label><input id="message" autocomplete="off" aria-label="Test message">
 <button id="run">Run check</button><output id="result">Waiting for native input.</output>
@@ -65,7 +65,7 @@ def json_get(url):
     except (OSError, ValueError):
         return None
 
-class NativeControl(Harness):
+class ComputerUse(Harness):
     def __init__(self, directory, binary_dir, evidence_dir, desktop, chromium):
         super().__init__(directory, binary_dir)
         self.evidence_dir = evidence_dir
@@ -250,7 +250,7 @@ class NativeControl(Harness):
         self.prepare()
         workspace = self.directory / "workspace"
         workspace.mkdir()
-        self.client, credentials = self.start_client(label="native-control", name="native-control-fixture", cwd=workspace)
+        self.client, credentials = self.start_client(label="computer-use", name="computer-use-fixture", cwd=workspace)
         self.oauth_login(credentials)
         self.client_id = credentials["client_id"]
         tools = []
@@ -267,7 +267,12 @@ class NativeControl(Harness):
         names = {tool["name"] for tool in tools}
         expected = {"ssmcp.browser." + name for name in ("status", "launch", "connect", "tabs", "open", "navigate", "snapshot", "click", "fill", "key", "scroll", "evaluate", "screenshot", "close", "disconnect")}
         expected |= {"ssmcp.computer." + name for name in ("status", "monitors", "windows", "focus", "screenshot", "move", "click", "drag", "key", "type", "scroll")}
-        self.check(expected <= names, "native computer and browser tools are discoverable through public list")
+        expected |= {"ssmcp.omarchy." + name for name in ("status", "themes", "theme_set", "backgrounds", "background_set", "fonts", "font_set", "audio", "audio_set", "brightness", "brightness_set", "toggles", "toggle_set", "workspaces", "workspace_switch", "window_action", "apps", "app_launch", "menu", "battery", "network")}
+        self.check(expected <= names, "all 47 native computer, browser and Omarchy tools are discoverable through public list")
+        omarchy = self.call("ssmcp.omarchy.status", {})
+        self.check(omarchy.get("platform") == "linux" and isinstance(omarchy.get("available"), bool),
+                   "Omarchy status reports native platform availability without changing system settings")
+        self.metrics["omarchy_available"] = omarchy["available"]
         self.check(not any(name.startswith(("claude.", "codex.", "pi.", "opencode.")) for name in names),
                    "control works without a coding-agent provider")
         self.browser_checks(self.start_fixture())
@@ -284,6 +289,8 @@ class NativeControl(Harness):
         self.check(True, "control audit retains the complete requested event range")
         completed = [entry["event"] for entry in events if entry["event"].get("type") == "ssmcp.control.completed"]
         self.check(any(event["provider"] == "browser" and event["success"] for event in completed), "native control calls produce completion audit events")
+        self.check(any(event["provider"] == "omarchy" and event["success"] for event in completed),
+                   "native Omarchy observations produce completion audit events")
         self.metrics["native_tools"] = len(expected)
         self.metrics["desktop_exercised"] = self.desktop
 
@@ -296,7 +303,7 @@ class NativeControl(Harness):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
-    parser.add_argument("--evidence-dir", type=Path, default=Path("target/native-control-evidence"))
+    parser.add_argument("--evidence-dir", type=Path, default=Path("target/computer-use-evidence"))
     parser.add_argument("--report", type=Path)
     parser.add_argument("--desktop", action="store_true")
     parser.add_argument("--chromium")
@@ -306,8 +313,8 @@ def main():
     if not chromium:
         parser.error("install a system Chromium browser or pass --chromium")
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="ssmcp-native-control-") as directory:
-        harness = NativeControl(Path(directory), args.bin_dir, args.evidence_dir, args.desktop, chromium)
+    with tempfile.TemporaryDirectory(prefix="ssmcp-computer-use-") as directory:
+        harness = ComputerUse(Path(directory), args.bin_dir, args.evidence_dir, args.desktop, chromium)
         try:
             harness.run()
         except Exception:

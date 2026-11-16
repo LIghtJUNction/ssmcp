@@ -14,6 +14,7 @@ pub mod http;
 pub mod identity;
 #[cfg(target_os = "linux")]
 pub mod oauth;
+pub mod omarchy;
 pub mod output;
 pub mod platform;
 #[cfg(target_os = "linux")]

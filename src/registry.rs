@@ -13,6 +13,7 @@ pub enum Provider {
     Exec,
     Browser,
     Computer,
+    Omarchy,
     Harnesses,
     Workspace,
     Context,
@@ -32,6 +33,7 @@ impl Provider {
             Self::Exec => "exec",
             Self::Browser => "browser",
             Self::Computer => "computer",
+            Self::Omarchy => "omarchy",
             Self::Harnesses => "harnesses",
             Self::Workspace => "workspace",
             Self::Context => "context",
@@ -227,6 +229,7 @@ fn prepare(
             Provider::Exec => id.starts_with("ssmcp.exec."),
             Provider::Browser => id.starts_with("ssmcp.browser."),
             Provider::Computer => id.starts_with("ssmcp.computer."),
+            Provider::Omarchy => id.starts_with("ssmcp.omarchy."),
             Provider::Harnesses => id == "ssmcp.harnesses.list",
             Provider::Workspace => id.starts_with("ssmcp.fs.") || id.starts_with("ssmcp.net."),
             Provider::Context => ["ssmcp.skills.", "ssmcp.agents.", "ssmcp.context."]

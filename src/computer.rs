@@ -1,4 +1,8 @@
-//! Native desktop primitives. System helpers use argv and bounded owned processes.
+//! Computer-use desktop primitives with native Linux, Windows and macOS adapters.
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(windows)]
+mod windows;
 use crate::backend::{process::Managed, result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -247,7 +251,7 @@ impl Computer {
             ),
             tool(
                 "monitors",
-                "List desktop monitors in global logical coordinates, physical pixel dimensions and scales.",
+                "List monitors in the adapter's global desktop coordinates, pixel dimensions and scales; read coordinate_space before input.",
                 json!({}),
                 &[],
                 true,
@@ -268,7 +272,7 @@ impl Computer {
             ),
             tool(
                 "screenshot",
-                "Capture a bounded JPEG image. Coordinates for input are global desktop logical coordinates; use returned region and image_to_desktop mapping. A region can capture just a test window.",
+                "Capture a bounded JPEG image. Use coordinate_space and image_to_desktop mapping: Linux/macOS use logical desktop coordinates; Windows uses physical virtual-desktop pixels. A region can capture one window.",
                 json!({"region":{"type":"object","properties":{"x":coordinate,"y":coordinate,"width":{"type":"integer","minimum":1,"maximum":100000},"height":{"type":"integer","minimum":1,"maximum":100000}},"required":["x","y","width","height"],"additionalProperties":false},"max_width":{"type":"integer","minimum":320,"maximum":2560,"default":1600},"quality":{"type":"integer","minimum":30,"maximum":90,"default":70},"cursor":{"type":"boolean","default":false}}),
                 &[],
                 true,
@@ -296,7 +300,7 @@ impl Computer {
             ),
             tool(
                 "key",
-                "Press and release a named XKB key (for example Return, Tab, Escape or a) with optional ctrl, alt, shift or super modifiers.",
+                "Press and release a named key (for example Return, Tab, Escape or a) with optional ctrl, alt, shift or super modifiers; super maps to Windows/Command.",
                 json!({"key":{"type":"string","minLength":1,"maxLength":64},"modifiers":{"type":"array","items":{"type":"string","enum":["ctrl","alt","shift","super"]},"maxItems":4,"default":[]}}),
                 &["key"],
                 false,
@@ -325,73 +329,79 @@ impl Computer {
         }
         self.releases.wait(RELEASE_WAIT_TIMEOUT).await?;
         let operation = async {
-            match name {
-                "ssmcp.computer.status" => {
-                    parse::<Empty>(args)?;
-                    Ok(result(self.status().await))
-                }
-                "ssmcp.computer.monitors" => {
-                    parse::<Empty>(args)?;
-                    Ok(result(
-                        json!({"monitors":self.monitors().await?,"coordinate_space":"desktop_logical"}),
-                    ))
-                }
-                "ssmcp.computer.windows" => {
-                    parse::<Empty>(args)?;
-                    Ok(result(self.windows().await?))
-                }
-                "ssmcp.computer.focus" => {
-                    let v: Focus = parse(args)?;
-                    self.focus(&v.window_id).await?;
-                    Ok(result(json!({"focused":v.window_id})))
-                }
-                "ssmcp.computer.screenshot" => self.screenshot(parse(args)?).await,
-                "ssmcp.computer.move" => {
-                    let p: Point = parse(args)?;
-                    self.validate_point(p).await?;
-                    self.move_pointer(p).await?;
-                    Ok(result(
-                        json!({"x":p.x,"y":p.y,"coordinate_space":"desktop_logical"}),
-                    ))
-                }
-                "ssmcp.computer.click" => {
-                    let v: Click = parse(args)?;
-                    if !(1..=3).contains(&v.count) {
-                        return Err("count must be between 1 and 3".into());
+            match std::env::consts::OS {
+                #[cfg(windows)]
+                "windows" => windows::perform(&self.root, name, args).await,
+                #[cfg(target_os = "macos")]
+                "macos" => macos::perform(&self.root, name, args).await,
+                _ => match name {
+                    "ssmcp.computer.status" => {
+                        parse::<Empty>(args)?;
+                        Ok(result(self.status().await))
                     }
-                    if let Some(p) = optional_point(v.x, v.y)? {
+                    "ssmcp.computer.monitors" => {
+                        parse::<Empty>(args)?;
+                        Ok(result(
+                            json!({"monitors":self.monitors().await?,"coordinate_space":"desktop_logical"}),
+                        ))
+                    }
+                    "ssmcp.computer.windows" => {
+                        parse::<Empty>(args)?;
+                        Ok(result(self.windows().await?))
+                    }
+                    "ssmcp.computer.focus" => {
+                        let v: Focus = parse(args)?;
+                        self.focus(&v.window_id).await?;
+                        Ok(result(json!({"focused":v.window_id})))
+                    }
+                    "ssmcp.computer.screenshot" => self.screenshot(parse(args)?).await,
+                    "ssmcp.computer.move" => {
+                        let p: Point = parse(args)?;
                         self.validate_point(p).await?;
                         self.move_pointer(p).await?;
+                        Ok(result(
+                            json!({"x":p.x,"y":p.y,"coordinate_space":"desktop_logical"}),
+                        ))
                     }
-                    self.click(v.button, v.count).await?;
-                    Ok(result(json!({"clicked":true,"count":v.count})))
-                }
-                "ssmcp.computer.drag" => {
-                    self.drag(parse(args)?).await?;
-                    Ok(result(json!({"dragged":true,"button_released":true})))
-                }
-                "ssmcp.computer.key" => {
-                    self.key(parse(args)?).await?;
-                    Ok(result(json!({"pressed":true,"released":true})))
-                }
-                "ssmcp.computer.type" => {
-                    let v: TypeText = parse(args)?;
-                    if v.text.len() > 16384 || v.text.contains('\0') {
-                        return Err("text must be at most 16384 UTF-8 bytes without NUL".into());
+                    "ssmcp.computer.click" => {
+                        let v: Click = parse(args)?;
+                        if !(1..=3).contains(&v.count) {
+                            return Err("count must be between 1 and 3".into());
+                        }
+                        if let Some(p) = optional_point(v.x, v.y)? {
+                            self.validate_point(p).await?;
+                            self.move_pointer(p).await?;
+                        }
+                        self.click(v.button, v.count).await?;
+                        Ok(result(json!({"clicked":true,"count":v.count})))
                     }
-                    if !v.text.is_empty() {
-                        self.type_text(&v.text).await?;
+                    "ssmcp.computer.drag" => {
+                        self.drag(parse(args)?).await?;
+                        Ok(result(json!({"dragged":true,"button_released":true})))
                     }
-                    Ok(result(
-                        json!({"typed":true,"characters":v.text.chars().count()}),
-                    ))
-                }
-                "ssmcp.computer.scroll" => {
-                    let v: Scroll = parse(args)?;
-                    self.scroll(v).await?;
-                    Ok(result(json!({"scrolled":true})))
-                }
-                _ => Err(format!("unknown computer tool: {name}")),
+                    "ssmcp.computer.key" => {
+                        self.key(parse(args)?).await?;
+                        Ok(result(json!({"pressed":true,"released":true})))
+                    }
+                    "ssmcp.computer.type" => {
+                        let v: TypeText = parse(args)?;
+                        if v.text.len() > 16384 || v.text.contains('\0') {
+                            return Err("text must be at most 16384 UTF-8 bytes without NUL".into());
+                        }
+                        if !v.text.is_empty() {
+                            self.type_text(&v.text).await?;
+                        }
+                        Ok(result(
+                            json!({"typed":true,"characters":v.text.chars().count()}),
+                        ))
+                    }
+                    "ssmcp.computer.scroll" => {
+                        let v: Scroll = parse(args)?;
+                        self.scroll(v).await?;
+                        Ok(result(json!({"scrolled":true})))
+                    }
+                    _ => Err(format!("unknown computer tool: {name}")),
+                },
             }
         };
         tokio::time::timeout(Duration::from_secs(30), operation)
