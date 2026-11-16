@@ -41,7 +41,6 @@ type Directory = cap_std::fs::Dir;
 enum Access {
     Read,
     ReadWrite,
-    CreateReadWrite,
     CreateNewWrite,
     CreateNewReadWrite,
 }
@@ -353,9 +352,6 @@ impl OutputStore {
                 Access::ReadWrite => {
                     options.read(true).write(true);
                 }
-                Access::CreateReadWrite => {
-                    options.read(true).write(true).create(true);
-                }
                 Access::CreateNewWrite => {
                     options.write(true).create_new(true);
                 }
@@ -372,7 +368,6 @@ impl OutputStore {
             let flags = match access {
                 Access::Read => libc::O_RDONLY,
                 Access::ReadWrite => libc::O_RDWR,
-                Access::CreateReadWrite => libc::O_RDWR | libc::O_CREAT,
                 Access::CreateNewWrite => libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
                 Access::CreateNewReadWrite => libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
             };
@@ -406,9 +401,18 @@ impl OutputStore {
     }
 
     fn directory_lock(&self) -> Result<File, String> {
-        let file = self
-            .open(".cleanup.lock", Access::CreateReadWrite)
-            .map_err(|e| format!("open output cleanup lock: {e}"))?;
+        // Concurrent openat(O_CREAT) on an absent name can return a spurious
+        // ENOENT on Darwin. Exclusive creation avoids that create-or-open path;
+        // only an actual AlreadyExists permits opening the existing lock.
+        // Both paths retain the no-follow and private-file identity checks.
+        let file = match self.open(".cleanup.lock", Access::CreateNewReadWrite) {
+            Ok(file) => Ok(file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                self.open(".cleanup.lock", Access::ReadWrite)
+            }
+            Err(error) => Err(error),
+        }
+        .map_err(|e| format!("open output cleanup lock: {e}"))?;
         lock(&file, false).map_err(|e| format!("acquire output cleanup lock: {e}"))?;
         Ok(file)
     }
@@ -1334,10 +1338,95 @@ mod tests {
     }
 
     #[test]
+    fn existing_cleanup_lock_is_preserved_across_connections() {
+        let fixture = Fixture::new(Policy::default());
+        let path = fixture.path.join(".cleanup.lock");
+        std::fs::write(&path, b"existing shared lock").unwrap();
+        #[cfg(unix)]
+        let before = std::fs::metadata(&path).unwrap();
+        let other = OutputStore::at(fixture.path.clone(), Policy::default()).unwrap();
+        assert_ne!(fixture.store.owner, other.owner);
+        other.cleanup_all().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing shared lock");
+        #[cfg(unix)]
+        {
+            let after = std::fs::metadata(&path).unwrap();
+            assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+            assert_eq!(after.mode() & 0o777, 0o600);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_lock_symlink_is_rejected_without_changing_its_target() {
+        let fixture = Fixture::new(Policy::default());
+        let target = fixture.path.join("keep-lock-target");
+        fixture
+            .store
+            .open("keep-lock-target", Access::CreateNewWrite)
+            .unwrap()
+            .write_all(b"untouched lock target")
+            .unwrap();
+        let path = fixture.path.join(".cleanup.lock");
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        let error = OutputStore::at(fixture.path.clone(), Policy::default())
+            .err()
+            .expect("a symlink cannot be used as the cleanup lock");
+        assert!(
+            error.starts_with("initial output retention cleanup: open output cleanup lock:"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched lock target");
+    }
+
+    #[test]
     fn concurrent_store_initialization_and_cleanup_preserve_ownership() {
         const CHILD_DIRECTORY: &str = "SSMCP_TEST_OUTPUT_CONCURRENCY_DIRECTORY";
         if let Some(path) = std::env::var_os(CHILD_DIRECTORY) {
             let path = PathBuf::from(path);
+            // Fixture::new has already created the parent's lock. Each round
+            // therefore gets a fresh private directory whose lock is absent.
+            // Join every worker before reporting an error or starting a new
+            // round; a failed opener cannot strand peers at a later barrier.
+            for round in 0..32 {
+                let directory = path.join(format!("cold-{round}"));
+                crate::platform::private_directory(&directory).unwrap();
+                assert!(!directory.join(".cleanup.lock").try_exists().unwrap());
+                let start = std::sync::Arc::new(std::sync::Barrier::new(8));
+                let failures = std::thread::scope(|scope| {
+                    let mut workers = Vec::new();
+                    for worker in 0..8 {
+                        let directory = directory.clone();
+                        let start = start.clone();
+                        workers.push((
+                            worker,
+                            scope.spawn(move || {
+                                start.wait();
+                                OutputStore::at(directory, Policy::default()).map(|_| ())
+                            }),
+                        ));
+                    }
+                    let mut failures = Vec::new();
+                    for (worker, handle) in workers {
+                        match handle.join() {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => failures.push(format!("worker {worker}: {error}")),
+                            Err(_) => failures.push(format!("worker {worker} panicked")),
+                        }
+                    }
+                    failures
+                });
+                assert!(
+                    failures.is_empty(),
+                    "cold output initialization round {round}: {failures:?}"
+                );
+                assert!(directory.join(".cleanup.lock").is_file());
+            }
+
+            // Retain the existing concurrent capture, ownership and integrity
+            // checks after exercising the previously missing cold-start race.
             let start = std::sync::Arc::new(std::sync::Barrier::new(4));
             std::thread::scope(|scope| {
                 for worker in 0..4 {
