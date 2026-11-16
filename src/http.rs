@@ -4,6 +4,7 @@
 use crate::{
     broker::{Authorization, Broker, Session},
     code_mode::{self, DEFAULT_TIMEOUT_MS, Host, HostRequest, MAX_CODE_BYTES, MAX_TIMEOUT_MS},
+    resources::{self, ResourceError},
     wire::{MAX_FRAME, Operation},
 };
 use axum::{
@@ -120,6 +121,26 @@ async fn endpoint(
         }
         Ok(Action::Code(arguments)) => {
             tool_result(execute(broker, user, authorization, access_token, arguments).await)
+        }
+        Ok(Action::ResourceList(cursor)) => {
+            let result = resources::list(&broker, &user, &authorization, cursor.as_deref()).await;
+            if broker.authenticate(&user, &access_token).await.is_none() {
+                return unauthorized(&broker.public_url, &user, true);
+            }
+            match result {
+                Ok(value) => value,
+                Err(error) => return resource_fault(error, era).response(Some(id)),
+            }
+        }
+        Ok(Action::ResourceRead(uri)) => {
+            let result = resources::read(&broker, &user, &authorization, &uri).await;
+            if broker.authenticate(&user, &access_token).await.is_none() {
+                return unauthorized(&broker.public_url, &user, true);
+            }
+            match result {
+                Ok(value) => value,
+                Err(error) => return resource_fault(error, era).response(Some(id)),
+            }
         }
         Err(fault) => return fault.response(Some(id)),
     };
@@ -371,6 +392,8 @@ enum Action {
     Reply(Value),
     List(ListArguments),
     Code(CodeArguments),
+    ResourceList(Option<String>),
+    ResourceRead(String),
 }
 
 #[derive(Deserialize)]
@@ -394,7 +417,7 @@ fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
 
-const INSTRUCTIONS: &str = "Use list to discover clients allowed for your authenticated identity and this endpoint, then list({client_id}) for a client's native tool names and schemas. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. All -t backends are accessed inside code_mode. Native policies and approvals remain in effect. Each client's access policy is enforced for discovery and native calls. Login-code grants end when their issuing SSH connection ends.";
+const INSTRUCTIONS: &str = "Use list to discover clients allowed for your authenticated identity and this endpoint, then list({client_id}) for a client's native tool names and schemas. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. All -t backends are accessed inside code_mode. Native policies and approvals remain in effect. Each client's access policy is enforced for discovery and native calls. Login-code grants end when their issuing SSH connection ends. Read ssmcp://guide and ssmcp://skill for usage, ssmcp://limits for budgets, and ssmcp://clients for a paged live inventory. Client metadata and tool schemas are exposed through resources/list and resources/read; resource reads are snapshots without subscriptions.";
 
 fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
     match request.method {
@@ -414,13 +437,13 @@ fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
             }
             Ok(Action::Reply(json!({
                 "protocolVersion":if LEGACY.contains(&version) { version } else { LEGACY[0] },
-                "capabilities":{"tools":{}},
+                "capabilities":{"tools":{},"resources":{"subscribe":false,"listChanged":false}},
                 "serverInfo":server_info(),
                 "instructions":INSTRUCTIONS
             })))
         }
         "server/discover" if era == Era::Modern => Ok(Action::Reply(json!({
-            "supportedVersions":VERSIONS,"capabilities":{"tools":{}},
+            "supportedVersions":VERSIONS,"capabilities":{"tools":{},"resources":{"subscribe":false,"listChanged":false}},
             "instructions":INSTRUCTIONS
         }))),
         "ping" => Ok(Action::Reply(json!({}))),
@@ -431,6 +454,32 @@ fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
                 ));
             }
             Ok(Action::Reply(json!({"tools":tool_definitions()})))
+        }
+        "resources/list" => {
+            resource_params(request, &["cursor"])?;
+            Ok(Action::ResourceList(resource_cursor(request)?))
+        }
+        "resources/templates/list" => {
+            resource_params(request, &["cursor"])?;
+            if resource_cursor(request)?.is_some() {
+                return Err(Fault::params(
+                    "the resource template catalog has no further pages",
+                ));
+            }
+            Ok(Action::Reply(resources::templates()))
+        }
+        "resources/read" => {
+            resource_params(request, &["uri"])?;
+            let uri = request
+                .param("uri")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Fault::params("resource uri must be a string"))?;
+            if uri.is_empty() || uri.len() > 1024 || uri.chars().any(char::is_control) {
+                return Err(Fault::params(
+                    "resource uri must be 1..=1024 bytes without control characters",
+                ));
+            }
+            Ok(Action::ResourceRead(uri.into()))
         }
         "tools/call" => operation(request),
         _ => Err(Fault::new(
@@ -443,6 +492,45 @@ fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
             "Method not found",
         )),
     }
+}
+
+fn resource_params(request: &RpcRequest<'_>, allowed: &[&str]) -> Result<(), Fault> {
+    if request.params.is_some_and(|params| {
+        params
+            .keys()
+            .any(|key| key != "_meta" && !allowed.contains(&key.as_str()))
+    }) {
+        return Err(Fault::params("unknown resource parameter"));
+    }
+    Ok(())
+}
+
+fn resource_cursor(request: &RpcRequest<'_>) -> Result<Option<String>, Fault> {
+    match request.param("cursor") {
+        None => Ok(None),
+        Some(Value::String(cursor)) if !cursor.is_empty() && cursor.len() <= 128 => {
+            Ok(Some(cursor.clone()))
+        }
+        _ => Err(Fault::params(
+            "resource cursor must be a nonempty string of at most 128 bytes",
+        )),
+    }
+}
+
+fn resource_fault(error: ResourceError, era: Era) -> Fault {
+    let (status, code) = match error {
+        ResourceError::InvalidParams(_) => (StatusCode::BAD_REQUEST, -32602),
+        ResourceError::NotFound => (
+            if era == Era::Modern {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::OK
+            },
+            -32002,
+        ),
+        ResourceError::Unavailable | ResourceError::TooLarge => (StatusCode::OK, -32603),
+    };
+    Fault::new(status, code, error.message())
 }
 
 fn valid_implementation(value: &Value) -> bool {
@@ -514,6 +602,12 @@ fn usage() -> Value {
         "call":"await call(clientId, toolName, arguments = {}) returns the complete native MCP result (including isError and structuredContent).",
         "tools":"await tools(clientId, cursor?) returns a page of native tool schemas; pass nextCursor to get the next page.",
         "output":"Use print(value) or console.log(value) for logs; return a JSON-serializable value.",
+        "fs":"fs.list/stat/read/write/mkdir(clientId, options) operate relative to that client startup cwd and return structured results.",
+        "rsync":"rsync({source:{client_id,path},destination:{client_id,path},dry_run:true,delete:false}) starts a managed job; sync is an alias. Both paths must be existing directories; copies contents. Reverse by swapping endpoints.",
+        "jobs":"jobs.status(id), jobs.wait(id,{wait_ms:5000}), jobs.cancel(id), jobs.list(). Jobs survive code_mode completion; inspect the final state and exit codes.",
+        "ports":"ports.open({listen:{client_id,port},target:{client_id,port}}), ports.list(), ports.close(id). Loopback only; port 0 selects an unused listener port.",
+        "resources":"resources.list(cursor?), resources.templates(), resources.read(uri). Start with ssmcp://guide.",
+        "workspace":"The caller sandbox needs its own registered client; server-side JavaScript cannot see its filesystem or loopback.",
         "example":"const c = clients.find(c => c.type === 'shell'); if (!c) throw new Error('No shell client'); return await call(c.id, 'terminal.status', {});"
     })
 }
@@ -565,6 +659,10 @@ async fn execute(
         let access_token = access_token.clone();
         Box::pin(async move {
             let (client_id, operation) = match request {
+                HostRequest::Builtin { name, arguments } => {
+                    return crate::bridge::dispatch(broker, user, access_token, name, arguments)
+                        .await;
+                }
                 HostRequest::Call {
                     client_id,
                     name,
@@ -581,7 +679,13 @@ async fn execute(
                 .await
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             let session = broker.client(&user, &authorization, &client_id).await?;
-            session.call(operation).await
+            let result = session.call(operation).await?;
+            let authorization = broker
+                .authenticate(&user, &access_token)
+                .await
+                .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
+            broker.client(&user, &authorization, &client_id).await?;
+            Ok(result)
         })
     });
     code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await
@@ -607,7 +711,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}) returning the complete MCP tool result, await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Supports variables, loops, conditions, await and Promise.all. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}) returning the complete MCP tool result, await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Includes fs helpers, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS}

@@ -12,11 +12,12 @@ import argparse
 import base64
 import concurrent.futures
 import json
+import re
 from pathlib import Path
 import tempfile
 import time
 
-from e2e import Harness, PUBLIC_URL, process_running, wait_for
+from e2e import BUILTIN_TOOLS, SHELL_TOOLS, Harness, PUBLIC_URL, process_running, wait_for
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,8 +82,12 @@ def catalog(harness, mode):
     harness.check(bool(names) and len(names) == len(set(names)),
                   f"{mode}: complete tool catalog has unique names")
     prefixes = ("terminal.",) if mode == "shell" else (f"{mode}.", f"ssmcp.{mode}.")
-    harness.check(all(name.startswith(prefixes) for name in names),
-                  f"{mode}: native capabilities belong to the selected backend")
+    shared = {name for name in names if name.startswith(("ssmcp.fs.", "ssmcp.net.", "ssmcp.rsync."))}
+    harness.check(shared == BUILTIN_TOOLS,
+                  f"{mode}: exact universal workspace and rsync capabilities are discoverable")
+    native = set(names) - BUILTIN_TOOLS
+    harness.check(bool(native) and all(name.startswith(prefixes) for name in native),
+                  f"{mode}: remaining native capabilities belong to the selected backend")
     harness.check(all(isinstance(tool.get("inputSchema"), dict) for tool in tools),
                   f"{mode}: all discovered tools retain JSON schemas")
     other_tool = "pi.get_state" if mode == "shell" else "terminal.status"
@@ -93,6 +98,12 @@ def catalog(harness, mode):
 
 def local_log(harness, label):
     return (harness.directory / f"{label}.log").read_text(errors="replace")
+
+
+def log_has_line(harness, label, expected):
+    # Default client output is rendered text; structured native events are checked separately.
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", local_log(harness, label))
+    return any(line.strip() == expected for line in text.splitlines())
 
 
 def events_until(harness, tool, predicate, *, cursor=0, timeout=5):
@@ -117,9 +128,8 @@ def pending_request(harness, tool):
 
 
 def check_shell(harness, label, tools, _directory):
-    harness.check({tool["name"] for tool in tools} == {
-        "terminal.read", "terminal.write", "terminal.resize", "terminal.status",
-    }, "shell: exactly four native PTY capabilities are available through code_mode")
+    harness.check({tool["name"] for tool in tools} == SHELL_TOOLS | BUILTIN_TOOLS,
+                  "shell: four native PTY capabilities plus exact shared builtins are available through code_mode")
     harness.call("terminal.write", {"data": (
         "stty -echo; printf 'SSMCP_SHELL_PID:%s\\n' \"$$\"; "
         "sleep 60 & printf 'SSMCP_CHILD_PID:%s\\n' \"$!\"; "
@@ -131,8 +141,10 @@ def check_shell(harness, label, tools, _directory):
     match, _, _ = harness.read_until(
         r"SSMCP_SHELL_PID:(\d+)[\s\S]*?SSMCP_CHILD_PID:(\d+)"
     )
-    harness.check("[ssmcp shell input]" not in local_log(harness, label),
-                  "shell: input is not duplicated as a JSON log line")
+    transcript = local_log(harness, label)
+    harness.check(transcript.count("SSMCP_SHELL_LIVE_BEFORE_READ") == 1
+                  and "[ssmcp shell input]" not in transcript,
+                  "shell: local transcript contains PTY output without duplicate input logging")
     harness.check(harness.call("terminal.status")["running"],
                   "shell: status reports the live PTY")
     return [int(match.group(1)), int(match.group(2))]
@@ -172,7 +184,7 @@ def check_codex(harness, label, tools, _directory):
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         running = pool.submit(harness.call, "codex.command_exec", {"command": ["hold"]})
         try:
-            wait_for(lambda: '\n  live\n' in local_log(harness, label),
+            wait_for(lambda: log_has_line(harness, label, "live"),
                      description="Codex base64 output decoded on local stderr")
             harness.check(not running.done(), "codex: command bytes are observable while its native call is still running")
         finally:
@@ -208,8 +220,8 @@ def check_cc(harness, label, tools, directory):
              description="Claude native progress on local stderr")
     harness.check(True, "cc: native progress appears on local stderr before event polling")
     full_call(harness, "cc.Bash", {"fixture_mode": "background"})
-    wait_for(lambda: "background.output" in local_log(harness, label)
-             and "second\n" in local_log(harness, label),
+    wait_for(lambda: log_has_line(harness, label, "first")
+             and log_has_line(harness, label, "second"),
              description="Claude background output on local stderr")
     events, _ = events_until(harness, "ssmcp.cc.events", lambda values: b"second\n" in b"".join(
         base64.b64decode(event["data_base64"])
@@ -236,7 +248,8 @@ def check_cc(harness, label, tools, directory):
 
 
 def check_pi(harness, label, tools, _directory):
-    harness.check(len(tools) == 37, "pi: all 33 native commands and four bridge helpers are discoverable")
+    harness.check(len(tools) == 37 + len(BUILTIN_TOOLS),
+                  "pi: all 33 native commands, four bridge helpers and shared builtins are discoverable")
     state = harness.call("pi.get_state")
     harness.check(state["success"] and state["command"] == "get_state", "pi: full native response envelope is preserved")
     future = harness.call("pi.rpc", {"type": "future_control", "args": {"future": {"nested": [2, 7]}}})
@@ -247,7 +260,7 @@ def check_pi(harness, label, tools, _directory):
                   "pi: native failures retain their envelope and MCP error flag")
     accepted = harness.call("pi.prompt", {"message": "fixture prompt"})
     harness.check(accepted["data"]["disposition"] == "started", "pi: prompt acceptance is returned separately from completion")
-    wait_for(lambda: "agent_settled" in local_log(harness, label),
+    wait_for(lambda: log_has_line(harness, label, "agent_settled"),
              description="Pi settled event on local stderr")
     harness.check(True, "pi: native completion reaches local stderr before event polling")
     events_until(harness, "ssmcp.pi.events", lambda events: any(
@@ -265,7 +278,7 @@ def check_pi(harness, label, tools, _directory):
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         running = pool.submit(harness.call, "pi.bash", {"command": "fixture-held-command"})
         try:
-            wait_for(lambda: "first\n  second" in local_log(harness, label),
+            wait_for(lambda: log_has_line(harness, label, "first"),
                      description="Pi bash delta on local stderr")
             harness.check(not running.done(), "pi: Bash output is visible before the native command returns")
         finally:
@@ -278,7 +291,7 @@ def check_pi(harness, label, tools, _directory):
 
 def check_opencode(harness, label, tools, directory):
     names = {tool["name"] for tool in tools}
-    harness.check(len(tools) == 78 and "opencode.fixture.extra69" in names,
+    harness.check(len(tools) == 78 + len(BUILTIN_TOOLS) and "opencode.fixture.extra69" in names,
                   "opencode: all native OpenAPI operations survive multi-page MCP discovery")
     info = harness.call("opencode.server.info")
     process = info["body"]["data"]
@@ -347,6 +360,7 @@ def run(harness):
         tools, pages = catalog(harness, mode)
         if mode == "opencode":
             harness.check(pages >= 2, "opencode: list actually traverses more than one native capability page")
+        harness.workspace_roundtrip(directory, label=mode)
         pids = CHECKERS[mode](harness, label, tools, directory)
         harness.check(all(process_running(pid) for pid in pids), f"{mode}: owned backend and test jobs are alive before disconnect")
         transcript = local_log(harness, label) + (harness.directory / "daemon.log").read_text(errors="replace")

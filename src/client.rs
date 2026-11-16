@@ -3,6 +3,7 @@ pub(crate) mod render;
 
 use crate::{
     backend::Backend,
+    runtime::Runtime,
     wire::{
         ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
         canonical_github_principal, read_frame, write_frame,
@@ -41,7 +42,7 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
   --shell /path        Shell executable (shell mode only)
   --backend PROGRAM    Override the native agent executable
   --raw                Show unmodified event payloads instead of the pretty transcript
-  --list-tools         Discover local tools as JSON, then exit without SSH
+  --list-tools         Discover native and workspace tools as JSON, then exit without SSH
 
 Uses system OpenSSH and ~/.ssh/config, including Host aliases, User,
 IdentityFile, ssh-agent and ProxyJump. An explicit user@host overrides User.
@@ -64,6 +65,8 @@ combined with --list-tools.
 Live input, output and native agent events appear on stderr as readable blocks.
 Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
 Unified diffs show old/new line numbers. --raw disables display parsing only.
+Workspace file operations are rooted at the startup directory. System rsync
+transfers and loopback TCP forwards are available to every backend.
 Keep this process running; Ctrl-C disconnects and stops its local backend.
 Without --allow, disconnecting revokes this connection's OAuth grants and
 reconnecting needs a new OAuth login. An MCP app restart can reuse valid tokens.
@@ -407,6 +410,9 @@ fn validate_destination(destination: &str) -> Result<(), String> {
 }
 
 pub async fn run() -> crate::Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__rsync-transport")) {
+        return crate::rsync::transport_main().await;
+    }
     let Some(options) = Options::parse(std::env::args_os().skip(1))? else {
         return Ok(());
     };
@@ -419,6 +425,7 @@ pub async fn run() -> crate::Result<()> {
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
+        let backend = Runtime::new(backend, std::env::current_dir()?)?;
         let tools = tokio::select! {
             result = timeout(Duration::from_secs(120),backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
             _ = interrupt.recv() => { backend.shutdown().await; return Ok(()); },
@@ -478,6 +485,7 @@ pub async fn run() -> crate::Result<()> {
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
         result = timeout(Duration::from_secs(120), Backend::start(options.mode, &options.shell, options.backend.as_deref(), &options.backend_args)) => result.map_err(|_| "local backend startup timed out")??,
     };
+    let backend = Runtime::new(backend, PathBuf::from(&metadata.cwd))?;
     // Discover before publishing credentials, so a missing/incompatible backend fails locally.
     let discovered = tokio::select! {
         biased;
