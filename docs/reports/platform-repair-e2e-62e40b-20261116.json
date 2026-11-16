@@ -1,0 +1,188 @@
+{
+  "status": "passed",
+  "source_revision": "62e40b04e1d50238630cb3b283174c4c29a465e3",
+  "completed_at": "2026-11-16T16:35:01Z",
+  "client_id": "9b9eb658e997eb605b2e4fb641508657f5088d87475bb66475b2ac56a03e9938",
+  "binaries": {
+    "ssmcp": {
+      "path": "target/acceptance/platform-repair-gates/bin/ssmcp",
+      "sha256": "fd302ca2824db5d41da2df27dc1b9247cfd12936812a72108666055223396cf3",
+      "bytes": 71595280
+    },
+    "ssmcpd": {
+      "path": "target/acceptance/platform-repair-gates/bin/ssmcpd",
+      "sha256": "885d85301808e076ae29ccb3389577e2c1a3fd4d38478503521096fae43df032",
+      "bytes": 64500912
+    },
+    "examples/vt_snapshot": {
+      "path": "target/acceptance/platform-repair-gates/bin/examples/vt_snapshot",
+      "sha256": "fc622bc653270b3929f3a22d4df324d46b1904ebad9ed5d6f02935d2df65aac1",
+      "bytes": 6444760
+    }
+  },
+  "binary_checksums_reverified_after_tests": true,
+  "cases": [
+    {
+      "case": "agents",
+      "status": "passed",
+      "native_job_id": "3d674f008f8a4fd25c550b99b7347d2f-c",
+      "exit_code": 0,
+      "duration_seconds": 17.56,
+      "checks": 349,
+      "script_sha256": "f91e6baa3ded528cfde3088dee9a794135e11e0583373870b0351ea932ddc7cf",
+      "result_path": "target/acceptance/platform-repair-e2e/agents/result.json",
+      "result_sha256": "9c0face3549aa22e10c6152c3e23d880fbd4043dd6c9e200a4b8eb32be087e59",
+      "artifacts": {
+        "stdout.log": {
+          "bytes": 22923,
+          "sha256": "c996db540c04b223c334859a5a32e88ff0ee68262bc833fc4d32684c881c8b91"
+        },
+        "stderr.log": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "report.json": {
+          "bytes": 25004,
+          "sha256": "ed8e1d87d8de7d2c9044b5d9ed9671e25eb6a208d316549685c3ef7a773d3e4f"
+        }
+      },
+      "stream_capture_complete": true,
+      "cleanup_confirmed": null,
+      "model_calls": false
+    },
+    {
+      "case": "unified",
+      "status": "passed",
+      "native_job_id": "3d674f008f8a4fd25c550b99b7347d2f-d",
+      "exit_code": 0,
+      "duration_seconds": 19.807,
+      "checks": 114,
+      "script_sha256": "572e649e0072b9ab0528af8922badcee69874c14cc3cd3dd8ebe7e249d028730",
+      "result_path": "target/acceptance/platform-repair-e2e/unified/result.json",
+      "result_sha256": "96efb3f07f206dadcc63095ccc65f319463235682236c412c7eb495a6a365787",
+      "artifacts": {
+        "stdout.log": {
+          "bytes": 8132,
+          "sha256": "68eab39c8178504ce1c7de8511d0582c3334f2fafcdb8eb4a93d908c20363d66"
+        },
+        "stderr.log": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "report.json": {
+          "bytes": 15903,
+          "sha256": "4bd7009999424b27372e1e8c076f78919bd722576e5bad3661af9acfc12ea7dc"
+        }
+      },
+      "stream_capture_complete": true,
+      "cleanup_confirmed": null,
+      "model_calls": 0
+    },
+    {
+      "case": "native_control",
+      "status": "passed",
+      "native_job_id": "3d674f008f8a4fd25c550b99b7347d2f-e",
+      "exit_code": 0,
+      "duration_seconds": 8.283,
+      "checks": 45,
+      "script_sha256": "2ccbc61a30d8628637e68e3c80734950c789913fc8347409a7d5accc2e481f97",
+      "result_path": "target/acceptance/platform-repair-e2e/native_control/result.json",
+      "result_sha256": "6842e8757fcfa80ed37d3138660f1c5c8343263d3e4eb2371c982ea84c9fa1de",
+      "artifacts": {
+        "stdout.log": {
+          "bytes": 2627,
+          "sha256": "0039c13a1fd78304dd81252c8875032b25c98f32312573a992c9764724939e3d"
+        },
+        "stderr.log": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "report.json": {
+          "bytes": 3288,
+          "sha256": "7aeab9164166844c71a8f3b46837deca6a7403f2faa6a663c4de697357bc7e42"
+        }
+      },
+      "stream_capture_complete": true,
+      "cleanup_confirmed": null,
+      "model_calls": null
+    },
+    {
+      "case": "dashboard",
+      "status": "passed",
+      "native_job_id": "3d674f008f8a4fd25c550b99b7347d2f-f",
+      "exit_code": 0,
+      "duration_seconds": 17.706,
+      "checks": 76,
+      "script_sha256": "d88f63ac0e25f93561ed3bcffb42f50aecc4c0a257a5b3e37e95784493079d62",
+      "result_path": "target/acceptance/platform-repair-e2e/dashboard/result.json",
+      "result_sha256": "7344cc7cfce13afd96b9d58d66a28aa0eed7c701fe3dd5685aa689a009d9a5d1",
+      "artifacts": {
+        "stdout.log": {
+          "bytes": 4952,
+          "sha256": "0f985b048a99b2dd188ddcf698c2cdf82747ce59f067ed574b78a8a9a18cb5b2"
+        },
+        "stderr.log": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "report.json": {
+          "bytes": 6134,
+          "sha256": "139ddccbe583cf5b4c222017a9d6881a5244507e5dd1f129836c24fc2b8ab07e"
+        }
+      },
+      "stream_capture_complete": true,
+      "cleanup_confirmed": null,
+      "model_calls": null
+    },
+    {
+      "case": "daemon",
+      "status": "passed",
+      "native_job_id": "3d674f008f8a4fd25c550b99b7347d2f-10",
+      "exit_code": 0,
+      "duration_seconds": 32.43,
+      "checks": 145,
+      "script_sha256": "8c476b892f2312a898ea7038dabeb7e61c8e91841fa85a1e9ff7cb718b91edde",
+      "result_path": "target/acceptance/platform-repair-e2e/daemon/result.json",
+      "result_sha256": "9ec9140a1d690d4292d42c2363d63244cf4fc17b72e5fc59872f11ea1b099e92",
+      "artifacts": {
+        "stdout.log": {
+          "bytes": 9513,
+          "sha256": "c4597961c294dcdc5058f1ee824166fda6c546d8ae7a17edc9a81b76714fed4c"
+        },
+        "stderr.log": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "report.json": {
+          "bytes": 21718,
+          "sha256": "b67fd0faf70b597aa39f98c7e3fee2177688449280bff482a8ff127be8f9ea92"
+        }
+      },
+      "stream_capture_complete": true,
+      "cleanup_confirmed": true,
+      "model_calls": null
+    }
+  ],
+  "total_checks": 729,
+  "maximum_concurrent_test_tasks": 3,
+  "source_archive_sha256": "87390a068b8f22b0ad85b55ae8add9fa12b003a61f6cfda33fe58a509b9f8e8c",
+  "preflight_sha256": "fae73ce5e5a44c6c3ab188bbdcdc090f81838065f5f48e81dc91fb33c3b9143a",
+  "runner_sha256": "30ce539e7c13589c9281dc71e9bed1cea71e9b80d83aaff0561e83d3902003ee",
+  "scope": [
+    "Actual Linux SSH public-key transport, OAuth loopback fixtures, native tool routing and process isolation.",
+    "Native browser suite explicitly uses an installed Chromium headless instance; no desktop flag or existing user browser.",
+    "Dashboard suite uses isolated PTYs; daemon suite uses only task-owned user-systemd units."
+  ],
+  "not_covered": [
+    "macOS or Windows actual session-manager lifecycle",
+    "GitHub-hosted CI outcome",
+    "Production 0.6 deployment and full-title live daemon acceptance"
+  ],
+  "source_report": {
+    "path": "target/acceptance/platform-repair-e2e/summary.json",
+    "bytes": 7190,
+    "sha256": "860c18269fd7153927a18aacbcd5e4e1a15d1c621122241c3818ae2875297631",
+    "publication_transform": "Only the three binary paths were changed from absolute workspace paths to project-relative paths; this provenance field was added. The public copy has its own SHA-256.",
+    "counting_note": "total_checks is the sum of assertion entries, including repeated authentication/setup; it is not a count of unique functional tests."
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "format": "ssmcp-terminal-sidebar-public-v1",
+  "captured_at_utc": "2026-11-16T16:19:03.898Z",
+  "image": {
+    "path": "docs/assets/terminal-sidebar-r5-20261116.jpg",
+    "bytes": 112257,
+    "sha256": "6fac8d012e7cd58bcd5e3489c4bda1bde181f15a2b4dbe4ec7a9764013dfbf9f",
+    "width": 1110,
+    "height": 894,
+    "mime_type": "image/jpeg",
+    "unmodified": true
+  },
+  "binary_sha256": "5798d18122aaee42272478285cf0d613c63509292ac1ac62c728280ed51c117a",
+  "scope": "Actual physical Kitty window on the r5 image. Metadata title was omitted for the old Broker; this is not full-title daemon, final-release-image, or production-upgrade acceptance.",
+  "observed": {
+    "simultaneous_tasks_in_frame": 2,
+    "completed_task_exit_codes": [
+      0,
+      0
+    ],
+    "completed_task_duration_ms": [
+      60081,
+      75213
+    ],
+    "stdout_stderr_separate": true,
+    "file_edit_and_diff_visible": true,
+    "git_state_and_recent_commits_visible": true,
+    "focus_restored_at_verification": true,
+    "original_input_method_overlay_retained": true
+  },
+  "terminal_sample_scope": "The 106x58 raw-TTY measurement was an independent initial sample before the owned window was resized. It is not synchronized with this screenshot. The visible Shell 90x13 label refers to its lower-left pane, not the entire terminal.",
+  "source_metadata": [
+    {
+      "path": "target/terminal-preview/sidebar-r5-5798d18122aa/sidebar-actual-01.json",
+      "bytes": 1365,
+      "sha256": "000e9fe8d59a469ea8169cd6b7c6778d05e1d93d7466ec37282e82f6edc78114"
+    },
+    {
+      "path": "target/terminal-preview/sidebar-r5-5798d18122aa/sidebar-actual-01-observation.json",
+      "bytes": 597,
+      "sha256": "ffc75e767d8c22f7827ccf114abf32be355bc49e6261b14b4bdde89188f11528"
+    },
+    {
+      "path": "target/terminal-preview/sidebar-r5-5798d18122aa/sidebar-jobs-completed.json",
+      "bytes": 2458,
+      "sha256": "ddcf4704f0025e05315ecfa9c9727e0a55e4eb2879727d561c26004cd16caf7f"
+    }
+  ],
+  "source_aggregate": {
+    "name": "sidebar-r5-acceptance.json",
+    "scope": "Locally staged aggregate of the native capture, observation and completed-job records; not an additional file at the remote capture directory.",
+    "bytes": 5194,
+    "sha256": "2c9db560d0ccbc06736d2805dd359997c71099d1d88317c7df7f5d121829e4c1"
+  },
+  "drive": {
+    "file_id": "1qJbCngBRlV6JTnYPvREHUnt72BHrK9Z4",
+    "url": "https://drive.google.com/file/d/1qJbCngBRlV6JTnYPvREHUnt72BHrK9Z4/view",
+    "verification": "Coordinator uploaded the original image and re-read matching metadata; reuse this existing standalone file."
+  },
+  "publication": "Private window identifiers, absolute paths, command argv and environment values are not included in this public summary."
+}

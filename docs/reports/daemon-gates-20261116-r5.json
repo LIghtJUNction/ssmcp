@@ -1,0 +1,104 @@
+{
+  "format": "ssmcp-daemon-local-gates-v1",
+  "recorded_at_utc": "2026-11-16T16:07:38Z",
+  "status": "passed",
+  "platform": "Linux",
+  "source_commit": "d2622e841a4b2240675b5d7949c8b00c407aa3b5",
+  "source_ref_kind": "clean_commit_and_recorded_source_file_hashes",
+  "tracked_source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "original_report": {
+    "path": "target/acceptance/daemon-gates-r5/report.json",
+    "bytes": 7640,
+    "sha256": "7d760597d096e58371b8b05f0423f43ed8a328516169eb022ee08f0a397a486e"
+  },
+  "steps": [
+    {
+      "name": "format",
+      "exit_code": 0,
+      "seconds": 1.486,
+      "log": "target/acceptance/daemon-gates-r5/format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "computer-cleanup",
+      "exit_code": 0,
+      "seconds": 21.125,
+      "log": "target/acceptance/daemon-gates-r5/computer-cleanup.log",
+      "sha256": "0e32e4f61759d8fad5095743a2dc71af715cc45dc303ce3dcaba74d960cdb11e"
+    },
+    {
+      "name": "clippy",
+      "exit_code": 0,
+      "seconds": 10.681,
+      "log": "target/acceptance/daemon-gates-r5/clippy.log",
+      "sha256": "0d154bfbca81eb4db648cf768be57b8288d0244296a5e640885082834aaa88c1"
+    },
+    {
+      "name": "package-files",
+      "exit_code": 0,
+      "seconds": 0.156,
+      "log": "target/acceptance/daemon-gates-r5/package-files.log",
+      "sha256": "8c1aaffa2e7f5d8d878901165ccd17199bd4ecd2fef00c9a96b63073a04d137a"
+    },
+    {
+      "name": "build",
+      "exit_code": 0,
+      "seconds": 15.701,
+      "log": "target/acceptance/daemon-gates-r5/build.log",
+      "sha256": "400858593a3838b052055cadcebfbf6e2b6569f7fcff8063032a107df5eccd18"
+    }
+  ],
+  "computer_cleanup_test_summaries": [
+    {
+      "result": "ok",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 333,
+      "duration": "0.25s"
+    }
+  ],
+  "scope_note": "This increment ran format, targeted computer-cleanup tests, clippy, package-file listing and build. It is not another all-targets Rust run, a produced release package, or CI completion. The c3d83ee all-targets result remains in its unchanged r4 record.",
+  "binaries": {
+    "ssmcp": "5798d18122aaee42272478285cf0d613c63509292ac1ac62c728280ed51c117a",
+    "ssmcpd": "5157024fc603a087f213c64b0fe9ec9c72b969c488c69dd1993ba4ae59aac1e9",
+    "examples/vt_snapshot": "fc622bc653270b3929f3a22d4df324d46b1904ebad9ed5d6f02935d2df65aac1"
+  },
+  "daemon": {
+    "status": "passed",
+    "assertions_passed": 145,
+    "exit_code": 0,
+    "duration_seconds": 30.206,
+    "report": {
+      "path": "docs/reports/daemon-20261116-r5-report.json",
+      "expected_bytes": 21717,
+      "expected_sha256": "886c2b3eea92519f51b0928fa707172f3b50e67415f8bae290fececee4010c78"
+    },
+    "cleanup_confirmed": true,
+    "cleanup_errors": [],
+    "scope": "actual Linux user-manager lifecycle + loopback SSH public keys + OAuth PKCE + MCP; no Harness/model request or installation"
+  },
+  "dashboard": {
+    "status": "passed",
+    "assertions_passed": 76,
+    "duration_seconds": 15.396,
+    "exit_code": 0,
+    "exit_code_source": "Coordinator inspected the final runner result.",
+    "report": {
+      "path": "docs/reports/dashboard-daemon-20261116-r5-report.json",
+      "expected_bytes": 6134,
+      "expected_sha256": "149a49cd2f1caad5af9876ede0a2bf77286f9df2d941c33ad29208efab1b1f24"
+    }
+  },
+  "counting_note": "Assertions include repeated authentication setup; do not add r4 and r5 as distinct functional cases.",
+  "not_covered": [
+    "macOS launchd actual lifecycle",
+    "Windows Task Scheduler actual lifecycle",
+    "cross-platform CI",
+    "GitHub identity-provider login",
+    "logout/reboot startup"
+  ],
+  "subsequent_merge_ci_status": "pending_separate_exact_commit_record",
+  "release_status": "pending",
+  "production_acceptance_status": "blocked_separate_record"
+}

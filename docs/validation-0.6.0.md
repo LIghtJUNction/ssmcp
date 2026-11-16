@@ -1,12 +1,41 @@
 # ssmcp 0.6.0 验收记录
 
-记录日期：2026-11-16，最新证据更新于 15:53 UTC。目标版本：0.6.0。本文按证据来源区分实现、协议测试、实机操作、发布与部署，不把其中一项的成功代替其他项。
+记录日期：2026-11-16，最新证据更新于 16:38 UTC。目标版本：0.6.0。本文按证据来源区分实现、协议测试、实机操作、发布与部署，不把其中一项的成功代替其他项。
 
-**当前是交付过程中的证据快照，尚未签署统一 Harness 架构全部完成。** 最新本地 daemon 与终端复验绑定干净源码 `c3d83ee87706b26db6ed77afb8bb1d5e67b67e13`；相关结果见下节。后续 CI 与发布提交另行记录。 代码已回到 `main`：PR #7 的合并提交为 `07e2bccead43f682d1937f6da9d780489411f0ff`，新增 Git 历史侧栏的提交为 [`dd252ff91547776fc52dafe8d2134152e12040c4`](https://github.com/LIghtJUNction/ssmcp/commit/dd252ff91547776fc52dafe8d2134152e12040c4)。当时原工作区也已快进到该提交；它是 Git 历史功能的先前身份，不是本轮 daemon 的源码。历史 Rust 全目标结果、后续定向门禁、73 项与 76 项 Linux 终端运行分别保留自己的源码或二进制身份。CI、安装、发布与生产部署仍需独立结论；版本号和 main 合并不能代替这些证据。0.5.1 的已发布结论保留在[历史记录](validation-0.5.1.md)。
+**当前是交付过程中的证据快照，尚未签署统一 Harness 架构全部完成。** 最新五组本地端到端证据绑定 `62e40b04e1d50238630cb3b283174c4c29a465e3`；r4/r5 与两轮发布预检分别保留自己的身份。第三轮 CI 仍待修复后验证，尚未发布部署。 代码已回到 `main`：PR #7 的合并提交为 `07e2bccead43f682d1937f6da9d780489411f0ff`，新增 Git 历史侧栏的提交为 [`dd252ff91547776fc52dafe8d2134152e12040c4`](https://github.com/LIghtJUNction/ssmcp/commit/dd252ff91547776fc52dafe8d2134152e12040c4)。当时原工作区也已快进到该提交；它是 Git 历史功能的先前身份，不是本轮 daemon 的源码。历史 Rust 全目标结果、后续定向门禁、73 项与 76 项 Linux 终端运行分别保留自己的源码或二进制身份。CI、安装、发布与生产部署仍需独立结论；版本号和 main 合并不能代替这些证据。0.5.1 的已发布结论保留在[历史记录](validation-0.5.1.md)。
 
 [最终门禁与交付记录](reports/final-0.6.0-gates.json) 保存每项检查的状态、命令、源码身份、结果与证据位置。`passed` 只适用于该项记录的源码快照；`pending` 表示尚未形成相应证据，不等于测试失败；`partial` 表示该组合场景已有实测，但表中仍列有未覆盖的部分。未执行项目的次数、退出码和耗时保持空值，不预填 0。
 
-2026-11-16 13:46 UTC 的 GitHub 插件查询曾记录 [PR #7](https://github.com/LIghtJUNction/ssmcp/pull/7) 为 open、`draft:false`、`mergeable:true`，当时头提交为 `7d3bd590…`；这条历史观察保留在机器记录中。PR 随后已合并，当时的候选提交为上述 `dd252ff9…`。[CI 运行 43889879804](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804)绑定该 SHA，首轮已因测试可移植性问题失败：Windows 的 cwd 断言遇到普通路径与 canonical verbatim 路径的表示差异，macOS 的两处 `openpty` 测试调用存在 const/mut 参数签名差异。这些测试修正已随 `a0430ba10b2cfdc360ec770c4066769a7f1ffc7a` 入库，后续 daemon 提交的 CI 仍需另行记录；这份记录不据此推断生产功能故障，也不将总验收标为完成。
+2026-11-16 13:46 UTC 的 GitHub 插件查询曾记录 [PR #7](https://github.com/LIghtJUNction/ssmcp/pull/7) 为 open、`draft:false`、`mergeable:true`，当时头提交为 `7d3bd590…`；这条历史观察保留在机器记录中。PR 随后已合并，当时的候选提交为上述 `dd252ff9…`。[CI 运行 43889879804](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804)绑定该 SHA，首轮已因测试可移植性问题失败：Windows 的 cwd 断言遇到普通路径与 canonical verbatim 路径的表示差异，macOS 的两处 `openpty` 测试调用存在 const/mut 参数签名差异。这些测试修正已随 `a0430ba10b2cfdc360ec770c4066769a7f1ffc7a` 入库，后续两轮发布预检的最终结果见下节；这份记录不据此推断生产功能故障，也不将总验收标为完成。
+
+## 后续固定镜像与发布预检
+
+[r5 门禁摘要](reports/daemon-gates-20261116-r5.json)绑定干净源码 `d2622e841a4b2240675b5d7949c8b00c407aa3b5`：格式、computer 清理定向测试、clippy、包文件清单检查和构建均 exit 0；定向测试为 10 passed、0 failed、1 ignored。[Daemon 报告](reports/daemon-20261116-r5-report.json)145 项断言通过，30.206 秒，最终清理成功；[dashboard 报告](reports/dashboard-daemon-20261116-r5-report.json)76 项通过，15.396 秒。这是 r5 的独立结果，没有把 r4 全目标测试重记为新一轮运行。
+
+随后使用 `62e40b04e1d50238630cb3b283174c4c29a465e3` 的固定镜像完成了[五组本地端到端](reports/platform-repair-e2e-62e40b-20261116.json)：
+
+| 组别 | 实际断言 | 退出码 | 运行器耗时 |
+| --- | ---: | ---: | ---: |
+| 原生 Harness 协议 fixture | 349 | 0 | 17.560 秒 |
+| 统一执行与审计 | 114 | 0 | 19.807 秒 |
+| 已安装 Chromium headless 与原生控制 | 45 | 0 | 8.283 秒 |
+| 真实 PTY 面板 | 76 | 0 | 17.706 秒 |
+| 真实 systemd 用户会话 | 145 | 0 | 32.430 秒 |
+
+各组包含重叠的认证与初始化断言，不相加为互不重复的测试数量。三个固定二进制在测试结束后再次核验摘要，未被并行构建替换。公开摘要仅将三处绝对二进制路径改为项目相对路径，并保留原始报告的字节数和 SHA-256；它有自己的公开副本摘要。这些 Linux 运行不能替代其他平台的实际会话生命周期或生产部署。
+
+| 发布预检 | 固定源码 | 最终结果 |
+| --- | --- | --- |
+| [43904831705](https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705) · [报告](reports/release-preflight-43904831705-status.json) | `5dc490388bca8519fdd6171f09b49699564afcbd` | 六个平台构建成功，六组检查失败，发布 skipped |
+| [43908296313](https://github.com/LIghtJUNction/ssmcp/actions/runs/43908296313) · [报告](reports/release-preflight-43908296313-20261116T163837Z.json) | `bf160c8f0e22669f8f4ef63fcdcb79c0e67ff2d5` | 六个平台构建成功；Linux x64、macOS Intel、Windows x64 检查通过，三个 ARM 检查失败，发布 skipped |
+
+第二轮失败分别涉及 guardian 退出的瞬时断言、OpenCode attach 前 OutputStore 初始化的 ENOENT，以及 Windows ARM 的 browser reason 断言和并发审计 busy 返回。已知事实与尚待验证的原因保留在报告中；不能由构建成功推断全部检查通过，也不能由这些断言直接宣称生产资源泄漏。**第三轮 CI 仍待修复后验证，0.6.0 尚未发布或部署。**
+
+[工作区清理摘要](reports/workspace-cleanup-20261116-summary.json)记录移除一个干净且已合并的旧 worktree，并清理另外两个 worktree 的 Cargo 缓存；父目录源码和本地证据保留。两个缓存清理前共分配 3,941,148 KiB，约 3.76 GiB，这是目录占用合计而非文件系统可用空间的独立实测增量。其余七个 worktree、原工作区九个已记录哈希的未提交文件及当前构建和证据受到保护。
+
+![r5 实际终端中的并行任务、文件 Diff 与 Git 历史](assets/terminal-sidebar-r5-20261116.jpg)
+
+图片来自 2026-11-16 16:19:03.898 UTC 的实际物理窗口，绑定 r5 `5798d181…` 镜像，原样保留输入法叠层。[精简来源记录](reports/terminal-sidebar-r5-20261116.json)区分初始 TTY 尺寸采样与截图中的子窗格尺寸。此预览省略 metadata title 以连接旧 Broker，不代表完整 title daemon 线上验收或最终发布镜像。后续须在 Broker 升级后保留完整参数复验。
 
 ## 已核实证据
 
@@ -179,7 +208,7 @@ stage/apply 使用同一 `--expected-version 0.6.0`、提交和候选包摘要�
 | Pi / OpenCode 真实外部服务 | pending | 实际端点接入，或保留具体不可用原因与支持范围 |
 | 新面板真实终端交互 | 先前 73 / 76 项报告保留；c3d83ee 同镜像再次 76 项通过，16.221 秒 | 三份报告分别绑定运行二进制；下表仍保留未覆盖的组合场景，其他平台待实际记录 |
 | Daemon 与 watchdog | Linux 实际用户管理器 145 项断言通过，26.848 秒；最终清理成功 | macOS / Windows 原生生命周期、登录或系统重启未在本轮验证 |
-| 六平台 CI | 首轮失败已保留；修正已入库，最新运行待记录 | [首轮运行 URL](https://github.com/LIghtJUNction/ssmcp/actions/runs/43889879804) 保留；失败涉及 Windows 路径比较与 macOS 测试签名，新运行尚未记录 |
+| 六平台 CI | 历史失败与两轮发布预检结果分别保留；第二轮六个构建成功、三组检查通过、三个 ARM 检查失败 | 第三轮修复后的不可变提交仍需验证；不能把构建成功写成全部检查通过 |
 | GitHub Release / crates.io | pending | 分别记录公开版本、制品清单与摘要 |
 | 客户端安装与 reload | pending | 安装入口、版本、二进制摘要及新连接 |
 | 服务端 stage/apply 与线上复验 | pending | 同一版本、提交和包摘要；运行版本、授权、健康及恢复记录 |
@@ -220,4 +249,6 @@ Windows 与 macOS 的真实交互结果必须单独记录，构建成功不能�
 
 Git 保存实现、项目技能、测试、文档和上述脱敏摘要；原始运行日志、候选包与回滚材料按权限保存，不把 OAuth 凭据、私钥、环境变量或敏感文件正文提交到公开仓库。Google Drive 同步应记录具体文件夹路径、报告 URL、上传文件清单与校验值；上传失败时如实保留未同步状态。
 
-已有 [Google Drive 验收目录](https://drive.google.com/drive/folders/1_ks6zQwTGMTcm3X3vkmfp1wqXwiZxWZ7)。本轮新增摘要的上传结果、具体目录、文件清单与报告 URL 仍为 pending；最终公开 Release 和部署后版本也尚待填入实际证据。
+已有 [Google Drive 验收目录](https://drive.google.com/drive/folders/1_ks6zQwTGMTcm3X3vkmfp1wqXwiZxWZ7)。最终材料包和其余证据的上传清单与结果仍为 pending，已上传的独立文件列于下文；最终公开 Release 和部署后版本也尚待填入实际证据。
+
+已有 Drive 独立文件包括 [r4 daemon 报告](https://drive.google.com/file/d/1uMstAGCrPk1bu8vYg41HAVRPjKXGNiTw/view)、[首轮发布预检](https://drive.google.com/file/d/1syWcd7krmViORiZK7U5-W3Z3LirCIAUJ/view)和[实际 r5 截图](https://drive.google.com/file/d/1qJbCngBRlV6JTnYPvREHUnt72BHrK9Z4/view)，已上传并核对元数据。最终合并材料包及其余证据仍待同步，不重复创建这些同名独立文件。

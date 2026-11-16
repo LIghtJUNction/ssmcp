@@ -1,0 +1,654 @@
+{
+  "schema_version": 1,
+  "run_id": 43904831705,
+  "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705",
+  "head_sha": "5dc490388bca8519fdd6171f09b49699564afcbd",
+  "mode": "build_only preflight; no publication authorized by this run",
+  "observed_at": "2026-11-16T16:20:41Z",
+  "run_status": "completed",
+  "run_conclusion": "failure",
+  "source": "GitHub Actions run/jobs and archived job logs, read-only connector",
+  "jobs": [
+    {
+      "id": 133430769844,
+      "name": "validate",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133430769844",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Validate the tag, locked version and main ancestry",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test publication safeguards",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo fmt --all -- --check",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 133431060216,
+      "name": "Build x86_64-apple-darwin",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431060216",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Build optimized executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke test and package executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify native installation, update and failed-download handling",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 133431060281,
+      "name": "Build aarch64-apple-darwin",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431060281",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Build optimized executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke test and package executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify native installation, update and failed-download handling",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 133431060309,
+      "name": "Build x86_64-pc-windows-msvc",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431060309",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Build optimized executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke test and package executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify native installation, update and failed-download handling",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 133431060340,
+      "name": "Build x86_64-unknown-linux-gnu",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431060340",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Build optimized executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke test and package executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify native installation, update and failed-download handling",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 133431060418,
+      "name": "Build aarch64-unknown-linux-gnu",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431060418",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Build optimized executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke test and package executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify native installation, update and failed-download handling",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 133431060465,
+      "name": "Build aarch64-pc-windows-msvc",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431060465",
+      "status": "completed",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Build optimized executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke test and package executables",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify native installation, update and failed-download handling",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 133431061115,
+      "name": "checks / linux (ubuntu-24.04-arm)",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431061115",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Install test dependencies",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo fmt --all -- --check",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check release tooling and installer",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Render terminal transcript fixture",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Save terminal transcript for visual review",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo test --locked",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise system Node.js and bubblewrap",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise runtime under installed service restrictions",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo build --locked --bins --example vt_snapshot",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve DCR through a real daemon restart",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise real SSH, OAuth, HTTP and PTY",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise session title, reload and output artifacts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise discovered harness fixtures through SSH and OAuth",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Exercise unified execution, audit and connection isolation",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Exercise native browser control and image transport",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Exercise terminal dashboard and Git observer through a real PTY",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Exercise background sessions and watchdog with real user systemd",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Save unified acceptance evidence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo build --locked --release",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Check staged Linux installation",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "id": 133431061135,
+      "name": "checks / linux (ubuntu-24.04)",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431061135",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Install test dependencies",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo fmt --all -- --check",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check release tooling and installer",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Render terminal transcript fixture",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Save terminal transcript for visual review",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise system Node.js and bubblewrap",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise runtime under installed service restrictions",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo build --locked --bins --example vt_snapshot",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Preserve DCR through a real daemon restart",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise real SSH, OAuth, HTTP and PTY",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise session title, reload and output artifacts",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Exercise discovered harness fixtures through SSH and OAuth",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Exercise unified execution, audit and connection isolation",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Exercise native browser control and image transport",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Exercise terminal dashboard and Git observer through a real PTY",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Exercise background sessions and watchdog with real user systemd",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Save unified acceptance evidence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo build --locked --release",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Check staged Linux installation",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "id": 133431061147,
+      "name": "checks / Client (macos-15)",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431061147",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Run cargo build --locked --bin ssmcp",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Check client startup",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Parse PowerShell installer",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "id": 133431061259,
+      "name": "checks / Client (macos-15-intel)",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431061259",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Run cargo build --locked --bin ssmcp",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Check client startup",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Parse PowerShell installer",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "id": 133431061278,
+      "name": "checks / Client (windows-2025)",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431061278",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo build --locked --bin ssmcp",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Check client startup",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Parse PowerShell installer",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "id": 133431061309,
+      "name": "checks / Client (windows-11-arm)",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133431061309",
+      "status": "completed",
+      "conclusion": "failure",
+      "steps": [
+        {
+          "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo build --locked --bin ssmcp",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Check client startup",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Parse PowerShell installer",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    {
+      "id": 133435776448,
+      "name": "finalize",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133435776448",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    },
+    {
+      "id": 133435776629,
+      "name": "publish_crates",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133435776629",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    },
+    {
+      "id": 133435777635,
+      "name": "publish_release",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43904831705/job/133435777635",
+      "status": "completed",
+      "conclusion": "skipped",
+      "steps": []
+    }
+  ],
+  "failures": [
+    {
+      "jobs": [
+        133431061278,
+        133431061309
+      ],
+      "cause": "Windows Clippy unused_mut in src/browser.rs::create_profile; mutation is cfg(unix), binding is unconditional",
+      "production_behavior_failure_demonstrated": false
+    },
+    {
+      "jobs": [
+        133431061147,
+        133431061259
+      ],
+      "cause": "Four test assertions compare canonical /private/var against /var: Hyprland helper fixture plus three program-resolution tests",
+      "tests": [
+        "computer::tests::hyprland_focus_requires_observed_active_window",
+        "program::tests::resolves_exact_mise_dispatcher_to_installed_nested_binary",
+        "program::tests::resolves_mise_without_ever_running_it_or_downloading",
+        "program::tests::skips_unresolved_shim_and_finds_real_runtime_later_in_path"
+      ],
+      "production_behavior_failure_demonstrated": false
+    },
+    {
+      "jobs": [
+        133431061147,
+        133431061259
+      ],
+      "cause": "client::terminal::tests::worker_exit_restores_alternate_screen_and_joins_within_a_deadline did not capture ESC[?1049l",
+      "source_observation": "Fixture stopped draining during worker shutdown, closed its only slave before final master read. Production restoration is bounded to 250ms. Test-only change keeps a slave descriptor alive and drains concurrently within the unchanged 1-second deadline.",
+      "inference": "PTY close/read fixture behavior is a candidate cause; this old run alone does not prove a production cleanup failure or validate the fix."
+    },
+    {
+      "jobs": [
+        133431061135,
+        133431061115
+      ],
+      "cause": "scripts/e2e_agents.py::catalog shared-prefix filter omits ssmcp.browser. and ssmcp.computer.; scripts/e2e.py BUILTIN_TOOLS already contains 15 browser and 11 computer tools. Exact equality consequently fails for the shell fixture.",
+      "failed_assertion": "shell: exact workspace, command, context and rsync capabilities are discoverable",
+      "later_e2e_steps": "skipped; not counted as passed"
+    }
+  ],
+  "monitor_actions": {
+    "modified_remote_jobs": false,
+    "dispatched_jobs": false,
+    "cancelled_jobs": false,
+    "called_models": false
+  },
+  "local_fixes_pending_new_validation": [
+    {
+      "path": "src/client/terminal.rs",
+      "scope": "Only worker-exit PTY fixture, preserving ENTER/LEAVE/VT restoration and 1s bounded cleanup assertions",
+      "sha256": "48e868f04910e6fae71fa6fd2943d9607983a3f39968afd322ab50f7d9e34098"
+    },
+    {
+      "path": "src/computer.rs",
+      "scope": "Only Hyprland fixture expected helper path canonicalization",
+      "sha256": "cf04c13c66eeba947bdd61a23a5b887c4cbdf2bc85802f8822975cc06e0ed3f2"
+    }
+  ],
+  "run_updated_at": "2026-11-16T16:19:44Z",
+  "final_counts": {
+    "validate_success": 1,
+    "release_builds_success": 6,
+    "reusable_ci_checks_failed": 6,
+    "publishing_jobs": [
+      {
+        "name": "finalize",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "publish_crates",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "publish_release",
+        "conclusion": "skipped"
+      }
+    ]
+  },
+  "source_scope": {
+    "repository": "LIghtJUNction/ssmcp",
+    "ci_workflow_sha": "5dc490388bca8519fdd6171f09b49699564afcbd",
+    "post_fix_validation": "Not represented by this run. Follow-up changes require their own immutable-commit validation."
+  }
+}

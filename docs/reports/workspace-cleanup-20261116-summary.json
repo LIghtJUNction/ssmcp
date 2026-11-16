@@ -1,0 +1,59 @@
+{
+  "format": "ssmcp-workspace-cleanup-public-v1",
+  "recorded_at_utc": "2026-11-16T16:07:38Z",
+  "status": "completed_with_preservation",
+  "scope": "Only the authorized ssmcp workspace cleanup; no unrelated project names, paths, changes, or private evidence contents are included.",
+  "original_inventory": {
+    "path": "target/acceptance/worktree-cleanup-20261116/inventory-final.json",
+    "bytes": 27980,
+    "sha256": "1a4c048bd7d192299f7265cb4e9854604b50b9271bee0dbc610aea4aab5b51c5"
+  },
+  "worktree_removal": {
+    "removed_worktrees": 1,
+    "removed": true,
+    "force_used": false,
+    "clean_including_ignored": true,
+    "head_merged_into_main": true,
+    "remove_exit_code": 0,
+    "prune_exit_code": 0,
+    "completed_at_utc": "2026-11-16T15:13:18.513141+00:00",
+    "original_record": {
+      "path": "target/acceptance/worktree-cleanup-20261116/baseline-removal.json",
+      "bytes": 1867,
+      "sha256": "4519df61dc802edf9b3e0ac8078c7ba339505afca602779708b6d3e7b9cc4a2a"
+    }
+  },
+  "cargo_cache_removal": {
+    "removed_cache_directories": 2,
+    "success": true,
+    "parent_worktrees_removed": false,
+    "allocated_kib_before": [
+      2438684,
+      1502464
+    ],
+    "reported_allocated_kib_removed": 3941148,
+    "reported_allocated_bytes_removed": 4035735552,
+    "reported_allocated_gib_removed": 3.758572,
+    "measurement_scope": "Sum of pre-deletion allocated directory blocks; not an independently measured filesystem free-space delta. The small removed worktree is not added to this exact cache total.",
+    "all_cache_signatures_valid": true,
+    "all_parent_sources_clean_after": true,
+    "all_parent_worktrees_preserved": true,
+    "all_local_evidence_preserved": true,
+    "private_evidence_read": false,
+    "completed_at_utc": "2026-11-16T15:15:01.324649+00:00",
+    "original_record": {
+      "path": "target/acceptance/worktree-cleanup-20261116/cargo-cache-removal.json",
+      "bytes": 2719,
+      "sha256": "b56a3d8f90571e24d585a13706990637c2fcd7e75e0d0087100c992a11dbb84a"
+    }
+  },
+  "preserved": {
+    "remaining_worktrees": 7,
+    "original_wip_file_hashes_recorded": 9,
+    "original_no_mutation_recorded": true,
+    "current_build_and_evidence_groups": 3,
+    "backup_contents_read": false,
+    "note": "Dirty source, locally retained evidence, current build and backup records were protected. This is not permission to delete the remaining worktrees."
+  },
+  "observation_limit": "Inventory snapshots were collected at different times and are not transactionally consistent; only recorded actions and before/after checks are asserted."
+}
