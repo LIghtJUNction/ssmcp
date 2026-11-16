@@ -53,3 +53,5 @@ install-portal:
 	sed 's|/usr/local/libexec/|$(PREFIX)/libexec/|g' packaging/ssmcp-portal-ssh.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal-ssh.service
 	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal-ssh.service
 	install -m 0644 packaging/ssmcp-portal-ssh.timer $(DESTDIR)$(SYSTEMD_DIR)/
+	sed 's|/usr/local/bin/|$(PREFIX)/bin/|g; s|/etc/ssmcpd/|$(SYSCONFDIR)/ssmcpd/|g' packaging/ssmcp-portal.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal.service
+	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal.service

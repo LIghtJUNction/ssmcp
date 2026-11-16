@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::{
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{process::Command, time::timeout};
@@ -76,12 +77,16 @@ struct Fixture(PathBuf);
 
 impl Fixture {
     fn new() -> Self {
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("ssmcp-startup-{}-{unique}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "ssmcp-startup-{}-{unique}-{sequence}",
+            std::process::id()
+        ));
         std::fs::create_dir(&path).unwrap();
         for (name, source) in [("ssh", SSH), ("native", NATIVE)] {
             let file = path.join(name);
