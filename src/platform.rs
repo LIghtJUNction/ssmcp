@@ -114,30 +114,7 @@ pub fn is_executable(path: &Path) -> bool {
 }
 
 pub fn executable(name: &str) -> Result<PathBuf, String> {
-    let search_path = std::env::var_os("PATH").unwrap_or_default();
-    let candidates = std::env::split_paths(&search_path).flat_map(|directory| {
-        let paths = vec![directory.join(name)];
-        #[cfg(windows)]
-        let paths = {
-            let mut paths = paths;
-            if Path::new(name).extension().is_none() {
-                for extension in std::env::var("PATHEXT")
-                    .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
-                    .split(';')
-                {
-                    if extension.starts_with('.') && !extension.contains(['/', '\\']) {
-                        paths.push(directory.join(format!("{name}{extension}")));
-                    }
-                }
-            }
-            paths
-        };
-        paths
-    });
-    candidates
-        .filter(|p| is_executable(p))
-        .find_map(|p| p.canonicalize().ok())
-        .ok_or_else(|| format!("{name} was not found in PATH"))
+    crate::program::executable(name)
 }
 
 pub fn random_bytes(bytes: &mut [u8]) -> io::Result<()> {
