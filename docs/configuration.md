@@ -244,7 +244,7 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 
 将示例用户名换成获准访问的 GitHub 用户名。参数采用 `用户名@提供方` 格式，目前提供方只支持 `github`；最多 32 个不同用户，大小写不敏感，重复项会合并。GitHub 用户名使用 1–39 个 ASCII 字母、数字及中间的单个连字符。`--allow` 需要 SSH 连接，不能与仅检查本机工具的 `--list-tools` 同用。[参数校验](../src/client.rs) · [身份格式](../src/wire.rs)
 
-每条连接都提供交互式 Shell 和独立命令任务。后台检查 `codex`、`claude`、`pi`、`opencode` 的原生接口，安全启动、版本、握手与目录检查通过后才注册工具；某个可选 CLI 失败会显示警告，Shell 和其他成功注册的工具继续可用。旧版启动参数按[迁移说明](backends.md#从旧的后端选择参数迁移)删除；需要的 CLI 放入客户端启动环境的 `PATH`。发现不安装软件或提交模型请求。OpenCode 需显式配置已经运行的本机服务；其他无法确认无安装启动的提供者保持 unavailable。模型身份、模型选择和权限仍由各原生 CLI 的配置管理。[统一工具目录](backends.md#1-启动客户端)
+每条连接都提供交互式 Shell 和独立命令任务。后台检查 `codex`、`claude`、`pi`、`opencode` 的原生接口，安全启动、版本、握手与目录检查通过后才注册工具；某个可选 CLI 失败会显示警告，Shell 和其他成功注册的工具继续可用。旧版启动参数按[迁移说明](backends.md#从旧的后端选择参数迁移)删除；需要的 CLI 放入客户端启动环境的 `PATH`。发现不安装软件或提交模型请求。Pi 通过 `SSMCP_PI_RPC_SOCKET` 连接已初始化的本机私有 Unix RPC 入口；OpenCode 通过 `SSMCP_OPENCODE_URL` 连接已有 loopback 服务。Pi socket 及直接父目录需由当前用户独占、无符号链接，握手还会检查 peer UID。OpenCode 地址只能为带显式端口的 `http://127.0.0.1:端口/`，原生密码由 `OPENCODE_PASSWORD` 提供；不接受代理、重定向或其他 URL 路径。入口未配置或安全检查未通过时提供者保持 unavailable。模型身份、模型选择和权限仍由各原生 CLI 的配置管理。[统一工具目录](backends.md#1-启动客户端)
 
 交互式终端会显示连接地址与登录提示。重定向 stdout 或选择 `--log-format jsonl` 时，连接信息输出为一行 JSON，例如：
 
@@ -398,7 +398,7 @@ ssmcp --name ssmcp-project my-ssmcp
 
 默认显示留白较多的 `minimal` 界面，连接摘要给出 MCP URL 和登录方式，活动记录写入 stderr。请求、完成、错误和超时使用不同颜色；独立命令按任务标识区分，stdout 与 stderr 分开显示。请求 ID、方法和耗时用于对应同一次调用，统一 diff 显示增加、删除及原始行号。[本地渲染](../src/client/render.rs)
 
-`--log-format pretty-verbose` 展开脱敏后的详细元数据，`--log-format jsonl` 输出脱敏事件 JSON；`--verbose` 是详细事件的别名，`--raw` 与 `--raw-events` 是 JSONL 的别名。重定向 stdout 时，连接信息始终是 JSON。`--no-color`、`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 会禁用 ANSI 颜色。这些配色设置不影响真实终端的交互式 PTY 字节透传。后台 stdout/stderr 按任务和流实时显示，读取历史 `wait/read` 结果不再重复打印正文。主题、时间戳、折叠行数和 TOML 配置见[日志与显示说明](logging.md)。
+`--log-format pretty-verbose` 展开脱敏后的详细元数据，`--log-format jsonl` 输出脱敏事件 JSON；`--verbose` 是详细事件的别名，`--raw` 与 `--raw-events` 是 JSONL 的别名。重定向 stdout 时，连接信息始终是 JSON。`--no-color`、`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 会禁用 ANSI 颜色。这些配色设置不影响真实终端的交互式 PTY 字节透传。后台 stdout/stderr 按任务和流实时显示，读取历史 `wait/read` 结果不再重复打印正文。默认 pretty 使用短任务号和相对工作区路径，折叠内联脚本与 JSON stdout；完整值保留在事件和输出中。`[ui] activity_interval_secs = 5` 控制静默活动提示，设为 0 只关闭周期提示；只有原生事件提供真实总量时才显示百分比。主题、时间戳、折叠行数和 TOML 配置见[日志与显示说明](logging.md)。
 
 ```sh
 ssmcp --title "检查构建与测试" --allow octocat@github my-ssmcp
@@ -407,7 +407,7 @@ ssmcp --log-format jsonl --allow octocat@github my-ssmcp
 NO_COLOR=1 ssmcp --allow octocat@github my-ssmcp
 ```
 
-更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接的命令任务、原生服务和转发；在途调用会导致 busy 拒绝。[重载协议与回归测试](../tests/client_reload.rs)
+更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../tests/client_reload.rs)
 
 GitHub 授权在仍有效、且新连接允许同一身份时继续可用。登录码授权绑定旧连接，重载断线后需要新登录码和新 OAuth 授权。调用方应按实际授权方式处理重连，避免把“程序已更新”或“重载已接收”报告为“新版本已经在线”。[重载完整说明](backends.md#9-更新后的客户端重载)
 

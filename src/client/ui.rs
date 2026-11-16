@@ -55,6 +55,8 @@ pub(crate) struct Ui {
     pub show_request_id: bool,
     pub show_raw_json: bool,
     pub max_inline_output: usize,
+    /// Quiet-job status cadence; zero disables periodic status, not lifecycle events.
+    pub activity_interval_secs: u64,
 }
 impl Default for Ui {
     fn default() -> Self {
@@ -66,6 +68,7 @@ impl Default for Ui {
             show_request_id: true,
             show_raw_json: false,
             max_inline_output: 12,
+            activity_interval_secs: 5,
         }
     }
 }
@@ -81,6 +84,9 @@ impl Ui {
             toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
         if !(1..=10000).contains(&doc.ui.max_inline_output) {
             return Err("ui.max_inline_output must be in 1..=10000".into());
+        }
+        if doc.ui.activity_interval_secs > 300 {
+            return Err("ui.activity_interval_secs must be in 0..=300".into());
         }
         Ok(doc.ui)
     }
@@ -120,6 +126,7 @@ mod tests {
         assert_eq!(u.max_inline_output, 5);
         for bad in [
             "[ui]\nmax_inline_output=0",
+            "[ui]\nactivity_interval_secs=301",
             "[ui]\ntheme='unknown'",
             "[ui]\nlog_format='xml'",
             "[ui]\ncolour=true",
