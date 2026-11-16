@@ -40,6 +40,23 @@
 
 自助公钥目前只接受单行 Ed25519 公钥，最多 20 把；只上传 `.pub`，私钥留在本机。服务器需先启用[门户与 SSH 同步](docs/deployment.md#account-portal)，变更通常在 15 秒内应用；删除公钥仅阻止后续 SSH 认证，已有连接须在本机退出。未启用门户时，首页会说明状态，原有 SSH 账户仍可使用。
 
+## 首次连接向导
+
+更新客户端和启用了账户门户的服务器后，可以在项目目录直接运行首次配置向导。向导完成并验证 SSH 后，会继续启动当前客户端：
+
+```sh
+ssmcp setup
+
+# 自建服务：门户地址与 SSH 地址可以不同。
+ssmcp setup --portal https://accounts.example.com ssh.example.com
+```
+
+浏览器会打开 GitHub 登录与电脑授权页；核对终端配对码后，单独点击授权。终端随后检查已有公钥，必要时询问是否安装 SSH、登记已有公钥或创建专用 Ed25519 密钥。确认操作输入 `yes`；电脑名称直接回车使用默认值。新建专用密钥前会说明不设口令，已有密钥不会被覆盖。
+
+**上传的只有公钥，归属当前 GitHub 身份对应的 ssmcp 账户，不是 github.com 的 SSH keys 设置。** 配置变更前备份原 SSH config，保存后用 `ssh -G` 和实际注册握手验证；相同配置重复运行不增加管理段。Windows 缺少 SSH 时可在确认后安装经过官方摘要验证的便携客户端。
+
+已有连接继续复用原 SSH 配置。交互终端在当前进程首次注册前失败时会尝试一次向导；非交互运行、后台服务及成功连接后的 watchdog 重连不会自动打开向导。需要手工管理时使用 `ssmcp --no-setup my-ssmcp`。服务端必须同步升级；安装依赖的期限、镜像与摘要信任边界、备份位置和恢复步骤见[首次连接与 SSH 配置](docs/onboarding.md)。
+
 ## 快速开始
 
 服务器已配置 GitHub OAuth 并接受你的 SSH 公钥后，在本机项目目录启动客户端。使用新命令管理和重载能力时，先将两端更新到同一版本。已有 `~/.ssh/config` 可以直接复用：
@@ -58,7 +75,7 @@ cd ~/projects/ssmcp
 ssmcp --name ssmcp-project --title "改进项目与运行测试" --allow octocat@github my-ssmcp
 ```
 
-`my-ssmcp` 是 SSH 配置别名；用户名、地址、端口和密钥交给系统 OpenSSH 解析。也可使用 `ssmcp alice@ssmcp.example.com`，或 `-F ~/.ssh/work_config` 指定配置文件。0.3.1 起支持省略用户名；已安装的 0.3.0 若提示 `destination must be user@host`，可先用 `alice@my-ssmcp`，或[重新构建安装](#安装与升级)。[SSH 配置细节](docs/configuration.md)
+`my-ssmcp` 是 SSH 配置别名；用户名、地址、端口和密钥交给系统 OpenSSH 解析。也可将同一命令的目标改为 `alice@ssmcp.example.com`，或 `-F ~/.ssh/work_config` 指定配置文件。0.3.1 起支持省略用户名；已安装的 0.3.0 若提示 `destination must be user@host`，可先用 `alice@my-ssmcp`，或[重新构建安装](#安装与升级)。[SSH 配置细节](docs/configuration.md)
 
 **已经能用同一把公钥连接该服务器账号，就可以继续用它。** 自助账户在首页管理公钥；已有手工创建的账户仍由管理员通过 OpenSSH 管理，受限账号启用 `ForceCommand` 后，通过独立管理员账号或服务器控制台追加新公钥。完整教程包括首次配置、保留旧钥、验证新钥和撤销旧连接的步骤。[公钥配置与更新](docs/configuration.md#更新公钥)
 
@@ -125,7 +142,8 @@ ssmcp 自己签发的 access token 默认有效 **8 小时**。refresh token 每
 | 本机能力 | 发现方式 | 运行内容 |
 | --- | --- | --- |
 | Shell | 始终提供 | 有状态的 PTY 与独立、可并行的命令任务 |
-| 电脑控制 | 原生桌面会话与系统依赖探测 | `ssmcp.computer.*`：截图、窗口、鼠标、键盘和滚轮；Hyprland / X11 |
+| 电脑控制 | 原生桌面会话与系统依赖探测 | `ssmcp.computer.*`：Linux / Windows / macOS 的截图、窗口、鼠标、键盘和滚轮 |
+| Omarchy 系统 | 安装、命令接口与设备探测 | `ssmcp.omarchy.*`：21 个主题、音频、亮度、工作区、窗口、应用及状态原语 |
 | 浏览器控制 | 原生 Chromium CDP | `ssmcp.browser.*`：启动与附着、页面快照、标签页、点击填表和截图 |
 | Codex | 版本匹配的 App Server Schema 与原生握手 | `codex.*`，以及由 `mcpServerStatus/list` 动态发现并由 `mcpServer/tool/call` 调用的 MCP 工具 |
 | Claude Code | `claude mcp serve` 的实际 MCP 目录 | `claude.*`，保留原生 Schema 和结果 |
@@ -145,19 +163,23 @@ ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
 
 旧的 `-t`、`--type`、`--backend` 和后端透传参数已移除，传入会提示迁移。发现不安装运行时、依赖或 Harness，不提交模型请求；无法确认安全启动的提供者保持 unavailable。Pi 需要 `SSMCP_PI_RPC_SOCKET` 指向已初始化的本机私有 RPC 入口，OpenCode 需要 `SSMCP_OPENCODE_URL` 指向已有 loopback 服务。未配置时保留不可用诊断；具体限制见[原生接口与发现策略](docs/backends.md)。
 
-## 原生电脑与浏览器控制
+## computer-use：原生电脑、浏览器与 Omarchy 操作
 
-电脑和浏览器接口直接内置于 ssmcp 客户端，使用原有 SSH 连接与访问控制。浏览器由 Rust 直接连接系统 Chromium 的 CDP，桌面由当前会话的系统接口执行操作。两组能力均不调用模型。
+computer-use 内置于 ssmcp 客户端，使用原有 SSH 连接和访问控制。Linux、Windows、macOS 分别通过本机桌面接口处理窗口、截图与鼠标键盘；浏览器由 Rust 直接连接 Chromium CDP。当前专用客户端与用户服务名称为 `ssmcp-computer-use`，原有 `ssmcp.computer.*`、`ssmcp.browser.*` API 名称保持稳定。
 
 ```javascript
-const shot = await computer.screenshot("CLIENT_ID_FROM_LIST", { max_width: 1600 });
+const id = "CLIENT_ID_FROM_LIST";
+const shot = await computer.screenshot(id, { max_width: 1600 });
+if (shot.isError) throw new Error(JSON.stringify(shot));
 image(shot);
 return shot.structuredContent;
 ```
 
-截图返回真正的 MCP 图片内容块，并附带显示缩放与坐标映射。浏览器可以启动独立临时 profile，也可以连接已开启调试的本机浏览器；页面快照生成可用于点击和填表的元素引用。
+截图返回 MCP 图片内容块和该张图片的坐标映射。Windows 使用物理桌面像素，Linux 与 macOS 使用逻辑桌面坐标；根据 `image_to_desktop` 转换后再发送鼠标操作。浏览器可以启动独立临时 profile，也可以附着已开启调试的本机浏览器，页面快照中的元素引用可用于点击和填表。
 
-先读取 `computer.status` 查看桌面能力。完整工具表、系统依赖、浏览器示例和平台范围见[原生控制指南](docs/native-control.md)，实机结果见[验收记录](docs/validation-native-control.md)。`image()` 和两组便捷方法需要同步更新服务端。
+Omarchy 新增 `ssmcp.omarchy.*` 的 21 个系统原语，覆盖主题、背景、字体、音频、亮度、夜灯、保持唤醒、状态栏、动画、工作区、窗口、应用、菜单、电池与网络。设置采用明确的期望值并检查可观察状态；应用和菜单分别报告请求是否接受。先用 `omarchy.status` 检查本机命令与设备，再通过枚举结果选择对象。
+
+先读取 `computer.status` 查看桌面会话、权限和逐项能力。三平台适配器已实现，实际可用性与验证证据按平台记录：Linux/Omarchy 可在当前开发机运行，Windows/macOS 的交叉编译结果不等于真机交互验收。完整接口与权限说明见 [computer-use 指南](docs/computer-use.md)，当前验证见[验收记录](docs/validation-computer-use.md)。`image()` 和 `computer/browser/omarchy` 便捷命名空间需要同步更新服务端。
 
 ## 两个工具就够了
 

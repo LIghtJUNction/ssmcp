@@ -1,6 +1,7 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
 mod git_status;
 mod input;
+mod onboarding;
 mod panel;
 pub(crate) mod reload;
 pub(crate) mod render;
@@ -36,12 +37,15 @@ use tokio::{
 const HELP: &str = r#"ssmcp — expose a local shell and every installed coding harness over SSH
 
 Usage: ssmcp [options] [user@]host
+       ssmcp setup [options] [user@]host
        ssmcp sessions <list|status|start|stop|restart|logs|auth|remove> [NAME]
 
   -i identity          SSH private key file
   -p port              SSH port
   -F ssh_config        OpenSSH configuration file
   --name NAME          Display name (default: hostname-pid)
+  --portal URL         HTTPS account portal for first-connection setup
+  --no-setup           Disable automatic interactive connection repair
   --daemon             Start a quiet, user-owned native background service
   --watchdog           Retry disconnected/failed connections until explicitly stopped
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5; needs --watchdog)
@@ -80,7 +84,11 @@ Add url to your MCP client, then enter login_code on its OAuth login page.
 login_expires_in deducts local backend startup time.
 With --allow, prints url, client information, allow and auth:"github" instead
 of a login_code. Add url to the MCP client and sign in with an allowed GitHub
-account in the browser. The CLI needs no GitHub login; SSH keys stay unchanged.
+account in the browser. On a first-connection failure, interactive setup opens
+GitHub authorization, checks account keys and offers to create/register a local
+Ed25519 key. Enter confirms a default computer name. Setup backs up and verifies
+SSH configuration. Existing working connections do not run setup. Use --no-setup
+to retain manual provisioning; services never open browsers or prompt.
 --allow requires a server that supports GitHub authorization and cannot be
 combined with --list-tools.
 Live input, output and native tool events appear on stderr as readable blocks.
@@ -215,6 +223,8 @@ struct Options {
     timestamps: bool,
     max_inline_output: Option<usize>,
     no_color: bool,
+    no_setup: bool,
+    portal: Option<String>,
     identity: Option<OsString>,
     port: Option<u16>,
     config: Option<OsString>,
@@ -223,6 +233,13 @@ struct Options {
 
 impl Options {
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Self>, String> {
+        Self::parse_with_default(args, None)
+    }
+
+    fn parse_with_default(
+        args: impl IntoIterator<Item = OsString>,
+        default_destination: Option<&str>,
+    ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter();
         let mut destination = None;
         let mut name = None;
@@ -239,6 +256,8 @@ impl Options {
         let mut timestamps = false;
         let mut max_inline_output = None;
         let mut no_color = false;
+        let mut no_setup = false;
+        let mut portal = None;
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = crate::platform::default_shell();
         while let Some(arg) = args.next() {
@@ -307,6 +326,15 @@ impl Options {
                     context_roots.push(path);
                 }
                 Some("--list-tools") => list_tools = true,
+                Some("--no-setup") => no_setup = true,
+                Some("--portal") => {
+                    portal = Some(
+                        args.next()
+                            .ok_or("--portal requires an HTTPS origin")?
+                            .into_string()
+                            .map_err(|_| "--portal must be UTF-8")?,
+                    )
+                }
                 Some("--daemon") => daemon = true,
                 Some("--watchdog") => watchdog = true,
                 Some("--reconnect-delay") => {
@@ -369,6 +397,9 @@ impl Options {
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
             }
         }
+        if destination.is_none() && !list_tools {
+            destination = default_destination.map(str::to_owned);
+        }
         if let Some(destination) = &destination {
             validate_destination(destination)?;
         } else if !list_tools {
@@ -413,6 +444,8 @@ impl Options {
             timestamps,
             max_inline_output,
             no_color,
+            no_setup,
+            portal,
             identity,
             port,
             config,
@@ -497,7 +530,7 @@ impl Options {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new("ssh");
+        let mut command = Command::new(onboarding::ssh_executable());
         command.arg("-T");
         // OpenSSH uses the first value for each option, so enforce these before user config.
         for option in [
@@ -513,6 +546,8 @@ impl Options {
             "ControlMaster=no",
             "ControlPath=none",
             "RequestTTY=no",
+            "ConnectTimeout=8",
+            "ConnectionAttempts=1",
             "ServerAliveInterval=15",
             "ServerAliveCountMax=3",
         ] {
@@ -586,6 +621,9 @@ fn validate_destination(destination: &str) -> Result<(), String> {
 }
 
 pub async fn run() -> crate::Result<()> {
+    if let Some(code) = onboarding::run_askpass_helper() {
+        std::process::exit(code);
+    }
     #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__rsync-transport")) {
         return crate::rsync::transport_main().await;
@@ -593,6 +631,10 @@ pub async fn run() -> crate::Result<()> {
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if args.first().is_some_and(|arg| arg == "sessions") {
         return crate::session::manage(args.into_iter().skip(1).collect()).await;
+    }
+    let setup_requested = args.first().is_some_and(|arg| arg == "setup");
+    if setup_requested {
+        args.remove(0);
     }
     let mut service = if args.first().is_some_and(|arg| arg == "__session-run") {
         if args.len() != 2 {
@@ -610,7 +652,12 @@ pub async fn run() -> crate::Result<()> {
     } else {
         None
     };
-    let Some(options) = Options::parse(args)? else {
+    let parsed = if setup_requested {
+        Options::parse_with_default(args, Some("ssmcp.lmm.best"))?
+    } else {
+        Options::parse(args)?
+    };
+    let Some(mut options) = parsed else {
         return Ok(());
     };
     if let Some(runner) = &service
@@ -620,6 +667,31 @@ pub async fn run() -> crate::Result<()> {
             || options.reconnect_delay_secs != runner.spec().reconnect_delay_secs)
     {
         return Err("saved background session options do not match its manifest".into());
+    }
+    if setup_requested {
+        if options.list_tools || options.no_setup {
+            return Err("setup cannot be combined with --list-tools or --no-setup".into());
+        }
+        if !onboarding::run(&mut options).await? {
+            return Ok(());
+        }
+        if !onboarding::verify_after_setup(&options).await? {
+            return Ok(());
+        }
+    } else if options.daemon && !options.no_setup && onboarding::interactive() {
+        match onboarding::probe(&options).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(()),
+            Err(error) => {
+                report_error(&error);
+                if !onboarding::run(&mut options).await? {
+                    return Ok(());
+                }
+                if !onboarding::verify_after_setup(&options).await? {
+                    return Ok(());
+                }
+            }
+        }
     }
     if options.daemon {
         let result = crate::session::start(options.session_spec()?).await?;
@@ -689,6 +761,8 @@ pub async fn run() -> crate::Result<()> {
         return Ok(());
     }
     let mut attempt = 0u64;
+    let mut setup_attempted = setup_requested;
+    let mut ever_registered = false;
     loop {
         if let Some(runner) = &service
             && runner.stop_requested()
@@ -700,7 +774,9 @@ pub async fn run() -> crate::Result<()> {
         if let Some(runner) = &service {
             runner.record("starting", attempt, None, None, None)?;
         }
-        let result = match connect(&options, &ui, service.as_ref(), attempt).await {
+        let mut registered = false;
+        let result = match connect(&options, &ui, service.as_ref(), attempt, &mut registered).await
+        {
             Ok(ConnectionExit::Reload { restart, output }) => {
                 // The ACK and broker receipt were sent before connect cleaned
                 // up every old task. Stop wins over a reload arriving at exit.
@@ -732,7 +808,25 @@ pub async fn run() -> crate::Result<()> {
             }
             return Ok(());
         }
+        ever_registered |= registered;
         let error = result.as_ref().err().map(ToString::to_string);
+        if error.is_some()
+            && !ever_registered
+            && !setup_attempted
+            && service.is_none()
+            && !options.no_setup
+            && onboarding::interactive()
+        {
+            setup_attempted = true;
+            report_error(error.as_deref().unwrap_or("SSH connection failed"));
+            if !onboarding::run(&mut options).await? {
+                return Ok(());
+            }
+            if !onboarding::verify_after_setup(&options).await? {
+                return Ok(());
+            }
+            continue;
+        }
         if !options.watchdog {
             if let Some(runner) = &service {
                 runner.record("disconnected", attempt, None, None, error.as_deref())?;
@@ -792,6 +886,7 @@ async fn connect(
     ui: &ui::Ui,
     service: Option<&crate::session::Runner>,
     attempt: u64,
+    registered: &mut bool,
 ) -> crate::Result<ConnectionExit> {
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
@@ -815,7 +910,7 @@ async fn connect(
             .get_args()
             .map(OsString::from)
             .collect::<Vec<_>>();
-        let mut background = Command::new("ssh");
+        let mut background = Command::new(onboarding::ssh_executable());
         background
             .args(["-o", "BatchMode=yes"])
             .args(arguments)
@@ -867,6 +962,7 @@ async fn connect(
         ),
         _ => return Err("unexpected registration response".into()),
     };
+    *registered = true;
     let github_auth = !metadata.allow.is_empty();
     if github_auth && (!login_code.is_empty() || login_expires_in != 0) {
         let _ = ssh.kill().await;
@@ -1135,6 +1231,27 @@ pub fn report_error(error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_defaults_the_host_after_parsing_options_without_swallowing_explicit_hosts() {
+        let options = Options::parse_with_default(
+            ["--name", "dev machine", "--daemon"].map(OsString::from),
+            Some("ssmcp.lmm.best"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.destination.as_deref(), Some("ssmcp.lmm.best"));
+        assert_eq!(options.name.as_deref(), Some("dev machine"));
+        assert!(options.daemon);
+        let explicit = Options::parse_with_default(
+            ["--name", "dev", "user@example.test"].map(OsString::from),
+            Some("ssmcp.lmm.best"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(explicit.destination.as_deref(), Some("user@example.test"));
+        assert!(Options::parse(["--name", "dev"].map(OsString::from)).is_err());
+    }
 
     #[test]
     fn background_and_watchdog_options_have_bounded_explicit_lifecycles() {
