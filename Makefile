@@ -16,6 +16,7 @@ check:
 	$(CARGO) clippy --locked --all-targets -- -D warnings
 
 test:
+	node --test scripts/test_cua_facade.mjs scripts/test_execution_helpers.mjs
 	$(CARGO) test --locked
 	$(CARGO) test --locked --lib code_mode::tests -- --include-ignored
 	$(CARGO) test --locked --test two_tools -- --include-ignored

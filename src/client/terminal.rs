@@ -6,6 +6,7 @@ use super::{
     ui::Ui,
 };
 use std::{
+    collections::BTreeMap,
     fmt::Write as _,
     io::{self, IsTerminal, Write},
     num::NonZeroU16,
@@ -20,6 +21,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
+const MAX_SESSIONS: usize = 16;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;2004s\x1b[?1049h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
 const LEAVE: &[u8] = b"\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[?1;6;25;66;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
@@ -146,7 +148,9 @@ pub(super) fn log(bytes: &[u8]) -> bool {
     true
 }
 
-pub(super) fn pty(bytes: &[u8]) -> bool {
+/// Every PTY has its own parser, including terminals that are not on screen.
+/// Unknown IDs are late output from a closed session and must not recreate it.
+pub(crate) fn pty_session(id: &str, bytes: &[u8]) -> bool {
     let Some(shared) = shared() else {
         return false;
     };
@@ -154,9 +158,29 @@ pub(super) fn pty(bytes: &[u8]) -> bool {
         return false;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.pty.process(bytes);
-    state.dirty = true;
+    state.pty_session(id, bytes);
     true
+}
+
+pub(crate) fn register_session(id: &str, title: &str) {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.register_session(id, title);
+    }
+}
+
+pub(crate) fn select_session(id: &str) {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.select_session(id);
+    }
+}
+
+pub(crate) fn close_session(id: &str) {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.close_session(id);
+    }
 }
 
 pub(super) fn set_panel(snapshot: PanelSnapshot) {
@@ -196,12 +220,12 @@ pub(crate) fn pane_size(rows: u16, cols: u16) -> (u16, u16) {
 /// Replies describe the virtual PTY, never absolute physical-screen positions.
 /// Input owns the write side and drains this bounded queue without holding it
 /// across await or renderer locks.
-pub(super) fn take_replies() -> Vec<u8> {
+pub(super) fn take_session_replies() -> Vec<(String, Vec<u8>)> {
     let Some(shared) = shared() else {
         return Vec::new();
     };
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::take(&mut state.pty.callbacks_mut().bytes)
+    state.take_session_replies()
 }
 
 /// F6 selects the scrollable audit pane. All other shell input, including
@@ -469,6 +493,9 @@ struct State {
     geometry: Geometry,
     logs: vt100::Parser,
     pty: vt100::Parser<Replies>,
+    active_session: String,
+    inactive: BTreeMap<String, vt100::Parser<Replies>>,
+    session_titles: BTreeMap<String, String>,
     panel: PanelSnapshot,
     theme: super::ui::Theme,
     color: bool,
@@ -487,6 +514,9 @@ impl State {
                 512,
                 Replies::default(),
             ),
+            active_session: "main".into(),
+            inactive: BTreeMap::new(),
+            session_titles: BTreeMap::from([("main".into(), "main".into())]),
             geometry,
             panel: PanelSnapshot::default(),
             theme: ui.theme,
@@ -495,6 +525,90 @@ impl State {
             dirty: true,
             keyboard: Keyboard::default(),
         }
+    }
+    fn register_session(&mut self, id: &str, title: &str) {
+        if id.is_empty() {
+            return;
+        }
+        if !self.session_titles.contains_key(id) {
+            if self.session_titles.len() >= MAX_SESSIONS {
+                return;
+            }
+            self.inactive.insert(
+                id.into(),
+                vt100::Parser::new_with_callbacks(
+                    nonzero(self.geometry.pty_rows),
+                    nonzero(self.geometry.left),
+                    512,
+                    Replies::default(),
+                ),
+            );
+        }
+        self.session_titles
+            .insert(id.into(), if title.is_empty() { id } else { title }.into());
+        self.dirty = true;
+    }
+    fn select_session(&mut self, id: &str) {
+        if id == self.active_session {
+            return;
+        }
+        let Some(next) = self.inactive.remove(id) else {
+            return;
+        };
+        let previous = std::mem::replace(&mut self.pty, next);
+        self.inactive.insert(
+            std::mem::replace(&mut self.active_session, id.into()),
+            previous,
+        );
+        self.keyboard.logs = false;
+        self.logs.screen_mut().set_scrollback(0);
+        self.dirty = true;
+    }
+    fn close_session(&mut self, id: &str) {
+        if id == "main" {
+            return;
+        }
+        if id == self.active_session {
+            self.select_session("main");
+        }
+        self.inactive.remove(id);
+        self.session_titles.remove(id);
+        self.dirty = true;
+    }
+    fn pty_session(&mut self, id: &str, bytes: &[u8]) {
+        if id == self.active_session {
+            self.pty.process(bytes);
+            self.dirty = true;
+        } else if let Some(parser) = self.inactive.get_mut(id) {
+            parser.process(bytes);
+        }
+    }
+    fn take_session_replies(&mut self) -> Vec<(String, Vec<u8>)> {
+        let mut replies = Vec::new();
+        let bytes = std::mem::take(&mut self.pty.callbacks_mut().bytes);
+        if !bytes.is_empty() {
+            replies.push((self.active_session.clone(), bytes));
+        }
+        for (id, parser) in &mut self.inactive {
+            let bytes = std::mem::take(&mut parser.callbacks_mut().bytes);
+            if !bytes.is_empty() {
+                replies.push((id.clone(), bytes));
+            }
+        }
+        replies
+    }
+    fn session_label(&self) -> String {
+        let index = self
+            .session_titles
+            .keys()
+            .position(|id| id == &self.active_session)
+            .unwrap_or(0)
+            + 1;
+        let title = self
+            .session_titles
+            .get(&self.active_session)
+            .map_or(self.active_session.as_str(), String::as_str);
+        format!("{index}/{} · {title}", self.session_titles.len())
     }
     fn log(&mut self, bytes: &[u8]) {
         let mut normalized = Vec::with_capacity(bytes.len());
@@ -515,6 +629,9 @@ impl State {
                 .set_size(nonzero(geometry.log_rows), nonzero(geometry.left));
             self.pty
                 .set_size(nonzero(geometry.pty_rows), nonzero(geometry.left));
+            for parser in self.inactive.values_mut() {
+                parser.set_size(nonzero(geometry.pty_rows), nonzero(geometry.left));
+            }
             self.geometry = geometry;
             if geometry.log_rows == 0 {
                 self.keyboard.logs = false;
@@ -562,15 +679,19 @@ impl State {
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
                 let hint = if g.log_rows == 0 {
-                    " Shell · compact view · enlarge window for log history ".into()
+                    format!(
+                        " Shell · {} · F7 Next · compact view ",
+                        self.session_label()
+                    )
                 } else if self.keyboard.logs {
                     format!(
-                        " Logs · PgUp/PgDn · Home/End · F6/Esc Shell · history {}/{} ",
+                        " Logs · PgUp/PgDn · Home/End · F6/Esc Shell · F7 Next · history {}/{} ",
                         self.logs.screen().scrollback(),
                         self.logs.screen().scrollback_len()
                     )
                 } else {
-                    " Shell · F6 Logs · keyboard input goes to the interactive shell ".into()
+                    " Shell · F6 Logs · F7 Next terminal · keyboard input goes to this shell "
+                        .into()
                 };
                 let text = fit(&hint, g.cols);
                 let padded = format!(
@@ -590,7 +711,12 @@ impl State {
             let mut line = if row < g.log_rows {
                 screen_row(self.logs.screen(), row, g.left, self.color)
             } else if row == g.log_rows && g.log_rows > 0 {
-                let title = format!(" Shell · {}×{} ", g.left, g.pty_rows);
+                let title = format!(
+                    " Shell · {} · F7 Next · {}×{} ",
+                    self.session_label(),
+                    g.left,
+                    g.pty_rows
+                );
                 let text = fit(&title, g.left);
                 let padding = usize::from(g.left).saturating_sub(text.width());
                 self.tone(PanelTone::Muted, &format!("{text}{}", "─".repeat(padding)))
@@ -1069,6 +1195,84 @@ mod tests {
         assert_eq!(state.geometry.pty_rows, 1);
         assert_eq!(state.geometry.log_rows, 0);
         assert_eq!(state.frame(Instant::now()).rows.len(), 1);
+    }
+    #[test]
+    fn terminal_switches_keep_independent_screens_cursors_and_input_modes() {
+        let mut state = State::new(30, 110, &Ui::default());
+        state.register_session("pty-0001", "build");
+        state.pty_session("main", b"MAIN\x1b[2;4H");
+        state.pty_session("pty-0001", b"\x1b[?1049h\x1b[?1h\x1b[?2004hBUILD\x1b[4;7H");
+        assert!(state.pty.screen().contents().contains("MAIN"));
+        assert!(!state.pty.screen().contents().contains("BUILD"));
+        assert_eq!(state.pty.screen().cursor_position(), (1, 3));
+        state.select_session("pty-0001");
+        assert!(state.pty.screen().contents().contains("BUILD"));
+        assert_eq!(state.pty.screen().cursor_position(), (3, 6));
+        assert!(state.pty.screen().application_cursor());
+        assert!(state.pty.screen().bracketed_paste());
+        assert!(
+            physical(&state.frame(Instant::now()))
+                .screen()
+                .contents()
+                .contains("2/2 · build · F7")
+        );
+        state.pty_session("main", b"\x1b[3;1HLATER");
+        assert!(!state.pty.screen().contents().contains("LATER"));
+        state.select_session("main");
+        assert!(state.pty.screen().contents().contains("MAIN"));
+        assert!(state.pty.screen().contents().contains("LATER"));
+        assert!(!state.pty.screen().application_cursor());
+        assert!(!state.pty.screen().bracketed_paste());
+    }
+    #[test]
+    fn device_replies_remain_with_the_requesting_terminal_across_selection_and_resize() {
+        let mut state = State::new(30, 110, &Ui::default());
+        state.register_session("pty-0001", "queries");
+        state.pty_session("main", b"\x1b[2;3H\x1b[6n");
+        state.pty_session("pty-0001", b"\x1b[4;5H\x1b[6n");
+        state.select_session("pty-0001");
+        let replies: BTreeMap<_, _> = state.take_session_replies().into_iter().collect();
+        assert_eq!(replies["main"], b"\x1b[2;3R");
+        assert_eq!(replies["pty-0001"], b"\x1b[4;5R");
+        assert!(state.take_session_replies().is_empty());
+        state.resize(45, 140);
+        let expected = (
+            nonzero(state.geometry.pty_rows),
+            nonzero(state.geometry.left),
+        );
+        assert_eq!(state.pty.screen().size(), expected);
+        assert_eq!(state.inactive["main"].screen().size(), expected);
+        state.pty_session("main", b"\x1b[18t");
+        let replies = state.take_session_replies();
+        assert_eq!(
+            replies,
+            vec![(
+                "main".into(),
+                format!("\x1b[8;{};{}t", expected.0, expected.1).into_bytes()
+            )]
+        );
+    }
+    #[test]
+    fn closing_selected_terminal_restores_main_and_ignores_late_output() {
+        let mut state = State::new(30, 110, &Ui::default());
+        state.register_session("pty-0001", "worker");
+        state.pty_session("main", b"main remains");
+        state.select_session("pty-0001");
+        state.close_session("pty-0001");
+        state.pty_session("pty-0001", b"late bytes\x1b[6n");
+        assert_eq!(state.active_session, "main");
+        assert_eq!(state.session_titles.len(), 1);
+        assert!(state.inactive.is_empty());
+        assert!(state.pty.screen().contents().contains("main remains"));
+        assert!(!state.pty.screen().contents().contains("late bytes"));
+        assert!(state.take_session_replies().is_empty());
+        state.close_session("main");
+        assert_eq!(state.session_titles.len(), 1);
+        for index in 1..32 {
+            state.register_session(&format!("pty-{index:04}"), "bounded");
+        }
+        assert_eq!(state.session_titles.len(), MAX_SESSIONS);
+        assert_eq!(state.inactive.len(), MAX_SESSIONS - 1);
     }
     #[test]
     fn pty_clear_absolute_cursor_alternate_and_wide_cells_cannot_escape() {

@@ -87,6 +87,25 @@ impl Terminal {
         live: bool,
         store: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
+        Self::spawn_configured(shell, None, live, store, "main")
+    }
+
+    pub fn spawn_named_with_store(
+        shell: &Path,
+        cwd: &Path,
+        output: Arc<OutputStore>,
+        terminal_id: &str,
+    ) -> crate::Result<Arc<Self>> {
+        Self::spawn_configured(shell, Some(cwd), true, output, terminal_id)
+    }
+
+    fn spawn_configured(
+        shell: &Path,
+        cwd: Option<&Path>,
+        live: bool,
+        store: Arc<OutputStore>,
+        display_id: &str,
+    ) -> crate::Result<Arc<Self>> {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
@@ -129,7 +148,10 @@ impl Terminal {
             command.arg("-NoLogo");
         }
         command.env("TERM", "xterm-256color");
-        command.cwd(std::env::current_dir()?);
+        command.cwd(
+            cwd.map(Path::to_path_buf)
+                .unwrap_or(std::env::current_dir()?),
+        );
         #[allow(unused_mut)]
         let mut child = pair
             .slave
@@ -171,6 +193,7 @@ impl Terminal {
         let startup_input = terminal.input.lock().unwrap().clone().unwrap();
         // Separate OS threads keep blocking native PTY pipes off the async
         // executor. The reader must drain while ConPTY closes (Windows < 24H2).
+        let display_id = display_id.to_owned();
         let output = terminal.output.clone();
         let changed = terminal.changed.clone();
         std::thread::Builder::new()
@@ -220,7 +243,7 @@ impl Terminal {
                             let visible = &data[..n];
                             output.lock().unwrap().push(visible);
                             if live {
-                                crate::client::render::terminal_output(visible);
+                                crate::client::render::terminal_output_for(&display_id, visible);
                             }
                             #[cfg(windows)]
                             startup_bytes.clear();

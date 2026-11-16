@@ -256,7 +256,8 @@ impl Fixture {
         let catalog_calls = Arc::new(AtomicUsize::new(0));
         let recorded = catalog_calls.clone();
         let worker = tokio::spawn(async move {
-            while let Ok(Some(Frame::Call { id, operation })) = wire::read_frame(&mut reader).await
+            while let Ok(Some(Frame::Call { id, operation, .. })) =
+                wire::read_frame(&mut reader).await
             {
                 let result = match operation {
                     Operation::ListTools { cursor: None } => {

@@ -12,6 +12,7 @@ use crate::{
     output::OutputStore,
     pty::Terminal,
     registry::{Provider, RegisteredTool, Registry},
+    terminals::Terminals,
     wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE, Operation},
 };
 use serde_json::{Value, json};
@@ -69,7 +70,7 @@ impl Driver {
 }
 
 pub struct Backend {
-    terminal: Arc<Terminal>,
+    terminal: Arc<Terminals>,
     shell: Arc<shell::Shell>,
     pub(crate) registry: Arc<Registry>,
     output: Arc<OutputStore>,
@@ -94,7 +95,7 @@ impl Backend {
         root: PathBuf,
         output: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
-        let terminal = Terminal::spawn_live_with_store(shell_path, output.clone())?;
+        let terminal = Terminals::new(shell_path, root.clone(), output.clone())?;
         let shell = shell::Shell::with_workspace(root, output.clone())?;
         let registry = Registry::new();
         registry.replace(
@@ -172,6 +173,9 @@ impl Backend {
         self.registry.catalog()
     }
     pub fn terminal(&self) -> Arc<Terminal> {
+        self.terminal.primary()
+    }
+    pub fn terminals(&self) -> Arc<Terminals> {
         self.terminal.clone()
     }
 
@@ -297,7 +301,7 @@ impl Backend {
                 if self.closed.load(Ordering::Acquire) {
                     return Err("client connection is closed".into());
                 }
-                self.terminal.perform(operation).await.map(result)
+                self.terminal.primary().perform(operation).await.map(result)
             }
         }
     }
@@ -306,7 +310,7 @@ impl Backend {
         match tool.provider {
             Provider::Terminal => self
                 .terminal
-                .perform(terminal_operation(&tool.native_name, arguments)?)
+                .call(&tool.native_name, arguments)
                 .await
                 .map(result),
             Provider::Exec => self
@@ -442,7 +446,7 @@ async fn probe_version(program: &Path) -> Result<String, String> {
 }
 
 /// Convert a shell capability into a validated private wire operation.
-fn terminal_operation(name: &str, arguments: Value) -> Result<Operation, String> {
+pub(crate) fn terminal_operation(name: &str, arguments: Value) -> Result<Operation, String> {
     let op = match name {
         "terminal.read" => "read",
         "terminal.write" => "write",
@@ -465,7 +469,7 @@ fn terminal_operation(name: &str, arguments: Value) -> Result<Operation, String>
 }
 
 fn terminal_tools() -> Value {
-    json!([
+    let mut tools = json!([
         {
             "name":"terminal.read",
             "description":"Read terminal output from a byte cursor. Reuse the returned cursor for the next read; output is retained in a bounded buffer.",
@@ -497,7 +501,21 @@ fn terminal_tools() -> Value {
             "inputSchema":{"type":"object","additionalProperties":false},
             "annotations":{"readOnlyHint":true,"destructiveHint":false}
         }
-    ])
+    ]);
+    for tool in tools.as_array_mut().unwrap() {
+        if tool["inputSchema"].get("properties").is_none() {
+            tool["inputSchema"]["properties"] = json!({});
+        }
+        tool["inputSchema"]["properties"]["terminal_id"] = json!({
+            "type":"string","minLength":1,"maxLength":128,"default":"main",
+            "description":"Independent terminal ID from terminal.open/list. Omission always selects main, even when the local view changes."
+        });
+    }
+    tools
+        .as_array_mut()
+        .unwrap()
+        .extend(Terminals::management_tools());
+    tools
 }
 
 // The cursor binds to catalog names/schema content, so list changes cannot silently skip tools.

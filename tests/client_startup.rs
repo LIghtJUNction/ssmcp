@@ -462,7 +462,7 @@ async fn github_allow_handshake_publishes_browser_auth_without_login_code() {
     assert!(ready.get("login_expires_in").is_none());
     let hello: Value =
         serde_json::from_slice(&std::fs::read(fixture.0.join("hello.json")).unwrap()).unwrap();
-    assert_eq!(hello["version"], 4);
+    assert_eq!(hello["version"], ssmcp::wire::VERSION);
     assert_eq!(hello["metadata"]["allow"], ready["allow"]);
     assert!(String::from_utf8_lossy(&output.stderr).contains("allowed GitHub account"));
     fixture.assert_native_stopped().await;

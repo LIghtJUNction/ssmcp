@@ -1,0 +1,128 @@
+# 终端、并行任务与控制者
+
+`code_mode` 同时提供独立命令任务、多终端和电脑操作。先调用 `list` 选择客户端，再读取该客户端的工具目录；旧连接只提供它实际注册的能力。
+
+| 需要完成的工作 | 原语 | 状态保留范围 |
+| --- | --- | --- |
+| 获取退出码，执行构建、检查或脚本 | `exec.run` | 短等待后可继续读取同一 job |
+| 同时执行一组有结束时间的命令 | `exec.parallel` | 返回全部结果；按真实运行状态限制并发 |
+| 启动开发服务器或持续任务 | `exec.start` | 保留到任务完成、取消或客户端断开 |
+| 运行交互程序，保留 shell 环境 | `terminal.open/write/read` | 每个 terminal 保留自己的 shell 和画面 |
+| 操作电脑或浏览器 | `cua.*` / `cua.browser.*` | 使用客户端的原生桌面与 CDP 接口 |
+
+## 并行命令
+
+每条命令使用独立进程和 stdout/stderr 管道。命令之间互不共享交互式 shell 的当前目录或环境变量；工作目录默认是客户端共享根目录。需要管道、通配符或重定向时，显式执行本机 shell。
+
+```javascript
+const id = clients.find(c => c.id === "CLIENT_ID_FROM_LIST")?.id;
+if (!id) throw new Error("先通过 list 选择客户端");
+return await exec.parallel(id, [
+  {command: ["git", "status", "--short"], wait_ms: 0},
+  {command: ["git", "diff", "--stat"], wait_ms: 0},
+  {command: ["git", "log", "-3", "--oneline"], wait_ms: 0}
+], {concurrency: 2});
+```
+
+concurrency 的默认值为 4，允许 1–8；一次最多提交 32 条命令。一个 worker 等到当前命令实际结束才启动下一条，因此即使 wait_ms 为 0，运行中的本批命令也不会突破所设上限。初次短等待后，内部以最多 60 秒的等待继续观察。结果按输入顺序返回，逐项包含 fulfilled/value 或 rejected/reason；退出码非零仍需由调用者检查 value.exit_code。
+
+观察失败时，结果尽可能保留 job_id，该 worker 停止启动新任务。未启动的项目标记 not_started:true，可以和“已启动、状态待确认”的项目分开处理。每次 code_mode 仍有 128 次原生调用预算和总时限；外层超时后，已启动任务继续运行，使用 exec.list/status/read 接管，不重复提交整批命令。持续服务使用 exec.start，避免长期占据 parallel 的 worker。
+
+## 后台任务与输入管道
+
+exec.start 立即返回 job_id，后续 code_mode 可以继续读取、等待或取消。每个客户端最多同时运行 32 个命令，保存最近 128 个记录；运行中的任务不会被历史淘汰。客户端断开或 reload 时会停止它拥有的任务。
+
+默认 stdin 为 null。需要给进程输入时指定 stdin:"pipe"：
+
+```javascript
+const job = await exec.start(clientId, {
+  command: ["python3", "-c", "import sys; print(sys.stdin.read().upper())"],
+  stdin: "pipe"
+});
+const input = await exec.write(clientId, job.job_id, {
+  data: "hello\n你好\n",
+  close_stdin: true
+});
+const status = await exec.wait(clientId, job.job_id, {wait_ms: 5000});
+return {input, status, output: await exec.read(clientId, job.job_id)};
+```
+
+exec.write 接受 data（UTF-8）或 data_base64（二选一），单次最多 32 KiB 原始字节。close_stdin:true 在全部提交的字节写完后发送 EOF。结果包含 written、remaining_bytes、timed_out、closed 和累计 stdin 状态；部分写入后等待超时，应只补写剩余字节。取消、执行期限和自然退出会唤醒堵塞或排队的输入操作。审计日志记录输入字节数和状态，不复制输入正文。
+
+exec.read 的 stdout_cursor 和 stderr_cursor 分别推进；完整长输出保存在返回的 artifact 中。exec.cancel 终止任务拥有的进程树，exec.forget 释放已结束记录。
+
+## 多个独立终端
+
+每条连接保留 main 终端，并可创建其他交互式终端，总计最多 16 个。每个终端拥有独立 shell、输入、输出游标、工作目录和 VT 画面。切换显示不会暂停后台终端。
+
+```javascript
+const [build, logs] = await Promise.all([
+  terminal.open(clientId, {name: "build", cwd: "."}),
+  terminal.open(clientId, {name: "logs", cwd: "."})
+]);
+await terminal.write(clientId, {
+  terminal_id: build.terminal_id,
+  data: "pwd\n"
+});
+await terminal.select(clientId, {terminal_id: build.terminal_id});
+return await terminal.list(clientId);
+```
+
+本机按 F7 在终端之间切换，分隔行显示终端名字和序号；F6 仍切换到审计日志。输入始终发送到当前显示的终端。括号粘贴里的 F7 字节保留为输入，终端设备查询的回复发回原终端。
+
+| 方法 | 参数与行为 |
+| --- | --- |
+| terminal.open | name、cwd、select 均可省略；cwd 必须在共享根目录内 |
+| terminal.list | 返回全部终端、selected、default_terminal_id 和上限 |
+| terminal.select | 指定 terminal_id，切换本机显示与键盘目标 |
+| terminal.write | 指定 terminal_id、data；追加换行执行命令 |
+| terminal.read | 指定 terminal_id、cursor、max_bytes、wait_ms；沿用返回的 next_cursor |
+| terminal.resize | 指定 terminal_id、rows、cols |
+| terminal.status | 返回指定终端的进程与输出状态 |
+| terminal.close | 停止并释放额外终端，重复关闭安全；关闭当前终端后回到 main |
+
+省略 terminal_id 的旧 read/write/status/resize 调用始终操作 main，界面切换不会改变旧脚本的目标。main 随客户端连接结束。列表中的 cwd 是启动目录；在 shell 内执行 cd 后，使用 pwd 获取动态位置。
+
+## 显示当前控制者与模型
+
+将 controller 放在 code_mode 的参数层，身份会跟随该次请求的每个原生调用：
+
+```json
+{
+  "controller": {
+    "name": "ChatGPT",
+    "model": "实际会话模型名称"
+  },
+  "code": "return await exec.list(clients[0].id);",
+  "timeout_ms": 15000
+}
+```
+
+侧栏显示当前活动控制者，请求结束后显示 Last controller；并发请求分别保留自己的身份。普通日志在身份变化时输出一行，轮询不会重复刷同一身份。
+
+模型名称来自调用方声明，界面标记 caller-reported。MCP clientInfo 只提供应用名称；未传模型时显示 Model unknown，不从应用名或历史请求推断。controller.name/model 至少提供一个，拒绝控制字符和超长字段；source 由服务端生成，不接受调用方指定。
+
+该元数据使用 SSH 协议 v5。新版服务端继续接收 v4 客户端，并省略旧端无法识别的新字段；list 中的 controller_metadata 表明连接是否支持身份显示。升级服务端和客户端后，新建或重载连接即可使用完整接口。
+
+## 原生 CUA 与 Codex 工具
+
+cua 复用桌面接口，cua.browser 复用浏览器接口。截图必须通过 image 发出，图片字节与 JSON 文本分开：
+
+```javascript
+const shot = await cua.screenshot(clientId, {max_width: 1600});
+image(shot);
+return shot.structuredContent;
+```
+
+cua 提供 status、monitors、windows、focus、screenshot、move、click、drag、key、type 和 scroll。使用截图返回的坐标映射定位点击，浏览器元素操作使用当前 snapshot 的 ref。具体系统权限和可用工具由 status 报告。
+
+Codex 已连接的 CUA MCP 工具通过真实目录中返回的 codex.mcp.* 名称调用。调用结果保留图片、structuredContent、isError 和原生审批状态；直接桌面操作和 Codex 原生工具都沿用同一 code_mode 返回通道。详细例子见[电脑操作](computer-use.md)。
+
+## 验证入口
+
+- 原生后台输入与取消：src/backend/shell.rs 的进程测试。
+- 多终端隔离、关闭和容量：tests/terminals.rs。
+- F7 输入顺序、设备回复和独立画面：src/client/input.rs、src/client/terminal.rs。
+- 并发、调用预算、stdin/terminal helper：scripts/test_execution_helpers.mjs。
+- CUA 图片及错误透传：scripts/test_cua_facade.mjs。
+- 真实 SSH、MCP 与客户端画面：scripts/e2e_terminal_control.py。

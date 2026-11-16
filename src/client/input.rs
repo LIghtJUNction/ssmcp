@@ -2,9 +2,13 @@
 //! Keep the outer terminal's interrupt handling: Ctrl-C disconnects the client.
 use crate::{
     pty::Terminal,
+    terminals::Terminals,
     wire::{MAX_WRITE, Operation},
 };
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::task::JoinHandle;
 
 pub(crate) struct Input {
@@ -13,8 +17,8 @@ pub(crate) struct Input {
 }
 
 impl Input {
-    pub(crate) fn attach(terminal: Arc<Terminal>) -> Result<Option<Self>, String> {
-        platform::attach(terminal)
+    pub(crate) fn attach(terminals: Arc<Terminals>) -> Result<Option<Self>, String> {
+        platform::attach(terminals)
     }
 
     pub(crate) async fn shutdown(mut self) {
@@ -42,53 +46,260 @@ impl Drop for RestoreOnExit {
     }
 }
 
-async fn forward(terminal: &Terminal, text: &str) -> Result<(), String> {
+fn chunks(text: &str) -> impl Iterator<Item = &str> {
     let mut remaining = text;
-    while !remaining.is_empty() {
+    std::iter::from_fn(move || {
+        if remaining.is_empty() {
+            return None;
+        }
         let mut end = remaining.len().min(MAX_WRITE);
         while !remaining.is_char_boundary(end) {
             end -= 1;
         }
+        let chunk = &remaining[..end];
+        remaining = &remaining[end..];
+        Some(chunk)
+    })
+}
+
+async fn forward(terminal: &Terminal, text: &str) -> Result<(), String> {
+    for chunk in chunks(text) {
         terminal
             .perform(Operation::Write {
-                data: remaining[..end].to_owned(),
+                data: chunk.to_owned(),
             })
             .await?;
-        remaining = &remaining[end..];
     }
     Ok(())
 }
 
-async fn forward_human(terminal: &Terminal, text: &str) -> Result<(), String> {
-    let text = super::terminal::keyboard(text);
-    forward(terminal, &text).await
+async fn forward_selected(terminals: &Terminals, text: &str) -> Result<(), String> {
+    for chunk in chunks(text) {
+        terminals
+            .selected()
+            .perform(Operation::Write {
+                data: chunk.to_owned(),
+            })
+            .await?;
+    }
+    Ok(())
 }
 
-async fn forward_display(terminal: &Terminal) -> Result<(), String> {
+async fn forward_local(terminals: &Terminals, text: &str) {
+    if let Err(error) = forward_selected(terminals, text).await {
+        // Never retry or replay failed input into another shell. The input pump
+        // must remain available so F7 can select a surviving terminal.
+        crate::client::render::status(
+            "input",
+            "Warning",
+            &format!("Local input stopped: {error}; use F7 to select another terminal"),
+        );
+    }
+}
+
+async fn forward_keys(terminals: &Terminals, events: Vec<InputEvent>) -> Result<(), String> {
+    for event in events {
+        match event {
+            InputEvent::Text(text) => {
+                let text = super::terminal::keyboard(&text);
+                forward_local(terminals, &text).await;
+            }
+            InputEvent::NextTerminal => terminals.cycle()?,
+        }
+    }
+    Ok(())
+}
+
+async fn forward_human(
+    terminals: &Terminals,
+    keys: &mut SessionKeys,
+    text: &str,
+) -> Result<(), String> {
+    forward_keys(terminals, keys.feed(text, Instant::now(), false)).await
+}
+
+async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Result<(), String> {
+    forward_keys(terminals, keys.feed("", Instant::now(), true)).await?;
     let keyboard = super::terminal::take_keyboard();
     if !keyboard.is_empty() {
-        forward(terminal, &keyboard).await?;
+        forward_local(terminals, &keyboard).await;
     }
-    let reply = super::terminal::take_replies();
-    if !reply.is_empty() {
+    for (id, reply) in super::terminal::take_session_replies() {
+        // A terminal may close between rendering its query and draining replies.
+        let Ok(terminal) = terminals.get(&id) else {
+            continue;
+        };
         let text = std::str::from_utf8(&reply).map_err(|_| "invalid virtual terminal reply")?;
-        forward(terminal, text).await?;
+        if let Err(error) = forward(&terminal, text).await {
+            crate::client::render::status("input", "Warning", &format!("terminal {id}: {error}"));
+        }
     }
     Ok(())
 }
 
-async fn resize(terminal: &Terminal, rows: u16, cols: u16) -> Result<(), String> {
+async fn resize(terminals: &Terminals, rows: u16, cols: u16) -> Result<(), String> {
     // Some terminals report 0 while being created or minimized.
     if rows > 0 && cols > 0 {
         let (rows, cols) = super::terminal::physical_resize(rows, cols);
-        terminal
-            .perform(Operation::Resize {
-                rows: rows.min(1000),
-                cols: cols.min(1000),
-            })
-            .await?;
+        terminals.resize_all(rows.min(1000), cols.min(1000)).await?;
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum InputEvent {
+    Text(String),
+    NextTerminal,
+}
+
+/// Preserve ordering around F7 even when one stdin read contains input for two
+/// terminals. Paste markers stay in the stream for the existing F6 handler.
+#[derive(Default)]
+struct SessionKeys {
+    pending: Vec<u8>,
+    since: Option<Instant>,
+    pasting: bool,
+}
+
+impl SessionKeys {
+    fn feed(&mut self, text: &str, now: Instant, flush: bool) -> Vec<InputEvent> {
+        const NEXT: &[u8] = b"\x1b[18~";
+        const PASTE_START: &[u8] = b"\x1b[200~";
+        const PASTE_END: &[u8] = b"\x1b[201~";
+        fn emit(bytes: &mut Vec<u8>, events: &mut Vec<InputEvent>) {
+            if !bytes.is_empty() {
+                events.push(InputEvent::Text(
+                    String::from_utf8_lossy(bytes).into_owned(),
+                ));
+                bytes.clear();
+            }
+        }
+        let mut output = Vec::new();
+        let mut events = Vec::new();
+        for &byte in text.as_bytes() {
+            if self.pending.is_empty() && byte != 0x1b {
+                output.push(byte);
+                continue;
+            }
+            self.pending.push(byte);
+            if !self.pasting && self.pending == NEXT {
+                emit(&mut output, &mut events);
+                events.push(InputEvent::NextTerminal);
+                self.pending.clear();
+                self.since = None;
+            } else if (!self.pasting && self.pending == PASTE_START)
+                || (self.pasting && self.pending == PASTE_END)
+            {
+                self.pasting = !self.pasting;
+                output.append(&mut self.pending);
+                self.since = None;
+            } else if (self.pasting && PASTE_END.starts_with(&self.pending))
+                || (!self.pasting
+                    && (NEXT.starts_with(&self.pending) || PASTE_START.starts_with(&self.pending)))
+            {
+                self.since.get_or_insert(now);
+            } else {
+                // A new Escape can begin another shortcut after an incomplete one.
+                let restart = self.pending.last() == Some(&0x1b);
+                let end = self.pending.len() - usize::from(restart);
+                output.extend_from_slice(&self.pending[..end]);
+                self.pending.drain(..end);
+                self.since = restart.then_some(now);
+            }
+        }
+        if flush
+            && self.since.is_some_and(|since| {
+                now.saturating_duration_since(since) >= Duration::from_millis(80)
+            })
+        {
+            output.append(&mut self.pending);
+            self.since = None;
+        }
+        emit(&mut output, &mut events);
+        events
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn f7_preserves_text_order_and_split_shortcuts() {
+        let now = Instant::now();
+        let mut keys = SessionKeys::default();
+        assert_eq!(
+            keys.feed("old\x1b[18~new\x1b[18~end", now, false),
+            vec![
+                InputEvent::Text("old".into()),
+                InputEvent::NextTerminal,
+                InputEvent::Text("new".into()),
+                InputEvent::NextTerminal,
+                InputEvent::Text("end".into()),
+            ]
+        );
+        for text in ["\x1b", "[", "1", "8"] {
+            assert!(keys.feed(text, now, false).is_empty());
+        }
+        assert_eq!(
+            keys.feed("~界", now, false),
+            vec![InputEvent::NextTerminal, InputEvent::Text("界".into())]
+        );
+    }
+
+    #[test]
+    fn pasted_f7_and_audit_keys_remain_literal_even_across_read_boundaries() {
+        let now = Instant::now();
+        let mut keys = SessionKeys::default();
+        let paste = "\x1b[200~界\x1b[18~\x1b[17~\x1b[5~\x1b[201~";
+        let mut text = String::new();
+        for character in paste.chars() {
+            for event in keys.feed(&character.to_string(), now, false) {
+                match event {
+                    InputEvent::Text(chunk) => text.push_str(&chunk),
+                    InputEvent::NextTerminal => panic!("pasted F7 must not select a terminal"),
+                }
+            }
+        }
+        assert_eq!(text, paste);
+        assert!(!keys.pasting);
+        assert_eq!(
+            keys.feed("\x1b[18~", now, false),
+            vec![InputEvent::NextTerminal]
+        );
+        assert_eq!(
+            keys.feed("\x1b[17~\x1b[5~", now, false),
+            vec![InputEvent::Text("\x1b[17~\x1b[5~".into())]
+        );
+    }
+
+    #[test]
+    fn incomplete_f7_flushes_without_losing_escape_or_reinterpreting_its_suffix() {
+        let now = Instant::now();
+        let mut keys = SessionKeys::default();
+        assert!(keys.feed("\x1b[18", now, false).is_empty());
+        assert_eq!(
+            keys.feed("", now + Duration::from_millis(100), true),
+            vec![InputEvent::Text("\x1b[18".into())]
+        );
+        assert_eq!(
+            keys.feed("~", now + Duration::from_millis(101), false),
+            vec![InputEvent::Text("~".into())]
+        );
+        assert!(keys.feed("\x1b", now, false).is_empty());
+        assert_eq!(
+            keys.feed("", now + Duration::from_millis(100), true),
+            vec![InputEvent::Text("\x1b".into())]
+        );
+    }
+
+    #[test]
+    fn input_chunks_keep_unicode_intact_at_the_write_limit() {
+        let text = format!("{}界🌍{}", "x".repeat(MAX_WRITE - 1), "y".repeat(MAX_WRITE));
+        let pieces: Vec<_> = chunks(&text).collect();
+        assert!(pieces.iter().all(|piece| piece.len() <= MAX_WRITE));
+        assert_eq!(pieces.concat(), text);
+    }
 }
 
 #[cfg(unix)]
@@ -164,17 +375,17 @@ mod platform {
         }
     }
 
-    pub(super) fn attach(terminal: Arc<Terminal>) -> Result<Option<Input>, String> {
+    pub(super) fn attach(terminals: Arc<Terminals>) -> Result<Option<Input>, String> {
         // Do not steal input from a foreground job if this client was backgrounded.
         // SAFETY: these functions inspect process and terminal state only.
         let foreground = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
         if foreground > 0 && foreground != unsafe { libc::getpgrp() } {
             return Ok(None);
         }
-        attach_from(terminal, libc::STDIN_FILENO)
+        attach_from(terminals, libc::STDIN_FILENO)
     }
 
-    fn attach_from(terminal: Arc<Terminal>, source: RawFd) -> Result<Option<Input>, String> {
+    fn attach_from(terminals: Arc<Terminals>, source: RawFd) -> Result<Option<Input>, String> {
         let Some(fd) = reopen_tty(source).map_err(|e| format!("open local terminal input: {e}"))?
         else {
             return Ok(None);
@@ -185,7 +396,7 @@ mod platform {
         let task_mode = mode.clone();
         let task = tokio::spawn(async move {
             let _restore = RestoreOnExit(task_mode.clone());
-            if let Err(error) = run(&terminal, &task_mode, resized).await {
+            if let Err(error) = run(&terminals, &task_mode, resized).await {
                 crate::client::render::status("input", "Warning", &error);
             }
         });
@@ -251,7 +462,7 @@ mod platform {
         Ok(unsafe { saved.assume_init() })
     }
 
-    async fn forward_size(terminal: &Terminal, mode: &Mode) -> Result<(), String> {
+    async fn forward_size(terminals: &Terminals, mode: &Mode) -> Result<(), String> {
         let mut size = MaybeUninit::<libc::winsize>::zeroed();
         // SAFETY: TIOCGWINSZ writes into a valid winsize structure.
         if unsafe {
@@ -264,25 +475,26 @@ mod platform {
         {
             // SAFETY: the ioctl succeeded.
             let size = unsafe { size.assume_init() };
-            resize(terminal, size.ws_row, size.ws_col).await?;
+            resize(terminals, size.ws_row, size.ws_col).await?;
         }
         Ok(())
     }
 
-    async fn run(terminal: &Terminal, mode: &Mode, mut resized: Signal) -> Result<(), String> {
-        forward_size(terminal, mode).await?;
+    async fn run(terminals: &Terminals, mode: &Mode, mut resized: Signal) -> Result<(), String> {
+        forward_size(terminals, mode).await?;
         let mut buffer = [0; 4096];
         let mut utf8 = Utf8Input::default();
+        let mut keys = SessionKeys::default();
         let mut replies = tokio::time::interval(std::time::Duration::from_millis(20));
         replies.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while mode.active.load(Ordering::Acquire) {
             tokio::select! {
-                _ = replies.tick(), if crate::client::terminal::active() => {
-                    forward_display(terminal).await?;
+                _ = replies.tick() => {
+                    forward_display(terminals, &mut keys).await?;
                 }
                 event = resized.recv() => {
                     if event.is_none() { break; }
-                    forward_size(terminal, mode).await?;
+                    forward_size(terminals, mode).await?;
                 }
                 ready = mode.fd.readable() => {
                     let mut ready = ready.map_err(|e| format!("read local terminal: {e}"))?;
@@ -292,8 +504,8 @@ mod platform {
                         if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
                     });
                     match read {
-                        Ok(Ok(0)) => { forward_human(terminal, &utf8.push(&[], true)).await?; break; }
-                        Ok(Ok(n)) => forward_human(terminal, &utf8.push(&buffer[..n], false)).await?,
+                        Ok(Ok(0)) => { forward_human(terminals, &mut keys, &utf8.push(&[], true)).await?; break; }
+                        Ok(Ok(n)) => forward_human(terminals, &mut keys, &utf8.push(&buffer[..n], false)).await?,
                         Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                         Ok(Err(e)) => return Err(format!("read local terminal: {e}")),
                         Err(_) => continue,
@@ -491,8 +703,14 @@ mod platform {
             let (keyboard, source) = pair();
             let saved = attributes(source.as_raw_fd()).unwrap();
             dimensions(&source, 47, 132);
-            let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
-            let input = attach_from(terminal.clone(), source.as_raw_fd())
+            let terminals = Terminals::new(
+                Path::new("/bin/sh"),
+                std::env::current_dir().unwrap(),
+                crate::output::OutputStore::new_connection().unwrap(),
+            )
+            .unwrap();
+            let terminal = terminals.primary();
+            let input = attach_from(terminals.clone(), source.as_raw_fd())
                 .unwrap()
                 .unwrap();
             let mut cursor = 0;
@@ -523,7 +741,86 @@ mod platform {
                 .await
                 .expect("idle input task must cancel promptly");
             same_mode(saved, attributes(source.as_raw_fd()).unwrap());
-            terminal.shutdown().await;
+            terminals.shutdown().await;
+        }
+
+        #[tokio::test]
+        async fn f7_in_one_input_chunk_routes_text_before_and_after_to_different_shells() {
+            let terminals = Terminals::new(
+                Path::new("/bin/sh"),
+                std::env::current_dir().unwrap(),
+                crate::output::OutputStore::new_connection().unwrap(),
+            )
+            .unwrap();
+            let opened = terminals
+                .call("terminal.open", serde_json::json!({"name":"worker"}))
+                .await
+                .unwrap();
+            let worker = terminals
+                .get(opened["terminal_id"].as_str().unwrap())
+                .unwrap();
+            let mut keys = SessionKeys::default();
+            forward_human(
+                &terminals,
+                &mut keys,
+                "printf '__M%s__\\n' AIN\n\x1b[18~printf '__W%s__\\n' ORKER\n",
+            )
+            .await
+            .unwrap();
+            let main = read_until(&terminals.primary(), &mut 0, "__MAIN__").await;
+            let other = read_until(&worker, &mut 0, "__WORKER__").await;
+            assert!(!main.contains("__WORKER__"));
+            assert!(!other.contains("__MAIN__"));
+            assert!(Arc::ptr_eq(&terminals.selected(), &worker));
+            terminals.shutdown().await;
+        }
+
+        #[tokio::test]
+        async fn exited_selected_pty_keeps_local_f7_usable_without_replaying_failed_input() {
+            let (keyboard, source) = pair();
+            let terminals = Terminals::new(
+                Path::new("/bin/sh"),
+                std::env::current_dir().unwrap(),
+                crate::output::OutputStore::new_connection().unwrap(),
+            )
+            .unwrap();
+            let opened = terminals
+                .call(
+                    "terminal.open",
+                    serde_json::json!({"name":"exiting","select":true}),
+                )
+                .await
+                .unwrap();
+            let exiting = terminals
+                .get(opened["terminal_id"].as_str().unwrap())
+                .unwrap();
+            let input = attach_from(terminals.clone(), source.as_raw_fd())
+                .unwrap()
+                .unwrap();
+            write(&keyboard, b"exit\n");
+            timeout(Duration::from_secs(5), async {
+                while exiting.perform(Operation::Status {}).await.unwrap()["running"] == true {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(
+                forward_selected(&terminals, "discarded input\n")
+                    .await
+                    .is_err()
+            );
+            write(
+                &keyboard,
+                b"printf '__DROPPED_%s__\\n' INPUT\n\x1b[18~printf '__R%s__\\n' ECOVERED\n",
+            );
+            let mut cursor = 0;
+            let output = read_until(&terminals.primary(), &mut cursor, "__RECOVERED__").await;
+            assert!(!output.contains("__DROPPED_INPUT__"), "{output}");
+            assert!(Arc::ptr_eq(&terminals.selected(), &terminals.primary()));
+            assert!(!input.task.as_ref().unwrap().is_finished());
+            input.shutdown().await;
+            terminals.shutdown().await;
         }
     }
 }
@@ -571,7 +868,7 @@ mod platform {
         }
     }
 
-    pub(super) fn attach(terminal: Arc<Terminal>) -> Result<Option<Input>, String> {
+    pub(super) fn attach(terminals: Arc<Terminals>) -> Result<Option<Input>, String> {
         if !io::stdin().is_terminal() {
             return Ok(None);
         }
@@ -625,7 +922,7 @@ mod platform {
         let task_mode = mode.clone();
         let task = tokio::spawn(async move {
             let _restore = RestoreOnExit(task_mode.clone());
-            if let Err(error) = run(&terminal, &task_mode).await {
+            if let Err(error) = run(&terminals, &task_mode).await {
                 crate::client::render::status("input", "Warning", &error);
             }
         });
@@ -649,16 +946,17 @@ mod platform {
         None
     }
 
-    async fn run(terminal: &Terminal, mode: &Mode) -> Result<(), String> {
+    async fn run(terminals: &Terminals, mode: &Mode) -> Result<(), String> {
         if let Some((rows, cols)) = size() {
-            resize(terminal, rows, cols).await?;
+            resize(terminals, rows, cols).await?;
         }
         let mut tick = tokio::time::interval(Duration::from_millis(20));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut utf16 = Utf16Input::default();
+        let mut keys = SessionKeys::default();
         while mode.active.load(Ordering::Acquire) {
             tick.tick().await;
-            forward_display(terminal).await?;
+            forward_display(terminals, &mut keys).await?;
             let mut count = 0;
             // ReadConsoleInputW is only called when records already exist. This
             // frontend is the sole console input consumer; no blocking stdin
@@ -699,12 +997,12 @@ mod platform {
                         let key = unsafe { event.Event.KeyEvent };
                         if key.bKeyDown != 0 {
                             let text = utf16.key(key);
-                            forward_human(terminal, &text).await?;
+                            forward_human(terminals, &mut keys, &text).await?;
                         }
                     }
                     WINDOW_BUFFER_SIZE_EVENT => {
                         if let Some((rows, cols)) = size() {
-                            resize(terminal, rows, cols).await?;
+                            resize(terminals, rows, cols).await?;
                         }
                     }
                     _ => {}
@@ -761,6 +1059,7 @@ mod platform {
                     0x27 if application_cursor => "\x1bOC",
                     0x28 if application_cursor => "\x1bOB",
                     0x75 => "\x1b[17~",
+                    0x76 => "\x1b[18~",
                     0x21 => "\x1b[5~",
                     0x22 => "\x1b[6~",
                     0x23 => "\x1b[F",
@@ -810,6 +1109,7 @@ mod platform {
             assert_eq!(input.key(key(0, 0x25, 0)), "\x1b[D");
             assert_eq!(input.key(key(0, 0x2e, 0)), "\x1b[3~");
             assert_eq!(input.key(key(0, 0x75, 0)), "\x1b[17~");
+            assert_eq!(input.key(key(0, 0x76, 0)), "\x1b[18~");
             assert_eq!(input.key_with_mode(key(0, 0x25, 0), true), "\x1bOD");
             assert_eq!(input.key_with_mode(key(0, 0x24, 0), true), "\x1bOH");
             assert_eq!(input.key_with_mode(key(0, 0x23, 0), true), "\x1bOF");

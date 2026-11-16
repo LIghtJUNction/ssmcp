@@ -192,7 +192,7 @@ return await exec.parallel(c.id, [
 
 一次最多传入 32 项命令，`concurrency` 默认为 4，范围为 `1..=8`。结果顺序与输入一致：成功启动并完成观察的项为 `{status:"fulfilled", value:...}`，启动或观察失败的项为 `{status:"rejected", reason:...}`。其中程序非零退出仍会返回 `fulfilled`，需要检查 `value.exit_code`。某一项失败不会丢弃其他项的结果；默认每项每条流返回 2048 字节，后续按游标继续读取。
 
-`concurrency` 限制同时执行的“启动 → 等待 → 读取”编排数量。某项等待到期后，其后台命令继续运行，编排会转去处理下一项，因此实际运行中的命令数可能超过 `concurrency`，仍受客户端 32 项上限约束。需要严格限制实际进程数量时，显式管理一组 `job_id`，等其中一项 `running:false` 后再启动下一项。多批等待需要把外层 `code_mode.timeout_ms` 设置得足够长，或分成多次请求。[helper 回归测试](../src/code_mode.rs) · [协议端到端测试](../scripts/e2e_agents.py)
+`concurrency` 限制本批实际运行中的命令任务数。初次等待到期后，worker 继续观察同一任务，收到 `running:false` 后才启动下一条；内部等待最长 60 秒。观察失败会保留可取得的 `job_id`，并停止该 worker 继续启动任务；最终未启动的项目带有 `not_started:true`。内部调用仍计入 128 次原生调用和外层时限，持续服务使用 `exec.start`；外层超时后通过 `exec.list/status/read` 接管已启动任务。[helper 回归测试](../scripts/test_execution_helpers.mjs) · [多终端与后台输入](terminal-control.md)
 
 ### 交互式终端
 

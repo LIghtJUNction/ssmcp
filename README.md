@@ -165,7 +165,7 @@ return shot.structuredContent;
 | --- | --- |
 | `list({})` | 列出当前授权可访问的在线客户端：ID、名字、任务标题（若设置）、类型、主机和启动目录 |
 | `list({client_id})` | 读取指定客户端的原生工具名称与参数 schema；用 `nextCursor` 分页 |
-| `code_mode({code, timeout_ms})` | 用 JavaScript 调用原生工具，返回结果和日志 |
+| `code_mode({code, timeout_ms, controller})` | 用 JavaScript 调用原生工具，返回结果和日志 |
 
 例如，对名为 `terminal` 的客户端查询 Git 状态。将下面源码放入 `code_mode` 的 `code` 参数：
 
@@ -181,6 +181,9 @@ return await exec.run(client.id, {
 ```
 
 返回值包含 `job_id`、`running`、`exit_code`、独立的 `stdout` / `stderr` 及输出游标。`running: true` 表示命令还在执行，用相同任务 ID 继续等待即可。参数是 argv 数组，管道或重定向需要显式调用本机 shell。交互式程序仍使用 `terminal.*` 的有状态 PTY。
+
+多任务原语现在覆盖独立后台输入和多个交互式终端：`exec.start({stdin:"pipe"})` 配合 `exec.write` 写入进程；`terminal.open/list/select/close` 管理最多 16 个独立 shell，F7 切换画面和本机键盘目标。`exec.parallel` 的并发数按实际运行中的命令计算。`cua.*`、`cua.browser.*` 直接操作原生桌面和浏览器，截图通过 `image()` 返回。请求可携带 `controller:{name,model}`，侧栏显示活动与上次控制者，并标注模型信息来源。[完整使用示例](docs/terminal-control.md)
+
 
 ### 并行、后台任务与等待
 

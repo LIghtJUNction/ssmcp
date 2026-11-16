@@ -1056,7 +1056,7 @@ mod tests {
                 loop {
                     tokio::select! {
                         frame = wire::read_frame(&mut reader) => {
-                            let Ok(Some(Frame::Call {id,operation})) = frame else { break; };
+                            let Ok(Some(Frame::Call {id,operation,..})) = frame else { break; };
                             let (writer,count,gate,reject,closes) = (writer.clone(),count.clone(),gate.clone(),reject.clone(),closes.clone());
                             requests.spawn(async move {
                                 let result = match operation {

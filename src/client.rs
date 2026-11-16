@@ -973,7 +973,7 @@ async fn connect(
             "Enter login_code on the MCP OAuth page. Ctrl-C disconnects and revokes access."
         },
     );
-    let local_input = match input::Input::attach(backend.terminal()) {
+    let local_input = match input::Input::attach(backend.terminals()) {
         Ok(input) => input,
         Err(error) => {
             let _ = ssh.start_kill();
@@ -1008,7 +1008,7 @@ async fn connect(
                 }
             },
             frame = incoming.frames.recv() => match frame {
-                Some(Ok(Some(Frame::Call {id,operation}))) => {
+                Some(Ok(Some(Frame::Call {id,operation,controller}))) => {
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
                             Ok(Ok(was_tool)) => {
@@ -1019,6 +1019,7 @@ async fn connect(
                         }
                     }
                     if reload::is_reload(&operation) {
+                        let _controller = render::controller_started(id, controller.as_ref());
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
                         let response = backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth));
                         let accepted = response.is_ok();
@@ -1066,6 +1067,8 @@ async fn connect(
                     let backend = backend.clone();
                     let writer = writer.clone();
                     requests.spawn(async move {
+                        let _controller = (!matches!(&operation, crate::wire::Operation::ListTools { .. }))
+                            .then(|| render::controller_started(id, controller.as_ref()));
                         let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
                         let mut result = backend.perform(operation).await;
                         // A large native response must not corrupt/disconnect the SSH stream.
