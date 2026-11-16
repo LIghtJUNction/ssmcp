@@ -190,47 +190,86 @@ pub(crate) fn wait_unix_child_unreaped(owner: libc::pid_t, nonblocking: bool) ->
 
 #[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn stop_unix_descendants(owner: libc::pid_t) {
-    // The owner is still unreaped. Include shell jobs in separate process groups.
-    let output = std::process::Command::new("/bin/ps")
-        .args(["-axo", "pid=,ppid="])
-        .output();
-    if let Ok(output) = output {
-        let rows: Vec<(i32, i32)> = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
-            })
-            .collect();
-        let mut owned = vec![owner];
-        for (pid, _) in &rows {
-            // Interactive jobs can have their own groups. The unreaped leader
-            // pins the session ID even after its children have been reparented.
-            if *pid > 1 && *pid != owner && unsafe { libc::getsid(*pid) } == owner {
-                owned.push(*pid);
-            }
-        }
-        for _ in 0..256 {
-            let old = owned.len();
-            for (pid, parent) in &rows {
-                if *pid > 1 && owned.contains(parent) && !owned.contains(pid) {
-                    owned.push(*pid);
-                }
-            }
-            if old == owned.len() {
-                break;
-            }
-        }
-        for pid in owned.into_iter().rev() {
-            // SAFETY: signal the observed child tree rooted at the still-owned leader.
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-            }
-        }
+    if owner <= 1 {
+        return;
     }
-    // SAFETY: negative owner addresses only the process group created for this child.
+    // The caller keeps its session leader unreaped. Stop its original process
+    // group first; its reserved PID prevents that group ID from being reused.
     unsafe {
         libc::kill(-owner, libc::SIGKILL);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Identify a live group member by its PID, group and creation timestamp.
+        // No old PPID tree is trusted, and processes in another session are never
+        // selected just because they used to descend from this shell.
+        fn identity(pid: libc::pid_t) -> Option<(libc::pid_t, u64, u64)> {
+            let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+            let size = std::mem::size_of_val(&info) as libc::c_int;
+            let read = unsafe {
+                libc::proc_pidinfo(
+                    pid,
+                    libc::PROC_PIDTBSDINFO,
+                    0,
+                    (&mut info as *mut libc::proc_bsdinfo).cast(),
+                    size,
+                )
+            };
+            (read == size && info.pbi_pid == pid as u32).then_some((
+                info.pbi_pgid as libc::pid_t,
+                info.pbi_start_tvsec,
+                info.pbi_start_tvusec,
+            ))
+        }
+
+        // libproc avoids starting a subprocess during shutdown. Bound memory,
+        // scan count and time even when the host has many unrelated processes.
+        const MAX_PIDS: usize = 65_536;
+        let started = std::time::Instant::now();
+        let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        if count <= 0 {
+            return;
+        }
+        let capacity = (count as usize).saturating_add(128).clamp(256, MAX_PIDS);
+        let mut pids = vec![0 as libc::pid_t; capacity];
+        for _ in 0..2 {
+            let count = unsafe {
+                libc::proc_listallpids(
+                    pids.as_mut_ptr().cast(),
+                    std::mem::size_of_val(pids.as_slice()) as libc::c_int,
+                )
+            };
+            if count <= 0 {
+                break;
+            }
+            let mut groups = std::collections::HashSet::new();
+            for &pid in &pids[..(count as usize).min(capacity)] {
+                if started.elapsed() >= std::time::Duration::from_millis(500) {
+                    return;
+                }
+                if pid <= 1 || pid == owner || unsafe { libc::getsid(pid) } != owner {
+                    continue;
+                }
+                let Some(observed) = identity(pid) else {
+                    continue;
+                };
+                let group = observed.0;
+                if group <= 1 || group == owner || !groups.insert(group) {
+                    continue;
+                }
+                // Revalidate immediately before signaling this session's job
+                // group. Darwin lacks pidfd signaling: this narrows, but cannot
+                // atomically eliminate, the remaining process/group reuse race.
+                if identity(pid) == Some(observed)
+                    && unsafe { libc::getsid(pid) } == owner
+                    && unsafe { libc::getpgid(pid) } == group
+                {
+                    unsafe {
+                        libc::kill(-group, libc::SIGKILL);
+                    }
+                }
+            }
+        }
     }
 }
 
