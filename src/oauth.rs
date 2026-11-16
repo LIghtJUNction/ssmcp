@@ -2,6 +2,11 @@
 //!
 //! MCP 2026-07-28 authorization, RFC 7636, 8414, 8707, 9207, 9728 and 9700.
 //! No external metadata fetching: DCR is the advertised registration mechanism.
+mod registry;
+#[cfg(test)]
+#[path = "oauth/registry_tests.rs"]
+mod registry_tests;
+
 use crate::{
     broker::{Authorization, Broker, Session, valid_username},
     identity::Identity,
@@ -94,6 +99,7 @@ pub struct OAuth {
     issuer: String,
     config: OAuthConfig,
     state: Arc<Mutex<Store>>,
+    registry: Option<registry::Registry>,
 }
 
 struct Store {
@@ -129,10 +135,12 @@ impl AuthMethod {
 struct Client {
     name: String,
     redirects: Vec<String>,
+    application_type: String,
     method: AuthMethod,
     secret_hash: Option<Key>,
     refresh: bool,
     expires: Instant,
+    expires_unix: u64,
 }
 
 #[derive(Clone)]
@@ -404,6 +412,7 @@ impl OAuth {
         Ok(Self {
             issuer: public_url.trim_end_matches('/').to_owned(),
             config,
+            registry: None,
             state: Arc::new(Mutex::new(Store {
                 clients: HashMap::new(),
                 transactions: HashMap::new(),
@@ -416,6 +425,19 @@ impl OAuth {
                 next_sweep: Instant::now(),
             })),
         })
+    }
+
+    /// Enable durable registrations before accepting requests. Invalid files,
+    /// unsafe permissions, or a competing writer prevent startup (fail closed).
+    pub fn enable_client_registry(&mut self, path: &std::path::Path) -> crate::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if self.registry.is_some() || !state.clients.is_empty() {
+            return Err("client registry must be enabled before registering clients".into());
+        }
+        let (registry, clients) = registry::Registry::open(path, &self.issuer)?;
+        state.clients = clients;
+        self.registry = Some(registry);
+        Ok(())
     }
 
     pub fn authenticate(&self, user: &str, access_token: &str) -> Option<Authorization> {
@@ -589,12 +611,28 @@ impl OAuth {
             Client {
                 name: name.clone(),
                 redirects: redirect_uris.clone(),
+                application_type: application_type.clone(),
                 method,
                 secret_hash: secret.as_deref().map(hash),
                 refresh: grants.iter().any(|g| g == "refresh_token"),
                 expires: now + self.config.client_registration_ttl,
+                expires_unix: issued + self.config.client_registration_ttl.as_secs(),
             },
         );
+        // Publish the registration only after durable storage acknowledges it.
+        // The store mutex serializes concurrent DCR responses and disk writes.
+        if let Some(registry) = &self.registry
+            && registry.save(&state.clients).is_err()
+        {
+            state.clients.remove(&id);
+            return Err(OAuthError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                ..OAuthError::new(
+                    "temporarily_unavailable",
+                    "Could not persist client registration; retry later",
+                )
+            });
+        }
         let mut reply = json!({"client_id":id,"client_id_issued_at":issued,"client_name":name,"application_type":application_type,
             "redirect_uris":redirect_uris,"token_endpoint_auth_method":method.name(),"grant_types":grants,"response_types":["code"],"scope":"mcp"});
         if let Some(secret) = secret {
@@ -1695,7 +1733,10 @@ async fn register(State(broker): State<Arc<Broker>>, request: Request) -> Respon
         let registration = serde_json::from_slice::<Registration>(&bytes).map_err(|_| {
             OAuthError::new("invalid_client_metadata", "Invalid registration metadata")
         })?;
-        broker.oauth.register(registration)
+        // Durable DCR fsync must not block the asynchronous HTTP worker.
+        tokio::task::spawn_blocking(move || broker.oauth.register(registration))
+            .await
+            .map_err(|_| OAuthError::internal())?
     }
     .await;
     match outcome {

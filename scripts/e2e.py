@@ -201,7 +201,11 @@ class Harness:
                 raise AssertionError("PTY text and base64 bytes disagree")
             output += result["text"]
             cursor = result["next_cursor"]
-            match = re.search(pattern, output)
+            # Modern readline emits bracketed-paste toggles and an extra CR
+            # before command output. Match visible text, while the byte-for-byte
+            # text/base64 assertion above still checks the actual transport.
+            visible = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output).replace("\n\r", "\n")
+            match = re.search(pattern, visible)
             if match:
                 return match, cursor, output
         raise AssertionError(f"Expected PTY output did not arrive: {pattern!r}; received {output[-2000:]!r}")

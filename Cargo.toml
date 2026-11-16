@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Expose a local shell or coding agent as MCP through SSH public-key authentication"
@@ -20,6 +20,7 @@ include = [
     "/scripts/smoke_pi.py",
     "/scripts/sync_portal_ssh.py",
     "/scripts/test_portal_ssh.py",
+    "/scripts/test_registry_restart.py",
     "/packaging/ssmcp-portal-ssh.*",
     "/packaging/ssmcp-portal.service",
     "/packaging/sshd-ssmcp-portal.conf",
