@@ -779,14 +779,12 @@ impl Renderer {
                         self.activities.finish(&key);
                         if let Some(Some(request_key)) = self.deferred_commands.remove(&key) {
                             self.activities.finish(&request_key);
-                            if value["command_rpc_completed"] != true {
-                                if let Some(key) = request_key.strip_prefix("rpc\0") {
-                                    if let Some(request) = self.requests.remove(key) {
-                                        if let Some(process) = request.process_id {
-                                            self.finish_process(out, provider, &process)?;
-                                        }
-                                    }
-                                }
+                            if value["command_rpc_completed"] != true
+                                && let Some(key) = request_key.strip_prefix("rpc\0")
+                                && let Some(request) = self.requests.remove(key)
+                                && let Some(process) = request.process_id
+                            {
+                                self.finish_process(out, provider, &process)?;
                             }
                         }
                         if value["command_rpc_completed"] == true {
