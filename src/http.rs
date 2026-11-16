@@ -601,6 +601,12 @@ fn usage() -> Value {
         "call":"await call(clientId, toolName, arguments = {}) returns the complete native MCP result (including isError and structuredContent).",
         "tools":"await tools(clientId, cursor?) returns a page of native tool schemas; pass nextCursor to get the next page.",
         "output":"Use print(value) or console.log(value) for logs; return a JSON-serializable value.",
+        "fs":"fs.list/stat/read/write/mkdir(clientId, options) operate relative to that client startup cwd and return structured results.",
+        "rsync":"rsync({source:{client_id,path},destination:{client_id,path},dry_run:true,delete:false}) starts a managed job; sync is an alias. Both paths must be existing directories; copies contents. Reverse by swapping endpoints.",
+        "jobs":"jobs.status(id), jobs.wait(id,{wait_ms:5000}), jobs.cancel(id), jobs.list(). Jobs survive code_mode completion; inspect the final state and exit codes.",
+        "ports":"ports.open({listen:{client_id,port},target:{client_id,port}}), ports.list(), ports.close(id). Loopback only; port 0 selects an unused listener port.",
+        "resources":"resources.list(cursor?), resources.templates(), resources.read(uri). Start with ssmcp://guide.",
+        "workspace":"The caller sandbox needs its own registered client; server-side JavaScript cannot see its filesystem or loopback.",
         "example":"const c = clients.find(c => c.type === 'shell'); if (!c) throw new Error('No shell client'); return await call(c.id, 'terminal.status', {});"
     })
 }
@@ -652,6 +658,10 @@ async fn execute(
         let access_token = access_token.clone();
         Box::pin(async move {
             let (client_id, operation) = match request {
+                HostRequest::Builtin { name, arguments } => {
+                    return crate::bridge::dispatch(broker, user, access_token, name, arguments)
+                        .await;
+                }
                 HostRequest::Call {
                     client_id,
                     name,
@@ -668,7 +678,13 @@ async fn execute(
                 .await
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             let session = broker.client(&user, &authorization, &client_id).await?;
-            session.call(operation).await
+            let result = session.call(operation).await?;
+            let authorization = broker
+                .authenticate(&user, &access_token)
+                .await
+                .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
+            broker.client(&user, &authorization, &client_id).await?;
+            Ok(result)
         })
     });
     code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await
@@ -694,7 +710,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}) returning the complete MCP tool result, await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Supports variables, loops, conditions, await and Promise.all. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}) returning the complete MCP tool result, await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Includes fs helpers, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS}

@@ -365,7 +365,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 | `oauth_token_invalid_grant` / `invalid_grant` / 要求重新授权 | 检查授权寿命与服务器重启情况，按当前模式重新授权；登录码模式还需检查签发连接是否退出 |
 | 服务重启后仍使用旧 `client_id`，重复授权失败 | MCP 客户端应重新注册；若它继续缓存旧登记，移除该 MCP 连接后用相同完整 URL 重新添加 |
 | 登录成功后 `list` 找不到原来的 `client_id` | 客户端重连会分配新 ID。重新调用 `list`，按名称、模式和目录选取当前在线 ID |
-| `list` 正常，`code_mode` 报系统运行环境不可用 | 在服务器检查系统 Node.js、bubblewrap 和用户命名空间，见[部署说明](deployment.md#系统代码运行环境) |
+| `list` 正常，`code_mode` 报系统运行环境不可用 | 在服务器检查系统 Node.js、bubblewrap、prlimit 和用户命名空间，见[部署说明](deployment.md#系统代码运行环境) |
 
 需要定位 SSH 认证细节时，可在本机运行 `ssh -v -T alice@my-ssmcp` 查看认证阶段日志。受限账户认证成功后进入桥接，手工 SSH 会等待协议数据；看到认证成功后按 `Ctrl-C` 退出，再使用 ssmcp。分享诊断信息前移除登录码、OAuth 令牌和不希望公开的主机或路径信息。
 

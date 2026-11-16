@@ -97,8 +97,9 @@ operations over the existing SSH bridge. The public JavaScript API provides
 clients, call, tools and logging. The worker does not inherit server credentials
 or mount the host's working directories, home directories or control socket.
 .PP
-Install Node.js 18 or newer and bubblewrap 0.8 or newer using the operating system
-package manager. No npm package is required. The bridge script is installed at
+Install Node.js 18 or newer, bubblewrap 0.8 or newer and util-linux prlimit using
+the operating system package manager. The process-count limit is applied inside
+the new user namespace, so existing host-user threads do not block its creation. No npm package is required. The bridge script is installed at
 PREFIX/libexec/ssmcp/code-mode.js, normally
 /usr/local/libexec/ssmcp/code-mode.js. SSMCP_CODE_MODE_RUNNER may select an
 absolute script path in the server environment.

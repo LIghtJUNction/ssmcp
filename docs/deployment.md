@@ -8,15 +8,15 @@ ssmcp 0.4.0 继续使用内部 wire v4，对外只提供 `list`、`code_mode` �
 
 ## 1. 安装程序与服务账户
 
-客户端需要 Linux 5.3 或更新内核以使用 pidfd；源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境；依赖由发行版包管理器安装和更新：
+客户端需要 Linux 5.3 或更新内核以使用 pidfd；源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
 
 ```sh
 # Debian / Ubuntu
-sudo apt install openssh-server nodejs bubblewrap
+sudo apt install openssh-server nodejs bubblewrap util-linux
 # Arch Linux
-sudo pacman -S openssh nodejs bubblewrap
+sudo pacman -S openssh nodejs bubblewrap util-linux
 # Fedora
-sudo dnf install openssh-server nodejs bubblewrap
+sudo dnf install openssh-server nodejs bubblewrap util-linux
 ```
 
 只运行本机 `ssmcp` 客户端时无需 Node.js 或 bubblewrap。构建并安装服务端文件：
