@@ -49,6 +49,8 @@ impl Theme {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Ui {
     pub color: bool,
+    /// On a real terminal, isolate logs and the interactive shell with a task sidebar.
+    pub dashboard: bool,
     pub log_format: LogFormat,
     pub theme: Theme,
     pub timestamps: bool,
@@ -62,6 +64,7 @@ impl Default for Ui {
     fn default() -> Self {
         Self {
             color: true,
+            dashboard: true,
             log_format: LogFormat::Pretty,
             theme: Theme::default(),
             timestamps: false,
@@ -120,6 +123,8 @@ mod tests {
     fn validated_ui_config_and_themes() {
         let u=Ui::parse("[ui]\ncolor=false\nlog_format='pretty-verbose'\ntheme='nord'\nmax_inline_output=5\ntimestamps=true").unwrap();
         assert!(!u.color);
+        assert!(u.dashboard);
+        assert!(!Ui::parse("[ui]\ndashboard=false").unwrap().dashboard);
         assert!(u.timestamps);
         assert_eq!(u.log_format, LogFormat::PrettyVerbose);
         assert_eq!(u.theme, Theme::Nord);

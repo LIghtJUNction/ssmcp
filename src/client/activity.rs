@@ -44,6 +44,12 @@ impl Activities {
         self.active.len()
     }
 
+    pub fn snapshot(&self) -> Vec<Activity> {
+        let mut activities = self.active.values().cloned().collect::<Vec<_>>();
+        activities.sort_by_key(|activity| activity.started);
+        activities
+    }
+
     pub fn summary(&mut self, now: Instant) -> Option<String> {
         if self.active.is_empty() {
             return None;
@@ -121,21 +127,7 @@ pub(super) fn elapsed(duration: Duration) -> String {
 
 pub(super) fn single_line(text: &str, limit: usize) -> String {
     let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let cells = |c: char| if c as u32 >= 0x1100 { 2 } else { 1 };
-    if line.chars().map(cells).sum::<usize>() <= limit {
-        return line;
-    }
-    let mut used = 0;
-    let mut shown = String::new();
-    for character in line.chars() {
-        if used + cells(character) > limit.saturating_sub(2) {
-            break;
-        }
-        shown.push(character);
-        used += cells(character);
-    }
-    shown.push('…');
-    shown
+    super::super::panel::fit(&line, limit)
 }
 
 /// Only an explicit native progress and positive total can produce a percentage.
