@@ -1,8 +1,31 @@
 {
-  "state": "starting",
+  "state": "applying",
   "commit": "fff47d191136198b38f154804115c9e9f9f89b35",
   "binary_source_commit": "fff47d191136198b38f154804115c9e9f9f89b35",
   "version": "0.4.1",
-  "checks": {},
-  "started_unix": 1794807061
+  "checks": {
+    "development_client_installed": true
+  },
+  "started_unix": 1794807061,
+  "stage": {
+    "checks": {
+      "github_configured": true,
+      "issuer_https": true,
+      "package_name": true,
+      "package_sha256": true,
+      "package_version": true,
+      "production_not_changed": true,
+      "stage_unit_unused": true,
+      "staged_DCR_survives_restart": true,
+      "staged_authorization_before_restart": true,
+      "staged_binary_version": true,
+      "staged_health_and_discovery": true,
+      "staged_private_registry": true
+    },
+    "commit": "fff47d191136198b38f154804115c9e9f9f89b35",
+    "finished_unix": 1794807046,
+    "phase": "stage",
+    "started_unix": 1794807044,
+    "state": "prepared"
+  }
 }
