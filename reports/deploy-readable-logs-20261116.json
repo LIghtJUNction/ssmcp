@@ -1,0 +1,28 @@
+{
+  "state": "prepared",
+  "binary_source_commit": "655342c852af0285b80b39b3e49ecbbb08f121dd",
+  "main_merge_commit": "6679a358dfac28901162f232b6fc651196e81bf5",
+  "package_version": "0.4.1.r70.g655342c-1",
+  "package_sha256": "c3deb05af56de089820b37e72fd9e1f8163384751b11cd96c00820e98d3d2d4e",
+  "production_changed": false,
+  "stage": {
+    "state": "prepared",
+    "port": 18087,
+    "checks": {
+      "package_sha256": true,
+      "package_name": true,
+      "package_version": true,
+      "proxy_candidate_syntax": true,
+      "staged_health_and_discovery": true,
+      "staged_DCR_survives_restart": true,
+      "staged_private_registry": true,
+      "production_not_changed": true
+    }
+  },
+  "validation": {
+    "regular_tests_passed": 208,
+    "regular_tests_default_ignored": 13,
+    "clippy_warnings_denied": "passed",
+    "registry_restart_checks": 8
+  }
+}
