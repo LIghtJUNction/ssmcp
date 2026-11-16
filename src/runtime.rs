@@ -60,7 +60,9 @@ impl Runtime {
                 backend::page(self.tools().await?, cursor.as_deref())
             }
             Operation::CallTool { name, arguments }
-                if name.starts_with("ssmcp.fs.") || name.starts_with("ssmcp.net.") =>
+                if name.starts_with("ssmcp.fs.")
+                    || name.starts_with("ssmcp.net.")
+                    =>
             {
                 self.workspace
                     .perform(&name, arguments)
@@ -114,3 +116,4 @@ impl Runtime {
         );
     }
 }
+

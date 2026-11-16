@@ -85,6 +85,7 @@ impl Handle {
 /// Handles belong to one live SSH client and never grant access to another workspace.
 pub struct Workspace {
     root: Arc<Root>,
+    events: Arc<crate::backend::events::EventLog>,
     handles: StdMutex<HashMap<String, Handle>>,
     slots: Arc<Semaphore>,
     nonce: String,
@@ -102,6 +103,7 @@ impl Workspace {
             .map_err(error)?;
         Ok(Self {
             root: Arc::new(Root { path, directory }),
+            events: crate::backend::events::EventLog::new("workspace"),
             handles: StdMutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(MAX_HANDLES)),
             nonce: random_id().map_err(error)?,
@@ -178,6 +180,20 @@ impl Workspace {
                 false,
             ),
             tool(
+                "ssmcp.skills.list",
+                "Discover project and user skills from .agents/skills, .claude/skills, .codex/skills and SKILLS_PATH.",
+                json!({}),
+                &[],
+                true,
+            ),
+            tool(
+                "ssmcp.skills.read",
+                "Read one discovered SKILL.md by its returned skill name and source. The read is recorded in workspace audit events.",
+                json!({"name":{"type":"string","maxLength":128},"source":{"type":"string","maxLength":32}}),
+                &["name", "source"],
+                true,
+            ),
+            tool(
                 "ssmcp.net.listen",
                 "Bind a loopback TCP listener. Port 0 selects an available port.",
                 json!({"host":host,"port":{"type":"integer","minimum":0,"maximum":65535,"default":0}}),
@@ -234,6 +250,13 @@ impl Workspace {
                 true,
             ),
         ];
+        tools.push(tool(
+            "ssmcp.fs.events",
+            "Read workspace file access and edit audit events. File writes include a unified diff.",
+            crate::backend::events::schema(),
+            &[],
+            true,
+        ));
         for item in &mut tools {
             item["annotations"]["openWorldHint"] = json!(false);
         }
@@ -244,12 +267,38 @@ impl Workspace {
         if self.closed.load(Ordering::Acquire) {
             return Err("workspace is closed".into());
         }
+        if name == "ssmcp.fs.events" {
+            return self.events.read(arguments).await;
+        }
+        if name == "ssmcp.skills.list" {
+            return self.skills_list(arguments).await;
+        }
+        if name == "ssmcp.skills.read" {
+            return self.skills_read(arguments).await;
+        }
         if name.starts_with("ssmcp.fs.") {
+            let path = arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or("<root>")
+                .to_owned();
             let root = self.root.clone();
-            let name = name.to_owned();
-            return tokio::task::spawn_blocking(move || root.perform(&name, arguments))
+            let operation = name.to_owned();
+            let result = tokio::task::spawn_blocking(move || root.perform(&operation, arguments))
                 .await
                 .map_err(|e| e.to_string())?;
+            if let Ok(value) = &result {
+                let kind = match name {
+                    "ssmcp.fs.read" => "file_read",
+                    "ssmcp.fs.write" => "filechange",
+                    "ssmcp.fs.list" => "directory_read",
+                    "ssmcp.fs.stat" => "file_stat",
+                    "ssmcp.fs.mkdir" => "directory_create",
+                    _ => "file_operation",
+                };
+                self.events.push(json!({"type":kind,"path":path,"bytes":value.get("written").or_else(||value.get("size")),"diff":value.get("diff")}));
+            }
+            return result;
         }
         match name {
             "ssmcp.net.listen" => self.listen(parse(arguments)?).await,
@@ -275,6 +324,193 @@ impl Workspace {
             }
             _ => Err(format!("unknown workspace capability: {name}")),
         }
+    }
+
+    pub async fn snapshot_file(&self, path: &str) -> Option<Vec<u8>> {
+        let root = self.root.clone();
+        let path = path.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let candidate = Path::new(&path);
+            let relative = if candidate.is_absolute() {
+                candidate
+                    .strip_prefix(&root.path)
+                    .ok()?
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                path
+            };
+            let mut file = root.file(&relative).ok()?;
+            let metadata = file.metadata().ok()?;
+            if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES as u64 {
+                return None;
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).ok()?;
+            Some(bytes)
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    pub fn audit_harness_file(
+        &self,
+        kind: &str,
+        harness: &str,
+        tool: &str,
+        path: &str,
+        old: Option<&[u8]>,
+        new: Option<&[u8]>,
+    ) {
+        let diff = if kind == "filechange" {
+            Some(unified_diff(
+                old.unwrap_or(&[]),
+                new.unwrap_or(&[]),
+                old.is_some(),
+            ))
+        } else {
+            None
+        };
+        self.events
+            .push(json!({"type":kind,"harness":harness,"tool":tool,"path":path,"diff":diff}));
+    }
+
+    pub fn audit_harness_skill(&self, harness: &str, tool: &str, skill: Option<&str>) {
+        self.events
+            .push(json!({"type":"skill_used","harness":harness,"tool":tool,"skill":skill}));
+    }
+
+    async fn skills_list(&self, arguments: Value) -> Result<Value, String> {
+        let _: Empty = parse(arguments)?;
+        let roots = self.skill_roots();
+        let mut skills = Vec::new();
+        for (source, root) in roots {
+            let entries = match std::fs::read_dir(&root) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let directory = entry.path();
+                if !directory.is_dir() || directory.file_name().and_then(|v| v.to_str()).is_none() {
+                    continue;
+                }
+                let file = directory.join("SKILL.md");
+                let canonical = match file.canonicalize() {
+                    Ok(v) if v.starts_with(&root) => v,
+                    _ => continue,
+                };
+                let metadata = match canonical.metadata() {
+                    Ok(v) if v.is_file() && v.len() <= 128 * 1024 => v,
+                    _ => continue,
+                };
+                let _ = metadata;
+                let content = match std::fs::read_to_string(&canonical) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let name = directory
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                let description = content
+                    .lines()
+                    .find(|line| line.starts_with("description:"))
+                    .map(|line| {
+                        line.trim_start_matches("description:")
+                            .trim()
+                            .trim_matches('"')
+                            .to_owned()
+                    })
+                    .unwrap_or_default();
+                skills.push(json!({"name":name,"source":source,"description":description,"path":canonical.to_string_lossy()}));
+            }
+        }
+        skills.sort_by(|a, b| {
+            a["source"]
+                .as_str()
+                .cmp(&b["source"].as_str())
+                .then(a["name"].as_str().cmp(&b["name"].as_str()))
+        });
+        Ok(json!({"skills":skills,"count":skills.len()}))
+    }
+
+    async fn skills_read(&self, arguments: Value) -> Result<Value, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            name: String,
+            source: String,
+        }
+        let args: Args = parse(arguments)?;
+        if args.name.is_empty()
+            || args.name.len() > 128
+            || args.name.contains('/')
+            || args.name.contains("..")
+        {
+            return Err("invalid skill name".into());
+        }
+        let path = self
+            .skill_roots()
+            .into_iter()
+            .find(|(source, root)| {
+                source == &args.source && root.join(&args.name).join("SKILL.md").is_file()
+            })
+            .map(|(_, root)| root.join(&args.name).join("SKILL.md"))
+            .ok_or("skill not found in the requested source")?;
+        let canonical = path.canonicalize().map_err(error)?;
+        let root = self
+            .skill_roots()
+            .into_iter()
+            .find(|(source, root)| source == &args.source && canonical.starts_with(root))
+            .map(|(_, root)| root)
+            .ok_or("skill path escaped its configured root")?;
+        let _ = root;
+        let metadata = canonical.metadata().map_err(error)?;
+        if !metadata.is_file() || metadata.len() > 128 * 1024 {
+            return Err("skill must be a regular file no larger than 128 KiB".into());
+        }
+        let content = std::fs::read_to_string(&canonical).map_err(error)?;
+        self.events.push(json!({"type":"skill_used","name":args.name,"source":args.source,"path":canonical.to_string_lossy()}));
+        Ok(
+            json!({"name":args.name,"source":args.source,"path":canonical.to_string_lossy(),"content":content}),
+        )
+    }
+
+    fn skill_roots(&self) -> Vec<(String, PathBuf)> {
+        let mut roots = vec![
+            (
+                "project-agents".into(),
+                self.root.path.join(".agents/skills"),
+            ),
+            (
+                "project-claude".into(),
+                self.root.path.join(".claude/skills"),
+            ),
+            ("project-codex".into(), self.root.path.join(".codex/skills")),
+        ];
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            roots.extend([
+                ("user-agents".into(), home.join(".agents/skills")),
+                ("user-claude".into(), home.join(".claude/skills")),
+                ("user-codex".into(), home.join(".codex/skills")),
+            ]);
+        }
+        if let Some(paths) = std::env::var_os("SKILLS_PATH") {
+            for (index, path) in std::env::split_paths(&paths).enumerate() {
+                roots.push((format!("skills-path-{index}"), path));
+            }
+        }
+        roots
+            .into_iter()
+            .filter_map(|(source, path)| {
+                path.canonicalize()
+                    .ok()
+                    .filter(|p| p.is_dir())
+                    .map(|p| (source, p))
+            })
+            .collect()
     }
 
     fn permit(&self) -> Result<OwnedSemaphorePermit, String> {
@@ -458,6 +694,7 @@ impl Workspace {
     fn close_all(&self) {
         let mut handles = self.handles.lock().unwrap();
         self.closed.store(true, Ordering::Release);
+        self.events.close();
         for (_, handle) in handles.drain() {
             handle.close();
         }
@@ -783,6 +1020,47 @@ impl Root {
         }
         Ok(json!({"path":args.path,"created":true}))
     }
+}
+
+pub(crate) fn unified_diff(old: &[u8], new: &[u8], existed: bool) -> String {
+    if existed && old == new {
+        return "No changes".into();
+    }
+    let old = match std::str::from_utf8(old) {
+        Ok(value) => value,
+        Err(_) => return "Binary file changed".into(),
+    };
+    let new = match std::str::from_utf8(new) {
+        Ok(value) => value,
+        Err(_) => return "Binary file changed".into(),
+    };
+    let old_lines: Vec<_> = old.lines().collect();
+    let new_lines: Vec<_> = new.lines().collect();
+    let mut diff = format!(
+        "--- {}\n+++ b\n@@ -1,{} +1,{} @@\n",
+        if existed { "a" } else { "/dev/null" },
+        old_lines.len(),
+        new_lines.len()
+    );
+    for line in old_lines {
+        diff.push('-');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    for line in new_lines {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    if diff.len() > 128 * 1024 {
+        let mut end = 128 * 1024;
+        while !diff.is_char_boundary(end) {
+            end -= 1;
+        }
+        diff.truncate(end);
+        diff.push_str("\n... diff truncated ...\n");
+    }
+    diff
 }
 
 fn open_at(directory: &File, name: &CString, flags: i32, mode: u32) -> io::Result<File> {
@@ -1155,6 +1433,15 @@ mod tests {
     async fn call(workspace: &Workspace, name: &str, args: Value) -> Value {
         workspace.perform(name, args).await.unwrap()
     }
+    #[test]
+    fn unified_diff_marks_added_removed_and_unchanged_files() {
+        let diff = unified_diff(b"before\nkeep\n", b"after\nkeep\n", true);
+        assert!(diff.contains("-before"));
+        assert!(diff.contains("+after"));
+        assert!(diff.contains("+keep"));
+        assert_eq!(unified_diff(b"same\n", b"same\n", true), "No changes");
+    }
+
     #[tokio::test]
     async fn files_round_trip_chunks_and_atomic_overwrite() {
         let scratch = Scratch::new();

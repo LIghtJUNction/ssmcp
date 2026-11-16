@@ -1,6 +1,6 @@
 # Linux 部署
 
-服务器部署 OpenSSH、`ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp` 及需要控制的 Agent。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
+服务器部署 OpenSSH、`ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp`，需要调用某个 Harness 时再安装和配置它。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
 
 服务器已经部署好时，可直接阅读 [配置、SSH 公钥与登录](configuration.md)：复用 `~/.ssh/config`、添加和轮换公钥、完成 OAuth 登录，以及处理重新打开后的授权状态。
 
@@ -138,43 +138,35 @@ MCP 请求存在 `Origin` 时，其值必须等于配置生效后的 `public_url
 
 原生 JSONL 后端的长调用最多等待 15 分钟。若反向代理或 MCP 客户端自定义了请求超时，应与任务时长相容；实时进度使用短等待的事件工具读取。公网入口使用 JSON 响应，不要求代理提供后台 SSE。
 
-## 4. 准备本机后端
+## 4. 准备本机客户端与 Harness
 
-本机安装 `ssmcp`，并安装希望使用的 Agent。运行 Agent 原生 CLI 完成登录、provider、模型和项目权限配置。Shell 模式只依赖系统 shell；Agent 模式的可执行文件及最低接口要求见[后端说明](backends.md#启动参数)。
+本机安装 ssmcp。客户端以 Shell / PTY 入口连接，探测本机已安装的 Codex、Claude Code、Pi 和 OpenCode。按需通过 Harness 原生 CLI 配置身份与项目权限；发现阶段不应安装软件或发起模型请求。迁移旧命令时删除 `-t`、`--type` 和 `--backend`。接口及实际支持范围见[统一客户端与 Harness 注册](backends.md)。
 
-在本机项目目录先检查工具目录：
+本机可先检查当前可发现的工具目录，无需 SSH 目标：
 
-```sh
-ssmcp -t shell --list-tools
-ssmcp -t codex --list-tools
-ssmcp -t cc --list-tools
-ssmcp -t pi --list-tools -- --no-session
-ssmcp -t opencode --list-tools
-```
+~~~sh
+ssmcp --list-tools
+~~~
 
-每次只检查需要使用的模式。`--list-tools` 在本机启动并关闭后端，不需要 SSH 目标；OpenCode 必须使用 v2。若可执行文件不在 PATH，使用 `--backend /absolute/path/to/program`。
+检查每个 Harness 的发现结果与诊断；未安装或未完成原生初始化的能力不应作为可调用工具使用。OpenCode 适配器使用 v2 接口。工具数量、Schema 和可用状态以当前目录为准。
 
 ## 5. 建立连接并登录
 
-首次使用时可按 [客户端配置与逐步登录教程](configuration.md#oauth-login) 操作。已有 SSH Host 条目的复用方法见 [SSH 配置](configuration.md#ssh-config)，重新打开后的行为见 [连接与授权生命周期](configuration.md#session-lifetime)。
+首次使用时可按[客户端配置与逐步登录教程](configuration.md#oauth-login)操作。已有 SSH Host 条目的复用方法见[SSH 配置](configuration.md#ssh-config)，重新打开后的行为见[连接与授权生命周期](configuration.md#session-lifetime)。
 
-GitHub 模式在所选后端命令中指定允许的身份；将示例用户名换成实际获准访问的用户：
+GitHub 模式在客户端连接命令中指定允许的身份；将示例用户名换成实际获准访问的用户：
 
-```sh
+~~~sh
 ssmcp --allow octocat@github alice@ssmcp.example.com
-ssmcp -t codex --allow octocat@github alice@ssmcp.example.com
-ssmcp -t cc --allow octocat@github alice@ssmcp.example.com
-ssmcp -t pi --allow octocat@github alice@ssmcp.example.com -- --no-session
-ssmcp -t opencode --allow octocat@github alice@ssmcp.example.com
-```
+~~~
 
-同一服务端用户名最多同时连接 128 个客户端，可以在不同电脑或项目目录中选择不同模式；使用 `--name laptop` 等参数指定显示名称。每条连接有独立的 `client_id`，同名客户端也用 ID 区分。首次连接按 OpenSSH 提示核验主机密钥，或预先配置可信 known_hosts。客户端强制公钥认证，保留私钥口令与 ssh-agent 的原生处理。
+同一服务端用户名最多同时连接 128 个 Shell 客户端，可以在不同电脑或项目目录中启动多个客户端；使用 --name laptop 等参数指定显示名称。每条连接有独立的 client_id，同名客户端也用 ID 区分。首次连接按 OpenSSH 提示核验主机密钥，或预先配置可信 known_hosts。客户端强制公钥认证，保留私钥口令与 ssh-agent 的原生处理。
 
-本机后端握手和目录发现成功后，stdout 输出：
+本机 Shell 初始化后，stdout 输出连接信息：
 
-```json
-{"url":"https://ssmcp.example.com/mcp","auth":"github","allow":["octocat@github"],"client_id":"服务端分配的连接ID","name":"laptop","type":"pi","cwd":"/home/alice/project","hostname":"alice-laptop"}
-```
+~~~json
+{"url":"https://ssmcp.example.com/mcp","auth":"github","allow":["octocat@github"],"client_id":"服务端分配的连接ID","name":"laptop","type":"shell","cwd":"/home/alice/project","hostname":"alice-laptop"}
+~~~
 
 在 MCP 客户端中添加完整 `/mcp` URL，启用 OAuth 登录。ssmcp 页面显示 MCP 客户端名称、已登记回调来源和资源 URL；点击 GitHub 登录，在 GitHub 完成身份验证后返回 ssmcp。页面显示已验证身份和当前可访问会话数，再由用户点击“允许连接”或“取消”。只完成 GitHub 登录不会自动授权这个 MCP 客户端。[登录步骤](configuration.md#github-allow)
 
@@ -258,7 +250,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 `http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 只有 `list` 和 `code_mode`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
 
-在 `code_mode` 中通过 `await call(clientId, "terminal.write", {data:"pwd\n"})` 和 `terminal.read` 验证 Shell 执行。Agent 可先用无模型的状态接口检查链路，例如 `pi.get_state` 或 `opencode.server.info`；先通过 `list({client_id})` 查看 schema，再在 `code_mode` 调用。模型任务和审批流程按[后端说明](backends.md)验证。Claude Code 前台 Bash 的输出在调用结束时返回，持续增量观察应使用其原生后台输出路径。
+先通过 `list({client_id})` 查看当前 Schema，再用 `ssmcp.exec.start` 启动 `pwd`，检查最终状态、退出码和分离的 stdout/stderr。用 `terminal.write/read` 单独验证交互式 PTY。Harness 验证选择实时发现的无模型状态接口和只读工具，保留原生结果与审批记录；不要为了发现或测试工具而发起模型请求。可观察的增量输出取决于原生接口，具体范围见[后端说明](backends.md)。
 
 验证 GitHub 模式时，为两个客户端设置不同 `--allow`，确认当前身份只看到并能调用匹配的客户端；未匹配的 `client_id` 也必须被拒绝。关闭一个客户端后，它应从列表消失；已有 GitHub 授权可以继续访问其他匹配客户端。重连时按新的允许列表重新判断。
 

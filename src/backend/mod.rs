@@ -6,62 +6,158 @@ pub mod opencode;
 pub mod pi;
 pub mod process;
 pub mod rpc;
+pub mod shell;
 
 use crate::{
     pty::Terminal,
-    wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE, Mode, Operation},
+    wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE, Operation},
 };
 use serde_json::{Value, json};
-use std::{
-    ffi::{OsStr, OsString},
-    path::Path,
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 
-pub enum Backend {
-    Shell(Arc<Terminal>),
-    Codex(Arc<codex::Codex>),
-    Claude(Arc<cc::Claude>),
-    Pi(Arc<pi::Pi>),
-    OpenCode(Arc<opencode::OpenCode>),
+/// One always-on shell plus every compatible coding harness installed on the client.
+pub struct Backend {
+    terminal: Arc<Terminal>,
+    shell: Arc<shell::Shell>,
+    codex: Option<Arc<codex::Codex>>,
+    claude: Option<Arc<cc::Claude>>,
+    pi: Option<Arc<pi::Pi>>,
+    opencode: Option<Arc<opencode::OpenCode>>,
 }
-
 impl Backend {
-    pub async fn start(
-        mode: Mode,
-        shell: &Path,
-        program: Option<&OsStr>,
-        args: &[OsString],
-    ) -> crate::Result<Arc<Self>> {
-        let backend = match mode {
-            Mode::Shell => Self::Shell(Terminal::spawn_live(shell)?),
-            Mode::Codex => Self::Codex(
-                codex::Codex::start(program.unwrap_or_else(|| OsStr::new("codex")), args).await?,
-            ),
-            Mode::Cc => Self::Claude(
-                cc::Claude::start(program.unwrap_or_else(|| OsStr::new("claude")), args).await?,
-            ),
-            Mode::Pi => {
-                Self::Pi(pi::Pi::start(program.unwrap_or_else(|| OsStr::new("pi")), args).await?)
+    pub async fn start(shell_path: &Path) -> crate::Result<Arc<Self>> {
+        let terminal = Terminal::spawn_live(shell_path)?;
+        let shell = shell::Shell::new();
+        async fn codex() -> Option<Arc<codex::Codex>> {
+            let Some(program) = find_program("codex") else {
+                return None;
+            };
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(90),
+                codex::Codex::start(&program, &[]),
+            )
+            .await
+            {
+                Ok(Ok(value)) => {
+                    eprintln!("[ssmcp harness] Codex registered");
+                    Some(value)
+                }
+                Ok(Err(error)) => {
+                    eprintln!("[ssmcp harness] Codex unavailable: {error}");
+                    None
+                }
+                Err(_) => {
+                    eprintln!("[ssmcp harness] Codex startup timed out; shell remains available");
+                    None
+                }
             }
-            Mode::Opencode => Self::OpenCode(
-                opencode::OpenCode::start(program.unwrap_or_else(|| OsStr::new("opencode")), args)
-                    .await?,
-            ),
-        };
-        Ok(Arc::new(backend))
+        }
+        async fn claude() -> Option<Arc<cc::Claude>> {
+            let Some(program) = find_program("claude") else {
+                return None;
+            };
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(45),
+                cc::Claude::start(&program, &[]),
+            )
+            .await
+            {
+                Ok(Ok(value)) => {
+                    eprintln!("[ssmcp harness] Claude Code registered");
+                    Some(value)
+                }
+                Ok(Err(error)) => {
+                    eprintln!("[ssmcp harness] Claude Code unavailable: {error}");
+                    None
+                }
+                Err(_) => {
+                    eprintln!("[ssmcp harness] Claude Code startup timed out");
+                    None
+                }
+            }
+        }
+        async fn pi() -> Option<Arc<pi::Pi>> {
+            let Some(program) = find_program("pi") else {
+                return None;
+            };
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                pi::Pi::start(&program, &[]),
+            )
+            .await
+            {
+                Ok(Ok(value)) => {
+                    eprintln!("[ssmcp harness] Pi registered");
+                    Some(value)
+                }
+                Ok(Err(error)) => {
+                    eprintln!("[ssmcp harness] Pi unavailable: {error}");
+                    None
+                }
+                Err(_) => {
+                    eprintln!("[ssmcp harness] Pi startup timed out");
+                    None
+                }
+            }
+        }
+        async fn opencode() -> Option<Arc<opencode::OpenCode>> {
+            let Some(program) = find_program("opencode") else {
+                return None;
+            };
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(45),
+                opencode::OpenCode::start(&program, &[]),
+            )
+            .await
+            {
+                Ok(Ok(value)) => {
+                    eprintln!("[ssmcp harness] OpenCode registered");
+                    Some(value)
+                }
+                Ok(Err(error)) => {
+                    eprintln!("[ssmcp harness] OpenCode unavailable: {error}");
+                    None
+                }
+                Err(_) => {
+                    eprintln!("[ssmcp harness] OpenCode startup timed out");
+                    None
+                }
+            }
+        }
+        let (codex, claude, pi, opencode) = tokio::join!(codex(), claude(), pi(), opencode());
+        Ok(Arc::new(Self {
+            terminal,
+            shell,
+            codex,
+            claude,
+            pi,
+            opencode,
+        }))
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
-        let tools = match self {
-            Self::Shell(_) => Ok(terminal_tools().as_array().unwrap().clone()),
-            Self::Codex(driver) => driver.tools().await,
-            Self::Claude(driver) => driver.tools().await,
-            Self::Pi(driver) => driver.tools().await,
-            Self::OpenCode(driver) => driver.tools().await,
-        }?;
-        if tools.len() > 4096 {
-            return Err("native tool catalog exceeds 4096 tools".into());
+        let mut tools = terminal_tools().as_array().unwrap().clone();
+        tools.extend(shell::Shell::tools());
+        if let Some(driver) = &self.codex {
+            tools.extend(driver.tools().await?);
+        }
+        if let Some(driver) = &self.claude {
+            tools.extend(driver.tools().await?);
+        }
+        if let Some(driver) = &self.pi {
+            tools.extend(driver.tools().await?);
+        }
+        if let Some(driver) = &self.opencode {
+            tools.extend(driver.tools().await?);
+        }
+        tools.push(json!({
+            "name":"ssmcp.harnesses.list",
+            "description":"List coding harnesses detected on this client and the number of native tools registered for each.",
+            "inputSchema":{"type":"object","additionalProperties":false},
+            "annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}
+        }));
+        if tools.len() > 8192 {
+            return Err("combined native tool catalog exceeds 8192 tools".into());
         }
         let mut names = std::collections::HashSet::new();
         for tool in &tools {
@@ -78,7 +174,9 @@ impl Backend {
                 return Err(format!("native tool name is not MCP compatible: {name:?}"));
             }
             if !names.insert(name) {
-                return Err(format!("duplicate native tool name: {name}"));
+                return Err(format!(
+                    "installed harnesses expose a duplicate tool name: {name}"
+                ));
             }
             if !tool.get("inputSchema").is_some_and(Value::is_object) {
                 return Err(format!("native tool {name} has no input schema"));
@@ -90,38 +188,131 @@ impl Backend {
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         match operation {
-            Operation::ListTools { cursor } => {
-                let tools = self.tools().await?;
-                page(tools, cursor.as_deref())
-            }
-            Operation::CallTool { name, arguments } => match self {
-                Self::Shell(terminal) => {
+            Operation::ListTools { cursor } => Ok(page(self.tools().await?, cursor.as_deref())?),
+            Operation::CallTool { name, arguments } => {
+                if name.starts_with("terminal.") {
                     let operation = terminal_operation(&name, arguments)?;
-                    Ok(result(terminal.perform(operation).await?))
+                    return self.terminal.perform(operation).await.map(result);
                 }
-                Self::Codex(driver) => driver.call(&name, arguments).await,
-                Self::Claude(driver) => driver.call(&name, arguments).await,
-                Self::Pi(driver) => driver.call(&name, arguments).await,
-                Self::OpenCode(driver) => driver.call(&name, arguments).await,
-            },
-            operation => match self {
-                Self::Shell(terminal) => Ok(result(terminal.perform(operation).await?)),
-                _ => {
-                    Err("terminal.* capabilities are only available in shell mode; use list to discover the selected client's tools".into())
+                if name.starts_with("ssmcp.exec.") {
+                    return self.shell.call(&name, arguments).await.map(result);
                 }
-            },
+                if name == "ssmcp.harnesses.list" {
+                    let tools = self.tools().await?;
+                    let counts = ["codex.", "cc.", "pi.", "opencode."]
+                        .iter()
+                        .map(|prefix| {
+                            let count = tools
+                                .iter()
+                                .filter(|tool| {
+                                    tool["name"].as_str().is_some_and(|n| n.starts_with(prefix))
+                                })
+                                .count();
+                            (prefix.trim_end_matches('.').to_owned(), json!(count))
+                        })
+                        .collect::<serde_json::Map<String, Value>>();
+                    return Ok(result(
+                        json!({"harnesses":counts,"model":"not exposed by MCP caller"}),
+                    ));
+                }
+                if name.starts_with("codex.") || name.starts_with("ssmcp.codex.") {
+                    self.audit_harness("codex", &name, &arguments);
+                    return self
+                        .codex
+                        .as_ref()
+                        .ok_or("Codex is not installed or failed native startup")?
+                        .call(&name, arguments)
+                        .await;
+                }
+                if name.starts_with("cc.") || name.starts_with("ssmcp.cc.") {
+                    self.audit_harness("claude-code", &name, &arguments);
+                    return self
+                        .claude
+                        .as_ref()
+                        .ok_or("Claude Code is not installed or failed native startup")?
+                        .call(&name, arguments)
+                        .await;
+                }
+                if name.starts_with("pi.") || name.starts_with("ssmcp.pi.") {
+                    self.audit_harness("pi", &name, &arguments);
+                    return self
+                        .pi
+                        .as_ref()
+                        .ok_or("Pi is not installed or failed native startup")?
+                        .call(&name, arguments)
+                        .await;
+                }
+                if name.starts_with("opencode.") {
+                    self.audit_harness("opencode", &name, &arguments);
+                    return self
+                        .opencode
+                        .as_ref()
+                        .ok_or("OpenCode is not installed or failed native startup")?
+                        .call(&name, arguments)
+                        .await;
+                }
+                Err(format!("unknown registered tool: {name}"))
+            }
+            _ => Err("unsupported client operation".into()),
         }
     }
 
-    pub async fn shutdown(&self) {
-        match self {
-            Self::Shell(terminal) => terminal.shutdown().await,
-            Self::Codex(driver) => driver.shutdown().await,
-            Self::Claude(driver) => driver.shutdown().await,
-            Self::Pi(driver) => driver.shutdown().await,
-            Self::OpenCode(driver) => driver.shutdown().await,
-        }
+    fn audit_harness(&self, harness: &str, tool: &str, arguments: &Value) {
+        let lower = tool.to_ascii_lowercase();
+        let path = ["file_path", "filePath", "path", "file"]
+            .iter()
+            .find_map(|key| arguments.get(*key).and_then(Value::as_str));
+        let skill = ["skill", "skill_name", "skillName", "name"]
+            .iter()
+            .find_map(|key| arguments.get(*key).and_then(Value::as_str));
+        let kind = if lower.contains("skill") {
+            "skill_used"
+        } else if path.is_some()
+            && (lower.contains("read") || lower.ends_with(".get") || lower.contains("file"))
+        {
+            "file_read"
+        } else if path.is_some()
+            && (lower.contains("write") || lower.contains("edit") || lower.contains("patch"))
+        {
+            "file_change"
+        } else {
+            "harness_tool_call"
+        };
+        self.shell.audit(json!({"type":kind,"harness":harness,"tool":tool,"path":path,"skill":if lower.contains("skill"){skill}else{None}}));
     }
+
+    pub async fn shutdown(&self) {
+        let _ = tokio::join!(
+            self.terminal.shutdown(),
+            self.shell.shutdown(),
+            async {
+                if let Some(v) = &self.codex {
+                    v.shutdown().await;
+                }
+            },
+            async {
+                if let Some(v) = &self.claude {
+                    v.shutdown().await;
+                }
+            },
+            async {
+                if let Some(v) = &self.pi {
+                    v.shutdown().await;
+                }
+            },
+            async {
+                if let Some(v) = &self.opencode {
+                    v.shutdown().await;
+                }
+            }
+        );
+    }
+}
+
+fn find_program(name: &str) -> Option<std::ffi::OsString> {
+    crate::code_mode::executable(name)
+        .ok()
+        .map(|path| path.into_os_string())
 }
 
 /// Convert a shell capability into a validated private wire operation.
@@ -264,7 +455,14 @@ mod tests {
     #[tokio::test]
     async fn shell_calls_reach_the_terminal_through_generic_native_dispatch() {
         let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
-        let backend = Backend::Shell(terminal.clone());
+        let backend = Backend {
+            terminal: terminal.clone(),
+            shell: shell::Shell::new(),
+            codex: None,
+            claude: None,
+            pi: None,
+            opencode: None,
+        };
         let result = backend
             .perform(Operation::CallTool {
                 name: "terminal.status".into(),

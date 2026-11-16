@@ -49,10 +49,10 @@ ssh -G my-ssmcp | awk '$1 ~ /^(hostname|user|port|identityfile|identitiesonly|id
 
 ```sh
 # 已安装的 0.3.0：显式填写服务器用户名，其他配置继续从 Host 条目读取。
-ssmcp --name ssmcp-project -t codex alice@my-ssmcp
+ssmcp --name ssmcp-project alice@my-ssmcp
 
 # 0.3.1 起：User 也可直接取自 SSH 配置。
-ssmcp --name ssmcp-project -t codex my-ssmcp
+ssmcp --name ssmcp-project my-ssmcp
 ```
 
 没有设置 `User` 的裸主机目标，会采用 OpenSSH 自身的用户名规则；通常为本机用户名。想固定账户时，在配置中写明 `User`，或继续使用 `alice@my-ssmcp`。`cwd` 是启动 ssmcp 时的本机目录快照，后续通过 `list` 可以找到它。
@@ -61,7 +61,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 
 ```sh
 # -F 使用另一份 OpenSSH 配置。
-ssmcp -F ~/.ssh/work-config -t codex alice@my-ssmcp
+ssmcp -F ~/.ssh/work-config alice@my-ssmcp
 
 # -p 显式选择端口；-i 提供要使用的私钥路径。
 ssmcp -p 2222 -i ~/.ssh/id_ed25519_work alice@my-ssmcp
@@ -226,8 +226,8 @@ rm -- "$keycheck_config"
 先在项目目录检查你选择的后端，再建立连接：
 
 ```sh
-ssmcp -t codex --list-tools
-ssmcp --name ssmcp-project -t codex --allow octocat@github my-ssmcp
+ssmcp --list-tools
+ssmcp --name ssmcp-project --allow octocat@github my-ssmcp
 
 # 多个用户可以用逗号分隔，也可以重复指定 --allow。
 ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
@@ -246,7 +246,7 @@ Shell 模式可省略 `-t`；其他模式是 `cc`、`pi`、`opencode`。Agent �
   "allow": ["octocat@github"],
   "client_id": "本次连接的唯一ID",
   "name": "ssmcp-project",
-  "type": "codex",
+  "type": "shell",
   "cwd": "/home/alice/projects/ssmcp",
   "hostname": "workstation"
 }
@@ -269,7 +269,7 @@ GitHub 模式只输出连接信息与允许列表，不生成登录码。实时�
 ### 登录码模式：保留现有使用方法
 
 ```sh
-ssmcp --name ssmcp-project -t codex my-ssmcp
+ssmcp --name ssmcp-project my-ssmcp
 ```
 
 省略 `--allow` 后，终端返回 `/SSH用户名` URL、`login_code` 和 `login_expires_in`。将完整 URL 添加到 MCP 客户端，打开 OAuth 页面，核对客户端名称与回调来源，再输入本次登录码。它从签发起最多有效 1800 秒，输出的剩余秒数已扣除本机后端初始化时间，成功使用一次即消耗。[登录码输出](../src/client.rs)
@@ -364,7 +364,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 | 已登录，但客户端从不自动续期 | 检查首次令牌响应是否有 `refresh_token`、客户端是否实现刷新和保存轮换后的新值。旧版登记可重新注册；显式只登记 `authorization_code` 时需修改客户端注册请求 |
 | `oauth_token_invalid_grant` / `invalid_grant` / 要求重新授权 | 检查授权寿命与服务器重启情况，按当前模式重新授权；登录码模式还需检查签发连接是否退出 |
 | 服务重启后仍使用旧 `client_id`，重复授权失败 | MCP 客户端应重新注册；若它继续缓存旧登记，移除该 MCP 连接后用相同完整 URL 重新添加 |
-| 登录成功后 `list` 找不到原来的 `client_id` | 客户端重连会分配新 ID。重新调用 `list`，按名称、模式和目录选取当前在线 ID |
+| 登录成功后 `list` 找不到原来的 `client_id` | 客户端重连会分配新 ID。重新调用 `list`，按名称、主机和目录选取当前在线 ID |
 | `list` 正常，`code_mode` 报系统运行环境不可用 | 在服务器检查系统 Node.js、bubblewrap、prlimit 和用户命名空间，见[部署说明](deployment.md#系统代码运行环境) |
 
 需要定位 SSH 认证细节时，可在本机运行 `ssh -v -T alice@my-ssmcp` 查看认证阶段日志。受限账户认证成功后进入桥接，手工 SSH 会等待协议数据；看到认证成功后按 `Ctrl-C` 退出，再使用 ssmcp。分享诊断信息前移除登录码、OAuth 令牌和不希望公开的主机或路径信息。
@@ -387,7 +387,7 @@ ssmcp --name ssmcp-project -t codex my-ssmcp
 只有传入 `--raw` 才输出未加工的原始事件 JSON。启动时 stdout 的连接信息仍保持机器可读；活动记录走 stderr。`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 时不输出 ANSI 颜色，但仍保留可读分块。更新磁盘上的程序不会改变已经运行的旧进程，需重新启动本机 ssmcp 才能看到新界面。
 
 ```sh
-ssmcp -t codex --allow octocat@github my-ssmcp
-ssmcp --raw -t codex --allow octocat@github my-ssmcp
-NO_COLOR=1 ssmcp -t codex --allow octocat@github my-ssmcp
+ssmcp --allow octocat@github my-ssmcp
+ssmcp --raw --allow octocat@github my-ssmcp
+NO_COLOR=1 ssmcp --allow octocat@github my-ssmcp
 ```
