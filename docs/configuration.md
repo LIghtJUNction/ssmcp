@@ -98,7 +98,7 @@ ssh-add ~/.ssh/id_ed25519
 
 ## 2. 添加或更新服务器上的公钥
 
-**已经建立 SSH 连接，说明这次使用的公钥已经被服务器接受。** 更换项目目录、启动第二个后端或重新登录 OAuth，都不要求重新登记同一把公钥。需要添加新电脑、新密钥或撤销旧密钥时，再更新服务端的授权文件。
+**已经建立 SSH 连接，说明这次使用的公钥已经被服务器接受。** 更换项目目录、启动第二个客户端或重新登录 OAuth，都不要求重新登记同一把公钥。需要添加新电脑、新密钥或撤销旧密钥时，再更新服务端的授权文件。
 
 仓库提供的服务器配置使用系统 OpenSSH 账户和授权策略。通常公钥位于目标用户的 `~/.ssh/authorized_keys`，ssmcp 没有另一套公钥数据库，也没有自动上传公钥的命令。如果管理员配置了自定义 `AuthorizedKeysFile` 或 `AuthorizedKeysCommand`，应更新相应的实际来源。[服务器配置](../packaging/sshd-ssmcp.conf) · [OpenSSH sshd_config](https://man.openbsd.org/sshd_config)
 
@@ -244,7 +244,7 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 
 将示例用户名换成获准访问的 GitHub 用户名。参数采用 `用户名@提供方` 格式，目前提供方只支持 `github`；最多 32 个不同用户，大小写不敏感，重复项会合并。GitHub 用户名使用 1–39 个 ASCII 字母、数字及中间的单个连字符。`--allow` 需要 SSH 连接，不能与仅检查本机工具的 `--list-tools` 同用。[参数校验](../src/client.rs) · [身份格式](../src/wire.rs)
 
-每条连接都提供交互式 Shell 和独立命令任务。启动时从 `PATH` 自动发现 `codex`、`claude`、`pi`、`opencode` 并注册成功初始化的原生工具；某个可选 CLI 失败会显示警告，Shell 和其他成功注册的工具继续可用。旧版启动参数按[迁移说明](backends.md#从旧的后端选择参数迁移)删除；需要的 CLI 放入客户端启动环境的 `PATH`。模型身份、模型选择和权限仍由各原生 CLI 的配置管理。[统一工具目录](backends.md#1-启动客户端)
+每条连接都提供交互式 Shell 和独立命令任务。后台检查 `codex`、`claude`、`pi`、`opencode` 的原生接口，安全启动、版本、握手与目录检查通过后才注册工具；某个可选 CLI 失败会显示警告，Shell 和其他成功注册的工具继续可用。旧版启动参数按[迁移说明](backends.md#从旧的后端选择参数迁移)删除；需要的 CLI 放入客户端启动环境的 `PATH`。发现不安装软件或提交模型请求。Pi 通过 `SSMCP_PI_RPC_SOCKET` 连接已初始化的本机私有 Unix RPC 入口；OpenCode 通过 `SSMCP_OPENCODE_URL` 连接已有 loopback 服务。Pi socket 及直接父目录需由当前用户独占、无符号链接，握手还会检查 peer UID。OpenCode 地址只能为带显式端口的 `http://127.0.0.1:端口/`，原生密码由 `OPENCODE_PASSWORD` 提供；不接受代理、重定向或其他 URL 路径。入口未配置或安全检查未通过时提供者保持 unavailable。模型身份、模型选择和权限仍由各原生 CLI 的配置管理。[统一工具目录](backends.md#1-启动客户端)
 
 交互式终端会显示连接地址与登录提示。重定向 stdout 或选择 `--log-format jsonl` 时，连接信息输出为一行 JSON，例如：
 
@@ -282,7 +282,7 @@ GitHub 模式只输出连接信息与允许列表，不生成登录码。实时�
 ssmcp --name ssmcp-project my-ssmcp
 ```
 
-省略 `--allow` 后，终端返回 `/SSH用户名` URL、`login_code` 和 `login_expires_in`。将完整 URL 添加到 MCP 客户端，打开 OAuth 页面，核对客户端名称与回调来源，再输入本次登录码。它从签发起最多有效 1800 秒，输出的剩余秒数已扣除本机后端初始化时间，成功使用一次即消耗。[登录码输出](../src/client.rs)
+省略 `--allow` 后，终端返回 `/SSH用户名` URL、`login_code` 和 `login_expires_in`。将完整 URL 添加到 MCP 客户端，打开 OAuth 页面，核对客户端名称与回调来源，再输入本次登录码。它从签发起最多有效 1800 秒，输出的剩余秒数根据实际握手耗时计算，成功使用一次即消耗。[登录码输出](../src/client.rs)
 
 该授权绑定签发登录码的 SSH 连接，只能发现和调用同一 SSH 账号下未设置 `--allow` 的连接。即使使用同一个 SSH 账户，登录码授权也不能访问设置了 `--allow` 的客户端。签发连接退出会撤销对应授权。[授权隔离](../src/broker.rs)
 
@@ -396,9 +396,11 @@ ssmcp --name ssmcp-project my-ssmcp
 
 ## 本地显示与重载
 
+真实交互终端默认启用 `[ui] dashboard = true`：宽窗口左侧分别显示后台日志和交互 Shell，右侧固定显示并行任务、原生进度与 Git 状态。少于 96 列或少于 18 行时会收起右栏；窗口调整会同步更新布局和 PTY 尺寸。`NO_COLOR` 只影响颜色。可在本地 TOML 中设 `dashboard = false` 恢复行式显示；JSONL 或重定向 stderr 也使用行式输出。任务没有原生总量时仅显示活动和耗时，不生成估算百分比。Git 查询只观察授权启动目录，查询失败会标明过期或未知；未跟踪目录可能作为一项计数。[面板布局与配置](logging.md#固定状态区与窗口尺寸)
+
 默认显示留白较多的 `minimal` 界面，连接摘要给出 MCP URL 和登录方式，活动记录写入 stderr。请求、完成、错误和超时使用不同颜色；独立命令按任务标识区分，stdout 与 stderr 分开显示。请求 ID、方法和耗时用于对应同一次调用，统一 diff 显示增加、删除及原始行号。[本地渲染](../src/client/render.rs)
 
-`--log-format pretty-verbose` 展开详细事件，`--log-format jsonl` 输出事件 JSON；`--verbose` 是详细事件的别名，`--raw` 与 `--raw-events` 是 JSONL 的别名。重定向 stdout 时，连接信息始终是 JSON。`--no-color`、`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 会禁用 ANSI 颜色。主题、时间戳、折叠行数和 TOML 配置见[日志与显示说明](logging.md)。
+`--log-format pretty-verbose` 展开脱敏后的详细元数据，`--log-format jsonl` 输出脱敏事件 JSON；`--verbose` 是详细事件的别名，`--raw` 与 `--raw-events` 是 JSONL 的别名。重定向 stdout 时，连接信息始终是 JSON。`--no-color`、`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 会禁用 ANSI 颜色。这些配色设置不影响真实终端的交互式 PTY 字节透传。后台 stdout/stderr 按任务和流实时显示，读取历史 `wait/read` 结果不再重复打印正文。默认 pretty 使用短任务号和相对工作区路径，折叠内联脚本与 JSON stdout；完整值保留在事件和输出中。`[ui] activity_interval_secs = 5` 控制静默活动提示，设为 0 只关闭周期提示；只有原生事件提供真实总量时才显示百分比。主题、时间戳、折叠行数和 TOML 配置见[日志与显示说明](logging.md)。
 
 ```sh
 ssmcp --title "检查构建与测试" --allow octocat@github my-ssmcp
@@ -407,10 +409,12 @@ ssmcp --log-format jsonl --allow octocat@github my-ssmcp
 NO_COLOR=1 ssmcp --allow octocat@github my-ssmcp
 ```
 
-更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接的命令任务、原生服务和转发；在途调用会导致 busy 拒绝。[重载协议与回归测试](../tests/client_reload.rs)
+更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../tests/client_reload.rs)
 
 GitHub 授权在仍有效、且新连接允许同一身份时继续可用。登录码授权绑定旧连接，重载断线后需要新登录码和新 OAuth 授权。调用方应按实际授权方式处理重连，避免把“程序已更新”或“重载已接收”报告为“新版本已经在线”。[重载完整说明](backends.md#9-更新后的客户端重载)
 
+
+成功文件读写和可查询 Diff 来自原生操作完成后的证据；敏感、二进制或无法取得的快照明确标为未知。技能发现、正文读取和实际调用分别记录，Harness 外部副作用不作完整审计承诺。完整事件范围见[文件与技能审计](backends.md#文件与技能审计)。
 
 ## 会话标题与输出保留
 
@@ -422,4 +426,4 @@ ssmcp --name dev --title "修复构建并准备发布" --allow octocat@github my
 
 重载只会重新启动原入口，不会下载更新或选择另一安装目录。Windows 手动按版本目录安装时，切换版本需停止旧进程并从新目录启动；使用安装器更新同一入口后，才可按上述重载流程接管。
 
-长输出超过 32 KiB 或 500 行时会按来源转储，调用方获得转储 ID、客户端路径、SHA-256、字节数和行数，再用 `outputs.read` 分块读取。Unix 的默认目录是 `/tmp/ssmcp/<uid>`，Windows 是用户临时目录下的 `ssmcp`；该路径不属于 MCP 服务器或调用方沙箱。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，运行期间每 60 秒清理一次。活动文件被跳过；达到单文件上限或发生写入错误时，应检查 `complete` 与 `error`，不能假定已保存完整输出。[输出实现](../src/output.rs) · [读取与清理](session-control.md#按需读取正文)
+长输出超过 32 KiB 或 500 行时会按来源转储，调用方获得转储 ID、客户端路径、SHA-256、字节数和行数，再用 `outputs.read` 分块读取。Unix 的默认目录是 `/tmp/ssmcp/<uid>`，Windows 默认是 `%LOCALAPPDATA%\ssmcp\output`，无该变量时使用用户临时目录下的 `ssmcp/output`；该路径属于目标客户端；文件仍按连接归属校验，其他客户端不能读取。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，运行期间每 60 秒清理一次。活动文件被跳过；达到单文件上限或发生写入错误时，应检查 `complete` 与 `error`，不能假定已保存完整输出。[输出实现](../src/output.rs) · [读取与清理](session-control.md#按需读取正文)

@@ -174,6 +174,7 @@ impl Root {
 
     pub(super) fn write_bytes(
         &self,
+        tool: &str,
         path: &str,
         data: &[u8],
         overwrite: bool,
@@ -189,6 +190,7 @@ impl Root {
         let _guard = lock_writes()?;
         let parent = self.directory(parents, create_parents)?;
         let mut permissions = None;
+        let mut before = audit::Snapshot::Missing;
         match open_file(&parent, name) {
             Ok(mut existing) => {
                 let metadata = regular_metadata(&existing)?;
@@ -196,14 +198,20 @@ impl Root {
                     return Err("file already exists; use overwrite=true".into());
                 }
                 permissions = Some(metadata.permissions());
-                if let Some(expected) = expected_sha256 {
-                    check_hash(expected, &sha256(&whole_file(&mut existing)?))?;
-                }
+                before = if let Some(expected) = expected_sha256 {
+                    let bytes = whole_file(&mut existing)?;
+                    check_hash(expected, &sha256(&bytes))?;
+                    audit::Snapshot::from_bytes(path, &bytes)
+                } else {
+                    audit::Snapshot::from_file(path, &mut existing)
+                };
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound && expected_sha256.is_none() => {}
             Err(e) => return Err(error(e)),
         }
-        publish(&parent, name, data, overwrite, permissions)
+        publish(&parent, name, data, overwrite, permissions)?;
+        self.audit.written(tool, path, before, data);
+        Ok(())
     }
 
     pub(super) fn edit_text(&self, args: TextEditArgs) -> Result<Value, String> {
@@ -254,6 +262,12 @@ impl Root {
             true,
             Some(permissions),
         )?;
+        self.audit.written(
+            "ssmcp.fs.edit_text",
+            &args.path,
+            audit::Snapshot::from_bytes(&args.path, &bytes),
+            replacement.as_bytes(),
+        );
         Ok(
             json!({"path":args.path,"written":replacement.len(),"replacements":1,
             "sha256":sha256(replacement.as_bytes()),"previous_sha256":previous_sha256}),

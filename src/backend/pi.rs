@@ -2,10 +2,13 @@
 //!
 //! Protocol reference (Pi 1.5.2):
 //! <https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc-commands.md>
-//! The generic `pi.rpc` tool also forwards commands added by later Pi releases.
+//! Only the negotiated JSONL control transport is registered. Pi does not expose
+//! native model/plugin/MCP tool schemas through this interface; `get_commands`
+//! lists slash commands, skills and templates, not a model-tool catalog.
 
 use std::{ffi::OsStr, ffi::OsString, sync::Arc};
 
+use crate::output::OutputStore;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
@@ -16,16 +19,81 @@ use super::{
 
 pub struct Pi {
     peer: Arc<Peer>,
+    transport: &'static str,
 }
 
 impl Pi {
     pub async fn start(program: &OsStr, args: &[OsString]) -> crate::Result<Arc<Self>> {
+        Self::start_with_output(program, args, OutputStore::global()?).await
+    }
+
+    pub async fn start_with_output(
+        program: &OsStr,
+        args: &[OsString],
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        // Explicitly controlled adapter launches preserve native extensions.
+        // Automatic discovery must use start_discovered_with_output instead:
+        // offline prevents native installs but cannot constrain user hooks.
         let mut command = Command::new(program);
-        command.args(["--mode", "rpc"]).args(args);
-        let peer = Peer::spawn(command, "pi", Dialect::Pi).await?;
-        let ready = peer.request("get_state", json!({})).await;
+        command
+            .args(["--mode", "rpc", "--offline"])
+            .args(args)
+            .env("PI_OFFLINE", "1");
+        let peer = Peer::spawn_with_output(command, "pi", Dialect::Pi, output).await?;
+        Self::handshake(peer, "owned_stdio").await
+    }
+
+    /// Backend verifies the installed executable and version before this entry.
+    /// The operator's socket must forward an already initialized native RPC
+    /// session; starting Pi on accept/connect does not meet this contract.
+    pub async fn start_discovered_with_output(
+        _program: &OsStr,
+        args: &[OsString],
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        if !args.is_empty() {
+            return Err("Pi automatic discovery does not accept process launch arguments".into());
+        }
+        let socket = std::env::var_os("SSMCP_PI_RPC_SOCKET")
+            .filter(|path| !path.is_empty())
+            .ok_or("Pi automatic launch is unavailable: native RPC runs user extension session_start hooks before its first reply. Disabling those extensions could bypass approval. Set SSMCP_PI_RPC_SOCKET only for an already initialized native RPC session; ssmcp will not launch Pi or dependencies.")?;
+        #[cfg(unix)]
+        {
+            Self::attach_with_output(std::path::Path::new(&socket), output).await
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (socket, output);
+            Err("Pi existing-session attach currently requires a private local Unix socket".into())
+        }
+    }
+
+    #[cfg(unix)]
+    pub async fn attach_with_output(
+        path: &std::path::Path,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let peer = Peer::connect_unix_with_output(path, "pi", Dialect::Pi, output).await?;
+        Self::handshake(peer, "existing_unix_socket").await
+    }
+
+    async fn handshake(peer: Arc<Peer>, transport: &'static str) -> crate::Result<Arc<Self>> {
+        let ready = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            peer.request("get_state", json!({})),
+        )
+        .await
+        .map_err(|_| "Pi native get_state handshake timed out".to_owned())
+        .and_then(|result| result);
         let error = match ready {
-            Ok(response) if response["success"] == true => None,
+            Ok(response)
+                if response["success"] == true
+                    && response["command"] == "get_state"
+                    && response["data"].is_object() =>
+            {
+                None
+            }
             Ok(response) => Some(format!(
                 "Pi rejected the startup get_state request: {}",
                 response["error"].as_str().unwrap_or("invalid response")
@@ -36,11 +104,29 @@ impl Pi {
             peer.shutdown().await;
             return Err(error.into());
         }
-        Ok(Arc::new(Self { peer }))
+        Ok(Arc::new(Self { peer, transport }))
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
+        if self.peer.pending().await["connected"] != true {
+            return Err("Pi native process disconnected".into());
+        }
         Ok(tool_catalog())
+    }
+
+    pub async fn diagnostics(&self) -> Value {
+        let connected = self.peer.pending().await["connected"] == true;
+        json!({
+            "status":if connected {"ready"} else {"unavailable"},
+            "reason":if connected {None} else {Some("Pi native process disconnected")},
+            "tools":if connected {4} else {0},
+            "connected":connected,
+            "transport":self.transport,
+            "automaticLaunch":"unavailable; native startup extensions can execute before the first RPC reply",
+            "existingSessionContract":"The operator supplies an already initialized native JSONL session; connecting must not launch Pi. ssmcp neither disables extensions nor answers approvals automatically.",
+            "scope":"Pi JSONL control protocol, negotiated with get_state. Native model, plugin and MCP tool schemas are not enumerable through this interface.",
+            "nativeToolEnumeration":"unavailable"
+        })
     }
 
     pub async fn call(&self, name: &str, arguments: Value) -> Result<Value, String> {
@@ -68,9 +154,9 @@ impl Pi {
     }
 }
 
-/// Name, description, and whether the native command only reads session state.
-/// Keep the names independent of the schemas so an unknown command can still be
-/// sent explicitly through `pi.rpc` when the installed CLI is newer than ssmcp.
+/// Known control-protocol aliases for direct driver callers. This reference
+/// table is not capability discovery and is never published as a tool catalog.
+/// Future commands can be forwarded without a copied schema through `pi.rpc`.
 const COMMANDS: &[(&str, &str, bool)] = &[
     (
         "prompt",
@@ -235,101 +321,11 @@ const COMMANDS: &[(&str, &str, bool)] = &[
     ),
 ];
 
-fn native_schema(command: &str) -> Value {
-    let (properties, required): (Value, &[&str]) = match command {
-        "prompt" => (
-            json!({
-                "message": {"type":"string"},
-                "images": image_schema(),
-                "streamingBehavior": {"type":"string","enum":["steer","followUp"]}
-            }),
-            &["message"],
-        ),
-        "steer" | "follow_up" => (
-            json!({"message":{"type":"string"},"images":image_schema()}),
-            &["message"],
-        ),
-        "new_session" => (
-            json!({"parentSession":{"type":"string","description":"Optional parent session file path."}}),
-            &[],
-        ),
-        "set_model" => (
-            json!({"provider":{"type":"string"},"modelId":{"type":"string"}}),
-            &["provider", "modelId"],
-        ),
-        "set_thinking_level" => (
-            json!({"level":{"type":"string","enum":["off","minimal","low","medium","high","xhigh","max"]}}),
-            &["level"],
-        ),
-        "set_steering_mode" | "set_follow_up_mode" => (
-            json!({"mode":{"type":"string","enum":["all","one-at-a-time"]}}),
-            &["mode"],
-        ),
-        "compact" => (json!({"customInstructions":{"type":"string"}}), &[]),
-        "set_auto_compaction" | "set_auto_retry" => {
-            (json!({"enabled":{"type":"boolean"}}), &["enabled"])
-        }
-        "bash" => (
-            json!({
-                "command":{"type":"string"},
-                "excludeFromContext":{"type":"boolean","default":false}
-            }),
-            &["command"],
-        ),
-        "export_html" => (json!({"outputPath":{"type":"string"}}), &[]),
-        "switch_session" => (json!({"sessionPath":{"type":"string"}}), &["sessionPath"]),
-        "fork" => (json!({"entryId":{"type":"string"}}), &["entryId"]),
-        "get_entries" => (
-            json!({"since":{"type":"string","description":"Return entries after this entry ID."}}),
-            &[],
-        ),
-        "set_session_name" => (json!({"name":{"type":"string"}}), &["name"]),
-        _ => (json!({}), &[]),
-    };
-    json!({
-        "type":"object",
-        "properties":properties,
-        "required":required,
-        "additionalProperties":true
-    })
-}
-
-fn image_schema() -> Value {
-    json!({
-        "type":"array",
-        "items":{
-            "type":"object",
-            "properties":{
-                "type":{"type":"string","const":"image"},
-                "data":{"type":"string","description":"Base64-encoded image data."},
-                "mimeType":{"type":"string"}
-            },
-            "required":["type","data","mimeType"],
-            "additionalProperties":true
-        }
-    })
-}
-
 fn tool_catalog() -> Vec<Value> {
-    let mut tools: Vec<Value> = COMMANDS
-        .iter()
-        .map(|(command, description, read_only)| {
-            json!({
-                "name":format!("pi.{command}"),
-                "description":description,
-                "inputSchema":native_schema(command),
-                "annotations":{
-                    "readOnlyHint":read_only,
-                    "destructiveHint":!read_only,
-                    "openWorldHint":!read_only
-                }
-            })
-        })
-        .collect();
-    tools.extend([
+    vec![
         json!({
             "name":"pi.rpc",
-            "description":"Send any command supported by the installed Pi JSONL protocol, including commands introduced after ssmcp. type is the native command name; args contains its fields. ssmcp assigns correlation IDs. For extension dialog replies use ssmcp.pi.respond. Preserve the native response and inspect success; prompt acceptance does not mean agent completion.",
+            "description":"ssmcp wrapper for the installed Pi JSONL control protocol after a successful get_state handshake. type is the native command name; args contains its unchanged fields. This wrapper does not enumerate model, plugin or MCP tools and does not claim per-command schemas. The installed Pi decides which commands are supported. For pending extension dialogs use ssmcp.pi.respond. Inspect the native success field; accepting a prompt is not completion.",
             "inputSchema":{
                 "type":"object",
                 "properties":{
@@ -378,8 +374,7 @@ fn tool_catalog() -> Vec<Value> {
             },
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"openWorldHint":true}
         }),
-    ]);
-    tools
+    ]
 }
 
 fn request_for(name: &str, arguments: Value) -> Result<(String, Value), String> {
@@ -424,33 +419,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_covers_native_control_commands_and_keeps_parameters_extensible() {
+    fn catalog_only_publishes_control_transport_and_observation_wrappers() {
         let tools = tool_catalog();
-        assert_eq!(COMMANDS.len(), 33);
-        assert_eq!(tools.len(), 37);
         let names: HashSet<&str> = tools
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), tools.len());
+        assert_eq!(
+            names,
+            HashSet::from([
+                "pi.rpc",
+                "ssmcp.pi.events",
+                "ssmcp.pi.requests",
+                "ssmcp.pi.respond",
+            ])
+        );
         for (command, _, _) in COMMANDS {
-            let name = format!("pi.{command}");
-            let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
-            assert_eq!(tool["inputSchema"]["type"], "object");
-            assert_eq!(tool["inputSchema"]["additionalProperties"], true);
-            for required in tool["inputSchema"]["required"].as_array().unwrap() {
-                assert!(
-                    tool["inputSchema"]["properties"]
-                        .get(required.as_str().unwrap())
-                        .is_some()
-                );
-            }
+            assert!(
+                !names.contains(format!("pi.{command}").as_str()),
+                "a remembered command is not a discovered native tool"
+            );
         }
-        assert!(names.contains("pi.clone"));
-        assert!(names.contains("pi.get_entries"));
-        assert!(names.contains("pi.get_tree"));
-        assert!(names.contains("pi.get_commands"));
-        assert!(names.contains("ssmcp.pi.respond"));
+        let rpc = tools.iter().find(|tool| tool["name"] == "pi.rpc").unwrap();
+        assert_eq!(
+            rpc["inputSchema"]["properties"]["args"]["additionalProperties"],
+            true
+        );
+        assert!(
+            rpc["description"]
+                .as_str()
+                .unwrap()
+                .contains("does not enumerate")
+        );
     }
 
     #[test]

@@ -56,6 +56,7 @@ struct Root {
     directory: File,
     #[cfg(not(target_os = "linux"))]
     directory: cap_std::fs::Dir,
+    audit: audit::FileAudit,
 }
 struct Listener {
     socket: TcpListener,
@@ -112,6 +113,13 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(root: PathBuf) -> Result<Self, String> {
+        Self::with_output(root, crate::output::OutputStore::global()?)
+    }
+
+    pub fn with_output(
+        root: PathBuf,
+        output: Arc<crate::output::OutputStore>,
+    ) -> Result<Self, String> {
         let path = root.canonicalize().map_err(error)?;
         #[cfg(target_os = "linux")]
         let directory = OpenOptions::new()
@@ -122,9 +130,14 @@ impl Workspace {
         #[cfg(not(target_os = "linux"))]
         let directory = cap_std::fs::Dir::open_ambient_dir(&path, cap_std::ambient_authority())
             .map_err(error)?;
+        let events = crate::backend::events::EventLog::with_output("workspace", output.clone());
         Ok(Self {
-            root: Arc::new(Root { path, directory }),
-            events: crate::backend::events::EventLog::new("workspace"),
+            root: Arc::new(Root {
+                path,
+                directory,
+                audit: audit::FileAudit::new(events.clone(), output),
+            }),
+            events,
             handles: StdMutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(MAX_HANDLES)),
             nonce: random_id().map_err(error)?,
@@ -259,7 +272,7 @@ impl Workspace {
         ];
         tools.push(tool(
             "ssmcp.fs.events",
-            "Read bounded file access and edit audit events, including diff previews for successful writes.",
+            "Read successful native file access/write audit events and complete inline diffs or output artifact references. Unknown/binary/sensitive snapshots have null line counts; external file effects are not inferred.",
             crate::backend::events::schema()["properties"].clone(),
             &[],
             true,
@@ -279,13 +292,10 @@ impl Workspace {
         }
         if name.starts_with("ssmcp.fs.") {
             let root = self.root.clone();
-            let events = self.events.clone();
             let name = name.to_owned();
-            return tokio::task::spawn_blocking(move || {
-                root.perform_audited(&name, arguments, &events)
-            })
-            .await
-            .map_err(|e| e.to_string())?;
+            return tokio::task::spawn_blocking(move || root.perform_audited(&name, arguments))
+                .await
+                .map_err(|e| e.to_string())?;
         }
         match name {
             "ssmcp.net.listen" => self.listen(parse(arguments)?).await,
@@ -589,7 +599,14 @@ impl Root {
 
     fn write(&self, args: FileWriteArgs) -> Result<Value, String> {
         let data = decode(&args.data_base64, MAX_FILE_BYTES)?;
-        self.write_bytes(&args.path, &data, args.overwrite, args.create_parents, None)?;
+        self.write_bytes(
+            "ssmcp.fs.write",
+            &args.path,
+            &data,
+            args.overwrite,
+            args.create_parents,
+            None,
+        )?;
         Ok(json!({"path":args.path,"written":data.len()}))
     }
 
@@ -598,6 +615,7 @@ impl Root {
             return Err(format!("text exceeds {MAX_FILE_BYTES} UTF-8 bytes"));
         }
         self.write_bytes(
+            "ssmcp.fs.write_text",
             &args.path,
             args.text.as_bytes(),
             args.overwrite,
@@ -731,6 +749,7 @@ impl Root {
 
     fn write_bytes(
         &self,
+        tool: &str,
         path: &str,
         data: &[u8],
         overwrite: bool,
@@ -745,21 +764,27 @@ impl Root {
         let (name, parents) = parts.split_last().ok_or("write requires a file path")?;
         let parent = locked_directory(&self.directory(parents, create_parents)?)?;
         let mut mode = 0o600;
+        let mut before = audit::Snapshot::Missing;
         if overwrite {
             match open_at(&parent, name, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
                 Ok(mut existing) => {
                     mode = regular_metadata(&existing)?.mode() & 0o777;
-                    if let Some(expected) = expected_sha256 {
+                    before = if let Some(expected) = expected_sha256 {
                         let bytes = whole_file(&mut existing)?;
                         check_hash(expected, &sha256(&bytes))?;
-                    }
+                        audit::Snapshot::from_bytes(path, &bytes)
+                    } else {
+                        audit::Snapshot::from_file(path, &mut existing)
+                    };
                 }
                 Err(error)
                     if error.kind() == io::ErrorKind::NotFound && expected_sha256.is_none() => {}
                 Err(error) => return Err(error.to_string()),
             }
         }
-        atomic_write(&parent, name, data, overwrite, mode)
+        atomic_write(&parent, name, data, overwrite, mode)?;
+        self.audit.written(tool, path, before, data);
+        Ok(())
     }
 
     fn edit_text(&self, args: TextEditArgs) -> Result<Value, String> {
@@ -804,6 +829,12 @@ impl Root {
         replacement.push_str(&args.new_text);
         replacement.push_str(&text[index + args.old_text.len()..]);
         atomic_write(&parent, name, replacement.as_bytes(), true, mode)?;
+        self.audit.written(
+            "ssmcp.fs.edit_text",
+            &args.path,
+            audit::Snapshot::from_bytes(&args.path, &bytes),
+            replacement.as_bytes(),
+        );
         Ok(json!({
             "path":args.path,"written":replacement.len(),"replacements":1,
             "sha256":sha256(replacement.as_bytes()),"previous_sha256":previous_sha256

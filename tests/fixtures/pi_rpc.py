@@ -44,7 +44,8 @@ for line in sys.stdin.buffer:
 
     calls += 1
     if kind == "get_state":
-        response(command, {"pid": os.getpid(), "calls": calls, "answers": answers})
+        response(command, {"pid": os.getpid(), "calls": calls, "answers": answers,
+                           "pi_offline": os.environ.get("PI_OFFLINE"), "startup_args": sys.argv[1:]})
     elif kind == "bash":
         held = command
         emit({"type": "bash_execution_update", "id": command["id"], "delta": "first\nsecond\u2028line\u2029\n"})

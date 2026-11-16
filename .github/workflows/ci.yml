@@ -85,7 +85,7 @@ jobs:
             "${restrictions[@]}" \
             /usr/local/bin/ssmcp-runtime-test \
             --exact code_mode::tests::real_system_runtime_uses_mandatory_os_isolation --ignored --nocapture
-      - run: cargo build --locked
+      - run: cargo build --locked --bins --example vt_snapshot
       - name: Preserve DCR through a real daemon restart
         run: python3 scripts/test_registry_restart.py --bin-dir target/debug
       - name: Exercise real SSH, OAuth, HTTP and PTY
@@ -94,6 +94,20 @@ jobs:
         run: python3 scripts/e2e_session_features.py --bin-dir target/debug
       - name: Exercise discovered harness fixtures through SSH and OAuth
         run: python3 scripts/e2e_agents.py --bin-dir target/debug
+      - name: Exercise unified execution, audit and connection isolation
+        run: python3 scripts/e2e_unified.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-unified-report.json" --revision "$(git rev-parse HEAD)"
+      - name: Exercise terminal dashboard and Git observer through a real PTY
+        run: python3 scripts/e2e_dashboard.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-dashboard-report.json"
+      - name: Save unified acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unified-acceptance-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/ssmcp-unified-report*
+            ${{ runner.temp }}/ssmcp-dashboard-report*
+          if-no-files-found: warn
+          retention-days: 14
       - run: cargo build --locked --release
       - name: Check staged Linux installation
         run: |

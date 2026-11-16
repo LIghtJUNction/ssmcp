@@ -101,24 +101,26 @@ impl Restart {
         Ok(acknowledgement(client_id, github_auth))
     }
 
-    pub(crate) fn execute(&self) -> crate::Result<()> {
+    pub(crate) fn execute(
+        &self,
+        output: std::sync::Arc<crate::output::OutputStore>,
+    ) -> crate::Result<()> {
         validate_executable(&self.program)?;
+        let mut command = std::process::Command::new(&self.program);
+        command.args(&self.arguments).current_dir(&self.cwd);
+        let _resume = output.prepare_reload(&mut command)?;
         #[cfg(windows)]
         {
             // Windows has no exec. All old backends have already stopped; keep
             // the original foreground invocation alive while its replacement
             // inherits the console, pipes, environment, arguments, and cwd.
             // Returning immediately would let the calling shell reuse stdin.
-            let status = std::process::Command::new(&self.program)
-                .args(&self.arguments)
-                .current_dir(&self.cwd)
-                .status()
-                .map_err(|error| {
-                    format!(
-                        "could not reload client from {}: {error}",
-                        self.program.display()
-                    )
-                })?;
+            let status = command.status().map_err(|error| {
+                format!(
+                    "could not reload client from {}: {error}",
+                    self.program.display()
+                )
+            })?;
             if status.success() {
                 Ok(())
             } else {
@@ -127,10 +129,7 @@ impl Restart {
         }
         #[cfg(unix)]
         {
-            let error = std::process::Command::new(&self.program)
-                .args(&self.arguments)
-                .current_dir(&self.cwd)
-                .exec();
+            let error = command.exec();
             Err(format!(
                 "could not reload client from {}: {error}",
                 self.program.display()

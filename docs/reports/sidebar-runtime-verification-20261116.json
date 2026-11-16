@@ -1,0 +1,124 @@
+{
+  "status": "read_only_verification_complete",
+  "observed_at_utc": "2026-11-16T14:08:59Z",
+  "client_id": "ff67e8de89fe455d4cac9e393dd6741d1b54d09e61734b57e4a410134c44c031",
+  "client_name": "ssmcp-visible-work",
+  "running_client": {
+    "pid": 447294,
+    "binary_sha256": "c6029bb5436dc0e128c1bf274b0f846ef1d220db9fce99043217708c42babae9",
+    "image_bytes": 65418912,
+    "image_device": 68,
+    "image_inode": 178054221,
+    "exe_symlink": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/build/debug/ssmcp",
+    "identification": "matching ancestor with >1 thread and direct SSH child; skipped inherited exec supervisor",
+    "version_exit_code": 0,
+    "version": "ssmcp 0.6.0",
+    "version_stderr_bytes": 0
+  },
+  "identity_evidence": [
+    {
+      "pid": 451421,
+      "ppid": 451420,
+      "comm": "python3",
+      "threads": 1,
+      "client_name": null
+    },
+    {
+      "pid": 451420,
+      "ppid": 447294,
+      "comm": "ssmcp",
+      "threads": 1,
+      "client_name": "ssmcp-visible-work",
+      "direct_ssh_children": []
+    },
+    {
+      "pid": 447294,
+      "ppid": 13904,
+      "comm": "ssmcp",
+      "threads": 5,
+      "client_name": "ssmcp-visible-work",
+      "direct_ssh_children": [
+        {
+          "pid": 447296,
+          "comm": "ssh"
+        }
+      ]
+    }
+  ],
+  "identity_note": "The one-threaded inherited exec supervisor is excluded. The matching multi-threaded ancestor directly owns the SSH child.",
+  "protocol_verification_scope": {
+    "earlier_real_codex_evidence": "native-validation-20261116-summary.json",
+    "earlier_running_binary_sha256": "f4f64248fa447e1cb40e8e76636a6467a0a24d4d28cae5422e999d80ad6b8e4d",
+    "current_sidebar_image_independently_identified": true,
+    "repeated_catalog_discovery": false,
+    "repeated_doctor_call": false,
+    "repeated_model_requests": 0,
+    "note": "The earlier real Codex enumeration/call evidence belongs to its recorded running image. This review identifies the later sidebar image and does not label the old protocol run as a new run on this image."
+  },
+  "approval_evidence": {
+    "real_readonly_doctor": {
+      "pending_before": 0,
+      "pending_after": 0,
+      "responses_sent": 0,
+      "conclusion": "The selected readonly call produced no approval request. This is not a test of a real approval-required call."
+    },
+    "current_source_review": {
+      "source": "tests/codex_backend.rs",
+      "fixture": "tests/fixtures/codex_rpc.py",
+      "fixture_sha256": "3d2e66001f9beaf4619c0bf73d32d6ecbdbbfcd96b0a933b6c0282cb0190df69",
+      "cases": [
+        {
+          "name": "native_approvals_are_visible_and_require_an_explicit_response",
+          "assertions": [
+            "pending native command approval retains the complete request payload",
+            "no answer is sent before explicit response",
+            "unknown IDs and response containing both result and error are rejected",
+            "explicit decline is forwarded unchanged",
+            "resolved approval is removed and cannot be answered again"
+          ]
+        },
+        {
+          "name": "native_cancellation_removes_stale_approval_requests",
+          "assertions": [
+            "native cancellation removes pending approval",
+            "a stale response is rejected"
+          ]
+        },
+        {
+          "name": "mcp_approval_is_forwarded_without_auto_answer_or_blocking_refresh",
+          "assertions": [
+            "native MCP elicitation keeps the tool call pending",
+            "no automatic answer is sent",
+            "catalog refresh remains usable while approval is pending",
+            "pending request retains complete requestedSchema and parameters",
+            "explicit decline is forwarded",
+            "original native isError, structured approval result and image content survive",
+            "pending request is cleared after resolution",
+            "fixture model request count remains zero"
+          ]
+        }
+      ],
+      "newly_executed_in_this_review": false,
+      "boundary": "Fixture assertions exercise protocol behavior; they do not establish approval-required behavior of the installed live Codex/MCP configuration."
+    },
+    "recorded_transport_run": {
+      "report": "target/acceptance/native-20261116T123356Z-08c2423f/agents-20261116T124816Z-0a22fd27.json",
+      "observed_status": "passed",
+      "transport": "real OpenSSH public-key + OAuth Authorization Code/S256 + HTTP MCP",
+      "backend": "deterministic Codex App Server fixture",
+      "observed_checks": [
+        "native approval remains unanswered until an explicit reply",
+        "explicit decline and native turn completion round-trip"
+      ],
+      "model_calls": false,
+      "newly_executed_in_this_review": false
+    }
+  },
+  "network_evidence": {
+    "worktree_path": "docs/reports/ssh-connectivity-20261116-sanitized.json",
+    "bytes": 8812,
+    "sha256": "5e7873466a8fe60a48acad505ba67f73d5636d012adce95e9fe1b2ab113b48bb",
+    "verified_by_complete_readback": true,
+    "note": "14:05:29 UTC banner receive timed out; 14:06:15 UTC a later connection received the SSH banner. Intermittency is observed; its cause remains unproved. No configuration or service was changed."
+  }
+}

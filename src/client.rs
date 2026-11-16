@@ -1,6 +1,10 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
+mod git_status;
+mod input;
+mod panel;
 pub(crate) mod reload;
 pub(crate) mod render;
+pub(crate) mod terminal;
 mod ui;
 
 use crate::{
@@ -218,6 +222,16 @@ impl Options {
                 Some("-V" | "--version") => {
                     println!("ssmcp {}", env!("CARGO_PKG_VERSION"));
                     return Ok(None);
+                }
+                Some("-t" | "--type" | "--backend") => {
+                    return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; installed harnesses are discovered automatically".into());
+                }
+                Some(value)
+                    if value.starts_with("--type=")
+                        || value.starts_with("--backend=")
+                        || value.starts_with("-t=") =>
+                {
+                    return Err("harness selection was removed; remove -t/--type/--backend; installed harnesses are discovered automatically".into());
                 }
                 Some("--name") => {
                     name = Some(
@@ -487,7 +501,7 @@ pub async fn run() -> crate::Result<()> {
     }
     ui.timestamps |= options.timestamps;
     ui.color &= !options.no_color;
-    render::configure(ui);
+    render::configure(ui.clone());
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
     if options.list_tools {
@@ -496,13 +510,19 @@ pub async fn run() -> crate::Result<()> {
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
-        let backend = Runtime::with_context_roots(
-            backend,
+        let backend = match Runtime::with_context_roots(
+            backend.clone(),
             std::env::current_dir()?,
             options.context_roots.clone(),
-        )?;
+        ) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                backend.shutdown().await;
+                return Err(error.into());
+            }
+        };
         let tools = tokio::select! {
-            result = timeout(Duration::from_secs(120),backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
+            result = timeout(Duration::from_secs(120),async { backend.wait_discovery().await; backend.tools().await }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
             _ = interrupt.recv() => { backend.shutdown().await; return Ok(()); },
             _ = terminate.recv() => { backend.shutdown().await; return Ok(()); },
         };
@@ -512,6 +532,14 @@ pub async fn run() -> crate::Result<()> {
     }
     let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
+    render::status(
+        "ssh",
+        "Progress",
+        &format!(
+            "Connecting to {} with OpenSSH",
+            options.destination.as_deref().unwrap_or("configured host")
+        ),
+    );
     let mut ssh = options
         .command()
         .spawn()
@@ -565,6 +593,17 @@ pub async fn run() -> crate::Result<()> {
         return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
     }
     let login_received_at = std::time::Instant::now();
+    let display_session = match terminal::Session::start(&ui) {
+        Ok(session) => session,
+        Err(error) => {
+            render::status(
+                "display",
+                "Warning",
+                &format!("Dashboard unavailable: {error}"),
+            );
+            None
+        }
+    };
     let mut incoming = Incoming::start(reader);
     render::status(
         "shell",
@@ -579,13 +618,21 @@ pub async fn run() -> crate::Result<()> {
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
         result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
     };
-    let backend = Runtime::with_context_roots(
-        backend,
+    let backend = match Runtime::with_context_roots(
+        backend.clone(),
         PathBuf::from(&metadata.cwd),
         options.context_roots.clone(),
-    )?;
-    // Discover before publishing credentials; optional native catalogs have
-    // their own deadlines and leave the shell available when unavailable.
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = ssh.start_kill();
+            backend.shutdown().await;
+            incoming.stop().await;
+            let _ = ssh.wait().await;
+            return Err(error.into());
+        }
+    };
+    // Core tools are ready immediately; optional providers continue discovery independently.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
@@ -637,23 +684,45 @@ pub async fn run() -> crate::Result<()> {
             "Enter login_code on the MCP OAuth page. Ctrl-C disconnects and revokes access."
         },
     );
+    let local_input = match input::Input::attach(backend.terminal()) {
+        Ok(input) => input,
+        Err(error) => {
+            let _ = ssh.start_kill();
+            backend.shutdown().await;
+            incoming.stop().await;
+            let _ = ssh.wait().await;
+            return Err(error.into());
+        }
+    };
+    let git_status = display_session
+        .as_ref()
+        .map(|_| git_status::GitStatus::start(PathBuf::from(&metadata.cwd)));
+    let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
+    ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
-    let mut requests: JoinSet<io::Result<()>> = JoinSet::new();
+    let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
     let mut reload_requested = false;
     let result: crate::Result<()> = 'connected: loop {
         tokio::select! {
+            _ = ui_updates.tick(), if git_status.is_some() => {
+                if let Some(observer) = &git_status {
+                    render::set_git_status(observer.snapshot());
+                }
+            },
             frame = incoming.frames.recv() => match frame {
                 Some(Ok(Some(Frame::Call {id,operation}))) => {
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
-                            Ok(Ok(())) => {},
+                            Ok(Ok(was_tool)) => {
+                                if was_tool && let Some(observer) = &git_status { observer.refresh(); }
+                            },
                             Ok(Err(error)) => break 'connected Err(error.into()),
                             Err(error) => break 'connected Err(error.into()),
                         }
                     }
                     if reload::is_reload(&operation) {
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
-                        let response = restart.accept(arguments, requests.len(), &client_id, github_auth);
+                        let response = backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth));
                         let accepted = response.is_ok();
                         let sent = timeout(Duration::from_secs(10), async {
                             let mut writer = writer.lock().await;
@@ -699,6 +768,7 @@ pub async fn run() -> crate::Result<()> {
                     let backend = backend.clone();
                     let writer = writer.clone();
                     requests.spawn(async move {
+                        let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
                         let mut result = backend.perform(operation).await;
                         // A large native response must not corrupt/disconnect the SSH stream.
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
@@ -708,7 +778,8 @@ pub async fn run() -> crate::Result<()> {
                         timeout(Duration::from_secs(10),async {
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer,&Frame::Reply {id,result}).await
-                        }).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut,"SSH write timed out"))?
+                        }).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut,"SSH write timed out"))??;
+                        Ok(was_tool)
                     });
                 }
                 Some(Ok(None)) | None => break Ok(()),
@@ -717,7 +788,9 @@ pub async fn run() -> crate::Result<()> {
                 Some(Err(error)) => break Err(error.into()),
             },
             response = requests.join_next(), if !requests.is_empty() => match response {
-                Some(Ok(Ok(()))) => {},
+                Some(Ok(Ok(was_tool))) => {
+                    if was_tool && let Some(observer) = &git_status { observer.refresh(); }
+                },
                 Some(Ok(Err(error))) => break Err(error.into()),
                 Some(Err(error)) => break Err(error.into()),
                 None => {},
@@ -726,16 +799,23 @@ pub async fn run() -> crate::Result<()> {
             _ = terminate.recv() => break Ok(()),
         }
     };
+    if let Some(input) = local_input {
+        input.shutdown().await;
+    }
     requests.abort_all();
     while requests.join_next().await.is_some() {}
+    if let Some(observer) = git_status {
+        observer.shutdown().await;
+    }
     incoming.stop().await;
     drop(writer);
     let _ = ssh.start_kill();
     backend.shutdown().await;
     let _ = ssh.wait().await;
+    drop(display_session);
     render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {
-        return restart.execute();
+        return restart.execute(backend.output());
     }
     result
 }
@@ -1053,6 +1133,20 @@ mod tests {
         .unwrap();
         assert!(local.list_tools);
         assert_eq!(local.context_roots.len(), 1);
+        assert!(
+            Options::parse(
+                [
+                    "-t",
+                    "codex",
+                    "my-server",
+                    "--",
+                    "--context-root",
+                    "native-option"
+                ]
+                .map(OsString::from)
+            )
+            .is_err()
+        );
     }
 
     #[test]

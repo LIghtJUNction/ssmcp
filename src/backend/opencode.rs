@@ -1,5 +1,6 @@
-//! OpenCode v2's native HTTP API, discovered from the owned server's OpenAPI document.
+//! OpenCode v2 HTTP API, discovered from an owned or explicitly attached native server.
 use super::{events::EventLog, process::Managed, result};
+use crate::output::{Capture, INLINE_BYTES, OutputStore};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Method, Response, Url};
@@ -10,17 +11,17 @@ use std::{
     io,
     process::Stdio,
     sync::{
-        Arc, Mutex as StdMutex,
+        Arc, Mutex as StdMutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, BufReader},
     process::Command,
     sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
-    time::{sleep, timeout},
+    time::{Instant, sleep, timeout, timeout_at},
 };
 use tokio_tungstenite::{
     connect_async_with_config,
@@ -43,14 +44,22 @@ struct Operation {
     content_type: Option<String>,
 }
 
+struct NativeCatalog {
+    document: Value,
+    operations: BTreeMap<String, Operation>,
+    tools: Vec<Value>,
+}
+
 pub struct OpenCode {
     client: Client,
     base: Url,
     password: String,
     process: Mutex<Option<Managed>>,
-    document: Value,
-    operations: BTreeMap<String, Operation>,
-    catalog: Vec<Value>,
+    owned: bool,
+    observing: Mutex<()>,
+    snapshot: RwLock<Arc<NativeCatalog>>,
+    refresh: Mutex<()>,
+    output: Arc<OutputStore>,
     events: Arc<EventLog>,
     readers: StdMutex<Vec<JoinHandle<()>>>,
     streams: StdMutex<BTreeMap<u64, JoinHandle<()>>>,
@@ -61,6 +70,14 @@ pub struct OpenCode {
 
 impl OpenCode {
     pub async fn start(program: &OsStr, args: &[OsString]) -> crate::Result<Arc<Self>> {
+        Self::start_with_output(program, args, OutputStore::new_connection()?).await
+    }
+
+    pub async fn start_with_output(
+        program: &OsStr,
+        args: &[OsString],
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
         // These flags define the private transport, not user-facing agent configuration.
         for arg in args {
             if matches!(
@@ -73,8 +90,14 @@ impl OpenCode {
         let mut random = [0_u8; 32];
         crate::platform::random_bytes(&mut random)?;
         let password = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random);
-        let events = EventLog::new("opencode");
+        let events = EventLog::with_output("opencode", output.clone());
         let mut command = Command::new(program);
+        crate::program::configure(&mut command);
+        // Native v2 safeguards. Discovery must separately reject server versions
+        // whose startup can install plugins or resume autonomous model work.
+        command
+            .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
+            .env("OPENCODE_DISABLE_MODELS_FETCH", "1");
         command
             .arg("serve")
             .args(args)
@@ -121,35 +144,18 @@ impl OpenCode {
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
             .build()?;
-        let response = timeout(
-            Duration::from_secs(15),
-            client
-                .get(base.join("/openapi.json")?)
-                .basic_auth("opencode", Some(&password))
-                .send(),
-        )
-        .await
-        .map_err(|_| "OpenCode schema request timed out")??;
-        if !response.status().is_success() {
-            return Err(format!("OpenCode /openapi.json returned {}", response.status()).into());
-        }
-        let (bytes, truncated) = timeout(Duration::from_secs(15), read_bytes(response, SPEC_LIMIT))
-            .await
-            .map_err(|_| "OpenCode schema read timed out")??;
-        if truncated {
-            return Err("OpenCode schema exceeds 4 MiB".into());
-        }
-        let document: Value = serde_json::from_slice(&bytes)?;
-        let (operations, catalog) = catalog(&document)?;
+        let snapshot = Arc::new(fetch_catalog(&client, &base, &password).await?);
         let stdout_task = log_lines(stdout, events.clone(), password.clone(), "stdout");
         let backend = Arc::new(Self {
             client,
             base,
             password,
             process: Mutex::new(Some(process)),
-            document,
-            operations,
-            catalog,
+            owned: true,
+            observing: Mutex::new(()),
+            snapshot: RwLock::new(snapshot),
+            refresh: Mutex::new(()),
+            output,
             events,
             readers: StdMutex::new(vec![stderr_task, stdout_task]),
             streams: StdMutex::new(BTreeMap::new()),
@@ -169,14 +175,152 @@ impl OpenCode {
         backend.start_stream(0, response, "/api/event".into(), true)?;
         backend
             .events
-            .push(json!({"type":"ssmcp.ready","backend":"opencode","tools":backend.catalog.len()}));
+            .push(json!({"type":"ssmcp.ready","backend":"opencode","tools":backend.snapshot.read().unwrap().tools.len()}));
         Ok(backend)
     }
 
+    /// Attach only to an explicitly supplied, already running local native server.
+    /// Discovery does not start OpenCode, change its configuration, or open a project.
+    pub async fn attach_with_output(
+        endpoint: &str,
+        password: &str,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let base = private_url(endpoint)?;
+        if password.is_empty() || password.len() > 4096 {
+            return Err(
+                "OpenCode attach requires a nonempty native password of at most 4096 bytes".into(),
+            );
+        }
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .build()?;
+        let info = fetch_server_info(&client, &base, password).await?;
+        let snapshot = Arc::new(fetch_catalog(&client, &base, password).await?);
+        let events = EventLog::with_output("opencode", output.clone());
+        let backend = Arc::new(Self {
+            client,
+            base,
+            password: password.to_owned(),
+            process: Mutex::new(None),
+            owned: false,
+            observing: Mutex::new(()),
+            snapshot: RwLock::new(snapshot),
+            refresh: Mutex::new(()),
+            output,
+            events,
+            readers: StdMutex::new(Vec::new()),
+            streams: StdMutex::new(BTreeMap::new()),
+            sockets: StdMutex::new(BTreeMap::new()),
+            next_stream: AtomicU64::new(1),
+            closed: AtomicBool::new(false),
+        });
+        backend.events.push(json!({
+            "type":"ssmcp.ready","backend":"opencode","mode":"attached",
+            "version":info["version"],"tools":backend.snapshot.read().unwrap().tools.len(),
+            "observation":"native events open only after an explicit tool call"
+        }));
+        Ok(backend)
+    }
+
+    async fn observe_attached_call(&self) {
+        if self.owned {
+            return;
+        }
+        let _observing = self.observing.lock().await;
+        if self.closed.load(Ordering::Acquire)
+            || self
+                .streams
+                .lock()
+                .unwrap()
+                .get(&0)
+                .is_some_and(|task| !task.is_finished())
+        {
+            return;
+        }
+        let outcome = async {
+            let response = self
+                .send(Method::GET, "/api/event", &json!({"timeout_ms":5000}), None)
+                .await?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "OpenCode event subscription returned {}",
+                    response.status()
+                ));
+            }
+            if response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split(';').next())
+                != Some("text/event-stream")
+            {
+                return Err("OpenCode event subscription did not return an event stream".to_owned());
+            }
+            self.start_stream(0, response, "/api/event".into(), true)
+        }
+        .await;
+        if let Err(error) = outcome {
+            // Lack of observation must not become an invented permission denial.
+            // The native operation still decides its own approval and result.
+            self.events.push(redact(
+                json!({
+                    "type":"ssmcp.observation_unavailable","backend":"opencode",
+                    "complete":false,"error":error
+                }),
+                &self.password,
+            ));
+        }
+    }
+
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
-        let mut tools = self.catalog.clone();
+        let _refresh = self.refresh.lock().await;
+        self.ensure_running().await?;
+        // A successful current native schema request, not installation alone,
+        // determines which tools are available. Replace routes and schemas together.
+        let next = Arc::new(fetch_catalog(&self.client, &self.base, &self.password).await?);
+        let changed = self.snapshot.read().unwrap().document != next.document;
+        let mut tools = next.tools.clone();
+        *self.snapshot.write().unwrap() = next;
+        if changed {
+            self.events.push(
+                json!({"type":"ssmcp.catalog_changed","backend":"opencode","tools":tools.len()}),
+            );
+        }
         tools.extend(extra_tools());
         Ok(tools)
+    }
+
+    async fn ensure_running(&self) -> Result<(), String> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err("OpenCode has stopped".into());
+        }
+        if !self.owned {
+            return fetch_server_info(&self.client, &self.base, &self.password)
+                .await
+                .map(|_| ());
+        }
+        let stopped = {
+            let mut process = self.process.lock().await;
+            match process.as_mut() {
+                None => Some("OpenCode process is unavailable".to_owned()),
+                // Managed::wait observes the unreaped leader before cleaning its
+                // process tree. Cancelling this short observation is safe.
+                Some(process) => match timeout(Duration::from_millis(1), process.wait()).await {
+                    Err(_) => None,
+                    Ok(Ok(status)) => Some(format!("OpenCode exited: {status}")),
+                    Ok(Err(error)) => Some(format!("OpenCode process check failed: {error}")),
+                },
+            }
+        };
+        if let Some(error) = stopped {
+            self.shutdown().await;
+            Err(error)
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn call(&self, name: &str, arguments: Value) -> Result<Value, String> {
@@ -203,20 +347,29 @@ impl OpenCode {
             return Err("arguments must be an object".into());
         }
         match name {
-            "opencode.events" => return self.events.read(arguments).await.map(result),
+            "opencode.events" => {
+                self.observe_attached_call().await;
+                return self.events.read(arguments).await.map(result);
+            }
             "opencode.schema" => return self.schema(&arguments).map(result),
             "opencode.stream_close" => return self.close_stream(&arguments).await.map(result),
             "opencode.stream_send" => return self.send_socket(&arguments).await.map(result),
             _ => {}
         }
+        let snapshot = self.snapshot.read().unwrap().clone();
         let operation = if name == "opencode.api" {
             arguments
                 .get("operation_id")
                 .and_then(Value::as_str)
-                .map(|id| self.find_operation(id))
+                .map(|id| Self::find_operation(&snapshot, id))
                 .transpose()?
         } else {
-            Some(self.operations.get(name).ok_or("unknown OpenCode tool")?)
+            Some(
+                snapshot
+                    .operations
+                    .get(name)
+                    .ok_or("unknown OpenCode tool")?,
+            )
         };
         let (method, path) = if let Some(operation) = operation {
             (
@@ -242,6 +395,7 @@ impl OpenCode {
             1,
             RESPONSE_LIMIT as u64,
         )? as usize;
+        self.observe_attached_call().await;
         self.events.push(redact(json!({"type":"ssmcp.request","tool":name,"method":method.as_str(),"path":path,"arguments":arguments}), &self.password));
         if operation.is_some_and(|op| {
             op.definition.get("x-websocket").and_then(Value::as_bool) == Some(true)
@@ -277,58 +431,90 @@ impl OpenCode {
                 .iter()
                 .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_owned())))
                 .collect();
-            let (bytes, truncated) =
-                timeout(Duration::from_secs(60), read_bytes(response, max_bytes))
-                    .await
-                    .map_err(|_| "OpenCode response body timed out")??;
-            let mut payload = json!({"status":status,"content_type":content_type,"headers":headers,"truncated":truncated});
-            if bytes.is_empty() {
-                payload["body"] = Value::Null;
-            } else if !truncated && (content_type.contains("json")) {
-                match serde_json::from_slice::<Value>(&bytes) {
-                    Ok(value) => payload["body"] = value,
-                    Err(_) => {
-                        payload["body_text"] = String::from_utf8_lossy(&bytes).into_owned().into()
-                    }
+            let captured = capture_response(
+                response,
+                &self.output,
+                format!("opencode.http.{name}"),
+                &self.password,
+                max_bytes.min(INLINE_BYTES),
+            )
+            .await;
+            let mut payload = json!({"status":status,"content_type":content_type,"headers":headers,
+                "truncated":captured.capture.is_spilled(),"complete":captured.capture.error().is_none()});
+            if let Some(metadata) = captured.capture.metadata() {
+                payload["body_artifact"] = json!(metadata);
+                payload["body_format"] = json!(if content_type.contains("json") {
+                    "json"
+                } else if content_type.starts_with("text/") {
+                    "text"
+                } else {
+                    "binary"
+                });
+                payload["preview_truncated"] = true.into();
+                if content_type.starts_with("text/") || content_type.contains("json") {
+                    payload["body_preview"] = String::from_utf8_lossy(&captured.preview)
+                        .into_owned()
+                        .into();
+                } else {
+                    payload["body_preview_base64"] = STANDARD.encode(&captured.preview).into();
                 }
-            } else if content_type.starts_with("text/") || content_type.contains("json") {
-                payload["body_text"] = String::from_utf8_lossy(&bytes).into_owned().into();
             } else {
-                payload["body_base64"] = STANDARD.encode(&bytes).into();
+                let bytes = &captured.preview;
+                if bytes.is_empty() {
+                    payload["body"] = Value::Null;
+                } else if content_type.contains("json") {
+                    match serde_json::from_slice::<Value>(bytes) {
+                        Ok(value) => payload["body"] = value,
+                        Err(_) => {
+                            payload["body_text"] =
+                                String::from_utf8_lossy(bytes).into_owned().into()
+                        }
+                    }
+                } else if content_type.starts_with("text/") {
+                    payload["body_text"] = String::from_utf8_lossy(bytes).into_owned().into();
+                } else {
+                    payload["body_base64"] = STANDARD.encode(bytes).into();
+                }
+            }
+            if let Some(error) = captured.capture.error() {
+                payload["output_error"] = error.into();
             }
             payload
         };
         let payload = redact(payload, &self.password);
         self.events
             .push(json!({"type":"ssmcp.response","tool":name,"path":path,"result":payload}));
+        let incomplete = payload.get("output_error").is_some();
         let mut output = result(payload);
-        if status >= 400 {
+        if status >= 400 || incomplete {
             output["isError"] = true.into();
-        }
-        if output.to_string().len() > crate::wire::MAX_FRAME.saturating_sub(64 * 1024) {
-            return Err("encoded OpenCode response exceeds the transport limit; retry with a smaller response_max_bytes or a Range header".into());
         }
         Ok(output)
     }
 
-    fn find_operation(&self, id: &str) -> Result<&Operation, String> {
-        self.operations
+    fn find_operation<'a>(snapshot: &'a NativeCatalog, id: &str) -> Result<&'a Operation, String> {
+        snapshot
+            .operations
             .get(id)
-            .or_else(|| self.operations.values().find(|op| op.id == id))
+            .or_else(|| snapshot.operations.values().find(|op| op.id == id))
             .ok_or_else(|| format!("unknown OpenCode operation: {id}; use opencode.schema"))
     }
 
     fn schema(&self, arguments: &Value) -> Result<Value, String> {
+        let snapshot = self.snapshot.read().unwrap().clone();
+        if arguments.get("document").and_then(Value::as_bool) == Some(true) {
+            return Ok(snapshot.document.clone());
+        }
         if let Some(id) = arguments.get("operation_id").and_then(Value::as_str) {
-            let op = self.find_operation(id)?;
-            let defs = referenced_schemas(&op.definition, &self.document)?;
+            let op = Self::find_operation(&snapshot, id)?;
+            let defs = referenced_schemas(&op.definition, &snapshot.document)?;
             return Ok(
                 json!({"operation_id":op.id,"method":op.method.as_str(),"path":op.path,
                 "operation":op.definition,"components":{"schemas":defs}}),
             );
         }
         Ok(
-            json!({"operations":self.operations.iter().map(|(name,op)| json!({
+            json!({"operations":snapshot.operations.iter().map(|(name,op)| json!({
             "tool":name,"operation_id":op.id,"method":op.method.as_str(),"path":op.path,
             "summary":op.definition.get("summary")
         })).collect::<Vec<_>>()}),
@@ -454,6 +640,9 @@ impl OpenCode {
         .map_err(|e| e.to_string())?;
         let id = self.next_stream.fetch_add(1, Ordering::Relaxed);
         let mut streams = self.streams.lock().unwrap();
+        if self.closed.load(Ordering::Acquire) {
+            return Err("OpenCode has stopped".into());
+        }
         streams.retain(|_, task| !task.is_finished());
         let mut sockets = self.sockets.lock().unwrap();
         sockets.retain(|id, _| streams.contains_key(id));
@@ -483,7 +672,7 @@ impl OpenCode {
                         Some(Ok(message)) => {
                             let flush = matches!(&message,Message::Ping(_) | Message::Close(_));
                             let closed = matches!(&message,Message::Close(_));
-                            if let Some(data) = socket_event(message) {
+                            if let Some(data) = socket_event(message, &password) {
                                 events.push(redact(json!({"type":"opencode.websocket","stream_id":id,"path":path,"frame":data}),&password));
                             }
                             // tungstenite queues protocol replies to received ping/close frames.
@@ -565,6 +754,9 @@ impl OpenCode {
         reconnect: bool,
     ) -> Result<(), String> {
         let mut streams = self.streams.lock().unwrap();
+        if self.closed.load(Ordering::Acquire) {
+            return Err("OpenCode has stopped".into());
+        }
         streams.retain(|_, task| !task.is_finished());
         if streams.len() >= STREAM_LIMIT {
             return Err("too many OpenCode streams; close an existing stream".into());
@@ -573,10 +765,11 @@ impl OpenCode {
         let client = self.client.clone();
         let base = self.base.clone();
         let password = self.password.clone();
+        let output = self.output.clone();
         streams.insert(id, tokio::spawn(async move {
             let mut response = response;
             loop {
-                let outcome = consume_sse(response, &events, id, &path, &password).await;
+                let outcome = consume_sse(response, &events, &output, id, &path, &password).await;
                 if !reconnect {
                     events.push(json!({"type":"ssmcp.stream_closed","stream_id":id,"error":outcome.err()}));
                     return;
@@ -784,12 +977,17 @@ fn socket_message(arguments: &Value) -> Result<(Message, usize), String> {
     Ok((message, length))
 }
 
-fn socket_event(message: Message) -> Option<Value> {
+fn socket_event(message: Message, password: &str) -> Option<Value> {
+    let encode = |bytes: &[u8]| {
+        // Binary frames must remain binary. Remove only the owned transport
+        // credentials before encoding, including credentials amid non-UTF-8 bytes.
+        STANDARD.encode(CredentialRedactor::new(password).push(bytes, true))
+    };
     Some(match message {
         Message::Text(text) => json!({"kind":"text","text":text.as_str()}),
-        Message::Binary(bytes) => json!({"kind":"binary","data_base64":STANDARD.encode(&bytes)}),
-        Message::Ping(bytes) => json!({"kind":"ping","data_base64":STANDARD.encode(&bytes)}),
-        Message::Pong(bytes) => json!({"kind":"pong","data_base64":STANDARD.encode(&bytes)}),
+        Message::Binary(bytes) => json!({"kind":"binary","data_base64":encode(&bytes)}),
+        Message::Ping(bytes) => json!({"kind":"ping","data_base64":encode(&bytes)}),
+        Message::Pong(bytes) => json!({"kind":"pong","data_base64":encode(&bytes)}),
         Message::Close(frame) => {
             json!({"kind":"close","code":frame.as_ref().map(|f|u16::from(f.code)),"reason":frame.map(|f|f.reason.to_string())})
         }
@@ -842,7 +1040,12 @@ fn catalog(document: &Value) -> Result<(BTreeMap<String, Operation>, Vec<Value>)
                     "OpenAPI operation ID is not a valid MCP tool name: {id}"
                 ));
             }
-            if operations.contains_key(&name) {
+            if operations.contains_key(&name)
+                || matches!(
+                    id,
+                    "api" | "schema" | "events" | "stream_close" | "stream_send"
+                )
+            {
                 return Err(format!("duplicate OpenAPI operation: {id}"));
             }
             let mut parameters = BTreeMap::new();
@@ -937,7 +1140,7 @@ fn catalog(document: &Value) -> Result<(BTreeMap<String, Operation>, Vec<Value>)
             }
             properties.insert(
                 "response_max_bytes".into(),
-                json!({"type":"integer","minimum":1,"maximum":RESPONSE_LIMIT,"default":262144}),
+                json!({"type":"integer","minimum":1,"maximum":RESPONSE_LIMIT,"default":262144,"description":"Maximum inline preview bytes, additionally capped at 32 KiB. Larger bodies are retained as typed output artifacts."}),
             );
             properties.insert(
                 "timeout_ms".into(),
@@ -1185,6 +1388,194 @@ fn deep_query(name: &str, value: &Value, out: &mut Vec<(String, String)>) -> Res
     Ok(())
 }
 
+async fn fetch_server_info(client: &Client, base: &Url, password: &str) -> Result<Value, String> {
+    let response = timeout(
+        Duration::from_secs(5),
+        client
+            .get(base.join("/api/info").map_err(|e| e.to_string())?)
+            .basic_auth("opencode", Some(password))
+            .send(),
+    )
+    .await
+    .map_err(|_| "OpenCode health request timed out")?
+    .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("OpenCode /api/info returned {}", response.status()));
+    }
+    let (bytes, truncated) = timeout(Duration::from_secs(5), read_bytes(response, 64 * 1024))
+        .await
+        .map_err(|_| "OpenCode health read timed out")??;
+    if truncated {
+        return Err("OpenCode /api/info exceeds 64 KiB".into());
+    }
+    let info: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "OpenCode /api/info did not return native server information")?;
+    let version = info
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or("OpenCode /api/info has no native version")?;
+    if version.len() > 128
+        || version
+            .strip_prefix('v')
+            .unwrap_or(version)
+            .split('.')
+            .next()
+            != Some("2")
+        || info
+            .get("pid")
+            .and_then(Value::as_u64)
+            .is_none_or(|pid| pid == 0)
+    {
+        return Err("OpenCode attach requires a supported v2 native server response".into());
+    }
+    Ok(info)
+}
+
+async fn fetch_catalog(
+    client: &Client,
+    base: &Url,
+    password: &str,
+) -> Result<NativeCatalog, String> {
+    let response = timeout(
+        Duration::from_secs(15),
+        client
+            .get(base.join("/openapi.json").map_err(|e| e.to_string())?)
+            .basic_auth("opencode", Some(password))
+            .send(),
+    )
+    .await
+    .map_err(|_| "OpenCode schema request timed out")?
+    .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "OpenCode /openapi.json returned {}",
+            response.status()
+        ));
+    }
+    let (bytes, truncated) = timeout(Duration::from_secs(15), read_bytes(response, SPEC_LIMIT))
+        .await
+        .map_err(|_| "OpenCode schema read timed out")??;
+    if truncated {
+        return Err("OpenCode schema exceeds 4 MiB; no partial catalog was registered".into());
+    }
+    let document = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let (operations, tools) = catalog(&document)?;
+    Ok(NativeCatalog {
+        document,
+        operations,
+        tools,
+    })
+}
+
+/// Only the private transport credentials are removed from native response
+/// bytes. Keep enough look-ahead to recognize a credential split across chunks.
+struct CredentialRedactor {
+    patterns: Vec<Vec<u8>>,
+    pending: Vec<u8>,
+    lookahead: usize,
+}
+
+impl CredentialRedactor {
+    fn new(password: &str) -> Self {
+        let patterns = vec![
+            password.as_bytes().to_vec(),
+            STANDARD.encode(format!("opencode:{password}")).into_bytes(),
+        ]
+        .into_iter()
+        .filter(|pattern| !pattern.is_empty())
+        .collect::<Vec<_>>();
+        let lookahead = patterns.iter().map(Vec::len).max().unwrap_or(1) - 1;
+        Self {
+            patterns,
+            pending: Vec::new(),
+            lookahead,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8], finished: bool) -> Vec<u8> {
+        self.pending.extend_from_slice(bytes);
+        let mut safe = if finished {
+            self.pending.len()
+        } else {
+            self.pending.len().saturating_sub(self.lookahead)
+        };
+        // Generated credentials contain no newlines. Complete log lines can be
+        // shown immediately instead of waiting for another output chunk.
+        if let Some(newline) = self.pending.iter().rposition(|byte| *byte == b'\n') {
+            safe = safe.max(newline + 1);
+        }
+        let mut output = Vec::with_capacity(safe);
+        let mut cursor = 0;
+        while cursor < safe {
+            if let Some(pattern) = self
+                .patterns
+                .iter()
+                .find(|pattern| self.pending[cursor..].starts_with(pattern))
+            {
+                output.extend_from_slice(b"[redacted]");
+                cursor += pattern.len();
+            } else {
+                output.push(self.pending[cursor]);
+                cursor += 1;
+            }
+        }
+        self.pending.drain(..cursor);
+        output
+    }
+}
+
+struct CapturedBody {
+    capture: Capture,
+    preview: Vec<u8>,
+}
+
+impl CapturedBody {
+    fn push(&mut self, bytes: &[u8], limit: usize) {
+        let remaining = limit.saturating_sub(self.preview.len());
+        self.preview
+            .extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+        // A caller may ask for a preview smaller than the normal inline
+        // threshold. Spill the rest instead of discarding the response.
+        if bytes.len() > remaining && !self.capture.is_spilled() {
+            let _ = self.capture.spill();
+        }
+        let _ = self.capture.push(bytes);
+    }
+}
+
+async fn capture_response(
+    mut response: Response,
+    output: &Arc<OutputStore>,
+    scope: String,
+    password: &str,
+    preview_limit: usize,
+) -> CapturedBody {
+    let mut body = CapturedBody {
+        capture: output.capture(scope),
+        preview: Vec::new(),
+    };
+    let mut redactor = CredentialRedactor::new(password);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let failure = loop {
+        match timeout_at(deadline, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => body.push(&redactor.push(&chunk, false), preview_limit),
+            Ok(Ok(None)) => break None,
+            Ok(Err(error)) => break Some(format!("OpenCode response body failed: {error}")),
+            Err(_) => {
+                break Some(
+                    "OpenCode response body timed out; the captured prefix is partial".into(),
+                );
+            }
+        }
+    };
+    body.push(&redactor.push(&[], true), preview_limit);
+    if let Some(error) = failure {
+        body.capture.fail(error);
+    }
+    let _ = body.capture.finish();
+    body
+}
+
 async fn read_bytes(mut response: Response, limit: usize) -> Result<(Vec<u8>, bool), String> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
@@ -1230,12 +1621,33 @@ fn log_lines<R: AsyncBufRead + Unpin + Send + 'static>(
     stream: &'static str,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        loop {
-            match bounded_line(&mut reader).await {
-                Ok(Some(line)) => events.push(redact(json!({"type":"ssmcp.process_output","stream":stream,"text":String::from_utf8_lossy(&line)}),&password)),
-                Ok(None) => break,
-                Err(error) => { events.push(json!({"type":"ssmcp.process_output_error","stream":stream,"error":error.to_string()})); break; }
+        let mut bytes = [0_u8; 8192];
+        let mut redactor = CredentialRedactor::new(&password);
+        let mut offset = 0_u64;
+        let failure = loop {
+            match reader.read(&mut bytes).await {
+                Ok(0) => break None,
+                Ok(count) => {
+                    let data = redactor.push(&bytes[..count], false);
+                    if !data.is_empty() {
+                        events.push(json!({"type":"ssmcp.process_output","stream":stream,
+                            "offset":offset,"next_offset":offset + data.len() as u64,
+                            "text":String::from_utf8_lossy(&data),"data_base64":STANDARD.encode(&data)}));
+                        offset += data.len() as u64;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => break Some(error.to_string()),
             }
+        };
+        let data = redactor.push(&[], true);
+        if !data.is_empty() {
+            events.push(json!({"type":"ssmcp.process_output","stream":stream,
+                "offset":offset,"next_offset":offset + data.len() as u64,
+                "text":String::from_utf8_lossy(&data),"data_base64":STANDARD.encode(&data)}));
+        }
+        if let Some(error) = failure {
+            events.push(json!({"type":"ssmcp.process_output_error","stream":stream,"error":error}));
         }
     })
 }
@@ -1279,23 +1691,107 @@ impl Sse {
     }
 }
 
+/// Retain the raw SSE byte stream as well as decoded EventLog records. The
+/// same store and quota apply when a malformed frame exceeds the parser limit.
+struct StreamArchive {
+    capture: Capture,
+    redactor: CredentialRedactor,
+    events: Arc<EventLog>,
+    id: u64,
+    announced: bool,
+    finished: bool,
+}
+
+impl StreamArchive {
+    fn new(output: &Arc<OutputStore>, events: Arc<EventLog>, id: u64, password: &str) -> Self {
+        Self {
+            capture: output.capture(format!("opencode.sse.{id}")),
+            redactor: CredentialRedactor::new(password),
+            events,
+            id,
+            announced: false,
+            finished: false,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        let data = self.redactor.push(bytes, false);
+        let _ = self.capture.push(&data);
+        if !self.announced && (self.capture.is_spilled() || self.capture.error().is_some()) {
+            self.announced = true;
+            self.events.push(json!({"type":"ssmcp.stream_artifact","stream_id":self.id,
+                "format":"text/event-stream","artifact":self.capture.metadata(),"output_error":self.capture.error()}));
+        }
+    }
+
+    fn finish(&mut self, failure: Option<&str>) {
+        if self.finished {
+            return;
+        }
+        let _ = self.capture.push(&self.redactor.push(&[], true));
+        if let Some(error) = failure {
+            // Keep even a small partial frame available for inspection.
+            if self.capture.bytes() != 0 {
+                let _ = self.capture.spill();
+            }
+            self.capture.fail(error);
+        }
+        let _ = self.capture.finish();
+        self.finished = true;
+        if self.capture.is_spilled() || self.capture.error().is_some() {
+            self.events.push(json!({"type":"ssmcp.stream_artifact","stream_id":self.id,
+                "format":"text/event-stream","artifact":self.capture.metadata(),"output_error":self.capture.error()}));
+        }
+    }
+}
+
+impl Drop for StreamArchive {
+    fn drop(&mut self) {
+        self.finish(Some(
+            "SSE stream closed before EOF; captured bytes are a partial stream",
+        ));
+    }
+}
+
 async fn consume_sse(
     mut response: Response,
-    events: &EventLog,
+    events: &Arc<EventLog>,
+    output: &Arc<OutputStore>,
     id: u64,
     path: &str,
     password: &str,
 ) -> Result<(), String> {
     let mut parser = Sse::default();
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-        parser.push(&chunk, |event| {
-            events.push(redact(
-                json!({"type":"opencode.event","stream_id":id,"path":path,"event":event}),
-                password,
-            ))
-        })?;
+    let mut archive = StreamArchive::new(output, events.clone(), id, password);
+    let mut decode_error = None;
+    let transport_error = loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                archive.push(&chunk);
+                if decode_error.is_none()
+                    && let Err(error) = parser.push(&chunk, |event| {
+                        events.push(redact(
+                        json!({"type":"opencode.event","stream_id":id,"path":path,"event":event}),
+                        password,
+                    ));
+                    })
+                {
+                    events.push(json!({"type":"ssmcp.stream_decode_error","stream_id":id,"error":error,
+                        "message":"Decoding stopped; received bytes are being captured subject to the output quota. Inspect the stream artifact completeness"}));
+                    decode_error = Some(error);
+                }
+            }
+            Ok(None) => break None,
+            Err(error) => break Some(error.to_string()),
+        }
+    };
+    if decode_error.is_none() && (!parser.line.is_empty() || !parser.data.is_empty()) {
+        decode_error = Some("OpenCode SSE stream ended with an incomplete frame".into());
+        let _ = archive.capture.spill();
     }
-    Ok(())
+    // A decoding error does not make a fully captured wire stream incomplete.
+    archive.finish(transport_error.as_deref());
+    transport_error.or(decode_error).map_or(Ok(()), Err)
 }
 
 fn redact(value: Value, password: &str) -> Value {
@@ -1327,10 +1823,10 @@ fn redact(value: Value, password: &str) -> Value {
 fn extra_tools() -> Vec<Value> {
     vec![
         json!({"name":"opencode.api","description":"Call a native OpenCode operation by operation_id, or method plus url_path on the private server. Use opencode.schema to discover schemas. JSON uses body; raw bytes use body_base64. SSE and WebSocket operations return stream_id; read with opencode.events. Set websocket=true for a raw WebSocket route. Native permission policy remains in effect.","inputSchema":{"type":"object","properties":{
-            "operation_id":{"type":"string"},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]},"url_path":{"type":"string"},"websocket":{"type":"boolean"},"path":{"type":"object"},"query":{"type":"object"},"headers":{"type":"object","additionalProperties":{"type":"string"}},"body":{},"body_base64":{"type":"string"},"content_type":{"type":"string"},"response_max_bytes":{"type":"integer","minimum":1,"maximum":RESPONSE_LIMIT},"timeout_ms":{"type":"integer","minimum":1,"maximum":120000}},"additionalProperties":false}}),
-        json!({"name":"opencode.schema","description":"List installed OpenCode operations, or return a native operation and its referenced schemas by operation_id. This discovers the installed API instead of assuming a fixed OpenCode version.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"}},"additionalProperties":false}}),
+            "operation_id":{"type":"string"},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]},"url_path":{"type":"string"},"websocket":{"type":"boolean"},"path":{"type":"object"},"query":{"type":"object"},"headers":{"type":"object","additionalProperties":{"type":"string"}},"body":{},"body_base64":{"type":"string"},"content_type":{"type":"string"},"response_max_bytes":{"type":"integer","minimum":1,"maximum":RESPONSE_LIMIT,"description":"Maximum inline preview bytes, additionally capped at 32 KiB. Larger bodies are retained as typed output artifacts."},"timeout_ms":{"type":"integer","minimum":1,"maximum":120000}},"additionalProperties":false}}),
+        json!({"name":"opencode.schema","description":"List installed OpenCode operations, or return a native operation and its referenced schemas by operation_id. This discovers the installed API instead of assuming a fixed OpenCode version.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"document":{"type":"boolean","description":"Return the complete, unchanged native OpenAPI document."}},"additionalProperties":false}}),
         json!({"name":"opencode.events","description":"Read bounded cursor-addressed OpenCode live events, tool calls, results, permission requests and adapter logs. Also mirrored live in the local terminal. If truncated=true, advance to start_cursor; upstream stream_gap events mean native events were missed.","inputSchema":{"type":"object","properties":{"cursor":{"type":"integer","minimum":0},"max_events":{"type":"integer","minimum":1,"maximum":256,"default":50},"wait_ms":{"type":"integer","minimum":0,"maximum":5000}},"additionalProperties":false}}),
-        json!({"name":"opencode.stream_close","description":"Close an SSE or WebSocket stream opened by a native operation. Stream 0 is the always-on local live log.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1}},"required":["stream_id"],"additionalProperties":false}}),
+        json!({"name":"opencode.stream_close","description":"Close an SSE or WebSocket stream opened by a native operation. Stream 0 is reserved for native live observation; attached servers start it after an explicit tool call.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1}},"required":["stream_id"],"additionalProperties":false}}),
         json!({"name":"opencode.stream_send","description":"Write a text/binary/ping/pong frame to an OpenCode WebSocket, such as native PTY terminal input or a client MCP JSON-RPC response. Specify text or data_base64. Data frames are bounded at 1 MiB, control frames at 125 bytes. Returns after the socket write succeeds; a timeout means delivery is uncertain.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1},"kind":{"type":"string","enum":["text","binary","ping","pong"]},"text":{"type":"string"},"data_base64":{"type":"string","contentEncoding":"base64"}},"required":["stream_id"],"additionalProperties":false}}),
     ]
 }
@@ -1427,6 +1923,7 @@ mod tests {
     }
 
     fn transport_backend(base: Url) -> OpenCode {
+        let output = OutputStore::new_connection().unwrap();
         OpenCode {
             client: Client::builder()
                 .no_proxy()
@@ -1436,10 +1933,16 @@ mod tests {
             base,
             password: "synthetic-test-password".into(),
             process: Mutex::new(None),
-            document: json!({}),
-            operations: BTreeMap::new(),
-            catalog: Vec::new(),
-            events: EventLog::new("opencode-test"),
+            owned: true,
+            observing: Mutex::new(()),
+            snapshot: RwLock::new(Arc::new(NativeCatalog {
+                document: json!({}),
+                operations: BTreeMap::new(),
+                tools: Vec::new(),
+            })),
+            refresh: Mutex::new(()),
+            events: EventLog::with_output("opencode-test", output.clone()),
+            output,
             readers: StdMutex::new(Vec::new()),
             streams: StdMutex::new(BTreeMap::new()),
             sockets: StdMutex::new(BTreeMap::new()),
@@ -1490,6 +1993,12 @@ mod tests {
             )
             .await
             .unwrap();
+            socket
+                .send(Message::Binary(
+                    b"\0synthetic-test-password\xff".to_vec().into(),
+                ))
+                .await
+                .unwrap();
             let mut kinds = Vec::new();
             while let Some(Ok(message)) = socket.next().await {
                 match message {
@@ -1549,7 +2058,7 @@ mod tests {
                     frames.push(item["event"]["frame"].clone());
                 }
             }
-            if frames.len() >= 3 {
+            if frames.len() >= 4 {
                 break;
             }
         }
@@ -1563,6 +2072,9 @@ mod tests {
                 .iter()
                 .any(|f| f == &json!({"kind":"binary","data_base64":"AP8="}))
         );
+        assert!(frames.iter().any(|frame| frame
+            == &json!({"kind":"binary",
+                "data_base64":STANDARD.encode(b"\0[redacted]\xff")})));
         assert!(
             frames
                 .iter()
@@ -1632,15 +2144,233 @@ mod tests {
         backend.shutdown().await;
     }
 
+    #[test]
+    fn private_credentials_are_redacted_across_every_chunk_boundary() {
+        let password = "synthetic-test-password";
+        let basic = STANDARD.encode(format!("opencode:{password}"));
+        let wire = format!("before {password}\nBasic {basic} after").into_bytes();
+        let expected = b"before [redacted]\nBasic [redacted] after";
+        for split in 0..=wire.len() {
+            let mut redactor = CredentialRedactor::new(password);
+            let mut output = redactor.push(&wire[..split], false);
+            output.extend(redactor.push(&wire[split..], false));
+            output.extend(redactor.push(&[], true));
+            assert_eq!(output, expected, "split at {split}");
+        }
+    }
+
+    async fn artifact_bytes(store: &Arc<OutputStore>, id: &str) -> Vec<u8> {
+        let mut output = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = store
+                .perform(
+                    "ssmcp.output.read",
+                    json!({"id":id,"offset":offset,"max_bytes":4096}),
+                )
+                .await
+                .unwrap();
+            output.extend(
+                STANDARD
+                    .decode(page["data_base64"].as_str().unwrap())
+                    .unwrap(),
+            );
+            offset = page["next_offset"].as_u64().unwrap();
+            if page["eof"] == true {
+                break;
+            }
+        }
+        output
+    }
+
     #[tokio::test]
-    #[ignore = "requires an explicitly selected OpenCode v2 binary and isolated XDG directories; no model calls"]
+    async fn http_preview_limit_retains_the_complete_typed_json_response() {
+        use sha2::{Digest, Sha256};
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = private_url(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let native = json!({"items":"native-value".repeat(8192),"tail":{"number":41,"ok":true},
+            "credential":"synthetic-test-password","authorization":STANDARD.encode("opencode:synthetic-test-password")});
+        let expected =
+            serde_json::to_vec(&redact(native.clone(), "synthetic-test-password")).unwrap();
+        let wire = serde_json::to_vec(&native).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", wire.len()).as_bytes()).await.unwrap();
+            for chunk in wire.chunks(1009) {
+                stream.write_all(chunk).await.unwrap();
+            }
+        });
+        let backend = transport_backend(base);
+        let response = backend
+            .call(
+                "opencode.api",
+                json!({"method":"GET","url_path":"/large","response_max_bytes":64}),
+            )
+            .await
+            .unwrap();
+        let body = &response["structuredContent"];
+        assert_eq!(response["isError"], false, "{response}");
+        assert_eq!(body["body_format"], "json");
+        assert!(body["body_preview"].as_str().unwrap().len() <= 64);
+        assert_eq!(body["body_artifact"]["complete"], true);
+        let artifact = &body["body_artifact"];
+        let saved = artifact_bytes(&backend.output, artifact["id"].as_str().unwrap()).await;
+        assert_eq!(saved, expected);
+        assert_eq!(artifact["bytes"], saved.len() as u64);
+        assert_eq!(artifact["sha256"], format!("{:x}", Sha256::digest(&saved)));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&saved).unwrap()["tail"],
+            native["tail"]
+        );
+        server.await.unwrap();
+        backend.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn oversized_sse_frame_is_fully_archived_after_decoding_stops() {
+        use sha2::{Digest, Sha256};
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = private_url(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let wire = format!(
+            "data: {{\"payload\":\"{}\",\"tail\":\"retained\"}}\n\n",
+            "x".repeat(LINE_LIMIT + 1024)
+        )
+        .into_bytes();
+        let expected = wire.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", wire.len()).as_bytes()).await.unwrap();
+            stream.write_all(&wire).await.unwrap();
+        });
+        let backend = transport_backend(base);
+        let response = backend
+            .send(Method::GET, "/api/event", &json!({}), None)
+            .await
+            .unwrap();
+        let error = consume_sse(
+            response,
+            &backend.events,
+            &backend.output,
+            7,
+            "/api/event",
+            &backend.password,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("exceeds 1 MiB"), "{error}");
+        let page = backend
+            .events
+            .read(json!({"max_events":256}))
+            .await
+            .unwrap();
+        let final_artifact = page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| &item["event"])
+            .find(|event| {
+                event["type"] == "ssmcp.stream_artifact" && event["artifact"]["complete"] == true
+            })
+            .unwrap();
+        let artifact = &final_artifact["artifact"];
+        let saved = artifact_bytes(&backend.output, artifact["id"].as_str().unwrap()).await;
+        assert_eq!(saved, expected);
+        assert_eq!(artifact["sha256"], format!("{:x}", Sha256::digest(&saved)));
+        server.await.unwrap();
+        backend.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn catalog_refresh_replaces_native_routes_and_detects_process_exit() {
+        use tokio::io::AsyncWriteExt;
+        let first = json!({"openapi":"3.1.0","paths":{"/old":{"get":{"operationId":"old.read",
+            "responses":{"200":{"description":"original"}}}}},"x-native":{"version":1}});
+        let body = json!({"oneOf":[{"type":"string","pattern":"^native$"},{"type":"integer","minimum":2}],
+            "examples":["native",2],"x-native-constraint":{"preserved":true}});
+        let second = json!({"openapi":"3.1.0","paths":{"/new":{"post":{"operationId":"new.write",
+            "requestBody":{"required":true,"content":{"application/json":{"schema":body}}},
+            "responses":{"200":{"description":"native response"}}}}},"x-native":{"version":2}});
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = private_url(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let documents = [
+            first,
+            second.clone(),
+            json!({"error":"temporarily unavailable"}),
+        ];
+        let server = tokio::spawn(async move {
+            for (index, document) in documents.into_iter().enumerate() {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let count = stream.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count]).starts_with("GET /openapi.json ")
+                );
+                let bytes = serde_json::to_vec(&document).unwrap();
+                let status = if index == 2 {
+                    "503 Service Unavailable"
+                } else {
+                    "200 OK"
+                };
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len()).as_bytes()).await.unwrap();
+                stream.write_all(&bytes).await.unwrap();
+            }
+        });
+        let backend = transport_backend(base);
+        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+        command
+            .args(["-c", "import time; time.sleep(60)"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        *backend.process.lock().await = Some(Managed::spawn(&mut command).unwrap());
+        let tools = backend.tools().await.unwrap();
+        assert!(tools.iter().any(|tool| tool["name"] == "opencode.old.read"));
+        let tools = backend.tools().await.unwrap();
+        assert!(!tools.iter().any(|tool| tool["name"] == "opencode.old.read"));
+        let discovered = tools
+            .iter()
+            .find(|tool| tool["name"] == "opencode.new.write")
+            .unwrap();
+        assert_eq!(discovered["inputSchema"]["properties"]["body"], body);
+        assert_eq!(backend.schema(&json!({"document":true})).unwrap(), second);
+        assert!(backend.tools().await.unwrap_err().contains("503"));
+        backend
+            .process
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .shutdown()
+            .await;
+        assert!(backend.tools().await.unwrap_err().contains("exited"));
+        server.await.unwrap();
+        backend.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicitly selected, already running OpenCode v2 endpoint with isolated XDG directories; no model calls"]
     async fn real_opencode_without_model_calls() {
-        let program = std::env::var_os("SSMCP_TEST_OPENCODE").expect("set SSMCP_TEST_OPENCODE");
+        let endpoint = std::env::var("SSMCP_TEST_OPENCODE_URL")
+            .expect("set the existing SSMCP_TEST_OPENCODE_URL");
+        let password =
+            std::env::var("OPENCODE_PASSWORD").expect("set the native OPENCODE_PASSWORD");
         let directory =
             std::env::var_os("SSMCP_TEST_DIRECTORY").expect("set an isolated SSMCP_TEST_DIRECTORY");
         let directory = std::path::PathBuf::from(directory);
         std::fs::create_dir_all(&directory).unwrap();
-        let backend = OpenCode::start(&program, &[]).await.unwrap();
+        let backend = OpenCode::attach_with_output(
+            &endpoint,
+            &password,
+            OutputStore::new_connection().unwrap(),
+        )
+        .await
+        .unwrap();
         let attempt: Result<(), String> = async {
             let tools = backend.tools().await?;
             assert!(tools.len() >= 100);
@@ -1743,5 +2473,338 @@ mod tests {
         .await;
         backend.shutdown().await;
         attempt.unwrap();
+    }
+    struct AttachmentFixture {
+        endpoint: String,
+        document: Arc<StdMutex<Value>>,
+        version: Arc<StdMutex<String>>,
+        requests: Arc<StdMutex<Vec<String>>>,
+        healthy: Arc<AtomicBool>,
+        redirect: Arc<AtomicBool>,
+        streams: Arc<AtomicU64>,
+        server: JoinHandle<()>,
+    }
+
+    impl AttachmentFixture {
+        async fn new() -> Self {
+            use tokio::io::AsyncWriteExt;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let document = Arc::new(StdMutex::new(json!({
+                "openapi":"3.1.0",
+                "paths":{
+                    "/api/echo":{"get":{"operationId":"attach.echo",
+                        "parameters":[{"in":"query","name":"native","schema":{
+                            "oneOf":[{"type":"integer","minimum":2},{"type":"string","pattern":"^exact$"}],
+                            "x-native-extension":{"preserved":true}
+                        }}],"responses":{"200":{"description":"Native result"}}}},
+                    "/api/denied":{"get":{"operationId":"attach.denied",
+                        "responses":{"403":{"description":"Native approval denial"}}}}
+                },
+                "x-native-document":{"preserved":true}
+            })));
+            let version = Arc::new(StdMutex::new("2.3.0".to_owned()));
+            let requests = Arc::new(StdMutex::new(Vec::new()));
+            let healthy = Arc::new(AtomicBool::new(true));
+            let redirect = Arc::new(AtomicBool::new(false));
+            let streams = Arc::new(AtomicU64::new(0));
+            let server = tokio::spawn({
+                let document = document.clone();
+                let version = version.clone();
+                let requests = requests.clone();
+                let healthy = healthy.clone();
+                let redirect = redirect.clone();
+                let streams = streams.clone();
+                let endpoint = endpoint.clone();
+                async move {
+                    loop {
+                        let (mut connection, _) = listener.accept().await.unwrap();
+                        let document = document.clone();
+                        let version = version.clone();
+                        let requests = requests.clone();
+                        let healthy = healthy.clone();
+                        let redirect = redirect.clone();
+                        let streams = streams.clone();
+                        let endpoint = endpoint.clone();
+                        tokio::spawn(async move {
+                            let mut bytes = Vec::new();
+                            let mut buffer = [0_u8; 1024];
+                            loop {
+                                let n = connection.read(&mut buffer).await.unwrap();
+                                if n == 0 {
+                                    return;
+                                }
+                                bytes.extend_from_slice(&buffer[..n]);
+                                assert!(bytes.len() < 64 * 1024);
+                                if bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            let request = String::from_utf8(bytes).unwrap();
+                            let line = request.lines().next().unwrap().to_owned();
+                            requests.lock().unwrap().push(line.clone());
+                            let authorized = request.lines().any(|line| {
+                                line.split_once(':').is_some_and(|(name, value)| {
+                                    name.eq_ignore_ascii_case("authorization")
+                                        && value.trim()
+                                            == format!(
+                                                "Basic {}",
+                                                STANDARD.encode("opencode:attach-fixture-password")
+                                            )
+                                })
+                            });
+                            let path = line.split_whitespace().nth(1).unwrap();
+                            if authorized && path == "/api/event" {
+                                streams.fetch_add(1, Ordering::AcqRel);
+                                connection.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"type\":\"server.connected\"}\n\n").await.unwrap();
+                                let mut closed = [0_u8; 1];
+                                let _ = connection.read(&mut closed).await;
+                                streams.fetch_sub(1, Ordering::AcqRel);
+                                return;
+                            }
+                            if authorized && path == "/api/info" && redirect.load(Ordering::Acquire)
+                            {
+                                connection.write_all(format!("HTTP/1.1 302 Found\r\nLocation: {endpoint}/redirect-target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                                return;
+                            }
+                            let (status, body) = if !authorized {
+                                (
+                                    "401 Unauthorized",
+                                    json!({"error":"native authentication required"}),
+                                )
+                            } else if path == "/api/info" {
+                                if healthy.load(Ordering::Acquire) {
+                                    (
+                                        "200 OK",
+                                        json!({"version":version.lock().unwrap().clone(),"pid":std::process::id()}),
+                                    )
+                                } else {
+                                    (
+                                        "503 Service Unavailable",
+                                        json!({"code":"service_stopping"}),
+                                    )
+                                }
+                            } else if path == "/openapi.json" {
+                                ("200 OK", document.lock().unwrap().clone())
+                            } else if path == "/api/echo" {
+                                (
+                                    "200 OK",
+                                    json!({"native":{"values":[1,{"exact":true}]},"approval":{"status":"pending"}}),
+                                )
+                            } else if path == "/api/denied" {
+                                (
+                                    "403 Forbidden",
+                                    json!({"error":{"code":"permission_denied","request_id":"native-fixture"}}),
+                                )
+                            } else {
+                                (
+                                    "404 Not Found",
+                                    json!({"error":"unexpected fixture request"}),
+                                )
+                            };
+                            let bytes = serde_json::to_vec(&body).unwrap();
+                            connection.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",bytes.len()).as_bytes()).await.unwrap();
+                            connection.write_all(&bytes).await.unwrap();
+                        });
+                    }
+                }
+            });
+            Self {
+                endpoint,
+                document,
+                version,
+                requests,
+                healthy,
+                redirect,
+                streams,
+                server,
+            }
+        }
+        async fn disconnected(&self) {
+            timeout(Duration::from_secs(5), async {
+                while self.streams.load(Ordering::Acquire) != 0 {
+                    sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("attached subscriptions must close");
+        }
+    }
+
+    impl Drop for AttachmentFixture {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle() {
+        let fixture = AttachmentFixture::new().await;
+        let output = OutputStore::new_connection().unwrap();
+        let backend = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "attach-fixture-password",
+            output.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(!backend.owned);
+        assert!(backend.process.lock().await.is_none());
+        let tools = backend.tools().await.unwrap();
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "opencode.attach.echo")
+        );
+        assert_eq!(
+            backend.schema(&json!({"document":true})).unwrap(),
+            *fixture.document.lock().unwrap()
+        );
+        assert_eq!(
+            *fixture.requests.lock().unwrap(),
+            [
+                "GET /api/info HTTP/1.1",
+                "GET /openapi.json HTTP/1.1",
+                "GET /api/info HTTP/1.1",
+                "GET /openapi.json HTTP/1.1",
+            ]
+        );
+        assert_eq!(fixture.streams.load(Ordering::Acquire), 0);
+
+        let response = backend
+            .call("opencode.attach.echo", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            response["structuredContent"]["body"],
+            json!({
+                "native":{"values":[1,{"exact":true}]},"approval":{"status":"pending"}
+            })
+        );
+        assert_eq!(fixture.streams.load(Ordering::Acquire), 1);
+        let denied = backend
+            .call("opencode.attach.denied", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(denied["isError"], true);
+        assert_eq!(denied["structuredContent"]["status"], 403);
+        assert_eq!(
+            denied["structuredContent"]["body"],
+            json!({
+                "error":{"code":"permission_denied","request_id":"native-fixture"}
+            })
+        );
+        assert_eq!(
+            fixture
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|request| request.starts_with("GET /api/event "))
+                .count(),
+            1
+        );
+
+        fixture.healthy.store(false, Ordering::Release);
+        assert!(backend.tools().await.unwrap_err().contains("503"));
+        fixture.healthy.store(true, Ordering::Release);
+        fixture.document.lock().unwrap()["paths"]["/api/echo"]["get"]["operationId"] =
+            json!("attach.replaced");
+        let tools = backend.tools().await.unwrap();
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool["name"] == "opencode.attach.echo")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "opencode.attach.replaced")
+        );
+        backend.shutdown().await;
+        fixture.disconnected().await;
+        assert!(backend.tools().await.is_err());
+        // The external native service is still alive after our shutdown.
+        fetch_server_info(&backend.client, &backend.base, &backend.password)
+            .await
+            .unwrap();
+        let second =
+            OpenCode::attach_with_output(&fixture.endpoint, "attach-fixture-password", output)
+                .await
+                .unwrap();
+        second
+            .call("opencode.attach.replaced", json!({}))
+            .await
+            .unwrap();
+        drop(second);
+        fixture.disconnected().await;
+        fetch_server_info(&backend.client, &backend.base, &backend.password)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_authentication_redirects_and_unsupported_native_versions() {
+        let fixture = AttachmentFixture::new().await;
+        let store = OutputStore::new_connection().unwrap();
+        let failed = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "wrong-fixture-password",
+            store.clone(),
+        )
+        .await
+        .err()
+        .expect("native authentication must be enforced")
+        .to_string();
+        assert!(failed.contains("401"));
+        assert!(!failed.contains("wrong-fixture-password"));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+
+        fixture.redirect.store(true, Ordering::Release);
+        let failed = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "attach-fixture-password",
+            store.clone(),
+        )
+        .await
+        .err()
+        .expect("do not follow redirects")
+        .to_string();
+        assert!(failed.contains("302"));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+        fixture.redirect.store(false, Ordering::Release);
+        *fixture.version.lock().unwrap() = "3.0.0".into();
+        let failed = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "attach-fixture-password",
+            store.clone(),
+        )
+        .await
+        .err()
+        .expect("an unverified native protocol version is not discoverable")
+        .to_string();
+        assert!(failed.contains("supported v2"));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 3);
+
+        for endpoint in [
+            "http://0.0.0.0:4096",
+            "http://localhost:4096",
+            "https://127.0.0.1:4096",
+            "http://user:secret@127.0.0.1:4096",
+            "http://127.0.0.1:4096/path",
+            "http://127.0.0.1:4096?query=1",
+        ] {
+            assert!(
+                OpenCode::attach_with_output(endpoint, "attach-fixture-password", store.clone())
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            OpenCode::attach_with_output(&fixture.endpoint, "", store)
+                .await
+                .is_err()
+        );
+        assert_eq!(fixture.requests.lock().unwrap().len(), 3);
     }
 }

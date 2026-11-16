@@ -1,8 +1,14 @@
 [ui]
 color = true
+# On a real terminal, isolate logs/Shell and show tasks plus Git in a sidebar.
+dashboard = true
 log_format = "pretty"
 theme = "codex-dark"
 timestamps = true
 show_request_id = true
 show_raw_json = false
 max_inline_output = 12
+
+# Quiet-task cadence for the line transcript; the dashboard stays live.
+# 0 disables periodic transcript status only.
+activity_interval_secs = 5

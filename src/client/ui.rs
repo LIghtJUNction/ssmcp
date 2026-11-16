@@ -49,23 +49,29 @@ impl Theme {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Ui {
     pub color: bool,
+    /// On a real terminal, isolate logs and the interactive shell with a task sidebar.
+    pub dashboard: bool,
     pub log_format: LogFormat,
     pub theme: Theme,
     pub timestamps: bool,
     pub show_request_id: bool,
     pub show_raw_json: bool,
     pub max_inline_output: usize,
+    /// Quiet-job status cadence; zero disables periodic status, not lifecycle events.
+    pub activity_interval_secs: u64,
 }
 impl Default for Ui {
     fn default() -> Self {
         Self {
             color: true,
+            dashboard: true,
             log_format: LogFormat::Pretty,
             theme: Theme::default(),
             timestamps: false,
             show_request_id: true,
             show_raw_json: false,
             max_inline_output: 12,
+            activity_interval_secs: 5,
         }
     }
 }
@@ -81,6 +87,9 @@ impl Ui {
             toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
         if !(1..=10000).contains(&doc.ui.max_inline_output) {
             return Err("ui.max_inline_output must be in 1..=10000".into());
+        }
+        if doc.ui.activity_interval_secs > 300 {
+            return Err("ui.activity_interval_secs must be in 0..=300".into());
         }
         Ok(doc.ui)
     }
@@ -114,12 +123,15 @@ mod tests {
     fn validated_ui_config_and_themes() {
         let u=Ui::parse("[ui]\ncolor=false\nlog_format='pretty-verbose'\ntheme='nord'\nmax_inline_output=5\ntimestamps=true").unwrap();
         assert!(!u.color);
+        assert!(u.dashboard);
+        assert!(!Ui::parse("[ui]\ndashboard=false").unwrap().dashboard);
         assert!(u.timestamps);
         assert_eq!(u.log_format, LogFormat::PrettyVerbose);
         assert_eq!(u.theme, Theme::Nord);
         assert_eq!(u.max_inline_output, 5);
         for bad in [
             "[ui]\nmax_inline_output=0",
+            "[ui]\nactivity_interval_secs=301",
             "[ui]\ntheme='unknown'",
             "[ui]\nlog_format='xml'",
             "[ui]\ncolour=true",
