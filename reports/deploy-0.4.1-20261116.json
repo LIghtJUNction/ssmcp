@@ -1,5 +1,5 @@
 {
-  "state": "applying",
+  "state": "verifying",
   "commit": "fff47d191136198b38f154804115c9e9f9f89b35",
   "binary_source_commit": "fff47d191136198b38f154804115c9e9f9f89b35",
   "version": "0.4.1",
@@ -27,5 +27,37 @@
     "phase": "stage",
     "started_unix": 1794807044,
     "state": "prepared"
+  },
+  "server": {
+    "binary_sha256": "ca84cd6594c4d3c03722af394240a054f2020b489e5bd3bad89e5478de359786",
+    "checks": {
+      "checkpoint_created": true,
+      "checkpoint_unused": true,
+      "configuration_unchanged": true,
+      "github_configured": true,
+      "installed_version": true,
+      "issuer_https": true,
+      "matching_stage_receipt": true,
+      "package_name": true,
+      "package_sha256": true,
+      "package_version": true,
+      "portal_remains_healthy": true,
+      "production_DCR_survives_restart": true,
+      "production_lease": true,
+      "production_registry_permissions": true,
+      "public_health_discovery_and_auth_rejection": true,
+      "public_homepage": true,
+      "rollback_available": true,
+      "running_binary_matches_install": true
+    },
+    "commit": "fff47d191136198b38f154804115c9e9f9f89b35",
+    "finished_unix": 1794807081,
+    "package": "ssmcp-git 0.4.1.r49.gfff47d1-1",
+    "phase": "apply",
+    "registry": "/var/lib/ssmcpd/oauth-clients.toml",
+    "rollback_checkpoint": "/var/lib/ssmcp-rollouts/fff47d191136198b38f154804115c9e9f9f89b35",
+    "server_version": "ssmcpd 0.4.1",
+    "started_unix": 1794807067,
+    "state": "deployed"
   }
 }
