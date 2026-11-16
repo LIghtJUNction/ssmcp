@@ -12,8 +12,11 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    process::{ChildStdin, Command},
+    io::{
+        AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
+        BufReader,
+    },
+    process::Command,
     sync::{Mutex, oneshot},
     task::JoinHandle,
     time::timeout,
@@ -23,6 +26,7 @@ const MAX_NATIVE_FRAME: usize = 16 * 1024 * 1024;
 const MAX_CALLS: usize = 8; // Leave bridge slots free for approvals, interrupt and event reads.
 const MAX_REQUESTS: usize = 64;
 type Response = Result<Value, String>;
+type NativeWriter = Box<dyn AsyncWrite + Unpin + Send>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
@@ -39,12 +43,13 @@ pub struct Peer {
     dialect: Dialect,
     // Fields drop in declaration order. Cancellation can skip async shutdown, so
     // Managed must stop descendants before closing stdin lets their parent exit.
-    process: Mutex<Managed>,
-    writer: Mutex<Option<ChildStdin>>,
+    process: Mutex<Option<Managed>>,
+    writer: Mutex<Option<NativeWriter>>,
     reader: SyncMutex<Option<JoinHandle<()>>>,
     stderr_reader: SyncMutex<Option<JoinHandle<()>>>,
     calls: SyncMutex<HashMap<String, Waiting>>,
     requests: SyncMutex<HashMap<String, Value>>,
+    request_prefix: String,
     next: AtomicU64,
     alive: AtomicBool,
     events: Arc<EventLog>,
@@ -85,31 +90,24 @@ impl Peer {
             .stdin
             .take()
             .ok_or("backend stdin unavailable")?;
-        let mut stdout = BufReader::new(
-            process
-                .child
-                .stdout
-                .take()
-                .ok_or("backend stdout unavailable")?,
-        );
+        let stdout = process
+            .child
+            .stdout
+            .take()
+            .ok_or("backend stdout unavailable")?;
         let mut stderr = process
             .child
             .stderr
             .take()
             .ok_or("backend stderr unavailable")?;
-        let peer = Arc::new_cyclic(|weak| Self {
+        let peer = Self::from_transport(
+            stdout,
+            Box::new(writer),
+            Some(process),
+            label,
             dialect,
-            process: Mutex::new(process),
-            writer: Mutex::new(Some(writer)),
-            reader: SyncMutex::new(None),
-            stderr_reader: SyncMutex::new(None),
-            calls: SyncMutex::new(HashMap::new()),
-            requests: SyncMutex::new(HashMap::new()),
-            next: AtomicU64::new(1),
-            alive: AtomicBool::new(true),
-            events: EventLog::with_output(label, output),
-            weak: weak.clone(),
-        });
+            output,
+        )?;
         let events = Arc::downgrade(&peer.events);
         let stderr_task = tokio::spawn(async move {
             let mut bytes = [0u8; 4096];
@@ -124,6 +122,83 @@ impl Peer {
             }
         });
         *peer.stderr_reader.lock().unwrap() = Some(stderr_task);
+        Ok(peer)
+    }
+
+    /// Connect only to an explicitly selected, already-running native service.
+    /// This peer never owns or terminates the process behind the socket.
+    #[cfg(unix)]
+    pub async fn connect_unix_with_output(
+        path: &std::path::Path,
+        label: &str,
+        dialect: Dialect,
+        output: Arc<crate::output::OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        if !path.is_absolute() {
+            return Err("native RPC socket requires an explicit absolute local path".into());
+        }
+        let parent = path
+            .parent()
+            .ok_or("native RPC socket has no parent directory")?;
+        let directory = std::fs::symlink_metadata(parent)?;
+        let metadata = std::fs::symlink_metadata(path)?;
+        // A private nonsymlink parent protects the checked path. Also verify
+        // the actual peer, rather than trusting only a filesystem pathname.
+        let uid = unsafe { libc::geteuid() };
+        if !directory.is_dir()
+            || directory.uid() != uid
+            || directory.mode() & 0o077 != 0
+            || !metadata.file_type().is_socket()
+            || metadata.uid() != uid
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(
+                "native RPC requires a socket and parent directory privately owned by this user"
+                    .into(),
+            );
+        }
+        let stream = timeout(
+            Duration::from_secs(5),
+            tokio::net::UnixStream::connect(path),
+        )
+        .await
+        .map_err(|_| "native RPC socket connection timed out")??;
+        if stream.peer_cred()?.uid() != uid {
+            return Err("native RPC socket peer belongs to another user".into());
+        }
+        let (reader, writer) = stream.into_split();
+        Self::from_transport(reader, Box::new(writer), None, label, dialect, output)
+    }
+
+    fn from_transport(
+        reader: impl AsyncRead + Unpin + Send + 'static,
+        writer: NativeWriter,
+        process: Option<Managed>,
+        label: &str,
+        dialect: Dialect,
+        output: Arc<crate::output::OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        // An attached service can outlive this connection and retain old replies.
+        // Never reuse an earlier connection's request ID namespace.
+        let mut nonce = [0u8; 16];
+        crate::platform::random_bytes(&mut nonce)?;
+        let request_prefix: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+        let peer = Arc::new_cyclic(|weak| Self {
+            dialect,
+            process: Mutex::new(process),
+            writer: Mutex::new(Some(writer)),
+            reader: SyncMutex::new(None),
+            stderr_reader: SyncMutex::new(None),
+            calls: SyncMutex::new(HashMap::new()),
+            requests: SyncMutex::new(HashMap::new()),
+            request_prefix,
+            next: AtomicU64::new(1),
+            alive: AtomicBool::new(true),
+            events: EventLog::with_output(label, output),
+            weak: weak.clone(),
+        });
+        let mut stdout = BufReader::new(reader);
         let weak = Arc::downgrade(&peer);
         let task = tokio::spawn(async move {
             loop {
@@ -139,7 +214,7 @@ impl Peer {
                         }
                     }
                     Ok(None) => {
-                        peer.fail("native process closed stdout");
+                        peer.fail("native peer closed its output stream");
                         break;
                     }
                     Err(error) => {
@@ -204,7 +279,9 @@ impl Peer {
             // A cancelled/failed write may leave half a JSON frame in the pipe.
             // Never reuse it for a subsequent request or retry a mutating call.
             self.fail(error);
-            self.process.lock().await.shutdown().await;
+            if let Some(process) = self.process.lock().await.as_mut() {
+                process.shutdown().await;
+            }
             self.writer.lock().await.take();
         }
         outcome
@@ -214,7 +291,9 @@ impl Peer {
         // This runs even when an outer timeout/abort drops send before its
         // normal error branch. No later frame may follow a partial JSON line.
         self.fail("native stdin write interrupted; transport cannot be reused");
-        if let Ok(mut process) = self.process.try_lock() {
+        if let Ok(mut process) = self.process.try_lock()
+            && let Some(process) = process.as_mut()
+        {
             process.terminate();
         }
         if let (Ok(runtime), Some(peer)) =
@@ -229,7 +308,11 @@ impl Peer {
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Response {
-        let id = format!("ssmcp-{}", self.next.fetch_add(1, Ordering::Relaxed));
+        let id = format!(
+            "ssmcp-{}-{}",
+            self.request_prefix,
+            self.next.fetch_add(1, Ordering::Relaxed)
+        );
         let key = json!(id).to_string();
         let (reply, receiver) = oneshot::channel();
         {
@@ -471,7 +554,9 @@ impl Peer {
         self.fail("ssmcp disconnected");
         // Capture and stop owned descendants while the parent still exists.
         // Closing stdin first lets fast native peers exit and orphan setsid jobs.
-        self.process.lock().await.shutdown().await;
+        if let Some(process) = self.process.lock().await.as_mut() {
+            process.shutdown().await;
+        }
         self.writer.lock().await.take();
         let stderr_task = self.stderr_reader.lock().unwrap().take();
         if let Some(task) = stderr_task {
@@ -488,7 +573,9 @@ impl Peer {
 
 impl Drop for Peer {
     fn drop(&mut self) {
-        self.process.get_mut().terminate();
+        if let Some(process) = self.process.get_mut().as_mut() {
+            process.terminate();
+        }
         if let Some(task) = self.stderr_reader.get_mut().unwrap().take() {
             task.abort();
         }
@@ -624,7 +711,14 @@ time.sleep(60)
             .await
             .expect("cancelled write did not finish native cleanup");
             assert!(
-                peer.process.lock().await.child.id().is_none(),
+                peer.process
+                    .lock()
+                    .await
+                    .as_ref()
+                    .unwrap()
+                    .child
+                    .id()
+                    .is_none(),
                 "native child was not reaped"
             );
             peer.shutdown().await;

@@ -181,57 +181,68 @@ impl Backend {
         name: &str,
         installed: &mut Option<(PathBuf, u64, std::time::SystemTime)>,
     ) {
-        let outcome=async {
-            let program=crate::program::executable(name)?;
-            let metadata=std::fs::metadata(&program).map_err(|e|e.to_string())?;
-            let identity=(program.clone(),metadata.len(),metadata.modified().map_err(|e|e.to_string())?);
-            if installed.as_ref()!=Some(&identity) {
+        let mut detected_program = None;
+        let mut detected_version = None;
+        let outcome = async {
+            let program = crate::program::executable(name)?;
+            let metadata = std::fs::metadata(&program).map_err(|e| e.to_string())?;
+            detected_program = Some(program.clone());
+            let identity = (program.clone(), metadata.len(), metadata.modified().map_err(|e| e.to_string())?);
+            if installed.as_ref() != Some(&identity) {
                 self.registry.invalidate(provider);
-                let old=self.drivers.lock().unwrap().remove(&provider);
-                if let Some(old)=old {old.shutdown().await}
-                *installed=None;
+                let old = self.drivers.lock().unwrap().remove(&provider);
+                if let Some(old) = old { old.shutdown().await; }
+                *installed = None;
             }
-            let mut driver=self.drivers.lock().unwrap().get(&provider).cloned();
-            let version = if driver.is_none() {
-                let version=probe_version(&program).await?;
-                let output=self.output.clone();
-                let future=async {
+            let mut driver = self.drivers.lock().unwrap().get(&provider).cloned();
+            if driver.is_none() {
+                detected_version = Some(probe_version(&program).await?);
+                let output = self.output.clone();
+                let future = async {
                     match provider {
-                        Provider::Codex=>codex::Codex::start_with_output(program.as_os_str(),&[],output).await.map(Driver::Codex),
-                        Provider::Claude=>cc::Claude::start_with_output(program.as_os_str(),&[],output).await.map(Driver::Claude),
-                        Provider::Pi=>pi::Pi::start_with_output(program.as_os_str(),&[],output).await.map(Driver::Pi),
-                        Provider::OpenCode=>opencode::OpenCode::start_with_output(program.as_os_str(),&[],output).await.map(Driver::OpenCode),
-                        _=>unreachable!(),
+                        Provider::Codex => codex::Codex::start_with_output(program.as_os_str(), &[], output).await.map(Driver::Codex),
+                        Provider::Claude => cc::Claude::start_with_output(program.as_os_str(), &[], output).await.map(Driver::Claude),
+                        Provider::Pi => pi::Pi::start_discovered_with_output(program.as_os_str(), &[], output).await.map(Driver::Pi),
+                        Provider::OpenCode => {
+                            let endpoint = std::env::var("SSMCP_OPENCODE_URL").map_err(|_| "OpenCode is installed; set SSMCP_OPENCODE_URL to an already-running native loopback service. Discovery does not start scheduled work.")?;
+                            let password = std::env::var("OPENCODE_PASSWORD").map_err(|_| "OpenCode attachment requires the native OPENCODE_PASSWORD")?;
+                            opencode::OpenCode::attach_with_output(&endpoint, &password, output).await.map(Driver::OpenCode)
+                        }
+                        _ => unreachable!(),
                     }
                 };
-                let opened=tokio::time::timeout(Duration::from_secs(90),future).await
-                    .map_err(|_|"native protocol handshake timed out".to_owned())?
-                    .map_err(|e|e.to_string())?;
-                driver=Some(opened);
-                Some(version)
-            } else {self.diagnostics.lock().unwrap().get(&provider).and_then(|d|d["version"].as_str().map(str::to_owned))};
-            let driver=driver.unwrap();
-            let catalog=match tokio::time::timeout(Duration::from_secs(75),driver.tools()).await {
-                Ok(Ok(catalog))=>catalog,
-                result=>{
+                let opened = tokio::time::timeout(Duration::from_secs(90), future).await
+                    .map_err(|_| "native protocol handshake timed out".to_owned())?
+                    .map_err(|e| e.to_string())?;
+                driver = Some(opened);
+            } else {
+                detected_version = self.diagnostics.lock().unwrap().get(&provider)
+                    .and_then(|d| d["version"].as_str().map(str::to_owned));
+            }
+            let driver = driver.unwrap();
+            let catalog = match tokio::time::timeout(Duration::from_secs(75), driver.tools()).await {
+                Ok(Ok(catalog)) => catalog,
+                result => {
                     driver.shutdown().await;
-                    return Err(match result {Ok(Err(error))=>error,_=>"native capability enumeration timed out".into()});
+                    return Err(match result {
+                        Ok(Err(error)) => error,
+                        _ => "native capability enumeration timed out".into(),
+                    });
                 }
             };
-            let count=catalog.len();
-            let details=driver.details().await;
-            // Publish only after the destination is installed. Hold the driver lock through
-            // publication so a concurrent caller cannot observe a catalog without its route.
+            let count = catalog.len();
+            let details = driver.details().await;
+            // Install the destination before publishing its current-generation routes.
             let published = {
                 let mut drivers = self.drivers.lock().unwrap();
-                drivers.insert(provider,driver.clone());
-                let published = self.registry.replace(provider,catalog);
+                drivers.insert(provider, driver.clone());
+                let published = self.registry.replace(provider, catalog);
                 if published.is_err() { drivers.remove(&provider); }
                 published
             };
-            if let Err(error)=published {driver.shutdown().await;return Err(error)}
-            *installed=Some(identity);
-            Ok(json!({"provider":name,"status":"ready","executable":program,"version":version,"tools":count,"details":details}))
+            if let Err(error) = published { driver.shutdown().await; return Err(error); }
+            *installed = Some(identity);
+            Ok(json!({"provider":name,"status":"ready","executable":program,"version":detected_version,"tools":count,"details":details}))
         }.await;
         let diagnostic = match outcome {
             Ok(value) => value,
@@ -242,7 +253,7 @@ impl Backend {
                     old.shutdown().await
                 }
                 *installed = None;
-                json!({"provider":name,"status":"unavailable","reason":error,"tools":0})
+                json!({"provider":name,"status":"unavailable","reason":error,"tools":0,"executable":detected_program,"version":detected_version})
             }
         };
         let changed = {
@@ -359,10 +370,6 @@ impl Drop for Backend {
             task.abort()
         }
     }
-}
-
-pub(crate) fn harness_status(level: &str, message: &str) {
-    crate::client::render::status("harness", level, message);
 }
 
 async fn probe_version(program: &Path) -> Result<String, String> {
@@ -577,6 +584,6 @@ mod tests {
         let third = page(tools.clone(), second["nextCursor"].as_str()).unwrap();
         assert_eq!(third["tools"].as_array().unwrap().len(), 22);
         assert!(third.get("nextCursor").is_none());
-        assert!(page(tools[1..].to_vec(), first["nextCursor"].as_str()).is_err());
+        assert!(page(&tools[1..], first["nextCursor"].as_str()).is_err());
     }
 }

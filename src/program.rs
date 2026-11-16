@@ -95,6 +95,15 @@ fn entry(
         return installed(manager, name, home, depth + 1)
             .ok_or_else(|| format!("{manager} shim for {name} has no usable installed entry point; no download was attempted"));
     }
+    // Resolve only an exact dispatcher: extra options or shell statements may
+    // carry user policy, so never silently bypass a more complex wrapper.
+    if let Some(manager) = static_manager_wrapper(&text, name) {
+        let home =
+            home.ok_or_else(|| format!("{manager} wrapper for {name}; home is unavailable"))?;
+        return installed(manager, name, home, depth + 1).ok_or_else(|| {
+            format!("{manager} wrapper for {name} has no usable installed entry point; no download was attempted")
+        });
+    }
     // mise/aube npm shims publish their already-installed entry in a comment.
     if let Some(target) = text
         .lines()
@@ -137,6 +146,28 @@ fn entry(
     Ok(resolved)
 }
 
+fn static_manager_wrapper(text: &str, name: &str) -> Option<&'static str> {
+    if !text.starts_with("#!") {
+        return None;
+    }
+    let mut commands = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'));
+    let command = commands.next()?;
+    if commands.next().is_some() {
+        return None;
+    }
+    for verb in ["x", "exec"] {
+        for quoted in [name.to_owned(), format!("\"{name}\""), format!("'{name}'")] {
+            if command == format!("exec mise {verb} {quoted} -- {quoted} \"$@\"") {
+                return Some("mise");
+            }
+        }
+    }
+    None
+}
+
 fn installed(manager: &str, name: &str, home: &Path, depth: usize) -> Option<PathBuf> {
     let root = match manager {
         "mise" => home.join(".local/share/mise/installs").join(name),
@@ -177,6 +208,7 @@ fn installed(manager: &str, name: &str, home: &Path, depth: usize) -> Option<Pat
         for candidate in [
             version.join("bin").join(name),
             version.join(name),
+            version.join(name).join(name),
             version.join("node_modules/.bin").join(name),
         ] {
             #[cfg(windows)]
@@ -255,7 +287,10 @@ pub fn configure(command: &mut tokio::process::Command) {
         .env("MISE_AUTO_INSTALL", "false")
         .env("UV_OFFLINE", "1")
         .env("npm_config_offline", "true")
-        .env("COREPACK_ENABLE_NETWORK", "0");
+        .env("COREPACK_ENABLE_NETWORK", "0")
+        .env("PI_OFFLINE", "1")
+        .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
+        .env("OPENCODE_DISABLE_MODELS_FETCH", "1");
     if let Ok(node) = executable("node")
         && prefix(&node).is_ok_and(|bytes| native_binary(&bytes))
         && let Some(directory) = node.parent()
@@ -331,5 +366,39 @@ mod tests {
         );
         assert!(!native_binary(b"#!/bin/sh\nexec mise"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn resolves_exact_mise_dispatcher_to_installed_nested_binary() {
+        let root = directory();
+        let bin = root.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let wrapper = bin.join("pi");
+        std::fs::write(&wrapper, "#!/bin/bash\n# Installed native bundle dispatcher.\nexec mise x \"pi\" -- \"pi\" \"$@\"\n").unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            resolve("pi", bin.as_os_str(), Some(&root))
+                .unwrap_err()
+                .contains("no download")
+        );
+        let binary = root.join(".local/share/mise/installs/pi/1.5.0/pi/pi");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+        assert_eq!(resolve("pi", bin.as_os_str(), Some(&root)).unwrap(), binary);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn does_not_skip_extra_wrapper_arguments_or_policy_statements() {
+        assert_eq!(
+            static_manager_wrapper("#!/bin/sh\nexec mise x \"pi\" -- \"pi\" \"$@\"", "pi"),
+            Some("mise")
+        );
+        for script in [
+            "#!/bin/sh\nexec mise x pi -- pi --config other \"$@\"",
+            "#!/bin/sh\nexport POLICY=required\nexec mise x pi -- pi \"$@\"",
+            "#!/bin/sh\nexec mise x other -- pi \"$@\"",
+            "#!/bin/sh\nexec mise x pi -- pi \"$@\"; exit 0",
+        ] {
+            assert_eq!(static_manager_wrapper(script, "pi"), None, "{script}");
+        }
     }
 }

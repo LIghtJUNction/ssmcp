@@ -40,7 +40,7 @@ from pathlib import Path
 name, other = sys.argv[1:]
 pid = os.getpid()
 Path(name + '.ready').write_text(json.dumps({
-    'pid': pid, 'cwd': os.getcwd(),
+    'command_pid': pid, 'parent_pid': os.getppid(), 'cwd': os.getcwd(),
     'env_sha256': hashlib.sha256(os.environ['UNIFIED_PROBE'].encode()).hexdigest()}))
 deadline = time.monotonic() + 40
 while not Path(other + '.ready').exists():
@@ -71,14 +71,36 @@ print('UNIFIED_LONG_DONE', flush=True)
 '''
 
 TREE_PROGRAM = r'''
-import json, os, subprocess, sys, time
+import json, os, sys, time
 from pathlib import Path
-child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'],
-    start_new_session=True, stdin=subprocess.DEVNULL,
-    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-Path(sys.argv[1]).write_text(json.dumps({'parent': os.getpid(), 'child': child.pid}))
+command_pid = os.getpid()
+read, write = os.pipe()
+first = os.fork()
+if first == 0:
+    os.close(read)
+    os.setsid()
+    if os.fork() != 0:
+        os._exit(0)
+    Path(sys.argv[1]).write_text(json.dumps({
+        'command_pid': command_pid, 'daemon_pid': os.getpid()}))
+    os.write(write, b'R')
+    os.close(write)
+    # Keep inherited stdout/stderr open: only complete descendant cleanup can
+    # make the command's captured output reach EOF after its native parent exits.
+    time.sleep(120)
+    os._exit(0)
+os.close(write)
+if os.read(read, 1) != b'R':
+    raise RuntimeError('detached descendant did not start')
+os.close(read)
+os.waitpid(first, 0)
 print('UNIFIED_TREE_READY', flush=True)
-time.sleep(120)
+deadline = time.monotonic() + 120
+while not Path(sys.argv[1] + '.release').exists():
+    if time.monotonic() > deadline:
+        raise RuntimeError('fixture owner did not complete the lifecycle check')
+    time.sleep(.02)
+sys.exit(17)
 '''
 
 
@@ -93,9 +115,15 @@ def process_identity(pid):
     """Bind cleanup assertions to a Linux process instance, not a reusable PID."""
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-        return {"pid": pid, "start_ticks": int(fields[19]), "state": fields[0]}
+        return {"pid": pid, "start_ticks": int(fields[19]), "state": fields[0],
+                "parent_pid": int(fields[1]), "session_pid": int(fields[3])}
     except FileNotFoundError:
         return None
+
+
+def still_present(identity):
+    current = process_identity(identity["pid"])
+    return bool(current and current["start_ticks"] == identity["start_ticks"])
 
 
 def still_running(identity):
@@ -156,13 +184,13 @@ class Unified(SessionFeatures):
             for child in value:
                 self.track(child)
 
-    def artifact_bytes(self, metadata, *, client_id=None):
+    def artifact_bytes(self, metadata, *, client_id=None, secret=None):
         self.artifact_path(metadata)
         result = bytearray()
         while len(result) < metadata["bytes"]:
             page = super().call("ssmcp.output.read", {
                 "id": metadata["id"], "offset": len(result), "max_bytes": 32768,
-            }, client_id=client_id)
+            }, client_id=client_id, secret=secret)
             chunk = base64.b64decode(page["data_base64"], validate=True)
             if (not chunk or page["offset"] != len(result)
                     or page["next_offset"] != len(result) + len(chunk)
@@ -177,7 +205,7 @@ class Unified(SessionFeatures):
         value = super().call(name, arguments, **kwargs)
         self.track(value)
         if isinstance(value, dict) and value.get("spilled") and value.get("format") == "mcp_tool_result_json":
-            original = json.loads(self.artifact_bytes(value["artifact"], client_id=kwargs.get("client_id")))
+            original = json.loads(self.artifact_bytes(value["artifact"], client_id=kwargs.get("client_id"), secret=kwargs.get("secret")))
             if original.get("isError"):
                 raise AssertionError(f"Archived native tool {name} failed: {original}")
             value = original["structuredContent"]
@@ -232,10 +260,10 @@ class Unified(SessionFeatures):
             return state if not state["running"] else None
         return wait_for(complete, timeout=timeout, description="final independent command state")
 
-    def events(self, tool, *, cursor=0, client_id=None):
+    def events(self, tool, *, cursor=0, client_id=None, secret=None):
         rows = []
         while True:
-            page = self.call(tool, {"cursor": cursor, "max_events": 8, "wait_ms": 0}, client_id=client_id)
+            page = self.call(tool, {"cursor": cursor, "max_events": 8, "wait_ms": 0}, client_id=client_id, secret=secret)
             if page["truncated"]:
                 raise AssertionError(f"{tool} lost a test event before it could be inspected")
             batch = page["events"]
@@ -309,6 +337,22 @@ class Unified(SessionFeatures):
         self.initial_catalog = index(listed)
         self.save("catalog.json", {"client": selected, "tools": listed, "discovery": discovery})
 
+
+    def record_job_processes(self, job, command_pid):
+        supervisor = process_identity(job["pid"])
+        command = process_identity(command_pid)
+        identities = []
+        for role, identity in (("supervisor", supervisor), ("command", command)):
+            if identity:
+                identity = {**identity, "role": role, "job_id": job["job_id"]}
+                self.tree_identities.append(identity)
+                identities.append(identity)
+        self.check(job["pid_role"] == "supervisor" and supervisor and command
+                   and still_running(supervisor) and still_running(command)
+                   and command_pid != job["pid"] and command["parent_pid"] == job["pid"],
+                   "reported supervisor PID owns the separately observed live command PID")
+        return identities
+
     def concurrent_commands(self):
         arguments = [{"command": [self.python, "-u", "-c", BARRIER_PROGRAM, name, other],
                       "env": {"UNIFIED_PROBE": self.env_marker}}
@@ -316,18 +360,20 @@ class Unified(SessionFeatures):
         jobs = self.code("return await Promise.all(%s.map(async args => { const r=await call(%s, 'ssmcp.exec.start', args); if(r.isError) throw Error(JSON.stringify(r)); return r.structuredContent; }));" %
                          (json.dumps(arguments), json.dumps(self.client_id)))
         self.check(len({job["job_id"] for job in jobs}) == 2 and len({job["pid"] for job in jobs}) == 2
-                   and all(job["running"] and job["exit_code"] is None for job in jobs),
+                   and all(job["running"] and job["exit_code"] is None and job["exit_signal"] is None
+                           and job["pid_role"] == "supervisor" for job in jobs),
                    "two starts return distinct active processes without claiming command success")
         self.concurrent_jobs = jobs
         observations = []
         for name, job in zip(("alpha", "beta"), jobs):
             observed = wait_for(lambda: fixture_json(self.workspace / f"{name}.ready"),
                                 timeout=10, description="both command barrier participants")
-            self.check(observed["pid"] == job["pid"] and observed["cwd"] == str(self.workspace.resolve())
+            self.record_job_processes(job, observed["command_pid"])
+            self.check(observed["parent_pid"] == job["pid"] and observed["cwd"] == str(self.workspace.resolve())
                        and observed["env_sha256"] == hashlib.sha256(self.env_marker.encode()).hexdigest(),
                        f"{name} runs in the authorized cwd with its explicit environment")
             for stream, label in (("stdout", "OUT"), ("stderr", "ERR")):
-                marker = f"UNIFIED_{name}_{label}_{job['pid']}".encode()
+                marker = f"UNIFIED_{name}_{label}_{observed['command_pid']}".encode()
                 self.wait_stream(job["job_id"], stream, marker)
             self.check(self.call("ssmcp.exec.status", {"job_id": job["job_id"]})["running"],
                        f"{name} emits live stdout/stderr while blocked behind the release gate")
@@ -337,8 +383,8 @@ class Unified(SessionFeatures):
         self.call("terminal.write", {"data": "printf '%s%s\\n' UNIFIED_PTY_ INDEPENDENT\n"})
         self.read_until(r"UNIFIED_PTY_INDEPENDENT", timeout=5)
         log = (self.directory / "unified-primary.log").read_text(errors="replace")
-        self.check(all(log.count(f"UNIFIED_{name}_{label}_{job['pid']}") == 1
-                       for name, job in zip(("alpha", "beta"), jobs) for label in ("OUT", "ERR")),
+        self.check(all(log.count(f"UNIFIED_{name}_{label}_{observed['command_pid']}") == 1
+                       for name, observed in zip(("alpha", "beta"), observations) for label in ("OUT", "ERR")),
                    "the terminal displays each live job/stdout/stderr marker once before any wait completes")
         self.call("ssmcp.fs.write_text", {"path": "concurrent.release", "text": "release\n"})
         final = [self.finish_job(job) for job in jobs]
@@ -462,18 +508,18 @@ class Unified(SessionFeatures):
         self.oauth_login(credentials)
         self.sibling_token = self.secret
         self.secret, self.oauth_grant = token, grant
-        self.check(self.call("terminal.status", client_id=self.sibling_id)["running"],
+        self.check(self.call("terminal.status", client_id=self.sibling_id, secret=self.sibling_token)["running"],
                    "the sibling is authorized and online before testing its per-client resource boundary")
         denied = {}
         for tool in ("ssmcp.output.read", "ssmcp.output.stat"):
-            denied[tool] = self.rejected(tool, {"id": self.retained_artifact["id"]}, client_id=self.sibling_id)
-        denied["job"] = self.rejected("ssmcp.exec.status", {"job_id": self.concurrent_jobs[0]["job_id"]}, client_id=self.sibling_id)
-        self.check(not self.call("ssmcp.exec.list", client_id=self.sibling_id)["jobs"],
+            denied[tool] = self.rejected(tool, {"id": self.retained_artifact["id"]}, client_id=self.sibling_id, secret=self.sibling_token)
+        denied["job"] = self.rejected("ssmcp.exec.status", {"job_id": self.concurrent_jobs[0]["job_id"]}, client_id=self.sibling_id, secret=self.sibling_token)
+        self.check(not self.call("ssmcp.exec.list", client_id=self.sibling_id, secret=self.sibling_token)["jobs"],
                    "a separate client cannot list or address the first client's tasks")
         for tool in ("ssmcp.exec.events", "ssmcp.fs.events", "ssmcp.audit.events"):
-            rows, _ = self.events(tool, client_id=self.sibling_id)
+            rows, _ = self.events(tool, client_id=self.sibling_id, secret=self.sibling_token)
             self.check(not rows, f"{tool} on another client does not expose the first client's audit stream")
-        self.call("ssmcp.output.cleanup", client_id=self.sibling_id)
+        self.call("ssmcp.output.cleanup", client_id=self.sibling_id, secret=self.sibling_token)
         self.check(self.artifact_path(self.retained_artifact).is_file(),
                    "another client's cleanup leaves the first client's retained artifact intact")
         self.save("client-isolation.json", {"primary": self.client_id, "sibling": self.sibling_id, "denied": denied})
@@ -483,16 +529,35 @@ class Unified(SessionFeatures):
         job = self.call("ssmcp.exec.start", {"command": [self.python, "-u", "-c", TREE_PROGRAM, marker],
                                               "timeout_ms": timeout_ms})
         observed = wait_for(lambda: fixture_json(self.workspace / marker), timeout=5, description="owned descendant fixture")
-        identities = [process_identity(observed[key]) for key in ("parent", "child")]
-        self.check(all(identity and still_running(identity) for identity in identities)
-                   and observed["parent"] == job["pid"], f"{label} starts an actual parent and a descendant in a separate session")
-        self.tree_identities.extend(identities)
+        identities = self.record_job_processes(job, observed["command_pid"])
+        def adopted():
+            daemon = process_identity(observed["daemon_pid"])
+            return daemon if daemon and daemon["parent_pid"] == job["pid"] else None
+        daemon = wait_for(adopted, timeout=5, description="double-fork descendant adopted by this job's supervisor")
+        daemon = {**daemon, "role": "daemon", "job_id": job["job_id"]}
+        self.tree_identities.append(daemon)
+        identities.append(daemon)
+        self.check(still_running(daemon) and daemon["session_pid"] != job["pid"],
+                   f"{label} starts an actual double-fork daemon in a detached session")
         return job, identities
 
     def stopped(self, identities, label):
-        wait_for(lambda: not any(still_running(identity) for identity in identities), timeout=10,
-                 description=f"{label} process and descendant cleanup")
-        self.check(True, f"{label} stops every observed owned process instance")
+        wait_for(lambda: not any(still_present(identity) for identity in identities), timeout=10,
+                 description=f"{label} process and descendant reaping")
+        self.check(True, f"{label} reaps every observed supervisor, command and daemon instance")
+
+    def native_parent_exit(self):
+        job, identities = self.tree("native-exit")
+        self.call("ssmcp.fs.write_text", {"path": "native-exit.pids.json.release", "text": "release\\n"})
+        final = self.finish_job(job)
+        self.check(final["exit_code"] == 17 and final["exit_signal"] is None
+                   and not final["running"] and final["error"] is None
+                   and final["stdout"]["eof"] and final["stderr"]["eof"]
+                   and final["stdout"]["error"] is None and final["stderr"]["error"] is None,
+                   "native exit 17 is preserved and detached stdout/stderr holders are closed without a drain timeout")
+        self.stopped(identities, "native parent exit")
+        self.save("native-parent-exit.json", {"started": job, "final": final,
+                                             "observed_processes": identities})
 
     def cancellation(self):
         cancelled, cancel_ids = self.tree("cancel")
@@ -547,7 +612,7 @@ class Unified(SessionFeatures):
         self.check(preserved["sha256"] == self.retained_artifact["sha256"]
                    and preserved["bytes"] == self.retained_artifact["bytes"],
                    "acknowledged reload preserves owned output through the private one-use handoff")
-        self.rejected("ssmcp.output.read", {"id": self.retained_artifact["id"]}, client_id=self.sibling_id)
+        self.rejected("ssmcp.output.read", {"id": self.retained_artifact["id"]}, client_id=self.sibling_id, secret=self.sibling_token)
         self.save("reload.json", {"acknowledgement": accepted, "old_client_id": old_id,
                   "new_client_id": self.client_id, "process_pid": pid, "stopped_processes": identities,
                   "old_job_rejected": stale, "retained_output": preserved, "old_oauth_status": 401})
@@ -566,7 +631,8 @@ class Unified(SessionFeatures):
         stages = [("ssh_oauth", self.bootstrap), ("catalog_no_harness", self.catalog),
                   ("concurrent_execution", self.concurrent_commands), ("output_storage", self.outputs),
                   ("file_skill_audit", self.workspace_audit), ("client_isolation", self.client_isolation),
-                  ("cancel_timeout", self.cancellation), ("automatic_expiration", self.expiration),
+                  ("cancel_timeout", self.cancellation), ("native_parent_exit", self.native_parent_exit),
+                  ("automatic_expiration", self.expiration),
                   ("reload", self.reload_client), ("disconnect", self.disconnect)]
         for name, action in stages:
             self.current_section = name
@@ -631,16 +697,21 @@ def main():
                     action()
                 except Exception as cleanup_error:
                     cleanup_errors.append(harness.scrub(f"{label}: {cleanup_error}"))
-            remaining = [item for item in harness.tree_identities if still_running(item)]
+            remaining = [item for item in harness.tree_identities if still_present(item)]
             report["remaining_observed_processes"] = remaining
             if remaining:
-                cleanup_errors.append("an observed test process survived client shutdown")
+                cleanup_errors.append("an observed test process remained alive or unreaped after client shutdown")
                 # Record the product failure before removing only the exact test
                 # process instances. A pidfd avoids signalling a reused PID.
                 for identity in remaining:
                     try:
                         fd = os.pidfd_open(identity["pid"])
                         try:
+                            info = Path(f"/proc/self/fdinfo/{fd}").read_text()
+                            bound_pid = next((int(line.split(":", 1)[1]) for line in info.splitlines()
+                                              if line.startswith("Pid:")), None)
+                            if bound_pid != identity["pid"]:
+                                raise RuntimeError("fixture pidfd could not be bound to its procfs identity")
                             if still_running(identity):
                                 signal.pidfd_send_signal(fd, signal.SIGKILL)
                         finally:

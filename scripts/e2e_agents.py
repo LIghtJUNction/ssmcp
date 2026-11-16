@@ -12,9 +12,16 @@ import argparse
 import base64
 import concurrent.futures
 import json
+import os
 import re
 from pathlib import Path
+import secrets
+import selectors
+import socket
+import subprocess
+import sys
 import tempfile
+import threading
 import time
 
 from e2e import BUILTIN_TOOLS, SHELL_TOOLS, Harness, PUBLIC_URL, process_running, wait_for
@@ -23,6 +30,161 @@ from e2e import BUILTIN_TOOLS, SHELL_TOOLS, Harness, PUBLIC_URL, process_running
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 MODES = ("shell", "codex", "cc", "pi", "opencode")
+
+
+class ExistingServices:
+    """Test-owned native services, initialized before the client can attach.
+
+    Pi's socket only forwards an already running JSONL session. It never starts
+    a process on connect. OpenCode's HTTP fixture likewise runs independently
+    of ssmcp. Fixture-only PATH wrappers reject any accidental automatic launch.
+    """
+
+    def __init__(self, harness, directory):
+        self.harness = harness
+        self.directory = directory
+        self.environment = {}
+        self.processes = []
+        self.stopping = threading.Event()
+        self.listener = None
+        self.connection = None
+        self.thread = None
+        self.relay_error = None
+        self.guard = directory / "reject-automatic-launch.py"
+        self.attempts = directory / "automatic-launch-attempted"
+        self.guard.write_text(
+            "from pathlib import Path\n"
+            f"Path({str(self.attempts)!r}).write_text('unexpected native launch')\n"
+            "raise SystemExit(91)\n"
+        )
+        harness.services.append(self)
+
+    def spawn(self, kind, directory, arguments, environment):
+        log_path = directory / "external-service.log"
+        log = log_path.open("w+")
+        self.harness.logs.append((log_path, log))
+        process = subprocess.Popen(
+            [sys.executable, str(FIXTURES / kind), *arguments],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
+            bufsize=0, cwd=directory, env={**os.environ, **environment},
+            start_new_session=True,
+        )
+        self.processes.append(process)
+        self.harness.processes.append(process)
+        return process
+
+    @staticmethod
+    def read_json(process):
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            if not selector.select(timeout=5):
+                raise AssertionError("external fixture did not initialize")
+        line = process.stdout.readline()
+        if not line:
+            raise AssertionError("external fixture exited before initialization")
+        return json.loads(line)
+
+    def start_pi(self, directory):
+        process = self.spawn("pi_rpc.py", directory, ["--mode", "rpc", "--offline"], {"PI_OFFLINE": "1"})
+        process.stdin.write(b'{"id":"fixture-preflight","type":"get_state"}\n')
+        state = self.read_json(process)
+        self.harness.check(state.get("success") is True
+                           and state.get("command") == "get_state"
+                           and state.get("data", {}).get("pid") == process.pid,
+                           "pi: native fixture session is initialized before publishing its socket")
+        path = directory / "native.sock"
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(path))
+        path.chmod(0o600)
+        self.listener.listen(1)
+        self.listener.settimeout(0.1)
+        self.thread = threading.Thread(target=self.relay_pi, args=(process,), daemon=True)
+        self.thread.start()
+        self.environment["SSMCP_PI_RPC_SOCKET"] = str(path)
+
+    def relay_pi(self, process):
+        try:
+            while not self.stopping.is_set():
+                try:
+                    connection, _ = self.listener.accept()
+                except socket.timeout:
+                    continue
+                self.connection = connection
+                try:
+                    with connection, selectors.DefaultSelector() as selector:
+                        connection.settimeout(1)
+                        selector.register(connection, selectors.EVENT_READ)
+                        selector.register(process.stdout, selectors.EVENT_READ)
+                        connected = True
+                        while connected and not self.stopping.is_set():
+                            for key, _ in selector.select(timeout=0.1):
+                                if key.fileobj is connection:
+                                    data = connection.recv(65536)
+                                    if not data:
+                                        connected = False
+                                        break
+                                    # Unbuffered pipes can perform a partial write.
+                                    remaining = memoryview(data)
+                                    while remaining:
+                                        remaining = remaining[process.stdin.write(remaining):]
+                                else:
+                                    data = os.read(process.stdout.fileno(), 65536)
+                                    if not data:
+                                        raise AssertionError("external Pi fixture closed its native stream")
+                                    connection.sendall(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    # Disconnect closes only this attachment, not Pi's stdin.
+                    pass
+                finally:
+                    self.connection = None
+        except Exception as error:
+            if not self.stopping.is_set():
+                self.relay_error = error
+
+    def start_opencode(self, directory):
+        password = secrets.token_hex(24)
+        self.harness.sensitive.extend([
+            password, base64.b64encode(f"opencode:{password}".encode()).decode(),
+        ])
+        process = self.spawn("opencode_http.py", directory, [
+            "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0",
+            "--fixture-dir", str(directory),
+        ], {"OPENCODE_PASSWORD": password})
+        endpoint = self.read_json(process)["url"]
+        self.environment.update(SSMCP_OPENCODE_URL=endpoint, OPENCODE_PASSWORD=password)
+
+    def check_no_launch(self):
+        self.harness.check(not self.attempts.exists() and self.relay_error is None,
+                           "external services: discovery never launches the guarded Pi/OpenCode executables")
+
+    def close(self):
+        self.stopping.set()
+        connection = self.connection
+        if connection is not None:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        if self.listener is not None:
+            self.listener.close()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+        for process in self.processes:
+            self.harness.stop(process)
+            process.stdin.close()
+
+
+class ServiceHarness(Harness):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.services = []
+
+    def cleanup(self):
+        try:
+            for service in reversed(self.services):
+                service.close()
+        finally:
+            super().cleanup()
 
 
 def full_call(harness, name, arguments=None, *, expect_error=False):
@@ -331,6 +493,13 @@ def check_opencode(harness, label, tools, directory):
     names = {tool["name"] for tool in tools}
     harness.check(len(tools) == 78 + len(BUILTIN_TOOLS) + len(SHELL_TOOLS) and "opencode.fixture.extra69" in names,
                   "opencode: all native OpenAPI operations survive multi-page MCP discovery")
+    def native_requests():
+        return [json.loads(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+    requests = native_requests()
+    harness.check(bool(requests) and all(
+        request["method"] == "GET" and request["path"] in ("/api/info", "/openapi.json")
+        for request in requests
+    ), "opencode: discovery only reads native info and OpenAPI, without starting an event session")
     info = harness.call("opencode.server.info")
     process = info["body"]["data"]
     harness.check(info["status"] == 200 and process["authenticated"]
@@ -340,6 +509,12 @@ def check_opencode(harness, label, tools, directory):
     harness.check(schema["operation"]["x-fixture-extension"] == {"keep": [1, 2, 3]}
                   and "EchoInput" in schema["components"]["schemas"],
                   "opencode: raw native operation extensions and referenced schemas are available")
+    wait_for(lambda: any(request["path"] == "/api/event" for request in native_requests()),
+             description="OpenCode observation stream after an explicit native call")
+    # The fixture records subscriber registration before sending SSE headers,
+    # independently of how the terminal renders an unfamiliar native event.
+    wait_for(lambda: (directory / "subscriber-ready").exists(),
+             description="OpenCode subscriber ready before publishing the echo")
     payload = {"message": "中文 HTTP echo", "future": {"nested": [7, True]}}
     result = harness.call("opencode.fixture.echo", {
         "path": {"itemID": "item_roundtrip"}, "query": {"trace": "round trip"},
@@ -360,7 +535,7 @@ def check_opencode(harness, label, tools, directory):
     ))
     harness.check(harness.call("opencode.fixture.extra69")["body"] == {"index": 69},
                   "opencode: an operation from the later catalog page is callable")
-    requests = [json.loads(line) for line in (directory / "requests.jsonl").read_text().splitlines()]
+    requests = native_requests()
     harness.check(all(request["authenticated"] for request in requests),
                   "opencode: schema, event and API requests all use the private Basic credential")
     return [process["pid"], process["child_pid"]]
@@ -372,11 +547,43 @@ CHECKERS = {
 }
 
 
+def unconfigured_external_services(harness):
+    started = time.monotonic()
+    before = len(harness.checks)
+    directory = harness.directory / "fixture-unconfigured"
+    directory.mkdir(mode=0o700)
+    services = ExistingServices(harness, directory)
+    client, credentials = harness.start_client(
+        "client-unconfigured", name="unconfigured-fixture", cwd=directory,
+        harnesses=[(kind, services.guard, ()) for kind in ("pi", "opencode")],
+    )
+    harness.client = client
+    harness.client_id = credentials["client_id"]
+    harness.oauth_login(credentials)
+    tools, pages = catalog(harness, "shell")
+    diagnostics = harness.call("ssmcp.harnesses.list")["harnesses"]
+    harness.check(all(row["status"] == "unavailable" and row.get("version")
+                      and isinstance(row.get("reason"), str)
+                      for row in diagnostics if row["provider"] in ("pi", "opencode")),
+                  "external services: installed binaries without explicit existing endpoints remain unavailable")
+    services.check_no_launch()
+    pid = harness.call("terminal.status")["pid"]
+    harness.stop(client)
+    wait_for(lambda: not process_running(pid), description="unconfigured-provider shell cleanup")
+    harness.secret = ""
+    return {
+        "mode": "external-without-endpoints", "tools": len(tools), "catalog_pages": pages,
+        "checks": len(harness.checks) - before,
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
+
+
 def combined_harnesses_and_commands(harness):
     started = time.monotonic()
     before = len(harness.checks)
     directory = harness.directory / "fixture-combined"
     directory.mkdir(mode=0o700)
+    services = ExistingServices(harness, directory)
     installed = []
     for kind, fixture in (
         ("codex", "codex_rpc.py"), ("cc", "cc-fake.py"),
@@ -385,14 +592,20 @@ def combined_harnesses_and_commands(harness):
         state = directory / kind
         state.mkdir(mode=0o700)
         arguments = ("--fixture-dir", state) if kind in ("cc", "opencode") else ()
-        installed.append((kind, FIXTURES / fixture, arguments))
+        if kind == "pi":
+            services.start_pi(state)
+        elif kind == "opencode":
+            services.start_opencode(state)
+        installed.append((kind, services.guard if kind in ("pi", "opencode") else FIXTURES / fixture, arguments))
     client, credentials = harness.start_client(
         "client-combined", name="combined-fixture", cwd=directory, harnesses=installed,
+        extra_env=services.environment,
     )
     harness.client = client
     harness.client_id = credentials["client_id"]
     harness.oauth_login(credentials)
     tools, pages = catalog(harness, "all")
+    services.check_no_launch()
     # The Claude fixture changes its DynamicN tool on every fresh native scan.
     # Two interleaved public scans must each keep one generation across pages.
     older = harness.public_call("list", {"client_id": harness.client_id})
@@ -434,9 +647,9 @@ def combined_harnesses_and_commands(harness):
                   and states[0]["running"] and states[2]["success"]
                   and states[3]["status"] == 200,
                   "all: shell and multiple discovered harness tools execute in one parallel code_mode")
-    pids = [states[0]["pid"], states[1]["pid"], states[2]["data"]["pid"],
-            int((directory / "cc" / "pid").read_text()),
-            states[3]["body"]["data"]["pid"], states[3]["body"]["data"]["child_pid"]]
+    owned_pids = [states[0]["pid"], states[1]["pid"], int((directory / "cc" / "pid").read_text())]
+    external_pids = [states[2]["data"]["pid"], states[3]["body"]["data"]["pid"],
+                     states[3]["body"]["data"]["child_pid"]]
 
     commands = [
         {"command": ["/bin/sh", "-c", "sleep 0.15; printf alpha; printf alpha-err >&2"]},
@@ -475,9 +688,14 @@ def combined_harnesses_and_commands(harness):
                   and all(job["job_id"] != job_id for job in lifecycle["after"]["jobs"]),
                   "commands: wait preserves background work, completed results survive new starts, cancel and forget clean up")
     harness.stop(client)
-    wait_for(lambda: all(not process_running(pid) for pid in pids),
-             description="combined harness and shell cleanup")
-    harness.check(True, "all: one disconnect stops the shell and every registered harness process")
+    wait_for(lambda: all(not process_running(pid) for pid in owned_pids),
+             description="combined owned harness and shell cleanup")
+    harness.check(all(process_running(pid) for pid in external_pids),
+                  "all: disconnect stops owned processes and leaves existing Pi/OpenCode services alive")
+    services.close()
+    wait_for(lambda: all(not process_running(pid) for pid in external_pids),
+             description="test-owned external service cleanup")
+    harness.check(True, "all: the fixture owner cleans up its external services and children")
     harness.secret = ""
     return {
         "mode": "combined", "tools": len(tools), "catalog_pages": pages,
@@ -500,10 +718,18 @@ def run(harness):
         }.get(mode)
         backend = FIXTURES / fixture if fixture else None
         arguments = ("--fixture-dir", directory) if mode in ("cc", "opencode") else ()
+        services = ExistingServices(harness, directory)
+        if mode == "pi":
+            services.start_pi(directory)
+            backend = services.guard
+        elif mode == "opencode":
+            services.start_opencode(directory)
+            backend = services.guard
         label = f"client-{mode}"
         client, credentials = harness.start_client(
             label, harness=mode if fixture else None, fixture=backend,
             fixture_args=arguments, name=f"{mode}-fixture", cwd=directory,
+            extra_env=services.environment,
         )
         harness.client = client
         harness.client_id = credentials["client_id"]
@@ -512,11 +738,16 @@ def run(harness):
                       f"{mode}: SSH registers shell and discovered tools at its authenticated user path")
         harness.oauth_login(credentials)
         tools, pages = catalog(harness, mode)
+        services.check_no_launch()
         if mode == "opencode":
             harness.check(pages >= 2, "opencode: list actually traverses more than one native capability page")
         harness.workspace_roundtrip(directory, label=mode)
         pids = CHECKERS[mode](harness, label, tools, directory)
-        harness.check(all(process_running(pid) for pid in pids), f"{mode}: owned backend and test jobs are alive before disconnect")
+        shell_pid = harness.call("terminal.status")["pid"]
+        external_pids = pids if mode in ("pi", "opencode") else []
+        owned_pids = [shell_pid] + ([] if external_pids else pids)
+        harness.check(all(process_running(pid) for pid in owned_pids + external_pids),
+                      f"{mode}: the shell, native provider and test jobs are alive before disconnect")
         transcript = local_log(harness, label) + (harness.directory / "daemon.log").read_text(errors="replace")
         harness.check(not any(value and value in transcript for value in harness.sensitive),
                       f"{mode}: login codes and OAuth tokens never enter activity or daemon logs")
@@ -528,15 +759,22 @@ def run(harness):
         status, result, _ = harness.oauth_refresh()
         harness.check(status == 400 and result.get("error") == "invalid_grant",
                       f"{mode}: disconnect also prevents refresh-token renewal")
-        wait_for(lambda: all(not process_running(pid) for pid in pids),
+        wait_for(lambda: all(not process_running(pid) for pid in owned_pids),
                  description=f"{mode} backend and child cleanup")
         harness.check(True, f"{mode}: owned backend and child processes exit on disconnect")
+        if external_pids:
+            harness.check(all(process_running(pid) for pid in external_pids),
+                          f"{mode}: disconnect leaves the existing native service and its children alive")
+        services.close()
+        wait_for(lambda: all(not process_running(pid) for pid in external_pids),
+                 description=f"{mode} test-owned external service cleanup")
         harness.secret = ""
         summaries.append({
             "mode": mode, "tools": len(tools), "catalog_pages": pages,
             "checks": len(harness.checks) - before,
             "duration_seconds": round(time.monotonic() - started, 3),
         })
+    summaries.append(unconfigured_external_services(harness))
     summaries.append(combined_harnesses_and_commands(harness))
     return summaries
 
@@ -548,7 +786,7 @@ def main():
     args = parser.parse_args()
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="ssmcp-agents-e2e-") as directory:
-        harness = Harness(Path(directory), args.bin_dir)
+        harness = ServiceHarness(Path(directory), args.bin_dir)
         try:
             modes = run(harness)
         except Exception:
@@ -561,6 +799,7 @@ def main():
             "duration_seconds": round(time.monotonic() - started, 3),
             "transport": "real OpenSSH public-key + OAuth Authorization Code/S256 + HTTP MCP",
             "backends": "real Linux PTY; deterministic Codex, Claude Code, Pi and OpenCode protocol fixtures",
+            "external_service_contract": "Pi JSONL session initialized before Unix socket publication; OpenCode HTTP server started before discovery; only the test owner terminates these services",
             "model_calls": False,
         }
         if args.report:

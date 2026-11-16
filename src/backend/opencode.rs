@@ -1,4 +1,4 @@
-//! OpenCode v2's native HTTP API, discovered from the owned server's OpenAPI document.
+//! OpenCode v2 HTTP API, discovered from an owned or explicitly attached native server.
 use super::{events::EventLog, process::Managed, result};
 use crate::output::{Capture, INLINE_BYTES, OutputStore};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -55,6 +55,8 @@ pub struct OpenCode {
     base: Url,
     password: String,
     process: Mutex<Option<Managed>>,
+    owned: bool,
+    observing: Mutex<()>,
     snapshot: RwLock<Arc<NativeCatalog>>,
     refresh: Mutex<()>,
     output: Arc<OutputStore>,
@@ -149,6 +151,8 @@ impl OpenCode {
             base,
             password,
             process: Mutex::new(Some(process)),
+            owned: true,
+            observing: Mutex::new(()),
             snapshot: RwLock::new(snapshot),
             refresh: Mutex::new(()),
             output,
@@ -175,6 +179,102 @@ impl OpenCode {
         Ok(backend)
     }
 
+    /// Attach only to an explicitly supplied, already running local native server.
+    /// Discovery does not start OpenCode, change its configuration, or open a project.
+    pub async fn attach_with_output(
+        endpoint: &str,
+        password: &str,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let base = private_url(endpoint)?;
+        if password.is_empty() || password.len() > 4096 {
+            return Err(
+                "OpenCode attach requires a nonempty native password of at most 4096 bytes".into(),
+            );
+        }
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .build()?;
+        let info = fetch_server_info(&client, &base, password).await?;
+        let snapshot = Arc::new(fetch_catalog(&client, &base, password).await?);
+        let events = EventLog::with_output("opencode", output.clone());
+        let backend = Arc::new(Self {
+            client,
+            base,
+            password: password.to_owned(),
+            process: Mutex::new(None),
+            owned: false,
+            observing: Mutex::new(()),
+            snapshot: RwLock::new(snapshot),
+            refresh: Mutex::new(()),
+            output,
+            events,
+            readers: StdMutex::new(Vec::new()),
+            streams: StdMutex::new(BTreeMap::new()),
+            sockets: StdMutex::new(BTreeMap::new()),
+            next_stream: AtomicU64::new(1),
+            closed: AtomicBool::new(false),
+        });
+        backend.events.push(json!({
+            "type":"ssmcp.ready","backend":"opencode","mode":"attached",
+            "version":info["version"],"tools":backend.snapshot.read().unwrap().tools.len(),
+            "observation":"native events open only after an explicit tool call"
+        }));
+        Ok(backend)
+    }
+
+    async fn observe_attached_call(&self) {
+        if self.owned {
+            return;
+        }
+        let _observing = self.observing.lock().await;
+        if self.closed.load(Ordering::Acquire)
+            || self
+                .streams
+                .lock()
+                .unwrap()
+                .get(&0)
+                .is_some_and(|task| !task.is_finished())
+        {
+            return;
+        }
+        let outcome = async {
+            let response = self
+                .send(Method::GET, "/api/event", &json!({"timeout_ms":5000}), None)
+                .await?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "OpenCode event subscription returned {}",
+                    response.status()
+                ));
+            }
+            if response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split(';').next())
+                != Some("text/event-stream")
+            {
+                return Err("OpenCode event subscription did not return an event stream".to_owned());
+            }
+            self.start_stream(0, response, "/api/event".into(), true)
+        }
+        .await;
+        if let Err(error) = outcome {
+            // Lack of observation must not become an invented permission denial.
+            // The native operation still decides its own approval and result.
+            self.events.push(redact(
+                json!({
+                    "type":"ssmcp.observation_unavailable","backend":"opencode",
+                    "complete":false,"error":error
+                }),
+                &self.password,
+            ));
+        }
+    }
+
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         let _refresh = self.refresh.lock().await;
         self.ensure_running().await?;
@@ -196,6 +296,11 @@ impl OpenCode {
     async fn ensure_running(&self) -> Result<(), String> {
         if self.closed.load(Ordering::Acquire) {
             return Err("OpenCode has stopped".into());
+        }
+        if !self.owned {
+            return fetch_server_info(&self.client, &self.base, &self.password)
+                .await
+                .map(|_| ());
         }
         let stopped = {
             let mut process = self.process.lock().await;
@@ -242,7 +347,10 @@ impl OpenCode {
             return Err("arguments must be an object".into());
         }
         match name {
-            "opencode.events" => return self.events.read(arguments).await.map(result),
+            "opencode.events" => {
+                self.observe_attached_call().await;
+                return self.events.read(arguments).await.map(result);
+            }
             "opencode.schema" => return self.schema(&arguments).map(result),
             "opencode.stream_close" => return self.close_stream(&arguments).await.map(result),
             "opencode.stream_send" => return self.send_socket(&arguments).await.map(result),
@@ -287,6 +395,7 @@ impl OpenCode {
             1,
             RESPONSE_LIMIT as u64,
         )? as usize;
+        self.observe_attached_call().await;
         self.events.push(redact(json!({"type":"ssmcp.request","tool":name,"method":method.as_str(),"path":path,"arguments":arguments}), &self.password));
         if operation.is_some_and(|op| {
             op.definition.get("x-websocket").and_then(Value::as_bool) == Some(true)
@@ -531,6 +640,9 @@ impl OpenCode {
         .map_err(|e| e.to_string())?;
         let id = self.next_stream.fetch_add(1, Ordering::Relaxed);
         let mut streams = self.streams.lock().unwrap();
+        if self.closed.load(Ordering::Acquire) {
+            return Err("OpenCode has stopped".into());
+        }
         streams.retain(|_, task| !task.is_finished());
         let mut sockets = self.sockets.lock().unwrap();
         sockets.retain(|id, _| streams.contains_key(id));
@@ -642,6 +754,9 @@ impl OpenCode {
         reconnect: bool,
     ) -> Result<(), String> {
         let mut streams = self.streams.lock().unwrap();
+        if self.closed.load(Ordering::Acquire) {
+            return Err("OpenCode has stopped".into());
+        }
         streams.retain(|_, task| !task.is_finished());
         if streams.len() >= STREAM_LIMIT {
             return Err("too many OpenCode streams; close an existing stream".into());
@@ -1273,6 +1388,49 @@ fn deep_query(name: &str, value: &Value, out: &mut Vec<(String, String)>) -> Res
     Ok(())
 }
 
+async fn fetch_server_info(client: &Client, base: &Url, password: &str) -> Result<Value, String> {
+    let response = timeout(
+        Duration::from_secs(5),
+        client
+            .get(base.join("/api/info").map_err(|e| e.to_string())?)
+            .basic_auth("opencode", Some(password))
+            .send(),
+    )
+    .await
+    .map_err(|_| "OpenCode health request timed out")?
+    .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("OpenCode /api/info returned {}", response.status()));
+    }
+    let (bytes, truncated) = timeout(Duration::from_secs(5), read_bytes(response, 64 * 1024))
+        .await
+        .map_err(|_| "OpenCode health read timed out")??;
+    if truncated {
+        return Err("OpenCode /api/info exceeds 64 KiB".into());
+    }
+    let info: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "OpenCode /api/info did not return native server information")?;
+    let version = info
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or("OpenCode /api/info has no native version")?;
+    if version.len() > 128
+        || version
+            .strip_prefix('v')
+            .unwrap_or(version)
+            .split('.')
+            .next()
+            != Some("2")
+        || info
+            .get("pid")
+            .and_then(Value::as_u64)
+            .is_none_or(|pid| pid == 0)
+    {
+        return Err("OpenCode attach requires a supported v2 native server response".into());
+    }
+    Ok(info)
+}
+
 async fn fetch_catalog(
     client: &Client,
     base: &Url,
@@ -1668,7 +1826,7 @@ fn extra_tools() -> Vec<Value> {
             "operation_id":{"type":"string"},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]},"url_path":{"type":"string"},"websocket":{"type":"boolean"},"path":{"type":"object"},"query":{"type":"object"},"headers":{"type":"object","additionalProperties":{"type":"string"}},"body":{},"body_base64":{"type":"string"},"content_type":{"type":"string"},"response_max_bytes":{"type":"integer","minimum":1,"maximum":RESPONSE_LIMIT,"description":"Maximum inline preview bytes, additionally capped at 32 KiB. Larger bodies are retained as typed output artifacts."},"timeout_ms":{"type":"integer","minimum":1,"maximum":120000}},"additionalProperties":false}}),
         json!({"name":"opencode.schema","description":"List installed OpenCode operations, or return a native operation and its referenced schemas by operation_id. This discovers the installed API instead of assuming a fixed OpenCode version.","inputSchema":{"type":"object","properties":{"operation_id":{"type":"string"},"document":{"type":"boolean","description":"Return the complete, unchanged native OpenAPI document."}},"additionalProperties":false}}),
         json!({"name":"opencode.events","description":"Read bounded cursor-addressed OpenCode live events, tool calls, results, permission requests and adapter logs. Also mirrored live in the local terminal. If truncated=true, advance to start_cursor; upstream stream_gap events mean native events were missed.","inputSchema":{"type":"object","properties":{"cursor":{"type":"integer","minimum":0},"max_events":{"type":"integer","minimum":1,"maximum":256,"default":50},"wait_ms":{"type":"integer","minimum":0,"maximum":5000}},"additionalProperties":false}}),
-        json!({"name":"opencode.stream_close","description":"Close an SSE or WebSocket stream opened by a native operation. Stream 0 is the always-on local live log.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1}},"required":["stream_id"],"additionalProperties":false}}),
+        json!({"name":"opencode.stream_close","description":"Close an SSE or WebSocket stream opened by a native operation. Stream 0 is reserved for native live observation; attached servers start it after an explicit tool call.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1}},"required":["stream_id"],"additionalProperties":false}}),
         json!({"name":"opencode.stream_send","description":"Write a text/binary/ping/pong frame to an OpenCode WebSocket, such as native PTY terminal input or a client MCP JSON-RPC response. Specify text or data_base64. Data frames are bounded at 1 MiB, control frames at 125 bytes. Returns after the socket write succeeds; a timeout means delivery is uncertain.","inputSchema":{"type":"object","properties":{"stream_id":{"type":"integer","minimum":1},"kind":{"type":"string","enum":["text","binary","ping","pong"]},"text":{"type":"string"},"data_base64":{"type":"string","contentEncoding":"base64"}},"required":["stream_id"],"additionalProperties":false}}),
     ]
 }
@@ -1775,6 +1933,8 @@ mod tests {
             base,
             password: "synthetic-test-password".into(),
             process: Mutex::new(None),
+            owned: true,
+            observing: Mutex::new(()),
             snapshot: RwLock::new(Arc::new(NativeCatalog {
                 document: json!({}),
                 operations: BTreeMap::new(),
@@ -2194,14 +2354,23 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires an explicitly selected OpenCode v2 binary and isolated XDG directories; no model calls"]
+    #[ignore = "requires an explicitly selected, already running OpenCode v2 endpoint with isolated XDG directories; no model calls"]
     async fn real_opencode_without_model_calls() {
-        let program = std::env::var_os("SSMCP_TEST_OPENCODE").expect("set SSMCP_TEST_OPENCODE");
+        let endpoint = std::env::var("SSMCP_TEST_OPENCODE_URL")
+            .expect("set the existing SSMCP_TEST_OPENCODE_URL");
+        let password =
+            std::env::var("OPENCODE_PASSWORD").expect("set the native OPENCODE_PASSWORD");
         let directory =
             std::env::var_os("SSMCP_TEST_DIRECTORY").expect("set an isolated SSMCP_TEST_DIRECTORY");
         let directory = std::path::PathBuf::from(directory);
         std::fs::create_dir_all(&directory).unwrap();
-        let backend = OpenCode::start(&program, &[]).await.unwrap();
+        let backend = OpenCode::attach_with_output(
+            &endpoint,
+            &password,
+            OutputStore::new_connection().unwrap(),
+        )
+        .await
+        .unwrap();
         let attempt: Result<(), String> = async {
             let tools = backend.tools().await?;
             assert!(tools.len() >= 100);
@@ -2304,5 +2473,338 @@ mod tests {
         .await;
         backend.shutdown().await;
         attempt.unwrap();
+    }
+    struct AttachmentFixture {
+        endpoint: String,
+        document: Arc<StdMutex<Value>>,
+        version: Arc<StdMutex<String>>,
+        requests: Arc<StdMutex<Vec<String>>>,
+        healthy: Arc<AtomicBool>,
+        redirect: Arc<AtomicBool>,
+        streams: Arc<AtomicU64>,
+        server: JoinHandle<()>,
+    }
+
+    impl AttachmentFixture {
+        async fn new() -> Self {
+            use tokio::io::AsyncWriteExt;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let document = Arc::new(StdMutex::new(json!({
+                "openapi":"3.1.0",
+                "paths":{
+                    "/api/echo":{"get":{"operationId":"attach.echo",
+                        "parameters":[{"in":"query","name":"native","schema":{
+                            "oneOf":[{"type":"integer","minimum":2},{"type":"string","pattern":"^exact$"}],
+                            "x-native-extension":{"preserved":true}
+                        }}],"responses":{"200":{"description":"Native result"}}}},
+                    "/api/denied":{"get":{"operationId":"attach.denied",
+                        "responses":{"403":{"description":"Native approval denial"}}}}
+                },
+                "x-native-document":{"preserved":true}
+            })));
+            let version = Arc::new(StdMutex::new("2.3.0".to_owned()));
+            let requests = Arc::new(StdMutex::new(Vec::new()));
+            let healthy = Arc::new(AtomicBool::new(true));
+            let redirect = Arc::new(AtomicBool::new(false));
+            let streams = Arc::new(AtomicU64::new(0));
+            let server = tokio::spawn({
+                let document = document.clone();
+                let version = version.clone();
+                let requests = requests.clone();
+                let healthy = healthy.clone();
+                let redirect = redirect.clone();
+                let streams = streams.clone();
+                let endpoint = endpoint.clone();
+                async move {
+                    loop {
+                        let (mut connection, _) = listener.accept().await.unwrap();
+                        let document = document.clone();
+                        let version = version.clone();
+                        let requests = requests.clone();
+                        let healthy = healthy.clone();
+                        let redirect = redirect.clone();
+                        let streams = streams.clone();
+                        let endpoint = endpoint.clone();
+                        tokio::spawn(async move {
+                            let mut bytes = Vec::new();
+                            let mut buffer = [0_u8; 1024];
+                            loop {
+                                let n = connection.read(&mut buffer).await.unwrap();
+                                if n == 0 {
+                                    return;
+                                }
+                                bytes.extend_from_slice(&buffer[..n]);
+                                assert!(bytes.len() < 64 * 1024);
+                                if bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            let request = String::from_utf8(bytes).unwrap();
+                            let line = request.lines().next().unwrap().to_owned();
+                            requests.lock().unwrap().push(line.clone());
+                            let authorized = request.lines().any(|line| {
+                                line.split_once(':').is_some_and(|(name, value)| {
+                                    name.eq_ignore_ascii_case("authorization")
+                                        && value.trim()
+                                            == format!(
+                                                "Basic {}",
+                                                STANDARD.encode("opencode:attach-fixture-password")
+                                            )
+                                })
+                            });
+                            let path = line.split_whitespace().nth(1).unwrap();
+                            if authorized && path == "/api/event" {
+                                streams.fetch_add(1, Ordering::AcqRel);
+                                connection.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"type\":\"server.connected\"}\n\n").await.unwrap();
+                                let mut closed = [0_u8; 1];
+                                let _ = connection.read(&mut closed).await;
+                                streams.fetch_sub(1, Ordering::AcqRel);
+                                return;
+                            }
+                            if authorized && path == "/api/info" && redirect.load(Ordering::Acquire)
+                            {
+                                connection.write_all(format!("HTTP/1.1 302 Found\r\nLocation: {endpoint}/redirect-target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                                return;
+                            }
+                            let (status, body) = if !authorized {
+                                (
+                                    "401 Unauthorized",
+                                    json!({"error":"native authentication required"}),
+                                )
+                            } else if path == "/api/info" {
+                                if healthy.load(Ordering::Acquire) {
+                                    (
+                                        "200 OK",
+                                        json!({"version":version.lock().unwrap().clone(),"pid":std::process::id()}),
+                                    )
+                                } else {
+                                    (
+                                        "503 Service Unavailable",
+                                        json!({"code":"service_stopping"}),
+                                    )
+                                }
+                            } else if path == "/openapi.json" {
+                                ("200 OK", document.lock().unwrap().clone())
+                            } else if path == "/api/echo" {
+                                (
+                                    "200 OK",
+                                    json!({"native":{"values":[1,{"exact":true}]},"approval":{"status":"pending"}}),
+                                )
+                            } else if path == "/api/denied" {
+                                (
+                                    "403 Forbidden",
+                                    json!({"error":{"code":"permission_denied","request_id":"native-fixture"}}),
+                                )
+                            } else {
+                                (
+                                    "404 Not Found",
+                                    json!({"error":"unexpected fixture request"}),
+                                )
+                            };
+                            let bytes = serde_json::to_vec(&body).unwrap();
+                            connection.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",bytes.len()).as_bytes()).await.unwrap();
+                            connection.write_all(&bytes).await.unwrap();
+                        });
+                    }
+                }
+            });
+            Self {
+                endpoint,
+                document,
+                version,
+                requests,
+                healthy,
+                redirect,
+                streams,
+                server,
+            }
+        }
+        async fn disconnected(&self) {
+            timeout(Duration::from_secs(5), async {
+                while self.streams.load(Ordering::Acquire) != 0 {
+                    sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("attached subscriptions must close");
+        }
+    }
+
+    impl Drop for AttachmentFixture {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle() {
+        let fixture = AttachmentFixture::new().await;
+        let output = OutputStore::new_connection().unwrap();
+        let backend = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "attach-fixture-password",
+            output.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(!backend.owned);
+        assert!(backend.process.lock().await.is_none());
+        let tools = backend.tools().await.unwrap();
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "opencode.attach.echo")
+        );
+        assert_eq!(
+            backend.schema(&json!({"document":true})).unwrap(),
+            *fixture.document.lock().unwrap()
+        );
+        assert_eq!(
+            *fixture.requests.lock().unwrap(),
+            [
+                "GET /api/info HTTP/1.1",
+                "GET /openapi.json HTTP/1.1",
+                "GET /api/info HTTP/1.1",
+                "GET /openapi.json HTTP/1.1",
+            ]
+        );
+        assert_eq!(fixture.streams.load(Ordering::Acquire), 0);
+
+        let response = backend
+            .call("opencode.attach.echo", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            response["structuredContent"]["body"],
+            json!({
+                "native":{"values":[1,{"exact":true}]},"approval":{"status":"pending"}
+            })
+        );
+        assert_eq!(fixture.streams.load(Ordering::Acquire), 1);
+        let denied = backend
+            .call("opencode.attach.denied", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(denied["isError"], true);
+        assert_eq!(denied["structuredContent"]["status"], 403);
+        assert_eq!(
+            denied["structuredContent"]["body"],
+            json!({
+                "error":{"code":"permission_denied","request_id":"native-fixture"}
+            })
+        );
+        assert_eq!(
+            fixture
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|request| request.starts_with("GET /api/event "))
+                .count(),
+            1
+        );
+
+        fixture.healthy.store(false, Ordering::Release);
+        assert!(backend.tools().await.unwrap_err().contains("503"));
+        fixture.healthy.store(true, Ordering::Release);
+        fixture.document.lock().unwrap()["paths"]["/api/echo"]["get"]["operationId"] =
+            json!("attach.replaced");
+        let tools = backend.tools().await.unwrap();
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool["name"] == "opencode.attach.echo")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "opencode.attach.replaced")
+        );
+        backend.shutdown().await;
+        fixture.disconnected().await;
+        assert!(backend.tools().await.is_err());
+        // The external native service is still alive after our shutdown.
+        fetch_server_info(&backend.client, &backend.base, &backend.password)
+            .await
+            .unwrap();
+        let second =
+            OpenCode::attach_with_output(&fixture.endpoint, "attach-fixture-password", output)
+                .await
+                .unwrap();
+        second
+            .call("opencode.attach.replaced", json!({}))
+            .await
+            .unwrap();
+        drop(second);
+        fixture.disconnected().await;
+        fetch_server_info(&backend.client, &backend.base, &backend.password)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_authentication_redirects_and_unsupported_native_versions() {
+        let fixture = AttachmentFixture::new().await;
+        let store = OutputStore::new_connection().unwrap();
+        let failed = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "wrong-fixture-password",
+            store.clone(),
+        )
+        .await
+        .err()
+        .expect("native authentication must be enforced")
+        .to_string();
+        assert!(failed.contains("401"));
+        assert!(!failed.contains("wrong-fixture-password"));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+
+        fixture.redirect.store(true, Ordering::Release);
+        let failed = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "attach-fixture-password",
+            store.clone(),
+        )
+        .await
+        .err()
+        .expect("do not follow redirects")
+        .to_string();
+        assert!(failed.contains("302"));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+        fixture.redirect.store(false, Ordering::Release);
+        *fixture.version.lock().unwrap() = "3.0.0".into();
+        let failed = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "attach-fixture-password",
+            store.clone(),
+        )
+        .await
+        .err()
+        .expect("an unverified native protocol version is not discoverable")
+        .to_string();
+        assert!(failed.contains("supported v2"));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 3);
+
+        for endpoint in [
+            "http://0.0.0.0:4096",
+            "http://localhost:4096",
+            "https://127.0.0.1:4096",
+            "http://user:secret@127.0.0.1:4096",
+            "http://127.0.0.1:4096/path",
+            "http://127.0.0.1:4096?query=1",
+        ] {
+            assert!(
+                OpenCode::attach_with_output(endpoint, "attach-fixture-password", store.clone())
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            OpenCode::attach_with_output(&fixture.endpoint, "", store)
+                .await
+                .is_err()
+        );
+        assert_eq!(fixture.requests.lock().unwrap().len(), 3);
     }
 }

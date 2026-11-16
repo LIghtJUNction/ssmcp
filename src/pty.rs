@@ -429,12 +429,23 @@ impl Terminal {
 }
 
 pub(crate) fn stop_session(session: libc::pid_t, leader: &OwnedFd) {
+    // Procfs names belong to its mount's PID namespace; pidfd_open uses ours.
+    // Bind the recorded leader first, otherwise proc ancestry could describe a
+    // different process with the same number in an ancestor namespace.
+    if !pidfd_matches_proc(leader, session) {
+        eprintln!(
+            "ssmcp: cannot bind process {session} to mounted procfs; cleanup is limited to its recorded pidfd"
+        );
+        let _ = signal_pidfd(leader, libc::SIGKILL);
+        return;
+    }
     // Shell jobs can have their own process groups, and native coding agents can
     // create child sessions. Include both this session and its still-owned process
     // descendants, then signal pidfds rather than reusable numeric process IDs.
     // Already reparented, detached daemons require native task cleanup; this is not
     // a security sandbox or a replacement for a cgroup supervisor.
     let mut members = Vec::new();
+    let mut unbound = 0;
     if let Ok(entries) = std::fs::read_dir("/proc") {
         for entry in entries.flatten() {
             let Some(pid) = entry
@@ -448,17 +459,44 @@ pub(crate) fn stop_session(session: libc::pid_t, leader: &OwnedFd) {
                 continue;
             }
             if let Ok(fd) = open_pidfd(pid) {
-                // Validate after opening: the descriptor is bound to this exact process.
+                // Revalidate ownership and bind this pidfd to the same procfs
+                // entry before delivering any signal.
                 if owned_process(pid, session) {
-                    members.push(fd);
+                    if pidfd_matches_proc(&fd, pid) {
+                        members.push(fd);
+                    } else {
+                        unbound += 1;
+                    }
                 }
             }
         }
+    }
+    if unbound != 0 {
+        eprintln!(
+            "ssmcp: skipped {unbound} process entries with unverified procfs identities during cleanup of {session}"
+        );
     }
     for member in members {
         let _ = signal_pidfd(&member, libc::SIGKILL);
     }
     let _ = signal_pidfd(leader, libc::SIGKILL);
+}
+
+fn pidfd_matches_proc(fd: &OwnedFd, pid: libc::pid_t) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    // Linux reports Pid here in the PID namespace of this procfs instance.
+    // A dead/invisible process is -1/0 and cannot authorize a proc-derived kill.
+    let Ok(info) = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd())) else {
+        return false;
+    };
+    info.lines().find_map(|line| {
+        line.strip_prefix("Pid:")?
+            .trim()
+            .parse::<libc::pid_t>()
+            .ok()
+    }) == Some(pid)
 }
 
 fn owned_process(pid: libc::pid_t, leader: libc::pid_t) -> bool {
@@ -753,6 +791,110 @@ mod tests {
             terminal.shutdown().await;
             assert_stopped(pid).await;
         }
+    }
+
+    #[test]
+    fn pidfd_binding_uses_the_mounted_procfs_namespace() {
+        let fd = open_pidfd(std::process::id() as libc::pid_t).unwrap();
+        let proc_pid: libc::pid_t = std::fs::read_link("/proc/self")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(pidfd_matches_proc(&fd, proc_pid));
+        assert!(!pidfd_matches_proc(&fd, if proc_pid == 1 { 2 } else { 1 }));
+        assert!(!pidfd_matches_proc(&fd, 0));
+        assert!(!pidfd_matches_proc(&fd, -1));
+    }
+
+    #[tokio::test]
+    async fn mismatched_proc_identity_cannot_kill_another_owned_session() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        struct KillFixture(OwnedFd);
+        impl Drop for KillFixture {
+            fn drop(&mut self) {
+                let _ = signal_pidfd(&self.0, libc::SIGKILL);
+            }
+        }
+
+        let mut decoy_command = Command::new("python3");
+        decoy_command
+            .args([
+                "-u",
+                "-c",
+                r#"
+import subprocess, sys
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(15)'])
+print(child.pid, flush=True)
+sys.stdin.buffer.read(1)
+child.terminate()
+child.wait(timeout=2)
+"#,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true);
+        // SAFETY: the fork child calls setsid before exec without allocating.
+        unsafe {
+            decoy_command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut decoy = decoy_command.spawn().unwrap();
+        let decoy_pid = decoy.id().unwrap() as libc::pid_t;
+        let mut line = String::new();
+        timeout(
+            Duration::from_secs(5),
+            BufReader::new(decoy.stdout.take().unwrap()).read_line(&mut line),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let decoy_child: libc::pid_t = line.trim().parse().unwrap();
+        let _child_cleanup = KillFixture(open_pidfd(decoy_child).unwrap());
+        assert!(owned_process(decoy_child, decoy_pid));
+
+        let mut leader = Command::new("python3")
+            .args(["-c", "import time; time.sleep(15)"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let leader_fd = open_pidfd(leader.id().unwrap() as libc::pid_t).unwrap();
+        assert!(!pidfd_matches_proc(&leader_fd, decoy_pid));
+        // Deliberately supply a procfs identity belonging to a different, fully
+        // controlled session. Only the trusted descriptor may be signalled.
+        stop_session(decoy_pid, &leader_fd);
+        let leader_status = timeout(Duration::from_secs(2), leader.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        let decoy_alive = decoy.try_wait().unwrap().is_none();
+        let child_alive = std::fs::read_to_string(format!("/proc/{decoy_child}/stat"))
+            .ok()
+            .is_some_and(|stat| {
+                stat.rsplit_once(')').unwrap().1.split_whitespace().next() != Some("Z")
+            });
+        // Let the controlled parent reap its own child before reporting failures.
+        drop(decoy.stdin.take());
+        let decoy_status = timeout(Duration::from_secs(3), decoy.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!leader_status.success());
+        assert!(
+            decoy_alive && child_alive,
+            "unbound proc identities must be skipped"
+        );
+        assert!(decoy_status.success());
     }
 
     #[test]

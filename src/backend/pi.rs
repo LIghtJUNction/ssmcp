@@ -19,6 +19,7 @@ use super::{
 
 pub struct Pi {
     peer: Arc<Peer>,
+    transport: &'static str,
 }
 
 impl Pi {
@@ -31,10 +32,60 @@ impl Pi {
         args: &[OsString],
         output: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
+        // Explicitly controlled adapter launches preserve native extensions.
+        // Automatic discovery must use start_discovered_with_output instead:
+        // offline prevents native installs but cannot constrain user hooks.
         let mut command = Command::new(program);
-        command.args(["--mode", "rpc"]).args(args);
+        command
+            .args(["--mode", "rpc", "--offline"])
+            .args(args)
+            .env("PI_OFFLINE", "1");
         let peer = Peer::spawn_with_output(command, "pi", Dialect::Pi, output).await?;
-        let ready = peer.request("get_state", json!({})).await;
+        Self::handshake(peer, "owned_stdio").await
+    }
+
+    /// Backend verifies the installed executable and version before this entry.
+    /// The operator's socket must forward an already initialized native RPC
+    /// session; starting Pi on accept/connect does not meet this contract.
+    pub async fn start_discovered_with_output(
+        _program: &OsStr,
+        args: &[OsString],
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        if !args.is_empty() {
+            return Err("Pi automatic discovery does not accept process launch arguments".into());
+        }
+        let socket = std::env::var_os("SSMCP_PI_RPC_SOCKET")
+            .filter(|path| !path.is_empty())
+            .ok_or("Pi automatic launch is unavailable: native RPC runs user extension session_start hooks before its first reply. Disabling those extensions could bypass approval. Set SSMCP_PI_RPC_SOCKET only for an already initialized native RPC session; ssmcp will not launch Pi or dependencies.")?;
+        #[cfg(unix)]
+        {
+            Self::attach_with_output(std::path::Path::new(&socket), output).await
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (socket, output);
+            Err("Pi existing-session attach currently requires a private local Unix socket".into())
+        }
+    }
+
+    #[cfg(unix)]
+    pub async fn attach_with_output(
+        path: &std::path::Path,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let peer = Peer::connect_unix_with_output(path, "pi", Dialect::Pi, output).await?;
+        Self::handshake(peer, "existing_unix_socket").await
+    }
+
+    async fn handshake(peer: Arc<Peer>, transport: &'static str) -> crate::Result<Arc<Self>> {
+        let ready = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            peer.request("get_state", json!({})),
+        )
+        .await
+        .map_err(|_| "Pi native get_state handshake timed out".to_owned())
+        .and_then(|result| result);
         let error = match ready {
             Ok(response)
                 if response["success"] == true
@@ -53,7 +104,7 @@ impl Pi {
             peer.shutdown().await;
             return Err(error.into());
         }
-        Ok(Arc::new(Self { peer }))
+        Ok(Arc::new(Self { peer, transport }))
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
@@ -70,6 +121,9 @@ impl Pi {
             "reason":if connected {None} else {Some("Pi native process disconnected")},
             "tools":if connected {4} else {0},
             "connected":connected,
+            "transport":self.transport,
+            "automaticLaunch":"unavailable; native startup extensions can execute before the first RPC reply",
+            "existingSessionContract":"The operator supplies an already initialized native JSONL session; connecting must not launch Pi. ssmcp neither disables extensions nor answers approvals automatically.",
             "scope":"Pi JSONL control protocol, negotiated with get_state. Native model, plugin and MCP tool schemas are not enumerable through this interface.",
             "nativeToolEnumeration":"unavailable"
         })

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """OpenCode v2 HTTP/SSE fixture; stdlib only, without models or existing credentials.
 
-The bridge supplies a private OPENCODE_PASSWORD. This process never prints or
+The fixture owner supplies a private OPENCODE_PASSWORD. This process never prints or
 persists it, and exits on stdin EOF just like the native v2 --stdio service.
 """
 
@@ -65,7 +65,7 @@ def document():
         }}
     return {
         "openapi": "3.1.0",
-        "info": {"title": "ssmcp OpenCode fixture", "version": "2-fixture"},
+        "info": {"title": "ssmcp OpenCode fixture", "version": "2.3.0"},
         "paths": paths,
         "components": {"schemas": {"EchoInput": {
             "type": "object", "required": ["message"],
@@ -144,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, self.server.document)
         elif path == "/api/info":
             self.reply(200, {"data": {
-                "version": "2-fixture", "pid": os.getpid(),
+                "version": "2.3.0", "pid": os.getpid(),
                 "child_pid": self.server.child.pid, "authenticated": True,
             }}, headers={"X-Fixture-Result": "preserved"})
         elif path == "/api/event":
@@ -189,6 +189,7 @@ class Handler(BaseHTTPRequestHandler):
         subscriber = queue.Queue()
         with self.server.lock:
             self.server.subscribers.append(subscriber)
+        (self.server.directory / "subscriber-ready").write_text("ready\n")
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
@@ -222,7 +223,7 @@ def main():
     args = parser.parse_args()
     password = os.environ.get("OPENCODE_PASSWORD")
     if not password:
-        parser.error("OPENCODE_PASSWORD must be supplied by the bridge")
+        parser.error("OPENCODE_PASSWORD must be supplied by the fixture owner")
     args.fixture_dir.mkdir(parents=True, exist_ok=True)
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"])
     server = None

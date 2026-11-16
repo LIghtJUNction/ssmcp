@@ -451,7 +451,7 @@ class Harness:
             )
             wrapper.chmod(0o700)
         inherited = {key: value for key, value in os.environ.items()
-                     if key not in ("SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD")}
+                     if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD")}
         return {
             **inherited,
             "PATH": str(directory.resolve()),

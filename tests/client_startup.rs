@@ -54,7 +54,7 @@ if scenario.endswith("healthy"):
     (directory / "catalog-before-native").write_text("confirmed")
     (directory / "release-native").write_text("continue")
 
-    provider = "claude" if phase == "discovery" else "pi"
+    provider = "claude"
     expected = "unavailable" if scenario == "catalog-error-healthy" else "ready"
     if scenario == "catalog-timeout-healthy":
         expected = "discovering"
@@ -100,19 +100,17 @@ def wait_for_release():
 
 for line in sys.stdin:
     request = json.loads(line)
-    if request.get("type") == "get_state":
-        (directory / "native-request").write_text("startup")
-        wait_for_release()
-        response = {"type":"response", "id":request["id"], "command":"get_state",
-                    "success":True, "data":{}}
-    elif request.get("method") == "initialize":
-        assert phase == "discovery"
+    if request.get("method") == "initialize":
+        if phase == "startup":
+            (directory / "native-request").write_text("startup")
+            wait_for_release()
         response = {"jsonrpc":"2.0", "id":request["id"], "result":{
                     "protocolVersion":"2025-11-25", "capabilities":{"tools":{}},
                     "serverInfo":{"name":"startup-fixture", "version":"1"}}}
     elif request.get("method") == "tools/list":
-        (directory / "native-request").write_text("discovery")
-        wait_for_release()
+        if phase == "discovery":
+            (directory / "native-request").write_text("discovery")
+            wait_for_release()
         if scenario == "catalog-timeout-healthy":
             # Keep the native process alive but never acknowledge a catalog request.
             continue
@@ -123,7 +121,8 @@ for line in sys.stdin:
             response = {"jsonrpc":"2.0", "id":request["id"], "result":{"tools":[]}}
     else:
         continue
-    if request.get("type") == "get_state" or request.get("method") == "tools/list":
+    if ((phase == "startup" and request.get("method") == "initialize")
+            or (phase == "discovery" and request.get("method") == "tools/list")):
         (directory / "native-response").write_text("released")
     print(json.dumps(response), flush=True)
 "#;
@@ -161,8 +160,10 @@ impl Fixture {
         phase: &str,
         extra_args: &[&str],
     ) -> std::process::Output {
-        let harness = if phase == "discovery" { "claude" } else { "pi" };
-        std::os::unix::fs::symlink(self.0.join("native"), self.0.join(harness)).unwrap();
+        // Delay either native initialize or tools/list on the same controlled
+        // MCP fixture. Automatic Pi startup is deliberately unavailable: its
+        // real startup hooks cannot satisfy discovery's no-model guarantee.
+        std::os::unix::fs::symlink(self.0.join("native"), self.0.join("claude")).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
         std::fs::write(self.0.join("native-request"), "shell-started").unwrap();
         command

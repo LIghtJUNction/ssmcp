@@ -266,6 +266,35 @@ mod guardian {
         }
     }
 
+    pub(super) fn kill_owned_child(pid: libc::pid_t) -> bool {
+        if pid <= 1 {
+            return false;
+        }
+        // Procfs may be mounted from an ancestor PID namespace. A numeric entry
+        // is not authority to signal a process in this guardian's namespace.
+        // waitid proves direct parenthood there without reaping it. This single
+        // guardian thread cannot reuse the child's PID between this check and kill.
+        unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            loop {
+                let result = libc::syscall(
+                    libc::SYS_waitid,
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info as *mut libc::siginfo_t,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT | libc::__WALL,
+                    std::ptr::null_mut::<libc::rusage>(),
+                );
+                if result == 0 {
+                    return libc::kill(pid, libc::SIGKILL) == 0;
+                }
+                if *libc::__errno_location() != libc::EINTR {
+                    return false;
+                }
+            }
+        }
+    }
+
     fn kill_children() -> bool {
         // SAFETY: only direct children are signalled. This guardian is their sole
         // reaper, and does not waitpid while parsing, so their PIDs cannot be reused.
@@ -276,7 +305,7 @@ mod guardian {
                 libc::O_RDONLY | libc::O_CLOEXEC,
             );
             if fd < 0 {
-                return false;
+                return kill_children_proc();
             }
             let mut bytes = [0_u8; 4096];
             let mut pid: libc::pid_t = 0;
@@ -287,11 +316,11 @@ mod guardian {
                         continue;
                     }
                     libc::close(fd);
-                    return false;
+                    return kill_children_proc();
                 }
                 if n == 0 {
                     if pid > 1 {
-                        libc::kill(pid, libc::SIGKILL);
+                        kill_owned_child(pid);
                     }
                     libc::close(fd);
                     return true;
@@ -301,12 +330,132 @@ mod guardian {
                         pid = pid.saturating_mul(10).saturating_add((byte - b'0') as i32);
                     } else {
                         if pid > 1 {
-                            libc::kill(pid, libc::SIGKILL);
+                            kill_owned_child(pid);
                         }
                         pid = 0;
                     }
                 }
             }
+        }
+    }
+
+    fn kill_children_proc() -> bool {
+        // Some Linux kernels do not expose /proc/<tid>/children. Enumerate proc
+        // with getdents64 rather than opendir/readdir, which may allocate or lock
+        // after fork. PPid narrows candidates; waitid independently verifies
+        // ownership in our PID namespace immediately before signalling.
+        unsafe {
+            let directory = libc::open(
+                c"/proc".as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            );
+            if directory < 0 {
+                return false;
+            }
+            let owner = libc::getpid();
+            let mut entries = [0_u8; 4096];
+            loop {
+                let n = libc::syscall(
+                    libc::SYS_getdents64,
+                    directory,
+                    entries.as_mut_ptr(),
+                    entries.len(),
+                );
+                if n < 0 {
+                    if *libc::__errno_location() == libc::EINTR {
+                        continue;
+                    }
+                    libc::close(directory);
+                    return false;
+                }
+                if n == 0 {
+                    libc::close(directory);
+                    return true;
+                }
+                if n as usize > entries.len() {
+                    libc::close(directory);
+                    return false;
+                }
+                let mut offset = 0;
+                while offset < n as usize {
+                    // linux_dirent64: ino(8), off(8), reclen(2), type(1), name.
+                    if n as usize - offset < 20 {
+                        libc::close(directory);
+                        return false;
+                    }
+                    let length =
+                        u16::from_ne_bytes([entries[offset + 16], entries[offset + 17]]) as usize;
+                    if length < 20 || length > n as usize - offset {
+                        libc::close(directory);
+                        return false;
+                    }
+                    let names = &entries[offset + 19..offset + length];
+                    let size = names
+                        .iter()
+                        .position(|byte| *byte == 0)
+                        .unwrap_or(names.len());
+                    let name = &names[..size];
+                    if let Some(pid) = decimal_pid(name)
+                        && pid > 1
+                        && pid != owner
+                        && proc_parent(name) == Some(owner)
+                    {
+                        kill_owned_child(pid);
+                    }
+                    offset += length;
+                }
+            }
+        }
+    }
+
+    fn decimal_pid(bytes: &[u8]) -> Option<libc::pid_t> {
+        if bytes.is_empty() || bytes.len() > 10 {
+            return None;
+        }
+        let mut value: libc::pid_t = 0;
+        for byte in bytes {
+            if !byte.is_ascii_digit() {
+                return None;
+            }
+            value = value.checked_mul(10)?.checked_add((byte - b'0') as i32)?;
+        }
+        Some(value)
+    }
+
+    fn proc_parent(name: &[u8]) -> Option<libc::pid_t> {
+        // The path and stat buffer are fixed stack storage. Slice iterators
+        // below borrow that storage; they do not create strings or allocate.
+        unsafe {
+            if name.is_empty() || name.len() > 10 {
+                return None;
+            }
+            let mut path = [0_u8; 32];
+            path[..6].copy_from_slice(b"/proc/");
+            path[6..6 + name.len()].copy_from_slice(name);
+            path[6 + name.len()..12 + name.len()].copy_from_slice(b"/stat\0");
+            let fd = libc::open(path.as_ptr().cast(), libc::O_RDONLY | libc::O_CLOEXEC);
+            if fd < 0 {
+                return None;
+            }
+            let mut bytes = [0_u8; 1024];
+            let n = loop {
+                let n = libc::read(fd, bytes.as_mut_ptr().cast(), bytes.len());
+                if n < 0 && *libc::__errno_location() == libc::EINTR {
+                    continue;
+                }
+                break n;
+            };
+            libc::close(fd);
+            if n <= 0 {
+                return None;
+            }
+            let bytes = &bytes[..n as usize];
+            let end = bytes.iter().rposition(|byte| *byte == b')')?;
+            let mut fields = bytes[end + 1..]
+                .split(|byte| byte.is_ascii_whitespace())
+                .filter(|field| !field.is_empty());
+            fields.next()?; // state
+            decimal_pid(fields.next()?)
         }
     }
 
@@ -320,7 +469,7 @@ mod guardian {
             loop {
                 loop {
                     let mut status = 0;
-                    let reaped = libc::waitpid(-1, &mut status, libc::WNOHANG);
+                    let reaped = libc::waitpid(-1, &mut status, libc::WNOHANG | libc::__WALL);
                     if reaped == command {
                         command_status = Some(status);
                         stopping = true;
@@ -619,6 +768,160 @@ time.sleep(60)
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
+    #[test]
+    #[ignore = "subprocess fixture for clone ownership and adoption regressions"]
+    fn clone_without_sigchld_fixture() {
+        let Ok(mode) = std::env::var("SSMCP_CLONE_FIXTURE") else {
+            return;
+        };
+        assert!(matches!(mode.as_str(), "adopt" | "direct"));
+        if let Ok(pid) = std::env::var("SSMCP_UNRELATED_FIXTURE_PID") {
+            assert!(
+                !guardian::kill_owned_child(pid.parse().unwrap()),
+                "a PID that belongs to another parent must never be signalled"
+            );
+        }
+        let mut pipes = [-1; 2];
+        // The raw clone child only executes libc calls, never inherited Rust locks.
+        let child = unsafe {
+            libc::alarm(15);
+            assert_eq!(libc::pipe2(pipes.as_mut_ptr(), libc::O_CLOEXEC), 0);
+            let child = libc::syscall(
+                libc::SYS_clone,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            );
+            if child == 0 {
+                libc::close(pipes[0]);
+                libc::alarm(15);
+                if libc::setsid() < 0 || libc::write(pipes[1], b"R".as_ptr().cast(), 1) != 1 {
+                    libc::_exit(125);
+                }
+                libc::close(pipes[1]);
+                loop {
+                    libc::pause();
+                }
+            }
+            assert!(child > 0, "clone without SIGCHLD failed");
+            libc::close(pipes[1]);
+            let mut ready = [0_u8; 1];
+            assert_eq!(libc::read(pipes[0], ready.as_mut_ptr().cast(), 1), 1);
+            libc::close(pipes[0]);
+            child as libc::pid_t
+        };
+        println!("SSMCP_CLONE_PID {child}");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        if mode == "direct" {
+            assert!(
+                guardian::kill_owned_child(child),
+                "waitid must recognize an owned clone child without SIGCHLD"
+            );
+            let mut status = 0;
+            assert_eq!(
+                unsafe { libc::waitpid(child, &mut status, libc::__WALL) },
+                child
+            );
+            assert!(libc::WIFSIGNALED(status));
+            assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+        }
+        // In adopt mode the still-live clone child is reparented to the guardian.
+        unsafe {
+            libc::_exit(17);
+        }
+    }
+
+    async fn cloned_fixture(
+        mode: &str,
+        unrelated: Option<u32>,
+    ) -> (Managed, i32, BufReader<tokio::process::ChildStdout>) {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "backend::process::tests::clone_without_sigchld_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("SSMCP_CLONE_FIXTURE", mode)
+            .env_remove("SSMCP_UNRELATED_FIXTURE_PID")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        if let Some(pid) = unrelated {
+            command.env("SSMCP_UNRELATED_FIXTURE_PID", pid.to_string());
+        }
+        let mut managed = Managed::spawn(&mut command).unwrap();
+        let mut stdout = BufReader::new(managed.child.stdout.take().unwrap());
+        let pid = timeout(Duration::from_secs(5), async {
+            loop {
+                let mut line = String::new();
+                assert_ne!(
+                    stdout.read_line(&mut line).await.unwrap(),
+                    0,
+                    "fixture exited before reporting its child"
+                );
+                if let Some((_, tail)) = line.split_once("SSMCP_CLONE_PID ") {
+                    break tail.trim().parse::<i32>().unwrap();
+                }
+            }
+        })
+        .await
+        .expect("clone fixture must start within the deadline");
+        (managed, pid, stdout)
+    }
+
+    #[tokio::test]
+    async fn clone_without_sigchld_is_reaped_on_native_exit_and_closes_stdout() {
+        use tokio::io::AsyncReadExt;
+        let (mut managed, child, mut stdout) = cloned_fixture("adopt", None).await;
+        let status = timeout(Duration::from_secs(5), managed.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.code(), Some(17));
+        gone(child).await;
+        let mut tail = Vec::new();
+        timeout(Duration::from_secs(1), stdout.read_to_end(&mut tail))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tail.is_empty(),
+            "the adopted clone must release inherited output pipes"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_identity_check_accepts_clone_children_and_rejects_unrelated_pids() {
+        let mut unrelated = Command::new("python3")
+            .args(["-c", "import time; time.sleep(15)"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let (mut managed, child, _stdout) = cloned_fixture("direct", unrelated.id()).await;
+        let status = timeout(Duration::from_secs(5), managed.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.code(), Some(17));
+        gone(child).await;
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "the ownership check must leave the unrelated controlled fixture alive"
+        );
+        unrelated.kill().await.unwrap();
+        timeout(Duration::from_secs(2), unrelated.wait())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "subprocess fixture for abrupt-parent-death regression"]
     async fn supervisor_parent_death_fixture() {
@@ -659,7 +962,7 @@ time.sleep(60)
         let text = String::from_utf8(output.stdout).unwrap();
         let pids: Vec<i32> = text
             .lines()
-            .find_map(|line| line.strip_prefix("SSMCP_OWNED_PIDS "))
+            .find_map(|line| line.split_once("SSMCP_OWNED_PIDS ").map(|(_, tail)| tail))
             .expect("fixture must report owned identities")
             .split_whitespace()
             .map(|v| v.parse().unwrap())
