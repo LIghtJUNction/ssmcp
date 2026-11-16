@@ -821,6 +821,9 @@ pub(crate) fn connection(output: &Value) -> io::Result<()> {
         writeln!(out, "{output}")?;
     } else {
         writeln!(out, "MCP: {}", clean(output["url"].as_str().unwrap_or("")))?;
+        if let Some(title) = output["title"].as_str() {
+            writeln!(out, "Session: {}", clean(title))?;
+        }
         if let Some(code) = output["login_code"].as_str() {
             writeln!(
                 out,

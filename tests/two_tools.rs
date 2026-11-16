@@ -68,6 +68,7 @@ impl Server {
                 mode,
                 metadata: ClientMetadata {
                     name: "same-display-name".into(),
+                    title: Some(format!("Work on {} backend", mode.name())),
                     cwd: format!("/workspace/{}", mode.name()),
                     hostname: "fixture".into(),
                     allow: Vec::new(),
@@ -304,6 +305,17 @@ impl Drop for Server {
 }
 
 #[tokio::test]
+async fn session_title_is_visible_in_inventory_and_selected_client_discovery() {
+    let mut server = Server::start().await;
+    let id = server.attach(Mode::Shell).await;
+    let inventory = server.call("list", json!({})).await;
+    assert_eq!(inventory["clients"][0]["title"], "Work on shell backend");
+    let selected = server.call("list", json!({"client_id":id})).await;
+    assert_eq!(selected["client"]["title"], "Work on shell backend");
+    assert_eq!(selected["client"]["name"], "same-display-name");
+}
+
+#[tokio::test]
 #[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
 async fn two_public_tools_cover_every_backend_with_native_discovery_and_javascript_dispatch() {
     let mut server = Server::start().await;
@@ -328,6 +340,7 @@ async fn two_public_tools_cover_every_backend_with_native_discovery_and_javascri
         assert_eq!(client["name"], "same-display-name");
         assert_eq!(client["hostname"], "fixture");
         let mode = client["type"].as_str().unwrap();
+        assert_eq!(client["title"], format!("Work on {mode} backend"));
         assert_eq!(client["cwd"], format!("/workspace/{mode}"));
         let page = server.call("list", json!({"client_id":client["id"]})).await;
         assert_eq!(page["client"]["id"], client["id"]);

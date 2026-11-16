@@ -7,7 +7,7 @@ use crate::{
     runtime::Runtime,
     wire::{
         ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
-        canonical_github_principal, read_frame, write_frame,
+        canonical_github_principal, read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -38,6 +38,7 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
   -p port              SSH port
   -F ssh_config        OpenSSH configuration file
   --name NAME          Display name (default: hostname-type-pid)
+  --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (at most 32 distinct users; case-insensitive)
   --shell /path        Shell executable (shell mode only)
@@ -59,6 +60,7 @@ Uses only SSH public-key authentication and standard known_hosts checks.
 
 Examples:
   ssmcp --name laptop my-server
+  ssmcp --title "Fix ssmcp client reload" my-server
   ssmcp -t codex -F ~/.ssh/work_config my-server
   ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
   ssmcp --allow octocat@github,alice@github -t codex my-server
@@ -175,6 +177,7 @@ fn ssh_ended(status: io::Result<ExitStatus>) -> String {
 struct Options {
     destination: Option<String>,
     name: Option<String>,
+    title: Option<String>,
     allow: Vec<String>,
     mode: Mode,
     backend: Option<OsString>,
@@ -198,6 +201,7 @@ impl Options {
         let mut args = args.into_iter();
         let mut destination = None;
         let mut name = None;
+        let mut title = None;
         let mut allow = Vec::new();
         let mut mode = Mode::Shell;
         let mut backend = None;
@@ -240,6 +244,17 @@ impl Options {
                             .into_string()
                             .map_err(|_| "client name must be UTF-8")?,
                     );
+                }
+                Some("--title") => {
+                    title = Some(
+                        args.next()
+                            .ok_or("--title requires a session title")?
+                            .into_string()
+                            .map_err(|_| "session title must be UTF-8")?,
+                    );
+                }
+                Some(value) if value.starts_with("--title=") => {
+                    title = Some(value["--title=".len()..].to_owned());
                 }
                 Some("--allow") => {
                     let value = args.next().ok_or("--allow requires username@github")?;
@@ -348,6 +363,7 @@ impl Options {
         if !shell.is_absolute() {
             return Err("--shell requires an absolute path".into());
         }
+        validate_title(title.as_deref())?;
         if let Some(name) = &name
             && (name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control))
         {
@@ -356,6 +372,7 @@ impl Options {
         Ok(Some(Self {
             destination,
             name,
+            title,
             allow,
             mode,
             backend,
@@ -385,6 +402,7 @@ impl Options {
             .map_err(|_| "client cwd must be UTF-8")?;
         let short_hostname: String = hostname.chars().take(24).collect();
         let metadata = ClientMetadata {
+            title: self.title.clone(),
             name: self.name.clone().unwrap_or_else(|| {
                 format!(
                     "{short_hostname}-{}-{}",
@@ -618,6 +636,9 @@ pub async fn run() -> crate::Result<()> {
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
     let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":options.mode.name()});
+    if let Some(title) = &metadata.title {
+        output["title"] = json!(title);
+    }
     if github_auth {
         output["auth"] = json!("github");
         output["allow"] = json!(metadata.allow);
@@ -809,6 +830,56 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn session_title_preserves_unicode_task_context_without_becoming_an_ssh_argument() {
+        let title = "修复会话重启 · issue #42";
+        let options = Options::parse(
+            ["--name", "workstation", "--title", title, "user@host"].map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        let metadata = options.metadata().unwrap();
+        assert_eq!(metadata.name, "workstation");
+        assert_eq!(metadata.title.as_deref(), Some(title));
+        assert!(!options.command().as_std().get_args().any(|arg| arg == title));
+
+        let equals = Options::parse(["--title=修复客户端", "host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(equals.title.as_deref(), Some("修复客户端"));
+        let absent = Options::parse(["host"].map(OsString::from)).unwrap().unwrap();
+        assert!(absent.title.is_none());
+        assert!(serde_json::to_value(absent.metadata().unwrap()).unwrap().get("title").is_none());
+    }
+
+    #[test]
+    fn session_title_rejects_missing_blank_controls_and_utf8_byte_overflow() {
+        use std::os::unix::ffi::OsStringExt;
+
+        assert!(Options::parse([OsString::from("--title")]).is_err());
+        for title in [
+            "".to_owned(),
+            "  ".to_owned(),
+            "bad\ntitle".to_owned(),
+            "bad\u{1b}[31mtitle".to_owned(),
+            "a".repeat(crate::wire::MAX_TITLE_BYTES + 1),
+            "界".repeat(crate::wire::MAX_TITLE_BYTES / 3 + 1),
+        ] {
+            assert!(Options::parse([
+                OsString::from("--title"),
+                OsString::from(title),
+                OsString::from("host"),
+            ]).is_err());
+        }
+        assert!(Options::parse([
+            OsString::from("--title"),
+            OsString::from_vec(vec![0xff]),
+            OsString::from("host"),
+        ]).is_err());
+        let maximum = "a".repeat(crate::wire::MAX_TITLE_BYTES);
+        assert!(Options::parse(["--title", &maximum, "host"].map(OsString::from)).is_ok());
     }
 
     #[test]
