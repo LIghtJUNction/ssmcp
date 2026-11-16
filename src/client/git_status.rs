@@ -1,12 +1,13 @@
 //! A bounded, read-only view of the repository rooted at the authorized startup cwd.
 //! Native porcelain-v2 format: https://git-scm.com/docs/git-status#_porcelain_format_version_2
+//! Native history fields and NUL terminators: https://git-scm.com/docs/pretty-formats
 use crate::backend::process::Managed;
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
@@ -20,6 +21,9 @@ const TIMEOUT: Duration = Duration::from_secs(3);
 const OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
 const ERROR_LIMIT: usize = 16 * 1024;
 const SAMPLE_LIMIT: usize = 5;
+const HISTORY_LIMIT: usize = 5;
+const HISTORY_OUTPUT_LIMIT: usize = 64 * 1024;
+const HISTORY_RETRY: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GitState {
@@ -35,6 +39,40 @@ pub(crate) struct GitChange {
     /// Native XY, "??" for an untracked entry; display strings escape controls.
     pub status: String,
     pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GitCommit {
+    pub full_hash: String,
+    pub short_hash: String,
+    /// A native subject with terminal controls escaped for display.
+    pub subject: String,
+    pub committed_at_unix: i64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GitHistory {
+    /// The exact commit this history belongs to, including pending/failed reads.
+    pub head: Option<String>,
+    pub commits: Vec<GitCommit>,
+    pub checked_at: Option<Instant>,
+    /// Wall time paired with checked_at for relative commit ages in the panel.
+    pub observed_at_unix: Option<i64>,
+    pub error: Option<String>,
+    pub stale: bool,
+}
+
+impl Default for GitHistory {
+    fn default() -> Self {
+        Self {
+            head: None,
+            commits: Vec::new(),
+            checked_at: None,
+            observed_at_unix: None,
+            error: None,
+            stale: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +94,7 @@ pub(crate) struct GitSnapshot {
     /// Unmerged entries are counted here, not as ready-to-commit staged changes.
     pub conflicts: usize,
     pub changed_files: Vec<GitChange>,
+    pub history: GitHistory,
     pub checked_at: Option<Instant>,
     /// Last successful observation. Errors retain the old data and mark it stale.
     pub observed_at: Option<Instant>,
@@ -79,6 +118,7 @@ impl Default for GitSnapshot {
             untracked: 0,
             conflicts: 0,
             changed_files: Vec::new(),
+            history: GitHistory::default(),
             checked_at: None,
             observed_at: None,
             stale: true,
@@ -179,7 +219,62 @@ async fn observe(
         if *stopped.borrow() {
             return;
         }
-        let result = inspect(&git, &root, TIMEOUT, &mut stopped).await;
+        let mut result = inspect(&git, &root, TIMEOUT, &mut stopped).await;
+        if matches!(result, Err(Failure::Cancelled)) {
+            return;
+        }
+        if let Ok(current) = &mut result {
+            let previous = sender.borrow().history.clone();
+            if let Some(history) =
+                cached_history(&previous, current.head.as_deref(), Instant::now())
+            {
+                current.history = history;
+            } else if let Some(head) = current.head.clone() {
+                // Publish the new HEAD without the old branch's commits while log runs.
+                current.history = GitHistory {
+                    head: Some(head.clone()),
+                    ..GitHistory::default()
+                };
+                publish(&sender, Ok(current.clone()), Instant::now());
+                let history = inspect_history(&git, &root, &head, TIMEOUT, &mut stopped).await;
+                if matches!(history, Err(Failure::Cancelled)) {
+                    return;
+                }
+                let checked_at = Instant::now();
+                let mut view = GitHistory {
+                    head: Some(head.clone()),
+                    checked_at: Some(checked_at),
+                    ..GitHistory::default()
+                };
+                match history {
+                    Ok(commits) => {
+                        view.commits = commits;
+                        view.stale = false;
+                        view.observed_at_unix = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .ok()
+                            .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok());
+                        // A checkout may have completed while log was reading. Recheck
+                        // status before attaching the result to a displayed branch.
+                        result = inspect(&git, &root, TIMEOUT, &mut stopped).await;
+                        if let Ok(verified) = &mut result {
+                            if verified.head.as_deref() == Some(head.as_str()) {
+                                verified.history = view;
+                            } else {
+                                verified.history.head = verified.head.clone();
+                                refresh.notify_one();
+                            }
+                        }
+                    }
+                    Err(Failure::Unavailable(error) | Failure::Error(error)) => {
+                        view.error = Some(error.into());
+                        current.history = view;
+                    }
+                    Err(Failure::NotRepository) => result = Err(Failure::NotRepository),
+                    Err(Failure::Cancelled) => return,
+                }
+            }
+        }
         if matches!(result, Err(Failure::Cancelled)) {
             return;
         }
@@ -225,6 +320,11 @@ fn publish(
             checked_at: Some(now),
             observed_at: Some(now),
             stale: false,
+            history: GitHistory {
+                checked_at: Some(now),
+                stale: false,
+                ..GitHistory::default()
+            },
             ..GitSnapshot::default()
         },
         Err(failure) => {
@@ -237,6 +337,7 @@ fn publish(
             previous.status = status;
             previous.checked_at = Some(now);
             previous.stale = true;
+            previous.history.stale = true;
             previous.last_error = Some(error.into());
             previous
         }
@@ -245,7 +346,7 @@ fn publish(
     sender.send_replace(Arc::new(next));
 }
 
-fn command(git: &Path, root: &Path) -> Result<Command, Failure> {
+fn base_command(git: &Path, root: &Path) -> Result<Command, Failure> {
     let mut command = Command::new(git);
     command.args([
         "--no-pager",
@@ -277,16 +378,6 @@ fn command(git: &Path, root: &Path) -> Result<Command, Failure> {
     command
         .arg("-c")
         .arg(worktree)
-        .args([
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=normal",
-            "--ahead-behind",
-            "--",
-            ".",
-        ])
         .current_dir(root)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -306,15 +397,196 @@ fn command(git: &Path, root: &Path) -> Result<Command, Failure> {
     Ok(command)
 }
 
+fn command(git: &Path, root: &Path) -> Result<Command, Failure> {
+    let mut command = base_command(git, root)?;
+    command.args([
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "-z",
+        "--untracked-files=normal",
+        "--ahead-behind",
+        "--",
+        ".",
+    ]);
+    Ok(command)
+}
+
+fn cached_history(previous: &GitHistory, head: Option<&str>, now: Instant) -> Option<GitHistory> {
+    let Some(head) = head else {
+        return Some(GitHistory {
+            checked_at: Some(now),
+            stale: false,
+            ..GitHistory::default()
+        });
+    };
+    if previous.head.as_deref() != Some(head) {
+        return None;
+    }
+    if previous.error.is_none()
+        && previous
+            .commits
+            .first()
+            .is_some_and(|commit| commit.full_hash == head)
+    {
+        let mut history = previous.clone();
+        // A fresh status with this same HEAD validates a previously stale view.
+        history.stale = false;
+        return Some(history);
+    }
+    if previous.error.is_some()
+        && previous
+            .checked_at
+            .is_some_and(|checked| now.saturating_duration_since(checked) < HISTORY_RETRY)
+    {
+        let mut history = previous.clone();
+        history.commits.clear();
+        history.stale = true;
+        return Some(history);
+    }
+    None
+}
+
+fn valid_oid(value: &[u8]) -> bool {
+    matches!(value.len(), 40 | 64) && value.iter().all(u8::is_ascii_hexdigit)
+}
+
+fn parse_history(bytes: &[u8], head: &str) -> Result<Vec<GitCommit>, &'static str> {
+    const INVALID: &str = "Git returned incomplete or invalid commit history";
+    if !bytes.ends_with(&[0]) || !valid_oid(head.as_bytes()) {
+        return Err(INVALID);
+    }
+    let fields = bytes[..bytes.len() - 1]
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
+    if fields.is_empty() || !fields.len().is_multiple_of(4) || fields.len() / 4 > HISTORY_LIMIT {
+        return Err(INVALID);
+    }
+    let mut commits = Vec::with_capacity(fields.len() / 4);
+    for fields in fields.as_chunks::<4>().0 {
+        let full_hash = std::str::from_utf8(fields[0]).map_err(|_| INVALID)?;
+        let short_hash = std::str::from_utf8(fields[1]).map_err(|_| INVALID)?;
+        if !valid_oid(fields[0])
+            || short_hash.len() < 4
+            || !full_hash.starts_with(short_hash)
+            || commits
+                .iter()
+                .any(|commit: &GitCommit| commit.full_hash == full_hash)
+        {
+            return Err(INVALID);
+        }
+        let committed_at_unix = std::str::from_utf8(fields[2])
+            .map_err(|_| INVALID)?
+            .parse::<i64>()
+            .map_err(|_| INVALID)?;
+        commits.push(GitCommit {
+            full_hash: full_hash.into(),
+            short_hash: short_hash.into(),
+            subject: display(fields[3]),
+            committed_at_unix,
+        });
+    }
+    if commits
+        .first()
+        .is_none_or(|commit| commit.full_hash != head)
+    {
+        return Err(INVALID);
+    }
+    Ok(commits)
+}
+
+async fn inspect_history(
+    git: &Path,
+    root: &Path,
+    head: &str,
+    timeout: Duration,
+    stopped: &mut watch::Receiver<bool>,
+) -> Result<Vec<GitCommit>, Failure> {
+    if *stopped.borrow() {
+        return Err(Failure::Cancelled);
+    }
+    if !valid_oid(head.as_bytes()) {
+        return Err(Failure::Error(
+            "Git history requires a complete HEAD object id",
+        ));
+    }
+    let mut command = base_command(git, root)?;
+    // NUL-terminated tformat gives exactly four fields per commit. A literal
+    // object id pins the query; a concurrent checkout cannot retarget the log.
+    // No signature verification, patch/textconv, notes, pager or hooks run.
+    command
+        .args([
+            "--no-replace-objects",
+            "-c",
+            "log.showSignature=false",
+            "-c",
+            if cfg!(windows) {
+                "core.hooksPath=NUL"
+            } else {
+                "core.hooksPath=/dev/null"
+            },
+            "log",
+            "--max-count=5",
+            "--no-patch",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-show-signature",
+            "--no-decorate",
+            "--no-notes",
+            "--no-color",
+            "--encoding=UTF-8",
+            "--abbrev=8",
+            "-z",
+            "--format=tformat:%H%x00%h%x00%ct%x00%s",
+        ])
+        .arg(head)
+        .arg("--");
+    let mut process = Managed::spawn(&mut command)
+        .map_err(|_| Failure::Unavailable("Git history could not start"))?;
+    let stdout = process.child.stdout.take().expect("piped Git stdout");
+    let stderr = process.child.stderr.take().expect("piped Git stderr");
+    let result = {
+        let complete = async {
+            let (stdout, stderr, exit) = tokio::try_join!(
+                limited(stdout, HISTORY_OUTPUT_LIMIT),
+                limited(stderr, ERROR_LIMIT),
+                async {
+                    process
+                        .wait()
+                        .await
+                        .map_err(|_| Failure::Error("Git history could not be reaped"))
+                }
+            )?;
+            if !exit.success() {
+                if stderr.starts_with(b"fatal: not a git repository") {
+                    return Err(Failure::NotRepository);
+                }
+                return Err(Failure::Error(
+                    "Git history failed; commits are unavailable",
+                ));
+            }
+            parse_history(&stdout, head).map_err(Failure::Error)
+        };
+        tokio::select! {
+            biased;
+            _ = stopped.changed() => Err(Failure::Cancelled),
+            _ = tokio::time::sleep(timeout) => Err(Failure::Error("Git history timed out")),
+            result = complete => result,
+        }
+    };
+    process.shutdown().await;
+    result
+}
+
 async fn limited(reader: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>, Failure> {
     let mut bytes = Vec::new();
     reader
         .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .await
-        .map_err(|_| Failure::Error("Git status output could not be read"))?;
+        .map_err(|_| Failure::Error("Git output could not be read"))?;
     if bytes.len() > limit {
-        return Err(Failure::Error("Git status exceeded its output limit"));
+        return Err(Failure::Error("Git output exceeded its limit"));
     }
     Ok(bytes)
 }
@@ -490,6 +762,79 @@ fn sample(snapshot: &mut GitSnapshot, status: &[u8], path: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_native_history_without_losing_hashes_times_or_terminal_safety() {
+        let head = "a".repeat(40);
+        let parent = "b".repeat(64);
+        let bytes = format!(
+            "{head}\0aaaaaaaa\0-123\0subject\x1b[31m\nnext\0{parent}\0bbbbbbbb\0{time}\0parent\0",
+            time = 1_700_000_000
+        )
+        .into_bytes();
+        let commits = parse_history(&bytes, &head).unwrap();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].full_hash, head);
+        assert_eq!(commits[1].full_hash, parent);
+        assert_eq!(commits[0].committed_at_unix, -123);
+        assert_eq!(commits[1].committed_at_unix, 1_700_000_000);
+        assert_eq!(commits[0].subject, "subject\\u{1b}[31m\\nnext");
+        assert!(parse_history(&bytes[..bytes.len() - 1], &head).is_err());
+        assert!(parse_history(&bytes, &"c".repeat(40)).is_err());
+        assert!(
+            parse_history(
+                format!("{head}\0aaaaaaaa\0invalid\0subject\0").as_bytes(),
+                &head
+            )
+            .is_err()
+        );
+        assert!(
+            parse_history(
+                format!("{head}\0wrong\0{time}\0subject\0", time = 0).as_bytes(),
+                &head
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cached_history_tracks_the_exact_head_and_failed_reads_hide_old_commits() {
+        let now = Instant::now();
+        let head = "a".repeat(40);
+        let newer = "b".repeat(40);
+        let previous = GitHistory {
+            head: Some(head.clone()),
+            commits: vec![GitCommit {
+                full_hash: head.clone(),
+                short_hash: "aaaaaaaa".into(),
+                subject: "known commit".into(),
+                committed_at_unix: 123,
+            }],
+            checked_at: Some(now),
+            observed_at_unix: Some(456),
+            stale: true,
+            error: None,
+        };
+        let cached = cached_history(&previous, Some(&head), now + POLL).unwrap();
+        assert!(!cached.stale);
+        assert_eq!(cached.checked_at, Some(now));
+        assert_eq!(cached.commits, previous.commits);
+        assert!(cached_history(&previous, Some(&newer), now).is_none());
+        let failed = GitHistory {
+            head: Some(newer.clone()),
+            error: Some("Git history timed out".into()),
+            ..previous
+        };
+        let cached = cached_history(&failed, Some(&newer), now + POLL).unwrap();
+        assert!(cached.stale);
+        assert!(cached.commits.is_empty());
+        assert!(cached_history(&failed, Some(&newer), now + HISTORY_RETRY).is_none());
+        let unborn = cached_history(&failed, None, now).unwrap();
+        assert!(!unborn.stale);
+        assert!(unborn.head.is_none());
+        assert!(unborn.commits.is_empty());
+        assert!(unborn.error.is_none());
+    }
 
     #[test]
     fn parses_native_nul_records_without_splitting_rename_paths_or_guessing_clean() {
@@ -699,6 +1044,21 @@ mod tests {
         ));
         let pid = std::fs::read_to_string(dir.0.join("child.pid")).unwrap();
         assert!(!Path::new("/proc").join(pid.trim()).exists());
+        let (_history_stop, mut history_stopped) = watch::channel(false);
+        let history = inspect_history(
+            &fixture,
+            &dir.0,
+            &"a".repeat(40),
+            Duration::from_millis(150),
+            &mut history_stopped,
+        )
+        .await;
+        assert!(matches!(
+            history,
+            Err(Failure::Error("Git history timed out"))
+        ));
+        let pid = std::fs::read_to_string(dir.0.join("child.pid")).unwrap();
+        assert!(!Path::new("/proc").join(pid.trim()).exists());
         let query = inspect(&fixture, &dir.0, TIMEOUT, &mut stopped);
         let cancel = async {
             tokio::time::sleep(Duration::from_millis(150)).await;
@@ -708,5 +1068,80 @@ mod tests {
         assert!(matches!(result, Err(Failure::Cancelled)));
         let pid = std::fs::read_to_string(dir.0.join("child.pid")).unwrap();
         assert!(!Path::new("/proc").join(pid.trim()).exists());
+    }
+
+    #[tokio::test]
+    async fn native_history_is_bounded_read_only_and_pinned_across_checkouts() {
+        let executable = crate::program::executable("git").expect("installed Git for history test");
+        let dir = Directory::new();
+        let root = &dir.0;
+        git(&executable, root, &["init", "-q", "--initial-branch=main"]);
+        for index in 0..6 {
+            git(
+                &executable,
+                root,
+                &[
+                    "commit",
+                    "--allow-empty",
+                    "-qm",
+                    &format!("history {index}"),
+                ],
+            );
+        }
+        let index = root.join(".git/index");
+        let before = std::fs::read(&index).ok();
+        let modified = std::fs::metadata(&index)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok());
+        let (_stop, mut stopped) = watch::channel(false);
+        let status = inspect(&executable, root, TIMEOUT, &mut stopped)
+            .await
+            .unwrap();
+        let head = status.head.unwrap();
+        let history = inspect_history(&executable, root, &head, TIMEOUT, &mut stopped)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), HISTORY_LIMIT);
+        assert_eq!(history[0].full_hash, head);
+        assert_eq!(history[0].subject, "history 5");
+        assert_eq!(history[4].subject, "history 1");
+        assert!(
+            history
+                .iter()
+                .all(|commit| commit.full_hash.starts_with(&commit.short_hash)
+                    && commit.short_hash.len() >= 8
+                    && commit.committed_at_unix > 0)
+        );
+        assert_eq!(std::fs::read(&index).ok(), before);
+        assert_eq!(
+            std::fs::metadata(&index)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok()),
+            modified
+        );
+        git(&executable, root, &["checkout", "-qb", "another-branch"]);
+        git(
+            &executable,
+            root,
+            &["commit", "--allow-empty", "-qm", "after switch"],
+        );
+        let pinned = inspect_history(&executable, root, &head, TIMEOUT, &mut stopped)
+            .await
+            .unwrap();
+        assert_eq!(
+            pinned, history,
+            "an in-flight query must not follow a changed HEAD"
+        );
+        let current = inspect(&executable, root, TIMEOUT, &mut stopped)
+            .await
+            .unwrap();
+        assert_eq!(current.branch.as_deref(), Some("another-branch"));
+        let current_head = current.head.unwrap();
+        assert_ne!(current_head, head);
+        let changed = inspect_history(&executable, root, &current_head, TIMEOUT, &mut stopped)
+            .await
+            .unwrap();
+        assert_eq!(changed[0].subject, "after switch");
+        assert_eq!(changed[0].full_hash, current_head);
     }
 }

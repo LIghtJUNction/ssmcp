@@ -98,8 +98,26 @@ pub(super) fn render(
     }
     let git_budget = (height / 3).clamp(2, 10).min(height);
     let git = git_lines(snapshot.git.as_deref(), git_budget, now);
-    let top_budget = height.saturating_sub(git.len() + usize::from(height > git.len()));
-    let progress_budget = if snapshot.progress.is_empty() {
+    let history_minimum = snapshot
+        .git
+        .as_deref()
+        .filter(|git| show_history(git))
+        .map(|git| {
+            if git.head.is_some() && git.history.head == git.head && !git.history.commits.is_empty()
+            {
+                1 + git.history.commits.len().min(3) * 2
+            } else {
+                2
+            }
+        })
+        .unwrap_or(0);
+    let top_available = height.saturating_sub(git.len() + usize::from(!git.is_empty()));
+    let top_minimum = if snapshot.tasks.is_empty() { 2 } else { 4 }
+        + if snapshot.progress.is_empty() { 0 } else { 3 };
+    let history_reserved = history_minimum.min(top_available.saturating_sub(top_minimum + 1));
+    let top_budget =
+        top_available.saturating_sub(history_reserved + usize::from(history_reserved > 0));
+    let progress_budget = if snapshot.progress.is_empty() || top_budget < 7 {
         0
     } else {
         top_budget.saturating_sub(4).min(8)
@@ -113,14 +131,26 @@ pub(super) fn render(
         now,
     ));
     lines.truncate(top_budget);
-    lines.resize_with(height.saturating_sub(git.len()), PanelLine::default);
-    lines.extend(git);
+    append_section(&mut lines, git, width, height);
+    let history_budget = height.saturating_sub(lines.len() + usize::from(!lines.is_empty()));
+    let history = history_lines(snapshot.git.as_deref(), history_budget, width, now);
+    append_section(&mut lines, history, width, height);
     lines.truncate(height);
     lines.resize_with(height, PanelLine::default);
     for line in &mut lines {
         line.text = fit(&line.text, width);
     }
     lines
+}
+
+fn append_section(rows: &mut Vec<PanelLine>, section: Vec<PanelLine>, width: usize, height: usize) {
+    if section.is_empty() || rows.len() >= height {
+        return;
+    }
+    if !rows.is_empty() {
+        rows.push(line("─".repeat(width), PanelTone::Muted));
+    }
+    rows.extend(section.into_iter().take(height.saturating_sub(rows.len())));
 }
 
 fn line(text: impl Into<String>, tone: PanelTone) -> PanelLine {
@@ -281,7 +311,7 @@ fn git_lines(snapshot: Option<&GitSnapshot>, budget: usize, now: Instant) -> Vec
                     .map(|v| format!("detached {}", v.chars().take(8).collect::<String>()))
             })
             .unwrap_or_else(|| "Branch unavailable".into());
-        lines.push(line(branch, PanelTone::Normal));
+        lines.push(line(branch, PanelTone::Accent));
         if git.conflicts > 0 {
             lines.push(line(
                 format!("{} conflicts", git.conflicts),
@@ -328,6 +358,174 @@ fn git_lines(snapshot: Option<&GitSnapshot>, budget: usize, now: Instant) -> Vec
     }
     lines.truncate(budget);
     lines
+}
+
+fn show_history(git: &GitSnapshot) -> bool {
+    git.status == GitState::Ready || (git.stale && git.head.is_some())
+}
+
+fn history_lines(
+    snapshot: Option<&GitSnapshot>,
+    budget: usize,
+    width: usize,
+    now: Instant,
+) -> Vec<PanelLine> {
+    let Some(git) = snapshot.filter(|git| show_history(git)) else {
+        return Vec::new();
+    };
+    if budget < 2 {
+        return Vec::new();
+    }
+    let history = &git.history;
+    let stale = git.stale
+        || git.status != GitState::Ready
+        || (history.stale && history.checked_at.is_some());
+    let mut rows = vec![line(
+        if stale {
+            "Recent commits · stale"
+        } else {
+            "Recent commits"
+        },
+        if stale {
+            PanelTone::Warning
+        } else {
+            PanelTone::Heading
+        },
+    )];
+    if git.status == GitState::Ready && !git.stale && git.unborn && git.head.is_none() {
+        rows.push(line("No commits yet", PanelTone::Muted));
+        return rows;
+    }
+    if git.head.is_none() || history.head != git.head {
+        rows.push(line(
+            if history.error.is_some() {
+                "History unavailable"
+            } else {
+                "History pending for HEAD"
+            },
+            if history.error.is_some() {
+                PanelTone::Warning
+            } else {
+                PanelTone::Muted
+            },
+        ));
+        return rows;
+    }
+    if history.commits.is_empty() {
+        rows.push(line(
+            if history.error.is_some() {
+                "History unavailable"
+            } else if history.stale {
+                "Loading recent commits"
+            } else {
+                "No history returned"
+            },
+            if history.error.is_some() {
+                PanelTone::Warning
+            } else {
+                PanelTone::Muted
+            },
+        ));
+        return rows;
+    }
+    let shown = history.commits.len().min(5).min((budget - 1) / 2);
+    if shown == 0 {
+        rows.push(line("Expand to show commits", PanelTone::Muted));
+        return rows;
+    }
+    if !stale && shown < history.commits.len().min(5) {
+        rows[0].text = format!("Recent commits · {shown}/{}", history.commits.len().min(5));
+    }
+    let observed_now = history
+        .observed_at_unix
+        .zip(history.checked_at)
+        .map(|(unix, checked)| {
+            unix.saturating_add(
+                i64::try_from(now.saturating_duration_since(checked).as_secs()).unwrap_or(i64::MAX),
+            )
+        });
+    for (index, commit) in history.commits.iter().take(shown).enumerate() {
+        let remaining_commits = shown - index - 1;
+        let subject_rows = budget
+            .saturating_sub(rows.len() + 1 + remaining_commits * 2)
+            .clamp(1, 2);
+        rows.push(line(
+            format!(
+                "{} · {}",
+                commit.short_hash,
+                commit_age(commit.committed_at_unix, observed_now)
+            ),
+            PanelTone::Muted,
+        ));
+        for subject in wrap_subject(&commit.subject, width.saturating_sub(2), subject_rows) {
+            rows.push(line(format!("  {subject}"), PanelTone::Normal));
+        }
+    }
+    rows.truncate(budget);
+    rows
+}
+
+fn commit_age(committed_at_unix: i64, now_unix: Option<i64>) -> String {
+    let Some(now) = now_unix else {
+        return "time unknown".into();
+    };
+    let delta = now.saturating_sub(committed_at_unix);
+    let seconds = delta.unsigned_abs();
+    let age = if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86400 {
+        format!("{}h", seconds / 3600)
+    } else {
+        format!("{}d", seconds / 86400)
+    };
+    if delta < 0 {
+        format!("in {age}")
+    } else {
+        format!("{age} ago")
+    }
+}
+
+/// Sanitize the whole subject before wrapping, so a split cannot conceal a secret.
+fn wrap_subject(subject: &str, width: usize, max_lines: usize) -> Vec<String> {
+    if width == 0 || max_lines == 0 {
+        return Vec::new();
+    }
+    let safe = safe_text(subject);
+    let mut remaining = safe.trim();
+    if remaining.is_empty() {
+        return vec!["(no subject)".into()];
+    }
+    let mut rows = Vec::new();
+    while !remaining.is_empty() && rows.len() < max_lines {
+        if UnicodeWidthStr::width(remaining) <= width || rows.len() + 1 == max_lines {
+            rows.push(fit(remaining, width));
+            break;
+        }
+        let mut used = 0;
+        let mut end = 0;
+        let mut word_end = None;
+        for (index, character) in remaining.char_indices() {
+            let cells = UnicodeWidthChar::width(character).unwrap_or(0);
+            if used + cells > width {
+                break;
+            }
+            used += cells;
+            end = index + character.len_utf8();
+            if character == ' ' && index > 0 {
+                word_end = Some(index);
+            }
+        }
+        let end = word_end.unwrap_or(end);
+        if end == 0 {
+            rows.push(fit(remaining, width));
+            break;
+        }
+        rows.push(remaining[..end].trim_end().into());
+        remaining = remaining[end..].trim_start();
+    }
+    rows
 }
 
 fn elapsed(duration: Duration) -> String {
@@ -560,5 +758,157 @@ mod tests {
             rows.iter()
                 .all(|line| !line.text.chars().any(char::is_control))
         );
+    }
+    fn git_with_history(now: Instant) -> GitSnapshot {
+        use super::super::git_status::{GitCommit, GitHistory};
+
+        let commits = (1..=5)
+            .map(|index| GitCommit {
+                full_hash: format!("{index:08x}{}", "0".repeat(32)),
+                short_hash: format!("{index:08x}"),
+                subject: format!("Commit {index} keeps native workspace history readable"),
+                committed_at_unix: 1_800_000_000 - index * 60,
+            })
+            .collect::<Vec<_>>();
+        let head = Some(commits[0].full_hash.clone());
+        GitSnapshot {
+            status: GitState::Ready,
+            branch: Some("main".into()),
+            head: head.clone(),
+            observed_at: Some(now),
+            stale: false,
+            history: GitHistory {
+                head,
+                commits,
+                checked_at: Some(now),
+                observed_at_unix: Some(1_800_000_000),
+                error: None,
+                stale: false,
+            },
+            ..GitSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn git_history_follows_activity_and_adapts_to_available_rows() {
+        let now = Instant::now();
+        let git = git_with_history(now);
+        let snapshot = PanelSnapshot {
+            tasks: vec![
+                TaskView {
+                    id: "#a".into(),
+                    description: "cargo test".into(),
+                    cwd: Some("project".into()),
+                    started: now - Duration::from_secs(6),
+                },
+                TaskView {
+                    id: "#b".into(),
+                    description: "cargo check".into(),
+                    cwd: None,
+                    started: now - Duration::from_secs(5),
+                },
+            ],
+            git: Some(Arc::new(git.clone())),
+            ..PanelSnapshot::default()
+        };
+        let full = render(&snapshot, 28, 57, now);
+        assert_eq!(full.len(), 57);
+        let git_row = full.iter().position(|row| row.text == "Git").unwrap();
+        assert_eq!(
+            git_row, 6,
+            "Git must follow two task rows without bottom anchoring"
+        );
+        let history_row = full
+            .iter()
+            .position(|row| row.text.starts_with("Recent commits"))
+            .unwrap();
+        assert_eq!(history_row, git_row + 4);
+        for commit in &git.history.commits {
+            assert!(full.iter().any(|row| row.text.contains(&commit.short_hash)));
+        }
+        assert!(full.iter().any(|row| row.text.contains("1m ago")));
+        assert!(
+            full.iter()
+                .all(|row| UnicodeWidthStr::width(row.text.as_str()) <= 28)
+        );
+        let compact = render(&snapshot, 28, 17, now);
+        let shown = git
+            .history
+            .commits
+            .iter()
+            .filter(|commit| {
+                compact
+                    .iter()
+                    .any(|row| row.text.contains(&commit.short_hash))
+            })
+            .count();
+        assert_eq!(shown, 3);
+        assert!(compact.iter().any(|row| row.text == "Recent commits · 3/5"));
+    }
+
+    #[test]
+    fn history_never_labels_a_different_head_or_missing_observation_as_current() {
+        let now = Instant::now();
+        let mut git = git_with_history(now);
+        let old_subject = git.history.commits[0].subject.clone();
+        git.head = Some("f".repeat(40));
+        let pending = history_lines(Some(&git), 20, 28, now);
+        assert!(
+            pending
+                .iter()
+                .any(|row| row.text == "History pending for HEAD")
+        );
+        assert!(
+            !pending
+                .iter()
+                .any(|row| row.text.contains(&git.history.commits[0].short_hash))
+        );
+        assert!(!pending.iter().any(|row| row.text.contains(&old_subject)));
+
+        git.head = git.history.head.clone();
+        git.status = GitState::Error;
+        git.stale = true;
+        git.history.stale = true;
+        let stale = history_lines(Some(&git), 20, 28, now);
+        assert_eq!(stale[0].text, "Recent commits · stale");
+        assert_eq!(stale[0].tone, PanelTone::Warning);
+        assert!(
+            stale
+                .iter()
+                .any(|row| row.text.contains(&git.history.commits[0].short_hash))
+        );
+
+        git.status = GitState::Ready;
+        git.stale = false;
+        git.unborn = true;
+        git.head = None;
+        git.history = super::super::git_status::GitHistory::default();
+        let unborn = history_lines(Some(&git), 20, 28, now);
+        assert!(unborn.iter().any(|row| row.text == "No commits yet"));
+        assert!(!unborn.iter().any(|row| row.text.contains("stale")));
+    }
+
+    #[test]
+    fn commit_subject_wrap_and_time_keep_native_text_safe_and_truthful() {
+        let rows = wrap_subject(
+            "password=panel-secret-fixture 修复 e\u{301}\x1b[2J\nnext",
+            26,
+            2,
+        );
+        let text = rows.join("\n");
+        assert!(text.contains("[redacted]"));
+        assert!(!text.contains("panel-secret-fixture"));
+        assert!(rows.iter().all(|row| {
+            UnicodeWidthStr::width(row.as_str()) <= 26 && !row.chars().any(char::is_control)
+        }));
+        assert_eq!(wrap_subject("e\u{301}界", 3, 2), ["e\u{301}界"]);
+        assert_eq!(
+            wrap_subject("Keep commit subjects readable", 18, 2),
+            ["Keep commit", "subjects readable"]
+        );
+        assert_eq!(commit_age(100, None), "time unknown");
+        assert_eq!(commit_age(100, Some(40)), "in 1m");
+        assert_eq!(commit_age(40, Some(100)), "1m ago");
+        assert_eq!(commit_age(-5, Some(10)), "15s ago");
     }
 }
