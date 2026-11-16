@@ -60,6 +60,8 @@ pub(crate) fn finish(label: &str) {
 #[derive(Default)]
 struct Lines {
     pending: String,
+    emitted: usize,
+    column: usize,
     old: usize,
     new: usize,
     hunk: bool,
@@ -268,7 +270,7 @@ impl Renderer {
         if let Some(encoded) = v.pointer("/params/deltaBase64").and_then(Value::as_str)
             && let Ok(bytes) = STANDARD.decode(encoded)
         {
-            return self.text(out, label, &String::from_utf8_lossy(&bytes));
+            return self.command_text(out, label, &String::from_utf8_lossy(&bytes));
         }
         // Native transports wrap useful payloads in these fields.
         for field in [
@@ -434,24 +436,43 @@ impl Renderer {
         Ok(shown)
     }
 
+    fn command_text(&mut self, out: &mut impl Write, label: &str, text: &str) -> io::Result<()> {
+        self.text(out, label, text)?;
+        let lines = self.streams.get_mut(label).unwrap();
+        // Command progress is useful before a newline or final RPC reply arrives.
+        // Keep possible diff headers and hunk lines intact for their parser.
+        let diff_prefix = ["diff --git", "--- ", "+++ ", "index ", "@@ "]
+            .iter()
+            .any(|prefix| prefix.starts_with(&lines.pending) || lines.pending.starts_with(prefix));
+        if !lines.pending.is_empty() && !lines.hunk && !diff_prefix {
+            let pending = std::mem::take(&mut lines.pending);
+            render_live(out, self.color, self.width, lines, &pending, false)?;
+            lines.pending = pending;
+        }
+        Ok(())
+    }
+
     fn text(&mut self, out: &mut impl Write, label: &str, text: &str) -> io::Result<()> {
         let lines = self.streams.entry(label.into()).or_default();
         // Strip terminal control sequences supplied by tools, including in redirected logs.
         lines.pending.push_str(&clean(text));
         while let Some(end) = lines.pending.find('\n') {
             let line: String = lines.pending.drain(..=end).collect();
-            render_line(
-                out,
-                self.color,
-                self.width,
-                lines,
-                line.trim_end_matches(['\n', '\r']),
-            )?;
+            let line = line.trim_end_matches(['\n', '\r']);
+            if lines.emitted > 0 {
+                render_live(out, self.color, self.width, lines, line, true)?;
+            } else {
+                render_line(out, self.color, self.width, lines, line)?;
+            }
         }
         // Bound buffering even for tools that never emit a newline.
         if lines.pending.len() > 64 * 1024 {
             let line = std::mem::take(&mut lines.pending);
-            render_line(out, self.color, self.width, lines, &line)?;
+            if lines.emitted > 0 {
+                render_live(out, self.color, self.width, lines, &line, true)?;
+            } else {
+                render_line(out, self.color, self.width, lines, &line)?;
+            }
         }
         Ok(())
     }
@@ -461,10 +482,44 @@ impl Renderer {
             && !lines.pending.is_empty()
         {
             let line = std::mem::take(&mut lines.pending);
-            render_line(out, self.color, self.width, &mut lines, &line)?;
+            if lines.emitted > 0 {
+                render_live(out, self.color, self.width, &mut lines, &line, true)?;
+            } else {
+                render_line(out, self.color, self.width, &mut lines, &line)?;
+            }
         }
         out.flush()
     }
+}
+
+fn render_live(
+    out: &mut impl Write,
+    color: bool,
+    width: usize,
+    lines: &mut Lines,
+    text: &str,
+    complete: bool,
+) -> io::Result<()> {
+    let mut fragment = String::new();
+    if lines.emitted == 0 {
+        fragment.push_str("  ");
+    }
+    for c in text[lines.emitted..].chars() {
+        let cells = if c as u32 >= 0x1100 { 2 } else { 1 };
+        if lines.column + cells > width.saturating_sub(2) {
+            fragment.push_str("\n  ");
+            lines.column = 0;
+        }
+        fragment.push(c);
+        lines.column += cells;
+    }
+    lines.emitted = text.len();
+    if complete {
+        fragment.push('\n');
+        lines.emitted = 0;
+        lines.column = 0;
+    }
+    painted(out, color, "0", &fragment)
 }
 
 fn painted(out: &mut impl Write, color: bool, code: &str, text: &str) -> io::Result<()> {
@@ -745,5 +800,80 @@ mod tests {
             render(std::slice::from_ref(&event), true, true),
             format!("{event}\n")
         );
+    }
+    #[test]
+    fn command_progress_is_visible_before_newline_and_completion() {
+        let mut renderer = Renderer::new(false, false, 100);
+        let mut out = Vec::new();
+        let delta = |text: &str| {
+            json!({
+                "method":"command/exec/outputDelta",
+                "params":{"processId":"running","deltaBase64":STANDARD.encode(text)}
+            })
+        };
+        renderer.event(&mut out, "codex", &delta("live")).unwrap();
+        assert_eq!(String::from_utf8_lossy(&out), "  live");
+        renderer
+            .event(&mut out, "codex", &delta(" progress"))
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out), "  live progress");
+        renderer.event(&mut out, "codex", &delta("\nnext")).unwrap();
+        assert_eq!(String::from_utf8_lossy(&out), "  live progress\n  next");
+        renderer.finish(&mut out, "codex").unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "  live progress\n  next\n");
+    }
+
+    #[test]
+    fn command_progress_keeps_wrapping_state_and_finishes_once_before_headings() {
+        let mut renderer = Renderer::new(false, true, 12);
+        let mut out = Vec::new();
+        for text in ["12345", "67890", "ab"] {
+            renderer
+                .event(
+                    &mut out,
+                    "codex",
+                    &json!({
+                        "method":"command/exec/outputDelta",
+                        "params":{"deltaBase64":STANDARD.encode(text)}
+                    }),
+                )
+                .unwrap();
+        }
+        assert_eq!(clean(&String::from_utf8_lossy(&out)), "  1234567890\n  ab");
+        renderer
+            .event(
+                &mut out,
+                "codex",
+                &json!({"id":"done","result":{"exitCode":0}}),
+            )
+            .unwrap();
+        let text = clean(&String::from_utf8(out).unwrap());
+        assert!(
+            text.starts_with("  1234567890\n  ab\n\n[codex · Success]"),
+            "{text}"
+        );
+        assert_eq!(text.matches("1234567890").count(), 1);
+        assert_eq!(text.matches("  ab").count(), 1);
+    }
+
+    #[test]
+    fn command_output_preserves_diff_rendering_at_every_chunk_boundary() {
+        let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,2 +2,2 @@\n-old\n+new\n same\n";
+        let delta = |text: &str| {
+            json!({
+                "method":"command/exec/outputDelta",
+                "params":{"deltaBase64":STANDARD.encode(text)}
+            })
+        };
+        let whole = render(&[delta(diff)], false, true);
+        assert!(whole.contains("\x1b[31m    2       │ -old"));
+        assert!(whole.contains("\x1b[32m          2 │ +new"));
+        for split in 1..diff.len() {
+            assert_eq!(
+                render(&[delta(&diff[..split]), delta(&diff[split..])], false, true),
+                whole,
+                "split {split}"
+            );
+        }
     }
 }

@@ -4,6 +4,8 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import runpy
+import subprocess
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -48,6 +50,45 @@ class SyncTests(unittest.TestCase):
         with patch.object(sync.subprocess, 'check_output', return_value='ForceCommand none\n'):
             with self.assertRaises(ValueError):
                 sync.verify_sshd('gh-123')
+
+    def test_installed_prefix_retains_exact_force_command_validation(self):
+        root = Path(__file__).resolve().parents[1]
+        effective = """ForceCommand {command}
+AuthorizedKeysFile /var/lib/ssmcp-ssh/%u
+AuthenticationMethods publickey
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+DisableForwarding yes
+PermitTTY no
+PermitUserRC no
+"""
+        for prefix, config in [('/usr/local', '/etc'), ('/usr', '/etc'), ('/opt/SSMCP', '/opt/SSMCP/etc')]:
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as tmp:
+                stage = Path(tmp)
+                subprocess.run(['make', 'install-portal', f'DESTDIR={stage}',
+                                f'PREFIX={prefix}', f'SYSCONFDIR={config}'], cwd=root, check=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                installed = stage / prefix.lstrip('/') / 'libexec/ssmcp/sync_portal_ssh.py'
+                module = runpy.run_path(str(installed))
+                expected = f'{prefix}/bin/ssmcpd attach'
+                self.assertEqual(module['FORCE_COMMAND'], expected)
+                unit = (stage / 'usr/lib/systemd/system/ssmcp-portal-ssh.service').read_text()
+                self.assertIn(f'ExecStart=/usr/bin/python3 -I {prefix}/libexec/ssmcp/sync_portal_ssh.py', unit)
+                self.assertTrue((stage / prefix.lstrip('/') / 'share/doc/ssmcp/examples/sshd-ssmcp-portal.conf').is_file())
+                portal = (stage / 'usr/lib/systemd/system/ssmcp-portal.service').read_text()
+                self.assertIn(f'EnvironmentFile=-{config}/ssmcpd/ssmcpd.env', portal)
+                self.assertIn(f'ExecStart={prefix}/bin/ssmcpd serve --config {config}/ssmcpd/ssmcpd.toml', portal)
+                self.assertIn('--listen 127.0.0.1:8086 --socket /run/ssmcp-portal/control.sock', portal)
+                self.assertIn('--portal-state-dir /var/lib/ssmcpd/portal', portal)
+                self.assertIn('RuntimeDirectory=ssmcp-portal', portal)
+                with patch.object(sync.subprocess, 'check_output', return_value=effective.format(command=expected)):
+                    module['verify_sshd']('gh-123')
+                for wrong in ['/bin/sh', expected + ' --unsafe', expected.replace('SSMCP', 'ssmcp')]:
+                    if wrong == expected:
+                        continue
+                    with patch.object(sync.subprocess, 'check_output', return_value=effective.format(command=wrong)):
+                        with self.assertRaises(ValueError):
+                            module['verify_sshd']('gh-123')
 
     def test_creation_rotation_and_removal_use_only_dedicated_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -141,8 +141,10 @@ def check_shell(harness, label, tools, _directory):
     match, _, _ = harness.read_until(
         r"SSMCP_SHELL_PID:(\d+)[\s\S]*?SSMCP_CHILD_PID:(\d+)"
     )
-    harness.check("[ssmcp shell input]" in local_log(harness, label),
-                  "shell: local transcript includes the remote command")
+    transcript = local_log(harness, label)
+    harness.check(transcript.count("SSMCP_SHELL_LIVE_BEFORE_READ") == 1
+                  and "[ssmcp shell input]" not in transcript,
+                  "shell: local transcript contains PTY output without duplicate input logging")
     harness.check(harness.call("terminal.status")["running"],
                   "shell: status reports the live PTY")
     return [int(match.group(1)), int(match.group(2))]

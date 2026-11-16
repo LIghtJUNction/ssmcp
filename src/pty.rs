@@ -190,12 +190,6 @@ impl Terminal {
                 wait_ms,
             } => self.read(cursor, max_bytes, wait_ms).await,
             Operation::Write { data } => {
-                if self.live {
-                    eprintln!(
-                        "\n[ssmcp shell input] {}",
-                        serde_json::to_string(&data).unwrap()
-                    );
-                }
                 if !self.running().await {
                     return Err("terminal has exited".into());
                 }

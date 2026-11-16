@@ -33,7 +33,7 @@ ssmcp --name workspace --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
 ```js
 const selected = clients.find(c => c.name === "development");
 if (!selected) throw new Error("development is offline");
-return await fs.list(selected.id, { path: ".", limit: 100 });
+return await fs.list(selected.id, { path: ".", max_entries: 100 });
 ```
 
 ```js
@@ -53,13 +53,13 @@ return await fs.write(workspaceId, {
 });
 ```
 
-写入先准备临时文件，再原子提交。默认拒绝覆盖，显式 `overwrite:true` 才替换已有普通文件。`fs.mkdir(id,{path,parents:true})` 创建目录，`fs.stat(id,{path})` 读取元数据。路径穿越、符号链接路径和设备文件被拒绝；这些限制只描述工作区内置方法，所选原生 Shell 或 Agent 仍遵循它自己的权限。
+写入先准备临时文件，再原子提交。默认拒绝覆盖，显式 `overwrite:true` 才替换已有普通文件。`fs.mkdir(id,{path,parents:true})` 创建目录，`fs.stat(id,{path})` 读取元数据。文件读写仅支持普通文件；路径穿越和符号链接路径被拒绝；这些限制只描述工作区内置方法，所选原生 Shell 或 Agent 仍遵循它自己的权限。
 
 ## 目录同步
 
 两端需要通过系统包管理器安装 `rsync`。ssmcp 使用系统 rsync 的协议和增量传输；协议字节沿现有客户端连接转发，不经过模型文本。
 
-同步复制源目录的内容。两端目录必须已经存在，可以先按任务需要调用 `fs.mkdir`。第一版保留普通文件内容、目录结构和修改时间，不复制符号链接、设备、所有权、权限位、ACL 或扩展属性；它适合工作文件同步，完整系统备份应使用相应备份工具。
+同步复制源目录的内容。两端目录必须已经存在，可以先按任务需要调用 `fs.mkdir`。第一版保留普通文件内容、目录结构和修改时间，跳过符号链接和设备，不启用所有权、权限位、ACL 或扩展属性的保留；它适合工作文件同步，完整系统备份应使用相应备份工具。
 
 先预演，查看将发生的变更：
 
@@ -105,6 +105,8 @@ return await ports.open({
   target: { client_id: developmentId, host: "127.0.0.1", port: 3000 }
 });
 ```
+
+先确认返回的 `state` 为 `running`。`ports.open` 最多等待 8 秒；若仍为 `starting`，通过 `ports.list()` 找到同一 `id` 并继续观察，待 `listener` 可用后再读取地址。
 
 随后在 **workspaceId 对应的机器** 访问 `http://127.0.0.1:8080`。需要自动选空闲监听端口时使用 `port:0`，读取返回的 `listener.port`。反方向映射交换两个客户端即可。
 

@@ -203,7 +203,7 @@ class Harness:
 
     def workspace_roundtrip(self, directory, *, client_id=None, label="workspace"):
         """Exercise universal file helpers across actual SSH in a temporary launch root."""
-        payload = bytes(range(256)) * 17 + b"\\x00ssmcp SSH roundtrip\\xff"
+        payload = bytes(range(256)) * 17 + b"\x00ssmcp SSH roundtrip\xff"
         relative = "workspace-check/nested/binary.dat"
         code = """
             const id = %s;
@@ -619,7 +619,11 @@ class Harness:
         self.check(True, "local stderr receives shell output without any MCP read")
         self.call("terminal.write", {"data": "printf '%s%s\\n' 'SSMCP_' 'ECHO_DISABLED'; stty echo\n"})
         wait_for(lambda: "SSMCP_ECHO_DISABLED" in log_path.read_text(errors="replace"), description="output with PTY echo disabled")
-        self.check("[ssmcp shell input]" in log_path.read_text(errors="replace"), "local transcript records remote input even when PTY echo is disabled")
+        transcript = log_path.read_text(errors="replace")
+        self.check(transcript.count("SSMCP_ECHO_DISABLED") == 1
+                   and "'ECHO_DISABLED'; stty echo" not in transcript
+                   and "[ssmcp shell input]" not in transcript,
+                   "local transcript shows PTY output once and respects disabled input echo")
         self.call("terminal.resize", {"rows": 37, "cols": 91})
         self.call("terminal.write", {"data": "stty size; tty; printf '%s%s:%s\\n' 'SSMCP_' 'SHELL' \"$$\"\n"})
         match, cursor, output = self.read_until(r"[\r\n]SSMCP_SHELL:(\d+)\r?\n")

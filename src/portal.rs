@@ -21,7 +21,7 @@ use base64::{
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::Read,
     path::Path,
     sync::{Arc, Mutex},
@@ -72,6 +72,22 @@ impl BrowserState {
             .retain(|_, p| p.expires > now && self.sessions.contains_key(&p.browser));
         self.rates
             .retain(|_, r| now.duration_since(r.start) < Duration::from_secs(60));
+    }
+    fn make_room_for_session(&mut self) -> Result<(), Problem> {
+        self.prune();
+        if self.sessions.len() < MAX_SESSIONS {
+            return Ok(());
+        }
+        let pending: HashSet<_> = self.pending.values().map(|p| p.browser).collect();
+        let oldest = self
+            .sessions
+            .iter()
+            .filter(|(key, session)| session.subject.is_none() && !pending.contains(*key))
+            .min_by_key(|(_, session)| session.expires)
+            .map(|(key, _)| *key);
+        let key = oldest.ok_or(Problem::Busy)?;
+        self.sessions.remove(&key);
+        Ok(())
     }
     fn charge(&mut self, name: String, maximum: usize) -> Result<(), Problem> {
         self.prune();
@@ -288,10 +304,7 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
             let csrf = random()?;
             let key = digest(&raw);
             let mut state = broker.portal.browser.lock().map_err(|_| Problem::Storage)?;
-            state.prune();
-            if state.sessions.len() >= MAX_SESSIONS {
-                return Err(Problem::Busy);
-            }
+            state.make_room_for_session()?;
             state.sessions.insert(
                 key,
                 Session {
@@ -399,10 +412,11 @@ pub(crate) fn is_callback(query: Option<&str>) -> bool {
     })
 }
 pub(crate) async fn callback(broker: Arc<Broker>, query: &str, headers: HeaderMap) -> Response {
-    match finish_callback(&broker, query, &headers).await {
+    let response = match finish_callback(&broker, query, &headers).await {
         Ok(response) => response,
         Err(error) => error.into_response(),
-    }
+    };
+    security_headers(response).await
 }
 async fn finish_callback(
     broker: &Broker,
@@ -523,8 +537,11 @@ async fn delete_key(
 
 /// Accept a single RFC 4253 Ed25519 blob, not authorized_keys options or certificates.
 fn parse_key(raw: &str, label: &str) -> Result<PublicKey, Problem> {
+    if raw.len() > 1024 {
+        return Err(Problem::Invalid);
+    }
+    let raw = raw.trim_ascii();
     if raw.is_empty()
-        || raw.len() > 1024
         || raw.chars().any(char::is_control)
         || label.len() > 80
         || label.chars().any(char::is_control)
