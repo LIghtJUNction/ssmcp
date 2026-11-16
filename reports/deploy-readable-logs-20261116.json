@@ -1,5 +1,5 @@
 {
-  "state": "deployed_with_verification_gap",
+  "state": "deployed",
   "commit": "655342c852af0285b80b39b3e49ecbbb08f121dd",
   "binary_source_commit": "655342c852af0285b80b39b3e49ecbbb08f121dd",
   "main_merge_commit": "6679a358dfac28901162f232b6fc651196e81bf5",
@@ -129,7 +129,18 @@
     "registry_restart_checks": 8,
     "context_helpers_explicit_tests": 2
   },
-  "error_type": "TimeoutExpired",
-  "error": "Command '['ssh', '-o', 'BatchMode=yes', 'archczy', 'sudo -n tar -cpf - -C / var/lib/ssmcp-rollouts/655342c852af0285b80b39b3e49ecbbb08f121dd opt/ssmcp/releases/655342c852af0285b80b3",
-  "finished_unix": 1794811191
+  "finished_unix": 1794812339,
+  "backup": {
+    "archive": "/home/lightjunction/Backups/servers/archczy/ssmcp-readable-655342c852af-1794811449/rollback.tar.gz",
+    "sha256": "065275e5caf8ff7d8b778fdb440956115b35e1274c2f6b8cc92693caec202cd4",
+    "entries_verified": 21,
+    "content_permissions_and_links_verified": true,
+    "server_temporary_files_removed": true
+  },
+  "cleanup_recovery": {
+    "previous_error_type": "TimeoutExpired",
+    "previous_error": "Command '['ssh', '-o', 'BatchMode=yes', 'archczy', 'sudo -n tar -cpf - -C / var/lib/ssmcp-rollouts/655342c852af0285b80b39b3e49ecbbb08f121dd opt/ssmcp/releases/655342c852af0285b80b3",
+    "method": "SHA-256 verified resumed compressed transfer; file content, permissions, owners and links checked",
+    "failed_partial_archive_removed": true
+  }
 }
