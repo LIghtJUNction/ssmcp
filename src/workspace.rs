@@ -2,6 +2,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     ffi::CString,
@@ -10,14 +11,14 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::fs::{MetadataExt, OpenOptionsExt},
+        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Component, Path, PathBuf},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -146,6 +147,27 @@ impl Workspace {
                 "Atomically write one bounded file. Existing files require overwrite=true. Use rsync for larger files.",
                 json!({"path":path,"data_base64":{"type":"string","maxLength":MAX_FILE_BYTES.div_ceil(3)*4},"overwrite":{"type":"boolean","default":false},"create_parents":{"type":"boolean","default":false}}),
                 &["path", "data_base64"],
+                false,
+            ),
+            tool(
+                "ssmcp.fs.read_text",
+                "Read bounded UTF-8 text without splitting characters. Offsets and limits are bytes; reuse next_offset. sha256 is the whole-file digest only when offset=0 and eof=true; otherwise null. Invalid UTF-8 requires binary fs.read.",
+                json!({"path":path,"offset":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":4,"maximum":MAX_FILE_BYTES,"default":65536}}),
+                &["path"],
+                true,
+            ),
+            tool(
+                "ssmcp.fs.write_text",
+                "Atomically write at most 262144 UTF-8 bytes. Existing files require overwrite=true; preserve existing permission bits. Optional expected_sha256 requires an existing bounded file and guards cooperating native writes, not arbitrary external writers.",
+                json!({"path":path,"text":{"type":"string","maxLength":MAX_FILE_BYTES},"overwrite":{"type":"boolean","default":false},"create_parents":{"type":"boolean","default":false},"expected_sha256":{"type":"string","pattern":"^[a-fA-F0-9]{64}$"}}),
+                &["path", "text"],
+                false,
+            ),
+            tool(
+                "ssmcp.fs.edit_text",
+                "Replace exactly one literal old_text occurrence in a UTF-8 file of at most 262144 bytes; reject empty, missing or ambiguous matches. Preserve all other bytes and permission bits. Optional expected_sha256 guards cooperating native writes.",
+                json!({"path":path,"old_text":{"type":"string","minLength":1,"maxLength":MAX_FILE_BYTES},"new_text":{"type":"string","maxLength":MAX_FILE_BYTES},"expected_sha256":{"type":"string","pattern":"^[a-fA-F0-9]{64}$"}}),
+                &["path", "old_text", "new_text"],
                 false,
             ),
             tool(
@@ -454,6 +476,9 @@ impl Root {
             "ssmcp.fs.stat" => self.stat(parse(args)?),
             "ssmcp.fs.read" => self.read(parse(args)?),
             "ssmcp.fs.write" => self.write(parse(args)?),
+            "ssmcp.fs.read_text" => self.read_text(parse(args)?),
+            "ssmcp.fs.write_text" => self.write_text(parse(args)?),
+            "ssmcp.fs.edit_text" => self.edit_text(parse(args)?),
             "ssmcp.fs.mkdir" => self.mkdir(parse(args)?),
             _ => Err(format!("unknown workspace capability: {name}")),
         }
@@ -601,71 +626,147 @@ impl Root {
             json!({"data_base64":STANDARD.encode(&bytes[..count]),"offset":args.offset,"next_offset":next,"size":metadata.len(),"eof":next>=metadata.len()}),
         )
     }
+    fn read_text(&self, args: FileReadArgs) -> Result<Value, String> {
+        if !(4..=MAX_FILE_BYTES).contains(&args.max_bytes) {
+            return Err(format!(
+                "max_bytes must be 4..={MAX_FILE_BYTES} for UTF-8 text"
+            ));
+        }
+        let mut file = self.file(&args.path)?;
+        let metadata = regular_metadata(&file)?;
+        if args.offset > metadata.len() {
+            return Err("offset is beyond the file".into());
+        }
+        file.seek(SeekFrom::Start(args.offset)).map_err(error)?;
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut file)
+            .take(args.max_bytes as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(error)?;
+        if !same_version(&metadata, &file.metadata().map_err(error)?) {
+            return Err("file changed during read; retry from a fresh read".into());
+        }
+        let count = bytes.len().min(args.max_bytes);
+        let at_end = bytes.len() <= args.max_bytes;
+        let text = match std::str::from_utf8(&bytes[..count]) {
+            Ok(text) => text,
+            Err(error) if error.error_len().is_none() && !at_end && error.valid_up_to() > 0 => {
+                std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap()
+            }
+            Err(_) => return Err(
+                "invalid UTF-8 or offset is inside a character; use the previous next_offset, or fs.read for binary data".into()
+            ),
+        };
+        let next = args.offset + text.len() as u64;
+        let eof = at_end && text.len() == bytes.len();
+        let digest = (args.offset == 0 && eof).then(|| sha256(text.as_bytes()));
+        Ok(json!({
+            "path":args.path,"text":text,"offset":args.offset,"next_offset":next,
+            "bytes":text.len(),"size":metadata.len(),"eof":eof,"truncated":!eof,"sha256":digest
+        }))
+    }
+
     fn write(&self, args: FileWriteArgs) -> Result<Value, String> {
         let data = decode(&args.data_base64, MAX_FILE_BYTES)?;
-        let parts = Self::components(&args.path)?;
-        let (name, parents) = parts.split_last().ok_or("write requires a file path")?;
-        let parent = self.directory(parents, args.create_parents)?;
-        // An overwrite may replace only a regular file, never a symlink or device.
-        if args.overwrite {
-            match open_at(&parent, name, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
-                Ok(existing) if !existing.metadata().map_err(error)?.is_file() => {
-                    return Err("overwrite target must be a regular file".into());
-                }
-                Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => return Err(error(e)),
-            }
-        }
-        let temporary =
-            CString::new(format!(".ssmcp-{}.tmp", random_id().map_err(error)?)).unwrap();
-        let mut file = open_at(
-            &parent,
-            &temporary,
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-            0o600,
-        )
-        .map_err(error)?;
-        struct Temp<'a> {
-            directory: &'a File,
-            name: &'a CString,
-        }
-        impl Drop for Temp<'_> {
-            fn drop(&mut self) {
-                unsafe { libc::unlinkat(self.directory.as_raw_fd(), self.name.as_ptr(), 0) };
-            }
-        }
-        let _temporary = Temp {
-            directory: &parent,
-            name: &temporary,
-        };
-        file.write_all(&data).map_err(error)?;
-        file.sync_all().map_err(error)?;
-        let outcome = if args.overwrite {
-            unsafe {
-                libc::renameat(
-                    parent.as_raw_fd(),
-                    temporary.as_ptr(),
-                    parent.as_raw_fd(),
-                    name.as_ptr(),
-                )
-            }
-        } else {
-            unsafe {
-                libc::linkat(
-                    parent.as_raw_fd(),
-                    temporary.as_ptr(),
-                    parent.as_raw_fd(),
-                    name.as_ptr(),
-                    0,
-                )
-            }
-        };
-        if outcome != 0 {
-            return Err(error(io::Error::last_os_error()));
-        }
-        parent.sync_all().map_err(error)?;
+        self.write_bytes(&args.path, &data, args.overwrite, args.create_parents, None)?;
         Ok(json!({"path":args.path,"written":data.len()}))
+    }
+
+    fn write_text(&self, args: TextWriteArgs) -> Result<Value, String> {
+        if args.text.len() > MAX_FILE_BYTES {
+            return Err(format!("text exceeds {MAX_FILE_BYTES} UTF-8 bytes"));
+        }
+        self.write_bytes(
+            &args.path,
+            args.text.as_bytes(),
+            args.overwrite,
+            args.create_parents,
+            args.expected_sha256.as_deref(),
+        )?;
+        Ok(
+            json!({"path":args.path,"written":args.text.len(),"sha256":sha256(args.text.as_bytes())}),
+        )
+    }
+
+    fn write_bytes(
+        &self,
+        path: &str,
+        data: &[u8],
+        overwrite: bool,
+        create_parents: bool,
+        expected_sha256: Option<&str>,
+    ) -> Result<(), String> {
+        validate_hash(expected_sha256)?;
+        if expected_sha256.is_some() && !overwrite {
+            return Err("expected_sha256 requires overwrite=true and an existing file".into());
+        }
+        let parts = Self::components(path)?;
+        let (name, parents) = parts.split_last().ok_or("write requires a file path")?;
+        let parent = locked_directory(&self.directory(parents, create_parents)?)?;
+        let mut mode = 0o600;
+        if overwrite {
+            match open_at(&parent, name, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
+                Ok(mut existing) => {
+                    mode = regular_metadata(&existing)?.mode() & 0o777;
+                    if let Some(expected) = expected_sha256 {
+                        let bytes = whole_file(&mut existing)?;
+                        check_hash(expected, &sha256(&bytes))?;
+                    }
+                }
+                Err(error)
+                    if error.kind() == io::ErrorKind::NotFound && expected_sha256.is_none() => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        atomic_write(&parent, name, data, overwrite, mode)
+    }
+
+    fn edit_text(&self, args: TextEditArgs) -> Result<Value, String> {
+        validate_hash(args.expected_sha256.as_deref())?;
+        if args.old_text.is_empty() {
+            return Err("old_text must not be empty".into());
+        }
+        if args.old_text.len() > MAX_FILE_BYTES || args.new_text.len() > MAX_FILE_BYTES {
+            return Err(format!("edit text exceeds {MAX_FILE_BYTES} UTF-8 bytes"));
+        }
+        let parts = Self::components(&args.path)?;
+        let (name, parents) = parts.split_last().ok_or("edit requires a file path")?;
+        let parent = locked_directory(&self.directory(parents, false)?)?;
+        let mut existing =
+            open_at(&parent, name, libc::O_RDONLY | libc::O_NONBLOCK, 0).map_err(error)?;
+        let mode = regular_metadata(&existing)?.mode() & 0o777;
+        let bytes = whole_file(&mut existing)?;
+        let previous_sha256 = sha256(&bytes);
+        if let Some(expected) = args.expected_sha256.as_deref() {
+            check_hash(expected, &previous_sha256)?;
+        }
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| "file is not valid UTF-8; use binary fs.read instead")?;
+        let index = text
+            .find(&args.old_text)
+            .ok_or("old_text was not found; file unchanged")?;
+        // Include overlapping occurrences when deciding whether a replacement is ambiguous.
+        let next_start = index + text[index..].chars().next().unwrap().len_utf8();
+        if text[next_start..].contains(&args.old_text) {
+            return Err(
+                "old_text matches more than once; provide a unique literal; file unchanged".into(),
+            );
+        }
+        let length = text.len() - args.old_text.len() + args.new_text.len();
+        if length > MAX_FILE_BYTES {
+            return Err(format!(
+                "edited file would exceed {MAX_FILE_BYTES} UTF-8 bytes"
+            ));
+        }
+        let mut replacement = String::with_capacity(length);
+        replacement.push_str(&text[..index]);
+        replacement.push_str(&args.new_text);
+        replacement.push_str(&text[index + args.old_text.len()..]);
+        atomic_write(&parent, name, replacement.as_bytes(), true, mode)?;
+        Ok(json!({
+            "path":args.path,"written":replacement.len(),"replacements":1,
+            "sha256":sha256(replacement.as_bytes()),"previous_sha256":previous_sha256
+        }))
     }
     fn mkdir(&self, args: MkdirArgs) -> Result<Value, String> {
         let parts = Self::components(&args.path)?;
@@ -699,6 +800,149 @@ fn open_at(directory: &File, name: &CString, flags: i32, mode: u32) -> io::Resul
         Ok(unsafe { File::from_raw_fd(descriptor) })
     }
 }
+/// Native writers cooperate on a fresh directory descriptor, including across
+/// Workspace instances. External editors do not participate in this advisory lock.
+fn locked_directory(directory: &File) -> Result<File, String> {
+    let locked = open_at(
+        directory,
+        &CString::new(".").unwrap(),
+        libc::O_RDONLY | libc::O_DIRECTORY,
+        0,
+    )
+    .map_err(error)?;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        if unsafe { libc::flock(locked.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(locked);
+        }
+        let failure = io::Error::last_os_error();
+        if failure.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        if failure.kind() != io::ErrorKind::WouldBlock {
+            return Err(error(failure));
+        }
+        if Instant::now() >= deadline {
+            return Err("workspace directory is busy; retry the file operation".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn regular_metadata(file: &File) -> Result<std::fs::Metadata, String> {
+    let metadata = file.metadata().map_err(error)?;
+    if !metadata.is_file() {
+        return Err("path is not a regular file".into());
+    }
+    Ok(metadata)
+}
+
+fn same_version(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
+    before.len() == after.len()
+        && before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
+        && before.ctime() == after.ctime()
+        && before.ctime_nsec() == after.ctime_nsec()
+}
+
+fn whole_file(file: &mut File) -> Result<Vec<u8>, String> {
+    let metadata = regular_metadata(file)?;
+    if metadata.len() > MAX_FILE_BYTES as u64 {
+        return Err(format!(
+            "text edit/precondition requires a file of at most {MAX_FILE_BYTES} bytes"
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    Read::by_ref(file)
+        .take(MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(error)?;
+    if bytes.len() > MAX_FILE_BYTES || !same_version(&metadata, &file.metadata().map_err(error)?) {
+        return Err("file changed during read; retry from a fresh read".into());
+    }
+    Ok(bytes)
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn validate_hash(expected: Option<&str>) -> Result<(), String> {
+    if expected
+        .is_some_and(|hash| hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err("expected_sha256 must be a 64-digit hexadecimal SHA-256 digest".into());
+    }
+    Ok(())
+}
+
+fn check_hash(expected: &str, actual: &str) -> Result<(), String> {
+    if !expected.eq_ignore_ascii_case(actual) {
+        return Err(
+            "file changed: expected_sha256 does not match; read again before editing".into(),
+        );
+    }
+    Ok(())
+}
+
+fn atomic_write(
+    parent: &File,
+    name: &CString,
+    data: &[u8],
+    overwrite: bool,
+    mode: u32,
+) -> Result<(), String> {
+    let temporary = CString::new(format!(".ssmcp-{}.tmp", random_id().map_err(error)?)).unwrap();
+    let mut file = open_at(
+        parent,
+        &temporary,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+    )
+    .map_err(error)?;
+    struct Temp<'a> {
+        directory: &'a File,
+        name: &'a CString,
+    }
+    impl Drop for Temp<'_> {
+        fn drop(&mut self) {
+            unsafe { libc::unlinkat(self.directory.as_raw_fd(), self.name.as_ptr(), 0) };
+        }
+    }
+    let _temporary = Temp {
+        directory: parent,
+        name: &temporary,
+    };
+    file.write_all(data).map_err(error)?;
+    file.set_permissions(std::fs::Permissions::from_mode(mode))
+        .map_err(error)?;
+    file.sync_all().map_err(error)?;
+    let outcome = if overwrite {
+        unsafe {
+            libc::renameat(
+                parent.as_raw_fd(),
+                temporary.as_ptr(),
+                parent.as_raw_fd(),
+                name.as_ptr(),
+            )
+        }
+    } else {
+        unsafe {
+            libc::linkat(
+                parent.as_raw_fd(),
+                temporary.as_ptr(),
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                0,
+            )
+        }
+    };
+    if outcome != 0 {
+        return Err(error(io::Error::last_os_error()));
+    }
+    parent.sync_all().map_err(error)
+}
+
 fn random_id() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     File::open("/dev/urandom")?.read_exact(&mut bytes)?;
@@ -814,6 +1058,27 @@ struct FileWriteArgs {
     overwrite: bool,
     #[serde(default)]
     create_parents: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextWriteArgs {
+    path: String,
+    text: String,
+    #[serde(default)]
+    overwrite: bool,
+    #[serde(default)]
+    create_parents: bool,
+    #[serde(default)]
+    expected_sha256: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextEditArgs {
+    path: String,
+    old_text: String,
+    new_text: String,
+    #[serde(default)]
+    expected_sha256: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1189,5 +1454,326 @@ mod tests {
             MAX_HANDLES
         );
         workspace.shutdown().await;
+    }
+    #[tokio::test]
+    async fn text_read_pages_at_utf8_boundaries_and_only_hashes_whole_files() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        let contents = "甲🙂乙\r\n\u{feff}tail";
+        std::fs::write(scratch.0.join("unicode"), contents).unwrap();
+        let mut offset = 0u64;
+        let mut reconstructed = String::new();
+        loop {
+            let page = call(
+                &workspace,
+                "ssmcp.fs.read_text",
+                json!({"path":"unicode","offset":offset,"max_bytes":4}),
+            )
+            .await;
+            let text = page["text"].as_str().unwrap();
+            assert!(text.len() <= 4);
+            assert_eq!(page["bytes"].as_u64(), Some(text.len() as u64));
+            reconstructed.push_str(text);
+            let next = page["next_offset"].as_u64().unwrap();
+            assert!(next > offset || page["eof"] == true);
+            assert!(page["sha256"].is_null());
+            if page["eof"] == true {
+                assert_eq!(page["truncated"], false);
+                break;
+            }
+            assert_eq!(page["truncated"], true);
+            offset = next;
+        }
+        assert_eq!(reconstructed, contents);
+        let whole = call(&workspace, "ssmcp.fs.read_text", json!({"path":"unicode"})).await;
+        assert_eq!(whole["text"], contents);
+        assert_eq!(whole["sha256"], sha256(contents.as_bytes()));
+        assert_eq!(whole["eof"], true);
+        assert!(
+            workspace
+                .perform("ssmcp.fs.read_text", json!({"path":"unicode","offset":1}))
+                .await
+                .unwrap_err()
+                .contains("UTF-8")
+        );
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.read_text",
+                    json!({"path":"unicode","max_bytes":3})
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.read_text",
+                    json!({"path":"unicode","max_bytes":MAX_FILE_BYTES+1})
+                )
+                .await
+                .is_err()
+        );
+        std::fs::write(scratch.0.join("empty"), []).unwrap();
+        let empty = call(&workspace, "ssmcp.fs.read_text", json!({"path":"empty"})).await;
+        assert_eq!(empty["text"], "");
+        assert_eq!(
+            empty["sha256"],
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        for bytes in [vec![0xff, 0xfe], vec![0xf0, 0x9f, 0x99]] {
+            std::fs::write(scratch.0.join("invalid"), bytes).unwrap();
+            assert!(
+                workspace
+                    .perform("ssmcp.fs.read_text", json!({"path":"invalid"}))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn text_edits_preserve_permissions_bom_and_newlines_and_reject_stale_hashes() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        let original = "\u{feff}alpha\r\n世界\r\n";
+        let created = call(
+            &workspace,
+            "ssmcp.fs.write_text",
+            json!({"path":"nested/script","text":original,"create_parents":true}),
+        )
+        .await;
+        assert_eq!(created["written"], original.len());
+        let path = scratch.0.join("nested/script");
+        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o751)).unwrap();
+        let edited = call(&workspace,"ssmcp.fs.edit_text",
+            json!({"path":"nested/script","old_text":"alpha","new_text":"beta","expected_sha256":created["sha256"]})).await;
+        assert_eq!(edited["previous_sha256"], created["sha256"]);
+        assert_eq!(edited["replacements"], 1);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            "\u{feff}beta\r\n世界\r\n".as_bytes()
+        );
+        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o751);
+        let stale = workspace.perform("ssmcp.fs.write_text",
+            json!({"path":"nested/script","text":"wrong","overwrite":true,"expected_sha256":created["sha256"]})).await.unwrap_err();
+        assert!(stale.contains("expected_sha256"));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            "\u{feff}beta\r\n世界\r\n".as_bytes()
+        );
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.write_text",
+                    json!({"path":"nested/script","text":"wrong"})
+                )
+                .await
+                .is_err()
+        );
+        call(&workspace,"ssmcp.fs.write_text",
+            json!({"path":"nested/script","text":"abc","overwrite":true,"expected_sha256":edited["sha256"]})).await;
+        let whole = call(
+            &workspace,
+            "ssmcp.fs.read_text",
+            json!({"path":"nested/script"}),
+        )
+        .await;
+        assert_eq!(
+            whole["sha256"],
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o751);
+        call(
+            &workspace,
+            "ssmcp.fs.write",
+            json!({"path":"nested/script","data_base64":"AAE=","overwrite":true}),
+        )
+        .await;
+        assert_eq!(std::fs::read(&path).unwrap(), [0, 1]);
+        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o751);
+    }
+
+    #[tokio::test]
+    async fn text_edit_rejects_empty_missing_overlapping_and_oversized_changes() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        let path = scratch.0.join("file");
+        std::fs::write(&path, "aaa\n世界 世界\n").unwrap();
+        for old_text in ["", "missing", "aa", "世界"] {
+            assert!(
+                workspace
+                    .perform(
+                        "ssmcp.fs.edit_text",
+                        json!({"path":"file","old_text":old_text,"new_text":"replacement"})
+                    )
+                    .await
+                    .is_err()
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "aaa\n世界 世界\n");
+        }
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.edit_text",
+                    json!({"path":"file","old_text":"aaa","new_text":"x".repeat(MAX_FILE_BYTES)})
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.write_text",
+                    json!({"path":"file","text":"界".repeat(MAX_FILE_BYTES/3+1),"overwrite":true})
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "aaa\n世界 世界\n");
+        for expected in ["", "bad", "z".repeat(64).as_str()] {
+            assert!(workspace.perform("ssmcp.fs.edit_text",
+                json!({"path":"file","old_text":"aaa","new_text":"b","expected_sha256":expected})).await.is_err());
+        }
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.write_text",
+                    json!({"path":"new","text":"x","expected_sha256":"0".repeat(64)})
+                )
+                .await
+                .is_err()
+        );
+        assert!(!scratch.0.join("new").exists());
+        std::fs::write(&path, vec![b'x'; MAX_FILE_BYTES + 1]).unwrap();
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.edit_text",
+                    json!({"path":"file","old_text":"x","new_text":"y"})
+                )
+                .await
+                .is_err()
+        );
+        assert!(workspace.perform("ssmcp.fs.write_text",
+            json!({"path":"file","text":"small","overwrite":true,"expected_sha256":"0".repeat(64)})).await.is_err());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            MAX_FILE_BYTES as u64 + 1
+        );
+        std::fs::write(&path, [0xff, b'x']).unwrap();
+        assert!(
+            workspace
+                .perform(
+                    "ssmcp.fs.edit_text",
+                    json!({"path":"file","old_text":"x","new_text":"y"})
+                )
+                .await
+                .unwrap_err()
+                .contains("UTF-8")
+        );
+    }
+
+    #[tokio::test]
+    async fn text_primitives_keep_root_and_regular_file_boundaries() {
+        let scratch = Scratch::new();
+        let outside = Scratch::new();
+        let workspace = scratch.workspace();
+        std::fs::write(outside.0.join("secret"), "outside").unwrap();
+        std::os::unix::fs::symlink(&outside.0, scratch.0.join("escape")).unwrap();
+        std::os::unix::fs::symlink(outside.0.join("secret"), scratch.0.join("link")).unwrap();
+        let fifo = CString::new(scratch.0.join("fifo").as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        for path in [
+            "../secret",
+            "/etc/passwd",
+            "escape/secret",
+            "link",
+            "fifo",
+            ".",
+        ] {
+            for (name, args) in [
+                ("ssmcp.fs.read_text", json!({"path":path})),
+                (
+                    "ssmcp.fs.write_text",
+                    json!({"path":path,"text":"changed","overwrite":true}),
+                ),
+                (
+                    "ssmcp.fs.edit_text",
+                    json!({"path":path,"old_text":"outside","new_text":"changed"}),
+                ),
+            ] {
+                assert!(
+                    workspace.perform(name, args).await.is_err(),
+                    "{name} {path}"
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(outside.0.join("secret")).unwrap(),
+            "outside"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_native_edits_with_the_same_precondition_have_one_winner() {
+        let scratch = Scratch::new();
+        let left = scratch.workspace();
+        let right = scratch.workspace();
+        std::fs::write(scratch.0.join("shared"), "old content").unwrap();
+        let before = call(&left, "ssmcp.fs.read_text", json!({"path":"shared"})).await;
+        let first = left.perform("ssmcp.fs.edit_text",
+            json!({"path":"shared","old_text":"old","new_text":"left","expected_sha256":before["sha256"]}));
+        let second = right.perform("ssmcp.fs.edit_text",
+            json!({"path":"shared","old_text":"old","new_text":"right","expected_sha256":before["sha256"]}));
+        let (first, second) = tokio::join!(first, second);
+        assert_ne!(first.is_ok(), second.is_ok(), "only one edit may commit");
+        let error = first.as_ref().err().or(second.as_ref().err()).unwrap();
+        assert!(error.contains("expected_sha256"), "{error}");
+        let actual = std::fs::read_to_string(scratch.0.join("shared")).unwrap();
+        assert!(matches!(actual.as_str(), "left content" | "right content"));
+        assert!(!std::fs::read_dir(&scratch.0).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".ssmcp-")
+        }));
+    }
+
+    #[tokio::test]
+    async fn external_directory_lock_causes_a_bounded_busy_error() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        let lock = File::open(&scratch.0).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let started = Instant::now();
+        let result = timeout(
+            Duration::from_secs(2),
+            workspace.perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"locked","text":"ready"}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(result.unwrap_err().contains("busy"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(!scratch.0.join("locked").exists());
+        drop(lock);
+        call(
+            &workspace,
+            "ssmcp.fs.write_text",
+            json!({"path":"locked","text":"ready"}),
+        )
+        .await;
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("locked")).unwrap(),
+            "ready"
+        );
     }
 }
