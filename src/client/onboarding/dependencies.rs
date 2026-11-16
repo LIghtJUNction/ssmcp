@@ -7,6 +7,11 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "linux")]
+mod linux_apt;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod macos_brew;
+
 pub(super) struct SshPrograms {
     pub ssh: PathBuf,
     pub keygen: PathBuf,
@@ -258,32 +263,7 @@ fn pacman_configuration(original: &str, transfer: &str) -> Result<String, String
 #[cfg(target_os = "linux")]
 async fn install_linux() -> Result<(), String> {
     if let Ok(apt) = crate::program::executable("apt-get") {
-        eprintln!(
-            "[ssmcp setup] Fetching the signed OpenSSH client package with apt; then installing from cache."
-        );
-        elevated(
-            &apt,
-            &[
-                "-o",
-                "Acquire::http::Timeout=10",
-                "-o",
-                "Acquire::https::Timeout=10",
-                "-o",
-                "Acquire::Retries=0",
-                "--yes",
-                "--download-only",
-                "install",
-                "openssh-client",
-            ],
-            true,
-        )
-        .await?;
-        return elevated(
-            &apt,
-            &["--yes", "--no-download", "install", "openssh-client"],
-            false,
-        )
-        .await;
+        return linux_apt::install(&apt).await;
     }
     if let Ok(pacman) = crate::program::executable("pacman") {
         let temp = TemporaryDirectory::create(&std::env::temp_dir())?;
@@ -402,33 +382,7 @@ async fn install_macos() -> Result<(), String> {
         ["/opt/homebrew/bin/brew","/usr/local/bin/brew"].into_iter().map(PathBuf::from)
             .find(|p|executable_file(p)).ok_or_else(||"Homebrew is unavailable".to_owned())
     }).map_err(|_|"macOS normally supplies /usr/bin/ssh and ssh-keygen; they are missing, and Homebrew is not installed. Restore the system tools or install OpenSSH with an approved package manager")?;
-    let temp = TemporaryDirectory::create(&std::env::temp_dir())?;
-    let curlrc = temp.0.join("curlrc");
-    std::fs::write(&curlrc,"connect-timeout = 8\nspeed-time = 12\nspeed-limit = 65536\nmax-time = 180\nretry = 0\nproto = \"=https\"\nproto-redir = \"=https\"\n")
-        .map_err(|error|error.to_string())?;
-    let env = [
-        ("HOMEBREW_NO_AUTO_UPDATE", OsString::from("1")),
-        ("HOMEBREW_NO_INSTALL_CLEANUP", OsString::from("1")),
-        ("HOMEBREW_CURL_RETRIES", OsString::from("0")),
-        ("HOMEBREW_CURLRC", curlrc.into_os_string()),
-    ];
-    eprintln!(
-        "[ssmcp setup] Fetching Homebrew's checksum-verified OpenSSH bottle and dependencies."
-    );
-    run_program(
-        &brew,
-        &["fetch", "--deps", "--force-bottle", "openssh"].map(OsString::from),
-        &env,
-        Some(Duration::from_secs(600)),
-    )
-    .await?;
-    run_program(
-        &brew,
-        &["install", "--force-bottle", "openssh"].map(OsString::from),
-        &env,
-        None,
-    )
-    .await
+    macos_brew::install(&brew).await
 }
 
 #[cfg(windows)]
@@ -527,8 +481,8 @@ async fn install_windows() -> Result<SshPrograms, String> {
     let zip = temp.0.join("openssh.zip");
     let unpacked = temp.0.join("unpacked");
     std::fs::write(&zip, &archive).map_err(|e| e.to_string())?;
-    let powershell = crate::program::executable("powershell")
-        .or_else(|_| crate::program::executable("pwsh"))
+    let powershell = crate::program::executable("pwsh")
+        .or_else(|_| crate::program::executable("powershell"))
         .or_else(|_| {
             std::env::var_os("SystemRoot")
                 .map(PathBuf::from)
