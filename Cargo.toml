@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 rust-version = "1.89"
 description = "Expose a local shell or coding agent as MCP through SSH public-key authentication"
