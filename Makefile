@@ -49,8 +49,12 @@ install-server: install
 # Optional portal integration; does not activate services or modify sshd configuration.
 .PHONY: install-portal
 install-portal:
-	install -d $(DESTDIR)$(PREFIX)/libexec/ssmcp $(DESTDIR)$(SYSTEMD_DIR)
-	install -m 0644 scripts/sync_portal_ssh.py $(DESTDIR)$(PREFIX)/libexec/ssmcp/
+	install -d $(DESTDIR)$(PREFIX)/libexec/ssmcp $(DESTDIR)$(SYSTEMD_DIR) $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples
+	sed 's|/usr/local/bin/|$(PREFIX)/bin/|g' scripts/sync_portal_ssh.py > $(DESTDIR)$(PREFIX)/libexec/ssmcp/sync_portal_ssh.py
+	chmod 0644 $(DESTDIR)$(PREFIX)/libexec/ssmcp/sync_portal_ssh.py
+	install -m 0644 packaging/sshd-ssmcp-portal.conf $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
 	sed 's|/usr/local/libexec/|$(PREFIX)/libexec/|g' packaging/ssmcp-portal-ssh.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal-ssh.service
 	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal-ssh.service
 	install -m 0644 packaging/ssmcp-portal-ssh.timer $(DESTDIR)$(SYSTEMD_DIR)/
+	sed 's|/usr/local/bin/|$(PREFIX)/bin/|g; s|/etc/ssmcpd/|$(SYSCONFDIR)/ssmcpd/|g' packaging/ssmcp-portal.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal.service
+	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal.service

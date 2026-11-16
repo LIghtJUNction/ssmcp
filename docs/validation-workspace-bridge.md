@@ -1,10 +1,70 @@
-# Workspace bridge 验证记录
+# 工作区同步与端口映射：验收记录
 
 验证日期：2026-11-16。
 
-本记录覆盖动态 MCP 资源、文件同步、双向 TCP 映射及任务取消的开发机测试。测试通过真实 HTTP 和 OAuth 入口调用 code_mode，使用系统 Node.js、bubblewrap、prlimit 和 rsync。两个测试客户端通过真实 wire 协议分别持有独立目录，并执行项目的 Workspace 和 Rsync 实现。
+工作区内置能力已在开发机完成本地验收，覆盖真实 HTTP、OAuth、隔离 JavaScript、系统 rsync、TCP 转发和本机 OpenSSH。两套 SSH 脚本分别通过 136 项与 204 项检查；Rust 默认测试通过 171 项，依赖真实运行环境的专项测试另行执行并通过。
 
-## 运行环境
+本次交付是源码、项目 skill、使用说明及验证记录。生产服务的升级和当前 ChatGPT 沙箱作为客户端的跨主机传输不在本次已完成的验证范围内。
+
+## 验收结果
+
+| 检查 | 结果 |
+| --- | --- |
+| cargo fmt --all -- --check | 通过 |
+| cargo clippy --locked --all-targets -- -D warnings | 通过 |
+| cargo test --locked | 171 通过、0 失败、11 忽略 |
+| code_mode::tests，包含隔离环境测试 | 9 通过 |
+| two_tools，真实 HTTP 入口及公开工具边界 | 3 通过 |
+| workspace_bridge，系统 rsync、双向端口、活跃任务取消 | 3 通过 |
+| scripts/e2e.py，真实 SSH 基础流程 | 136 项通过 |
+| scripts/e2e_agents.py，5 种后端 | 204 项通过 |
+| scripts/test_portal_ssh.py，合并后的门户安装逻辑 | 5 通过 |
+| cargo package --locked --allow-dirty --offline --no-verify | 通过，包含 80 个文件 |
+| 项目 skill 的结构校验 | 通过 |
+
+各行记录各自命令的结果，测试覆盖存在重叠。默认忽略的测试涉及实际系统运行环境或后端集成；本次分别显式运行了隔离 JavaScript、HTTP 和工作区桥接测试，并用确定性后端程序执行五种模式的真实 SSH 验收。
+
+发布包包含 skills/ssmcp/SKILL.md、工作区使用说明、验收记录及新增 Rust 模块。make install 将 skill 安装到前缀下的 share/doc/ssmcp/skills/ssmcp，动态资源 ssmcp://skill 也提供同一内容。
+
+## 关键行为及证据
+
+### 文件与目录同步
+
+workspace_bridge 测试建立两个独立客户端和共享目录，通过真实 MCP 请求调用 code_mode，再经 wire 调度进入 Workspace 和 Rsync 实现。传输使用系统 rsync 的实际协议字节流。
+
+测试覆盖超过 512 KiB 的二进制文件、隐藏文件、子目录、默认 dry-run、正向同步、交换端点后的反向同步和显式删除。预演后目标没有新增文件；实际同步后逐字节比较内容。delete 默认关闭，目标已有文件保留；显式开启后验证删除传播。原生 rsync 测试还覆盖带引号和 Unicode 的路径、符号链接隔离及数据上限。
+
+源和目标是各自共享根目录内已经存在的目录，复制的是源目录内的内容。默认 dry_run=true、delete=false。每次同步有一个明确的源；交换端点可反向同步，两端独立修改的冲突由调用方先行处理。
+
+### 端口映射和任务清理
+
+端口测试分别建立两个方向的映射，每次发送超过 128 KiB 的数据。发送端关闭写侧后仍收到完整回复，证明 TCP 半关闭被保留。关闭映射后，新连接失败，两端原生网络句柄列表均为空。测试还验证了其他登录授权无法关闭该映射。
+
+取消测试创建 64 MiB 稀疏文件，等待两个 rsync 端点都开始传输后调用 jobs.cancel。进入 cancelled 状态时，每端开始与关闭的 rsync 端点数一致。
+
+清理逻辑的单元测试占满 Broker 的 16 个原生调用名额，验证忙碌时的重试；持续无法关闭时保留 cleanup_failed 和待清理句柄，再次关闭或取消可继续清理。尚未清理的对象保留在容量统计和历史中。
+
+### 动态资源和权限
+
+资源测试覆盖分页、URI 校验、客户端断开、端点范围、登录身份及授权变化。真实 HTTP/OAuth 测试覆盖两代 MCP 协议的资源请求。公开工具仍严格为 list 和 code_mode；新增能力通过内置 helper、原生目录和标准 MCP resources 提供。
+
+## 真实 SSH 的五后端验收
+
+两套脚本通过本机真实 OpenSSH 公钥认证、OAuth Authorization Code / PKCE S256 和 HTTP MCP 入口。五种模式都执行 fs.mkdir、fs.write、fs.read、fs.stat 的二进制往返，并核对启动目录对应的共享根目录。
+
+| 后端 | 发现的原生工具数 |
+| --- | ---: |
+| Shell | 22 |
+| Codex | 29 |
+| Claude Code | 27 |
+| Pi | 55 |
+| OpenCode | 96 |
+
+每种后端包含 18 个通用内置能力：5 个文件接口、8 个 TCP 接口、5 个 rsync 接口。OpenCode 实际遍历两页能力目录。Shell 使用真实 Linux PTY，其余后端使用确定性的原生协议测试程序；model_calls=false。
+
+测试确认 Codex 无换行的实时输出在命令结束前可见，Shell 输出遵循 PTY 的 echo 设置并避免重复输入日志。基础脚本用时 3.121 秒，五后端脚本用时 4.083 秒；这些数值记录测试执行时间，不作为性能基准。
+
+## 运行环境与修复
 
 | 程序 | 实际路径 | 版本 |
 | --- | --- | --- |
@@ -13,75 +73,57 @@
 | prlimit | /usr/bin/prlimit | util-linux 2.42.4 |
 | rsync | /usr/bin/rsync | 3.5.2-g41bbd895，协议 33 |
 
-运行测试时，将 /usr/bin:/bin 放在该次命令的 PATH 前部，并保留原有 Cargo 可执行文件。开发机默认 PATH 中有 mise 的 Node.js shim；该 shim 依赖隔离环境外的配置，不能作为本测试所要求的系统 Node.js。测试没有修改全局 PATH、系统配置或命名空间策略。
+本次命令将 /usr/bin:/bin 放在其 PATH 前部，同时保留 Cargo 路径。开发机默认 PATH 中的 mise shim 依赖隔离环境外的配置，因此验收选择系统 Node.js。全局 PATH 和系统配置保持原状。
 
-## 结果与证据
+测试发现原有 RLIMIT_NPROC=128 在创建用户命名空间之前生效：开发机用户已有大量线程时，bubblewrap 返回 Resource temporarily unavailable。修复将这一上限移入已创建的用户命名空间，由 prlimit 设置。CPU、内存、文件描述符及 core dump 限制仍在外层保留；只读挂载、独立网络、禁止嵌套用户命名空间和权限删除继续生效。
 
-| 验证目标 | 测试 | 结果 |
-| --- | --- | --- |
-| 资源分页、端点权限、连接失效、URI 校验 | cargo test resources::tests --lib | 4 通过 |
-| 真实 OAuth 和 HTTP 资源读取，覆盖两代 MCP 协议 | cargo test --test resources | 4 通过 |
-| 512 KiB 以上二进制、隐藏文件、子目录、默认 dry-run、正向与反向同步、显式删除、文件根目录约束 | real_rsync_dry_run_forward_reverse_delete_and_rooted_fs | 通过 |
-| 两个方向的 TCP 映射，128 KiB 以上数据，写侧半关闭，映射权限与关闭清理 | tcp_mappings_work_in_both_directions_preserve_half_close_and_cleanup | 通过 |
-| 活跃同步取消，所有已获取的 rsync 端点清理 | cancelling_an_active_sync_closes_every_owned_rsync_endpoint | 通过 |
-| code_mode 新增接口向认证 host bridge 分发 | workspace_helpers_dispatch_through_the_authenticated_host_bridge | 通过 |
-| 异常保留日志，原生错误可观察 | errors_keep_logs_and_native_errors_remain_observable | 通过 |
+SSH 验收还暴露了命令输出的部分行缓冲问题：没有换行的 live 要等到命令结束才显示。修复使普通命令分片立即显示，保留跨分片换行、折行与去重状态；diff 标题和 hunk 继续按行解析。12 个渲染测试及真实 SSH 的完成前输出检查均通过。
 
-取消测试建立一个 64 MiB 稀疏文件，等待两个 rsync 端点都进入数据传输后调用 jobs.cancel。任务进入 cancelled 状态时，每个客户端上已开始的 rsync 端点数与已关闭的端点数相等。
+## 构建来源及日志
 
-TCP 测试先在客户端一监听并连接客户端二的目标端口，再交换两个客户端的角色。每次请求发送完后关闭写侧，继续读取完整回包；关闭映射后，新连接失败，两个客户端的原生网络句柄列表均为空。测试还确认其他登录授权不能关闭该映射。
+本次合入了主分支 f4962ccb 的门户和部署改动。SSH 验收使用独立构建目录，并复制固定二进制后执行，避免并行工作覆盖共享 target/debug 下的同名程序。
 
-文件同步测试在默认 dry-run 后检查目标目录未创建文件；实际传输后逐字节比较二进制文件。交换源和目标后验证反向文件到达，再以 delete=true 验证删除传播。未指定 delete 时，目标已有文件保留。
+构建时 HEAD 为 1f02965fb1f672c9780c29e1661886204a69feff，待合并父提交为 f4962ccb0cdde6de98354e85dcf2777d7cd96c46，另包含本工作区的渲染修复。后续文档校对不改变上述运行行为。
 
-## 同步语义
+| 二进制 | 验收快照的 SHA-256 |
+| --- | --- |
+| ssmcp | d1e4fad87ec22de978b4c504616791ebd4e8620e8dcbc2479f6203243b3e4da4 |
+| ssmcpd | d49ac8bf96171eb04b16f69e2f711ca0830bdb6a5c80172740c587fb3b242bb7 |
 
-源和目标都是各自客户端共享根目录内已经存在的目录；可先通过 fs.mkdir 创建目标目录。同步复制的是源目录内的内容，不会再套一层源目录名称。默认 dry_run=true、delete=false；实际写入必须显式设置 dry_run=false，删除目标多余文件必须显式设置 delete=true。
+开发机工作区：/home/lightjunction/Documents/GITHUB/ssmcp-workspace-bridge。
 
-交换 source 与 destination 即可反向同步。该操作不执行两端同时修改的冲突合并；指定源端是本次同步的数据来源。用户需要保留两端独立修改时，应先预览并处理冲突。
+- target/workspace-validation/final/ 保存 Rust、隔离、HTTP、工作区、打包和门户检查的日志及 results.json。
+- target/workspace-validation/reports/ 保存 ssh-shell.json、ssh-shell.log、ssh-backends.json、ssh-backends.log 和 staged-build.json。
+- staged-build.json 记录构建来源、工作区补丁摘要、二进制摘要和系统程序路径。
 
 ## 可复现命令
 
-先记录当前 Cargo 路径，再为测试选择系统运行时：
+先使用系统运行时，并为本工作区选择独立构建目录：
 
 ~~~sh
 SSMCP_CARGO="$(command -v cargo)"
 export PATH="/usr/bin:/bin:$PATH"
+export CARGO_TARGET_DIR="$PWD/target/workspace-validation/build"
 
-"$SSMCP_CARGO" test resources::tests --lib
-"$SSMCP_CARGO" test --test resources
-"$SSMCP_CARGO" test --test workspace_bridge -- --ignored --test-threads=1
-"$SSMCP_CARGO" test --lib code_mode::tests::workspace_helpers_dispatch_through_the_authenticated_host_bridge
-"$SSMCP_CARGO" test --lib code_mode::tests::errors_keep_logs_and_native_errors_remain_observable
+"$SSMCP_CARGO" fmt --all -- --check
+"$SSMCP_CARGO" clippy --locked --all-targets -- -D warnings
+"$SSMCP_CARGO" test --locked
+"$SSMCP_CARGO" test --locked --lib code_mode::tests -- --include-ignored --test-threads=1
+"$SSMCP_CARGO" test --locked --test two_tools -- --include-ignored --test-threads=1
+"$SSMCP_CARGO" test --locked --test workspace_bridge -- --ignored --test-threads=1
+"$SSMCP_CARGO" build --locked --bins
+python3 scripts/e2e.py --bin-dir "$CARGO_TARGET_DIR/debug"
+python3 scripts/e2e_agents.py --bin-dir "$CARGO_TARGET_DIR/debug"
+python3 scripts/test_portal_ssh.py
+"$SSMCP_CARGO" package --locked --allow-dirty --offline --no-verify
 ~~~
 
-workspace_bridge 测试依赖真实系统程序和 Linux 命名空间，因此显式标为 ignored，需在满足这些条件的环境中使用 --ignored 执行。测试不以不隔离的 Node.js 代替 bubblewrap。
+workspace_bridge 和隔离测试需要相应系统程序及 Linux 命名空间。SSH 脚本另需要 OpenSSH，具体准备方式见项目的部署与验证文档。
 
-## 运行时修复
+## 当前 ChatGPT 沙箱的接入状态
 
-测试发现原有进程数限制在创建隔离命名空间之前生效。当开发机同一用户已经运行大量线程时，外层 RLIMIT_NPROC=128 会令 bubblewrap 创建命名空间失败，返回 Resource temporarily unavailable。
+本环境经 HTTP 传输访问 ssmcp 服务的 HTTPS healthz 得到 HTTP 200。直接创建到 ssmcp.lmm.best:22 的 socket 时，getaddrinfo 返回 Temporary failure in name resolution；当前沙箱没有本地 SSH 密钥目录或可用 SSH agent。
 
-修复将进程数上限移到已创建的用户命名空间内，由 prlimit 设置为 128。CPU、内存、文件描述符和 core dump 限制仍在外层保留；只读挂载、独立网络、禁止嵌套用户命名空间及权限删除均保持。测试中没有增加对主机目录或网络的访问能力。
+因此，当前沙箱尚未注册为传输端。已完成的证据覆盖开发机上的独立工作区、真实本机 SSH、系统 rsync 和 TCP 转发。公网跨主机链路、断网后的恢复及跨机吞吐量，需要在两个实际环境都建立客户端连接后验证。
 
-## 证据边界
-
-这些端到端测试在同一开发机上运行两个独立客户端和目录，覆盖实际 MCP 请求、OAuth、隔离 JavaScript、wire 调度、系统 rsync 字节流及 TCP 数据转发。它们不单独证明公网 SSH 链路、网络断连恢复或不同物理主机之间的带宽表现。
-
-此验证记录尚未包含当前 ChatGPT 沙箱注册为客户端后的跨主机传输结果。当前测试证据来自开发机上的两个真实 wire 测试客户端；实际沙箱连接情况应另以连接和传输结果确认。
-
-本记录没有宣称发布或生产部署，也没有把双向可发起同步描述为自动冲突合并。上述资源、传输和清理语义由对应测试直接验证。
-
-## 当前沙箱连接探测
-
-通过本环境的 HTTP 传输请求 ssmcp 服务的 HTTPS healthz 得到 HTTP 200，说明该 HTTP 路径可达。直接创建到 ssmcp.lmm.best:22 的 socket 时，getaddrinfo 返回 Temporary failure in name resolution；当前沙箱也没有本地 SSH 密钥目录或可用 SSH agent。
-
-这些结果不能等同于 HTTPS 不可用，也没有完成 SSH 客户端注册。当前沙箱与开发机之间的实际传输仍需在建立客户端连接后单独验证。
-
-## 清理改动后的复验
-
-桥接清理逻辑更新后，以同一系统 PATH 再次执行：
-
-~~~sh
-"$SSMCP_CARGO" test --test workspace_bridge -- --ignored --test-threads=1
-~~~
-
-结果为 3 通过、0 失败、0 忽略；测试执行时间 2.45 秒，不含编译。此时间用于记录测试运行，不是文件同步或端口转发的性能基准。
+接入时，两端各自运行更新后的 ssmcp 客户端，服务端运行包含本次功能的 ssmcpd，再通过 list 核对客户端 ID、hostname 与 cwd。操作方法见 [工作区使用说明](workspaces.md)。

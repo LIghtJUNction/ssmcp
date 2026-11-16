@@ -34,7 +34,7 @@
 
 ## 公共服务连接教程
 
-打开 [ssmcp.lmm.best](https://ssmcp.lmm.best)，按首页教程完成 GitHub 登录、公钥登记、本机连接和 ChatGPT 插件配置。自助账户使用 GitHub numeric ID 绑定，SSH 用户名固定为 `gh-<ID>`；GitHub 改名后，更新 `--allow`，SSH 用户名和公钥归属保持不变。账户与公钥持久保存，网页登录会话在服务重启后失效。
+打开 [ssmcp.lmm.best](https://ssmcp.lmm.best)，按首页教程完成 GitHub 登录、公钥登记、本机连接和 ChatGPT 插件配置。自助账户使用 GitHub 账号编号绑定，SSH 用户名固定为 `gh-<ID>`；GitHub 改名后，更新 `--allow`，SSH 用户名和公钥归属保持不变。账户与公钥持久保存，网页登录会话在服务重启后失效。
 
 在 [ChatGPT Plugins](https://chatgpt.com/plugins) 点击 **Add**，**Name** 填 `ssmcp`，**Connection** 填 `https://ssmcp.lmm.best/mcp`，勾选同意后点击 **Create**。再按提示使用 GitHub 登录，核对身份和当前 MCP 客户端，明确允许连接。首页登录不会自动授予插件访问权限。
 
