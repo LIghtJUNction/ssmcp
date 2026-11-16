@@ -5,7 +5,7 @@ Run as root on the server. Never prints provider secrets or OAuth credentials.
 Staging does not restart production. Apply requires the matching stage receipt.
 """
 from __future__ import annotations
-import argparse, base64, fcntl, hashlib, http.client, json, os, pwd, shutil
+import argparse, base64, fcntl, hashlib, http.client, json, os, pwd, re, shutil
 import subprocess, tempfile, time, tomllib
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -87,7 +87,13 @@ def main():
     parser.add_argument('--commit',required=True)
     parser.add_argument('--report',type=Path,required=True)
     parser.add_argument('--config',type=Path,default=Path('/etc/ssmcpd/ssmcpd.toml'))
+    parser.add_argument('--proxy-config',type=Path,help='Optional replacement for the existing Nginx site')
+    parser.add_argument('--proxy-target',type=Path,default=Path('/etc/nginx/conf.d/ssmcp.lmm.best.conf'))
     args=parser.parse_args()
+    if not re.fullmatch(r'[0-9a-f]{40}',args.commit) or not re.fullmatch(r'[0-9a-f]{64}',args.sha256):
+        parser.error('commit and sha256 must be full lowercase hexadecimal values')
+    if args.proxy_config and (not args.proxy_config.is_absolute() or args.proxy_target.parent!=Path('/etc/nginx/conf.d') or args.proxy_target.suffix!='.conf'):
+        parser.error('proxy paths must identify an absolute candidate and one existing conf.d site')
     if os.geteuid()!=0:raise SystemExit('root required')
     os.umask(0o077)
     checkpoint=Path('/var/lib/ssmcp-rollouts')/args.commit
@@ -105,6 +111,14 @@ def main():
         info=run(['bsdtar','-xOf',str(args.package),'.PKGINFO'])
         check('package_name','pkgname = ssmcp-git\n' in info)
         check('package_version','pkgver = 0.4.1.' in info)
+        proxy_digest=digest(args.proxy_config) if args.proxy_config else None
+        if args.proxy_config:
+            check('proxy_target_exists',args.proxy_target.is_file())
+            with tempfile.TemporaryDirectory(prefix='ssmcp-nginx-') as directory:
+                candidate=Path(directory)/'nginx.conf'
+                candidate.write_text('error_log stderr; events {} http { include '+str(args.proxy_config)+'; }\n')
+                run(['nginx','-t','-c',str(candidate)])
+            check('proxy_candidate_syntax')
         config=tomllib.loads(args.config.read_text())
         issuer=config['server']['public_url'].rstrip('/')
         check('issuer_https',urlsplit(issuer).scheme=='https')
@@ -119,6 +133,7 @@ def main():
         if args.phase=='stage':
             before={'binary':digest('/usr/bin/ssmcpd'),'config':digest(args.config),
                     'package':run(['pacman','-Q','ssmcp-git'])}
+            if args.proxy_config:before['proxy']=digest(args.proxy_target)
             stage_root.mkdir(parents=True,exist_ok=True,mode=0o755)
             os.chmod('/opt/ssmcp',0o755);os.chmod('/opt/ssmcp/releases',0o755);stage_root.chmod(0o755)
             run(['bsdtar','-xpf',str(args.package),'-C',str(stage_root),'usr/bin/ssmcp','usr/bin/ssmcpd','usr/libexec/ssmcp/code-mode.js'])
@@ -149,11 +164,12 @@ def main():
             finally:
                 if owned:run(['systemctl','stop',stage_unit],timeout=45)
             check('production_not_changed',before['binary']==digest('/usr/bin/ssmcpd') and before['config']==digest(args.config))
-            save(receipt,{'package_sha':args.sha256,'before':before,'prepared_unix':time.time()})
+            save(receipt,{'package_sha':args.sha256,'proxy_sha':proxy_digest,'before':before,'prepared_unix':time.time()})
             report['state']='prepared'
         else:
             saved=json.loads(receipt.read_text())
-            check('matching_stage_receipt',saved['package_sha']==args.sha256 and 0<=time.time()-saved['prepared_unix']<3600)
+            check('matching_stage_receipt',saved['package_sha']==args.sha256 and saved.get('proxy_sha')==proxy_digest and 0<=time.time()-saved['prepared_unix']<3600)
+            if args.proxy_config:check('proxy_production_lease',saved['before'].get('proxy')==digest(args.proxy_target))
             check('production_lease',saved['before']['binary']==digest('/usr/bin/ssmcpd') and saved['before']['config']==digest(args.config)
                   and saved['before']['package']==run(['pacman','-Q','ssmcp-git']))
             rollback=args.rollback_package.resolve()
@@ -163,6 +179,7 @@ def main():
             paths=['usr/bin/ssmcp','usr/bin/ssmcpd','usr/libexec/ssmcp','usr/lib/systemd/system/ssmcpd.service',
                 'usr/lib/systemd/system/ssmcp-portal.service','usr/lib/systemd/system/ssmcp-portal-ssh.service',
                 'usr/lib/systemd/system/ssmcp-portal-ssh.timer','usr/libexec/ssmcp-portal-ssh-sync']
+            if args.proxy_config:paths.append(str(args.proxy_target).lstrip('/'))
             existing=[path for path in paths if Path('/'+path).exists()]
             backup=checkpoint/'files-before.tar'
             check('checkpoint_unused',not backup.exists())
@@ -172,6 +189,15 @@ def main():
             try:
                 run(['pacman','-U','--noconfirm',str(args.package)],timeout=120)
                 check('installed_version',run(['/usr/bin/ssmcpd','--version'])=='ssmcpd 0.4.1')
+                if args.proxy_config:
+                    temporary=args.proxy_target.with_suffix('.conf.ssmcp-new')
+                    try:
+                        shutil.copyfile(args.proxy_config,temporary);temporary.chmod(0o644)
+                        os.replace(temporary,args.proxy_target)
+                        run(['nginx','-t']);run(['systemctl','reload','nginx'])
+                        check('proxy_installed',digest(args.proxy_target)==proxy_digest)
+                    finally:
+                        temporary.unlink(missing_ok=True)
                 run(['systemctl','daemon-reload'])
                 run(['systemctl','restart','ssmcpd.service'],timeout=45)
                 wait_health('http://127.0.0.1:8080')
@@ -200,6 +226,8 @@ def main():
                 check('rollback_package_unchanged',digest(rollback)==rollback_hash)
                 run(['pacman','-U','--noconfirm',str(rollback)],timeout=120)
                 run(['tar','-xpf',str(backup),'-C','/'])
+                if args.proxy_config:
+                    run(['nginx','-t']);run(['systemctl','reload','nginx'])
                 run(['systemctl','daemon-reload']);run(['systemctl','restart','ssmcpd'],timeout=45)
                 if portal_active:run(['systemctl','restart','ssmcp-portal'],timeout=45)
                 wait_health(issuer)

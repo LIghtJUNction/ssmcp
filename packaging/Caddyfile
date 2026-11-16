@@ -1,3 +1,24 @@
 ssmcp.xxxx.yyy {
-    reverse_proxy 127.0.0.1:8080
+	# OAuth and discovery should not wait for a tool's long execution budget.
+	@control path /healthz /.well-known/* /oauth/* /account/* / /portal.css
+	handle @control {
+		reverse_proxy 127.0.0.1:8080 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+		}
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8080 {
+			# Keep the proxy above the 910s native-call deadline.
+			flush_interval -1
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 930s
+				read_timeout 930s
+				write_timeout 930s
+			}
+		}
+	}
 }

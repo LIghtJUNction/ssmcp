@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "checks": [
+    "register confidential client over real HTTP",
+    "plaintext client secret is not stored",
+    "registry has mode 0600",
+    "registered client can start authorization",
+    "same client ID can authorize after full daemon restart",
+    "restart does not renew or rewrite registration expiry",
+    "saved redirect URI remains exact-match only",
+    "corrupt persisted registry fails startup closed"
+  ],
+  "transport": "real daemon + HTTP + full process restart"
+}

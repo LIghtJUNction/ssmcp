@@ -18,3 +18,5 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub mod bridge;
 pub mod rsync;
 pub mod runtime;
+
+pub mod observability;
