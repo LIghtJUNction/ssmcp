@@ -487,7 +487,7 @@ mod tests {
     use super::*;
     use std::sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::Instant;
     use tokio::sync::Notify;
@@ -599,6 +599,139 @@ mod tests {
         assert_eq!(output["result"]["alias"], true);
         assert_eq!(output["result"]["frozen"], true);
         assert!(run_code("return await rsync([]);").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn execution_helpers_bound_parallelism_and_keep_every_command_result() {
+        let _guard = TESTS.lock().await;
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let host: Host = {
+            let active = active.clone();
+            let maximum = maximum.clone();
+            Arc::new(move |request| {
+                let active = active.clone();
+                let maximum = maximum.clone();
+                Box::pin(async move {
+                    let HostRequest::Call {
+                        name, arguments, ..
+                    } = request
+                    else {
+                        return Err("unexpected fixture request".into());
+                    };
+                    let id = arguments["job_id"].as_str().unwrap_or("").to_owned();
+                    let snapshot = json!({
+                        "job_id":id,
+                        "running":id == "live",
+                        "exit_code":if id == "live" { None } else { Some(if id == "exit7" { 7 } else { 0 }) },
+                        "state":if id == "live" { "running" } else { "completed" },
+                        "stdout":{"next_cursor":id.len()}, "stderr":{"next_cursor":0}
+                    });
+                    let result = match name.as_str() {
+                        "ssmcp.exec.start" => {
+                            let label = arguments["command"][0].as_str().unwrap();
+                            if label == "missing" {
+                                return Err("fixture command not found".into());
+                            }
+                            let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                            maximum.fetch_max(count, Ordering::SeqCst);
+                            json!({"job_id":label,"running":true})
+                        }
+                        "ssmcp.exec.wait" => {
+                            tokio::time::sleep(Duration::from_millis(25)).await;
+                            snapshot
+                        }
+                        "ssmcp.exec.read" => {
+                            assert_eq!(arguments["max_bytes"], 2048);
+                            active.fetch_sub(1, Ordering::SeqCst);
+                            json!({"job_id":id,"stdout":id,"stderr":"","snapshot":snapshot})
+                        }
+                        _ => return Err(format!("unexpected fixture tool {name}")),
+                    };
+                    Ok(crate::backend::result(result))
+                })
+            })
+        };
+        let output = trusted_execute(
+            r#"
+                const results = await exec.parallel('one', [
+                    {command:['first']}, {command:['missing']},
+                    {command:['exit7']}, {command:['live']}
+                ], {concurrency:2});
+                return {results, frozen:Object.isFrozen(exec)};
+            "#
+            .into(),
+            2_000,
+            json!([{"id":"one"}]),
+            host,
+        )
+        .await
+        .unwrap();
+        let results = &output["result"]["results"];
+        assert_eq!(results[0]["value"]["stdout"], "first");
+        assert_eq!(results[1]["status"], "rejected");
+        assert!(
+            results[1]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("command not found")
+        );
+        assert_eq!(results[2]["status"], "fulfilled");
+        assert_eq!(results[2]["value"]["exit_code"], 7);
+        assert_eq!(results[3]["value"]["running"], true);
+        assert_eq!(results[3]["value"]["job_id"], "live");
+        assert_eq!(results[3]["value"]["snapshot"]["stdout"]["next_cursor"], 4);
+        assert_eq!(output["result"]["frozen"], true);
+        assert_eq!(maximum.load(Ordering::SeqCst), 2);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn execution_run_validates_before_start_and_preserves_job_id_after_start_errors() {
+        let _guard = TESTS.lock().await;
+        let starts = Arc::new(AtomicUsize::new(0));
+        let host: Host = {
+            let starts = starts.clone();
+            Arc::new(move |request| {
+                let starts = starts.clone();
+                Box::pin(async move {
+                    match request {
+                        HostRequest::Call { name, .. } if name == "ssmcp.exec.start" => {
+                            starts.fetch_add(1, Ordering::SeqCst);
+                            Ok(crate::backend::result(
+                                json!({"job_id":"started-once","running":true}),
+                            ))
+                        }
+                        _ => Err("fixture observation failed".into()),
+                    }
+                })
+            })
+        };
+        let output = trusted_execute(
+            r#"
+                const invalid = [];
+                for (const options of [{wait_ms:60001}, {max_bytes:0}]) {
+                    try { await exec.run('one',{command:['unused'],...options}); }
+                    catch (error) { invalid.push(error.message); }
+                }
+                let after;
+                try { await exec.run('one',{command:['run-once']}); }
+                catch (error) { after = error.message; }
+                return {invalid, after};
+            "#
+            .into(),
+            2_000,
+            json!([{"id":"one"}]),
+            host,
+        )
+        .await
+        .unwrap();
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(output["result"]["invalid"].as_array().unwrap().len(), 2);
+        let after = output["result"]["after"].as_str().unwrap();
+        assert!(after.contains("started-once"), "{after}");
+        assert!(after.contains("fixture observation failed"), "{after}");
+        assert!(after.contains("exec.status/exec.read"), "{after}");
     }
 
     #[tokio::test]

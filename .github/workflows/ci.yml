@@ -2,14 +2,21 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit to validate for a release
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ inputs.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -19,9 +26,11 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable action
         with:
           toolchain: 1.100.0
@@ -29,7 +38,7 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends openssh-server nodejs bubblewrap util-linux rsync apparmor-profiles
+          sudo apt-get install --yes --no-install-recommends openssh-server nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck
           if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
             if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
               sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
@@ -37,6 +46,10 @@ jobs:
             fi
           fi
       - run: cargo fmt --all -- --check
+      - name: Check release tooling and installer
+        run: |
+          shellcheck scripts/install.sh
+          python3 scripts/test_release.py
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - name: Exercise system Node.js and bubblewrap
@@ -78,3 +91,36 @@ jobs:
           test -x "$RUNNER_TEMP/ssmcp-install/usr/local/bin/ssmcpd"
           test -f "$RUNNER_TEMP/ssmcp-install/usr/lib/systemd/system/ssmcpd.service"
           test -f "$RUNNER_TEMP/ssmcp-install/usr/local/libexec/ssmcp/code-mode.js"
+
+  client:
+    name: Client (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable action
+        with:
+          toolchain: 1.100.0
+          components: clippy
+      - run: cargo clippy --locked --lib --bin ssmcp -- -D warnings
+      - run: cargo test --locked --lib --bin ssmcp
+      - run: cargo build --locked --bin ssmcp
+      - name: Check client startup
+        shell: bash
+        run: |
+          target/debug/ssmcp --version
+          target/debug/ssmcp --help
+      - name: Parse PowerShell installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors) { throw ($errors | Out-String) }

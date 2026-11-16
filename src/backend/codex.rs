@@ -9,8 +9,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fs,
-    io::Read,
-    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -264,10 +262,10 @@ struct SchemaDirectory(PathBuf);
 impl SchemaDirectory {
     fn new() -> crate::Result<Self> {
         let mut random = [0u8; 16];
-        fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+        crate::platform::random_bytes(&mut random)?;
         let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
         let path = std::env::temp_dir().join(format!("ssmcp-codex-{suffix}"));
-        fs::DirBuilder::new().mode(0o700).create(&path)?;
+        crate::platform::private_directory(&path)?;
         Ok(Self(path))
     }
 }

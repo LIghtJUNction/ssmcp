@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Exercise all five modes through real local SSH, HTTP MCP and OAuth.
+"""Exercise shell and automatic harness discovery through local SSH/MCP/OAuth.
 
-Shell uses a real PTY. Agent modes use deterministic local protocol fixtures;
+Shell uses a real PTY. Harnesses use deterministic local protocol fixtures;
 no installed agent, model account, existing SSH identity or paid API is used.
 Run after cargo build --locked, on Linux with an OpenSSH server available.
 """
@@ -56,8 +56,8 @@ def catalog(harness, mode):
     inventory = harness.public_call("list")
     harness.check(len(inventory["clients"]) == 1
                   and inventory["clients"][0]["id"] == harness.client_id
-                  and inventory["clients"][0]["type"] == mode,
-                  f"{mode}: list discovers the selected client and backend type")
+                  and inventory["clients"][0]["type"] == "shell",
+                  f"{mode}: list discovers the shell client with installed harness tools")
     tools = []
     cursor = None
     seen = set()
@@ -81,18 +81,25 @@ def catalog(harness, mode):
     names = [tool["name"] for tool in tools]
     harness.check(bool(names) and len(names) == len(set(names)),
                   f"{mode}: complete tool catalog has unique names")
-    prefixes = ("terminal.",) if mode == "shell" else (f"{mode}.", f"ssmcp.{mode}.")
-    shared = {name for name in names if name.startswith(("ssmcp.fs.", "ssmcp.net.", "ssmcp.rsync.", "ssmcp.context.", "ssmcp.skills.", "ssmcp.agents.", "ssmcp.output.", "ssmcp.client."))}
+    kinds = MODES[1:] if mode == "all" else (mode,)
+    prefixes = tuple(prefix for kind in kinds for prefix in (f"{kind}.", f"ssmcp.{kind}."))
+    shared = {name for name in names if name.startswith(("ssmcp.fs.", "ssmcp.net.", "ssmcp.rsync.", "ssmcp.context.", "ssmcp.skills.", "ssmcp.agents.", "ssmcp.output.", "ssmcp.client.", "ssmcp.exec.", "ssmcp.harnesses."))}
     harness.check(shared == BUILTIN_TOOLS,
-                  f"{mode}: exact universal workspace, context and rsync capabilities are discoverable")
-    native = set(names) - BUILTIN_TOOLS
-    harness.check(bool(native) and all(name.startswith(prefixes) for name in native),
-                  f"{mode}: remaining native capabilities belong to the selected backend")
+                  f"{mode}: exact workspace, command, context and rsync capabilities are discoverable")
+    native = set(names) - BUILTIN_TOOLS - SHELL_TOOLS
+    harness.check(SHELL_TOOLS <= set(names)
+                  and (not native if mode == "shell" else bool(native) and all(name.startswith(prefixes) for name in native)),
+                  f"{mode}: shell capabilities coexist with the installed harness catalog")
     harness.check(all(isinstance(tool.get("inputSchema"), dict) for tool in tools),
                   f"{mode}: all discovered tools retain JSON schemas")
-    other_tool = "pi.get_state" if mode == "shell" else "terminal.status"
+    harness.check(harness.call("terminal.status")["running"], f"{mode}: the shell stays available")
+    counts = harness.call("ssmcp.harnesses.list")["harnesses"]
+    expected = set(MODES[1:]) if mode == "all" else ({mode} if mode != "shell" else set())
+    harness.check({name for name, count in counts.items() if count} == expected,
+                  f"{mode}: automatic discovery reports exactly the installed fixture harnesses")
+    other_tool = "unknown.fixture" if mode == "all" else ("pi.get_state" if mode != "pi" else "codex.thread_start")
     full_call(harness, other_tool, expect_error=True)
-    harness.check(True, f"{mode}: a tool from another mode is rejected")
+    harness.check(True, f"{mode}: unavailable native capabilities are rejected")
     return tools, pages
 
 
@@ -248,7 +255,7 @@ def check_cc(harness, label, tools, directory):
 
 
 def check_pi(harness, label, tools, _directory):
-    harness.check(len(tools) == 37 + len(BUILTIN_TOOLS),
+    harness.check(len(tools) == 37 + len(BUILTIN_TOOLS) + len(SHELL_TOOLS),
                   "pi: all 33 native commands, four bridge helpers and shared builtins are discoverable")
     state = harness.call("pi.get_state")
     harness.check(state["success"] and state["command"] == "get_state", "pi: full native response envelope is preserved")
@@ -291,7 +298,7 @@ def check_pi(harness, label, tools, _directory):
 
 def check_opencode(harness, label, tools, directory):
     names = {tool["name"] for tool in tools}
-    harness.check(len(tools) == 78 + len(BUILTIN_TOOLS) and "opencode.fixture.extra69" in names,
+    harness.check(len(tools) == 78 + len(BUILTIN_TOOLS) + len(SHELL_TOOLS) and "opencode.fixture.extra69" in names,
                   "opencode: all native OpenAPI operations survive multi-page MCP discovery")
     info = harness.call("opencode.server.info")
     process = info["body"]["data"]
@@ -334,6 +341,93 @@ CHECKERS = {
 }
 
 
+def combined_harnesses_and_commands(harness):
+    started = time.monotonic()
+    before = len(harness.checks)
+    directory = harness.directory / "fixture-combined"
+    directory.mkdir(mode=0o700)
+    installed = []
+    for kind, fixture in (
+        ("codex", "codex_rpc.py"), ("cc", "cc-fake.py"),
+        ("pi", "pi_rpc.py"), ("opencode", "opencode_http.py"),
+    ):
+        state = directory / kind
+        state.mkdir(mode=0o700)
+        arguments = ("--fixture-dir", state) if kind in ("cc", "opencode") else ()
+        installed.append((kind, FIXTURES / fixture, arguments))
+    client, credentials = harness.start_client(
+        "client-combined", name="combined-fixture", cwd=directory, harnesses=installed,
+    )
+    harness.client = client
+    harness.client_id = credentials["client_id"]
+    harness.oauth_login(credentials)
+    tools, pages = catalog(harness, "all")
+    client_id = json.dumps(harness.client_id)
+    code = """
+        const id = %s;
+        return await Promise.all([
+            call(id,'terminal.status',{}), call(id,'codex.server_diagnostics',{}),
+            call(id,'pi.get_state',{}), call(id,'opencode.server.info',{})
+        ]);
+    """ % client_id
+    replies = harness.public_call("code_mode", {"code": code})["result"]
+    states = [reply["structuredContent"] for reply in replies]
+    harness.check(all(not reply.get("isError") for reply in replies)
+                  and states[0]["running"] and states[2]["success"]
+                  and states[3]["status"] == 200,
+                  "all: shell and multiple discovered harness tools execute in one parallel code_mode")
+    pids = [states[0]["pid"], states[1]["pid"], states[2]["data"]["pid"],
+            int((directory / "cc" / "pid").read_text()),
+            states[3]["body"]["data"]["pid"], states[3]["body"]["data"]["child_pid"]]
+
+    commands = [
+        {"command": ["/bin/sh", "-c", "sleep 0.15; printf alpha; printf alpha-err >&2"]},
+        {"command": ["/bin/sh", "-c", "sleep 0.15; printf beta; exit 7"]},
+        {"command": [str(directory / "missing-command")]},
+    ]
+    code = "return await exec.parallel(%s,%s,{concurrency:2});" % (client_id, json.dumps(commands))
+    results = harness.public_call("code_mode", {"code": code})["result"]
+    harness.check(results[0]["status"] == "fulfilled"
+                  and results[0]["value"]["stdout"] == "alpha"
+                  and results[0]["value"]["stderr"] == "alpha-err"
+                  and results[0]["value"]["exit_code"] == 0
+                  and results[1]["value"]["stdout"] == "beta"
+                  and results[1]["value"]["exit_code"] == 7
+                  and results[2]["status"] == "rejected",
+                  "commands: parallel execution preserves input order, separate streams, nonzero exits and start failures")
+    retained_id = results[0]["value"]["job_id"]
+    code = """
+        const id = %s;
+        const task = await exec.start(id,{command:['/bin/sh','-c','sleep 60']});
+        const pending = await exec.wait(id,task.job_id,{wait_ms:1});
+        const listed = await exec.list(id);
+        const retained = await exec.status(id,%s);
+        const stopped = await exec.cancel(id,task.job_id);
+        await exec.forget(id,task.job_id);
+        const after = await exec.list(id);
+        return {task,pending,listed,retained,stopped,after};
+    """ % (client_id, json.dumps(retained_id))
+    lifecycle = harness.public_call("code_mode", {"code": code})["result"]
+    job_id = lifecycle["task"]["job_id"]
+    harness.check(lifecycle["pending"]["running"]
+                  and any(job["job_id"] == job_id for job in lifecycle["listed"]["jobs"])
+                  and lifecycle["retained"]["exit_code"] == 0
+                  and not lifecycle["stopped"]["running"]
+                  and lifecycle["stopped"]["cancelled"]
+                  and all(job["job_id"] != job_id for job in lifecycle["after"]["jobs"]),
+                  "commands: wait preserves background work, completed results survive new starts, cancel and forget clean up")
+    harness.stop(client)
+    wait_for(lambda: all(not process_running(pid) for pid in pids),
+             description="combined harness and shell cleanup")
+    harness.check(True, "all: one disconnect stops the shell and every registered harness process")
+    harness.secret = ""
+    return {
+        "mode": "combined", "tools": len(tools), "catalog_pages": pages,
+        "checks": len(harness.checks) - before,
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
+
+
 def run(harness):
     harness.prepare()
     summaries = []
@@ -353,9 +447,9 @@ def run(harness):
                                                    backend_args=arguments, name=f"{mode}-fixture", cwd=directory)
         harness.client = client
         harness.client_id = credentials["client_id"]
-        harness.check(credentials.get("type") == mode
+        harness.check(credentials.get("type") == "shell"
                       and credentials["url"] == f"{PUBLIC_URL}/{harness.user}",
-                      f"{mode}: SSH registers the selected backend at its authenticated user path")
+                      f"{mode}: SSH registers shell and discovered tools at its authenticated user path")
         harness.oauth_login(credentials)
         tools, pages = catalog(harness, mode)
         if mode == "opencode":
@@ -383,6 +477,7 @@ def run(harness):
             "checks": len(harness.checks) - before,
             "duration_seconds": round(time.monotonic() - started, 3),
         })
+    summaries.append(combined_harnesses_and_commands(harness))
     return summaries
 
 
@@ -411,7 +506,7 @@ def main():
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-        print(f"\nPassed {len(harness.checks)} checks across {len(modes)} modes in {report['duration_seconds']}s")
+        print(f"\nPassed {len(harness.checks)} checks across {len(modes)} discovery scenarios in {report['duration_seconds']}s")
 
 
 if __name__ == "__main__":
