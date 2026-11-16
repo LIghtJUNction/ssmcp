@@ -37,9 +37,13 @@ exec.status(clientId,jobId) to inspect one, exec.wait(clientId,jobId,{wait_ms:60
 and exec.read(clientId,jobId,{stdout_cursor,stderr_cursor,max_bytes}) to read new output. \
 Each stream has its own byte cursor. exec.cancel stops a running process tree; exec.forget \
 releases a completed job's retained state. These command jobs survive code_mode completion \
-and stop when the client disconnects or reloads.\n\n\
+and stop when the client disconnects or reloads. Each client permits 32 running jobs and \
+retains up to 128 records, evicting the oldest completed job when a new start needs room.\n\n\
 Use exec.parallel(clientId,[{command:[\"cargo\",\"test\"]},{command:[\"git\",\"status\"]}], \
-{concurrency:4}) to execute up to 32 commands with 1..8 workers. Results retain input order \
+{concurrency:4}) to orchestrate up to 32 commands with 1..8 workers. Each worker starts, \
+waits for and reads a command; a wait that expires releases the worker while the command \
+continues in the background. Running commands may therefore exceed concurrency, up to the \
+client limit of 32. Results retain input order \
 and use fulfilled/value or rejected/reason records. A failed start does not discard other \
 results; inspect value.exit_code for commands that ran. Parallel output defaults to 2048 \
 bytes per stream per command. Command arguments are argv arrays; for shell syntax invoke \
@@ -327,10 +331,16 @@ fn limits() -> Value {
             "default_wait_ms":5000,
             "max_wait_ms":60000,
             "default_command_timeout_ms":0,
+            "max_command_timeout_ms":900000,
+            "max_running_per_client":32,
+            "max_retained_per_client":128,
+            "live_output_bytes_per_stream":65536,
+            "max_read_bytes_per_stream":32768,
             "max_parallel_commands":32,
             "default_parallel_workers":4,
             "max_parallel_workers":8,
             "parallel_default_read_bytes_per_stream":2048,
+            "parallel_concurrency":"limits start/wait/read sequences, not commands that continue after wait expiry",
             "lifetime":"client connection; survives code_mode completion"
         },
         "wire":{
@@ -339,7 +349,8 @@ fn limits() -> Value {
             "max_inflight_per_client":wire::MAX_INFLIGHT
         },
         "client_output_guard":{
-            "directory":"/tmp/ssmcp/<uid>",
+            "directory":"private ssmcp directory under the client's OS temporary directory",
+            "linux_default_directory":"/tmp/ssmcp/<uid>",
             "inline_bytes":crate::output::INLINE_BYTES,
             "inline_lines":crate::output::INLINE_LINES,
             "retention_seconds":crate::output::RETENTION_SECS,

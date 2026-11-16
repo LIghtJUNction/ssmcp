@@ -23,6 +23,7 @@ pub(crate) fn is_reload(operation: &Operation) -> bool {
     matches!(operation, Operation::CallTool { name, .. } if name == TOOL)
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn accepted(result: &Value) -> bool {
     result["isError"] != true
         && result["structuredContent"]["accepted"] == true

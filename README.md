@@ -5,6 +5,7 @@
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
 [![Linux](https://img.shields.io/badge/Linux-x86__64%20%C2%B7%20arm64-64748b?style=flat)](.github/workflows/ci.yml)
+[![Clients](https://img.shields.io/badge/Clients-macOS%20%C2%B7%20Windows-64748b?style=flat)](docs/releases.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat)](LICENSE)
 
 一条 SSH 连接，两个 MCP 工具。`list` 找到在线客户端，`code_mode` 调用它们的原生能力；命令、输出和智能体事件实时显示在本机终端。项目、模型配置和后端工具执行都留在本机。[工作原理](docs/backends.md)
@@ -42,7 +43,7 @@
 
 ## 快速开始
 
-服务器已部署 0.4.0、配置 GitHub OAuth 并接受你的 SSH 公钥后，在本机项目目录启动客户端。已有 `~/.ssh/config` 可以直接复用：
+服务器已配置 GitHub OAuth 并接受你的 SSH 公钥后，在本机项目目录启动客户端。使用新命令管理和重载能力时，先将两端更新到同一版本。已有 `~/.ssh/config` 可以直接复用：
 
 ```sshconfig
 Host my-ssmcp
@@ -55,7 +56,7 @@ Host my-ssmcp
 
 ```sh
 cd ~/projects/ssmcp
-ssmcp --name ssmcp-project -t codex --allow octocat@github my-ssmcp
+ssmcp --name ssmcp-project --title "改进项目与运行测试" --allow octocat@github my-ssmcp
 ```
 
 `my-ssmcp` 是 SSH 配置别名；用户名、地址、端口和密钥交给系统 OpenSSH 解析。也可使用 `ssmcp alice@ssmcp.example.com`，或 `-F ~/.ssh/work_config` 指定配置文件。0.3.1 起支持省略用户名；已安装的 0.3.0 若提示 `destination must be user@host`，可先用 `alice@my-ssmcp`，或[重新构建安装](#安装与升级)。[SSH 配置细节](docs/configuration.md)
@@ -68,7 +69,7 @@ ssmcp --name ssmcp-project -t codex --allow octocat@github my-ssmcp
 ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 ```
 
-启动成功后，终端会输出一次连接信息：
+启动成功后，交互终端显示清晰的地址与登录提示。重定向 stdout 或选择 JSONL 时，输出连接 JSON：
 
 ```json
 {
@@ -77,7 +78,7 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
   "allow": ["octocat@github"],
   "client_id": "服务端分配的连接 ID",
   "name": "ssmcp-project",
-  "type": "codex",
+  "type": "shell",
   "cwd": "/home/alice/projects/ssmcp",
   "hostname": "workstation"
 }
@@ -105,29 +106,30 @@ ssmcp 自己签发的 access token 默认有效 **8 小时**。refresh token 每
 
 **访问令牌到期后，MCP 客户端可以用 refresh token 自动续期。** 新注册省略 `grant_types` 时，服务端默认提供刷新授权；客户端需保存每次返回的新 refresh token，并实现刷新请求。服务器返回到期提示与新令牌，自动发起刷新由 MCP 客户端负责。[静默续期流程](docs/configuration.md#silent-refresh)
 
-## 五种后端，同一个入口
+## 一个客户端，自动发现本机工具
 
-| 本机后端 | 启动方式 | 运行内容 |
+每条连接始终提供 Shell、独立命令任务、文件与上下文工具，同时检查 PATH 中已安装的编码工具。无需选择后端类型，也无需为每个工具另开连接。可选工具未安装或初始化失败时，会显示原因并保留其他可用能力。
+
+| 本机能力 | 发现方式 | 运行内容 |
 | --- | --- | --- |
-| Shell | `ssmcp --name terminal my-ssmcp` | 有状态的本机 Shell 与 PTY；默认模式 |
-| Codex | `ssmcp -t codex --name coder my-ssmcp` | 已安装 Codex 的 App Server |
-| Claude Code | `ssmcp -t cc --name claude my-ssmcp` | 已安装 Claude Code 的 MCP 工具 |
-| Pi | `ssmcp -t pi --name pi my-ssmcp` | 已安装 Pi 的 JSONL RPC |
-| OpenCode | `ssmcp -t opencode --name opencode my-ssmcp` | 已安装 OpenCode v2 的服务接口 |
+| Shell | 始终提供 | 有状态的 PTY 与独立、可并行的命令任务 |
+| Codex | PATH 中的 `codex` | 已安装 Codex 的 App Server |
+| Claude Code | PATH 中的 `claude` | 已安装 Claude Code 的 MCP 工具 |
+| Pi | PATH 中的 `pi` | 已安装 Pi 的 JSONL RPC |
+| OpenCode | PATH 中的 `opencode` | 已安装 OpenCode v2 的服务接口 |
 
-每个进程提供一个后端，同一账号最多同时在线 128 个客户端。`--name` 是显示名称，调用始终按服务端分配的 ID 路由；`cwd` 记录启动目录。Agent 的安装、模型配置和原生权限在本机完成，支持范围以实际发现的 schema 为准。[后端要求与示例](docs/backends.md)
+`ssmcp.harnesses.list` 返回当前连接发现的工具。调用始终按服务端分配的客户端 ID 路由；`--name` 是显示名称，`cwd` 是启动目录。同一账号最多同时在线 128 个客户端。Agent 的安装、登录、模型配置和原生权限在本机完成，支持范围以实际 schema 为准。[后端要求与示例](docs/backends.md)
 
 ```sh
-# 本机发现工具，无需 SSH，也不建立远程连接。
-ssmcp -t codex --list-tools
+# 本机启动工具并读取能力目录，无需 SSH 目标。
+ssmcp --list-tools
 
-# 使用另一份 SSH 配置或已有私钥。
-ssmcp -F ~/.ssh/work_config -t codex my-ssmcp
+# 复用另一份 SSH 配置或已有私钥。
+ssmcp -F ~/.ssh/work_config my-ssmcp
 ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
-
-# 自定义后端路径；-- 后的参数交给本机后端。
-ssmcp -t pi --backend /opt/pi/bin/pi my-ssmcp -- --no-session
 ```
+
+旧的 `-t`、`--type`、`--backend` 和后端透传参数已移除。将工具安装目录加入 PATH，并使用各工具原生配置。
 
 ## 两个工具就够了
 
@@ -137,23 +139,48 @@ ssmcp -t pi --backend /opt/pi/bin/pi my-ssmcp -- --no-session
 | `list({client_id})` | 读取指定客户端的原生工具名称与参数 schema；用 `nextCursor` 分页 |
 | `code_mode({code, timeout_ms})` | 用 JavaScript 调用原生工具，返回结果和日志 |
 
-例如，对名为 `terminal` 的 Shell 客户端执行 `pwd`。将下面源码放入 `code_mode` 的 `code` 参数：
+例如，对名为 `terminal` 的客户端查询 Git 状态。将下面源码放入 `code_mode` 的 `code` 参数：
 
 ```javascript
 const client = clients.find(c => c.name === "terminal" && c.type === "shell");
 if (!client) throw new Error("terminal is offline");
 
-const before = await call(client.id, "terminal.status", {});
-if (before.isError) return before;
-const sent = await call(client.id, "terminal.write", { data: "pwd\n" });
-if (sent.isError) return sent;
-return await call(client.id, "terminal.read", {
-  cursor: before.structuredContent.next_cursor,
-  wait_ms: 1000
+return await exec.run(client.id, {
+  command: ["git", "status", "--short"],
+  wait_ms: 5000
 });
 ```
 
-单次读取可能只有部分输出，继续用返回的 `next_cursor` 读取。若 `structuredContent.spilled` 为 `true`，PTY 的 `next_cursor` 已推进至本次输出末尾，正文需根据 `artifact.id` 用 `outputs.read` 读取。
+返回值包含 `job_id`、`running`、`exit_code`、独立的 `stdout` / `stderr` 及输出游标。`running: true` 表示命令还在执行，用相同任务 ID 继续等待即可。参数是 argv 数组，管道或重定向需要显式调用本机 shell。交互式程序仍使用 `terminal.*` 的有状态 PTY。
+
+### 并行、后台任务与等待
+
+```javascript
+return await exec.parallel(client.id, [
+  { command: ["git", "status", "--short"] },
+  { command: ["git", "log", "-5", "--oneline"] }
+], { concurrency: 2 });
+```
+
+各项按输入顺序返回 fulfilled/rejected；进程执行成功与否仍看 `exit_code`。并行度限制同时进行的启动、等待与读取流程；某项等待结束后仍在后台运行时，流程会继续处理下一项。客户端最多同时运行 32 个命令，容量检查发生在启动进程之前。
+
+```javascript
+// 启动一次，保存返回的 job_id。
+return await exec.start(client.id, {
+  command: ["cargo", "test", "--locked"],
+  timeout_ms: 600000
+});
+```
+
+下一次 `code_mode` 使用同一客户端 ID 和已保存的 `job_id`：
+
+```javascript
+return await exec.wait(clientId, jobId, { wait_ms: 5000 });
+// 按需读取：exec.read(clientId, jobId, { stdout_cursor, stderr_cursor })
+// 管理任务：exec.list(clientId)、exec.cancel(clientId, jobId)、exec.forget(clientId, jobId)
+```
+
+`wait_ms` 只控制这次等待；`timeout_ms` 才是命令的执行期限，默认没有期限。完成的任务不会被下一次启动立即删除，达到 128 条记录时才淘汰最早完成的记录。每个流保留 64 KiB 内存尾部，长输出另存完整文件；检查截断标记并通过 `outputs.read` 读取转储。[命令接口、边界和恢复方式](docs/commands.md)
 
 调用 Agent 时，先用 `list({client_id})` 或 `await tools(client.id)` 检查实际 schema。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批数据；原生后端的长结果转为元数据，PTY 保存原始终端流，其他后端结果保存原始 MCP 结果 JSON。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
 
@@ -169,7 +196,7 @@ ssmcp --name dev --title "完善客户端重载和输出转储" --allow octocat@
 
 安装新版客户端后，在 `code_mode` 中使用 `return await reload(clientId)` 重新加载原启动入口。请求确认后旧连接关闭，后台命令、harness 和转发随之停止；再调用 `list` 获取新客户端 ID。有效的 `--allow` GitHub 授权可继续使用，登录码模式需要重新完成 OAuth 登录。
 
-输出超过 32 KiB 或 500 行时，护卫自动转储到客户端的 `/tmp/ssmcp/<uid>/`，返回路径、SHA-256、行数和完成状态。按需读取正文：
+输出超过 32 KiB 或 500 行时自动转储，返回路径、SHA-256、行数和完成状态。Linux 使用客户端的 `/tmp/ssmcp/<uid>/`；其他平台使用本机用户的私有临时目录，以实际返回的 `path` 为准。按需读取正文：
 
 ```javascript
 return await outputs.read(clientId, { id: artifactId, offset: 0, max_bytes: 16384 });
@@ -201,7 +228,7 @@ skills.list/read/view 分别用于元数据索引、全文读取与 Markdown 摘
 
 ## 文件同步、端口映射和动态资源
 
-每个客户端同时提供受启动目录限制的文件能力。通过 `code_mode` 使用 `fs.list/stat/read/write/mkdir`，不需要为简单文件操作拼接命令。目录同步调用系统 rsync，端口转发在所选客户端的回环地址之间传送 TCP。
+每个客户端同时提供受启动目录限制的文件能力。通过 `code_mode` 使用 `fs.list/stat/read/write/mkdir`，不需要为简单文件操作拼接命令。Linux 客户端的目录同步调用系统 rsync；其他平台当前不提供该同步接口。端口转发在所选客户端的回环地址之间传送 TCP。
 
 | 内置接口 | 用途 |
 | --- | --- |
@@ -229,7 +256,23 @@ return await rsync({
 
 ## 安装与升级
 
-当前支持 Linux 5.3+，仓库固定构建工具链为 Rust 1.100.0。客户端需要 OpenSSH 和所选本机后端；服务端需要 OpenSSH Server、系统 Node.js 18+、bubblewrap 0.8+、util-linux 的 prlimit 及 HTTPS 反向代理。[完整部署教程](docs/deployment.md)
+Release 提供 Linux、macOS、Windows 的 x86_64 与 ARM64 预编译客户端。Linux 包还包含服务端；`ssmcpd` 运行于 Linux。Linux 客户端需要内核 5.3+，GNU 包以 glibc 2.35 为构建基线。客户端需要系统 OpenSSH；编码工具按需安装。
+
+**Linux / macOS：**
+
+```sh
+curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh
+```
+
+**Windows PowerShell：**
+
+```powershell
+irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex
+```
+
+安装器识别系统和 CPU，核验 SHA-256 与二进制版本后替换程序。重复运行即可升级；下载或验证失败保留旧版本。默认目录分别为 `~/.local/bin` 和 `%LOCALAPPDATA%\ssmcp\bin`。指定版本、自定义路径、发布资产和自动升级版本工作流见[安装与发布说明](docs/releases.md)。
+
+源码构建使用仓库固定的 Rust 1.100.0；也可运行 `cargo install ssmcp --locked --bin ssmcp` 安装已发布的客户端版本。
 
 ```sh
 # 在仓库目录构建，并安装程序、运行脚本、man page 和文档。
@@ -268,7 +311,7 @@ python3 scripts/e2e.py --bin-dir target/debug
 python3 scripts/e2e_agents.py --bin-dir target/debug
 ```
 
-CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、独立 sshd、临时 known_hosts 和 loopback 端口；五模式链路测试使用确定性 Agent 协议 fixture，不发起模型推理。默认测试中需要系统隔离或单独安装原生 CLI 的探针会明确标为 ignored。[测试结果与范围](docs/validation.md) · [CI 工作流](.github/workflows/ci.yml)
+CI 在 Linux x86_64 / ARM64 上运行服务端、隔离环境和真实 SSH 链路测试，在 macOS 与 Windows 的两种架构上运行原生客户端检查和测试。SSH 测试使用临时密钥、独立 sshd、临时 known_hosts 和 loopback 端口；harness 链路使用确定性协议 fixture，不发起模型推理。默认测试中需要系统隔离或单独安装原生 CLI 的探针会明确标为 ignored。发布工作流复用 CI，再构建六个平台的安装包并验证安装和升级。[测试范围](docs/validation.md) · [CI 工作流](.github/workflows/ci.yml) · [发布工作流](.github/workflows/release.yml)
 
 ## 文档导航
 
@@ -296,11 +339,11 @@ CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、�
 上图来自真实渲染器的固定测试事件，用于展示样式。完整说明见 [日志与主题配置](docs/logging.md)。
 
 ```sh
-ssmcp -t codex --log-format pretty my-server          # 默认彩色摘要
-ssmcp -t codex --log-format pretty-verbose my-server  # 展开输出和原始 JSON
-ssmcp -t codex --log-format jsonl my-server           # 每行一个原始事件
-ssmcp -t codex --no-color my-server
-ssmcp -t codex --theme nord --timestamps my-server
+ssmcp --log-format pretty my-server          # 默认彩色摘要
+ssmcp --log-format pretty-verbose my-server  # 展开输出和原始 JSON
+ssmcp --log-format jsonl my-server           # 每行一个原始事件
+ssmcp --no-color my-server
+ssmcp --theme nord --timestamps my-server
 ```
 
 `--verbose`、`--raw-events`、原有 `--raw` 分别提供详细/JSONL 快捷方式。`~/.config/ssmcp/config.toml` 的 `[ui]` 支持主题、时间戳、请求 ID 和输出行数；`NO_COLOR` 和重定向 stderr 自动关闭颜色。展示变化不修改 SSH/MCP 协议或工具结果。

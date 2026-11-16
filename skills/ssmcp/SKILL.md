@@ -1,6 +1,6 @@
 ---
 name: ssmcp
-description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for remote shell or coding tools, scoped file access, system-rsync transfers, loopback TCP forwarding, and discovery of live MCP resources.
+description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel commands, background process management, bounded waits, client reload, native coding tools, scoped files and instruction discovery, system-rsync transfers, and loopback TCP forwarding.
 ---
 
 # ssmcp workspaces
@@ -8,6 +8,8 @@ description: Operate SSH-connected ssmcp workspaces through list and code_mode. 
 ## Discover the machines and their capabilities
 
 Call `list` first. Use each client's optional `title` to understand its task, then check its `name` and `cwd`. Select clients by their returned `id`; titles, names and hostnames are labels and may repeat. Call `list({client_id})` and follow `nextCursor` before using a native tool. Respect each native backend's permission and approval policy.
+
+Expect current clients to connect as `type:"shell"`, with both a shared interactive terminal and independent command jobs. Installed `codex`, `claude`, `pi` and `opencode` executables are discovered automatically from the client's `PATH`. Check `ssmcp.harnesses.list` and the tool catalog for successful registrations. A missing or unhealthy optional CLI does not remove the shell. Discovery itself does not submit a model task. Remove obsolete `-t`, `--type`, `--backend` and trailing backend arguments from startup commands.
 
 Read `ssmcp://guide`, `ssmcp://limits`, and `ssmcp://clients` through MCP resources or `resources.read(uri)` inside `code_mode`. Use `resources.templates()` for client-specific resources. Check current catalogs when a connected client has an older version.
 
@@ -28,7 +30,44 @@ Use `context.roots(id)` to see the workspace and any explicit read-only context 
 
 The default root is the client's startup workspace. An operator may add up to eight read-only roots with repeated `--context-root PATH`; select their returned IDs explicitly with the `root` option. A root that directly contains skill folders can be scanned with `paths:["."]`. These context roots do not extend ordinary file-write access. This is a current disk view, not an inventory of a backend model's loaded prompt. Metadata parsing uses the documented YAML subset; read diagnostics and do not infer missing descriptions from body text.
 
-## Execute native tools
+## Run and manage commands
+
+Use `exec` for independent commands with exit status and separate stdout/stderr. Pass argv arrays, an optional existing absolute `cwd`, and optional `env` overrides. For pipelines or shell expansion, invoke the platform shell explicitly. A command does not inherit later `cd` or environment changes inside the interactive terminal.
+
+```js
+const client = clients.find(c => c.name === "development");
+if (!client) throw new Error("Select an online client from list");
+return await exec.run(client.id, {
+  command: ["git", "status", "--short"],
+  cwd: client.cwd,
+  wait_ms: 5000,
+  max_bytes: 16384
+});
+```
+
+Read `job_id`, `running`, `state`, `exit_code`, `stdout`, `stderr`, the two output cursors, and `snapshot`. Only assess the final exit when `running:false`; nonzero exit codes are command failures even when the helper resolved successfully. `snapshot` contains the latest atomic state and output metadata. `wait_timed_out` records the wait step; the subsequent read may already show completion.
+
+Keep waiting separate from command lifetime. `wait_ms` defaults to 5000 and accepts `0..60000`; expiry leaves the command running. A command's `timeout_ms` defaults to 0, meaning no execution deadline; a positive value up to 900000 terminates its process tree on expiry. Set the outer `code_mode.timeout_ms` long enough for the entire sequence. A JavaScript deadline does not undo commands that were already started.
+
+For long work, start with `exec.start(clientId,{command,cwd})` and return its `job_id` promptly. Continue in later requests:
+
+| Helper | Purpose |
+| --- | --- |
+| `exec.list(clientId)` | Find running and retained completed jobs |
+| `exec.status(clientId,jobId)` | Inspect current state, duration, exit code and artifact metadata |
+| `exec.wait(clientId,jobId,{wait_ms:5000})` | Wait for completion within a bounded interval |
+| `exec.read(clientId,jobId,{stdout_cursor,stderr_cursor,max_bytes,wait_ms})` | Read incremental output and an atomic `snapshot` |
+| `exec.cancel(clientId,jobId)` | Terminate the owned process tree and inspect the returned state |
+| `exec.forget(clientId,jobId)` | Release a completed job's retained record |
+| `exec.events(clientId,{cursor,max_events,wait_ms})` | Read bounded command events |
+
+Carry `stdout_cursor` and `stderr_cursor` separately between reads. Each stream returns at most 32768 bytes per read; `*_base64` preserves exact bytes and `*_eof` identifies its end. If `*_truncated` is true, read older bytes from the corresponding `snapshot.stdout.artifact` or `snapshot.stderr.artifact`. If observation fails after start, inspect the error's `job_id` with status/read before retrying; do not launch duplicate work.
+
+Use `exec.parallel(clientId,[{command:[...]},...],{concurrency:4})` for up to 32 commands. Concurrency accepts `1..8`. Results keep input order and contain `fulfilled/value` or `rejected/reason`; retain every result and check each exit code. Output defaults to 2048 bytes per stream per command. Concurrency limits simultaneous start/wait/read sequences. When a wait expires, that command continues in the background and a new sequence may start, so running processes can exceed the concurrency setting. For a strict running-process limit, wait for a job to finish before filling its slot.
+
+Expect at most 32 running jobs and 128 retained records per client. On reaching the record limit, new starts evict the oldest completed job; running jobs stay registered. Jobs survive `code_mode` completion but stop on client disconnect or reload. `forget` does not immediately delete output artifacts. Use `exec.*` for commands; `jobs.*` manages rsync transfer jobs. Use `terminal.*` when a shared interactive shell is necessary, and do not infer command completion from one terminal read.
+
+## Execute other native tools
 
 ```js
 const client = clients.find(c => c.name === "development");
@@ -46,11 +85,11 @@ Treat `accepted: true` as acceptance, then call the public `list` again to verif
 
 ## Read long-output artifacts
 
-Check `spilled` and `artifact` in long-output results. PTY captures contain the full terminal session's merged raw stream; other oversized backend results contain MCP JSON. A spilled terminal read advances `next_cursor` to its returned range end, so read historical bytes with `outputs.read(clientId,{id:artifact.id,offset,max_bytes:16384})` and follow `next_offset`. Use `data_base64` for exact bytes, and do not return every page into the agent context at once.
+Check `spilled` and `artifact` in long-output results. PTY captures contain the full terminal session's merged raw stream; independent command artifacts contain one job's stdout or stderr; other oversized backend results contain MCP JSON. Command reads expose their artifacts inside `snapshot.stdout` and `snapshot.stderr`. A spilled terminal read advances `next_cursor` to its returned range end. Read historical bytes with `outputs.read(clientId,{id:artifact.id,offset,max_bytes:16384})` and follow `next_offset`. Use `data_base64` for exact bytes, and do not return every page into the agent context at once.
 
 Use `outputs.stat(clientId,{id})` to refresh file size, SHA-256, line count and completion metadata. A live capture can grow after a snapshot; `complete:false` or `error` must not be reported as a complete log. Underlying backend truncation cannot be recovered.
 
-Expect automatic spilling above 32 KiB or 500 lines, 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live on the client in `/tmp/ssmcp/<uid>`. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. An unexpired artifact may remain readable through the reconnected client ID.
+Expect automatic spilling above 32 KiB or 500 lines, up to 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live in the client's private temporary ssmcp directory, normally `/tmp/ssmcp/<uid>` on Linux. Use returned metadata rather than assuming a path on other platforms. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. An unexpired artifact may remain readable through the reconnected client ID.
 
 ## Read and write workspace files
 
@@ -68,7 +107,7 @@ Binary file contents are base64, so binary bytes survive transport. Follow retur
 
 ## Synchronize with system rsync
 
-Both clients need system `rsync`; install dependencies with the system package manager. Both selected directories must exist; create the destination with `fs.mkdir` when authorized. The operation copies directory contents, preserving ordinary files, directories and modification times. It skips symlinks and devices and does not enable preservation of ownership, permission bits, ACLs or extended attributes. Start with a dry run:
+Check that both clients expose the rsync transport; it is currently available on Linux clients and requires system `rsync`. Install dependencies with the system package manager. Both selected directories must exist; create the destination with `fs.mkdir` when authorized. The operation copies directory contents, preserving ordinary files, directories and modification times. It skips symlinks and devices and does not enable preservation of ownership, permission bits, ACLs or extended attributes. Start with a dry run:
 
 ```js
 return await rsync({
@@ -96,4 +135,4 @@ Confirm the returned state is `running` before reading the listener address on t
 
 ## Verify and report
 
-For transfers, verify the intended files and report source, destination, job state, and dry-run status. For forwarding, make a real request through the returned local port, then close temporary mappings. Distinguish code changes, local tests, committed code, and deployed software. Never report a live sandbox connection from a test that used two development-host peers.
+For commands, report final state and exit code, or a still-running `job_id`; inspect log completeness before describing output as complete. For reload, verify the replacement connection with `list`. For transfers, verify the intended files and report source, destination, job state, and dry-run status. For forwarding, make a real request through the returned local port, then close temporary mappings. Distinguish code changes, local tests, committed code, and deployed software. Never report a live sandbox connection from a test that used two development-host peers.
