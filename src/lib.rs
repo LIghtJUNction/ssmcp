@@ -7,6 +7,7 @@ pub mod code_mode;
 pub mod http;
 pub mod identity;
 pub mod oauth;
+pub mod portal;
 pub mod pty;
 pub mod wire;
 

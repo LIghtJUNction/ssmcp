@@ -317,3 +317,42 @@ DCR 响应在文件写入、文件同步、原子重命名和目录同步全部�
 这不等于“所有 OAuth 令牌跨重启有效”：短时授权事务、授权码、AT 和 RT 仍需重新取得。首次从 0.4.0 升级无法找回已经丢失的内存登记；必要时仅在这次迁移后删除并重新添加 MCP 连接。之后同一有效 `client_id` 能跨服务重启重新授权。
 
 回归验证：`python3 scripts/test_registry_restart.py --bin-dir target/debug` 会启动临时守护进程，注册客户端，完整停止并重启进程，再用同一 ID 发起授权，同时检查密钥不落明文、回调精确匹配和损坏文件拒绝启动。不会操作已安装服务。
+<a id="account-portal"></a>
+
+## 可选账户门户与 SSH 同步
+
+门户复用现有 `[auth.github]` OAuth App 和 `/oauth/callback/github`，无需新建 OAuth client 或更改已有回调。原有 MCP 登录与登录码方式保持有效。这里只提供安装说明；提交源码不会启用生产功能。
+
+在私有 TOML 中增加：
+
+```toml
+[portal]
+state_dir = "/var/lib/ssmcpd/portal"
+```
+
+`state_dir` 必须为服务用户拥有的 `0700` 绝对路径，父目录须已存在，不能包含符号链接或 `..`。服务创建 `0600` 账户文件，原子替换并同步到磁盘；用进程锁阻止多个守护进程同时修改。每个账户以 GitHub numeric ID 为主键，分配 `gh-<ID>`；显示的 GitHub login 每次登录更新。网页登录会话仅存内存，重启后需重新登录，账户和公钥保留。
+
+网页进程不创建系统用户、不运行 sudo、不修改任何 `authorized_keys`。可选 root 定时任务只为门户新建受限账户，并写入独立的 `/var/lib/ssmcp-ssh/gh-<ID>` 公钥文件；遇到已有同名账户会拒绝接管。root 私有 `owners.json` 记录账户 UID，UID 或账户属性变化也会拒绝同步。不会删除系统账户、修改旧账户或覆盖旧密钥文件。发布公钥前，脚本还会通过 `sshd -T` 核验受限配置；缺少强制桥接或禁用转发等设置时拒绝发布。自定义安装前缀时也需调整脚本中预期的 ForceCommand 路径。
+
+管理员确认已有 `ssmcp` 组和 [60-ssmcp.conf](../packaging/sshd-ssmcp.conf) 生效后，手动启用：
+
+```sh
+sudo make install-portal
+sudo groupadd --system ssmcp-portal
+sudo install -d -o ssmcpd -g ssmcp -m 0700 /var/lib/ssmcpd
+sudo install -d -o ssmcpd -g ssmcp -m 0700 /var/lib/ssmcpd/portal
+sudo install -m 0644 packaging/sshd-ssmcp-portal.conf /etc/ssh/sshd_config.d/70-ssmcp-portal.conf
+sudo sshd -t
+sudo systemctl daemon-reload
+# 安排现有任务退出后，重启门户并按发行版名称 reload ssh 或 sshd。
+sudo systemctl restart ssmcpd
+sudo systemctl enable --now ssmcp-portal-ssh.timer
+```
+
+安装更新后的 `ssmcpd.service` 会通过 `StateDirectory=ssmcpd` 为私有状态提供可写目录。采用自定义 `state_dir` 时，也需调整 systemd 的可写目录；同步脚本默认只读 `/var/lib/ssmcpd/portal/accounts.json`，自定义路径须同步修改受 root 保护的脚本。脚本需要 Python 3、`useradd` 和本地用户数据库；不向网页进程开放提权接口。
+
+门户账户同时属于 `ssmcp` 与 `ssmcp-portal`，由前者强制运行 `ssmcpd attach`、关闭转发和 PTY，后者只读取专用公钥文件。必须检查实际 `sshd -T -C user=gh-<ID>,host=localhost,addr=127.0.0.1` 的 `forcecommand`、`authorizedkeysfile`、`disableforwarding` 与认证设置，并验证发行版 PAM、AllowUsers/AllowGroups 策略允许该受限账户以公钥连接。切勿单独安装门户 SSH 片段而缺少强制桥接限制。
+
+同步周期为 15 秒，加上执行和调度时间；失败会在该 service 的 journal 中报错，应监控 timer/service。首次登记和删除公钥并非立即生效；删除不会断开已有连接，需在本机退出。同步失败期间，OpenSSH 保留上次成功同步的公钥，管理员应检查并完成撤销。账户状态文件不得手工删掉或回滚到旧密钥快照，以免重新授权已撤销的密钥。
+
+网页登录使用 Secure/HttpOnly/SameSite cookie，独立随机 CSRF token、精确 Origin 检查、一次性浏览器绑定 OAuth state 和 PKCE；登录后轮换会话。公钥操作仅从服务器会话取得账户 ID，不接收账户或路径参数。仅接受标准 Ed25519 的固定长度 wire blob，拒绝私钥、证书、授权选项、多行、控制字符和重复公钥；页面转义所有显示字段，不接收私钥。全局登录频率和会话容量有界，公网仍应配置代理限流。
