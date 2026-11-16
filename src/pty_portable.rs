@@ -68,20 +68,41 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn spawn(shell: &Path) -> crate::Result<Arc<Self>> {
-        Self::spawn_with_logging(shell, false)
+        Self::spawn_with_logging(shell, false, OutputStore::global()?)
     }
 
     pub fn spawn_live(shell: &Path) -> crate::Result<Arc<Self>> {
-        Self::spawn_with_logging(shell, true)
+        Self::spawn_with_logging(shell, true, OutputStore::global()?)
     }
 
-    fn spawn_with_logging(shell: &Path, live: bool) -> crate::Result<Arc<Self>> {
+    pub fn spawn_live_with_store(
+        shell: &Path,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        Self::spawn_with_logging(shell, true, output)
+    }
+
+    fn spawn_with_logging(
+        shell: &Path,
+        live: bool,
+        store: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
-        let output_store = OutputStore::global()?;
+        let initial_size = if live {
+            let (rows, cols) = crate::client::terminal::pane_size(24, 80);
+            PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            }
+        } else {
+            PtySize::default()
+        };
         let pair = native_pty_system()
-            .openpty(PtySize::default())
+            .openpty(initial_size)
             .map_err(io::Error::other)?;
         let mut reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
         let mut writer = pair.master.take_writer().map_err(io::Error::other)?;
@@ -135,7 +156,7 @@ impl Terminal {
             child: Mutex::new(Some(child)),
             input: Mutex::new(Some(input)),
             output: Arc::new(Mutex::new(Output {
-                capture: Some(output_store.capture("terminal_session")),
+                capture: Some(store.capture("terminal_session")),
                 ..Output::default()
             })),
             changed: Arc::new(Notify::new()),

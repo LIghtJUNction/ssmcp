@@ -1,6 +1,6 @@
 //! Native release smoke tests. No SSH server, coding harness or model is needed.
 use serde_json::{Value, json};
-use ssmcp::{backend::shell::Shell, context::Context, workspace::Workspace};
+use ssmcp::{backend::shell::Shell, context::Context, output::OutputStore, workspace::Workspace};
 use std::{
     io::Write,
     path::PathBuf,
@@ -65,7 +65,29 @@ async fn native_files_skills_and_instruction_precedence_work_together() {
         )
         .await
         .unwrap();
-    assert!(edited["diff"].as_str().unwrap().contains("+changed"));
+    assert_eq!(edited["previous_sha256"], original["sha256"]);
+    let audit = workspace
+        .perform("ssmcp.fs.events", json!({}))
+        .await
+        .unwrap();
+    let diff = audit["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .map(|entry| &entry["event"])
+        .find(|event| event["type"] == "ssmcp.file.diff" && event["path"] == "notes/中文.txt")
+        .expect("successful edit must publish its diff evidence");
+    assert_eq!(diff["before"]["sha256"], original["sha256"]);
+    assert_eq!(diff["after"]["sha256"], edited["sha256"]);
+    assert_eq!(diff["added_lines"], 1);
+    assert_eq!(diff["removed_lines"], 1);
+    assert_eq!(diff["diff_complete"], true);
+    let text = diff["diff"]
+        .as_str()
+        .expect("small complete diff is inline");
+    assert!(text.contains("-first\n+changed\n"));
+    assert!(!text.contains("-界"));
     assert!(
         workspace
             .perform(
@@ -177,7 +199,8 @@ async fn finished(shell: &Shell, job: &Value) -> Value {
 #[tokio::test]
 async fn native_exec_preserves_arguments_environment_cwd_streams_and_exit_code() {
     let scratch = Scratch::new();
-    let shell = Shell::new();
+    let shell =
+        Shell::with_workspace(scratch.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
     let job = shell
         .call(
             "ssmcp.exec.start",

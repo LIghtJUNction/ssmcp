@@ -3,15 +3,19 @@ name: ssmcp
 description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, automatically discovered coding harnesses, scoped file access and audit, skills and instruction discovery, Linux rsync transfers, and loopback TCP forwarding.
 ---
 
-# ssmcp workspaces
+# ssmcp unified workspace bridge
 
 ## Discover the machines and their capabilities
 
 Call `list` first. Use each client's optional `title` to understand its task, then check its `name` and `cwd`. Select clients by their returned `id`; titles, names and hostnames are labels and may repeat. Call `list({client_id})` and follow `nextCursor` before using a native tool. Respect each native backend's permission and approval policy.
 
-Keep each tool-catalog traversal on its returned cursor. Its pages share a snapshot even if a native tool directory changes; start a fresh cursor-free request to discover updates. A client retains at most four snapshots, 64 MiB of serialized JSON total, for 120 seconds. Restart discovery if the server reports that a snapshot expired or was evicted.
+Keep each tool-catalog traversal on its returned cursor. Its pages share a snapshot even if a native tool directory changes; start a fresh cursor-free request to discover updates. A client retains at most four snapshots and 64 MiB of serialized JSON total. Each successful page read renews the 120-second idle timeout, but a snapshot expires at most 900 seconds after creation. Invalid cursors do not renew it, and reusing an unchanged catalog does not reset its creation time; LRU and capacity limits may evict it earlier. Restart discovery if the server reports that a snapshot expired or was evicted.
 
-Expect current clients to connect as `type:"shell"`, with both a shared interactive terminal and independent command jobs. Installed `codex`, `claude`, `pi` and `opencode` executables are discovered automatically from the client's `PATH`. Check `ssmcp.harnesses.list` and the tool catalog for successful registrations. A missing or unhealthy optional CLI does not remove the shell. Discovery itself does not submit a model task. Remove obsolete `-t`, `--type`, `--backend` and trailing backend arguments from startup commands.
+Current clients connect as `type:"shell"` and provide a shared interactive terminal, independent command jobs, files and context tools without requiring a Harness. Background discovery checks installed providers and registers only interfaces whose version, startup policy, handshake and actual catalog are usable. `ssmcp.harnesses.list` reports status and diagnostics; an unavailable provider does not remove Shell or other tools. Remove obsolete `-t`, `--type`, `--backend` and trailing backend arguments from startup commands.
+
+Discovery must not install runtimes, dependencies or Harnesses, submit model requests, or relax native permissions. Do not treat offline package caches as proof that nothing will be installed. Providers without a verified safe startup remain unavailable. Pi discovery connects only to an explicitly configured, already initialized native JSONL RPC session through `SSMCP_PI_RPC_SOCKET`. The absolute Unix socket and its direct parent must belong to the current UID, have no group/other permissions and not be symlinks; the connected peer UID, installed binary and version are checked before a five-second `get_state` handshake. OpenCode discovery attaches only to an existing service at `http://127.0.0.1:PORT/` (`SSMCP_OPENCODE_URL`, `OPENCODE_PASSWORD`). The explicit port and root path are required; proxies, redirects, other hosts, userinfo, query and fragment are rejected. Native discovery reads only info and OpenAPI; event subscription is lazy. Missing endpoints mean unavailable. Neither adapter starts an external service or disables user extensions to manufacture a complete catalog.
+
+`list` and `tools` use one registry, preserving native Schema and descriptors with routing namespaces. Namespaces include `codex.*`, `claude.*`, `pi.*`, and `opencode.*`; exact names come from the current catalog. Codex MCP tools are enumerated through native `mcpServerStatus/list` and forwarded through `mcpServer/tool/call`; select discovered `codex.mcp.*` names without hardcoding a server. Pi exposes only the `pi.rpc`, `ssmcp.pi.events`, `ssmcp.pi.requests`, and `ssmcp.pi.respond` bridge operations when available. A CLI installation or known control-command list is not an enumeration of its model, plugin or internal MCP tool Schema.
 
 Read `ssmcp://guide`, `ssmcp://limits`, and `ssmcp://clients` through MCP resources or `resources.read(uri)` inside `code_mode`. Use `resources.templates()` for client-specific resources. Check current catalogs when a connected client has an older version.
 
@@ -34,7 +38,7 @@ The default root is the client's startup workspace. An operator may add up to ei
 
 ## Run and manage commands
 
-Use `exec` for independent commands with exit status and separate stdout/stderr. Pass argv arrays, an optional existing absolute `cwd`, and optional `env` overrides. For pipelines or shell expansion, invoke the platform shell explicitly. A command does not inherit later `cd` or environment changes inside the interactive terminal.
+Use `exec` for independent commands with exit status and separate stdout/stderr. Pass argv arrays, an optional existing `cwd` inside the authorized workspace, and optional `env` overrides. Each start creates an independent process and pipes; it does not queue input through the interactive PTY. For pipelines or shell expansion, invoke the platform shell explicitly. A command does not inherit later `cd` or environment changes inside the interactive terminal.
 
 ```js
 const client = clients.find(c => c.id === "CLIENT_ID_FROM_LIST");
@@ -47,7 +51,7 @@ return await exec.run(client.id, {
 });
 ```
 
-Read `job_id`, `running`, `state`, `exit_code`, `stdout`, `stderr`, the two output cursors, and `snapshot`. Only assess the final exit when `running:false`; nonzero exit codes are command failures even when the helper resolved successfully. `snapshot` contains the latest atomic state and output metadata. `wait_timed_out` records the wait step; the subsequent read may already show completion.
+Read `job_id`, `running`, `state`, `exit_code`, `stdout`, `stderr`, the two output cursors, and `snapshot`. A successful start confirms launch only. If process metadata includes `pid_role`, retain it when reporting the PID; a supervisor PID is not the command PID. Only assess the final exit when `running:false`; nonzero exit codes are command failures even when the helper resolved successfully. `snapshot` contains the latest atomic state and output metadata. `wait_timed_out` records the wait step; the subsequent read may already show completion.
 
 Keep waiting separate from command lifetime. `wait_ms` defaults to 5000 and accepts `0..60000`; expiry leaves the command running. A command's `timeout_ms` defaults to 0, meaning no execution deadline; a positive value up to 900000 terminates its process tree on expiry. Set the outer `code_mode.timeout_ms` long enough for the entire sequence. A JavaScript deadline does not undo commands that were already started.
 
@@ -79,21 +83,21 @@ return await tools(client.id);
 
 Call a discovered operation with `await call(clientId, toolName, arguments)`. Check `isError` and read `structuredContent` when present. Short results remain inline; oversized backend results return artifact metadata instead of the full body. Await every call. Return only the output needed for the task. Never start an agent or model through a native backend unless the user authorized that delegation.
 
-When connected to an older server without `exec` helpers, call the discovered `ssmcp.exec.*` tools with `call(clientId, toolName, arguments)` and inspect the full MCP result. The tool schemas remain authoritative.
+The native command primitives are `ssmcp.exec.start/list/status/wait/read/cancel/events`, plus `ssmcp.exec.forget` for completed records. When an older server lacks `exec` helpers, call these discovered tools with `call(clientId, toolName, arguments)` and inspect the full MCP result. The schemas remain authoritative. Use `Promise.all` for independent native calls; every call is separately authorized. Concurrent Cargo commands can still contend for their shared build lock.
 
 ## Reload an updated client
 
 After installing an update at the client's original executable entry, call `await reload(clientId)`. Check that `ssmcp.client.reload` is available first. Both client and server must support reload; an older client needs an ordinary restart for its first upgrade.
 
-Treat `accepted: true` as acceptance, then call the public `list` again to verify reconnection and obtain the new ID. Match title, name and cwd without assuming labels are unique. Startup arguments, cwd, environment and `--allow` are preserved. Background jobs, harnesses and forwards stop; in-flight calls cause a busy rejection. Login-code authorization must be renewed after reconnection, while valid GitHub identity authorization can discover the new connection under the same allow list. Do not blindly repeat an uncertain reload.
+Treat `accepted: true` as acceptance, then call the public `list` again to verify reconnection and obtain the new ID. Match title, name and cwd without assuming labels are unique. Startup arguments, cwd, environment and `--allow` are preserved. Connection-owned background jobs and forwards stop, and Harness bridges close; operator-managed external Pi/OpenCode services continue. In-flight calls cause a busy rejection. Login-code authorization must be renewed after reconnection, while valid GitHub identity authorization can discover the new connection under the same allow list. Do not blindly repeat an uncertain reload.
 
 ## Read long-output artifacts
 
-Check `spilled` and `artifact` in long-output results. PTY captures contain the full terminal session's merged raw stream; independent command artifacts contain one job's stdout or stderr; other oversized backend results contain MCP JSON. Command reads expose their artifacts inside `snapshot.stdout` and `snapshot.stderr`. A spilled terminal read advances `next_cursor` to its returned range end. Read historical bytes with `outputs.read(clientId,{id:artifact.id,offset,max_bytes:16384})` and follow `next_offset`. Use `data_base64` for exact bytes, and do not return every page into the agent context at once.
+Check `spilled`, `artifact`, and source-specific metadata in long-output results. PTY captures contain the full terminal session's merged raw stream; independent command artifacts contain one job's stdout or stderr; oversized MCP results retain the native result as JSON. OpenCode HTTP bodies may use `body_artifact` with `body_format` rather than a generic MCP-result artifact; short JSON bodies remain objects. Preserve the result type when reconstructing a response. Command reads expose their artifacts inside `snapshot.stdout` and `snapshot.stderr`. A spilled terminal read advances `next_cursor` to its returned range end. Read historical bytes with `outputs.read(clientId,{id:artifact.id,offset,max_bytes:16384})` and follow `next_offset`. Use `data_base64` for exact bytes, and do not return every page into the agent context at once.
 
 Use `outputs.stat(clientId,{id})` to refresh file size, SHA-256, line count and completion metadata. A live capture can grow after a snapshot; `complete:false` or `error` must not be reported as a complete log. Underlying backend truncation cannot be recovered.
 
-Expect automatic spilling above 32 KiB or 500 lines, up to 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live in the client's private storage, normally `/tmp/ssmcp/<uid>` on Unix and `%LOCALAPPDATA%\ssmcp\output` on Windows. Use returned metadata rather than assuming a path on other platforms. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. An unexpired artifact may remain readable through the reconnected client ID.
+Expect automatic spilling above 32 KiB or 500 lines, up to 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live in the client's private storage, normally `/tmp/ssmcp/<uid>` on Unix and `%LOCALAPPDATA%\ssmcp\output` on Windows. Use returned metadata rather than assuming a path on other platforms. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. Artifacts, jobs and audit records are scoped to their owning connection. Retention on disk does not grant another client or a replacement connection access; use only IDs authorized by the current interface.
 
 ## Read and write workspace files
 
@@ -109,7 +113,11 @@ Use fs.readText/writeText/editText for UTF-8 text without base64. For an existin
 
 Binary file contents are base64, so binary bytes survive transport. Follow returned offsets for chunked reads. Write helpers replace a bounded file atomically; set `overwrite:true` only for an intended replacement. Use rsync for directory trees and large files.
 
-Read `ssmcp.fs.events` for bounded access and edit history. Writes include a unified diff when the before/after text fits the audit limits. Harness file activity is recorded only when its native schemas expose recognizable paths or skill operations; do not claim complete observation of a harness's internal filesystem access. On macOS and Windows, hash-precondition writes serialize cooperating calls within one client process; they do not lock out other processes.
+Read `ssmcp.fs.events` for successful native file access and write evidence. Reads emit `ssmcp.file.read`; atomic writes and edits emit `ssmcp.file.write` and `ssmcp.file.diff` only after successful commit. Snapshots distinguish missing, known text and unknown content. Unknown, sensitive, binary, oversized or inaccessible snapshots have unknown line counts rather than a fabricated empty preimage. Comparable text has actual added/removed counts. Inspect `diff_complete`, `diff_unavailable_reason`, and `diff_redacted`; small complete diffs are inline, while `diff_artifact` points to the shared output store for larger diffs. A preview is not the complete artifact.
+
+Harness lifecycle events record provider, tool, call ID, status and duration. External file effects remain `file_audit:"unknown"` unless the native interface supplies evidence; never infer successful writes from arguments or tool-name substrings. On macOS and Windows, hash-precondition writes serialize cooperating calls within one client process; they do not lock out unrelated processes.
+
+Skill discovery and reading are distinct from invocation. `ssmcp.skill.discovered` reports actual metadata, `ssmcp.skill.read` reports a body read, and `ssmcp.skill.discovery.completed` summarizes a scan. These operations do not execute a skill or prove a model used it. Report invoked only with explicit native evidence. Skill selection uses root and path, not an assumed unique name.
 
 ## Synchronize with system rsync
 
@@ -139,6 +147,12 @@ return await ports.open({
 
 Confirm the returned state is `running` before reading the listener address on the listening client. The open call waits at most eight seconds; if it returns `starting`, use `ports.list()` to observe the same ID until its listener is ready. A `cleanup_failed` state retains pending handles; retry close or cancel and inspect the result. Swap endpoint IDs for the reverse direction. List mappings with `ports.list()` and close one with `ports.close(id)` when done. Listeners and targets are limited to loopback; the mapping remains managed after the JavaScript invocation finishes and ends on closure, expiry, authorization loss, or disconnection.
 
+## Observe activity and respect lifecycle
+
+Background command stdout/stderr is displayed while it runs. Keep job IDs, stream sources and cursors separate; a historical read or wait result must not be reported as new live output. Pretty, verbose and JSONL audit logs use a redacted copy of events. Do not print environment mappings, credentials or sensitive file bodies. Native return values preserve their types and permission states; sanitizing the audit copy does not change a provider's approval decision.
+
+Keep the client process running while using its tools. Disconnect and reload invalidate the old registry and stop connection-owned work. Closing an attached external native transport does not terminate its operator-managed service. Re-select the current ID from `list`; labels are not identities. Never copy private SSH keys, disable host-key checks, or bypass native permission and approval requests. Use `exec.cancel` for commands and `jobs.cancel` for the separate rsync transfer jobs.
+
 ## Verify and report
 
-For commands, report final state and exit code, or a still-running `job_id`; inspect log completeness before describing output as complete. For reload, verify the replacement connection with `list`. For transfers, verify the intended files and report source, destination, job state, and dry-run status. For forwarding, make a real request through the returned local port, then close temporary mappings. Distinguish code changes, local tests, committed code, and deployed software. Never report a live sandbox connection from a test that used two development-host peers.
+For commands, report final state and exit code, or a still-running `job_id`; inspect log completeness before describing output as complete. For Codex MCP integration, preserve separate evidence for actual dynamic enumeration and a real native call, including original errors and approval state. Protocol fixtures alone do not establish compatibility with an installed provider or its configured servers. For reload, verify the replacement connection with `list`. For transfers, verify the intended files and report source, destination, job state, and dry-run status. For forwarding, make a real request through the returned local port, then close temporary mappings. Distinguish code changes, local tests, committed code, and deployed software. Never report a live sandbox connection from a test that used two development-host peers.

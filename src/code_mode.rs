@@ -88,7 +88,13 @@ fn bounded(mut text: String, max: usize) -> String {
     text
 }
 
-pub(crate) use crate::platform::executable;
+pub(crate) fn executable(name: &str) -> Result<PathBuf, String> {
+    if name == "node" {
+        crate::program::node()
+    } else {
+        crate::program::executable(name)
+    }
+}
 
 fn runner_path() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("SSMCP_CODE_MODE_RUNNER") {
@@ -118,13 +124,7 @@ fn runner_path() -> Result<PathBuf, String> {
 }
 
 fn node_arguments(command: &mut Command) {
-    command.args([
-        "--jitless",
-        "--no-addons",
-        "--max-old-space-size=32",
-        "--max-semi-space-size=1",
-        "--stack-size=256",
-    ]);
+    command.args(crate::program::NODE_FLAGS);
 }
 
 fn sandbox_command() -> Result<Command, String> {

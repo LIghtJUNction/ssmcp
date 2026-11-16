@@ -1,7 +1,7 @@
 pkgname=ssmcp-git
-pkgver=0.4.1.r0
+pkgver=0.6.0.r0
 pkgrel=1
-pkgdesc='Expose a local shell or coding agent as MCP through SSH public-key authentication'
+pkgdesc='Bridge native local tools and concurrent shell tasks to MCP over SSH'
 arch=('x86_64' 'aarch64')
 url='https://github.com/LIghtJUNction/ssmcp'
 license=('MIT')

@@ -12,7 +12,10 @@ use std::{
     fs::File,
     io::{self, Read, Write},
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -52,6 +55,10 @@ pub const READ_BYTES: usize = 32 * 1024;
 const SCHEMA: &str = "ssmcp.output.v1";
 const JANITOR_SECS: u64 = 60;
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024;
+const RELOAD_ENV: &str = "SSMCP_OUTPUT_RELOAD";
+const RELOAD_SCHEMA: &str = "ssmcp.output-reload.v1";
+const RELOAD_TTL: u64 = 60;
+static RELOAD_CHECKED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct Policy {
@@ -96,56 +103,103 @@ pub struct ArtifactMetadata {
     pub error: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct Manifest {
+    #[serde(flatten)]
+    metadata: ArtifactMetadata,
+    // Legacy manifests remain eligible for automatic retention, never for a new client.
+    #[serde(default)]
+    owner: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReloadGrant {
+    schema: String,
+    owner: String,
+    expires_at_unix: u64,
+}
+
+/// Keeps a one-use reload grant alive until the replacement consumes it.
+pub struct ReloadTicket {
+    store: Arc<OutputStore>,
+    name: String,
+}
+
+impl Drop for ReloadTicket {
+    fn drop(&mut self) {
+        self.store.unlink(&self.name);
+    }
+}
+
 pub struct OutputStore {
+    owner: String,
     directory: PathBuf,
     directory_fd: Directory,
     policy: Policy,
 }
 
 impl OutputStore {
+    /// Compatibility accessor for a single foreground connection.
     pub fn global() -> Result<Arc<Self>, String> {
         static STORE: OnceLock<Result<Arc<OutputStore>, String>> = OnceLock::new();
-        STORE
-            .get_or_init(|| {
-                #[cfg(windows)]
-                {
-                    let base = std::env::var_os("LOCALAPPDATA")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(std::env::temp_dir)
-                        .join("ssmcp");
-                    std::fs::create_dir_all(&base).map_err(error)?;
-                    Self::at(base.join("output"), Policy::default())
-                }
-                #[cfg(unix)]
-                {
-                    let base = Path::new("/tmp/ssmcp");
-                    match std::fs::DirBuilder::new().mode(0o1777).create(base) {
-                        Ok(()) => {
-                            // Creation is affected by umask; make the shared parent sticky.
-                            std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o1777))
-                                .map_err(error)?;
-                        }
-                        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                        Err(e) => return Err(error(e)),
-                    }
-                    let base_fd = open_directory(base).map_err(error)?;
-                    let metadata = base_fd.metadata().map_err(error)?;
-                    let uid = unsafe { libc::geteuid() };
-                    if (metadata.uid() != 0 && metadata.uid() != uid)
-                        || (metadata.mode() & 0o002 != 0 && metadata.mode() & 0o1000 == 0)
-                    {
-                        return Err(
-                            "output directory /tmp/ssmcp has unsafe ownership or permissions"
-                                .into(),
-                        );
-                    }
-                    Self::at(base.join(uid.to_string()), Policy::default())
-                }
-            })
-            .clone()
+        STORE.get_or_init(Self::new_connection).clone()
     }
 
+    /// Every connection gets a distinct owner. Acknowledged reload is the only
+    /// path that restores ownership, using a private, expiring, one-use grant.
+    pub fn new_connection() -> Result<Arc<Self>, String> {
+        let reload = if !RELOAD_CHECKED.swap(true, Ordering::AcqRel) {
+            std::env::var(RELOAD_ENV).ok()
+        } else {
+            None
+        };
+        Self::at_restoring(Self::directory()?, Policy::default(), reload.as_deref())
+    }
+
+    fn directory() -> Result<PathBuf, String> {
+        #[cfg(unix)]
+        {
+            let base = Path::new("/tmp/ssmcp");
+            match std::fs::DirBuilder::new().mode(0o1777).create(base) {
+                Ok(()) => std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o1777))
+                    .map_err(error)?,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(error(e)),
+            }
+            let base_fd = open_directory(base).map_err(error)?;
+            let metadata = base_fd.metadata().map_err(error)?;
+            let uid = unsafe { libc::geteuid() };
+            if (metadata.uid() != 0 && metadata.uid() != uid)
+                || (metadata.mode() & 0o002 != 0 && metadata.mode() & 0o1000 == 0)
+            {
+                return Err(
+                    "output directory /tmp/ssmcp has unsafe ownership or permissions".into(),
+                );
+            }
+            Ok(base.join(uid.to_string()))
+        }
+        #[cfg(windows)]
+        {
+            let base = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join("ssmcp");
+            std::fs::create_dir_all(&base).map_err(error)?;
+            Ok(base.join("output"))
+        }
+    }
+
+    #[cfg(test)]
     fn at(directory: PathBuf, policy: Policy) -> Result<Arc<Self>, String> {
+        Self::at_restoring(directory, policy, None)
+    }
+
+    fn at_restoring(
+        directory: PathBuf,
+        policy: Policy,
+        reload: Option<&str>,
+    ) -> Result<Arc<Self>, String> {
         #[cfg(windows)]
         let directory_fd = windows::private_directory(&directory).map_err(error)?;
         #[cfg(unix)]
@@ -164,12 +218,19 @@ impl OutputStore {
             }
             directory_fd
         };
-        let store = Arc::new(Self {
+        let mut store = Self {
+            owner: random_id()?,
             directory,
             directory_fd,
             policy,
-        });
-        store.cleanup()?;
+        };
+        if let Some(token) = reload
+            && let Some(owner) = store.consume_reload(token)?
+        {
+            store.owner = owner;
+        }
+        let store = Arc::new(store);
+        store.cleanup_all()?;
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let weak = Arc::downgrade(&store);
             runtime.spawn(async move {
@@ -177,11 +238,74 @@ impl OutputStore {
                     tokio::time::sleep(Duration::from_secs(JANITOR_SECS)).await;
                     let Some(store) = weak.upgrade() else { break };
                     // Directory scans and filesystem I/O must not stall the async reactor.
-                    let _ = tokio::task::spawn_blocking(move || store.cleanup()).await;
+                    let _ = tokio::task::spawn_blocking(move || store.cleanup_all()).await;
                 }
             });
         }
         Ok(store)
+    }
+
+    /// Call only after the broker has confirmed the reload acknowledgement.
+    /// The ticket is not a tool result and must never be logged.
+    pub fn prepare_reload(
+        self: &Arc<Self>,
+        command: &mut std::process::Command,
+    ) -> Result<ReloadTicket, String> {
+        let _guard = self.directory_lock()?;
+        for _ in 0..8 {
+            let token = random_id()?;
+            let name = format!("reload-{token}.json");
+            let mut file = match self.open(&name, Access::CreateNewWrite) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(error(e)),
+            };
+            let grant = ReloadGrant {
+                schema: RELOAD_SCHEMA.into(),
+                owner: self.owner.clone(),
+                expires_at_unix: now().saturating_add(RELOAD_TTL),
+            };
+            if let Err(e) = serde_json::to_writer(&mut file, &grant)
+                .map_err(error)
+                .and_then(|_| file.flush().map_err(error))
+            {
+                self.unlink(&name);
+                return Err(e);
+            }
+            command.env(RELOAD_ENV, token);
+            return Ok(ReloadTicket {
+                store: self.clone(),
+                name,
+            });
+        }
+        Err("could not create an output reload grant".into())
+    }
+
+    fn consume_reload(&self, token: &str) -> Result<Option<String>, String> {
+        validate_id(token).map_err(|_| "invalid output reload grant".to_owned())?;
+        let _guard = self.directory_lock()?;
+        let name = format!("reload-{token}.json");
+        let file = match self.open(&name, Access::Read) {
+            Ok(file) => file,
+            // A spent token inherited by a later child grants no old output access.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(error(e)),
+        };
+        if file.metadata().map_err(error)?.len() > MAX_MANIFEST_BYTES {
+            return Err("output reload grant is oversized".into());
+        }
+        let grant: ReloadGrant =
+            serde_json::from_reader(file).map_err(|_| "invalid output reload grant".to_owned())?;
+        if !self.unlink(&name) {
+            return Err("could not consume the output reload grant".into());
+        }
+        if grant.schema != RELOAD_SCHEMA
+            || validate_id(&grant.owner).is_err()
+            || grant.expires_at_unix <= now()
+        {
+            return Err("output reload grant is invalid or expired".into());
+        }
+        Ok(Some(grant.owner))
     }
 
     pub fn capture(self: &Arc<Self>, scope: impl Into<String>) -> Capture {
@@ -275,7 +399,7 @@ impl OutputStore {
     }
 
     fn create(&self, scope: &str) -> Result<Artifact, String> {
-        self.cleanup()?;
+        self.cleanup_all()?;
         let _guard = self.directory_lock()?;
         for _ in 0..8 {
             let mut random = [0u8; 16];
@@ -306,7 +430,13 @@ impl OutputStore {
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(error(e)),
             };
-            if let Err(error) = serde_json::to_writer(&mut manifest, &initial) {
+            if let Err(error) = serde_json::to_writer(
+                &mut manifest,
+                &Manifest {
+                    metadata: initial,
+                    owner: self.owner.clone(),
+                },
+            ) {
                 self.unlink(&manifest_name(&id));
                 return Err(error.to_string());
             }
@@ -332,16 +462,27 @@ impl OutputStore {
     }
 
     fn manifest(&self, id: &str) -> Result<ArtifactMetadata, String> {
+        let manifest = self.load_manifest(id)?;
+        if manifest.owner != self.owner {
+            return Err("unknown output artifact for this connection".into());
+        }
+        Ok(manifest.metadata)
+    }
+
+    fn load_manifest(&self, id: &str) -> Result<Manifest, String> {
         validate_id(id)?;
         let file = self.open(&manifest_name(id), Access::Read).map_err(error)?;
         if file.metadata().map_err(error)?.len() > MAX_MANIFEST_BYTES {
             return Err("output manifest exceeds its size limit".into());
         }
-        let metadata: ArtifactMetadata = serde_json::from_reader(file).map_err(error)?;
-        if metadata.schema != SCHEMA || metadata.id != id {
+        let manifest: Manifest = serde_json::from_reader(file).map_err(error)?;
+        if manifest.metadata.schema != SCHEMA
+            || manifest.metadata.id != id
+            || (!manifest.owner.is_empty() && validate_id(&manifest.owner).is_err())
+        {
             return Err("unrecognized output manifest".into());
         }
-        Ok(metadata)
+        Ok(manifest)
     }
 
     fn write_manifest(&self, metadata: &ArtifactMetadata) -> Result<(), String> {
@@ -351,7 +492,14 @@ impl OutputStore {
             .open(&temporary, Access::CreateNewWrite)
             .map_err(error)?;
         let result = (|| {
-            serde_json::to_writer(&mut file, metadata).map_err(error)?;
+            serde_json::to_writer(
+                &mut file,
+                &Manifest {
+                    metadata: metadata.clone(),
+                    owner: self.owner.clone(),
+                },
+            )
+            .map_err(error)?;
             file.flush().map_err(error)?;
             #[cfg(windows)]
             self.directory_fd
@@ -397,8 +545,18 @@ impl OutputStore {
         }
     }
 
-    /// Evict expired and oldest completed artifacts; held writer locks always win.
+    /// Explicit cleanup is limited to this connection's artifacts.
     pub fn cleanup(&self) -> Result<Value, String> {
+        self.cleanup_scope(false)
+    }
+
+    // Automatic retention keeps the existing UID-wide quota and also reclaims
+    // expired artifacts after the connection that produced them has ended.
+    fn cleanup_all(&self) -> Result<Value, String> {
+        self.cleanup_scope(true)
+    }
+
+    fn cleanup_scope(&self, all: bool) -> Result<Value, String> {
         let _guard = self.directory_lock()?;
         let current = now();
         let mut files = Vec::new();
@@ -407,12 +565,30 @@ impl OutputStore {
         let entries = directory_entries(&self.directory_fd).map_err(error)?;
         for name in entries {
             let Some(name) = name.to_str() else { continue };
+            if let Some(token) = name
+                .strip_prefix("reload-")
+                .and_then(|v| v.strip_suffix(".json"))
+            {
+                if validate_id(token).is_ok()
+                    && let Ok(file) = self.open(name, Access::Read)
+                    && file.metadata().is_ok_and(|m| m.len() <= MAX_MANIFEST_BYTES)
+                    && let Ok(grant) = serde_json::from_reader::<_, ReloadGrant>(file)
+                    && grant.schema == RELOAD_SCHEMA
+                    && (all || grant.owner == self.owner)
+                    && grant.expires_at_unix <= current
+                {
+                    self.unlink(name);
+                }
+                continue;
+            }
             if let Some(id) = name
                 .strip_prefix("output-")
                 .and_then(|v| v.strip_suffix(".meta.json"))
             {
                 if validate_id(id).is_ok()
-                    && self.manifest(id).is_ok()
+                    && self
+                        .load_manifest(id)
+                        .is_ok_and(|m| all || m.owner == self.owner)
                     && self
                         .open(&artifact_name(id), Access::Read)
                         .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
@@ -431,7 +607,11 @@ impl OutputStore {
             else {
                 continue;
             };
-            if validate_id(id).is_err() || self.manifest(id).is_err() {
+            if validate_id(id).is_err()
+                || !self
+                    .load_manifest(id)
+                    .is_ok_and(|m| all || m.owner == self.owner)
+            {
                 continue;
             }
             let Ok(file) = self.open(name, Access::ReadWrite) else {
@@ -646,6 +826,12 @@ impl OutputStore {
 struct Artifact {
     id: String,
     file: Option<File>,
+}
+
+fn random_id() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    crate::platform::random_bytes(&mut bytes).map_err(error)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 pub struct Capture {
@@ -1042,6 +1228,131 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn connections_cannot_read_stat_or_explicitly_clean_each_others_artifacts() {
+        let fixture = Fixture::new(Policy {
+            inline_bytes: 1,
+            ..Policy::default()
+        });
+        let mut capture = fixture.store.capture("owned");
+        capture.push(b"private output").unwrap();
+        capture.finish().unwrap();
+        let metadata = capture.metadata().unwrap();
+        let other = OutputStore::at(fixture.path.clone(), Policy::default()).unwrap();
+        assert_ne!(fixture.store.owner, other.owner);
+        for method in ["ssmcp.output.read", "ssmcp.output.stat"] {
+            assert!(
+                other
+                    .perform_sync(method, json!({"id":metadata.id}))
+                    .is_err()
+            );
+            assert!(
+                fixture
+                    .store
+                    .perform_sync(method, json!({"id":metadata.id}))
+                    .is_ok()
+            );
+        }
+        assert!(
+            serde_json::to_value(&metadata)
+                .unwrap()
+                .get("owner")
+                .is_none()
+        );
+        File::options()
+            .write(true)
+            .open(&metadata.path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH)
+            .unwrap();
+        assert_eq!(other.cleanup().unwrap()["removed_files"], 0);
+        assert!(Path::new(&metadata.path).exists());
+        assert_eq!(fixture.store.cleanup().unwrap()["removed_files"], 1);
+    }
+
+    #[test]
+    fn reload_grant_restores_only_its_owner_once_and_is_removed_on_failure() {
+        let fixture = Fixture::new(Policy {
+            inline_bytes: 1,
+            ..Policy::default()
+        });
+        let mut capture = fixture.store.capture("before-reload");
+        capture
+            .push(b"retained across acknowledged reload")
+            .unwrap();
+        capture.finish().unwrap();
+        let id = capture.metadata().unwrap().id;
+        let mut command = std::process::Command::new("ssmcp");
+        let ticket = fixture.store.prepare_reload(&mut command).unwrap();
+        let token = command
+            .get_envs()
+            .find(|(key, _)| key.to_str() == Some(RELOAD_ENV))
+            .unwrap()
+            .1
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let restored =
+            OutputStore::at_restoring(fixture.path.clone(), Policy::default(), Some(&token))
+                .unwrap();
+        assert_eq!(restored.owner, fixture.store.owner);
+        assert_eq!(
+            restored
+                .perform_sync("ssmcp.output.read", json!({"id":id}))
+                .unwrap()["text"],
+            "retained across acknowledged reload"
+        );
+        let replay =
+            OutputStore::at_restoring(fixture.path.clone(), Policy::default(), Some(&token))
+                .unwrap();
+        assert_ne!(replay.owner, fixture.store.owner);
+        assert!(
+            replay
+                .perform_sync("ssmcp.output.stat", json!({"id":id}))
+                .is_err()
+        );
+        drop(ticket);
+        let pending = fixture.store.prepare_reload(&mut command).unwrap();
+        let pending_path = fixture.path.join(&pending.name);
+        assert!(pending_path.exists());
+        drop(pending);
+        assert!(!pending_path.exists());
+    }
+
+    #[test]
+    fn expired_reload_grant_never_restores_artifact_access() {
+        let fixture = Fixture::new(Policy::default());
+        let mut command = std::process::Command::new("ssmcp");
+        let ticket = fixture.store.prepare_reload(&mut command).unwrap();
+        let token = command
+            .get_envs()
+            .find(|(key, _)| key.to_str() == Some(RELOAD_ENV))
+            .unwrap()
+            .1
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let mut file = fixture.store.open(&ticket.name, Access::ReadWrite).unwrap();
+        file.set_len(0).unwrap();
+        serde_json::to_writer(
+            &mut file,
+            &ReloadGrant {
+                schema: RELOAD_SCHEMA.into(),
+                owner: fixture.store.owner.clone(),
+                expires_at_unix: now().saturating_sub(1),
+            },
+        )
+        .unwrap();
+        drop(file);
+        assert!(
+            OutputStore::at_restoring(fixture.path.clone(), Policy::default(), Some(&token))
+                .is_err()
+        );
+        assert!(!fixture.path.join(&ticket.name).exists());
     }
 
     #[test]

@@ -52,7 +52,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
     "ssmcp.exec.read", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
-    "ssmcp.harnesses.list",
+    "ssmcp.harnesses.list", "ssmcp.audit.events",
 })
 
 
@@ -444,17 +444,23 @@ class Harness:
                 raise ValueError(f"duplicate harness fixture: {kind}")
             command = shlex.join([sys.executable, str(Path(program).resolve())])
             extra = shlex.join([str(argument) for argument in arguments])
-            wrapper.write_text(f'#!/bin/sh\nexec {command} "$@" {extra}\n')
+            wrapper.write_text(
+                f'#!/bin/sh\nif [ "$1" = "--version" ]; then printf "%s\\n" '
+                f'"{names[kind]} fixture 2.3.0"; exit 0; fi\n'
+                f'exec {command} "$@" {extra}\n'
+            )
             wrapper.chmod(0o700)
+        inherited = {key: value for key, value in os.environ.items()
+                     if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD")}
         return {
-            **os.environ,
+            **inherited,
             "PATH": str(directory.resolve()),
             "ENV": "/dev/null",
             "BASH_ENV": "/dev/null",
         }
 
     def start_client(self, label="client", *, name="workstation", cwd=None, harness=None,
-                     fixture=None, fixture_args=(), destination=None, harnesses=()):
+                     fixture=None, fixture_args=(), destination=None, harnesses=(), extra_env=None):
         command = [
             str(self.binary_dir / "ssmcp"), "-F", str(self.directory / "ssh_config"),
             "--name", name, "--shell", "/bin/sh",
@@ -463,6 +469,8 @@ class Harness:
         environment = self.client_environment(
             label, harness=harness, fixture=fixture, fixture_args=fixture_args, harnesses=harnesses
         )
+        if extra_env:
+            environment.update(extra_env)
         process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd, env=environment)
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)

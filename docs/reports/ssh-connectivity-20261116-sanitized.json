@@ -1,0 +1,260 @@
+{
+  "purpose": "Read-only bounded diagnostics for intermittent SSH/new-client connection timeouts",
+  "capture_date_utc": "2026-11-16",
+  "executor_client": "ssmcp-unified-dev",
+  "scope": "Only SSH PIDs 13413 and 86769, configured archczy and ssmcp@ssmcp.lmm.best targets; no keys, tokens, proxy changes, firewall changes or service changes.",
+  "observations": [
+    {
+      "job_id": "2d1ba1d845dad5d03755ad400c894372-f",
+      "exit_code": 0,
+      "report": {
+        "utc": "2026-11-16T14:01:53Z",
+        "ssh_processes": [
+          {
+            "pid": 13413,
+            "comm": "ssh",
+            "ppid": 13412,
+            "target": "ssmcp@ssmcp.lmm.best",
+            "settings": {
+              "PreferredAuthentications": "[value omitted]",
+              "PubkeyAuthentication": "[value omitted]",
+              "PasswordAuthentication": "[value omitted]",
+              "KbdInteractiveAuthentication": "[value omitted]",
+              "GSSAPIAuthentication": "[value omitted]",
+              "HostbasedAuthentication": "[value omitted]",
+              "ForwardAgent": "[value omitted]",
+              "ForwardX11": "[value omitted]",
+              "ClearAllForwardings": "[value omitted]",
+              "ControlMaster": "no",
+              "ControlPath": "[value omitted]",
+              "RequestTTY": "[value omitted]",
+              "ServerAliveInterval": "15",
+              "ServerAliveCountMax": "3"
+            },
+            "explicit_identity_count": 0,
+            "config_paths": []
+          },
+          {
+            "pid": 86769,
+            "comm": "ssh",
+            "ppid": 86768,
+            "target": "ssmcp@ssmcp.lmm.best",
+            "settings": {
+              "PreferredAuthentications": "[value omitted]",
+              "PubkeyAuthentication": "[value omitted]",
+              "PasswordAuthentication": "[value omitted]",
+              "KbdInteractiveAuthentication": "[value omitted]",
+              "GSSAPIAuthentication": "[value omitted]",
+              "HostbasedAuthentication": "[value omitted]",
+              "ForwardAgent": "[value omitted]",
+              "ForwardX11": "[value omitted]",
+              "ClearAllForwardings": "[value omitted]",
+              "ControlMaster": "no",
+              "ControlPath": "[value omitted]",
+              "RequestTTY": "[value omitted]",
+              "ServerAliveInterval": "15",
+              "ServerAliveCountMax": "3"
+            },
+            "explicit_identity_count": 0,
+            "config_paths": []
+          }
+        ],
+        "effective_ssh": [
+          {
+            "target": "archczy",
+            "exit_code": 0,
+            "settings": {
+              "user": "arch",
+              "hostname": "216.126.239.69",
+              "port": "22",
+              "addressfamily": "inet",
+              "batchmode": "no",
+              "canonicalizehostname": "false",
+              "controlmaster": "auto",
+              "tcpkeepalive": "true",
+              "connectionattempts": "3",
+              "serveralivecountmax": "3",
+              "serveraliveinterval": "30",
+              "canonicaldomains": "none",
+              "connecttimeout": "20",
+              "controlpersist": "600"
+            },
+            "identityfile_count": 1,
+            "proxycommand_present": false,
+            "stderr_bytes": 72,
+            "elapsed_ms": 3
+          },
+          {
+            "target": "ssmcp@ssmcp.lmm.best",
+            "exit_code": 0,
+            "settings": {
+              "user": "ssmcp",
+              "hostname": "216.126.239.69",
+              "port": "22",
+              "addressfamily": "inet",
+              "batchmode": "no",
+              "canonicalizehostname": "false",
+              "controlmaster": "false",
+              "tcpkeepalive": "true",
+              "connectionattempts": "1",
+              "serveralivecountmax": "3",
+              "serveraliveinterval": "30",
+              "canonicaldomains": "none",
+              "connecttimeout": "none",
+              "controlpersist": "no"
+            },
+            "identityfile_count": 1,
+            "proxycommand_present": false,
+            "stderr_bytes": 72,
+            "elapsed_ms": 4
+          }
+        ]
+      }
+    },
+    {
+      "job_id": "2d1ba1d845dad5d03755ad400c894372-12",
+      "exit_code": 0,
+      "report": {
+        "utc": "2026-11-16T14:04:30Z",
+        "known_ssh_sockets": [
+          {
+            "pid": 13413,
+            "sockets": [
+              {
+                "remote_ip": "216.126.239.69",
+                "remote_port": 22,
+                "state": "ESTABLISHED",
+                "tx_queued_bytes": 0,
+                "rx_queued_bytes": 0
+              }
+            ]
+          },
+          {
+            "pid": 86769,
+            "sockets": [
+              {
+                "remote_ip": "216.126.239.69",
+                "remote_port": 22,
+                "state": "ESTABLISHED",
+                "tx_queued_bytes": 0,
+                "rx_queued_bytes": 0
+              }
+            ]
+          }
+        ],
+        "dns": {
+          "hostname": "ssmcp.lmm.best",
+          "exit_code": 0,
+          "addresses": [
+            "198.18.1.10",
+            "fdfe:dcba:9876::103"
+          ],
+          "stderr_bytes": 0,
+          "elapsed_ms": 23
+        },
+        "tcp_probes": [
+          {
+            "ip": "216.126.239.69",
+            "port": 22,
+            "timeout_seconds": 3,
+            "connected": true,
+            "elapsed_ms": 1
+          },
+          {
+            "ip": "216.126.239.69",
+            "port": 443,
+            "timeout_seconds": 3,
+            "connected": true,
+            "elapsed_ms": 0
+          }
+        ]
+      }
+    },
+    {
+      "job_id": "2d1ba1d845dad5d03755ad400c894372-14",
+      "exit_code": 0,
+      "report": {
+        "utc": "2026-11-16T14:05:06Z",
+        "ssh_banner": {
+          "ip": "216.126.239.69",
+          "port": 22,
+          "authenticated": false,
+          "error_type": "TimeoutError",
+          "errno": null,
+          "elapsed_ms": 3004
+        },
+        "route": {
+          "exit_code": 0,
+          "records": [
+            {
+              "dst": "216.126.239.69",
+              "gateway": "198.18.0.2",
+              "dev": "Meta",
+              "table": "2022",
+              "flags": []
+            }
+          ],
+          "stderr_bytes": 0
+        }
+      }
+    },
+    {
+      "job_id": "2d1ba1d845dad5d03755ad400c894372-15",
+      "exit_code": 0,
+      "report": {
+        "utc": "2026-11-16T14:05:29Z",
+        "ip": "216.126.239.69",
+        "port": 22,
+        "phase": "receive_banner",
+        "authenticated": false,
+        "tcp_connected": true,
+        "connect_ms": 1,
+        "error_type": "TimeoutError",
+        "errno": null,
+        "elapsed_ms": 3004
+      }
+    },
+    {
+      "job_id": "2d1ba1d845dad5d03755ad400c894372-16",
+      "exit_code": 0,
+      "report": {
+        "utc": "2026-11-16T14:06:15Z",
+        "ssh_banner": {
+          "ip": "216.126.239.69",
+          "port": 22,
+          "phase": "complete",
+          "authenticated": false,
+          "tcp_connected": true,
+          "connect_ms": 1,
+          "received_bytes": 22,
+          "ssh_protocol_prefix": true,
+          "banner": "SSH-2.0-OpenSSH_10.6",
+          "elapsed_ms": 554
+        },
+        "master_check": {
+          "exit_code": 255,
+          "alive": false,
+          "pid": null,
+          "socket_missing": false,
+          "stdout_bytes": 0,
+          "stderr_bytes": 86,
+          "elapsed_ms": 4
+        }
+      }
+    }
+  ],
+  "conclusions": [
+    "Both effective SSH configurations target 216.126.239.69:22 directly, and both previously running SSH sockets were ESTABLISHED.",
+    "The current route uses device Meta via 198.18.0.2/table 2022. A successful TCP connect alone did not demonstrate remote SSH application responsiveness.",
+    "At 14:05:29 UTC TCP connected in 1 ms but the banner receive phase timed out after 3 seconds.",
+    "At 14:06:15 UTC a new unauthed TCP connection received SSH-2.0-OpenSSH_10.6 within 554 ms total.",
+    "The observed SSH banner responsiveness was intermittent. The measurements do not establish whether the cause was local routing, an intermediary, the server, or another transient factor.",
+    "ssh -O check archczy returned 255; no existing-master remote commands were attempted.",
+    "No conclusion tying earlier native Reply deadlines to the later SSH problem is established."
+  ],
+  "limits": [
+    "No authentication attempt or remote service health check was performed by these probes.",
+    "The initial 14:05:06 banner probe lacked an explicit failure phase and is superseded by the phase-marked 14:05:29 observation.",
+    "No proxy configuration, credentials, unrelated process arguments or unrelated connection contents were inspected."
+  ]
+}

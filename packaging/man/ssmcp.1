@@ -1,6 +1,6 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.5.1" "User Commands"
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.6.0" "User Commands"
 .SH NAME
-ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP gateway
+ssmcp \- bridge local tools and independent commands through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
 .B ssmcp
 .RB [ \-\-name " name" ]
@@ -32,18 +32,21 @@ not track shell directory changes or the workspaces of native agent sessions.
 .PP
 The external MCP catalog contains exactly two tools: list and code_mode.
 Use list to discover clients and their native capabilities. Use code_mode to
-run JavaScript that calls a selected capability over SSH. All installed harness
-capabilities share the shell connection and keep their native permission checks.
+run JavaScript that calls a selected capability over SSH. One registry owns all
+Shell, workspace, Harness and MCP routes. Only usable native interfaces are
+registered; installation alone is not a tool inventory. Native names, schemas,
+results, errors and approval requests retain their meaning through namespaced
+routes. Each call checks the live connection, provider and current authorization.
 .PP
-Keep the program running while its backend is in use. Ctrl-C or SIGTERM closes
-the SSH connection and stops its backend. Login-code grants issued by that
+Keep the program running while its tools are in use. Ending the connection
+stops its owned background jobs and closes native provider connections.
+Operator-managed external Pi and OpenCode services are not terminated. Login-code grants issued by that
 connection are revoked. GitHub identity grants remain subject to their own
 lifetimes and each currently connected client's allow policy.
 .SH OPTIONS
 .TP
 .BI \-\-name " name"
-Set the client display name. The default combines hostname, backend type and
-process ID. Names are limited to 128 UTF-8 bytes and may not contain control
+Set the client display name. The default is generated from the host and process. Names are limited to 128 UTF-8 bytes and may not contain control
 characters or consist only of whitespace. Duplicate names are allowed; use the
 server-generated client ID to select an unambiguous target.
 .TP
@@ -106,15 +109,19 @@ MCP results, including isError and structuredContent. Inspect isError even when
 the JavaScript promise resolves. The code-mode structuredContent has result
 (the script return value) and logs (an array of strings).
 .PP
-The server starts a system-installed Node.js process inside bubblewrap for each
-request. Node.js 18 or newer, bubblewrap 0.8 or newer and util-linux prlimit are
+The server resolves an installed Node.js binary and validates --jitless support
+before starting it inside bubblewrap for each request. Runtime manager shims are
+not passed to Node.js as if they were the runtime, and discovery does not install
+missing runtimes or dependencies. Node.js 18 or newer, bubblewrap 0.8 or newer and util-linux prlimit are
 server dependencies managed by the operating system package manager; no npm package is needed. A client-only
 ssmcp installation does not require these server dependencies. The public
 JavaScript API includes clients, call, tools, logging, exec, reload, outputs.read/stat/cleanup,
 fs, context, skills, agents, rsync/sync, jobs, ports and resources. Short native
 results are returned unchanged. Long backend output is replaced by artifact
 metadata; inspect spilled and use outputs.read. PTY artifacts contain raw terminal
-bytes; other oversized backend results contain the saved MCP result JSON.
+bytes; command streams have separate artifacts; oversized MCP results retain
+the saved MCP JSON. OpenCode HTTP responses may expose body_artifact and
+body_format instead of a generic MCP-result artifact.
 Native backend calls execute
 on the selected client with that local user's permissions. Runtime state is
 fresh for each request; backend sessions remain alive.
@@ -137,25 +144,45 @@ ssmcp.exec.start/list/status/read/wait/cancel/forget/events.
 .B codex
 Codex App Server over stdio. Requires schema generation support. The installed
 CLI's generated client methods, events and approval responses are callable.
+Configured MCP tools are dynamically enumerated with mcpServerStatus/list and
+called through mcpServer/tool/call, under discovered codex.mcp.* routes. Only a
+complete successful catalog replaces the previous snapshot. Missing native
+schemas remain unavailable; the bridge does not synthesize them.
 .TP
-.B cc
+.B claude
 Claude Code's native claude mcp serve entry point. Tools are discovered and
-prefixed with cc.; their schemas and results are preserved. Native MCP tool
+prefixed with claude.; their schemas and results are preserved. Native MCP tool
 calls do not imply the interactive terminal's confirmation behavior.
 .TP
 .B pi
-Pi's native JSONL RPC interface. Control commands use pi.; pi.rpc forwards
-additional commands supported by the installed CLI. Events and extension
-dialogs retain explicit read and response capabilities.
+A limited native JSONL RPC bridge attached to an already initialized session
+through SSMCP_PI_RPC_SOCKET. The socket path must be absolute. The socket and its direct parent must be
+owned by the current UID, have no group/other permissions and not be symbolic
+links. The connected peer UID is checked. The installed binary and version
+must also be recognized; the get_state handshake has a five-second deadline.
+Discovery sends get_state but does not spawn Pi or disable user extensions.
+Without a safe existing endpoint this provider remains unavailable.
+The exposed operations are pi.rpc, ssmcp.pi.events, ssmcp.pi.requests and
+ssmcp.pi.respond. Internal model, plugin and MCP tool schemas are not inferred
+from a known control-command list.
 .TP
 .B opencode
-OpenCode v2 serve with a private loopback listener, stdio ready handshake and
-OpenAPI discovery. Requires the v2 entry point; v1 is not supported. HTTP,
-SSE and WebSocket capabilities use the same code-mode interface.
+Attach to an operator-managed existing local service using SSMCP_OPENCODE_URL
+and OPENCODE_PASSWORD. The URL must be http://127.0.0.1:PORT/ with an explicit
+port, no userinfo, other path, query or fragment. Proxies and redirects are not
+used. The native Basic username is opencode and the password must be nonempty.
+Discovery reads /api/info and /openapi.json, checks native major version 2 and
+a positive PID, and does not start a service, create sessions or submit prompts.
+The /api/event stream is connected lazily on an explicit operation or events call. OpenCode v2.3.0 service
+startup can initialize schedules and install configured plugins, so automatic
+spawn is unavailable. HTTP, SSE and WebSocket operations require successful
+native discovery and retain native permission decisions.
 .SH MANAGED COMMANDS
 Use exec.run(clientId,{command:[program,arg],wait_ms:5000}) for an independent
 command. Results carry job_id, running, exit_code, stdout, stderr and byte
-cursors. Arguments are passed directly; shell syntax requires an explicit shell.
+cursors. A successful start acknowledges launch, not completion. The working
+directory must remain within the authorized workspace. Preserve pid_role when
+reporting a PID; a supervisor PID is distinct from the command PID. Arguments are passed directly; shell syntax requires an explicit shell.
 Use exec.parallel(clientId,commands,{concurrency:4}) to orchestrate commands in
 parallel. Results preserve input order and report fulfilled/rejected per item;
 a fulfilled operation may still have a nonzero process exit code.
@@ -250,8 +277,8 @@ Native agent permissions, request IDs and approval responses remain explicit.
 ssmcp does not automatically answer native requests. Install and configure the
 selected agent on the client; the gateway does not need that agent installed.
 .SH CONTEXT AND TEXT FILES
-Every backend provides native skill metadata, instruction views and UTF-8 file
-primitives through code_mode. Use context.roots, skills.list/read/view,
+The client provides skill metadata, instruction views and UTF-8 file
+primitives through code_mode independently of any Harness. Use context.roots, skills.list/read/view,
 agents.list/read/resolve and fs.readText/writeText/editText.
 The workspace root is the startup directory. Repeat
 .B --context-root PATH
@@ -259,7 +286,27 @@ to add up to eight existing read-only context directories. Select their returned
 root IDs explicitly; these grants do not extend ordinary file writes.
 Skill views index name and description frontmatter. Full documents are read on
 demand. Instruction views follow the selected root to a target and preserve
-source paths and contents. No model is started by these operations.
+source paths and contents. No model is started by these operations. Skill
+selection uses a root and path; discovery and reading do not establish that a
+model invoked or used a skill.
+.SH FILE AND TOOL AUDIT
+Successful native reads emit ssmcp.file.read. Atomic writes and edits capture
+the preimage while holding the write guard and emit ssmcp.file.write and
+ssmcp.file.diff only after commit. Missing, known text and unknown snapshots
+are distinct. Comparable text produces actual added/removed line counts;
+unknown, binary, sensitive or excessive snapshots use null counts and an
+explicit reason. Failed calls do not produce successful access events.
+.PP
+Read ssmcp.fs.events for evidence. Small complete diffs are inline; larger
+diffs use diff_artifact in the shared output store. preview is display-only.
+Inspect diff_complete, diff_unavailable_reason and diff_redacted. External
+file effects remain unknown unless observed through a native interface.
+Harness lifecycle events identify the provider, tool, call, duration and
+success without inferring effects from names or arguments.
+.PP
+Context emits skill.discovered, skill.read and discovery summary events under
+the ssmcp prefix. An invoked state requires explicit native evidence; finding
+a SKILL.md does not execute it.
 
 .SH CLIENT RELOAD
 After installing a replacement at the original client entry point, use
@@ -270,7 +317,8 @@ The request uses the existing client authorization and accepts no arguments.
 Reload is refused while other tool requests are in flight or the entry point
 is unavailable. On acceptance it returns accepted:true and status:restarting,
 waits for the server acknowledgement, stops the old connection's background
-commands, harnesses and forwards, and re-executes the installed entry point.
+commands and forwards, closes Harness bridges, and re-executes the installed
+entry point. Existing external Pi/OpenCode services remain operator-managed.
 .PP
 Startup arguments, working directory and environment are preserved, including
 title and allow policy. Reload does not download, build or install an update.
@@ -294,8 +342,10 @@ integrity, not whether the command succeeded.
 .PP
 A PTY artifact
 covers the whole terminal session's merged raw stream, including terminal control
-bytes. Other oversized native results are stored as the MCP result JSON received
-by ssmcp. Output already truncated by a native harness cannot be recovered.
+bytes. Independent command artifacts preserve stdout and stderr separately. Oversized
+MCP results are stored as their original MCP result JSON. OpenCode HTTP bodies
+retain their body_format and separate body_artifact, and short JSON bodies
+remain structured objects. Output already truncated by a native harness cannot be recovered.
 .PP
 Use outputs.read(clientId,{id,offset,max_bytes}) for a chunk, with byte offsets,
 16 KiB by default and 32 KiB maximum. Reuse next_offset. The result contains text
@@ -311,7 +361,9 @@ prefix incomplete and supplies an error. If artifact creation itself fails,
 the operation reports an error and may have no readable artifact.
 Active captures hold file locks and are skipped
 by cleanup, so their bytes may temporarily exceed the completed-file quota.
-Unrelated files are preserved.
+Unrelated files are preserved. Output access is scoped to the owning
+connection; a new client ID cannot read another connection's artifacts,
+background tasks or audit records merely because it shares the OS account.
 .PP
 Cleanup runs at output-store startup, artifact creation and every 60 seconds
 while the client runs. outputs.cleanup(clientId), or the native
@@ -351,10 +403,15 @@ Trusted SSH host keys.
 .SH LOG OUTPUT
 .TP
 .B --log-format pretty|pretty-verbose|jsonl
-Select compact colored summaries, expanded events, or one JSON event per line.
+Select compact colored summaries, expanded event metadata, or one JSON event
+per line. All audit display modes use redacted copies; environment mappings,
+credential fields and recognized sensitive content are omitted from logs.
+Native return values and native permission decisions are unchanged.
 .TP
 .B --no-color
-Disable ANSI colors. NO_COLOR and redirected stderr also disable them.
+Disable ANSI log colors. NO_COLOR and redirected stderr also disable colors.
+Interactive PTY byte passthrough on a real terminal is independent of this
+setting; cursor control and split UTF-8 sequences are preserved.
 .TP
 .B --verbose
 Alias for --log-format pretty-verbose.
@@ -380,6 +437,9 @@ ssmcpd; macOS and Windows releases contain the client. Windows uses ConPTY and
 requires OpenSSH Client. Rsync endpoints are currently Linux-only.
 Release archives cover x86_64 and ARM64 and include SHA-256 checksums.
 .SH MIGRATION
-Version 0.5 removes -t, --type and --backend. Install native harnesses on PATH;
-use --list-tools to inspect available capabilities. Automatic discovery does
-not start a model turn; individual native calls may do so.
+Version 0.5 removes -t, --type and --backend; passing them reports migration
+instructions. Existing SSH configuration, public-key authentication, OAuth,
+name, title and allow settings remain applicable. Use --list-tools to inspect
+the current registry. Discovery must not install software or start model
+requests; providers without a verified safe path remain unavailable.
+Explicit native calls may enter model workflows and require task authorization.

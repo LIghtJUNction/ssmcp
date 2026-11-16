@@ -1,9 +1,9 @@
 [package]
 name = "ssmcp"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.89"
-description = "Expose a local shell or coding agent as MCP through SSH public-key authentication"
+description = "Discover native tools and execute workspace commands through an authenticated SSH MCP bridge"
 license = "MIT"
 repository = "https://github.com/LIghtJUNction/ssmcp"
 include = [
@@ -32,6 +32,8 @@ include = [
     "/scripts/e2e.py",
     "/scripts/e2e_session_features.py",
     "/scripts/e2e_agents.py",
+    "/scripts/e2e_unified.py",
+    "/docs/validation-0.6.0.md",
     "/scripts/smoke_pi.py",
     "/scripts/sync_portal_ssh.py",
     "/scripts/test_portal_ssh.py",
@@ -75,6 +77,8 @@ serde_urlencoded = "0.7"
 sha2 = "0.10"
 subtle = "2.6"
 toml = "0.8"
+unicode-width = "0.2"
+vt100 = "0.18.1"
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "signal", "time", "fs"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
@@ -83,7 +87,7 @@ cap-std = "4.0.3"
 cap-fs-ext = "4.0.3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [profile.release]
 lto = "thin"

@@ -1,5 +1,6 @@
 """Publication invariants: reject wrong tags, incomplete artifacts and collisions."""
 
+import contextlib
 import json
 import io
 import os
@@ -556,6 +557,185 @@ class GithubReleaseTests(unittest.TestCase):
                     self.publish_release()
                 self.assertTrue(self.metadata["draft"])
                 self.assertEqual(self.operations("edit"), [])
+
+
+
+@unittest.skipUnless(os.name == "posix", "The Arch deployment helper requires POSIX")
+class DeploymentVersionTests(unittest.TestCase):
+    """Exercise the real stage/apply gates without invoking host services."""
+
+    def setUp(self):
+        import deploy_server
+        self.deploy = deploy_server
+        self.directory = self.enterContext(tempfile.TemporaryDirectory())
+        self.root = Path(self.directory)
+        self.commit = "a" * 40
+        self.calls = []
+        self.info = "pkgname = ssmcp-git\npkgver = 0.6.0.r123.gaaaaaaa-1\n"
+        self.staged_version = "ssmcpd 0.6.0"
+        self.installed_version = "ssmcpd 0.6.0"
+        self.package = self.write("/incoming/candidate.pkg.tar.zst", b"candidate")
+        self.rollback = self.write("/incoming/rollback.pkg.tar.zst", b"rollback")
+        self.config = self.write("/etc/ssmcpd/ssmcpd.toml",
+            b'[server]\npublic_url = "https://ssmcp.example"\n[auth.github]\nclient_id = "fixture"\n')
+        self.binary = self.write("/usr/bin/ssmcpd", b"old server")
+        self.path("/run/lock").mkdir(parents=True)
+        self.report_path = self.root / "report.json"
+        self.receipt = self.path("/var/lib/ssmcp-rollouts") / self.commit / "prepared.json"
+        self.package_hash = self.deploy.digest(self.package)
+        self.real_chmod = os.chmod
+
+    def path(self, *parts):
+        path = Path(*parts)
+        if path.is_absolute() and not path.is_relative_to(self.root):
+            return self.root / str(path).lstrip("/")
+        return path
+
+    def write(self, name, data):
+        path = self.path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def prepared(self, **changes):
+        value = {
+            "commit": self.commit, "expected_version": "0.6.0",
+            "package_sha": self.package_hash, "proxy_sha": None,
+            "before": {"binary": self.deploy.digest(self.binary),
+                       "config": self.deploy.digest(self.config),
+                       "package": "ssmcp-git 0.4.1.r70.g655342c-1"},
+            "prepared_unix": self.deploy.time.time(),
+        }
+        value.update(changes)
+        self.receipt.parent.mkdir(parents=True, exist_ok=True)
+        self.receipt.write_text(json.dumps(value))
+        return value
+
+    def command(self, argv, timeout=30):
+        self.calls.append(list(argv))
+        if argv[:2] == ["bsdtar", "-xOf"]:
+            return self.info
+        if argv[:2] == ["bsdtar", "-xpf"]:
+            stage = Path(argv[argv.index("-C") + 1])
+            (stage / "usr/bin").mkdir(parents=True, exist_ok=True)
+            (stage / "usr/libexec/ssmcp").mkdir(parents=True, exist_ok=True)
+        if len(argv) == 2 and argv[1] == "--version":
+            return self.installed_version if argv[0] == "/usr/bin/ssmcpd" else self.staged_version
+        if argv[:2] == ["pacman", "-Q"]:
+            return "ssmcp-git 0.4.1.r70.g655342c-1"
+        if argv[:2] == ["systemctl", "show"]:
+            return "not-found" if "LoadState" in argv else "inactive"
+        if argv[0] == "systemd-run":
+            registry = self.write("/var/lib/ssmcp-stage-" + self.commit[:8] + "/oauth-clients.toml", b"fixture")
+            self.real_chmod(registry, 0o600)
+        if argv[:2] == ["tar", "-cpf"]:
+            Path(argv[2]).write_bytes(b"backup")
+        return ""
+
+    def invoke(self, phase, expected="0.6.0"):
+        argv = ["deploy_server.py", "--phase", phase, "--package", str(self.package),
+                "--sha256", self.package_hash, "--rollback-package", str(self.rollback),
+                "--commit", self.commit, "--report", str(self.report_path),
+                "--config", str(self.config)]
+        if expected is not None:
+            argv += ["--expected-version", expected]
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch("sys.argv", argv))
+            stack.enter_context(mock.patch.object(self.deploy, "Path", self.path))
+            stack.enter_context(mock.patch.object(self.deploy, "open",
+                lambda path, *args, **kwargs: open(self.path(path), *args, **kwargs), create=True))
+            stack.enter_context(mock.patch.object(self.deploy.os, "geteuid", return_value=0))
+            stack.enter_context(mock.patch.object(self.deploy.os, "umask", return_value=0o077))
+            stack.enter_context(mock.patch.object(self.deploy.os, "chmod",
+                lambda path, mode, **kwargs: self.real_chmod(self.path(path), mode, **kwargs)))
+            stack.enter_context(mock.patch.object(self.deploy, "run", self.command))
+            stack.enter_context(mock.patch.object(self.deploy, "wait_health"))
+            stack.enter_context(mock.patch.object(self.deploy, "metadata"))
+            stack.enter_context(mock.patch.object(self.deploy, "registration", return_value="/oauth/authorize?fixture"))
+            stack.enter_context(mock.patch.object(self.deploy, "request", return_value=(200, "ok")))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            result = self.deploy.main()
+        return result, json.loads(self.report_path.read_text())
+
+    def test_expected_version_is_required_and_validated_before_commands(self):
+        for value in (None, "v0.6.0", "0.6", "00.6.0", "0.6.0;true", "0.6.0-rc.1"):
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit) as caught:
+                    self.invoke("stage", expected=value)
+                self.assertEqual(caught.exception.code, 2)
+                self.assertEqual(self.calls, [])
+                self.assertFalse(self.path("/run/lock/ssmcp-deployment.lock").exists())
+
+    def test_wrong_or_ambiguous_package_identity_stops_before_staging(self):
+        for info, failed in (
+            ("pkgname = ssmcp-git\npkgver = 0.5.1.r123.gaaaaaaa-1", "package_version"),
+            ("pkgname = ssmcp-git\npkgver = 0.6.00.r123.gaaaaaaa-1", "package_version"),
+            ("pkgname = ssmcp-git\npkgver = 0.6.0.r123.gaaaaaaa-1\npkgver = 0.5.1-1", "package_version"),
+            ("pkgname = other\npkgver = 0.6.0-1", "package_name"),
+            ("pkgname = ssmcp-git\npkgname = other\npkgver = 0.6.0-1", "package_name"),
+        ):
+            with self.subTest(info=info):
+                self.info = info
+                self.calls.clear()
+                status, report = self.invoke("stage")
+                self.assertEqual(status, 1)
+                self.assertEqual(report["failed_check"], failed)
+                self.assertEqual(report["state"], "failed")
+                self.assertEqual([call[:2] for call in self.calls], [["bsdtar", "-xOf"]])
+                self.assertFalse(self.receipt.exists())
+
+    def test_staged_binary_must_match_package_release_before_service_start(self):
+        self.staged_version = "ssmcpd 0.5.1"
+        status, report = self.invoke("stage")
+        self.assertEqual(status, 1)
+        self.assertEqual(report["failed_check"], "staged_binary_version")
+        self.assertFalse(any(call[0] == "systemd-run" for call in self.calls))
+        self.assertFalse(self.receipt.exists())
+
+    def test_successful_stage_binds_release_commit_and_digest(self):
+        status, report = self.invoke("stage")
+        self.assertEqual(status, 0)
+        self.assertEqual(report["state"], "prepared")
+        self.assertEqual(report["expected_version"], "0.6.0")
+        receipt = json.loads(self.receipt.read_text())
+        self.assertEqual(receipt["expected_version"], "0.6.0")
+        self.assertEqual(receipt["commit"], self.commit)
+        self.assertEqual(receipt["package_sha"], self.package_hash)
+        self.assertFalse(any(call[:3] == ["systemctl", "restart", "ssmcpd.service"] for call in self.calls))
+        self.assertTrue(any(call[:3] == ["systemctl", "stop", "ssmcp-stage-" + self.commit[:8]] for call in self.calls))
+
+    def test_receipt_rejects_other_version_commit_digest_or_expired_stage(self):
+        for changes in (
+            {"expected_version": "0.5.1"}, {"expected_version": None},
+            {"commit": "b" * 40}, {"commit": None},
+            {"package_sha": "0" * 64},
+            {"prepared_unix": self.deploy.time.time() - 3601},
+        ):
+            with self.subTest(changes=changes):
+                self.prepared(**changes)
+                self.calls.clear()
+                status, report = self.invoke("apply")
+                self.assertEqual(status, 1)
+                self.assertEqual(report["failed_check"], "matching_stage_receipt")
+                self.assertFalse(any(call[0] in ("pacman", "tar", "systemctl", "systemd-run") for call in self.calls))
+
+    def test_wrong_installed_version_restores_package_and_checkpoint(self):
+        self.prepared()
+        self.installed_version = "ssmcpd 0.5.1"
+        status, report = self.invoke("apply")
+        self.assertEqual(status, 1)
+        self.assertEqual(report["state"], "rolled_back")
+        self.assertEqual(report["failed_check"], "installed_version")
+        self.assertTrue(report["checks"]["rollback_package_unchanged"])
+        self.assertTrue(report["checks"]["rollback_health"])
+        upgrades = [call for call in self.calls if call[:2] == ["pacman", "-U"]]
+        self.assertEqual(upgrades, [
+            ["pacman", "-U", "--noconfirm", str(self.package)],
+            ["pacman", "-U", "--noconfirm", str(self.rollback)],
+        ])
+        self.assertTrue(any(call[:2] == ["tar", "-xpf"] for call in self.calls))
+        self.assertNotIn("server_version", report)
 
 
 if __name__ == "__main__":

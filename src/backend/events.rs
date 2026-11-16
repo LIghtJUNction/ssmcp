@@ -28,18 +28,31 @@ pub struct EventLog {
     label: String,
     buffer: Mutex<Buffer>,
     changed: Notify,
+    archive: Mutex<Option<crate::output::Capture>>,
 }
 
 impl EventLog {
     pub fn new(label: &str) -> Arc<Self> {
+        Self::create(label, crate::output::OutputStore::global().ok())
+    }
+
+    pub fn with_output(label: &str, output: Arc<crate::output::OutputStore>) -> Arc<Self> {
+        Self::create(label, Some(output))
+    }
+
+    fn create(label: &str, output: Option<Arc<crate::output::OutputStore>>) -> Arc<Self> {
         Arc::new(Self {
             label: label.into(),
             buffer: Mutex::new(Buffer::default()),
             changed: Notify::new(),
+            archive: Mutex::new(output.map(|store| store.capture(format!("events:{label}:jsonl")))),
         })
     }
 
-    pub fn push(&self, mut event: Value) {
+    pub fn push(&self, event: Value) {
+        let mut event = crate::audit::event(event);
+        // Serialise persistence, display and sequence assignment for this stream.
+        let mut archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
         crate::client::render::event(&self.label, &event);
         // Codex command streaming carries bytes as base64. Keep the original event
         // and add readable text so both the local transcript and MCP consumers can inspect it.
@@ -50,13 +63,18 @@ impl EventLog {
             event["ssmcp_output_text"] = json!(String::from_utf8_lossy(&bytes));
         }
         let encoded = event.to_string();
+        if let Some(capture) = archive.as_mut() {
+            let _ = capture.push(encoded.as_bytes());
+            let _ = capture.push(b"\n");
+        }
+        let artifact = archive.as_ref().and_then(|capture| capture.metadata());
 
         if encoded.len() > MAX_EVENT {
             let mut end = MAX_EVENT / 2;
             while !encoded.is_char_boundary(end) {
                 end -= 1;
             }
-            event = json!({"type":"ssmcp.event_truncated", "original_bytes":encoded.len(), "preview":&encoded[..end]});
+            event = json!({"type":"ssmcp.event_truncated", "original_bytes":encoded.len(), "preview":&encoded[..end], "artifact":artifact, "format":"jsonl"});
         }
         let bytes = event.to_string().len();
         let mut buffer = self.buffer.lock().unwrap();
@@ -71,10 +89,19 @@ impl EventLog {
         buffer.bytes += bytes;
         buffer.entries.push_back((cursor, event, bytes));
         drop(buffer);
+        drop(archive);
         self.changed.notify_waiters();
     }
 
     pub fn close(&self) {
+        if let Some(capture) = self
+            .archive
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            let _ = capture.finish();
+        }
         crate::client::render::finish(&self.label);
         self.buffer.lock().unwrap().closed = true;
         self.changed.notify_waiters();
@@ -124,8 +151,12 @@ impl EventLog {
                         bytes += size;
                         next = cursor + 1;
                     }
+                    let closed = buffer.closed;
+                    drop(buffer);
+                    let archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
+                    let artifact = archive.as_ref().and_then(|capture| capture.metadata());
                     return Ok(
-                        json!({"events":events,"next_cursor":next,"start_cursor":start,"truncated":args.cursor < start,"closed":buffer.closed}),
+                        json!({"events":events,"next_cursor":next,"start_cursor":start,"truncated":args.cursor < start,"closed":closed,"artifact":artifact,"archive_format":"jsonl","archive_error":archive.as_ref().and_then(|capture|capture.error())}),
                     );
                 }
             }

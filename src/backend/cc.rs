@@ -48,10 +48,18 @@ pub struct Claude {
 
 impl Claude {
     pub async fn start(program: &OsStr, args: &[OsString]) -> crate::Result<Arc<Self>> {
+        Self::start_with_output(program, args, crate::output::OutputStore::global()?).await
+    }
+
+    pub async fn start_with_output(
+        program: &OsStr,
+        args: &[OsString],
+        output: Arc<crate::output::OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
         validate_args(args)?;
         let mut command = Command::new(program);
         command.args(["mcp", "serve"]).args(args);
-        let peer = Peer::spawn(command, "cc", Dialect::JsonRpc).await?;
+        let peer = Peer::spawn_with_output(command, "claude", Dialect::JsonRpc, output).await?;
         let initialization = async {
             let initialized = peer
                 .request(

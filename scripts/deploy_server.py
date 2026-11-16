@@ -2,7 +2,8 @@
 """Stage and deploy an Arch ssmcp package with a private rollback checkpoint.
 
 Run as root on the server. Never prints provider secrets or OAuth credentials.
-Staging does not restart production. Apply requires the matching stage receipt.
+Staging does not restart production. Apply requires the matching stage receipt
+for the expected release version, commit and package digest.
 """
 from __future__ import annotations
 import argparse, base64, fcntl, hashlib, http.client, json, os, pwd, re, shutil
@@ -78,6 +79,19 @@ def metadata(base,issuer):
     if status!=401:raise RuntimeError('unauthenticated MCP did not reject request')
 
 
+def package_field(info, name):
+    """A package identity field must occur exactly once in .PKGINFO."""
+    values=[line.split(' = ',1)[1] for line in info.splitlines()
+            if line.startswith(name+' = ')]
+    return values[0] if len(values)==1 else None
+
+
+def package_version_matches(value, expected):
+    """Accept the release or this repository's git package, including pkgrel."""
+    return isinstance(value,str) and re.fullmatch(
+        re.escape(expected)+r'(?:\.r[0-9]+\.g[0-9a-f]+)?-[0-9]+(?:\.[0-9]+)*',value) is not None
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--phase',choices=['stage','apply'],required=True)
@@ -85,11 +99,15 @@ def main():
     parser.add_argument('--sha256',required=True)
     parser.add_argument('--rollback-package',type=Path,required=True)
     parser.add_argument('--commit',required=True)
+    parser.add_argument('--expected-version',required=True,help='Exact stable release version, for example 0.6.0')
     parser.add_argument('--report',type=Path,required=True)
     parser.add_argument('--config',type=Path,default=Path('/etc/ssmcpd/ssmcpd.toml'))
     parser.add_argument('--proxy-config',type=Path,help='Optional replacement for the existing Nginx site')
     parser.add_argument('--proxy-target',type=Path,default=Path('/etc/nginx/conf.d/ssmcp.lmm.best.conf'))
     args=parser.parse_args()
+    if not re.fullmatch(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)',args.expected_version):
+        parser.error('expected-version must be a stable major.minor.patch version without a v prefix')
+    expected_binary='ssmcpd '+args.expected_version
     if not re.fullmatch(r'[0-9a-f]{40}',args.commit) or not re.fullmatch(r'[0-9a-f]{64}',args.sha256):
         parser.error('commit and sha256 must be full lowercase hexadecimal values')
     if args.proxy_config and (not args.proxy_config.is_absolute() or args.proxy_target.parent!=Path('/etc/nginx/conf.d') or args.proxy_target.suffix!='.conf'):
@@ -100,7 +118,7 @@ def main():
     checkpoint.mkdir(parents=True,exist_ok=True,mode=0o700)
     lock=open('/run/lock/ssmcp-deployment.lock','a')
     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    report={'phase':args.phase,'state':'running','commit':args.commit,'checks':{},'started_unix':int(time.time())}
+    report={'phase':args.phase,'state':'running','commit':args.commit,'expected_version':args.expected_version,'checks':{},'started_unix':int(time.time())}
     args.report=args.report.resolve()
     def check(name,value=True):
         report['checks'][name]=bool(value)
@@ -109,8 +127,8 @@ def main():
     try:
         check('package_sha256',digest(args.package)==args.sha256)
         info=run(['bsdtar','-xOf',str(args.package),'.PKGINFO'])
-        check('package_name','pkgname = ssmcp-git\n' in info)
-        check('package_version','pkgver = 0.4.1.' in info)
+        check('package_name',package_field(info,'pkgname')=='ssmcp-git')
+        check('package_version',package_version_matches(package_field(info,'pkgver'),args.expected_version))
         proxy_digest=digest(args.proxy_config) if args.proxy_config else None
         if args.proxy_config:
             check('proxy_target_exists',args.proxy_target.is_file())
@@ -139,7 +157,7 @@ def main():
             run(['bsdtar','-xpf',str(args.package),'-C',str(stage_root),'usr/bin/ssmcp','usr/bin/ssmcpd','usr/libexec/ssmcp/code-mode.js'])
             for directory in ['usr','usr/bin','usr/libexec','usr/libexec/ssmcp']:
                 (stage_root/directory).chmod(0o755)
-            check('staged_binary_version',run([str(stage_root/'usr/bin/ssmcpd'),'--version'])=='ssmcpd 0.4.1')
+            check('staged_binary_version',run([str(stage_root/'usr/bin/ssmcpd'),'--version'])==expected_binary)
             command=['systemd-run','--quiet','--collect','--unit='+stage_unit,'--uid=ssmcpd','--gid=ssmcp',
                 '--property=StateDirectory='+state_name,'--property=StateDirectoryMode=0700',
                 '--property=RuntimeDirectory='+state_name,'--property=RuntimeDirectoryMode=0750',
@@ -164,11 +182,14 @@ def main():
             finally:
                 if owned:run(['systemctl','stop',stage_unit],timeout=45)
             check('production_not_changed',before['binary']==digest('/usr/bin/ssmcpd') and before['config']==digest(args.config))
-            save(receipt,{'package_sha':args.sha256,'proxy_sha':proxy_digest,'before':before,'prepared_unix':time.time()})
+            save(receipt,{'commit':args.commit,'expected_version':args.expected_version,
+                          'package_sha':args.sha256,'proxy_sha':proxy_digest,'before':before,'prepared_unix':time.time()})
             report['state']='prepared'
         else:
             saved=json.loads(receipt.read_text())
-            check('matching_stage_receipt',saved['package_sha']==args.sha256 and saved.get('proxy_sha')==proxy_digest and 0<=time.time()-saved['prepared_unix']<3600)
+            check('matching_stage_receipt',saved.get('commit')==args.commit and saved.get('expected_version')==args.expected_version
+                  and saved.get('package_sha')==args.sha256 and saved.get('proxy_sha')==proxy_digest
+                  and 0<=time.time()-saved['prepared_unix']<3600)
             if args.proxy_config:check('proxy_production_lease',saved['before'].get('proxy')==digest(args.proxy_target))
             check('production_lease',saved['before']['binary']==digest('/usr/bin/ssmcpd') and saved['before']['config']==digest(args.config)
                   and saved['before']['package']==run(['pacman','-Q','ssmcp-git']))
@@ -188,7 +209,7 @@ def main():
             portal_active=run(['systemctl','show','ssmcp-portal.service','-p','ActiveState','--value'])=='active'
             try:
                 run(['pacman','-U','--noconfirm',str(args.package)],timeout=120)
-                check('installed_version',run(['/usr/bin/ssmcpd','--version'])=='ssmcpd 0.4.1')
+                check('installed_version',run(['/usr/bin/ssmcpd','--version'])==expected_binary)
                 if args.proxy_config:
                     temporary=args.proxy_target.with_suffix('.conf.ssmcp-new')
                     try:
@@ -240,6 +261,7 @@ def main():
     finally:
         report['finished_unix']=int(time.time());save(args.report,report)
         print(json.dumps(report,sort_keys=True))
+        lock.close()
     return 0 if report['state'] in ('prepared','deployed') else 1
 
 if __name__=='__main__':raise SystemExit(main())
