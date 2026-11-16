@@ -68,6 +68,9 @@ for line in sys.stdin:
                     "serverInfo":{"name":"startup-fixture", "version":"1"}}}
     elif request.get("method") == "tools/list":
         (directory / "native-request").write_text("discovery")
+        if scenario == "catalog-timeout-healthy":
+            # Keep the native process alive but never acknowledge a catalog request.
+            continue
         time.sleep(0.4)
         if scenario == "catalog-error-healthy":
             response = {"jsonrpc":"2.0", "id":request["id"],
@@ -125,7 +128,12 @@ impl Fixture {
             .env("SSMCP_STARTUP_SCENARIO", scenario)
             .env("SSMCP_STARTUP_PHASE", phase)
             .kill_on_drop(true);
-        timeout(Duration::from_secs(5), command.output())
+        let limit = if scenario == "catalog-timeout-healthy" {
+            Duration::from_secs(15)
+        } else {
+            Duration::from_secs(5)
+        };
+        timeout(limit, command.output())
             .await
             .expect("ssmcp did not stop after SSH ended")
             .unwrap()
@@ -257,19 +265,54 @@ async fn an_unavailable_optional_harness_catalog_keeps_shell_tools_online() {
             .iter()
             .all(|tool| !tool["name"].as_str().unwrap().starts_with("cc."))
     );
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    let events: Vec<Value> = stderr
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("every stderr line is JSON"))
-        .collect();
-    assert!(events.iter().any(|event| {
-        event["type"] == "ssmcp.status"
-            && event["level"] == "Warning"
-            && event["message"].as_str().is_some_and(|message| {
-                message.contains("fixture catalog unavailable")
-                    && message.contains("shell remains available")
-            })
-    }));
+    assert!(warning_contains(
+        &output.stderr,
+        "fixture catalog unavailable"
+    ));
+    fixture.assert_native_stopped().await;
+}
+
+fn warning_contains(stderr: &[u8], text: &str) -> bool {
+    String::from_utf8_lossy(stderr).lines().any(|line| {
+        serde_json::from_str::<Value>(line).is_ok_and(|event| {
+            event["type"] == "ssmcp.status"
+                && event["level"] == "Warning"
+                && event["message"]
+                    .as_str()
+                    .is_some_and(|s| s.contains(text) && s.contains("shell remains available"))
+        })
+    })
+}
+
+#[tokio::test]
+async fn an_unresponsive_optional_catalog_does_not_block_shell_registration_or_listing() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .run_with_args(
+            "catalog-timeout-healthy",
+            "discovery",
+            &["--log-format", "jsonl"],
+        )
+        .await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(ready["type"], "shell");
+    assert_eq!(ready["client_id"], "b".repeat(64));
+    let reply: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("reply.json")).unwrap()).unwrap();
+    let tools = reply["result"]["Ok"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "terminal.status"));
+    assert!(tools.iter().any(|tool| tool["name"] == "ssmcp.exec.start"));
+    assert!(
+        tools
+            .iter()
+            .all(|tool| !tool["name"].as_str().unwrap().starts_with("cc."))
+    );
+    assert!(warning_contains(&output.stderr, "tool catalog timed out"));
     fixture.assert_native_stopped().await;
 }
 

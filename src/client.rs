@@ -584,7 +584,8 @@ pub async fn run() -> crate::Result<()> {
         PathBuf::from(&metadata.cwd),
         options.context_roots.clone(),
     )?;
-    // Discover before publishing credentials, so a missing/incompatible backend fails locally.
+    // Discover before publishing credentials; optional native catalogs have
+    // their own deadlines and leave the shell available when unavailable.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),

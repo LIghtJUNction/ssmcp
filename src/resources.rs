@@ -18,7 +18,10 @@ Read ssmcp://clients for the clients currently available to your identity and en
 A client id identifies one live connection; names are labels, title is optional operator-supplied \
 task context, and cwd is its startup directory. Select the intended task by title, then dispatch by id.\n\n\
 Read ssmcp://clients/{id}/tools to discover native tool names and JSON schemas. \
-Follow nextUri to read the next page. Do not invent tool names or backend arguments.\n\n\
+Follow nextUri to read the next page of the same directory snapshot. A new cursor-free \
+request discovers current native tools. Each client retains at most four snapshots for \
+120 seconds within 64 MiB; restart listing without a cursor if one expires or is evicted. \
+Do not invent tool names or backend arguments.\n\n\
 New clients always provide a shell and automatically discover installed Codex, Claude Code, \
 Pi and OpenCode tools. ssmcp.harnesses.list reports the registered tool counts.\n\n\
 Use code_mode with clients, await call(clientId, toolName, arguments), \
@@ -53,8 +56,8 @@ the request, waits for the server's receipt, stops local background work, and ex
 installed entry point with the original arguments, cwd and environment. In-flight requests \
 must finish first. Call list again for the new ID. GitHub --allow access persists; login-code \
 connections need new OAuth login. Both client and server must support reload.\n\n\
-Long command output is streamed to private files in the client's temporary ssmcp directory \
-(normally /tmp/ssmcp on Linux). Read the \
+Long command output is streamed to the client's private ssmcp storage \
+(normally /tmp/ssmcp/<uid> on Unix or LOCALAPPDATA/ssmcp/output on Windows). Read the \
 returned artifact metadata, including SHA-256, bytes, lines, complete and expiry. Use \
 outputs.read(clientId,{id,offset,max_bytes}) for bounded chunks, outputs.stat(clientId,{id}) \
 for a fresh snapshot, and outputs.cleanup(clientId) for retention cleanup. Automatic cleanup \
@@ -327,6 +330,15 @@ fn limits() -> Value {
                 "additional_roots":"explicit --context-root directories; read-only context access"
             }
         },
+        "tool_catalog":{
+            "max_tools_per_page":64,
+            "snapshot_seconds":crate::runtime::CATALOG_SNAPSHOT_SECONDS,
+            "max_snapshots_per_client":crate::runtime::MAX_CATALOG_SNAPSHOTS,
+            "max_snapshot_bytes_per_client":crate::runtime::MAX_CATALOG_SNAPSHOT_BYTES,
+            "snapshot_size_unit":"serialized JSON bytes",
+            "native_catalog_timeout_ms":5000,
+            "refresh":"omit the cursor to discover current native tools"
+        },
         "command_jobs":{
             "default_wait_ms":5000,
             "max_wait_ms":60000,
@@ -349,8 +361,9 @@ fn limits() -> Value {
             "max_inflight_per_client":wire::MAX_INFLIGHT
         },
         "client_output_guard":{
-            "directory":"private ssmcp directory under the client's OS temporary directory",
+            "directory":"private client output storage; use artifact metadata for the actual path",
             "linux_default_directory":"/tmp/ssmcp/<uid>",
+            "windows_default_directory":"%LOCALAPPDATA%\\ssmcp\\output",
             "inline_bytes":crate::output::INLINE_BYTES,
             "inline_lines":crate::output::INLINE_LINES,
             "retention_seconds":crate::output::RETENTION_SECS,

@@ -87,10 +87,10 @@ impl Codex {
             .filter_map(|t| t["name"].as_str().map(str::to_owned))
             .collect();
         for tool in dynamic_tools {
-            if let Some(name) = tool["name"].as_str() {
-                if registered.insert(name.to_owned()) {
-                    tools.push(tool);
-                }
+            if let Some(name) = tool["name"].as_str()
+                && registered.insert(name.to_owned())
+            {
+                tools.push(tool);
             }
         }
         super::harness_status(

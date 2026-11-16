@@ -34,6 +34,9 @@ struct Output {
 
 impl Output {
     fn push(&mut self, data: &[u8]) {
+        if self.eof {
+            return;
+        }
         if let Some(capture) = &mut self.capture {
             let _ = capture.push(data);
         }
@@ -141,6 +144,10 @@ impl Terminal {
             #[cfg(windows)]
             job,
         });
+        #[cfg(windows)]
+        let (startup_sender, startup_receiver) = std::sync::mpsc::sync_channel(1);
+        #[cfg(windows)]
+        let startup_input = terminal.input.lock().unwrap().clone().unwrap();
         // Separate OS threads keep blocking native PTY pipes off the async
         // executor. The reader must drain while ConPTY closes (Windows < 24H2).
         let output = terminal.output.clone();
@@ -149,14 +156,53 @@ impl Terminal {
             .name("ssmcp-pty-read".into())
             .spawn(move || {
                 let mut data = [0_u8; 8192];
+                #[cfg(windows)]
+                let mut startup_sender = Some(startup_sender);
+                #[cfg(windows)]
+                let mut startup_input = Some(startup_input);
+                #[cfg(windows)]
+                let mut startup_bytes = Vec::new();
                 loop {
                     match reader.read(&mut data) {
                         Ok(0) => break,
                         Ok(n) => {
-                            output.lock().unwrap().push(&data[..n]);
+                            #[cfg(windows)]
+                            let visible = if startup_sender.is_some() {
+                                startup_bytes.extend_from_slice(&data[..n]);
+                                let replied = answer_initial_cursor(
+                                    &mut startup_bytes,
+                                    startup_input.as_ref().unwrap(),
+                                );
+                                match replied {
+                                    Ok(false) if startup_bytes.len() < 65536 => continue,
+                                    Ok(true) => {
+                                        let _ = startup_sender.take().unwrap().send(Ok(()));
+                                        startup_input.take();
+                                        startup_bytes.as_slice()
+                                    }
+                                    other => {
+                                        let error = other.err().unwrap_or_else(|| {
+                                            "ConPTY startup cursor query exceeded its limit".into()
+                                        });
+                                        let _ =
+                                            startup_sender.take().unwrap().send(Err(error.clone()));
+                                        if let Some(capture) = &mut output.lock().unwrap().capture {
+                                            capture.fail(error);
+                                        }
+                                        break;
+                                    }
+                                }
+                            } else {
+                                &data[..n]
+                            };
+                            #[cfg(unix)]
+                            let visible = &data[..n];
+                            output.lock().unwrap().push(visible);
                             if live {
-                                crate::client::render::terminal_output(&data[..n]);
+                                crate::client::render::terminal_output(visible);
                             }
+                            #[cfg(windows)]
+                            startup_bytes.clear();
                             changed.notify_waiters();
                         }
                         Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -197,6 +243,27 @@ impl Terminal {
                     }
                 }
             })?;
+        #[cfg(windows)]
+        startup_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|error| format!("ConPTY startup handshake failed: {error}"))??;
+        #[cfg(unix)]
+        {
+            let weak = Arc::downgrade(&terminal);
+            std::thread::Builder::new()
+                .name("ssmcp-pty-exit".into())
+                .spawn(move || {
+                    if matches!(
+                        crate::platform::wait_unix_child_unreaped(pid as libc::pid_t, false),
+                        Ok(true)
+                    ) && let Some(terminal) = weak.upgrade()
+                    {
+                        // stop owns the only transition that moves/reaps the
+                        // child; a concurrent shutdown simply wins that race.
+                        terminal.stop();
+                    }
+                })?;
+        }
         Ok(terminal)
     }
 
@@ -283,26 +350,23 @@ impl Terminal {
         }
         #[cfg(windows)]
         {
-            self.child
+            let running = self
+                .child
                 .lock()
                 .unwrap()
                 .as_mut()
-                .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+                .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+            if !running {
+                self.stop();
+            }
+            running
         }
         #[cfg(unix)]
         {
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            // SAFETY: the unreaped child is still owned; WNOWAIT preserves its PID
-            // so shutdown cannot signal a later process with a recycled identity.
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    self.pid as libc::id_t,
-                    &mut info,
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            };
-            result == 0 && info.si_pid == 0
+            matches!(
+                crate::platform::wait_unix_child_unreaped(self.pid as libc::pid_t, true),
+                Ok(false)
+            )
         }
     }
 
@@ -389,11 +453,7 @@ impl Terminal {
         #[cfg(windows)]
         self.job.terminate();
         #[cfg(unix)]
-        // SAFETY: portable-pty creates the child session; the leader was never
-        // reaped by running(). Kill its group before releasing the PID.
-        unsafe {
-            libc::kill(-(self.pid as libc::pid_t), libc::SIGKILL);
-        }
+        crate::platform::stop_unix_descendants(self.pid as libc::pid_t);
         self.input.lock().unwrap().take();
         let mut child = self.child.lock().unwrap().take();
         if let Some(child) = child.as_mut() {
@@ -417,8 +477,20 @@ impl Terminal {
     }
 
     pub async fn shutdown(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
         if let Some(completed) = self.stop() {
-            let _ = timeout(Duration::from_secs(5), completed).await;
+            let _ = timeout_at(deadline, completed).await;
+        }
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.output.lock().unwrap().eof {
+                break;
+            }
+            if timeout_at(deadline, changed).await.is_err() {
+                break;
+            }
         }
         let mut output = self.output.lock().unwrap();
         if !output.eof
@@ -427,7 +499,34 @@ impl Terminal {
             capture.fail("terminal was stopped before output EOF; capture may be incomplete");
             let _ = capture.finish();
         }
+        output.eof = true;
+        drop(output);
+        self.changed.notify_waiters();
     }
+}
+
+#[cfg(windows)]
+fn answer_initial_cursor(bytes: &mut Vec<u8>, input: &mpsc::Sender<Input>) -> Result<bool, String> {
+    let Some(offset) = bytes.windows(4).position(|bytes| bytes == b"\x1b[6n") else {
+        return Ok(false);
+    };
+    // portable-pty enables PSEUDOCONSOLE_INHERIT_CURSOR. Reply before opening
+    // the session to user input, otherwise ConPTY will not process that input.
+    let (complete, completed) = oneshot::channel();
+    input
+        .blocking_send(Input {
+            bytes: b"\x1b[1;1R".to_vec(),
+            complete,
+        })
+        .map_err(|_| "terminal writer exited during startup".to_owned())?;
+    completed
+        .blocking_recv()
+        .map_err(|_| "terminal writer exited during startup".to_owned())?
+        .map_err(|error| format!("ConPTY cursor response failed: {error}"))?;
+    // This request was answered locally; forwarding it would cause the user's
+    // own terminal to send an unrelated second response.
+    bytes.drain(offset..offset + 4);
+    Ok(true)
 }
 
 impl Drop for Terminal {
@@ -483,6 +582,74 @@ mod tests {
         }
         bytes.extend_from_slice(chunks[3]);
         assert!(visible_text(&bytes).contains("SSMCP_PORTABLE_OK"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn exiting_terminal_stops_jobs_in_separate_process_groups() {
+        let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
+        terminal
+            .perform(Operation::Write {
+                data:
+                    "stty -echo; trap '' HUP; sleep 60 & printf 'SSMCP_CHILD=%s\\n' \"$!\"; exit\n"
+                        .into(),
+            })
+            .await
+            .unwrap();
+        let mut output = String::new();
+        let mut cursor = 0;
+        let eof = timeout(Duration::from_secs(5), async {
+            loop {
+                let page = terminal
+                    .perform(Operation::Read {
+                        cursor,
+                        max_bytes: 32768,
+                        wait_ms: 250,
+                    })
+                    .await
+                    .unwrap();
+                cursor = page["next_cursor"].as_u64().unwrap();
+                output.push_str(page["text"].as_str().unwrap());
+                if page["output_eof"] == true {
+                    break;
+                }
+            }
+        })
+        .await;
+        let pid = output.split("SSMCP_CHILD=").skip(1).find_map(|tail| {
+            tail.split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse::<i32>()
+                .ok()
+                .filter(|pid| *pid > 1)
+        });
+        let stopped = if let Some(pid) = pid {
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    let state = tokio::process::Command::new("/bin/ps")
+                        .args(["-o", "stat=", "-p", &pid.to_string()])
+                        .output()
+                        .await
+                        .unwrap();
+                    let state = String::from_utf8_lossy(&state.stdout);
+                    if state.trim().is_empty() || state.trim_start().starts_with('Z') {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .is_ok()
+        } else {
+            false
+        };
+        if !stopped && let Some(pid) = pid {
+            // Do not leave the fixture running if the regression is reintroduced.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        terminal.shutdown().await;
+        assert!(eof.is_ok(), "PTY did not reach EOF: {output:?}");
+        assert!(stopped, "background job remained alive: {output:?}");
     }
 
     #[tokio::test]

@@ -164,6 +164,76 @@ pub fn private_directory(path: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) fn wait_unix_child_unreaped(owner: libc::pid_t, nonblocking: bool) -> io::Result<bool> {
+    loop {
+        // Darwin leaves this unchanged when WNOHANG finds no exit.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let flags = libc::WEXITED | libc::WNOWAIT | if nonblocking { libc::WNOHANG } else { 0 };
+        // SAFETY: the caller owns this unreaped child, and info is writable storage.
+        if unsafe { libc::waitid(libc::P_PID, owner as libc::id_t, &mut info, flags) } < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        return match info.si_signo {
+            libc::SIGCHLD => Ok(true),
+            0 if nonblocking => Ok(false),
+            value => Err(io::Error::other(format!(
+                "unexpected child wait notification: {value}"
+            ))),
+        };
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) fn stop_unix_descendants(owner: libc::pid_t) {
+    // The owner is still unreaped. Include shell jobs in separate process groups.
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-axo", "pid=,ppid="])
+        .output();
+    if let Ok(output) = output {
+        let rows: Vec<(i32, i32)> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+            })
+            .collect();
+        let mut owned = vec![owner];
+        for (pid, _) in &rows {
+            // Interactive jobs can have their own groups. The unreaped leader
+            // pins the session ID even after its children have been reparented.
+            if *pid > 1 && *pid != owner && unsafe { libc::getsid(*pid) } == owner {
+                owned.push(*pid);
+            }
+        }
+        for _ in 0..256 {
+            let old = owned.len();
+            for (pid, parent) in &rows {
+                if *pid > 1 && owned.contains(parent) && !owned.contains(pid) {
+                    owned.push(*pid);
+                }
+            }
+            if old == owned.len() {
+                break;
+            }
+        }
+        for pid in owned.into_iter().rev() {
+            // SAFETY: signal the observed child tree rooted at the still-owned leader.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+    // SAFETY: negative owner addresses only the process group created for this child.
+    unsafe {
+        libc::kill(-owner, libc::SIGKILL);
+    }
+}
+
 #[cfg(windows)]
 #[path = "platform_windows.rs"]
 pub(crate) mod windows;

@@ -46,6 +46,8 @@ ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
 
 发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend/mod.rs)
 
+每个原生目录的完整分页读取有 5 秒预算，超时后跳过该目录并记录警告，保留 Shell 和其他已注册的工具。该期限用于发现目录，不改变原生任务调用的执行期限。[启动回归测试](../tests/client_startup.rs)
+
 工具发现不为这些 harness 提交生成任务。后续操作是否调用模型由原生方法决定：例如 `codex.turn_start`、`pi.prompt` 和可能存在的 `cc.Agent` 会进入其任务或模型流程；直接 MCP 工具也可能在工具内部使用模型。普通读写文件与 shell 命令优先使用 ssmcp 自带的 `fs` 和 `ssmcp.exec.*`，不要把“注册到 code_mode”理解为所有方法都无需模型。
 
 `ssmcpd` 和代码模式的隔离执行环境运行在 Linux。服务端通过系统 Node.js、bubblewrap 与 util-linux 的 `prlimit` 执行编排代码；客户端只需本机 OpenSSH 与所选 shell。服务端的安装条件见[部署说明](deployment.md#系统代码运行环境)。原生 rsync 端点目前也仅在 Linux 客户端提供；macOS／Windows 可使用文件和 loopback 网络原语。[rsync 平台分支](../src/rsync.rs)
@@ -68,7 +70,9 @@ ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST"}}
 ```
 
-这个结果包含 `client` 和 `tools`；每个能力提供名称、描述及 `inputSchema`。目录按最多 64 项分页，也可能因 schema 大小提前分页。存在 `nextCursor` 时，将它传入下一次请求；目录变更导致旧游标失效时，从无游标请求重新开始。[目录分页](../src/backend/mod.rs)
+这个结果包含 `client` 和 `tools`；每个能力提供名称、描述及 `inputSchema`。目录按最多 64 项分页，也可能因 schema 大小提前分页。无游标的请求重新发现当前原生能力，并为这次扫描保存合并后的目录快照；存在 `nextCursor` 时，将它传入下一次请求。后续页面读取同一快照，因此扫描途中原生目录变化不会改变已开始的分页。需要最新目录时，重新发送无游标的请求。[分页实现](../src/backend/mod.rs) · [合并目录快照](../src/runtime.rs)
+
+每条客户端连接最多保留四份目录快照，按序列化 JSON 计合计不超过 64 MiB，每份有效 120 秒。新的扫描可能淘汰旧快照；过期或被淘汰的游标会明确要求从无游标请求重新开始。游标只属于对应的客户端连接，重连后需用新的 ID 重新扫描。
 
 ```json
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST","cursor":"NEXT_CURSOR_FROM_RESULT"}}

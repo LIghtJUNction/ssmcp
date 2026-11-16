@@ -1,6 +1,6 @@
 ---
 name: ssmcp
-description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for independent shell commands, automatically discovered coding harnesses, scoped file access and audit, skills and instruction discovery, Linux rsync transfers, and loopback TCP forwarding.
+description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, automatically discovered coding harnesses, scoped file access and audit, skills and instruction discovery, Linux rsync transfers, and loopback TCP forwarding.
 ---
 
 # ssmcp workspaces
@@ -8,6 +8,8 @@ description: Operate SSH-connected ssmcp workspaces through list and code_mode. 
 ## Discover the machines and their capabilities
 
 Call `list` first. Use each client's optional `title` to understand its task, then check its `name` and `cwd`. Select clients by their returned `id`; titles, names and hostnames are labels and may repeat. Call `list({client_id})` and follow `nextCursor` before using a native tool. Respect each native backend's permission and approval policy.
+
+Keep each tool-catalog traversal on its returned cursor. Its pages share a snapshot even if a native tool directory changes; start a fresh cursor-free request to discover updates. A client retains at most four snapshots, 64 MiB of serialized JSON total, for 120 seconds. Restart discovery if the server reports that a snapshot expired or was evicted.
 
 Expect current clients to connect as `type:"shell"`, with both a shared interactive terminal and independent command jobs. Installed `codex`, `claude`, `pi` and `opencode` executables are discovered automatically from the client's `PATH`. Check `ssmcp.harnesses.list` and the tool catalog for successful registrations. A missing or unhealthy optional CLI does not remove the shell. Discovery itself does not submit a model task. Remove obsolete `-t`, `--type`, `--backend` and trailing backend arguments from startup commands.
 
