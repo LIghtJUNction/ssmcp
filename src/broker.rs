@@ -109,11 +109,36 @@ impl Session {
         self.sender
             .try_send(Call { operation, reply })
             .map_err(|_| "client disconnected or busy")?;
-        match timeout(duration, response).await {
+        let started = std::time::Instant::now();
+        let result = match timeout(duration, response).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("client disconnected".into()),
             Err(_) => Err("client request timed out; its outcome may be unknown".into()),
-        }
+        };
+        let timed_out = result.as_ref().is_err_and(|e| e.contains("timed out"));
+        crate::observability::log(
+            if result.is_err() { "warn" } else { "debug" },
+            if timed_out { "timeout" } else { "proxy" },
+            &[
+                ("event", "native_call_complete".into()),
+                ("client_id", self.client_id().into()),
+                ("session_id", self.client_id().into()),
+                ("duration_ms", started.elapsed().as_millis().to_string()),
+                ("timeout_ms", duration.as_millis().to_string()),
+                (
+                    "outcome",
+                    if timed_out {
+                        "timeout"
+                    } else if result.is_err() {
+                        "error"
+                    } else {
+                        "ok"
+                    }
+                    .into(),
+                ),
+            ],
+        );
+        result
     }
 }
 
@@ -382,7 +407,17 @@ impl Broker {
                 .or_default()
                 .insert(client_id.clone(), session.clone());
         }
-        eprintln!("ssmcpd: connected {user}/{client_id} ({})", mode.name());
+        crate::observability::log(
+            "info",
+            "session",
+            &[
+                ("event", "connected".into()),
+                ("user", user.clone()),
+                ("client_id", client_id.clone()),
+                ("session_id", client_id.clone()),
+                ("mode", mode.name().into()),
+            ],
+        );
         let result: crate::Result<()> = async {
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone() }).await?;
             let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant)> = HashMap::new();
@@ -436,7 +471,16 @@ impl Broker {
                 sessions.remove(&user);
             }
         }
-        eprintln!("ssmcpd: disconnected {user}/{client_id}");
+        crate::observability::log(
+            "info",
+            "session",
+            &[
+                ("event", "disconnected".into()),
+                ("user", user.clone()),
+                ("client_id", client_id.clone()),
+                ("session_id", client_id.clone()),
+            ],
+        );
         result
     }
 }

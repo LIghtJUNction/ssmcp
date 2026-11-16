@@ -99,7 +99,7 @@ SSH 用公钥确认本机可以接入服务器。`--allow` 决定哪些 GitHub �
 | 本机 ssmcp 断开后重连 | 旧客户端消失；新客户端的 `--allow` 仍包含该身份时，可用现有授权发现它 | 签发连接退出会撤销其授权，需要新码登录 |
 | 新增一个项目客户端 | 只显示明确允许当前 GitHub 身份的客户端 | 只显示同一 SSH 账号下未设置 `--allow` 的客户端 |
 | 当前没有获准访问的在线客户端 | 可以完成登录与同意，`list` 返回空列表 | 需要在线连接签发登录码 |
-| 重启 `ssmcpd` | 内存中的连接、登记与授权清空，重新连接和登录 | 同左 |
+| 重启 `ssmcpd` | 连接与授权清空；启用持久化的 DCR 登记保留，重新连接和登录 | 同左 |
 
 ssmcp 自己签发的 access token 默认有效 **8 小时**。refresh token 每次成功刷新都会轮换，并把闲置期限向后延长 **30 天**，同一授权从首次登录起最长 **90 天**。客户端登记默认有效 **365 天**。原有登录码仍是 **30 分钟、使用一次**。GitHub 只用于核验身份；MCP 使用上述 ssmcp 令牌。[有效期与服务端配置](docs/deployment.md#oauth-lifetimes)
 
@@ -268,15 +268,18 @@ CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、�
 
 ### 客户端终端输出
 
-连接凭据仍以单行 JSON 输出到 stdout；实时活动显示在 stderr，默认使用易读分块，区分助手文本、工具/命令、文件差异、错误、状态和 token usage。终端自动着色；设置 `NO_COLOR=1` 或重定向 stderr 时不输出 ANSI。JSON 字符串中的换行正常显示，源码中的字面 `\n` 保留。
+默认日志先显示彩色摘要：请求、成功、错误、进度和 stdout/stderr 分开。缓冲输出自动折叠，保留开头与末尾；长命令自动换行。终端连接信息使用可读格式，重定向 stdout 时保留原有连接 JSON。
 
-Unified diff 的文件 header 加粗、hunk 青色、增加行绿色、删除行红色，并显示旧/新行号；流式分片会先拼成完整行，最后的未换行内容在事件结束或断开时刷新。普通长文本按终端宽度换行，diff 保持原行布局。
+![彩色终端日志](docs/assets/terminal-logs.png)
+
+上图来自真实渲染器的固定测试事件，用于展示样式。完整说明见 [日志与主题配置](docs/logging.md)。
 
 ```sh
-ssmcp -t codex my-server                    # 默认 pretty
-NO_COLOR=1 ssmcp -t codex my-server         # 无颜色
-ssmcp -t codex my-server 2> activity.log    # 可读日志，无 ANSI
-ssmcp --raw -t codex my-server             # 原始事件序列化，每个事件一行
+ssmcp -t codex --log-format pretty my-server          # 默认彩色摘要
+ssmcp -t codex --log-format pretty-verbose my-server  # 展开输出和原始 JSON
+ssmcp -t codex --log-format jsonl my-server           # 每行一个原始事件
+ssmcp -t codex --no-color my-server
+ssmcp -t codex --theme nord --timestamps my-server
 ```
 
-`--raw` 仅改变展示：直接输出传入 EventLog 的原始事件序列化（不添加标签或派生字段），不影响事件缓存、工具结果或 SSH/MCP 协议。
+`--verbose`、`--raw-events`、原有 `--raw` 分别提供详细/JSONL 快捷方式。`~/.config/ssmcp/config.toml` 的 `[ui]` 支持主题、时间戳、请求 ID 和输出行数；`NO_COLOR` 和重定向 stderr 自动关闭颜色。展示变化不修改 SSH/MCP 协议或工具结果。

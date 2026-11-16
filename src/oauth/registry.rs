@@ -169,6 +169,14 @@ impl Registry {
             }
             Err(error) => return Err(error.into()),
         };
+        crate::observability::log(
+            "info",
+            "persistence",
+            &[
+                ("event", "client_registry_loaded".into()),
+                ("clients", clients.len().to_string()),
+            ],
+        );
         Ok((registry, clients))
     }
 
@@ -302,6 +310,16 @@ impl Registry {
             unsafe {
                 libc::unlinkat(self.dir.as_raw_fd(), temp.as_ptr(), 0);
             }
+        }
+        if result.is_ok() {
+            crate::observability::log(
+                "debug",
+                "persistence",
+                &[
+                    ("event", "client_registry_saved".into()),
+                    ("clients", clients.len().to_string()),
+                ],
+            );
         }
         result
     }

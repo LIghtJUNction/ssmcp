@@ -265,3 +265,29 @@ Trusted SSH host keys.
 .BR ssmcpd (8),
 .BR ssh (1),
 .BR ssh_config (5)
+
+.SH LOG OUTPUT
+.TP
+.B --log-format pretty|pretty-verbose|jsonl
+Select compact colored summaries, expanded events, or one JSON event per line.
+.TP
+.B --no-color
+Disable ANSI colors. NO_COLOR and redirected stderr also disable them.
+.TP
+.B --verbose
+Alias for --log-format pretty-verbose.
+.TP
+.B --raw-events
+Alias for --log-format jsonl. --raw remains supported.
+.TP
+.B --ui-config FILE
+Load local TOML display settings. Default: ~/.config/ssmcp/config.toml.
+.TP
+.B --theme minimal|codex-dark|nord|solarized
+Select the terminal palette.
+.TP
+.B --timestamps
+Include UTC timestamps on event headings.
+.TP
+.B --max-inline-output N
+Show at most N lines per buffered output block. Default: 12.

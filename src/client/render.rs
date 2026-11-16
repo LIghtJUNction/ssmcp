@@ -1,6 +1,7 @@
 //! Human transcript only; never changes events retained for MCP consumers.
+use super::ui::Ui;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     io::{self, IsTerminal, Write},
@@ -10,9 +11,39 @@ use std::{
 
 static DISPLAY: OnceLock<Mutex<Renderer>> = OnceLock::new();
 
-pub(crate) fn configure(raw: bool) {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum LogFormat {
+    Pretty,
+    PrettyVerbose,
+    Jsonl,
+}
+
+impl LogFormat {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "pretty" => Ok(Self::Pretty),
+            "pretty-verbose" => Ok(Self::PrettyVerbose),
+            "jsonl" => Ok(Self::Jsonl),
+            _ => Err(format!(
+                "unsupported log format {value:?}; expected pretty, pretty-verbose, or jsonl"
+            )),
+        }
+    }
+}
+
+pub(crate) fn configure(ui: Ui) {
     let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
-    renderer.raw = raw;
+    renderer.raw = ui.log_format == LogFormat::Jsonl;
+    renderer.verbose = ui.log_format == LogFormat::PrettyVerbose || ui.show_raw_json;
+    renderer.color = ui.color
+        && !renderer.raw
+        && color_enabled(
+            io::stderr().is_terminal(),
+            std::env::var_os("NO_COLOR").is_some()
+                || std::env::var("TERM").is_ok_and(|t| t == "dumb"),
+        );
+    renderer.ui = ui;
 }
 
 fn display() -> &'static Mutex<Renderer> {
@@ -54,7 +85,7 @@ pub(crate) fn event(label: &str, value: &Value) {
 
 pub(crate) fn finish(label: &str) {
     let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
-    let _ = renderer.finish(&mut io::stderr().lock(), label);
+    let _ = renderer.finish_group(&mut io::stderr().lock(), label);
 }
 
 #[derive(Default)]
@@ -65,12 +96,15 @@ struct Lines {
     old: usize,
     new: usize,
     hunk: bool,
+    tone: &'static str,
 }
 
 struct Renderer {
     raw: bool,
+    verbose: bool,
     color: bool,
     width: usize,
+    ui: Ui,
     streams: HashMap<String, Lines>,
     requests: HashMap<String, (String, Instant)>,
 }
@@ -79,8 +113,10 @@ impl Renderer {
     fn new(raw: bool, color: bool, width: usize) -> Self {
         Self {
             raw,
+            verbose: false,
             color,
             width: width.max(12),
+            ui: Ui::default(),
             streams: HashMap::new(),
             requests: HashMap::new(),
         }
@@ -92,11 +128,22 @@ impl Renderer {
         } else if !self.rpc(out, label, value)? {
             self.value(out, label, value, "Event", 0)?;
         }
+        if self.verbose && !self.raw {
+            self.finish(out, label)?;
+            painted(
+                out,
+                self.color,
+                self.ui.theme.color("gray"),
+                &format!(
+                    "[RAW] {}\n",
+                    serde_json::to_string_pretty(value).unwrap_or_default()
+                ),
+            )?;
+        }
         out.flush()
     }
 
-    // Keep IDs and method names at the RPC boundary: descending directly into
-    // params/result otherwise loses the context that makes a transcript readable.
+    // Correlate at the RPC boundary, scoped by backend so identical IDs cannot collide.
     fn rpc(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<bool> {
         let v = value
             .get("request")
@@ -105,100 +152,219 @@ impl Renderer {
         let Some(id) = v.get("id").filter(|id| !id.is_null()) else {
             return Ok(false);
         };
-        let key = id
+        let id = id
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| id.to_string());
+        let key = format!("{label}\0{id}");
+        let id_text = if self.ui.show_request_id {
+            format!("  id={id}")
+        } else {
+            String::new()
+        };
         if let Some(method) = v.get("method").and_then(Value::as_str) {
-            // An unresponsive backend must not grow display-only bookkeeping forever.
             if self.requests.len() >= 2048 {
                 self.requests.clear();
             }
-            self.requests
-                .insert(key.clone(), (method.into(), Instant::now()));
-            self.block(out, label, "Request", &format!("{key}  {method}"))?;
+            self.requests.insert(key, (method.into(), Instant::now()));
+            self.summary(out, label, "Request", &format!("{method}{id_text}"))?;
             let params = &v["params"];
-            if let Some(argv) = params.get("command").and_then(Value::as_array) {
-                let command = argv
-                    .iter()
-                    .map(|arg| {
-                        let arg = arg.as_str().unwrap_or("");
-                        if !arg.is_empty()
-                            && arg
-                                .chars()
-                                .all(|c| c.is_ascii_alphanumeric() || "_./:-".contains(c))
-                        {
-                            arg.to_owned()
-                        } else {
-                            format!("{arg:?}")
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                self.block(out, label, "Command", &format!("$ {command}"))?;
-                for field in ["cwd", "timeoutMs"] {
-                    if let Some(v) = params.get(field).filter(|v| !v.is_null()) {
-                        let text = v
-                            .as_str()
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| v.to_string());
-                        self.text(out, label, &format!("{field}: {text}\n"))?;
-                    }
-                }
-            } else {
-                self.value(out, label, params, "Tool", 0)?;
+            let params = params.get("arguments").unwrap_or(params);
+            if let Some(command) = params.get("command").or_else(|| params.get("cmd")) {
+                let command = if let Some(args) = command.as_array() {
+                    args.iter()
+                        .map(|a| {
+                            let a = a.as_str().unwrap_or("");
+                            if !a.is_empty()
+                                && a.chars()
+                                    .all(|c| c.is_ascii_alphanumeric() || "_./:-".contains(c))
+                            {
+                                a.to_owned()
+                            } else {
+                                format!("{a:?}")
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    command.as_str().unwrap_or("").to_owned()
+                };
+                self.text(out, label, &format!("cmd={command}\n"))?;
             }
+            for field in ["cwd", "name", "tool", "processId"] {
+                if let Some(v) = params.get(field).filter(|v| !v.is_null()) {
+                    self.text(out, label, &format!("{field}={}\n", compact(v, 0)))?;
+                }
+            }
+            if let Some(ms) = params
+                .get("timeoutMs")
+                .or_else(|| params.get("timeout_ms"))
+                .and_then(Value::as_u64)
+            {
+                self.text(out, label, &format!("timeout={:.3}s\n", ms as f64 / 1000.0))?;
+            }
+            self.finish(out, label)?;
             return Ok(true);
         }
         if v.get("result").is_some() || v.get("error").is_some() {
             let (method, elapsed) = self
                 .requests
                 .remove(&key)
-                .map(|(method, started)| (method, Some(started.elapsed())))
-                .unwrap_or_else(|| (String::new(), None));
-            let result = &v["result"];
+                .map(|(m, t)| (m, format!("  {:.2}s", t.elapsed().as_secs_f64())))
+                .unwrap_or_default();
+            let result = v["result"].get("structuredContent").unwrap_or(&v["result"]);
             let exit = result
                 .get("exitCode")
                 .or_else(|| result.get("exit_code"))
                 .and_then(Value::as_i64);
-            let error = v.get("error").is_some_and(|v| !v.is_null())
+            let timed_out =
+                exit == Some(124) || result["timedOut"] == true || result["timed_out"] == true;
+            let failed = timed_out
+                || v.get("error").is_some_and(|e| !e.is_null())
+                || v["result"]["isError"] == true
                 || result["isError"] == true
                 || result["success"] == false
-                || exit.is_some_and(|code| code != 0);
-            let title = if exit == Some(124) {
+                || exit.is_some_and(|c| c != 0);
+            let title = if timed_out {
                 "Timeout"
-            } else if error {
+            } else if failed {
                 "Error"
             } else {
                 "Success"
             };
-            let duration = elapsed
-                .map(|d| format!("  {:.2}s", d.as_secs_f64()))
-                .unwrap_or_default();
-            self.block(out, label, title, &format!("{key}  {method}{duration}"))?;
-            if let Some(error) = v.get("error").filter(|v| !v.is_null()) {
+            let mut meta = String::new();
+            for field in [
+                "exitCode",
+                "exit_code",
+                "timeout",
+                "timedOut",
+                "in_flight",
+                "tool",
+                "toolName",
+                "status",
+            ] {
+                if let Some(v) = result.get(field).filter(|v| !v.is_null()) {
+                    meta += &format!("  {field}={}", compact(v, 0));
+                }
+            }
+            if let Some(pid) = result.pointer("/process/id").or_else(|| result.get("pid")) {
+                meta += &format!("  process.id={}", compact(pid, 0));
+            }
+            if let Some(rss) = result
+                .pointer("/process/rssBytes")
+                .or_else(|| result.pointer("/memory/rss"))
+                .or_else(|| result.get("rssBytes"))
+                .and_then(Value::as_u64)
+            {
+                meta += &format!("  rss={:.1}MB", rss as f64 / 1_000_000.0);
+            }
+            if timed_out {
+                meta += "  command timeout";
+            }
+            self.summary(
+                out,
+                label,
+                title,
+                &format!("{method}{id_text}{elapsed}{meta}"),
+            )?;
+            if let Some(error) = v.get("error").filter(|e| !e.is_null()) {
                 self.value(out, label, error, "Error", 0)?;
             } else {
-                self.value(out, label, result, title, 0)?;
+                self.value(out, label, result, "Result", 0)?;
             }
             return Ok(true);
         }
         Ok(false)
     }
 
-    fn heading(&mut self, out: &mut impl Write, label: &str, title: &str) -> io::Result<()> {
-        self.finish(out, label)?;
-        let color = match title {
-            "Error" => "31;1",
-            "Success" => "32;1",
-            "Assistant" => "36;1",
-            "User" | "Request" => "34;1",
-            "stdout" => "35;1",
-            "stderr" | "Timeout" => "33;1",
-            "Usage" => "90",
-            _ => "33;1",
+    fn finish_group(&mut self, out: &mut impl Write, label: &str) -> io::Result<()> {
+        let prefix = format!("{label}\0");
+        let keys: Vec<_> = self
+            .streams
+            .keys()
+            .filter(|k| k.as_str() == label || k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for key in keys {
+            self.finish(out, &key)?;
+        }
+        Ok(())
+    }
+
+    fn prefix(&self, out: &mut impl Write, title: &str) -> io::Result<()> {
+        if self.ui.timestamps {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let sec = now.as_secs() % 86400;
+            painted(
+                out,
+                self.color,
+                self.ui.theme.color("gray"),
+                &format!(
+                    "{:02}:{:02}:{:02}.{:03}Z ",
+                    sec / 3600,
+                    (sec / 60) % 60,
+                    sec % 60,
+                    now.subsec_millis()
+                ),
+            )?;
+        }
+        let (tag, color) = match title {
+            "Request" | "User" => ("REQ ", "blue"),
+            "Success" | "Connected" => ("OK  ", "green"),
+            "Error" | "Timeout" => ("ERR ", "red"),
+            "Warning" => ("WARN", "yellow"),
+            "Progress" => ("PROG", "yellow"),
+            "stdout" => ("STDOUT", "purple"),
+            "stderr" => ("STDERR", "yellow"),
+            "stderr-error" => ("STDERR", "red"),
+            "Tool" | "Command" | "Files" => ("OUT ", "purple"),
+            "Usage" => ("META", "gray"),
+            _ => ("RES ", "cyan"),
         };
-        painted(out, self.color, color, &format!("\n[{label} · {title}]\n"))
+        painted(
+            out,
+            self.color,
+            self.ui.theme.color(color),
+            &format!("[{tag}] "),
+        )
+    }
+
+    fn summary(
+        &mut self,
+        out: &mut impl Write,
+        label: &str,
+        title: &str,
+        text: &str,
+    ) -> io::Result<()> {
+        self.finish_group(out, label)?;
+        self.prefix(out, title)?;
+        // Include the backend label once; continuation lines are indented.
+        let text = clean(&format!("{label}  {text}"));
+        let available = self
+            .width
+            .saturating_sub(if self.ui.timestamps { 24 } else { 7 })
+            .max(8);
+        let mut col = 0;
+        for c in text.chars() {
+            let cells = if c as u32 >= 0x1100 { 2 } else { 1 };
+            if c == '\n' || col + cells > available {
+                write!(out, "\n       ")?;
+                col = 0;
+            }
+            if c != '\n' {
+                write!(out, "{c}")?;
+                col += cells;
+            }
+        }
+        writeln!(out)
+    }
+
+    fn heading(&mut self, out: &mut impl Write, label: &str, title: &str) -> io::Result<()> {
+        self.finish_group(out, label)?;
+        self.prefix(out, title)?;
+        writeln!(out, "{}", clean(label))
     }
 
     fn block(
@@ -209,7 +375,46 @@ impl Renderer {
         text: &str,
     ) -> io::Result<()> {
         self.heading(out, label, title)?;
-        self.text(out, label, text)?;
+        let stream = matches!(title, "stdout" | "stderr" | "stderr-error");
+        let limit = if self.verbose || !stream {
+            usize::MAX
+        } else {
+            self.ui.max_inline_output
+        };
+        let cleaned = clean(text);
+        let lines: Vec<_> = cleaned.lines().collect();
+        let shown = lines.len().min(limit);
+        // Keep the tail (usually the actual failure) when folding a buffered stream.
+        let tail = if lines.len() > limit {
+            limit.min(3) / 2 + usize::from(limit >= 3)
+        } else {
+            0
+        };
+        let head = shown - tail;
+        let tone = if title == "stderr-error" {
+            self.ui.theme.color("red")
+        } else if title == "stderr" {
+            self.ui.theme.color("yellow")
+        } else {
+            "0"
+        };
+        self.streams.entry(label.into()).or_default().tone = tone;
+        for (i, line) in lines.iter().enumerate() {
+            if i >= head && i < lines.len().saturating_sub(tail) && lines.len() > limit {
+                if i == head {
+                    self.text(
+                        out,
+                        label,
+                        &format!(
+                            "... {} lines folded; use --verbose or --raw-events\n",
+                            lines.len() - shown
+                        ),
+                    )?;
+                }
+                continue;
+            }
+            self.text(out, label, &format!("{line}\n"))?;
+        }
         self.finish(out, label)
     }
 
@@ -222,7 +427,7 @@ impl Renderer {
         depth: usize,
     ) -> io::Result<()> {
         if depth > 24 {
-            return self.block(out, label, title, &v.to_string());
+            return self.block(out, label, title, &compact(v, 0));
         }
         if let Some(text) = v.as_str() {
             // Decode JSON envelopes once per layer, never replace literal source-code \\n.
@@ -232,10 +437,21 @@ impl Renderer {
             return self.block(out, label, title, text);
         }
         if let Some(array) = v.as_array() {
-            for item in array {
+            for item in array
+                .iter()
+                .take(if self.verbose { usize::MAX } else { 12 })
+            {
                 self.value(out, label, item, title, depth + 1)?;
             }
             return Ok(());
+        }
+        if v["type"] == "ssmcp.status" {
+            return self.summary(
+                out,
+                label,
+                v["level"].as_str().unwrap_or("Result"),
+                v["message"].as_str().unwrap_or(""),
+            );
         }
         let kind = v["method"]
             .as_str()
@@ -249,6 +465,8 @@ impl Renderer {
             || lower.contains("failed")
         {
             "Error"
+        } else if lower == "stderr" || lower == "ssmcp.stderr" {
+            "stderr"
         } else if lower.contains("token") || lower.contains("usage") {
             "Usage"
         } else if lower.contains("diff") || lower.contains("filechange") || lower.contains("patch")
@@ -270,7 +488,42 @@ impl Renderer {
         if let Some(encoded) = v.pointer("/params/deltaBase64").and_then(Value::as_str)
             && let Ok(bytes) = STANDARD.decode(encoded)
         {
-            return self.command_text(out, label, &String::from_utf8_lossy(&bytes));
+            let stream = v
+                .pointer("/params/stream")
+                .and_then(Value::as_str)
+                .unwrap_or("stdout");
+            let process = v
+                .pointer("/params/processId")
+                .and_then(Value::as_str)
+                .unwrap_or("command");
+            let key = format!("{label}\0{process}\0{stream}");
+            let others: Vec<_> = self
+                .streams
+                .keys()
+                .filter(|k| k.as_str() != key)
+                .cloned()
+                .collect();
+            for other in others {
+                self.finish(out, &other)?;
+            }
+            if !self.streams.contains_key(&key) {
+                self.heading(
+                    out,
+                    label,
+                    if stream == "stderr" {
+                        "stderr"
+                    } else {
+                        "stdout"
+                    },
+                )?;
+                let tone = if stream == "stderr" {
+                    self.ui.theme.color("yellow")
+                } else {
+                    "0"
+                };
+                self.streams.entry(key.clone()).or_default().tone = tone;
+            }
+            return self.command_text(out, &key, &String::from_utf8_lossy(&bytes));
         }
         // Native transports wrap useful payloads in these fields.
         for field in [
@@ -292,7 +545,7 @@ impl Renderer {
                 }
                 self.value(out, label, inner, title, depth + 1)?;
                 // Error/status/usage can sit alongside the wrapped payload.
-                self.details(out, label, v)?;
+                self.details(out, label, v, title != "Result")?;
                 return Ok(());
             }
         }
@@ -342,32 +595,43 @@ impl Renderer {
                 shown = true;
             }
         }
-        shown |= self.details(out, label, v)?;
+        shown |= self.details(out, label, v, title != "Result")?;
         if !shown && title == "Error" {
-            self.block(out, label, title, &v.to_string())?;
+            self.block(out, label, title, &compact(v, 0))?;
         } else if !shown && kind.is_empty() {
             if let Some(object) = v.as_object() {
-                for (key, value) in object {
+                for (key, value) in object
+                    .iter()
+                    .take(if self.verbose { usize::MAX } else { 12 })
+                {
+                    if title == "Result"
+                        && matches!(
+                            key.as_str(),
+                            "process" | "in_flight" | "pid" | "rssBytes" | "timeout" | "timedOut"
+                        )
+                    {
+                        continue;
+                    }
+
                     if !matches!(
                         key.as_str(),
-                        "id" | "jsonrpc" | "threadId" | "turnId" | "itemId" | "type" | "role"
+                        "id" | "jsonrpc"
+                            | "threadId"
+                            | "turnId"
+                            | "itemId"
+                            | "type"
+                            | "role"
+                            | "exitCode"
+                            | "exit_code"
+                            | "stdout"
+                            | "stderr"
+                            | "status"
                     ) {
-                        self.block(
-                            out,
-                            label,
-                            title,
-                            &format!(
-                                "{key}: {}",
-                                value
-                                    .as_str()
-                                    .map(str::to_owned)
-                                    .unwrap_or_else(|| value.to_string())
-                            ),
-                        )?;
+                        self.block(out, label, title, &format!("{key}: {}", compact(value, 0)))?;
                     }
                 }
             } else if !v.is_null() {
-                self.block(out, label, title, &v.to_string())?;
+                self.block(out, label, title, &compact(v, 0))?;
             }
         } else if !shown
             && !kind.is_empty()
@@ -381,7 +645,13 @@ impl Renderer {
         Ok(())
     }
 
-    fn details(&mut self, out: &mut impl Write, label: &str, v: &Value) -> io::Result<bool> {
+    fn details(
+        &mut self,
+        out: &mut impl Write,
+        label: &str,
+        v: &Value,
+        include_status: bool,
+    ) -> io::Result<bool> {
         let mut shown = false;
         // Buffered command/exec replies carry output beside exitCode. Render it
         // explicitly; a displayed status must never suppress either stream.
@@ -391,7 +661,18 @@ impl Renderer {
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
             {
-                self.block(out, label, field, text)?;
+                let failed = v
+                    .get("exitCode")
+                    .or_else(|| v.get("exit_code"))
+                    .and_then(Value::as_i64)
+                    .is_some_and(|v| v != 0)
+                    || v["isError"] == true;
+                let title = if field == "stderr" && failed {
+                    "stderr-error"
+                } else {
+                    field
+                };
+                self.block(out, label, title, text)?;
                 shown = true;
             }
         }
@@ -405,6 +686,9 @@ impl Renderer {
             ("duration_ms", "Status"),
             ("durationMs", "Status"),
         ] {
+            if !include_status && !matches!(field, "error" | "usage" | "tokenUsage") {
+                continue;
+            }
             if let Some(inner) = v.get(field).filter(|v| !v.is_null()) {
                 let title = if field.starts_with("exit") && inner.as_i64().is_some_and(|n| n != 0) {
                     "Error"
@@ -422,14 +706,14 @@ impl Renderer {
                         if let Some(s) = inner.as_str() {
                             s.to_owned()
                         } else {
-                            serde_json::to_string_pretty(inner).unwrap_or_default()
+                            compact(inner, 0)
                         }
                     ),
                 )?;
                 shown = true;
             }
         }
-        if v["success"] == true {
+        if include_status && v["success"] == true {
             self.block(out, label, "Success", "Completed")?;
             shown = true;
         }
@@ -492,6 +776,79 @@ impl Renderer {
     }
 }
 
+/// A bounded description, never a giant JSON dump in the default transcript.
+fn compact(value: &Value, depth: usize) -> String {
+    if depth > 2 {
+        return "… (--verbose for JSON)".into();
+    }
+    let text = match value {
+        Value::String(s) => s.clone(),
+        Value::Array(v) => format!("[{} items; --verbose for JSON]", v.len()),
+        Value::Object(o) => {
+            let mut fields = o
+                .iter()
+                .take(6)
+                .map(|(k, v)| format!("{k}={}", compact(v, depth + 1)))
+                .collect::<Vec<_>>();
+            if o.len() > 6 {
+                fields.push(format!("… {} more fields", o.len() - 6));
+            }
+            fields.join("  ")
+        }
+        _ => value.to_string(),
+    };
+    if text.chars().count() > 256 {
+        format!(
+            "{}… (--verbose for JSON)",
+            text.chars().take(256).collect::<String>()
+        )
+    } else {
+        text
+    }
+}
+
+pub(crate) fn status(label: &str, level: &str, message: &str) {
+    event(
+        label,
+        &json!({"type":"ssmcp.status","level":level,"message":message}),
+    );
+}
+
+pub(crate) fn connection(output: &Value) -> io::Result<()> {
+    let renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+    let mut out = io::stdout().lock();
+    if !out.is_terminal() || renderer.raw {
+        writeln!(out, "{output}")?;
+    } else {
+        writeln!(out, "MCP: {}", clean(output["url"].as_str().unwrap_or("")))?;
+        if let Some(code) = output["login_code"].as_str() {
+            writeln!(
+                out,
+                "OAuth login code: {}  ({}s)",
+                clean(code),
+                output["login_expires_in"]
+            )?;
+        } else {
+            writeln!(out, "OAuth: sign in with an allowed GitHub account")?;
+        }
+    }
+    out.flush()
+}
+
+pub(crate) fn terminal_output(bytes: &[u8]) {
+    let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+    let mut out = io::stderr().lock();
+    if renderer.raw {
+        let _=renderer.event(&mut out,"shell",&json!({"type":"ssmcp.terminal_output","data_base64":STANDARD.encode(bytes),"text":String::from_utf8_lossy(bytes)}));
+    } else if renderer.color {
+        let _ = out.write_all(bytes);
+        let _ = out.flush();
+    } else {
+        let _ = out.write_all(clean(&String::from_utf8_lossy(bytes)).as_bytes());
+        let _ = out.flush();
+    }
+}
+
 fn render_live(
     out: &mut impl Write,
     color: bool,
@@ -519,7 +876,16 @@ fn render_live(
         lines.emitted = 0;
         lines.column = 0;
     }
-    painted(out, color, "0", &fragment)
+    painted(
+        out,
+        color,
+        if lines.tone.is_empty() {
+            "0"
+        } else {
+            lines.tone
+        },
+        &fragment,
+    )
 }
 
 fn painted(out: &mut impl Write, color: bool, code: &str, text: &str) -> io::Result<()> {
@@ -538,6 +904,14 @@ fn render_line(
     line: &str,
 ) -> io::Result<()> {
     let mut prefix = String::new();
+    let lower = line.to_ascii_lowercase();
+    let progress = lower.contains("downloading")
+        || lower.contains("download ")
+        || lower.starts_with("mise ") && lower.contains("installing");
+    let failure = lower.starts_with("error")
+        || lower.starts_with("fatal")
+        || lower.contains(" failed")
+        || lower.contains("timed out");
     let code = if line.starts_with("diff --git")
         || line.starts_with("--- ")
         || line.starts_with("+++ ")
@@ -570,8 +944,21 @@ fn render_line(
         lines.old += 1;
         lines.new += 1;
         "90"
+    } else if failure {
+        prefix = "[ERR ] ".into();
+        "31;1"
+    } else if progress {
+        prefix = "[PROG] ".into();
+        "33;1"
+    } else if lower.starts_with("warning") || lower.contains("retrying") {
+        prefix = "[WARN] ".into();
+        "33;1"
     } else {
-        "0"
+        if lines.tone.is_empty() {
+            "0"
+        } else {
+            lines.tone
+        }
     };
     // Keep diff/source columns intact. Prose wraps without dropping characters.
     let text = format!("{prefix}{line}");
@@ -614,6 +1001,10 @@ fn clean(text: &str) -> String {
                 }
                 _ => {}
             }
+        } else if c == '\r' {
+            if chars.peek() != Some(&'\n') {
+                output.push('\n');
+            }
         } else if !c.is_control() || matches!(c, '\n' | '\t') {
             output.push(c);
         }
@@ -632,7 +1023,7 @@ mod tests {
         for event in events {
             renderer.event(&mut out, "codex", event).unwrap();
         }
-        renderer.finish(&mut out, "codex").unwrap();
+        renderer.finish_group(&mut out, "codex").unwrap();
         String::from_utf8(out).unwrap()
     }
 
@@ -693,14 +1084,14 @@ mod tests {
             false,
         );
         for expected in [
-            "Tool",
+            "[OUT ]",
             "bash",
             "cargo test",
-            "Error",
+            "[ERR ]",
             "first\n  second",
             "duration_ms: 24",
-            "Success",
-            "Usage",
+            "[OK  ]",
+            "[META]",
             "input_tokens",
         ] {
             assert!(
@@ -753,12 +1144,12 @@ mod tests {
             true,
         );
         for expected in [
-            "r1  command/exec",
-            "$ sh -c",
-            "cwd: /project",
-            "timeoutMs: 1000",
-            "stdout",
-            "stderr",
+            "command/exec  id=r1",
+            "cmd=sh -c",
+            "cwd=/project",
+            "timeout=1.000s",
+            "[STDOUT]",
+            "[STDERR]",
             "hello\n  second",
             "warning",
             "\x1b[34;1m",
@@ -781,10 +1172,10 @@ mod tests {
             true,
         );
         for expected in [
-            "Timeout",
+            "command timeout",
             "partial output",
             "installing tool",
-            "exitCode: 124",
+            "exitCode=124",
         ] {
             assert!(text.contains(expected), "{text}");
         }
@@ -812,15 +1203,24 @@ mod tests {
             })
         };
         renderer.event(&mut out, "codex", &delta("live")).unwrap();
-        assert_eq!(String::from_utf8_lossy(&out), "  live");
+        assert_eq!(String::from_utf8_lossy(&out), "[STDOUT] codex\n  live");
         renderer
             .event(&mut out, "codex", &delta(" progress"))
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&out), "  live progress");
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "[STDOUT] codex\n  live progress"
+        );
         renderer.event(&mut out, "codex", &delta("\nnext")).unwrap();
-        assert_eq!(String::from_utf8_lossy(&out), "  live progress\n  next");
-        renderer.finish(&mut out, "codex").unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), "  live progress\n  next\n");
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "[STDOUT] codex\n  live progress\n  next"
+        );
+        renderer.finish_group(&mut out, "codex").unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "[STDOUT] codex\n  live progress\n  next\n"
+        );
     }
 
     #[test]
@@ -839,7 +1239,10 @@ mod tests {
                 )
                 .unwrap();
         }
-        assert_eq!(clean(&String::from_utf8_lossy(&out)), "  1234567890\n  ab");
+        assert_eq!(
+            clean(&String::from_utf8_lossy(&out)),
+            "[STDOUT] codex\n  1234567890\n  ab"
+        );
         renderer
             .event(
                 &mut out,
@@ -849,7 +1252,7 @@ mod tests {
             .unwrap();
         let text = clean(&String::from_utf8(out).unwrap());
         assert!(
-            text.starts_with("  1234567890\n  ab\n\n[codex · Success]"),
+            text.starts_with("[STDOUT] codex\n  1234567890\n  ab\n[OK  ]"),
             "{text}"
         );
         assert_eq!(text.matches("1234567890").count(), 1);
@@ -883,5 +1286,116 @@ mod tests {
         let mut output = Vec::new();
         renderer.event(&mut output, "codex", &json!({"method":"command/exec/outputDelta","params":{"deltaBase64":STANDARD.encode("still running")}})).unwrap();
         assert!(String::from_utf8(output).unwrap().contains("still running"));
+    }
+    #[test]
+    fn pretty_folds_output_keeps_tail_and_verbose_reveals_json() {
+        let stdout = (0..40).map(|n| format!("line-{n}\n")).collect::<String>();
+        let event = json!({"id":"fold","result":{"exitCode":1,"stdout":stdout,"stderr":"fatal: stopped","huge":{"blob":"x".repeat(10000)}}});
+        let text = render(std::slice::from_ref(&event), false, false);
+        assert!(text.contains("lines folded"));
+        assert!(text.contains("line-39"));
+        assert!(text.contains("fatal: stopped"));
+        assert!(text.len() < 2500, "{}", text.len());
+        assert!(!text.contains(&"x".repeat(1000)));
+        let mut r = Renderer::new(false, false, 100);
+        r.verbose = true;
+        let mut out = Vec::new();
+        r.event(&mut out, "codex", &event).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("[RAW]"));
+        assert!(text.contains("line-20"));
+        assert!(text.contains(&"x".repeat(1000)));
+    }
+
+    #[test]
+    fn progress_warnings_failure_and_cr_are_distinct() {
+        let text = render(
+            &[
+                json!({"stderr":"mise downloading codex@0.169.0 16.3/192.3 MB\rwarning: retrying\rfatal: download failed\n"}),
+            ],
+            false,
+            true,
+        );
+        for expected in ["[PROG]", "[WARN]", "[ERR ]", "\x1b[31;1m"] {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert_eq!(clean("a\rb\r\nc"), "a\nb\nc");
+    }
+
+    #[test]
+    fn request_ids_are_backend_scoped_and_can_be_hidden() {
+        let mut r = Renderer::new(false, false, 100);
+        let mut out = Vec::new();
+        for label in ["one", "two"] {
+            r.event(&mut out, label, &json!({"id":1,"method":label,"params":{}}))
+                .unwrap();
+        }
+        r.event(&mut out, "one", &json!({"id":1,"result":{}}))
+            .unwrap();
+        assert_eq!(r.requests.len(), 1);
+        assert!(r.requests.contains_key("two\u{0}1"));
+        r.ui.show_request_id = false;
+        out.clear();
+        r.event(&mut out, "two", &json!({"id":1,"result":{}}))
+            .unwrap();
+        assert!(!String::from_utf8(out).unwrap().contains("id="));
+    }
+
+    #[test]
+    fn interleaved_processes_and_streams_never_join_partial_lines() {
+        let mut r = Renderer::new(false, false, 100);
+        let mut out = Vec::new();
+        for (pid, stream, text) in [
+            ("a", "stdout", "first"),
+            ("b", "stderr", "second"),
+            ("a", "stdout", "tail\n"),
+        ] {
+            r.event(&mut out,"codex",&json!({"method":"command/exec/outputDelta","params":{"processId":pid,"stream":stream,"deltaBase64":STANDARD.encode(text)}})).unwrap();
+        }
+        r.finish_group(&mut out, "codex").unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("firstsecond"));
+        assert_eq!(text.matches("first").count(), 1);
+        assert!(text.contains("[STDERR]"));
+        assert!(text.contains("tail"));
+    }
+
+    #[test]
+    fn theme_and_timestamp_are_display_only() {
+        let mut r = Renderer::new(false, true, 100);
+        r.ui.theme = super::super::ui::Theme::Nord;
+        r.ui.timestamps = true;
+        let mut out = Vec::new();
+        r.event(&mut out, "codex", &json!({"id":"t","error":"failed"}))
+            .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("38;5;167"));
+        assert!(clean(&text).contains("Z ["));
+        let mut r = Renderer::new(true, true, 100);
+        r.ui.timestamps = true;
+        let mut out = Vec::new();
+        let event = json!({"type":"ssmcp.status","level":"Error","message":"x\ny"});
+        r.event(&mut out, "codex", &event).unwrap();
+        assert_eq!(out, format!("{event}\n").as_bytes());
+    }
+
+    #[test]
+    fn terminal_preview_fixture() {
+        let Some(path) = std::env::var_os("SSMCP_RENDER_PREVIEW") else {
+            return;
+        };
+        let text = render(
+            &[
+                json!({"type":"ssmcp.status","level":"Connected","message":"CONNECTED  client=light-codex  mode=codex  cwd=/workspace/ssmcp"}),
+                json!({"id":"r1","method":"server/diagnostics","params":{}}),
+                json!({"id":"r1","result":{"process":{"id":2263065,"rssBytes":129900000},"in_flight":1}}),
+                json!({"id":"r2","method":"command/exec","params":{"command":["bash","-lc","printf 'SSMCP_PROBE_OK\\n'; pwd; codex --version"],"cwd":"/workspace/ssmcp","timeoutMs":10000}}),
+                json!({"stderr":"warning: codex wrapper triggered tool install\nmise downloading codex@0.169.0 16.3/192.3 MB 2.3 MB/s\n"}),
+                json!({"id":"r2","result":{"exitCode":124,"stdout":"SSMCP_PROBE_OK\n/workspace/ssmcp\n","stderr":"error: command timeout after 10s"}}),
+            ],
+            false,
+            true,
+        );
+        std::fs::write(path, text).unwrap();
     }
 }

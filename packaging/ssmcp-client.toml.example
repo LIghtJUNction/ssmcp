@@ -1,0 +1,8 @@
+[ui]
+color = true
+log_format = "pretty"
+theme = "codex-dark"
+timestamps = true
+show_request_id = true
+show_raw_json = false
+max_inline_output = 12

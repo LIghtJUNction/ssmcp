@@ -13,6 +13,7 @@ use tokio::{process::Command, time::timeout};
 
 const SSH: &str = r#"#!/usr/bin/python3
 import json, os, pathlib, sys, time
+print("warning: fixture stderr",file=sys.stderr,flush=True)
 directory = pathlib.Path(os.environ["SSMCP_STARTUP_DIR"])
 scenario = os.environ["SSMCP_STARTUP_SCENARIO"]
 hello = json.loads(sys.stdin.readline())
@@ -48,6 +49,7 @@ elif scenario == "partial-eof":
 
 const NATIVE: &str = r#"#!/usr/bin/python3
 import json, os, pathlib, sys, time
+print("warning: fixture stderr",file=sys.stderr,flush=True)
 directory = pathlib.Path(os.environ["SSMCP_STARTUP_DIR"])
 scenario = os.environ["SSMCP_STARTUP_SCENARIO"]
 phase = os.environ["SSMCP_STARTUP_PHASE"]
@@ -282,4 +284,52 @@ async fn github_allow_fails_closed_before_backend_start_if_server_returns_legacy
         assert!(error.contains("did not acknowledge the --allow"), "{error}");
         assert!(!error.contains(&"a".repeat(64)));
     }
+}
+
+#[tokio::test]
+async fn jsonl_keeps_native_ssh_and_lifecycle_stderr_machine_readable() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .run_with_args(
+            "github-healthy",
+            "startup",
+            &[
+                "--allow",
+                "octocat@github",
+                "--log-format",
+                "jsonl",
+                "--no-color",
+            ],
+        )
+        .await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains('\x1b'));
+    let events: Vec<Value> = stderr
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every stderr line is JSON"))
+        .collect();
+    assert!(
+        events
+            .iter()
+            .any(|v| v["type"] == "ssmcp.status" && v["level"] == "Connected")
+    );
+    assert!(events.iter().any(|v| {
+        v["type"] == "stderr"
+            && v["text"]
+                .as_str()
+                .is_some_and(|s| s.contains("fixture stderr"))
+    }));
+    assert!(events.iter().any(|v| {
+        v["stderr"]
+            .as_str()
+            .is_some_and(|s| s.contains("fixture stderr"))
+    }));
+    let connection: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(connection["auth"], "github");
+    fixture.assert_native_stopped().await;
 }
