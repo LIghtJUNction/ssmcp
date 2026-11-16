@@ -1,7 +1,10 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
+mod git_status;
 mod input;
+mod panel;
 pub(crate) mod reload;
 pub(crate) mod render;
+pub(crate) mod terminal;
 mod ui;
 
 use crate::{
@@ -498,7 +501,7 @@ pub async fn run() -> crate::Result<()> {
     }
     ui.timestamps |= options.timestamps;
     ui.color &= !options.no_color;
-    render::configure(ui);
+    render::configure(ui.clone());
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
     if options.list_tools {
@@ -582,6 +585,17 @@ pub async fn run() -> crate::Result<()> {
         return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
     }
     let login_received_at = std::time::Instant::now();
+    let display_session = match terminal::Session::start(&ui) {
+        Ok(session) => session,
+        Err(error) => {
+            render::status(
+                "display",
+                "Warning",
+                &format!("Dashboard unavailable: {error}"),
+            );
+            None
+        }
+    };
     let mut incoming = Incoming::start(reader);
     render::status(
         "shell",
@@ -672,16 +686,28 @@ pub async fn run() -> crate::Result<()> {
             return Err(error.into());
         }
     };
+    let git_status = display_session
+        .as_ref()
+        .map(|_| git_status::GitStatus::start(PathBuf::from(&metadata.cwd)));
+    let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
+    ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
-    let mut requests: JoinSet<io::Result<()>> = JoinSet::new();
+    let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
     let mut reload_requested = false;
     let result: crate::Result<()> = 'connected: loop {
         tokio::select! {
+            _ = ui_updates.tick(), if git_status.is_some() => {
+                if let Some(observer) = &git_status {
+                    render::set_git_status(observer.snapshot());
+                }
+            },
             frame = incoming.frames.recv() => match frame {
                 Some(Ok(Some(Frame::Call {id,operation}))) => {
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
-                            Ok(Ok(())) => {},
+                            Ok(Ok(was_tool)) => {
+                                if was_tool && let Some(observer) = &git_status { observer.refresh(); }
+                            },
                             Ok(Err(error)) => break 'connected Err(error.into()),
                             Err(error) => break 'connected Err(error.into()),
                         }
@@ -734,6 +760,7 @@ pub async fn run() -> crate::Result<()> {
                     let backend = backend.clone();
                     let writer = writer.clone();
                     requests.spawn(async move {
+                        let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
                         let mut result = backend.perform(operation).await;
                         // A large native response must not corrupt/disconnect the SSH stream.
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
@@ -743,7 +770,8 @@ pub async fn run() -> crate::Result<()> {
                         timeout(Duration::from_secs(10),async {
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer,&Frame::Reply {id,result}).await
-                        }).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut,"SSH write timed out"))?
+                        }).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut,"SSH write timed out"))??;
+                        Ok(was_tool)
                     });
                 }
                 Some(Ok(None)) | None => break Ok(()),
@@ -752,7 +780,9 @@ pub async fn run() -> crate::Result<()> {
                 Some(Err(error)) => break Err(error.into()),
             },
             response = requests.join_next(), if !requests.is_empty() => match response {
-                Some(Ok(Ok(()))) => {},
+                Some(Ok(Ok(was_tool))) => {
+                    if was_tool && let Some(observer) = &git_status { observer.refresh(); }
+                },
                 Some(Ok(Err(error))) => break Err(error.into()),
                 Some(Err(error)) => break Err(error.into()),
                 None => {},
@@ -766,11 +796,15 @@ pub async fn run() -> crate::Result<()> {
     }
     requests.abort_all();
     while requests.join_next().await.is_some() {}
+    if let Some(observer) = git_status {
+        observer.shutdown().await;
+    }
     incoming.stop().await;
     drop(writer);
     let _ = ssh.start_kill();
     backend.shutdown().await;
     let _ = ssh.wait().await;
+    drop(display_session);
     render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {
         return restart.execute(backend.output());

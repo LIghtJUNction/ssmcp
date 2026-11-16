@@ -19,13 +19,39 @@ stdout 用于连接信息。重定向 stdout 或选择 JSONL 时，保留单行�
 
 默认每个缓冲 stdout/stderr 块显示最多 12 行，保留开头与末尾，省略处注明折叠数量和展开参数。实时流式输出持续显示；大对象和数组显示有界摘要。`--max-inline-output N` 调整缓冲输出的行数。这里的折叠只影响展示。事件滚动缓存有界，过早的游标会得到 `truncated:true`；检查事件页的 JSONL artifact 和归档错误，通过 `outputs.read` 分页读取已保存记录。来源、容量或存储错误造成的不完整由 metadata 明确标记。
 
+## 固定状态区与窗口尺寸
+
+真实交互终端默认启用 `ui.dashboard = true`。窗口至少 96 列、18 行时，左上显示日志，左下保留交互式 Shell，右侧固定显示并行任务、原生进度和 Git 状态。右栏宽度为终端列数的四分之一，限制在 28–36 列；106 列窗口对应 77 列工作区、1 列分隔和 28 列状态区。少于 96 列或 18 行时收起右栏；例如 80 列窗口仍保留上下分开的日志与 Shell，并使用全宽。终端高度至少 5 行时可以切换日志焦点；不足 5 行时优先保留 PTY，F6 不再作为界面快捷键拦截。物理终端尺寸和交互 PTY 尺寸分别处理，调整窗口会更新布局与 Shell 的可用尺寸。[布局](../src/client/panel.rs) · [终端合成](../src/client/terminal.rs)
+
+日志和交互 Shell 使用各自的终端状态，后台输出不会覆盖正在输入的命令。面板只接收文字和语义颜色；分支、路径、任务名和进度消息中的控制字符转成可见文字，按 Unicode 显示宽度截断。`NO_COLOR` 和 `--no-color` 仅关闭颜色。JSONL、重定向 stderr、`TERM=dumb` 或 `ui.dashboard = false` 保留行式输出。
+
+Git 状态在授权启动目录独立查询，约每 2 秒刷新；读取本地 Git 元数据，不执行 fetch，也不读文件内容。右栏显示分支、已知的 ahead/behind、暂存/工作区/未跟踪项计数、冲突和少量路径。未跟踪目录可能作为一项计数。查询失败时保留的旧数据标为 Last known state；没有成功观测时显示 pending、unavailable 或 checking，不报告工作区干净。Git 观察不代替成功文件操作的审计事件。[Git 观察器](../src/client/git_status.rs) · [Git porcelain v2 与后台刷新](https://git-scm.com/docs/git-status)
+
+### 回看日志与返回 Shell
+
+窗口底部显示当前焦点、可用快捷键，以及日志回看位置。快捷键只在启用面板且存在日志区域时生效：
+
+| 按键 | 所在焦点 | 作用 |
+| --- | --- | --- |
+| F6 | Shell 或日志 | 在日志与 Shell 间切换 |
+| PgUp / PgDn | 日志 | 向前或向后翻一页 |
+| Home / End | 日志 | 到最早保留的日志或最新输出 |
+| Esc | 日志 | 返回 Shell |
+| 普通字符输入 | 日志 | 返回 Shell，并把输入原样交给 PTY |
+
+返回 Shell 时，日志自动跟随最新输出。日志焦点之外的 PgUp、PgDn、Home、End 和 Esc 保持原生输入用途；粘贴内容中的快捷键序列不触发焦点切换。需要把 F6 交给终端内应用时，可用 `ui.dashboard = false` 关闭面板。[键盘路由](../src/client/terminal.rs) · [输入处理](../src/client/input.rs)
+
+日志窗配置 512 行滚动历史。这只是屏幕回看范围，完整输出、事件游标和 artifact 保留策略仍使用原有存储；不要把滚动到最早一行理解为执行输出已经完整显示。正常退出时恢复原终端屏幕、光标和输入模式；平台实测与恢复检查的结果见[验收记录](validation-0.6.0.md)。
+
 ## 并行任务与真实进度
 
 任务开始时显示短任务号、命令与工作目录，结束时显示实际状态、退出码或信号及耗时。只有明确的 exit 0 才显示成功；缺少最终退出信息时显示未知。多个任务同时运行时，摘要列出活跃数量与短任务号。长 `python -c`、`node -e` 等内联脚本以程序名和脚本行数代替源码墙；原始参数没有改变。
 
-任务尚未结束时，默认每 5 秒追加一条活动标记与已运行时间；非 TTY 日志至少间隔 30 秒。它不占用全屏、不清除终端内容、不移动光标，近期有交互式 PTY 输出时会推迟状态提示。活动标记只说明任务仍在运行，不代表估算完成比例。只有原生 `notifications/progress` 同时给出合法 `progress` 与正数 `total` 时才显示百分比条；未知总量显示当前活动和耗时。
+启用固定状态区时，活跃任务持续显示活动标记与已运行时间，周期刷新不向日志重复追加心跳。未使用面板时，默认每 5 秒追加活动摘要；非 TTY 日志至少间隔 30 秒，近期有交互式 PTY 输出时推迟提示。活动标记只说明任务仍在运行。只有原生 `notifications/progress` 同时给出合法 `progress` 与正数 `total` 时才显示百分比条；未知总量显示原生数值和 total unknown。原生进度按来源与 token 独立展示，不推断它属于哪个 Shell 任务；长时间没有更新时注明更新时间。
 
 程序打印的 JSON 保留 stdout/stderr 来源，默认显示字段摘要，多行字符串和超大 JSON 记录有界折叠，不裸打印转义换行或完整对象墙。JSON 中的 `status`、`exit_code` 等字段仍是程序输出，不会被提升为命令成功事件。JSONL 保留脱敏后的原始事件；完整输出仍按原有捕获与查询规则访问。显示短 ID 只用于辨认，调用 `exec.status/read/wait` 时使用 `exec.list` 或原生结果中的完整任务 ID。
+
+已明确标记为内部发现的重复成功 RPC 摘要在默认 pretty 中折叠，首次观察、错误、恢复和显式用户调用仍可见。原生工具目录或可用性变化由发现事件报告。pretty-verbose 与 JSONL 保留脱敏后的事件来源；来源不明的 stderr 不按文本猜测或隐藏。
 
 ## 命令、文件与技能活动
 
@@ -42,6 +68,7 @@ stdout 用于连接信息。重定向 stdout 或选择 JSONL 时，保留单行�
 ```toml
 [ui]
 color = true
+dashboard = true
 log_format = "pretty"
 theme = "codex-dark"
 timestamps = true
@@ -51,7 +78,7 @@ max_inline_output = 12
 activity_interval_secs = 5
 ```
 
-`activity_interval_secs` 可设为 0–300 秒；0 关闭周期性活动提示，开始、完成、文件和原生调用事件仍会显示。该设置不改变任务并发或执行超时。
+`dashboard` 控制交互式面板，默认 true。`activity_interval_secs` 可设为 0–300 秒，控制行式日志的周期活动提示；0 关闭该提示，面板、开始、完成、文件和原生调用事件仍会更新。两个设置都不改变任务并发或执行超时。
 
 支持 `minimal`、`codex-dark`、`nord`、`solarized` 四种主题。`--theme nord`、`--timestamps` 可直接覆盖。时间戳使用 UTC；终端主题不改变原生工具返回。`NO_COLOR`、`--no-color`、`TERM=dumb` 和重定向 stderr 都关闭日志 ANSI 颜色。真实终端上的交互式 PTY 独立于配色，保留字节与光标、退格等控制序列；JSONL 模式仍输出事件格式。非 TTY 日志输出使用安全可读展示。
 

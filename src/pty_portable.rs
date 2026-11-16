@@ -90,8 +90,19 @@ impl Terminal {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
+        let initial_size = if live {
+            let (rows, cols) = crate::client::terminal::pane_size(24, 80);
+            PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            }
+        } else {
+            PtySize::default()
+        };
         let pair = native_pty_system()
-            .openpty(PtySize::default())
+            .openpty(initial_size)
             .map_err(io::Error::other)?;
         let mut reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
         let mut writer = pair.master.take_writer().map_err(io::Error::other)?;

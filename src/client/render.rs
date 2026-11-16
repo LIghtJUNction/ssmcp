@@ -1,5 +1,9 @@
 //! Human transcript only; never changes events retained for MCP consumers.
-use super::ui::Ui;
+use super::{
+    git_status::GitSnapshot,
+    panel::{PanelSnapshot, ProgressView, TaskView},
+    ui::Ui,
+};
 #[path = "activity.rs"]
 mod activity;
 use activity::{Activities, key as activity_key, short_id};
@@ -8,12 +12,15 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     io::{self, IsTerminal, Write},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
 static DISPLAY: OnceLock<Mutex<Renderer>> = OnceLock::new();
 static ACTIVITY_TICKER: OnceLock<()> = OnceLock::new();
+// Serialize transcript emission and snapshots without holding DISPLAY while
+// the compositor locks or writes the physical terminal.
+static EMISSION: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -58,11 +65,23 @@ pub(crate) fn configure(ui: Ui) {
                     let Some(display) = DISPLAY.get() else {
                         continue;
                     };
-                    let mut renderer = display.lock().unwrap_or_else(|e| e.into_inner());
-                    let mut out = io::stderr().lock();
-                    let tty = out.is_terminal();
-                    renderer.width = terminal_width();
-                    let _ = renderer.heartbeat(&mut out, Instant::now(), tty);
+                    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+                    let dashboard = super::terminal::active();
+                    let width = terminal_width();
+                    let now = Instant::now();
+                    let mut bytes = Vec::new();
+                    let snapshot = {
+                        let mut renderer = display.lock().unwrap_or_else(|e| e.into_inner());
+                        renderer.width = width;
+                        renderer.dashboard_active = dashboard && !renderer.raw;
+                        if renderer.dashboard_active {
+                            Some(renderer.panel_snapshot(now))
+                        } else {
+                            let _ = renderer.heartbeat(&mut bytes, now, io::stderr().is_terminal());
+                            None
+                        }
+                    };
+                    publish(&bytes, snapshot);
                 }
             });
         if started.is_err() {
@@ -90,6 +109,9 @@ fn display() -> &'static Mutex<Renderer> {
 }
 
 fn terminal_width() -> usize {
+    if let Some(columns) = super::terminal::log_width() {
+        return columns;
+    }
     #[cfg(unix)]
     {
         let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
@@ -113,14 +135,55 @@ fn color_enabled(tty: bool, no_color: bool) -> bool {
 }
 
 pub(crate) fn event(label: &str, value: &Value) {
-    let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
-    renderer.width = terminal_width();
-    let _ = renderer.event(&mut io::stderr().lock(), label, value);
+    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    let dashboard = super::terminal::active();
+    let width = terminal_width();
+    let mut bytes = Vec::new();
+    let snapshot = {
+        let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+        renderer.width = width;
+        renderer.dashboard_active = dashboard && !renderer.raw;
+        let _ = renderer.event(&mut bytes, label, value);
+        renderer
+            .dashboard_active
+            .then(|| renderer.panel_snapshot(Instant::now()))
+    };
+    publish(&bytes, snapshot);
 }
 
 pub(crate) fn finish(label: &str) {
-    let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
-    let _ = renderer.finish_group(&mut io::stderr().lock(), label);
+    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    let mut bytes = Vec::new();
+    {
+        let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+        let _ = renderer.finish_group(&mut bytes, label);
+    }
+    publish(&bytes, None);
+}
+
+/// Git polling has no dependency on renderer or terminal locks.
+pub(super) fn set_git_status(snapshot: Arc<GitSnapshot>) {
+    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    let dashboard = super::terminal::active();
+    let panel = {
+        let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+        renderer.git = Some(snapshot);
+        (dashboard && !renderer.raw).then(|| renderer.panel_snapshot(Instant::now()))
+    };
+    if let Some(panel) = panel {
+        super::terminal::set_panel(panel);
+    }
+}
+
+fn publish(bytes: &[u8], snapshot: Option<PanelSnapshot>) {
+    if !bytes.is_empty() && !super::terminal::log(bytes) {
+        let mut out = io::stderr().lock();
+        let _ = out.write_all(bytes);
+        let _ = out.flush();
+    }
+    if let Some(snapshot) = snapshot {
+        super::terminal::set_panel(snapshot);
+    }
 }
 
 #[derive(Default)]
@@ -150,6 +213,10 @@ struct Renderer {
     current_stream: Option<String>,
     stream_offsets: HashMap<String, u64>,
     workspace_root: Option<std::path::PathBuf>,
+    dashboard_active: bool,
+    git: Option<Arc<GitSnapshot>>,
+    native_progress: HashMap<String, ProgressView>,
+    discovery_success: HashMap<String, Value>,
 }
 
 impl Renderer {
@@ -168,6 +235,10 @@ impl Renderer {
             current_stream: None,
             stream_offsets: HashMap::new(),
             workspace_root: std::env::current_dir().ok(),
+            dashboard_active: false,
+            git: None,
+            native_progress: HashMap::new(),
+            discovery_success: HashMap::new(),
         }
     }
 
@@ -194,6 +265,32 @@ impl Renderer {
         out.flush()
     }
 
+    fn panel_snapshot(&self, now: Instant) -> PanelSnapshot {
+        let tasks = self
+            .activities
+            .snapshot()
+            .into_iter()
+            .map(|task| TaskView {
+                id: short_id(&task.id),
+                description: task.description,
+                cwd: task.cwd.as_deref().map(|cwd| self.path_label(cwd)),
+                started: task.started,
+            })
+            .collect();
+        let mut progress = self
+            .native_progress
+            .values()
+            .filter(|value| now.saturating_duration_since(value.updated) < Duration::from_secs(300))
+            .cloned()
+            .collect::<Vec<_>>();
+        progress.sort_by_key(|value| std::cmp::Reverse(value.updated));
+        PanelSnapshot {
+            tasks,
+            progress,
+            git: self.git.clone(),
+        }
+    }
+
     fn path_label(&self, path: &str) -> String {
         self.workspace_root
             .as_ref()
@@ -209,6 +306,10 @@ impl Renderer {
     }
 
     fn active_summary(&mut self, out: &mut impl Write, now: Instant) -> io::Result<()> {
+        if self.dashboard_active {
+            self.last_activity_summary = now;
+            return Ok(());
+        }
         if let Some(summary) = self.activities.summary(now) {
             self.summary(out, "tasks", "Progress", &summary)?;
         }
@@ -279,6 +380,43 @@ impl Renderer {
                 .as_str()
                 .map(|s| activity::single_line(s, 100))
                 .unwrap_or_default();
+            let now = Instant::now();
+            self.native_progress.retain(|_, update| {
+                now.saturating_duration_since(update.updated) < Duration::from_secs(300)
+            });
+            if self.native_progress.len() >= 64
+                && let Some(oldest) = self
+                    .native_progress
+                    .iter()
+                    .min_by_key(|(_, update)| update.updated)
+                    .map(|(key, _)| key.clone())
+            {
+                self.native_progress.remove(&oldest);
+            }
+            let progress_key = format!(
+                "{label}\0{}",
+                params
+                    .get("progressToken")
+                    .map(Value::to_string)
+                    .unwrap_or_default()
+            );
+            self.native_progress.insert(
+                progress_key,
+                ProgressView {
+                    source: if token.is_empty() {
+                        label.into()
+                    } else {
+                        format!("{label}:{}", short_id(&token))
+                    },
+                    message: (!message.is_empty()).then_some(message.clone()),
+                    value: params["progress"].as_f64(),
+                    total: params["total"].as_f64(),
+                    updated: now,
+                },
+            );
+            if self.dashboard_active {
+                return Ok(true);
+            }
             self.summary(
                 out,
                 label,
@@ -567,6 +705,13 @@ impl Renderer {
             | "ssmcp.harness.tool.completed" => {
                 let provider = value["provider"].as_str().unwrap_or(label);
                 let tool = value["tool"].as_str().unwrap_or("");
+                let tool_name = if tool.is_empty() {
+                    provider.to_owned()
+                } else if tool.starts_with(&format!("{provider}.")) {
+                    tool.to_owned()
+                } else {
+                    format!("{provider}.{tool}")
+                };
                 let call = value
                     .get("call_id")
                     .map(|v| format!("  call={}", short_id(&compact(v, 0))))
@@ -580,18 +725,13 @@ impl Renderer {
                     if !call_id.is_empty() {
                         self.activities.start(
                             key,
-                            format!("call:{call_id}"),
-                            tool.into(),
+                            format!("{provider}:{}", short_id(&call_id)),
+                            tool_name.clone(),
                             None,
                             Instant::now(),
                         );
                     }
-                    self.summary(
-                        out,
-                        label,
-                        "Request",
-                        &format!("{provider}  {tool}{call}  started"),
-                    )?;
+                    self.summary(out, "", "Request", &format!("{tool_name}{call}  started"))?;
                     self.last_activity_summary = Instant::now();
                     if self.activities.len() > 1 {
                         self.active_summary(out, Instant::now())?;
@@ -606,9 +746,9 @@ impl Renderer {
                         .unwrap_or_default();
                     self.summary(
                         out,
-                        label,
+                        "",
                         if success { "Success" } else { "Error" },
-                        &format!("{provider}  {tool}{call}  {state}{elapsed}"),
+                        &format!("{tool_name}{call}  {state}{elapsed}"),
                     )?;
                     if self.activities.len() > 0 {
                         self.active_summary(out, Instant::now())?;
@@ -689,6 +829,14 @@ impl Renderer {
                 self.requests.clear();
             }
             self.requests.insert(key, (method.into(), Instant::now()));
+            if value["internal_discovery"] == true
+                && !self.verbose
+                && self
+                    .discovery_success
+                    .contains_key(&format!("{label}\0{method}"))
+            {
+                return Ok(true);
+            }
             self.summary(out, label, "Request", &format!("{method}{id_text}"))?;
             let params = &v["params"];
             let params = params.get("arguments").unwrap_or(params);
@@ -735,6 +883,26 @@ impl Renderer {
                 || result["isError"] == true
                 || result["success"] == false
                 || exit.is_some_and(|c| c != 0);
+            if value["internal_discovery"] == true && !self.verbose && !method.is_empty() {
+                let key = format!("{label}\0{method}");
+                if failed {
+                    // Keep failures visible, including repeated native errors.
+                    // Clearing success makes the eventual recovery visible too.
+                    self.discovery_success.remove(&key);
+                } else {
+                    let signature = json!({
+                        "status":result["status"],"exit":exit,"success":result["success"],
+                        "in_flight":result["in_flight"],"timed_out":timed_out
+                    });
+                    if self.discovery_success.get(&key) == Some(&signature) {
+                        return Ok(true);
+                    }
+                    if self.discovery_success.len() >= 256 {
+                        self.discovery_success.clear();
+                    }
+                    self.discovery_success.insert(key, signature);
+                }
+            }
             let title = if timed_out {
                 "Timeout"
             } else if failed {
@@ -1497,74 +1665,101 @@ pub(crate) fn status(label: &str, level: &str, message: &str) {
 }
 
 pub(crate) fn connection(output: &Value) -> io::Result<()> {
-    let renderer = display().lock().unwrap_or_else(|e| e.into_inner());
-    let mut out = io::stdout().lock();
-    if !out.is_terminal() || renderer.raw {
-        writeln!(out, "{output}")?;
-    } else {
-        writeln!(out)?;
-        painted(
-            &mut out,
-            renderer.color,
-            renderer.ui.theme.color("blue"),
-            concat!("  ssmcp  ", env!("CARGO_PKG_VERSION"), "\n"),
-        )?;
-        if let Some(title) = output["title"].as_str() {
-            writeln!(out, "  {}", clean(title))?;
-        }
-        writeln!(out)?;
-        writeln!(
-            out,
-            "  MCP    {}",
-            clean(output["url"].as_str().unwrap_or(""))
-        )?;
-        if let Some(cwd) = output["cwd"].as_str() {
-            writeln!(out, "  Workspace  {}", clean(cwd))?;
-        }
-        if let Some(code) = output["login_code"].as_str() {
+    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    let tty = io::stdout().is_terminal();
+    let mut bytes = Vec::new();
+    let raw;
+    {
+        let renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+        raw = renderer.raw;
+        let out = &mut bytes;
+        if !tty || raw {
+            // This explicitly requested connection result retains the human login
+            // code. It is not an audit copy and is never published to native peers.
+            writeln!(out, "{output}")?;
+        } else {
+            writeln!(out)?;
+            painted(
+                out,
+                renderer.color,
+                renderer.ui.theme.color("blue"),
+                concat!("  ssmcp  ", env!("CARGO_PKG_VERSION"), "\n"),
+            )?;
+            if let Some(title) = output["title"].as_str() {
+                writeln!(out, "  {}", clean(title))?;
+            }
+            writeln!(out)?;
             writeln!(
                 out,
-                "  Login  {}  ·  expires in {}s",
-                clean(code),
-                output["login_expires_in"]
+                "  MCP    {}",
+                clean(output["url"].as_str().unwrap_or(""))
             )?;
-        } else {
-            writeln!(out, "  Login  GitHub account")?;
+            if let Some(cwd) = output["cwd"].as_str() {
+                writeln!(out, "  Workspace  {}", clean(cwd))?;
+            }
+            if let Some(code) = output["login_code"].as_str() {
+                writeln!(
+                    out,
+                    "  Login  {}  ·  expires in {}s",
+                    clean(code),
+                    output["login_expires_in"]
+                )?;
+            } else {
+                writeln!(out, "  Login  GitHub account")?;
+            }
+            painted(
+                out,
+                renderer.color,
+                renderer.ui.theme.color("gray"),
+                "\n  Commands run here. Parallel jobs keep separate output.\n  Ctrl-C disconnects and stops owned processes.\n\n",
+            )?;
         }
-        painted(
-            &mut out,
-            renderer.color,
-            renderer.ui.theme.color("gray"),
-            "\n  Commands run here. Parallel jobs keep separate output.\n  Ctrl-C disconnects and stops owned processes.\n\n",
-        )?;
     }
+    if tty && !raw && super::terminal::log(&bytes) {
+        return Ok(());
+    }
+    let mut out = io::stdout().lock();
+    out.write_all(&bytes)?;
     out.flush()
 }
 
 pub(crate) fn terminal_output(bytes: &[u8]) {
-    let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
-    let mut out = io::stderr().lock();
-    renderer.last_pty_output = Some(Instant::now());
-    renderer.current_stream = None;
-    if renderer.raw {
-        let _ = renderer.event(
-            &mut out,
-            "shell",
-            &json!({
-                "type":"ssmcp.terminal_output",
-                "data_base64":STANDARD.encode(bytes),"text":String::from_utf8_lossy(bytes)
-            }),
-        );
-    } else if out.is_terminal() {
-        // This is the user's interactive PTY, not an audit transcript. Preserve
-        // cursor control and split UTF-8 bytes independently of NO_COLOR.
-        let _ = out.write_all(bytes);
-        let _ = out.flush();
+    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    let tty = io::stderr().is_terminal();
+    let mut rendered = Vec::new();
+    let raw;
+    {
+        let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+        renderer.last_pty_output = Some(Instant::now());
+        renderer.current_stream = None;
+        raw = renderer.raw;
+        if raw {
+            let _ = renderer.event(
+                &mut rendered,
+                "shell",
+                &json!({
+                    "type":"ssmcp.terminal_output",
+                    "data_base64":STANDARD.encode(bytes),"text":String::from_utf8_lossy(bytes)
+                }),
+            );
+        }
+    }
+    if raw {
+        publish(&rendered, None);
+    } else if tty {
+        // Preserve the user's original PTY bytes; only the compositor interprets
+        // cursor control when panes are active. NO_COLOR does not change transport.
+        if !super::terminal::pty(bytes) {
+            let mut out = io::stderr().lock();
+            let _ = out.write_all(bytes);
+            let _ = out.flush();
+        }
     } else {
         let safe = crate::audit::event(json!({
             "type":"ssmcp.terminal_output","text":String::from_utf8_lossy(bytes)
         }));
         let text = safe["text"].as_str().unwrap_or("");
+        let mut out = io::stderr().lock();
         let _ = out.write_all(clean(text).as_bytes());
         let _ = out.flush();
     }
@@ -2130,6 +2325,151 @@ mod tests {
         assert!(output.contains("[READ] codex src/main.rs"));
         assert!(output.contains("[SKIL] codex read"));
         assert!(!output.contains("{\"type\""));
+    }
+
+    #[test]
+    fn internal_discovery_folds_only_repeated_success_and_keeps_explicit_calls() {
+        let exchange = |id: &str, internal: bool, failed: bool| {
+            let mut request = json!({"type":"ssmcp.request","request":{
+                "id":id,"method":"mcpServerStatus/list","params":{}}});
+            let mut response = if failed {
+                json!({"id":id,"error":{"code":-32000,"message":"native discovery failed"}})
+            } else {
+                json!({"id":id,"result":{"status":"ready"}})
+            };
+            if internal {
+                request["internal_discovery"] = json!(true);
+                response["internal_discovery"] = json!(true);
+            }
+            [request, response]
+        };
+        let events = [
+            exchange("first", true, false),
+            exchange("again", true, false),
+            exchange("failed", true, true),
+            exchange("still-failed", true, true),
+            exchange("recovered", true, false),
+            exchange("explicit", false, false),
+        ]
+        .concat();
+        let pretty = render(&events, false, false);
+        assert!(pretty.contains("id=first"), "{pretty}");
+        assert!(!pretty.contains("id=again"), "{pretty}");
+        for id in ["failed", "still-failed", "recovered", "explicit"] {
+            assert!(pretty.contains(&format!("id={id}")), "{pretty}");
+        }
+        assert_eq!(pretty.matches("id=explicit").count(), 2, "{pretty}");
+        let mut renderer = Renderer::new(false, false, 100);
+        renderer.verbose = true;
+        let mut output = Vec::new();
+        for event in &events {
+            renderer.event(&mut output, "codex", event).unwrap();
+        }
+        assert!(String::from_utf8(output).unwrap().contains("id=again"));
+        let raw = render(&events, true, false);
+        assert!(raw.contains("again") && raw.contains("internal_discovery"));
+    }
+
+    #[test]
+    fn harness_display_has_one_namespace_and_distinguishes_equal_call_ids() {
+        let mut renderer = Renderer::new(false, false, 100);
+        let mut output = Vec::new();
+        for provider in ["codex", "claude"] {
+            renderer
+                .event(
+                    &mut output,
+                    provider,
+                    &json!({
+                        "type":"ssmcp.harness.tool.started","provider":provider,
+                        "tool":format!("{provider}.lookup"),"call_id":7
+                    }),
+                )
+                .unwrap();
+        }
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("[REQ ] codex.lookup call=7 started"),
+            "{text}"
+        );
+        assert!(!text.contains("codex codex"), "{text}");
+        assert!(
+            text.contains("codex:7") && text.contains("claude:7"),
+            "{text}"
+        );
+        assert_eq!(renderer.activities.len(), 2);
+    }
+
+    #[test]
+    fn dashboard_snapshot_keeps_native_progress_separate_from_jobs() {
+        let mut renderer = Renderer::new(false, false, 77);
+        renderer.dashboard_active = true;
+        renderer.workspace_root = Some(std::path::PathBuf::from("/workspace/project"));
+        let mut output = Vec::new();
+        let nonce = "1234567890abcdef1234567890abcdef";
+        for suffix in ["a", "b"] {
+            renderer
+                .event(
+                    &mut output,
+                    "shell",
+                    &json!({
+                        "type":"exec.started","job_id":format!("{nonce}-{suffix}"),
+                        "command":["cargo","test"],"cwd":"/workspace/project"
+                    }),
+                )
+                .unwrap();
+        }
+        for provider in ["codex", "claude"] {
+            renderer
+                .event(
+                    &mut output,
+                    provider,
+                    &json!({
+                        "method":"notifications/progress","params":{
+                            "progressToken":7,"progress":3,"message":"Indexing sources"
+                        }
+                    }),
+                )
+                .unwrap();
+        }
+        let snapshot = renderer.panel_snapshot(Instant::now());
+        assert_eq!(snapshot.tasks.len(), 2);
+        assert_eq!(snapshot.tasks[0].id, "#a");
+        assert_eq!(snapshot.tasks[1].cwd.as_deref(), Some("."));
+        assert_eq!(snapshot.progress.len(), 2);
+        assert!(
+            snapshot
+                .progress
+                .iter()
+                .all(|progress| progress.total.is_none())
+        );
+        assert!(
+            snapshot
+                .progress
+                .iter()
+                .any(|progress| progress.source == "codex:7")
+        );
+        assert!(
+            snapshot
+                .progress
+                .iter()
+                .any(|progress| progress.source == "claude:7")
+        );
+        let transcript = String::from_utf8(output).unwrap();
+        assert!(!transcript.contains("[PROG]"), "{transcript}");
+        let rows = super::super::panel::render(&snapshot, 28, 58, Instant::now());
+        assert!(!rows.iter().any(|line| line.text.contains('%')));
+        let mut output = Vec::new();
+        renderer.event(&mut output, "shell", &json!({
+            "type":"exec.exited","job_id":format!("{nonce}-a"),"exit_code":0,"state":"completed"
+        })).unwrap();
+        let snapshot = renderer.panel_snapshot(Instant::now());
+        assert_eq!(snapshot.tasks.len(), 1);
+        assert_eq!(snapshot.tasks[0].id, "#b");
+        assert_eq!(
+            snapshot.progress.len(),
+            2,
+            "a progress token is not assumed to belong to a shell job"
+        );
     }
 
     #[test]

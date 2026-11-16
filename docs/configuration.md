@@ -396,6 +396,8 @@ ssmcp --name ssmcp-project my-ssmcp
 
 ## 本地显示与重载
 
+真实交互终端默认启用 `[ui] dashboard = true`：宽窗口左侧分别显示后台日志和交互 Shell，右侧固定显示并行任务、原生进度与 Git 状态。少于 96 列或少于 18 行时会收起右栏；窗口调整会同步更新布局和 PTY 尺寸。`NO_COLOR` 只影响颜色。可在本地 TOML 中设 `dashboard = false` 恢复行式显示；JSONL 或重定向 stderr 也使用行式输出。任务没有原生总量时仅显示活动和耗时，不生成估算百分比。Git 查询只观察授权启动目录，查询失败会标明过期或未知；未跟踪目录可能作为一项计数。[面板布局与配置](logging.md#固定状态区与窗口尺寸)
+
 默认显示留白较多的 `minimal` 界面，连接摘要给出 MCP URL 和登录方式，活动记录写入 stderr。请求、完成、错误和超时使用不同颜色；独立命令按任务标识区分，stdout 与 stderr 分开显示。请求 ID、方法和耗时用于对应同一次调用，统一 diff 显示增加、删除及原始行号。[本地渲染](../src/client/render.rs)
 
 `--log-format pretty-verbose` 展开脱敏后的详细元数据，`--log-format jsonl` 输出脱敏事件 JSON；`--verbose` 是详细事件的别名，`--raw` 与 `--raw-events` 是 JSONL 的别名。重定向 stdout 时，连接信息始终是 JSON。`--no-color`、`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 会禁用 ANSI 颜色。这些配色设置不影响真实终端的交互式 PTY 字节透传。后台 stdout/stderr 按任务和流实时显示，读取历史 `wait/read` 结果不再重复打印正文。默认 pretty 使用短任务号和相对工作区路径，折叠内联脚本与 JSON stdout；完整值保留在事件和输出中。`[ui] activity_interval_secs = 5` 控制静默活动提示，设为 0 只关闭周期提示；只有原生事件提供真实总量时才显示百分比。主题、时间戳、折叠行数和 TOML 配置见[日志与显示说明](logging.md)。

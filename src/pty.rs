@@ -91,9 +91,14 @@ impl Terminal {
         }
         let mut master = -1;
         let mut slave = -1;
+        let (rows, cols) = if live {
+            crate::client::terminal::pane_size(24, 80)
+        } else {
+            (24, 80)
+        };
         let size = libc::winsize {
-            ws_row: 24,
-            ws_col: 80,
+            ws_row: rows,
+            ws_col: cols,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };

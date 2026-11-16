@@ -59,9 +59,28 @@ async fn forward(terminal: &Terminal, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+async fn forward_human(terminal: &Terminal, text: &str) -> Result<(), String> {
+    let text = super::terminal::keyboard(text);
+    forward(terminal, &text).await
+}
+
+async fn forward_display(terminal: &Terminal) -> Result<(), String> {
+    let keyboard = super::terminal::take_keyboard();
+    if !keyboard.is_empty() {
+        forward(terminal, &keyboard).await?;
+    }
+    let reply = super::terminal::take_replies();
+    if !reply.is_empty() {
+        let text = std::str::from_utf8(&reply).map_err(|_| "invalid virtual terminal reply")?;
+        forward(terminal, text).await?;
+    }
+    Ok(())
+}
+
 async fn resize(terminal: &Terminal, rows: u16, cols: u16) -> Result<(), String> {
     // Some terminals report 0 while being created or minimized.
     if rows > 0 && cols > 0 {
+        let (rows, cols) = super::terminal::physical_resize(rows, cols);
         terminal
             .perform(Operation::Resize {
                 rows: rows.min(1000),
@@ -254,8 +273,13 @@ mod platform {
         forward_size(terminal, mode).await?;
         let mut buffer = [0; 4096];
         let mut utf8 = Utf8Input::default();
+        let mut replies = tokio::time::interval(std::time::Duration::from_millis(20));
+        replies.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while mode.active.load(Ordering::Acquire) {
             tokio::select! {
+                _ = replies.tick(), if crate::client::terminal::active() => {
+                    forward_display(terminal).await?;
+                }
                 event = resized.recv() => {
                     if event.is_none() { break; }
                     forward_size(terminal, mode).await?;
@@ -268,8 +292,8 @@ mod platform {
                         if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
                     });
                     match read {
-                        Ok(Ok(0)) => { forward(terminal, &utf8.push(&[], true)).await?; break; }
-                        Ok(Ok(n)) => forward(terminal, &utf8.push(&buffer[..n], false)).await?,
+                        Ok(Ok(0)) => { forward_human(terminal, &utf8.push(&[], true)).await?; break; }
+                        Ok(Ok(n)) => forward_human(terminal, &utf8.push(&buffer[..n], false)).await?,
                         Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                         Ok(Err(e)) => return Err(format!("read local terminal: {e}")),
                         Err(_) => continue,
@@ -634,6 +658,7 @@ mod platform {
         let mut utf16 = Utf16Input::default();
         while mode.active.load(Ordering::Acquire) {
             tick.tick().await;
+            forward_display(terminal).await?;
             let mut count = 0;
             // ReadConsoleInputW is only called when records already exist. This
             // frontend is the sole console input consumer; no blocking stdin
@@ -674,7 +699,7 @@ mod platform {
                         let key = unsafe { event.Event.KeyEvent };
                         if key.bKeyDown != 0 {
                             let text = utf16.key(key);
-                            forward(terminal, &text).await?;
+                            forward_human(terminal, &text).await?;
                         }
                     }
                     WINDOW_BUFFER_SIZE_EVENT => {
@@ -695,6 +720,10 @@ mod platform {
     }
     impl Utf16Input {
         fn key(&mut self, key: KEY_EVENT_RECORD) -> String {
+            self.key_with_mode(key, crate::client::terminal::application_cursor())
+        }
+
+        fn key_with_mode(&mut self, key: KEY_EVENT_RECORD, application_cursor: bool) -> String {
             // SAFETY: console input was requested in Unicode mode.
             let unit = unsafe { key.uChar.UnicodeChar };
             let ctrl = key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0;
@@ -725,6 +754,13 @@ mod platform {
             } else {
                 // Windows virtual-key codes for terminal navigation keys.
                 let sequence = match key.wVirtualKeyCode {
+                    0x23 if application_cursor => "\x1bOF",
+                    0x24 if application_cursor => "\x1bOH",
+                    0x25 if application_cursor => "\x1bOD",
+                    0x26 if application_cursor => "\x1bOA",
+                    0x27 if application_cursor => "\x1bOC",
+                    0x28 if application_cursor => "\x1bOB",
+                    0x75 => "\x1b[17~",
                     0x21 => "\x1b[5~",
                     0x22 => "\x1b[6~",
                     0x23 => "\x1b[F",
@@ -773,6 +809,10 @@ mod platform {
             assert_eq!(input.key(key('界' as u16, 0, 0)), "界");
             assert_eq!(input.key(key(0, 0x25, 0)), "\x1b[D");
             assert_eq!(input.key(key(0, 0x2e, 0)), "\x1b[3~");
+            assert_eq!(input.key(key(0, 0x75, 0)), "\x1b[17~");
+            assert_eq!(input.key_with_mode(key(0, 0x25, 0), true), "\x1bOD");
+            assert_eq!(input.key_with_mode(key(0, 0x24, 0), true), "\x1bOH");
+            assert_eq!(input.key_with_mode(key(0, 0x23, 0), true), "\x1bOF");
             assert_eq!(input.key(key('x' as u16, 0, LEFT_ALT_PRESSED)), "\x1bx");
             // AltGr is a text modifier, not a request to send a leading Escape.
             assert_eq!(
