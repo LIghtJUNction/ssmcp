@@ -39,9 +39,9 @@ ssmcp --allow octocat@github -t opencode --name review-opencode user@host
 
 先在客户端安装所选 Agent，并按其要求配置账户或模型。ssmcpd 不需要安装这些 Agent；各 Agent 的安装及运行依赖由该 Agent 决定。
 
-代码模式调用服务器上由系统包管理器安装的 Node.js 18 或更新版本，并使用系统 bubblewrap 0.8 或更新版本隔离每次执行。Debian/Ubuntu 可用 `sudo apt install nodejs bubblewrap`，Arch Linux 可用 `sudo pacman -S nodejs bubblewrap`；安装后确认版本满足要求。这两项依赖安装在服务器上；仅运行 `ssmcp` 客户端不需要它们，也不需要为代码模式安装 npm 包。
+代码模式调用服务器上由系统包管理器安装的 Node.js 18 或更新版本，并使用系统 bubblewrap 0.8 或更新版本隔离每次执行，再在隔离环境内通过 util-linux 的 prlimit 限制进程数。Debian/Ubuntu 可用 `sudo apt install nodejs bubblewrap util-linux`，Arch Linux 可用 `sudo pacman -S nodejs bubblewrap util-linux`；安装后确认版本满足要求。这些依赖安装在服务器上；仅运行 `ssmcp` 客户端不需要它们，也不需要为代码模式安装 npm 包。
 
-`make install` 把桥接脚本安装到 `$PREFIX/libexec/ssmcp/code-mode.js`，Node.js 和 bubblewrap 本身由系统包管理器维护。自定义脚本位置时，用服务环境变量 `SSMCP_CODE_MODE_RUNNER` 指定绝对路径。依赖缺失或系统不允许建立隔离环境时，`code_mode` 返回错误；`list` 仍可用于发现客户端。具体部署条件见[部署说明](deployment.md#系统代码运行环境)。
+`make install` 把桥接脚本安装到 `$PREFIX/libexec/ssmcp/code-mode.js`，Node.js、bubblewrap 和 prlimit 由系统包管理器维护。自定义脚本位置时，用服务环境变量 `SSMCP_CODE_MODE_RUNNER` 指定绝对路径。依赖缺失或系统不允许建立隔离环境时，`code_mode` 返回错误；`list` 仍可用于发现客户端。具体部署条件见[部署说明](deployment.md#系统代码运行环境)。
 
 原生传输由 ssmcp 管理。不要用后端参数改写 Codex 的 `--listen`、Claude 的 print/输入输出/SDK 传输参数，或 OpenCode 的监听、stdio 和服务模式参数。Shell 模式只接受 `--shell`，不接受 `--backend` 或 Agent 参数。
 
