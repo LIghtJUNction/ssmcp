@@ -1,0 +1,40 @@
+{
+  "source_base": "dd252ff91547776fc52dafe8d2134152e12040c4",
+  "steps": [
+    {
+      "name": "format",
+      "exit_code": 0,
+      "seconds": 1.051,
+      "log": "target/acceptance/cross-platform-test-gates/format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "workspace-cwd",
+      "exit_code": 0,
+      "seconds": 5.898,
+      "log": "target/acceptance/cross-platform-test-gates/workspace-cwd.log",
+      "log_sha256": "42df940da551a908b254c5b774a7fc3993c10ae56c5bcee851ed3a1d228b9065"
+    },
+    {
+      "name": "input",
+      "exit_code": 0,
+      "seconds": 0.233,
+      "log": "target/acceptance/cross-platform-test-gates/input.log",
+      "log_sha256": "f8e2ebbc89c214f23a92163943c39c238792f6631f368708e9fb2d70b3f26a6f"
+    },
+    {
+      "name": "terminal-restore",
+      "exit_code": 0,
+      "seconds": 0.114,
+      "log": "target/acceptance/cross-platform-test-gates/terminal-restore.log",
+      "log_sha256": "f0dce3e79efaa83403a57a2ac19e76120eed52f3641d03475b96bdb99fe95c9b"
+    },
+    {
+      "name": "clippy",
+      "exit_code": 0,
+      "seconds": 2.403,
+      "log": "target/acceptance/cross-platform-test-gates/clippy.log",
+      "log_sha256": "b5bdf03cf127fa0d38dccf5b0d8eed0160a32a2d656022f5473064fffb00848a"
+    }
+  ]
+}

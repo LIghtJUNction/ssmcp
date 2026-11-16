@@ -1175,12 +1175,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            result["stdout"].as_str().unwrap().trim(),
-            root.join("nested")
+            std::path::Path::new(result["stdout"].as_str().unwrap().trim())
                 .canonicalize()
-                .unwrap()
-                .to_str()
-                .unwrap()
+                .unwrap(),
+            root.join("nested").canonicalize().unwrap()
         );
         shell.shutdown().await;
         std::fs::remove_dir_all(base).unwrap();
