@@ -6,3 +6,6 @@ timestamps = true
 show_request_id = true
 show_raw_json = false
 max_inline_output = 12
+
+# Append quiet activity summaries; 0 disables periodic status only.
+activity_interval_secs = 5
