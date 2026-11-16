@@ -189,6 +189,9 @@ impl Runtime {
     pub fn terminal(&self) -> Arc<crate::pty::Terminal> {
         self.backend.terminal()
     }
+    pub fn terminals(&self) -> Arc<crate::terminals::Terminals> {
+        self.backend.terminals()
+    }
     pub async fn wait_discovery(&self) {
         self.backend.wait_discovery().await
     }

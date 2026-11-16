@@ -116,7 +116,7 @@ impl Server {
         let task = tokio::spawn(async move {
             while let Some(frame) = wire::read_frame(&mut reader).await.unwrap() {
                 let (id, operation) = match frame {
-                    Frame::Call { id, operation } => (id, operation),
+                    Frame::Call { id, operation, .. } => (id, operation),
                     Frame::ReloadCommit { .. } => {
                         // Negative scenarios retain the connection so a later
                         // barrier call can prove whether a commit was sent.

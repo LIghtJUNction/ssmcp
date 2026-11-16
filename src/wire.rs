@@ -4,7 +4,9 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
+/// Version 4 clients remain usable, but cannot receive controller metadata.
+pub const LEGACY_VERSION: u32 = 4;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub const MAX_READ: usize = 32 * 1024;
 pub const MAX_WRITE: usize = 16 * 1024;
@@ -129,6 +131,48 @@ pub fn canonical_github_principal(principal: &str) -> Result<String, String> {
         return Err("invalid GitHub username: use 1..=39 ASCII letters or digits, with optional single hyphens between them".into());
     }
     Ok(format!("{}@github", username.to_ascii_lowercase()))
+}
+
+/// Display attribution supplied by a caller. It never grants authority or proves
+/// which model ran; MCP clientInfo identifies an application, not its model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Controller {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub source: ControllerSource,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerSource {
+    CallerReported,
+    McpClientInfo,
+}
+
+impl Controller {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_none() && self.model.is_none() {
+            return Err("controller requires a name or model".into());
+        }
+        for (field, value) in [("name", &self.name), ("model", &self.model)] {
+            if let Some(value) = value
+                && (value.trim().is_empty()
+                    || value.len() > 128
+                    || value.chars().any(char::is_control))
+            {
+                return Err(format!(
+                    "controller {field} must be 1..=128 UTF-8 bytes without control characters"
+                ));
+            }
+        }
+        if self.source == ControllerSource::McpClientInfo && self.model.is_some() {
+            return Err("MCP clientInfo cannot attest a model".into());
+        }
+        Ok(())
+    }
 }
 
 /// Public discovery information. IDs identify a connection, not a display name.
@@ -262,6 +306,10 @@ pub enum Frame {
     Call {
         id: u64,
         operation: Operation,
+        /// Absent on the version 4 wire. Per-call attribution avoids one caller
+        /// overwriting another caller's identity during concurrent execution.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        controller: Option<Controller>,
     },
     Reply {
         id: u64,
@@ -328,6 +376,62 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &Frame) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_fields_are_display_only_and_bounded() {
+        let mut controller = Controller {
+            name: Some("ChatGPT".into()),
+            model: Some("example-model".into()),
+            source: ControllerSource::CallerReported,
+        };
+        assert!(controller.validate().is_ok());
+        controller.source = ControllerSource::McpClientInfo;
+        assert!(controller.validate().is_err());
+        controller.model = None;
+        assert!(controller.validate().is_ok());
+        for name in [
+            "".into(),
+            " \t".into(),
+            "bad\u{1b}[2J".into(),
+            "x".repeat(129),
+        ] {
+            controller.name = Some(name);
+            assert!(controller.validate().is_err());
+        }
+        controller.name = None;
+        assert!(controller.validate().is_err());
+    }
+
+    #[test]
+    fn absent_controller_retains_the_strict_version_four_frame_shape() {
+        let frame = Frame::Call {
+            id: 7,
+            operation: Operation::Status {},
+            controller: None,
+        };
+        let value = serde_json::to_value(frame).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"type":"call","id":7,"operation":{"op":"status"}})
+        );
+        let Frame::Call { controller, .. } = serde_json::from_value::<Frame>(value).unwrap() else {
+            panic!("expected a call");
+        };
+        assert!(controller.is_none());
+        let frame = Frame::Call {
+            id: 8,
+            operation: Operation::Status {},
+            controller: Some(Controller {
+                name: None,
+                model: Some("model-a".into()),
+                source: ControllerSource::CallerReported,
+            }),
+        };
+        let value = serde_json::to_value(frame).unwrap();
+        assert_eq!(value["controller"]["source"], "caller-reported");
+        assert_eq!(value["controller"]["model"], "model-a");
+    }
+
     #[tokio::test]
     async fn bounded_frames_reject_truncation_and_oversize() {
         let mut truncated = &b"{\"type\":\"hello\",\"version\":1}"[..];

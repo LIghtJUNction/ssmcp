@@ -137,7 +137,7 @@ impl Server {
             loop {
                 tokio::select! {
                     frame = wire::read_frame(&mut reader) => {
-                        let Ok(Some(Frame::Call { id, operation })) = frame else { break };
+                        let Ok(Some(Frame::Call { id, operation, .. })) = frame else { break };
                         let workspace = workspace_copy.clone();
                         let rsync = rsync_copy.clone();
                         let writer = writer.clone();

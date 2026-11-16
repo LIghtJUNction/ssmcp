@@ -299,8 +299,10 @@ const bootstrap = `(() => {
       const snapshot = output.snapshot ?? status;
       return {...status, ...snapshot, ...output, snapshot};
     } catch (error) {
-      throw new Failure('Command started as ' + job + '; ' + (error?.message ?? text(error))
+      const failure = new Failure('Command started as ' + job + '; ' + (error?.message ?? text(error))
         + '. Inspect exec.status/exec.read for this job before retrying.');
+      failure.job_id = job;
+      throw failure;
     }
   };
   const parallelCommands = async (id, commands, options = {}) => {
@@ -320,19 +322,51 @@ const bootstrap = `(() => {
     const worker = async () => {
       while (next < commands.length) {
         const index = next++;
+        let job;
         try {
           const command = commands[index];
           if (!command || typeof command !== 'object' || isArray(command)) {
             throw new Failure('each parallel command must be an options object');
           }
-          const value = await executeCommand(id, {max_bytes:2048, ...command});
+          let value = await executeCommand(id, {max_bytes:2048, ...command});
+          job = value.job_id;
+          // A polling deadline never frees a running process's concurrency slot.
+          while (value.running === true) {
+            const status = await execution('wait', id, {job_id:job, wait_ms:60000});
+            if (typeof status.running !== 'boolean') {
+              throw new Failure('command state is unavailable; inspect exec.list before starting more work');
+            }
+            value = {...value, ...status, snapshot:status};
+            if (!status.running) {
+              const output = await execution('read', id, {
+                job_id:job, max_bytes:command.max_bytes ?? 2048,
+              });
+              value = {...value, ...output.snapshot, ...output, snapshot:output.snapshot ?? status};
+            }
+          }
+          if (value.running !== false) {
+            throw new Failure('command completion is unknown; inspect exec.list before starting more work');
+          }
           results[index] = {status:'fulfilled', value};
         } catch (error) {
-          results[index] = {status:'rejected', reason:(error?.message ?? text(error)).slice(0, 4096)};
+          const job_id = job ?? error?.job_id;
+          results[index] = {
+            status:'rejected', reason:(error?.message ?? text(error)).slice(0, 4096),
+            ...(job_id ? {job_id} : {}),
+          };
+          // Observation can fail after launch. Reserve this worker's slot for
+          // that possibly running process instead of oversubscribing the host.
+          return;
         }
       }
     };
     await Promise.all(Array.from({length:Math.min(concurrency, commands.length)}, worker));
+    for (let index = 0; index < results.length; index++) {
+      if (!results[index]) results[index] = {
+        status:'rejected', not_started:true,
+        reason:'Command was not started because a worker could not confirm completion; inspect returned job IDs before retrying.',
+      };
+    }
     return results;
   };
   const exec = freeze({
@@ -341,12 +375,17 @@ const bootstrap = `(() => {
     status: (id, job) => execution('status', id, {job_id:job}),
     wait: (id, job, args = {}) => execution('wait', id, {...args, job_id:job}),
     read: (id, job, args = {}) => execution('read', id, {...args, job_id:job}),
+    write: (id, job, args = {}) => execution('write', id, {...args, job_id:job}),
     cancel: (id, job) => execution('cancel', id, {job_id:job}),
     forget: (id, job) => execution('forget', id, {job_id:job}),
     events: (id, args) => execution('events', id, args),
     run: executeCommand,
     parallel: parallelCommands,
   });
+  const terminal = freeze(Object.fromEntries(
+    ['open','list','select','close','read','write','status','resize']
+      .map(name => [name, (id, args = {}) => workspaceResult(id, 'terminal.' + name, args)])
+  ));
   const rsync = (args) => builtin('sync', args);
   const jobs = freeze({
     list: () => builtin('jobs.list'),
@@ -384,6 +423,7 @@ const bootstrap = `(() => {
     skills: { value: skills, enumerable: true },
     agents: { value: agents, enumerable: true },
     exec: { value: exec, enumerable: true },
+    terminal: { value: terminal, enumerable: true },
     rsync: { value: rsync, enumerable: true },
     sync: { value: rsync, enumerable: true },
     jobs: { value: jobs, enumerable: true },

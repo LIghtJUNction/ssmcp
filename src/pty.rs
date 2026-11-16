@@ -63,6 +63,7 @@ pub struct Terminal {
     reader: Mutex<Option<JoinHandle<()>>>,
     closed: AtomicBool,
     live: bool,
+    display_id: String,
 }
 
 impl Terminal {
@@ -85,6 +86,25 @@ impl Terminal {
         shell: &Path,
         live: bool,
         output_store: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        Self::spawn_configured(shell, None, live, output_store, "main")
+    }
+
+    pub fn spawn_named_with_store(
+        shell: &Path,
+        cwd: &Path,
+        output: Arc<OutputStore>,
+        terminal_id: &str,
+    ) -> crate::Result<Arc<Self>> {
+        Self::spawn_configured(shell, Some(cwd), true, output, terminal_id)
+    }
+
+    fn spawn_configured(
+        shell: &Path,
+        cwd: Option<&Path>,
+        live: bool,
+        output_store: Arc<OutputStore>,
+        display_id: &str,
     ) -> crate::Result<Arc<Self>> {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
@@ -138,6 +158,9 @@ impl Terminal {
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave))
             .kill_on_drop(true);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
         // SAFETY: this closure runs after fork and only calls async-signal-safe syscalls.
         unsafe {
             command.pre_exec(|| {
@@ -169,6 +192,7 @@ impl Terminal {
             reader: Mutex::new(None),
             closed: AtomicBool::new(false),
             live,
+            display_id: display_id.into(),
         });
         let weak = Arc::downgrade(&terminal);
         let reader = tokio::spawn(async move {
@@ -191,7 +215,10 @@ impl Terminal {
                     Ok(n) if n > 0 => {
                         terminal.output.lock().unwrap().push(&data[..n]);
                         if terminal.live {
-                            crate::client::render::terminal_output(&data[..n]);
+                            crate::client::render::terminal_output_for(
+                                &terminal.display_id,
+                                &data[..n],
+                            );
                         }
                     }
                     result => {

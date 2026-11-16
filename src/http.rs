@@ -5,7 +5,7 @@ use crate::{
     broker::{Authorization, Broker, Session},
     code_mode::{self, DEFAULT_TIMEOUT_MS, Host, HostRequest, MAX_CODE_BYTES, MAX_TIMEOUT_MS},
     resources::{self, ResourceError},
-    wire::{MAX_FRAME, Operation},
+    wire::{Controller, ControllerSource, MAX_FRAME, Operation},
 };
 use axum::{
     Json, Router,
@@ -423,6 +423,50 @@ struct CodeArguments {
     code: String,
     #[serde(default = "default_timeout")]
     timeout_ms: u64,
+    #[serde(default)]
+    controller: Option<ControllerInput>,
+    #[serde(skip)]
+    controller_context: Option<Controller>,
+}
+
+/// A claim is intentionally separate from wire attribution. A caller cannot
+/// select a supposedly stronger provenance by supplying a "source" property.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ControllerInput {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+impl ControllerInput {
+    fn identity(&self) -> Result<Controller, String> {
+        let controller = Controller {
+            name: self.name.clone(),
+            model: self.model.clone(),
+            source: ControllerSource::CallerReported,
+        };
+        controller.validate()?;
+        Ok(controller)
+    }
+}
+
+fn request_controller(request: &RpcRequest<'_>) -> Option<Controller> {
+    // Stateless HTTP has no unique legacy initialize session to attach this to.
+    // Read only the current request's application metadata, never a global or
+    // token-keyed cache that could mix several callers sharing a connection.
+    let name = request
+        .param("_meta")?
+        .get("io.modelcontextprotocol/clientInfo")?
+        .get("name")?
+        .as_str()?;
+    let controller = Controller {
+        name: Some(name.to_owned()),
+        model: None,
+        source: ControllerSource::McpClientInfo,
+    };
+    controller.validate().ok().map(|()| controller)
 }
 
 fn default_timeout() -> u64 {
@@ -582,9 +626,19 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             Ok(Action::List(arguments))
         }
         "code_mode" => {
-            let arguments: CodeArguments = serde_json::from_value(arguments).map_err(|_| {
-                Fault::params("code_mode requires code and accepts an optional timeout_ms integer")
+            let mut arguments: CodeArguments = serde_json::from_value(arguments).map_err(|_| {
+                Fault::params(
+                    "code_mode requires code and accepts timeout_ms and controller {name, model}",
+                )
             })?;
+            arguments.controller_context = match &arguments.controller {
+                Some(controller) => Some(
+                    controller
+                        .identity()
+                        .map_err(|error| Fault::params(&error))?,
+                ),
+                None => request_controller(request),
+            };
             if arguments.code.trim().is_empty() || arguments.code.len() > MAX_CODE_BYTES {
                 return Err(Fault::params(&format!(
                     "code must be nonempty and at most {MAX_CODE_BYTES} UTF-8 bytes"
@@ -604,12 +658,14 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
 fn client_info(session: &Session) -> Value {
     let mut info = json!(session.info());
     info["cwd_kind"] = json!("startup");
+    info["controller_metadata"] = json!(session.supports_controller());
     info
 }
 
 fn usage() -> Value {
     json!({
         "language":"javascript",
+        "controller":"Pass optional controller:{name,model} to code_mode to attribute each native call. Values are caller-reported, not verified model identity. Without a model declaration, the terminal shows Model unknown. clientInfo supplies only the current request's application name.",
         "clients":"Online client metadata snapshot; select a client by id from list.",
         "call":"await call(clientId, toolName, arguments = {}) returns short native MCP results unchanged. Long backend output returns artifact metadata in structuredContent; inspect isError, spilled and completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.",
         "tools":"await tools(clientId, cursor?) returns a page of native tool schemas; pass nextCursor to get the next page.",
@@ -677,8 +733,10 @@ async fn execute(
     let request_id = crate::observability::REQUEST_ID
         .try_with(Clone::clone)
         .unwrap_or_default();
+    let controller = arguments.controller_context.clone();
     let host: Host = Arc::new(move |request| {
         let request_id = request_id.clone();
+        let controller = controller.clone();
         let broker = broker.clone();
         let user = user.clone();
         let access_token = access_token.clone();
@@ -715,7 +773,10 @@ async fn execute(
             );
             let is_reload = crate::client::reload::is_reload(&operation);
             let result = crate::observability::REQUEST_ID
-                .scope(request_id, session.call(operation))
+                .scope(
+                    request_id,
+                    session.call_with_controller(operation, controller),
+                )
                 .await?;
             // The authorized lifecycle action deliberately invalidates its old
             // connection. Deliver its ACK even if EOF arrives before this task
@@ -759,10 +820,20 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools(clientId, cursor?) for native tool schemas, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All shell/codex/cc/pi/opencode actions run through call over SSH. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
-                "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS}
+                "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
+                "controller":{
+                    "type":"object",
+                    "description":"Optional caller-reported application and model shown on each controlled terminal. Display attribution only; cannot prove model identity. Omit unknown fields.",
+                    "properties":{
+                        "name":{"type":"string","minLength":1,"maxLength":128},
+                        "model":{"type":"string","minLength":1,"maxLength":128}
+                    },
+                    "anyOf":[{"required":["name"]},{"required":["model"]}],
+                    "additionalProperties":false
+                }
             },"required":["code"],"additionalProperties":false},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}
         }
@@ -837,6 +908,62 @@ impl Fault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_claims_are_explicit_and_cannot_claim_trusted_provenance() {
+        let mut value = json!({
+            "jsonrpc":"2.0","id":1,"method":"tools/call",
+            "params":{"name":"code_mode","arguments":{"code":"return 1;","controller":{"name":"ChatGPT","model":"model-a"}}}
+        });
+        let Action::Code(arguments) =
+            operation(&parse(&value)).unwrap_or_else(|e| panic!("{}", e.message))
+        else {
+            panic!("expected code_mode");
+        };
+        let controller = arguments.controller_context.unwrap();
+        assert_eq!(controller.name.as_deref(), Some("ChatGPT"));
+        assert_eq!(controller.model.as_deref(), Some("model-a"));
+        assert_eq!(controller.source, ControllerSource::CallerReported);
+        for claim in [
+            json!({}),
+            json!({"model":""}),
+            json!({"name":"bad\nname"}),
+            json!({"model":"x".repeat(129)}),
+            json!({"model":false}),
+            json!({"model":"model-a","source":"mcp-client-info"}),
+        ] {
+            value["params"]["arguments"]["controller"] = claim;
+            assert!(operation(&parse(&value)).is_err());
+        }
+    }
+
+    #[test]
+    fn request_client_info_never_infers_a_model_or_leaks_to_the_next_request() {
+        let mut value = json!({
+            "jsonrpc":"2.0","id":1,"method":"tools/call",
+            "params":{"name":"code_mode","arguments":{"code":"return 1;"},
+                "_meta":{"io.modelcontextprotocol/clientInfo":{"name":"example app","version":"1","model":"untrusted-extra"}}}
+        });
+        let Action::Code(arguments) =
+            operation(&parse(&value)).unwrap_or_else(|e| panic!("{}", e.message))
+        else {
+            panic!("expected code_mode");
+        };
+        let controller = arguments.controller_context.unwrap();
+        assert_eq!(controller.name.as_deref(), Some("example app"));
+        assert!(controller.model.is_none());
+        assert_eq!(controller.source, ControllerSource::McpClientInfo);
+        value["params"].as_object_mut().unwrap().remove("_meta");
+        let Action::Code(arguments) =
+            operation(&parse(&value)).unwrap_or_else(|e| panic!("{}", e.message))
+        else {
+            panic!("expected code_mode");
+        };
+        assert!(arguments.controller_context.is_none());
+        value["params"]["_meta"] =
+            json!({"io.modelcontextprotocol/clientInfo":{"name":"\u{1b}[2J","version":"1"}});
+        assert!(request_controller(&parse(&value)).is_none());
+    }
 
     fn modern_request(method: &str) -> Value {
         json!({"jsonrpc":"2.0","id":1,"method":method,"params":{"_meta":{

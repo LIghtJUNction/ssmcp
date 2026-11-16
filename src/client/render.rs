@@ -1,7 +1,7 @@
 //! Human transcript only; never changes events retained for MCP consumers.
 use super::{
     git_status::GitSnapshot,
-    panel::{PanelSnapshot, ProgressView, TaskView},
+    panel::{ControllerView, PanelSnapshot, ProgressView, TaskView},
     ui::Ui,
 };
 #[path = "activity.rs"]
@@ -151,6 +151,36 @@ pub(crate) fn event(label: &str, value: &Value) {
     publish(&bytes, snapshot);
 }
 
+/// Held by the individual native request, including while it awaits I/O.
+/// Dropping a cancelled request clears only that request's control indicator.
+pub(crate) struct ControllerGuard {
+    id: u64,
+}
+
+impl Drop for ControllerGuard {
+    fn drop(&mut self) {
+        controller_finished(self.id);
+    }
+}
+
+pub(crate) fn controller_started(
+    id: u64,
+    controller: Option<&crate::wire::Controller>,
+) -> ControllerGuard {
+    event(
+        "controller",
+        &json!({"type":"ssmcp.controller.started","request_id":id,"controller":controller}),
+    );
+    ControllerGuard { id }
+}
+
+pub(crate) fn controller_finished(id: u64) {
+    event(
+        "controller",
+        &json!({"type":"ssmcp.controller.finished","request_id":id}),
+    );
+}
+
 pub(crate) fn finish(label: &str) {
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
     let mut bytes = Vec::new();
@@ -217,6 +247,8 @@ struct Renderer {
     git: Option<Arc<GitSnapshot>>,
     native_progress: HashMap<String, ProgressView>,
     discovery_success: HashMap<String, Value>,
+    controllers: HashMap<String, ControllerView>,
+    last_controller: Option<ControllerView>,
 }
 
 impl Renderer {
@@ -239,15 +271,21 @@ impl Renderer {
             git: None,
             native_progress: HashMap::new(),
             discovery_success: HashMap::new(),
+            controllers: HashMap::new(),
+            last_controller: None,
         }
     }
 
     fn event(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<()> {
         let safe = crate::audit::event(value.clone());
         let value = &safe;
+        let controller_event = self.controller(out, value)?;
         if self.raw {
             writeln!(out, "{value}")?;
-        } else if !self.activity(out, label, value)? && !self.rpc(out, label, value)? {
+        } else if !controller_event
+            && !self.activity(out, label, value)?
+            && !self.rpc(out, label, value)?
+        {
             self.value(out, label, value, "Event", 0)?;
         }
         if self.verbose && !self.raw {
@@ -284,11 +322,77 @@ impl Renderer {
             .cloned()
             .collect::<Vec<_>>();
         progress.sort_by_key(|value| std::cmp::Reverse(value.updated));
+        let mut controllers = self.controllers.values().cloned().collect::<Vec<_>>();
+        controllers.sort_by_key(|controller| controller.started);
         PanelSnapshot {
+            controllers,
+            last_controller: self.last_controller.clone(),
             tasks,
             progress,
             git: self.git.clone(),
         }
+    }
+
+    fn controller(&mut self, out: &mut impl Write, value: &Value) -> io::Result<bool> {
+        let kind = value["type"].as_str().unwrap_or("");
+        if !matches!(
+            kind,
+            "ssmcp.controller.started" | "ssmcp.controller.finished"
+        ) {
+            return Ok(false);
+        }
+        let Some(request_id) = value["request_id"].as_u64().map(|id| id.to_string()) else {
+            return Ok(true);
+        };
+        if kind == "ssmcp.controller.finished" {
+            if let Some(controller) = self.controllers.remove(&request_id) {
+                self.last_controller = Some(controller);
+            }
+            return Ok(true);
+        }
+        let identity =
+            serde_json::from_value::<crate::wire::Controller>(value["controller"].clone())
+                .ok()
+                .filter(|controller| controller.validate().is_ok());
+        let changed = self
+            .last_controller
+            .as_ref()
+            .is_none_or(|last| last.identity != identity);
+        let controller = ControllerView {
+            request_id: request_id.clone(),
+            identity,
+            started: Instant::now(),
+        };
+        // The real transport allows only 16 requests. Keep malformed/replayed
+        // display events bounded as well, without evicting an active identity.
+        if self.controllers.len() < crate::wire::MAX_INFLIGHT
+            || self.controllers.contains_key(&request_id)
+        {
+            self.controllers
+                .insert(request_id.clone(), controller.clone());
+        }
+        self.last_controller = Some(controller.clone());
+        if changed && !self.raw {
+            let identity = controller.identity.as_ref();
+            let name = identity
+                .and_then(|value| value.name.as_deref())
+                .unwrap_or("Client unknown");
+            let model = identity
+                .and_then(|value| value.model.as_deref())
+                .unwrap_or("Model unknown");
+            let source = match identity.map(|value| value.source) {
+                Some(crate::wire::ControllerSource::CallerReported) => "caller-reported",
+                Some(crate::wire::ControllerSource::McpClientInfo) => "MCP clientInfo",
+                None => "metadata missing",
+            };
+            self.summary(
+                out,
+                "controller",
+                "Usage",
+                &format!("#{request_id} · {model} · {name} · {source}"),
+            )?;
+        }
+        Ok(true)
     }
 
     fn path_label(&self, path: &str) -> String {
@@ -1723,7 +1827,7 @@ pub(crate) fn connection(output: &Value) -> io::Result<()> {
     out.flush()
 }
 
-pub(crate) fn terminal_output(bytes: &[u8]) {
+pub(crate) fn terminal_output_for(terminal_id: &str, bytes: &[u8]) {
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
     let tty = io::stderr().is_terminal();
     let mut rendered = Vec::new();
@@ -1738,7 +1842,7 @@ pub(crate) fn terminal_output(bytes: &[u8]) {
                 &mut rendered,
                 "shell",
                 &json!({
-                    "type":"ssmcp.terminal_output",
+                    "type":"ssmcp.terminal_output","terminal_id":terminal_id,
                     "data_base64":STANDARD.encode(bytes),"text":String::from_utf8_lossy(bytes)
                 }),
             );
@@ -1749,14 +1853,14 @@ pub(crate) fn terminal_output(bytes: &[u8]) {
     } else if tty {
         // Preserve the user's original PTY bytes; only the compositor interprets
         // cursor control when panes are active. NO_COLOR does not change transport.
-        if !super::terminal::pty(bytes) {
+        if !super::terminal::pty_session(terminal_id, bytes) {
             let mut out = io::stderr().lock();
             let _ = out.write_all(bytes);
             let _ = out.flush();
         }
     } else {
         let safe = crate::audit::event(json!({
-            "type":"ssmcp.terminal_output","text":String::from_utf8_lossy(bytes)
+            "type":"ssmcp.terminal_output","terminal_id":terminal_id,"text":String::from_utf8_lossy(bytes)
         }));
         let text = safe["text"].as_str().unwrap_or("");
         let mut out = io::stderr().lock();
@@ -1942,6 +2046,104 @@ fn clean(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_controller_requests_keep_their_own_identity_until_finished() {
+        let mut renderer = Renderer::new(false, false, 140);
+        let mut out = Vec::new();
+        for (id, model) in [(1, "model-a"), (2, "model-b")] {
+            renderer
+                .event(
+                    &mut out,
+                    "controller",
+                    &json!({
+                        "type":"ssmcp.controller.started","request_id":id,
+                        "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
+                    }),
+                )
+                .unwrap();
+        }
+        let panel = renderer.panel_snapshot(Instant::now());
+        assert_eq!(panel.controllers.len(), 2);
+        assert_eq!(
+            panel.controllers[0]
+                .identity
+                .as_ref()
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("model-a")
+        );
+        assert_eq!(
+            panel.controllers[1]
+                .identity
+                .as_ref()
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("model-b")
+        );
+        renderer
+            .event(
+                &mut out,
+                "controller",
+                &json!({"type":"ssmcp.controller.finished","request_id":2}),
+            )
+            .unwrap();
+        let panel = renderer.panel_snapshot(Instant::now());
+        assert_eq!(panel.controllers.len(), 1);
+        assert_eq!(panel.controllers[0].request_id, "1");
+        renderer
+            .event(
+                &mut out,
+                "controller",
+                &json!({"type":"ssmcp.controller.finished","request_id":1}),
+            )
+            .unwrap();
+        let panel = renderer.panel_snapshot(Instant::now());
+        assert!(panel.controllers.is_empty());
+        assert_eq!(panel.last_controller.unwrap().request_id, "1");
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("model-a")
+                && text.contains("model-b")
+                && text.contains("caller-reported")
+        );
+    }
+
+    #[test]
+    fn missing_controller_metadata_is_not_replaced_by_a_previous_model() {
+        let mut renderer = Renderer::new(false, false, 140);
+        let mut out = Vec::new();
+        renderer
+            .event(
+                &mut out,
+                "controller",
+                &json!({
+                    "type":"ssmcp.controller.started","request_id":1,
+                    "controller":{"name":"ChatGPT","model":"model-a","source":"caller-reported"}
+                }),
+            )
+            .unwrap();
+        renderer
+            .event(
+                &mut out,
+                "controller",
+                &json!({"type":"ssmcp.controller.finished","request_id":1}),
+            )
+            .unwrap();
+        renderer
+            .event(
+                &mut out,
+                "controller",
+                &json!({"type":"ssmcp.controller.started","request_id":2,"controller":null}),
+            )
+            .unwrap();
+        let panel = renderer.panel_snapshot(Instant::now());
+        assert!(panel.controllers[0].identity.is_none());
+        assert!(String::from_utf8(out).unwrap().contains("Model unknown"));
+    }
+
     use serde_json::json;
 
     fn render(events: &[Value], raw: bool, color: bool) -> String {

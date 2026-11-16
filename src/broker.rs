@@ -1,7 +1,7 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
-    wire::{self, ClientInfo, Frame, Operation},
+    wire::{self, ClientInfo, Controller, Frame, Operation},
 };
 use serde_json::Value;
 use std::{
@@ -34,6 +34,7 @@ type CallResult = std::result::Result<Value, String>;
 
 struct Call {
     operation: Operation,
+    controller: Option<Controller>,
     reply: oneshot::Sender<CallResult>,
 }
 
@@ -77,6 +78,7 @@ pub struct Session {
     // Resolved provider subject IDs are immutable for this SSH connection.
     allow: Vec<Identity>,
     info: ClientInfo,
+    wire_version: u32,
     sender: mpsc::Sender<Call>,
     slots: Semaphore,
     alive: AtomicBool,
@@ -95,8 +97,26 @@ impl Session {
         self.alive.load(Ordering::Acquire)
     }
 
+    pub fn supports_controller(&self) -> bool {
+        self.wire_version >= wire::VERSION
+    }
+
     pub async fn call(&self, operation: Operation) -> CallResult {
+        self.call_with_controller(operation, None).await
+    }
+
+    pub async fn call_with_controller(
+        &self,
+        operation: Operation,
+        controller: Option<Controller>,
+    ) -> CallResult {
         operation.validate()?;
+        if let Some(controller) = &controller {
+            controller.validate()?;
+        }
+        // An older client uses a strict frame parser. Omit the new field
+        // entirely; never corrupt its connection merely to improve display.
+        let controller = controller.filter(|_| self.supports_controller());
         if !self.alive.load(Ordering::Acquire) {
             return Err("client disconnected".into());
         }
@@ -107,7 +127,11 @@ impl Session {
         let duration = request_timeout(&operation);
         let (reply, response) = oneshot::channel();
         self.sender
-            .try_send(Call { operation, reply })
+            .try_send(Call {
+                operation,
+                controller,
+                reply,
+            })
             .map_err(|_| "client disconnected or busy")?;
         let started = std::time::Instant::now();
         let result = match timeout(duration, response).await {
@@ -242,6 +266,7 @@ impl Broker {
                 cwd: "/test".into(),
                 hostname: "localhost".into(),
             },
+            wire_version: wire::VERSION,
             sender,
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
@@ -300,17 +325,24 @@ impl Broker {
         let user = tokio::task::spawn_blocking(move || username(uid)).await??;
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
-        let (mode, metadata) = match timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await?? {
+        let (wire_version, mode, metadata) = match timeout(
+            IO_TIMEOUT,
+            wire::read_frame(&mut reader),
+        )
+        .await??
+        {
             Some(Frame::Hello {
-                version: wire::VERSION,
+                version,
                 mode,
                 metadata,
-            }) => (mode, metadata),
+            }) if matches!(version, wire::VERSION | wire::LEGACY_VERSION) => {
+                (version, mode, metadata)
+            }
             _ => {
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "unsupported ssmcp wire protocol".into(),
+                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)".into(),
                     },
                 )
                 .await?;
@@ -369,6 +401,7 @@ impl Broker {
                 cwd: metadata.cwd,
                 hostname: metadata.hostname,
             },
+            wire_version,
             sender,
             slots: Semaphore::new(wire::MAX_INFLIGHT),
             alive: AtomicBool::new(true),
@@ -442,7 +475,7 @@ impl Broker {
                             next_id = next_id.checked_add(1).ok_or("request id exhausted")?;
                             let reload = crate::client::reload::is_reload(&call.operation);
                             pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation), reload));
-                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::Call { id:next_id, operation:call.operation })).await??;
+                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::Call { id:next_id, operation:call.operation, controller:call.controller })).await??;
                         }
                         _ = expiry.tick() => {
                             if pending.values().any(|(_, deadline, _)| Instant::now() >= *deadline) {
@@ -604,6 +637,147 @@ fn generate_secret() -> io::Result<String> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn controller_attribution_negotiates_real_version_four_and_five_connections() {
+        for version in [wire::LEGACY_VERSION, wire::VERSION] {
+            let broker = Arc::new(Broker::new("https://example.test".into()));
+            let (server, client) = UnixStream::pair().unwrap();
+            let server_task = tokio::spawn(broker.clone().attach(server));
+            let (reader, mut writer) = client.into_split();
+            let mut reader = BufReader::new(reader);
+            wire::write_frame(
+                &mut writer,
+                &Frame::Hello {
+                    version,
+                    mode: wire::Mode::Shell,
+                    metadata: metadata("controller test", "/project"),
+                },
+            )
+            .await
+            .unwrap();
+            let Some(Frame::Ready {
+                url, login_code, ..
+            }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+            else {
+                panic!("registration failed");
+            };
+            let user = url.rsplit('/').next().unwrap();
+            let subject = broker.redeem_login(user, &login_code).await.unwrap();
+            assert_eq!(subject.supports_controller(), version == wire::VERSION);
+            let request = tokio::spawn(async move {
+                subject
+                    .call_with_controller(
+                        Operation::Status {},
+                        Some(wire::Controller {
+                            name: Some("ChatGPT".into()),
+                            model: Some("test-model".into()),
+                            source: wire::ControllerSource::CallerReported,
+                        }),
+                    )
+                    .await
+            });
+            let Some(Frame::Call { id, controller, .. }) =
+                timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                    .await
+                    .unwrap()
+                    .unwrap()
+            else {
+                panic!("missing call");
+            };
+            if version == wire::LEGACY_VERSION {
+                assert!(controller.is_none());
+            } else {
+                assert_eq!(controller.unwrap().model.as_deref(), Some("test-model"));
+            }
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reply {
+                    id,
+                    result: Ok(serde_json::json!({"ok":true})),
+                },
+            )
+            .await
+            .unwrap();
+            assert!(request.await.unwrap().unwrap()["ok"] == true);
+            drop(reader);
+            drop(writer);
+            timeout(Duration::from_secs(2), server_task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn controller_metadata_is_per_call_and_omitted_for_version_four_clients() {
+        for version in [wire::LEGACY_VERSION, wire::VERSION] {
+            let (sender, mut receiver) = mpsc::channel(4);
+            let mut subject = session("controller-test", "secret");
+            let mutable = Arc::get_mut(&mut subject).unwrap();
+            mutable.sender = sender;
+            mutable.slots = Semaphore::new(4);
+            mutable.wire_version = version;
+            let mut tasks = Vec::new();
+            for (tool, model) in [("tool.a", "model-a"), ("tool.b", "model-b")] {
+                let subject = subject.clone();
+                tasks.push(tokio::spawn(async move {
+                    subject
+                        .call_with_controller(
+                            Operation::CallTool {
+                                name: tool.into(),
+                                arguments: serde_json::json!({}),
+                            },
+                            Some(wire::Controller {
+                                name: Some("ChatGPT".into()),
+                                model: Some(model.into()),
+                                source: wire::ControllerSource::CallerReported,
+                            }),
+                        )
+                        .await
+                }));
+            }
+            let first = timeout(Duration::from_secs(2), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let second = timeout(Duration::from_secs(2), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            for call in [second, first] {
+                let Operation::CallTool { name, .. } = call.operation else {
+                    panic!("expected native call");
+                };
+                if version == wire::LEGACY_VERSION {
+                    assert!(call.controller.is_none());
+                } else {
+                    let expected = if name == "tool.a" {
+                        "model-a"
+                    } else {
+                        "model-b"
+                    };
+                    assert_eq!(call.controller.unwrap().model.as_deref(), Some(expected));
+                }
+                call.reply
+                    .send(Ok(serde_json::json!({"tool":name})))
+                    .unwrap();
+            }
+            for task in tasks {
+                assert!(
+                    timeout(Duration::from_secs(2), task)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_ok()
+                );
+            }
+        }
+    }
+
     fn metadata(name: &str, cwd: &str) -> wire::ClientMetadata {
         wire::ClientMetadata {
             name: name.into(),
@@ -634,6 +808,7 @@ mod tests {
                 cwd: "/project".into(),
                 hostname: "localhost".into(),
             },
+            wire_version: wire::VERSION,
             sender,
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),

@@ -105,7 +105,7 @@ impl Server {
         let native_gate = Arc::new(Notify::new());
         let recorded_native_gate = native_gate.clone();
         let task = tokio::spawn(async move {
-            while let Some(Frame::Call { id, operation }) =
+            while let Some(Frame::Call { id, operation, .. }) =
                 wire::read_frame(&mut reader).await.unwrap()
             {
                 let result = match operation {

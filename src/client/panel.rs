@@ -77,8 +77,17 @@ pub(super) struct ProgressView {
     pub updated: Instant,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct ControllerView {
+    pub request_id: String,
+    pub identity: Option<crate::wire::Controller>,
+    pub started: Instant,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct PanelSnapshot {
+    pub controllers: Vec<ControllerView>,
+    pub last_controller: Option<ControllerView>,
     pub tasks: Vec<TaskView>,
     pub progress: Vec<ProgressView>,
     pub git: Option<Arc<GitSnapshot>>,
@@ -91,6 +100,74 @@ pub(super) fn render(
     height: u16,
     now: Instant,
 ) -> Vec<PanelLine> {
+    let mut lines = controller_lines(snapshot);
+    lines.truncate(usize::from(height));
+    let remaining = usize::from(height).saturating_sub(lines.len() + 1);
+    if remaining > 0 {
+        lines.push(PanelLine::default());
+        lines.extend(render_body(snapshot, width, remaining as u16, now));
+    }
+    lines.resize_with(usize::from(height), PanelLine::default);
+    for row in &mut lines {
+        row.text = fit(&row.text, usize::from(width));
+    }
+    lines
+}
+
+fn controller_lines(snapshot: &PanelSnapshot) -> Vec<PanelLine> {
+    let active = !snapshot.controllers.is_empty();
+    let controllers = if active {
+        snapshot.controllers.iter().take(2).collect::<Vec<_>>()
+    } else {
+        snapshot.last_controller.iter().collect::<Vec<_>>()
+    };
+    let heading = if active {
+        format!("Controller · {} active", snapshot.controllers.len())
+    } else if controllers.is_empty() {
+        "Controller".into()
+    } else {
+        "Last controller".into()
+    };
+    let mut rows = vec![line(heading, PanelTone::Heading)];
+    if controllers.is_empty() {
+        rows.push(line("Model unknown", PanelTone::Muted));
+        rows.push(line("No controller metadata yet", PanelTone::Muted));
+        return rows;
+    }
+    for controller in controllers {
+        let identity = controller.identity.as_ref();
+        rows.push(line(
+            identity
+                .and_then(|value| value.model.as_deref())
+                .unwrap_or("Model unknown"),
+            PanelTone::Accent,
+        ));
+        rows.push(line(
+            identity
+                .and_then(|value| value.name.as_deref())
+                .unwrap_or("Client unknown"),
+            PanelTone::Normal,
+        ));
+        let source = match identity.map(|value| value.source) {
+            Some(crate::wire::ControllerSource::CallerReported) => "caller-reported",
+            Some(crate::wire::ControllerSource::McpClientInfo) => "MCP clientInfo",
+            None => "metadata missing",
+        };
+        rows.push(line(
+            format!("{source} · #{}", controller.request_id),
+            PanelTone::Muted,
+        ));
+    }
+    if snapshot.controllers.len() > 2 {
+        rows.push(line(
+            format!("+{} other active requests", snapshot.controllers.len() - 2),
+            PanelTone::Muted,
+        ));
+    }
+    rows
+}
+
+fn render_body(snapshot: &PanelSnapshot, width: u16, height: u16, now: Instant) -> Vec<PanelLine> {
     let width = usize::from(width);
     let height = usize::from(height);
     if height == 0 {
@@ -590,6 +667,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn controller_panel_distinguishes_active_last_reported_and_unknown() {
+        let now = Instant::now();
+        let controller = ControllerView {
+            request_id: "42".into(),
+            identity: Some(crate::wire::Controller {
+                name: Some("ChatGPT".into()),
+                model: Some("model-a".into()),
+                source: crate::wire::ControllerSource::CallerReported,
+            }),
+            started: now,
+        };
+        let mut snapshot = PanelSnapshot {
+            controllers: vec![controller.clone()],
+            ..PanelSnapshot::default()
+        };
+        let text = render(&snapshot, 36, 24, now)
+            .into_iter()
+            .map(|row| row.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("Controller · 1 active")
+                && text.contains("model-a")
+                && text.contains("caller-reported")
+        );
+        snapshot.controllers.clear();
+        snapshot.last_controller = Some(controller);
+        let text = render(&snapshot, 36, 24, now)
+            .into_iter()
+            .map(|row| row.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Last controller") && !text.contains("1 active"));
+        snapshot.last_controller = None;
+        let text = render(&snapshot, 36, 24, now)
+            .into_iter()
+            .map(|row| row.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Model unknown"));
+        assert!(!text.contains("model-a"));
+        for height in 0..=24 {
+            let rows = render(&snapshot, 28, height, now);
+            assert_eq!(rows.len(), usize::from(height));
+            assert!(
+                rows.iter()
+                    .all(|row| UnicodeWidthStr::width(row.text.as_str()) <= 28)
+            );
+        }
+    }
+
+    #[test]
     fn sidebar_text_uses_the_same_secret_redaction_as_logs() {
         assert_eq!(
             safe_text("branch password=panel-secret-fixture"),
@@ -815,8 +944,8 @@ mod tests {
         assert_eq!(full.len(), 57);
         let git_row = full.iter().position(|row| row.text == "Git").unwrap();
         assert_eq!(
-            git_row, 6,
-            "Git must follow two task rows without bottom anchoring"
+            git_row, 10,
+            "Git follows the controller block and two task rows without bottom anchoring"
         );
         let history_row = full
             .iter()
@@ -842,8 +971,15 @@ mod tests {
                     .any(|row| row.text.contains(&commit.short_hash))
             })
             .count();
-        assert_eq!(shown, 3);
-        assert!(compact.iter().any(|row| row.text == "Recent commits · 3/5"));
+        assert_eq!(shown, 1);
+        assert!(compact.iter().any(|row| row.text == "Recent commits · 1/5"));
+        assert_eq!(compact.len(), 17);
+        assert!(
+            compact
+                .iter()
+                .all(|row| UnicodeWidthStr::width(row.text.as_str()) <= 28)
+        );
+        assert!(compact.iter().any(|row| row.text == "Model unknown"));
     }
 
     #[test]

@@ -847,12 +847,18 @@ mod tests {
         let _guard = TESTS.lock().await;
         let active = Arc::new(AtomicUsize::new(0));
         let maximum = Arc::new(AtomicUsize::new(0));
+        let jobs = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            bool,
+        >::new()));
         let host: Host = {
             let active = active.clone();
             let maximum = maximum.clone();
+            let jobs = jobs.clone();
             Arc::new(move |request| {
                 let active = active.clone();
                 let maximum = maximum.clone();
+                let jobs = jobs.clone();
                 Box::pin(async move {
                     let HostRequest::Call {
                         name, arguments, ..
@@ -861,13 +867,15 @@ mod tests {
                         return Err("unexpected fixture request".into());
                     };
                     let id = arguments["job_id"].as_str().unwrap_or("").to_owned();
-                    let snapshot = json!({
-                        "job_id":id,
-                        "running":id == "live",
-                        "exit_code":if id == "live" { None } else { Some(if id == "exit7" { 7 } else { 0 }) },
-                        "state":if id == "live" { "running" } else { "completed" },
-                        "stdout":{"next_cursor":id.len()}, "stderr":{"next_cursor":0}
-                    });
+                    let snapshot = || {
+                        let running = *jobs.lock().unwrap().get(&id).expect("observed job");
+                        json!({
+                            "job_id":id,"running":running,
+                            "exit_code":if running { None } else { Some(if id == "exit7" { 7 } else { 0 }) },
+                            "state":if running {"running"} else {"completed"},
+                            "stdout":{"next_cursor":id.len()},"stderr":{"next_cursor":0}
+                        })
+                    };
                     let result = match name.as_str() {
                         "ssmcp.exec.start" => {
                             let label = arguments["command"][0].as_str().unwrap();
@@ -876,18 +884,34 @@ mod tests {
                             }
                             let count = active.fetch_add(1, Ordering::SeqCst) + 1;
                             maximum.fetch_max(count, Ordering::SeqCst);
+                            assert!(count <= 2, "poll deadlines cannot release live job slots");
+                            assert!(jobs.lock().unwrap().insert(label.into(), true).is_none());
                             json!({"job_id":label,"running":true})
                         }
                         "ssmcp.exec.wait" => {
-                            tokio::time::sleep(Duration::from_millis(25)).await;
-                            let mut waited = snapshot;
-                            waited["wait_timed_out"] = json!(id == "live");
+                            if arguments["wait_ms"] == 60000 {
+                                tokio::time::sleep(Duration::from_millis(if id == "first" {
+                                    40
+                                } else {
+                                    1
+                                }))
+                                .await;
+                                assert_eq!(
+                                    jobs.lock().unwrap().insert(id.clone(), false),
+                                    Some(true)
+                                );
+                                active.fetch_sub(1, Ordering::SeqCst);
+                            } else {
+                                assert_eq!(arguments["wait_ms"], 1);
+                            }
+                            let mut waited = snapshot();
+                            waited["wait_timed_out"] = waited["running"].clone();
                             waited
                         }
                         "ssmcp.exec.read" => {
                             assert_eq!(arguments["max_bytes"], 2048);
-                            active.fetch_sub(1, Ordering::SeqCst);
-                            json!({"job_id":id,"stdout":id,"stderr":"","snapshot":snapshot})
+                            // Reading a live job must not pretend that it has exited.
+                            json!({"job_id":id,"stdout":id,"stderr":"","snapshot":snapshot()})
                         }
                         _ => return Err(format!("unexpected fixture tool {name}")),
                     };
@@ -898,8 +922,8 @@ mod tests {
         let output = trusted_execute(
             r#"
                 const results = await exec.parallel('one', [
-                    {command:['first']}, {command:['missing']},
-                    {command:['exit7']}, {command:['live']}
+                    {command:['first'],wait_ms:0}, {command:['live'],wait_ms:1},
+                    {command:['exit7'],wait_ms:0}, {command:['missing'],wait_ms:0}
                 ], {concurrency:2});
                 return {results, frozen:Object.isFrozen(exec)};
             "#
@@ -912,19 +936,19 @@ mod tests {
         .unwrap();
         let results = &output["result"]["results"];
         assert_eq!(results[0]["value"]["stdout"], "first");
-        assert_eq!(results[1]["status"], "rejected");
+        assert_eq!(results[1]["value"]["running"], false);
+        assert_eq!(results[1]["value"]["wait_timed_out"], false);
+        assert_eq!(results[1]["value"]["job_id"], "live");
+        assert_eq!(results[1]["value"]["snapshot"]["stdout"]["next_cursor"], 4);
+        assert_eq!(results[2]["status"], "fulfilled");
+        assert_eq!(results[2]["value"]["exit_code"], 7);
+        assert_eq!(results[3]["status"], "rejected");
         assert!(
-            results[1]["reason"]
+            results[3]["reason"]
                 .as_str()
                 .unwrap()
                 .contains("command not found")
         );
-        assert_eq!(results[2]["status"], "fulfilled");
-        assert_eq!(results[2]["value"]["exit_code"], 7);
-        assert_eq!(results[3]["value"]["running"], true);
-        assert_eq!(results[3]["value"]["wait_timed_out"], true);
-        assert_eq!(results[3]["value"]["job_id"], "live");
-        assert_eq!(results[3]["value"]["snapshot"]["stdout"]["next_cursor"], 4);
         assert_eq!(output["result"]["frozen"], true);
         assert_eq!(maximum.load(Ordering::SeqCst), 2);
         assert_eq!(active.load(Ordering::SeqCst), 0);

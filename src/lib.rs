@@ -26,6 +26,7 @@ pub mod registry;
 #[cfg(target_os = "linux")]
 pub mod resources;
 pub mod session;
+pub mod terminals;
 pub mod wire;
 pub mod workspace;
 

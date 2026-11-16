@@ -31,7 +31,7 @@ await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
 Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
-Use computer.status(clientId) to inspect native desktop capabilities. computer.screenshot, \
+Use cua.status(clientId) to inspect native desktop capabilities. cua aliases computer and cua.browser aliases browser. computer.screenshot, \
 move/click/drag/key/type/scroll and windows/focus operate the client desktop. Browser control \
 uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/\
 evaluate/screenshot/close/disconnect. Neither provider invokes a model. Both convenience \
@@ -54,14 +54,24 @@ releases a completed job's retained state. These command jobs survive code_mode 
 and stop when the client disconnects or reloads. Each client permits 32 running jobs and \
 retains up to 128 records, evicting the oldest completed job when a new start needs room.\n\n\
 Use exec.parallel(clientId,[{command:[\"cargo\",\"test\"]},{command:[\"git\",\"status\"]}], \
-{concurrency:4}) to orchestrate up to 32 commands with 1..8 workers. Each worker starts, \
-waits for and reads a command; a wait that expires releases the worker while the command \
-continues in the background. Running commands may therefore exceed concurrency, up to the \
-client limit of 32. Results retain input order \
-and use fulfilled/value or rejected/reason records. A failed start does not discard other \
-results; inspect value.exit_code for commands that ran. Parallel output defaults to 2048 \
-bytes per stream per command. Command arguments are argv arrays; for shell syntax invoke \
-the platform shell explicitly. Existing jobs.* helpers manage file-transfer jobs.\n\n\
+{concurrency:4}) for up to 32 commands and 1..8 workers. A worker retains its slot until \
+the process actually completes, including after a short initial wait. Results retain input \
+order and use fulfilled/value or rejected/reason records. Observation errors retain job_id \
+when available and stop that worker; queued commands that never launched have not_started:true. \
+Inspect each exit_code. Polls count toward the 128-call and outer timeout budgets; use \
+exec.start for long-lived services. Parallel reads default to 2048 bytes per stream.\n\n\
+Start with stdin set to pipe to accept input. exec.write(clientId,jobId,{data,close_stdin:true}) \
+writes bounded UTF-8 (or data_base64) and sends EOF only after every submitted byte was written. \
+Inspect written, remaining_bytes and timed_out before retrying only the unwritten tail. \
+Cancellation and execution deadlines interrupt blocked input without blocking other jobs.\n\n\
+Use terminal.open/list/select/close for independent interactive shells. read/write/status/resize \
+accept terminal_id; omitting it always targets main. Up to 16 terminals keep separate cwd, \
+state, output cursors and display buffers. F7 cycles the local view and keyboard target; F6 \
+still selects the audit pane. Background terminals keep running. Close extra terminals when done.\n\n\
+Use the code_mode controller parameter with name and/or model to identify the caller. Each \
+request preserves its own declaration; the client displays active and last controllers. Models \
+are caller-reported, while MCP clientInfo supplies only the application name. Missing models \
+display unknown. list reports controller_metadata; v4 clients require an update to display it.\n\n\
 Use await reload(clientId) after installing an updated client binary. The client acknowledges \
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
@@ -130,6 +140,7 @@ fn descriptor(uri: String, name: String, description: &str, mime: &str) -> Value
 fn client_info(session: &Session) -> Value {
     let mut value = json!(session.info());
     value["cwd_kind"] = json!("startup");
+    value["controller_metadata"] = json!(session.supports_controller());
     value
 }
 
@@ -329,7 +340,9 @@ fn limits() -> Value {
                 "context.roots","skills.list","skills.read","skills.view",
                 "agents.list","agents.read","agents.resolve",
                 "rsync","sync","jobs","ports","resources","reload","outputs",
-                "exec.start","exec.list","exec.status","exec.wait","exec.read",
+                "cua","cua.browser","terminal.open","terminal.list","terminal.select","terminal.close",
+                "terminal.read","terminal.write","terminal.status","terminal.resize",
+                "exec.start","exec.list","exec.status","exec.wait","exec.read","exec.write",
                 "exec.cancel","exec.forget","exec.events","exec.run","exec.parallel"
             ],
             "text_files":{
@@ -381,9 +394,12 @@ fn limits() -> Value {
             "default_parallel_workers":4,
             "max_parallel_workers":8,
             "parallel_default_read_bytes_per_stream":2048,
-            "parallel_concurrency":"limits start/wait/read sequences, not commands that continue after wait expiry",
+            "parallel_concurrency":"limits actually running commands in this batch; workers wait for completion",
+            "stdin_default":"null",
+            "stdin_pipe_write_max_bytes":32768,
             "lifetime":"client connection; survives code_mode completion"
         },
+        "terminals":{"max_per_client":crate::terminals::MAX_TERMINALS,"default_id":"main","local_switch_key":"F7"},
         "wire":{
             "version":wire::VERSION,
             "max_frame_bytes":wire::MAX_FRAME,

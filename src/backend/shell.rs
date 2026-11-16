@@ -15,9 +15,9 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt},
-    process::Command,
-    sync::{Notify, Semaphore, watch},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    process::{ChildStdin, Command},
+    sync::{Mutex as AsyncMutex, Notify, Semaphore, watch},
     task::JoinHandle,
     time::{Instant, timeout, timeout_at},
 };
@@ -28,6 +28,8 @@ const MAX_OUTPUT: usize = 64 * 1024;
 const MAX_COMMAND_ARGS: usize = 256;
 const MAX_WAIT: u64 = 60_000;
 const MAX_TIMEOUT: u64 = 900_000;
+const MAX_INPUT: usize = 32 * 1024;
+const MAX_INPUT_WAIT: u64 = 5_000;
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 const PID_ROLE: &str = if cfg!(target_os = "linux") {
     "supervisor"
@@ -89,6 +91,22 @@ impl Output {
         self.eof = true;
     }
 }
+#[derive(Clone, Copy, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum InputMode {
+    #[default]
+    Null,
+    Pipe,
+}
+impl InputMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Pipe => "pipe",
+        }
+    }
+}
+
 struct State {
     running: bool,
     exit_code: Option<i32>,
@@ -97,6 +115,8 @@ struct State {
     timed_out: bool,
     error: Option<String>,
     finished: Option<Instant>,
+    stdin_open: bool,
+    stdin_written: u64,
     stdout: Output,
     stderr: Output,
 }
@@ -109,6 +129,9 @@ struct Job {
     state: Mutex<State>,
     changed: Notify,
     cancel: watch::Sender<bool>,
+    input_mode: InputMode,
+    stdin: AsyncMutex<Option<ChildStdin>>,
+    input_stopped: watch::Sender<bool>,
 }
 impl Job {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -120,10 +143,32 @@ impl Job {
             "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
             "duration_ms":state.finished.unwrap_or_else(Instant::now).duration_since(self.started).as_millis() as u64,
+            "stdin":self.input_snapshot(state),
             "stdout":state.stdout.metadata(),"stderr":state.stderr.metadata()})
     }
     fn snapshot(&self) -> Value {
         self.snapshot_locked(&self.state())
+    }
+    fn input_snapshot(&self, state: &State) -> Value {
+        json!({"mode":self.input_mode.label(),"open":state.stdin_open,
+            "bytes_written":state.stdin_written})
+    }
+    fn stop_input(&self) {
+        self.state().stdin_open = false;
+        self.input_stopped.send_replace(true);
+        self.changed.notify_waiters();
+    }
+    fn write_result(
+        &self,
+        written: usize,
+        requested: usize,
+        timed_out: bool,
+        error: Option<String>,
+    ) -> Value {
+        let state = self.state();
+        json!({"job_id":self.id,"written":written,"requested_bytes":requested,
+            "remaining_bytes":requested-written,"timed_out":timed_out,"error":error,
+            "closed":!state.stdin_open,"stdin":self.input_snapshot(&state)})
     }
 }
 #[derive(Default)]
@@ -184,6 +229,7 @@ impl Shell {
                 json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":MAX_COMMAND_ARGS},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
+                    "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"null delivers EOF immediately; pipe enables bounded exec.write input and explicit close_stdin."},
                     "timeout_ms":{"type":"integer","minimum":0,"maximum":MAX_TIMEOUT,"default":0,"description":"0 means no execution deadline. A nonzero deadline terminates the command."}}),
                 &["command"],
                 false,
@@ -219,6 +265,17 @@ impl Shell {
                 true,
             ),
             tool(
+                "ssmcp.exec.write",
+                "Write UTF-8 data or base64 bytes to a job started with stdin:'pipe'. Returns exact written byte count; retry only the remaining bytes after a timeout. close_stdin sends EOF only after all supplied bytes are written. Writes are serialized per job; cancellation and deadlines interrupt blocked writers.",
+                json!({"job_id":{"type":"string","minLength":1,"maxLength":128},
+                    "data":{"type":"string","maxLength":MAX_INPUT},
+                    "data_base64":{"type":"string","maxLength":MAX_INPUT.div_ceil(3)*4},
+                    "close_stdin":{"type":"boolean","default":false},
+                    "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_INPUT_WAIT,"default":MAX_INPUT_WAIT}}),
+                &["job_id"],
+                false,
+            ),
+            tool(
                 "ssmcp.exec.cancel",
                 "Terminate a job and its owned process tree; return its final state. Safe to repeat for a completed job.",
                 id.clone(),
@@ -244,6 +301,7 @@ impl Shell {
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         match name {
             "ssmcp.exec.start" => self.start(args),
+            "ssmcp.exec.write" => self.write_input(args).await,
             "ssmcp.exec.list" => {
                 empty(args)?;
                 let jobs: Vec<_> = self.registry().jobs.values().cloned().collect();
@@ -320,6 +378,101 @@ impl Shell {
             .cloned()
             .ok_or_else(|| "unknown or expired background job; use exec.list(clientId)".into())
     }
+    async fn write_input(&self, args: Value) -> Result<Value, String> {
+        let args: Input = parse(args)?;
+        if args.wait_ms > MAX_INPUT_WAIT {
+            return Err(format!("stdin wait_ms must be 0..={MAX_INPUT_WAIT}"));
+        }
+        let data = match (args.data, args.data_base64) {
+            (Some(_), Some(_)) => return Err("provide data or data_base64, not both".into()),
+            (Some(data), None) => data.into_bytes(),
+            (None, Some(data)) => {
+                if data.len() > MAX_INPUT.div_ceil(3) * 4 {
+                    return Err(format!("stdin is limited to {MAX_INPUT} bytes per write"));
+                }
+                STANDARD
+                    .decode(data)
+                    .map_err(|error| format!("invalid stdin base64: {error}"))?
+            }
+            (None, None) if args.close_stdin => Vec::new(),
+            (None, None) => return Err("provide data, data_base64 or close_stdin:true".into()),
+        };
+        if data.len() > MAX_INPUT {
+            return Err(format!("stdin is limited to {MAX_INPUT} bytes per write"));
+        }
+        let job = self.job(&args.job_id)?;
+        if job.input_mode != InputMode::Pipe {
+            return Err("stdin is disabled; start the job with stdin:'pipe'".into());
+        }
+        let mut stopped = job.input_stopped.subscribe();
+        if *stopped.borrow() {
+            return if data.is_empty() && args.close_stdin {
+                Ok(job.write_result(0, 0, false, None))
+            } else {
+                Err("job stdin is closed".into())
+            };
+        }
+        let deadline = Instant::now() + Duration::from_millis(args.wait_ms);
+        let mut input = tokio::select! {
+            biased;
+            _ = stopped.changed() => return Ok(job.write_result(0,data.len(),false,Some("job stdin closed before the write".into()))),
+            result = timeout_at(deadline, job.stdin.lock()) => match result {
+                Ok(input) => input,
+                Err(_) => return Ok(job.write_result(0,data.len(),true,None)),
+            }
+        };
+        let mut written = 0;
+        let mut timed_out = false;
+        let mut error = None;
+        while written < data.len() {
+            if *stopped.borrow() {
+                error = Some("job stdin closed during the write".into());
+                break;
+            }
+            let Some(pipe) = input.as_mut() else {
+                error = Some("job stdin is closed".into());
+                break;
+            };
+            // One write is cancellation-safe. write_all would hide partially
+            // accepted bytes when a deadline or command exit interrupts it.
+            let result = tokio::select! {
+                biased;
+                _ = stopped.changed() => {
+                    error = Some("job stdin closed during the write".into());
+                    break;
+                },
+                result = timeout_at(deadline, pipe.write(&data[written..])) => result,
+            };
+            match result {
+                Ok(Ok(0)) => {
+                    error = Some("job stdin accepted zero bytes".into());
+                    break;
+                }
+                Ok(Ok(count)) => {
+                    written += count;
+                    job.state().stdin_written += count as u64;
+                }
+                Ok(Err(cause)) => {
+                    error = Some(format!("stdin write failed: {cause}"));
+                    break;
+                }
+                Err(_) => {
+                    timed_out = true;
+                    break;
+                }
+            }
+        }
+        if error.is_some() || (written == data.len() && args.close_stdin) {
+            input.take();
+            job.stop_input();
+        }
+        drop(input);
+        let result = job.write_result(written, data.len(), timed_out, error);
+        self.events.push(json!({"type":"exec.stdin","job_id":job.id,
+            "written":written,"closed":result["closed"],"timed_out":timed_out}));
+        Ok(result)
+    }
+
     fn start(&self, args: Value) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -327,6 +480,8 @@ impl Shell {
             command: Vec<String>,
             cwd: Option<PathBuf>,
             env: Option<HashMap<String, String>>,
+            #[serde(default)]
+            stdin: InputMode,
             #[serde(default)]
             timeout_ms: u64,
         }
@@ -392,7 +547,11 @@ impl Shell {
         command
             .args(&args.command[1..])
             .current_dir(&cwd)
-            .stdin(Stdio::null())
+            .stdin(if args.stdin == InputMode::Pipe {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(env) = args.env {
@@ -417,6 +576,7 @@ impl Shell {
             NEXT_JOB.fetch_add(1, Ordering::Relaxed)
         );
         let (cancel, cancel_rx) = watch::channel(false);
+        let (input_stopped, _) = watch::channel(args.stdin != InputMode::Pipe);
         let job = Arc::new(Job {
             id: id.clone(),
             pid,
@@ -431,11 +591,16 @@ impl Shell {
                 timed_out: false,
                 error: None,
                 finished: None,
+                stdin_open: args.stdin == InputMode::Pipe,
+                stdin_written: 0,
                 stdout: Output::new(store, format!("job:{id}:stdout")),
                 stderr: Output::new(store, format!("job:{id}:stderr")),
             }),
             changed: Notify::new(),
             cancel,
+            input_mode: args.stdin,
+            stdin: AsyncMutex::new(process.child.stdin.take()),
+            input_stopped,
         });
         // A failed spawn must leave the retained history untouched.
         if let Some(id) = &evicted {
@@ -462,6 +627,11 @@ impl Shell {
                     Err(_) => (None,false,true,None,None),
                 }
             };
+            // Wake blocked/queued writers before waiting for their pipe lock.
+            // Command cancellation and execution deadlines must not wait for
+            // a reader that has stopped consuming stdin.
+            worker.stop_input();
+            worker.stdin.lock().await.take();
             process.shutdown().await;
             tokio::join!(
                 drain(&mut out, &worker, "stdout"),
@@ -675,6 +845,17 @@ struct Id {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct Input {
+    job_id: String,
+    data: Option<String>,
+    data_base64: Option<String>,
+    #[serde(default)]
+    close_stdin: bool,
+    #[serde(default = "default_wait")]
+    wait_ms: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Wait {
     job_id: String,
     #[serde(default = "default_wait")]
@@ -709,6 +890,7 @@ mod tests {
     fn completed_job(store: &Arc<OutputStore>) -> Arc<Job> {
         let id = format!("test-{}", NEXT_JOB.fetch_add(1, Ordering::Relaxed));
         let (cancel, _) = watch::channel(false);
+        let (input_stopped, _) = watch::channel(true);
         let mut stdout = Output::new(store, format!("job:{id}:stdout"));
         let mut stderr = Output::new(store, format!("job:{id}:stderr"));
         stdout.finish(None);
@@ -727,11 +909,16 @@ mod tests {
                 timed_out: false,
                 error: None,
                 finished: Some(Instant::now()),
+                stdin_open: false,
+                stdin_written: 0,
                 stdout,
                 stderr,
             }),
             changed: Notify::new(),
             cancel,
+            input_mode: InputMode::Null,
+            stdin: AsyncMutex::new(None),
+            input_stopped,
         })
     }
 
@@ -803,6 +990,15 @@ mod tests {
     const OUTPUT_START: &str = "SSMCP_SHELL_FIXTURE_OUTPUT\n";
 
     async fn start_fixture(shell: &Shell, fixture: &str, timeout_ms: u64) -> String {
+        start_fixture_with_input(shell, fixture, timeout_ms, "null").await
+    }
+
+    async fn start_fixture_with_input(
+        shell: &Shell,
+        fixture: &str,
+        timeout_ms: u64,
+        stdin: &str,
+    ) -> String {
         shell
             .call(
                 "ssmcp.exec.start",
@@ -810,7 +1006,7 @@ mod tests {
                     "command":[std::env::current_exe().unwrap(),"--exact",
                         "backend::shell::tests::fixture_process","--nocapture"],
                     "env":{"SSMCP_SHELL_TEST_FIXTURE":fixture},
-                    "timeout_ms":timeout_ms
+                    "timeout_ms":timeout_ms,"stdin":stdin
                 }),
             )
             .await
@@ -836,6 +1032,21 @@ mod tests {
         let Ok(fixture) = std::env::var("SSMCP_SHELL_TEST_FIXTURE") else {
             return;
         };
+        if fixture == "stdin" {
+            use std::io::Read;
+            print!("{OUTPUT_START}");
+            std::io::stdout().flush().unwrap();
+            let mut bytes = [0u8; 4096];
+            loop {
+                let size = std::io::stdin().read(&mut bytes).unwrap();
+                if size == 0 {
+                    break;
+                }
+                std::io::stdout().write_all(&bytes[..size]).unwrap();
+                std::io::stdout().flush().unwrap();
+            }
+            std::process::exit(0);
+        }
         let (stdout, stderr) = match fixture.as_str() {
             "alpha" | "beta" => {
                 std::thread::sleep(Duration::from_millis(250));
@@ -854,6 +1065,222 @@ mod tests {
         std::io::stderr().flush().unwrap();
         // Avoid libtest's trailing report so bytes after the boundary are exact.
         std::process::exit(0);
+    }
+
+    #[tokio::test]
+    async fn piped_stdin_preserves_unicode_binary_bytes_and_independent_eof() {
+        let shell = Shell::new();
+        let one = start_fixture_with_input(&shell, "stdin", 5000, "pipe").await;
+        let two = start_fixture_with_input(&shell, "stdin", 5000, "pipe").await;
+        let text = "你好，shell 🦀\n";
+        let first = shell
+            .call("ssmcp.exec.write", json!({"job_id":one,"data":text}))
+            .await
+            .unwrap();
+        assert_eq!(first["written"], text.len());
+        assert_eq!(first["closed"], false);
+        let binary = [0, 255, 13, 10, 128];
+        let second = shell
+            .call(
+                "ssmcp.exec.write",
+                json!({"job_id":one,"data_base64":STANDARD.encode(binary),"close_stdin":true}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second["written"], binary.len());
+        assert_eq!(second["closed"], true);
+        assert_eq!(second["stdin"]["bytes_written"], text.len() + binary.len());
+        assert_eq!(
+            shell
+                .call("ssmcp.exec.status", json!({"job_id":two}))
+                .await
+                .unwrap()["stdin"]["open"],
+            true
+        );
+        shell
+            .call(
+                "ssmcp.exec.write",
+                json!({"job_id":two,"data":"second","close_stdin":true}),
+            )
+            .await
+            .unwrap();
+        for job in [&one, &two] {
+            let status = shell
+                .call("ssmcp.exec.wait", json!({"job_id":job,"wait_ms":5000}))
+                .await
+                .unwrap();
+            assert_eq!(status["exit_code"], 0, "{status}");
+        }
+        let out = shell
+            .call("ssmcp.exec.read", json!({"job_id":one}))
+            .await
+            .unwrap();
+        let out = STANDARD
+            .decode(out["stdout_base64"].as_str().unwrap())
+            .unwrap();
+        let position = out
+            .windows(OUTPUT_START.len())
+            .position(|part| part == OUTPUT_START.as_bytes())
+            .unwrap()
+            + OUTPUT_START.len();
+        let expected = [text.as_bytes(), &binary].concat();
+        assert_eq!(&out[position..], expected.as_slice());
+        let other = shell
+            .call("ssmcp.exec.read", json!({"job_id":two}))
+            .await
+            .unwrap();
+        assert_eq!(output(&other), "second");
+        let again = shell
+            .call("ssmcp.exec.write", json!({"job_id":one,"close_stdin":true}))
+            .await
+            .unwrap();
+        assert_eq!(again["written"], 0);
+        assert_eq!(again["closed"], true);
+        assert!(
+            shell
+                .call("ssmcp.exec.write", json!({"job_id":one,"data":"late"}))
+                .await
+                .is_err()
+        );
+        shell.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn default_stdin_delivers_eof_and_invalid_input_does_not_write() {
+        let shell = Shell::new();
+        let job = shell.call("ssmcp.exec.start",json!({
+            "command":[std::env::current_exe().unwrap(),"--exact","backend::shell::tests::fixture_process","--nocapture"],
+            "env":{"SSMCP_SHELL_TEST_FIXTURE":"stdin"},"timeout_ms":5000
+        })).await.unwrap()["job_id"].as_str().unwrap().to_owned();
+        let ended = shell
+            .call("ssmcp.exec.wait", json!({"job_id":job,"wait_ms":5000}))
+            .await
+            .unwrap();
+        assert_eq!(ended["exit_code"], 0);
+        assert_eq!(
+            ended["stdin"],
+            json!({"mode":"null","open":false,"bytes_written":0})
+        );
+        assert!(
+            shell
+                .call("ssmcp.exec.write", json!({"job_id":job,"data":"disabled"}))
+                .await
+                .is_err()
+        );
+
+        let job = start_fixture_with_input(&shell, "stdin", 5000, "pipe").await;
+        for mut args in [
+            json!({"data":"x","data_base64":"eA=="}),
+            json!({"data_base64":"@@@="}),
+            json!({"data":"界".repeat(MAX_INPUT / 3 + 1)}),
+            json!({"data_base64":STANDARD.encode(vec![0;MAX_INPUT+1])}),
+            json!({"data":"x","wait_ms":MAX_INPUT_WAIT+1}),
+            json!({}),
+        ] {
+            args["job_id"] = json!(job);
+            assert!(shell.call("ssmcp.exec.write", args).await.is_err());
+        }
+        assert_eq!(
+            shell
+                .call("ssmcp.exec.status", json!({"job_id":job}))
+                .await
+                .unwrap()["stdin"]["bytes_written"],
+            0
+        );
+        shell
+            .call("ssmcp.exec.write", json!({"job_id":job,"close_stdin":true}))
+            .await
+            .unwrap();
+        assert_eq!(
+            shell
+                .call("ssmcp.exec.wait", json!({"job_id":job,"wait_ms":5000}))
+                .await
+                .unwrap()["exit_code"],
+            0
+        );
+        shell.shutdown().await;
+    }
+
+    async fn fill_stdin(shell: &Shell, job: &str) {
+        for _ in 0..64 {
+            let result = shell
+                .call(
+                    "ssmcp.exec.write",
+                    json!({"job_id":job,"data":"x".repeat(MAX_INPUT),"wait_ms":2}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result["closed"], false);
+            let written = result["written"].as_u64().unwrap();
+            assert_eq!(
+                written + result["remaining_bytes"].as_u64().unwrap(),
+                MAX_INPUT as u64
+            );
+            if result["timed_out"] == true {
+                return;
+            }
+        }
+        panic!("the non-reading fixture must eventually apply pipe backpressure");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_job_interrupts_blocked_and_queued_stdin_writers() {
+        let shell = Shell::new();
+        let job = start_fixture_with_input(&shell, "wait", 10000, "pipe").await;
+        fill_stdin(&shell, &job).await;
+        let blocked = shell.call(
+            "ssmcp.exec.write",
+            json!({"job_id":job,"data":"x".repeat(MAX_INPUT),"wait_ms":5000}),
+        );
+        tokio::pin!(blocked);
+        assert!(
+            timeout(Duration::from_millis(20), blocked.as_mut())
+                .await
+                .is_err()
+        );
+        let queued = shell.call(
+            "ssmcp.exec.write",
+            json!({"job_id":job,"data":"queued","wait_ms":5000}),
+        );
+        tokio::pin!(queued);
+        assert!(
+            timeout(Duration::from_millis(20), queued.as_mut())
+                .await
+                .is_err()
+        );
+        let cancelled = shell.call("ssmcp.exec.cancel", json!({"job_id":job}));
+        let (cancelled, blocked, queued) = timeout(Duration::from_secs(3), async {
+            tokio::join!(cancelled, blocked, queued)
+        })
+        .await
+        .expect("stdin backpressure must not stall job cancellation");
+        assert_eq!(cancelled.unwrap()["cancelled"], true);
+        assert_eq!(blocked.unwrap()["closed"], true);
+        assert_eq!(queued.unwrap()["closed"], true);
+        shell.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_execution_deadline_interrupts_a_blocked_stdin_writer() {
+        let shell = Shell::new();
+        let job = start_fixture_with_input(&shell, "wait", 500, "pipe").await;
+        fill_stdin(&shell, &job).await;
+        let writer = shell.call(
+            "ssmcp.exec.write",
+            json!({"job_id":job,"data":"x".repeat(MAX_INPUT),"wait_ms":5000}),
+        );
+        let result = timeout(Duration::from_secs(3), writer)
+            .await
+            .expect("execution deadline must wake stdin writer")
+            .unwrap();
+        assert_eq!(result["closed"], true);
+        let status = shell
+            .call("ssmcp.exec.wait", json!({"job_id":job,"wait_ms":3000}))
+            .await
+            .unwrap();
+        assert_eq!(status["timed_out"], true);
+        assert_eq!(status["stdin"]["open"], false);
+        shell.shutdown().await;
     }
 
     #[tokio::test]
