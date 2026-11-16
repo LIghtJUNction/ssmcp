@@ -505,8 +505,9 @@ fn text_redacted(text: &str, depth: usize) -> String {
             }
             let prefix = body[..index].trim_end().trim_end_matches(['"', '\'']);
             let start = prefix
-                .rfind(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '_' | '-'))
-                .map_or(0, |i| i + 1);
+                .char_indices()
+                .rfind(|(_, ch)| !ch.is_ascii_alphanumeric() && !matches!(*ch, '_' | '-'))
+                .map_or(0, |(index, ch)| index + ch.len_utf8());
             let key = &prefix[start..];
             let environment = key.len() >= 2
                 && key.len() <= 128
@@ -743,6 +744,44 @@ mod tests {
             event(json!({"usage":{"input_tokens":12,"output_tokens":4}}))["usage"]["input_tokens"],
             12
         );
+    }
+
+    #[test]
+    fn utf8_key_boundaries_preserve_plain_text_and_redact_secrets() {
+        // The first case places the three-byte delimiter at byte 51. Advancing
+        // by one byte instead of one char used to panic at start byte 52.
+        for delimiter in ['\u{3001}', '\u{1f680}', '\u{00e9}', '\u{3000}'] {
+            let prefix = format!("{}{delimiter}", "a".repeat(51));
+            let plain = format!("{prefix}exit=0");
+            assert_eq!(text_redacted(&plain, 0), plain);
+            let stream = event(json!({
+                "type":"exec.stdout", "job_id":"utf8-regression", "text":plain,
+                "params":{"deltaBase64":STANDARD.encode(plain.as_bytes()), "stream":"stdout"}
+            }));
+            assert_eq!(stream["text"], plain);
+            assert_eq!(
+                STANDARD
+                    .decode(stream["params"]["deltaBase64"].as_str().unwrap())
+                    .unwrap(),
+                plain.as_bytes()
+            );
+
+            let secret = format!("{prefix}API_TOKEN=ordinary-secret-value");
+            let expected = format!("{prefix}API_TOKEN={REDACTED}");
+            assert_eq!(text_redacted(&secret, 0), expected);
+            let stream = event(json!({
+                "type":"exec.stderr", "job_id":"utf8-regression", "text":secret,
+                "params":{"deltaBase64":STANDARD.encode(secret.as_bytes()), "stream":"stderr"}
+            }));
+            assert_eq!(stream["text"], expected);
+            assert_eq!(
+                STANDARD
+                    .decode(stream["params"]["deltaBase64"].as_str().unwrap())
+                    .unwrap(),
+                expected.as_bytes()
+            );
+            assert!(!stream.to_string().contains("ordinary-secret-value"));
+        }
     }
 
     #[test]

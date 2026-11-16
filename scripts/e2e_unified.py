@@ -404,6 +404,41 @@ class Unified(SessionFeatures):
         self.save("concurrent-commands.json", {"started": jobs, "observed": observations, "final": final,
                                                "outside_workspace_rejected": rejected})
 
+    def utf8_transport(self):
+        expected = ("a" * 51 + chr(0x3001) + "exit=0").encode("utf-8")
+        # Keep the argv ASCII: only the owned command emits the UTF-8 boundary
+        # fixture through the real executor, audit, events and SSH result path.
+        program = ("import sys; value = ('a' * 51 + chr(0x3001) + 'exit=0').encode('utf-8'); "
+                   "sys.stdout.buffer.write(value); sys.stderr.buffer.write(value)")
+        job = self.call("ssmcp.exec.start", {
+            "command": [self.python, "-u", "-c", program], "timeout_ms": 10000,
+        })
+        final = self.finish_job(job, timeout=15)
+        self.check(not final["running"] and final["exit_code"] == 0
+                   and final["exit_signal"] is None and final["error"] is None
+                   and final["stdout"]["eof"] and final["stderr"]["eof"],
+                   "UTF-8 command output completes with exit zero and both streams at EOF")
+        read = self.call("ssmcp.exec.read", {"job_id": job["job_id"]})
+        observed = {}
+        for stream in ("stdout", "stderr"):
+            observed[stream] = base64.b64decode(read[stream + "_base64"], validate=True)
+            self.check(observed[stream] == expected,
+                       f"UTF-8 {stream} preserves the exact byte-52 delimiter fixture")
+        self.poll_exec()
+        self.check(all(bytes(self.streams[job["job_id"]][stream]) == expected
+                       for stream in ("stdout", "stderr")),
+                   "UTF-8 stdout and stderr remain exact in ordered audit event bytes")
+        terminal = self.call("terminal.status")
+        self.check(terminal["running"] and self.client.poll() is None,
+                   "a subsequent native call succeeds on the same live connection after UTF-8 output")
+        self.save("utf8-transport.json", {
+            "job_id": job["job_id"], "exit_code": final["exit_code"],
+            "client_id": self.client_id, "followup_terminal_running": terminal["running"],
+            "expected_bytes": len(expected), "expected_sha256": hashlib.sha256(expected).hexdigest(),
+            "stdout_sha256": hashlib.sha256(observed["stdout"]).hexdigest(),
+            "stderr_sha256": hashlib.sha256(observed["stderr"]).hexdigest(),
+        })
+
     def outputs(self):
         job = self.call("ssmcp.exec.start", {"command": [self.python, "-u", "-c", LONG_PROGRAM, str(LONG_BYTES)]})
         self.wait_stream(job["job_id"], "stdout", LONG_LIVE)
@@ -630,7 +665,8 @@ class Unified(SessionFeatures):
 
     def run(self):
         stages = [("ssh_oauth", self.bootstrap), ("catalog_no_harness", self.catalog),
-                  ("concurrent_execution", self.concurrent_commands), ("output_storage", self.outputs),
+                  ("concurrent_execution", self.concurrent_commands), ("utf8_transport", self.utf8_transport),
+                  ("output_storage", self.outputs),
                   ("file_skill_audit", self.workspace_audit), ("client_isolation", self.client_isolation),
                   ("cancel_timeout", self.cancellation), ("native_parent_exit", self.native_parent_exit),
                   ("automatic_expiration", self.expiration),
