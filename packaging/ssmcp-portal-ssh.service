@@ -1,6 +1,6 @@
 [Unit]
 Description=Synchronize ssmcp portal public keys to restricted SSH accounts
-After=ssmcpd.service
+After=ssmcpd.service ssmcp-portal.service
 ConditionPathExists=/var/lib/ssmcpd/portal/accounts.json
 
 [Service]

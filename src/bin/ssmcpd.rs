@@ -31,7 +31,7 @@ Configuration:
   --config PATH selects a TOML file; SSMCP_CONFIG also selects a file.
   Otherwise /etc/ssmcpd/ssmcpd.toml is read when present.
   Precedence: command line > environment > TOML > built-in defaults.
-  Portal: [portal] state_dir (optional private persistent directory).
+  Portal: --portal-state-dir PATH overrides [portal] state_dir (private persistent directory).
   Server settings: [server] listen, public_url, socket.
   Environment: SSMCP_LISTEN, SSMCP_PUBLIC_URL, SSMCP_SOCKET.
   GitHub: [auth.github] client_id, client_secret (private file mode 0600).
@@ -276,6 +276,7 @@ fn run() -> ssmcp::Result<()> {
             "--socket" => config.socket = value.into(),
             "--listen" if mode == "serve" => config.listen = value.parse()?,
             "--public-url" if mode == "serve" => config.public_url = normalize_origin(value)?,
+            "--portal-state-dir" if mode == "serve" => config.portal_dir = Some(value.into()),
             "--access-token-ttl" if mode == "serve" => {
                 lifetime_options.insert("SSMCP_ACCESS_TOKEN_TTL", seconds(value, arg)?);
             }
