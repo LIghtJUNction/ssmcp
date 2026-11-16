@@ -971,10 +971,31 @@ time.sleep(60)
         gone(pids[1]).await;
         gone(pids[2]).await;
         // The guardian itself is adopted by the machine's init after the test
-        // parent dies. Descendants were reaped by it; init controls its own reap.
-        let guardian = std::fs::read_to_string(format!("/proc/{}/stat", pids[0])).ok();
-        assert!(guardian.is_none_or(|s| {
-            s.rsplit_once(')').unwrap().1.split_whitespace().next() == Some("Z")
-        }));
+        // parent dies. Reaping its last child precedes its own exit; init then
+        // controls reaping the guardian, so either absent or zombie is complete.
+        let mut last_stat = None;
+        let exited = timeout(Duration::from_secs(5), async {
+            loop {
+                match std::fs::read_to_string(format!("/proc/{}/stat", pids[0])) {
+                    Ok(stat) => {
+                        let zombie =
+                            stat.rsplit_once(')').unwrap().1.split_whitespace().next() == Some("Z");
+                        last_stat = Some(stat);
+                        if zombie {
+                            break;
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                    Err(error) => panic!("cannot observe guardian {}: {error}", pids[0]),
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            exited.is_ok(),
+            "guardian {} did not exit after reaping its descendants; last stat: {last_stat:?}",
+            pids[0]
+        );
     }
 }

@@ -539,6 +539,24 @@ mod tests {
         }
     }
 
+    async fn write_after_contention(workspace: &Workspace, args: Value) -> Result<Value, String> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match workspace.perform("ssmcp.fs.write_text", args.clone()).await {
+                // The portable writer returns this only before reading the preimage,
+                // publishing bytes, or emitting audit events. Parallel tests on other
+                // workspaces share that bounded lock; all other failures stay fatal.
+                Err(error)
+                    if error == "workspace is busy; retry the file operation"
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                result => return result,
+            }
+        }
+    }
+
     #[test]
     fn separated_edits_count_only_changed_lines_and_preserve_newline_status() {
         let diff = unified_diff(
@@ -864,20 +882,16 @@ mod tests {
     async fn concurrent_native_writes_have_a_consistent_snapshot_chain() {
         let scratch = Scratch::new();
         let workspace = scratch.workspace(OutputStore::global().unwrap());
-        workspace
-            .perform(
-                "ssmcp.fs.write_text",
-                json!({"path":"shared","text":"initial\n"}),
-            )
+        write_after_contention(&workspace, json!({"path":"shared","text":"initial\n"}))
             .await
             .unwrap();
         let (left, right) = tokio::join!(
-            workspace.perform(
-                "ssmcp.fs.write_text",
+            write_after_contention(
+                &workspace,
                 json!({"path":"shared","text":"left\n","overwrite":true})
             ),
-            workspace.perform(
-                "ssmcp.fs.write_text",
+            write_after_contention(
+                &workspace,
                 json!({"path":"shared","text":"right\n","overwrite":true})
             ),
         );
@@ -950,12 +964,12 @@ mod tests {
         let left = scratch.workspace(OutputStore::global().unwrap());
         let right = scratch.workspace(OutputStore::global().unwrap());
         let (a, b) = tokio::join!(
-            left.perform(
-                "ssmcp.fs.write_text",
+            write_after_contention(
+                &left,
                 json!({"path":"a","text":"after-a\n","overwrite":true})
             ),
-            right.perform(
-                "ssmcp.fs.write_text",
+            write_after_contention(
+                &right,
                 json!({"path":"b","text":"after-b\n","overwrite":true})
             ),
         );
