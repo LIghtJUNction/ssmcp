@@ -1,0 +1,31 @@
+{
+  "scope": "read-only exact native_available command; owned empty runtime directory; no service or real bus changed",
+  "systemctl_version": "systemd 262 (262.2-1-arch)",
+  "cases": [
+    {
+      "case": "baseline",
+      "exit_code": 0,
+      "stdout": "Version=262.2-1-arch",
+      "stderr": ""
+    },
+    {
+      "case": "bad_dbus_only",
+      "exit_code": 0,
+      "stdout": "Version=262.2-1-arch",
+      "stderr": ""
+    },
+    {
+      "case": "bad_runtime_only",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Failed to connect to user scope bus via local transport: No such file or directory"
+    },
+    {
+      "case": "bad_both",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Failed to connect to user scope bus via local transport: No such file or directory"
+    }
+  ],
+  "reference": "https://github.com/systemd/systemd/blob/v262/src/shared/bus-util.c"
+}

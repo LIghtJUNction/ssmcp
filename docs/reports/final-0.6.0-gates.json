@@ -1,6 +1,6 @@
 {
   "format": "ssmcp-final-gates-v1",
-  "recorded_at_utc": "2026-11-16T14:51:41Z",
+  "recorded_at_utc": "2026-11-16T15:53:12Z",
   "target_version": "0.6.0",
   "status": "pending_final_acceptance",
   "release_commit": null,
@@ -294,6 +294,28 @@
         "Two macOS openpty test calls need platform-appropriate const/mut argument types"
       ],
       "action": "Minimal test-only fixes under preparation; rerun not yet recorded"
+    },
+    {
+      "id": "linux_daemon_r4_exact_source",
+      "status": "passed",
+      "source_commit": "c3d83ee87706b26db6ed77afb8bb1d5e67b67e13",
+      "evidence_path": "docs/reports/daemon-gates-20261116-r4.json",
+      "daemon_report": {
+        "path": "docs/reports/daemon-20261116-r4-report.json",
+        "expected_bytes": 21719,
+        "expected_sha256": "b9c059ddeb3a014ae55b908f70cdb97b7ad5f032c7c972ff501e57665f968ee5"
+      },
+      "dashboard_report": {
+        "path": "docs/reports/dashboard-daemon-20261116-r4-report.json",
+        "expected_bytes": 6134,
+        "expected_sha256": "3092bf54979f41434ed98a88c358df8ada65166a6a2478ed653796440e0101b3"
+      },
+      "failed_first_run_provenance": {
+        "path": "docs/reports/daemon-first-20261116-provenance.json",
+        "expected_bytes": 3405,
+        "expected_sha256": "99fb7d813e710b20faed8588cb7d16ccce2a90c3fd3fa1956f315571ad892d62"
+      },
+      "ci_status": "pending_separate_record"
     }
   ],
   "gates": [
@@ -1443,13 +1465,49 @@
     ],
     "actions_taken": "Read only; no comment, review trigger, or model request sent"
   },
-  "candidate_commit": "dd252ff91547776fc52dafe8d2134152e12040c4",
+  "candidate_commit": null,
   "repository_state": {
     "branch": "main",
     "head_sha": "dd252ff91547776fc52dafe8d2134152e12040c4",
     "pr_7_merged": true,
     "merge_commit": "07e2bccead43f682d1937f6da9d780489411f0ff",
     "source": "Coordinator verified main push and fast-forward of the original workspace",
-    "source_scope": "Code integration state; not a published release or production deployment"
-  }
+    "source_scope": "Code integration state; not a published release or production deployment",
+    "observation_scope": "Historical dd252ff9 integration observation, preserved unchanged; not a current-head assertion."
+  },
+  "latest_local_acceptance": {
+    "source_commit": "c3d83ee87706b26db6ed77afb8bb1d5e67b67e13",
+    "status": "passed_with_stated_scope",
+    "evidence_path": "docs/reports/daemon-gates-20261116-r4.json",
+    "daemon_assertions_passed": 145,
+    "dashboard_assertions_passed": 76,
+    "rust_test_summaries": {
+      "rust": {
+        "suites": 17,
+        "passed": 418,
+        "failed": 0,
+        "ignored": 19
+      },
+      "code-mode": {
+        "suites": 1,
+        "passed": 16,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "binary_sha256": {
+      "ssmcp": "fd7133489a257a4c152f27ee959172200fcffc8c6edb459abc6241e98e7d88d2",
+      "ssmcpd": "72b986e7dce3dcfbd27c44308063b99831c011b933ca3ed724ea25ad34b5fca8"
+    },
+    "history_note": "Prior observations and gates retain their own source identities. The recorded dd252ff9 candidate/repository state is historical, not the latest main HEAD.",
+    "release_or_ci_claim": false,
+    "not_covered": [
+      "macOS launchd actual lifecycle",
+      "Windows Task Scheduler actual lifecycle",
+      "cross-platform CI",
+      "GitHub identity-provider login",
+      "logout/reboot startup"
+    ]
+  },
+  "candidate_commit_note": "Final release/CI candidate not yet recorded; latest successful local source is c3d83ee87706b26db6ed77afb8bb1d5e67b67e13."
 }

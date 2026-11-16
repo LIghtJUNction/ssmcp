@@ -1,0 +1,81 @@
+{
+  "format": "ssmcp-failed-run-provenance-correction-v1",
+  "recorded_at_utc": "2026-11-16T15:53:12Z",
+  "original_report": {
+    "path": "target/acceptance/daemon-first-report.json",
+    "bytes": 18597,
+    "sha256": "138657d3476b1af17b4088e59c29a004d0ba9523b1f513746eeb1762d504ff1f"
+  },
+  "original_preserved": true,
+  "status": "failed",
+  "exit_code": 1,
+  "assertions_passed_before_failure": 127,
+  "failure": "AssertionError: invalid CLI --daemon unexpectedly succeeded",
+  "duration_seconds": 22,
+  "source_identity": {
+    "base_revision": "a0430ba10b2cfdc360ec770c4066769a7f1ffc7a",
+    "exact_source_revision": null,
+    "tracked_working_diff_sha256": "60ad34418e1a6913d7018def42bab017b903323f95fdac753ebcdd771195078e",
+    "diff_scope": "Partial tracked git diff HEAD only; then-untracked src/session.rs and scripts/e2e_daemon.py were excluded. The original source_revision field is the base revision, not an exact source binding.",
+    "binaries": {
+      "ssmcp": "4e2f170c130dae740cf30ee14b7bdadbc62ceb37dad456485ce4d76f9018b565",
+      "ssmcpd": "65d87b51fdd32d4b4f697f062e626b8d17b7414a3ed09117627e80cb01c18cc6"
+    },
+    "test_sources": {
+      "e2e_daemon.py": "2bbdbf80758114b04fa36761765b8981ec710c190f838b978a14c765ce69e851",
+      "e2e.py": "c66ae9a013f4cb1237f3a047c50a774d3dff14b6a32d14342e18e3675b3b65f7"
+    }
+  },
+  "diagnosis": {
+    "classification": "negative_test_precondition_was_not_met",
+    "summary": "Changing DBUS_SESSION_BUS_ADDRESS alone did not make this systemd user manager unavailable; the native command could still use XDG_RUNTIME_DIR/systemd/private.",
+    "native_command": [
+      "systemctl",
+      "--user",
+      "--no-pager",
+      "show",
+      "--property=Version"
+    ],
+    "read_only_probe": {
+      "path": "docs/reports/daemon-manager-transport-20261116.json",
+      "expected_bytes": 893,
+      "expected_sha256": "c6e9d30a88288d171527fd44fb58daa563fcc59fb7fcf9754ae890df9ef01321"
+    },
+    "observed_exit_codes": {
+      "baseline": 0,
+      "bad_dbus_only": 0,
+      "bad_runtime_only": 1,
+      "bad_both": 1
+    },
+    "reference": "https://github.com/systemd/systemd/blob/v262/src/shared/bus-util.c",
+    "test_fix": "Use a short, owned 0700 empty XDG_RUNTIME_DIR and an invalid DBUS_SESSION_BUS_ADDRESS, then assert the exact native probe fails before testing daemon failure and absence of partial state.",
+    "production_change_required_for_this_failure": false
+  },
+  "cleanup": {
+    "script_confirmed": true,
+    "script_errors": [],
+    "independent_read_only_check": {
+      "report_cleanup_confirmed": true,
+      "report_cleanup_errors": [],
+      "loaded_ssmcp_unit_count": 0,
+      "loaded_test_units": [],
+      "test_directories_in_run_window": [],
+      "runtime_directory_present": true,
+      "dbus_address_present": true
+    },
+    "check_job_id": "e915f94a93f00423086e625ad52d8aca-2",
+    "check_exit_code": 0,
+    "recorded_at_utc": "2026-11-16T15:35:10Z",
+    "timestamp_scope": "Time the successful check was recorded, not an embedded sample timestamp."
+  },
+  "superseding_run": {
+    "source_commit": "c3d83ee87706b26db6ed77afb8bb1d5e67b67e13",
+    "report": {
+      "path": "docs/reports/daemon-20261116-r4-report.json",
+      "expected_bytes": 21719,
+      "expected_sha256": "b9c059ddeb3a014ae55b908f70cdb97b7ad5f032c7c972ff501e57665f968ee5"
+    },
+    "status": "passed",
+    "assertions_passed": 145
+  }
+}
