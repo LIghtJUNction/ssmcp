@@ -347,13 +347,22 @@ impl Runtime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        tokio::join!(
+        let (_, _, computer, _, _) = tokio::join!(
             self.workspace.shutdown(),
             self.browser.shutdown(),
             self.computer.shutdown(),
             self.rsync.shutdown(),
             self.backend.shutdown()
         );
+        if let Err(error) = computer {
+            // EventLog redacts, renders and retains the failure before closing.
+            self.audit.push(json!({
+                "type":"ssmcp.control.cleanup_failed",
+                "provider":"computer",
+                "cleanup_complete":false,
+                "error":error
+            }));
+        }
         self.audit.close();
     }
 }
