@@ -1201,54 +1201,79 @@ mod tests {
         shell.shutdown().await;
     }
 
-    async fn fill_stdin(shell: &Shell, job: &str) {
+    type StdinWriter<'a> =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + 'a>>;
+
+    async fn poll_once<F: std::future::Future + ?Sized>(
+        mut future: std::pin::Pin<&mut F>,
+    ) -> std::task::Poll<F::Output> {
+        std::future::poll_fn(|cx| std::task::Poll::Ready(future.as_mut().poll(cx))).await
+    }
+
+    async fn pending_stdin_writer<'a>(shell: &'a Shell, id: &str) -> StdinWriter<'a> {
+        let job = shell.job(id).unwrap();
         for _ in 0..64 {
-            let result = shell
-                .call(
-                    "ssmcp.exec.write",
-                    json!({"job_id":job,"data":"x".repeat(MAX_INPUT),"wait_ms":2}),
-                )
-                .await
-                .unwrap();
-            assert_eq!(result["closed"], false);
-            let written = result["written"].as_u64().unwrap();
-            assert_eq!(
-                written + result["remaining_bytes"].as_u64().unwrap(),
-                MAX_INPUT as u64
-            );
-            if result["timed_out"] == true {
-                return;
+            let mut writer: StdinWriter<'a> = Box::pin(shell.call(
+                "ssmcp.exec.write",
+                json!({"job_id":id,"data":"x".repeat(MAX_INPUT),"wait_ms":5000}),
+            ));
+            loop {
+                match poll_once(writer.as_mut()).await {
+                    std::task::Poll::Ready(result) => {
+                        let result = result.unwrap();
+                        assert_eq!(result["closed"], false);
+                        assert_eq!(result["timed_out"], false);
+                        assert_eq!(result["written"], MAX_INPUT);
+                        assert_eq!(result["remaining_bytes"], 0);
+                        break;
+                    }
+                    std::task::Poll::Pending => {
+                        assert!(job.state().running);
+                        assert!(!*job.input_stopped.borrow());
+                        // Pending can mean cooperative scheduling, or Windows'
+                        // buffered background write. Only retain a request that
+                        // has acquired stdin, and keep that exact future alive:
+                        // a timed-out request says nothing about the next one.
+                        if job.stdin.try_lock().is_err() {
+                            return writer;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                }
             }
         }
-        panic!("the non-reading fixture must eventually apply pipe backpressure");
+        panic!("the non-reading fixture must eventually suspend a stdin writer");
+    }
+
+    async fn wait_for_input_stop(job: &Job) {
+        let mut stopped = job.input_stopped.subscribe();
+        timeout(Duration::from_secs(3), stopped.wait_for(|stopped| *stopped))
+            .await
+            .expect("the supervisor must stop input before awaiting the held stdin lock")
+            .unwrap();
     }
 
     #[tokio::test]
     async fn cancelling_a_job_interrupts_blocked_and_queued_stdin_writers() {
         let shell = Shell::new();
         let job = start_fixture_with_input(&shell, "wait", 10000, "pipe").await;
-        fill_stdin(&shell, &job).await;
-        let blocked = shell.call(
-            "ssmcp.exec.write",
-            json!({"job_id":job,"data":"x".repeat(MAX_INPUT),"wait_ms":5000}),
-        );
-        tokio::pin!(blocked);
-        assert!(
-            timeout(Duration::from_millis(20), blocked.as_mut())
-                .await
-                .is_err()
-        );
+        let state = shell.job(&job).unwrap();
+        let blocked = pending_stdin_writer(&shell, &job).await;
         let queued = shell.call(
             "ssmcp.exec.write",
             json!({"job_id":job,"data":"queued","wait_ms":5000}),
         );
         tokio::pin!(queued);
-        assert!(
-            timeout(Duration::from_millis(20), queued.as_mut())
-                .await
-                .is_err()
-        );
+        assert!(poll_once(queued.as_mut()).await.is_pending());
+        assert!(state.stdin.try_lock().is_err());
+
         let cancelled = shell.call("ssmcp.exec.cancel", json!({"job_id":job}));
+        tokio::pin!(cancelled);
+        assert!(poll_once(cancelled.as_mut()).await.is_pending());
+        // Retain both pending futures and the writer's lock until the
+        // supervisor publishes the stop. This exercises the cancellation
+        // ordering without relying on pipe capacity or a millisecond race.
+        wait_for_input_stop(&state).await;
         let (cancelled, blocked, queued) = timeout(Duration::from_secs(3), async {
             tokio::join!(cancelled, blocked, queued)
         })
@@ -1264,11 +1289,11 @@ mod tests {
     async fn an_execution_deadline_interrupts_a_blocked_stdin_writer() {
         let shell = Shell::new();
         let job = start_fixture_with_input(&shell, "wait", 500, "pipe").await;
-        fill_stdin(&shell, &job).await;
-        let writer = shell.call(
-            "ssmcp.exec.write",
-            json!({"job_id":job,"data":"x".repeat(MAX_INPUT),"wait_ms":5000}),
-        );
+        let writer = pending_stdin_writer(&shell, &job).await;
+        // Keep the actual pending request alive across the execution deadline.
+        // In particular, do not discard a short write timeout and assume that
+        // a subsequent write must block on Windows' asynchronous pipe buffer.
+        wait_for_input_stop(&shell.job(&job).unwrap()).await;
         let result = timeout(Duration::from_secs(3), writer)
             .await
             .expect("execution deadline must wake stdin writer")

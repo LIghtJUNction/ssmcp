@@ -581,12 +581,16 @@ if line==b'SELFTEST\\n':
 else:
     value=json.loads(line)
     if value.get('type')!='hello': raise SystemExit(4)
-    Path({str(self.authenticated)!r}).write_text(json.dumps({{
+    authenticated=Path({str(self.authenticated)!r})
+    pending=authenticated.with_name(authenticated.name+'.'+str(os.getpid())+'.tmp')
+    pending.write_text(json.dumps({{
         'received_hello':True,'protocol':value.get('version'),
         'name':value.get('metadata',{{}}).get('name'),
         'allow':value.get('metadata',{{}}).get('allow',[]),
         'pid':os.getpid()
-    }}))
+    }}),encoding='utf-8')
+    # Existence is the reader's completion signal: publish only finished JSON.
+    os.replace(pending,authenticated)
     # Never send Ready: the test stops verification before local harnesses or a
     # background session could start. EOF makes server cleanup cooperative.
     while sys.stdin.buffer.read(4096): pass
