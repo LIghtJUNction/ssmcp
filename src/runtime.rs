@@ -5,6 +5,7 @@ use crate::{
     browser::Browser,
     computer::Computer,
     context::Context,
+    omarchy::Omarchy,
     output::OutputStore,
     registry::{Provider, Registry},
     wire::Operation,
@@ -128,6 +129,7 @@ pub struct Runtime {
     workspace: Workspace,
     browser: Browser,
     computer: Computer,
+    omarchy: Omarchy,
     context: Context,
     rsync: Rsync,
     output: Arc<OutputStore>,
@@ -150,10 +152,12 @@ impl Runtime {
         let context = Context::with_output(root.clone(), context_roots, output.clone())?;
         let browser = Browser::new(root.clone())?;
         let computer = Computer::new(root.clone())?;
+        let omarchy = Omarchy::new(root.clone())?;
         let rsync = Rsync::new(root)?;
         registry.replace(Provider::Workspace, Workspace::tools())?;
         registry.replace(Provider::Browser, Browser::tools())?;
         registry.replace(Provider::Computer, Computer::tools())?;
+        registry.replace(Provider::Omarchy, Omarchy::tools())?;
         registry.replace(Provider::Context, Context::tools())?;
         registry.replace(Provider::Rsync, Rsync::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
@@ -170,6 +174,7 @@ impl Runtime {
             workspace,
             browser,
             computer,
+            omarchy,
             context,
             rsync,
             audit: EventLog::with_output("audit", output.clone()),
@@ -237,7 +242,10 @@ impl Runtime {
                 "file_audit":"unknown","approval":"native"}),
             );
         }
-        let control = matches!(tool.provider, Provider::Browser | Provider::Computer);
+        let control = matches!(
+            tool.provider,
+            Provider::Browser | Provider::Computer | Provider::Omarchy
+        );
         if control {
             self.audit
                 .push(json!({"type":"ssmcp.control.started","call_id":call_id,
@@ -250,6 +258,7 @@ impl Runtime {
         let outcome = match tool.provider {
             Provider::Browser => self.browser.perform(&tool.native_name, arguments).await,
             Provider::Computer => self.computer.perform(&tool.native_name, arguments).await,
+            Provider::Omarchy => self.omarchy.perform(&tool.native_name, arguments).await,
             Provider::Workspace => self
                 .workspace
                 .perform(&tool.native_name, arguments)
@@ -347,10 +356,11 @@ impl Runtime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let (_, _, computer, _, _) = tokio::join!(
+        let (_, _, computer, _, _, _) = tokio::join!(
             self.workspace.shutdown(),
             self.browser.shutdown(),
             self.computer.shutdown(),
+            self.omarchy.shutdown(),
             self.rsync.shutdown(),
             self.backend.shutdown()
         );

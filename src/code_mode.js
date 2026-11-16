@@ -224,6 +224,10 @@ const bootstrap = `(() => {
     ['status','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.computer.' + name, args)])
   ));
+  const omarchy = freeze(Object.fromEntries(
+    ["status","themes","theme_set","backgrounds","background_set","fonts","font_set","audio","audio_set","brightness","brightness_set","toggles","toggle_set","workspaces","workspace_switch","window_action","apps","app_launch","menu","battery","network"]
+      .map(name => [name, (id, args = {}) => call(id, 'ssmcp.omarchy.' + name, args)])
+  ));
   const tools = async (id, cursor = null) => {
     if (cursor !== null && typeof cursor !== 'string') {
       throw new Failure('tool cursor must be a string or null');
@@ -369,6 +373,7 @@ const bootstrap = `(() => {
     image: { value: image, enumerable: true },
     browser: { value: browser, enumerable: true },
     computer: { value: computer, enumerable: true },
+    omarchy: { value: omarchy, enumerable: true },
     reload: { value: reload, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },

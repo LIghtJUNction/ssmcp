@@ -754,7 +754,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn computer_and_browser_helpers_use_native_routes_without_unwrapping_results() {
+    async fn computer_use_helpers_use_native_routes_without_unwrapping_results() {
         let _guard = TESTS.lock().await;
         let host: Host = Arc::new(|request| {
             Box::pin(async move {
@@ -773,7 +773,8 @@ mod tests {
             r#"return {
                 computer:await computer.type('one',{text:'hello'}),
                 browser:await browser.navigate('one',{target_id:'t',url:'about:blank'}),
-                frozen:Object.isFrozen(computer)&&Object.isFrozen(browser),
+                omarchy:await omarchy.audio_set('one',{target:'output',percent:25}),
+                frozen:Object.isFrozen(computer)&&Object.isFrozen(browser)&&Object.isFrozen(omarchy),
                 hidden:typeof __ssmcp_image
             };"#
             .into(),
@@ -796,6 +797,14 @@ mod tests {
             "ssmcp.browser.navigate"
         );
         assert_eq!(output["result"]["frozen"], true);
+        assert_eq!(
+            output["result"]["omarchy"]["structuredContent"]["name"],
+            "ssmcp.omarchy.audio_set"
+        );
+        assert_eq!(
+            output["result"]["omarchy"]["structuredContent"]["arguments"]["percent"],
+            25
+        );
         assert_eq!(output["result"]["hidden"], "undefined");
     }
 

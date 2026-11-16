@@ -356,11 +356,13 @@ fn limits() -> Value {
             "native_catalog_timeout_ms":5000,
             "refresh":"omit the cursor to discover current native tools"
         },
-        "native_control":{
+        "computer_use":{
             "computer_namespace":"ssmcp.computer.*",
+            "omarchy_namespace":"ssmcp.omarchy.*",
+            "desktop_platforms":["linux","windows","macos"],
             "browser_namespace":"ssmcp.browser.*",
             "model_invocation":false,
-            "desktop_coordinates":"global desktop logical coordinates; use screenshot image_to_desktop mapping",
+            "desktop_coordinates":"read coordinate_space: Linux/macOS logical, Windows physical virtual-desktop pixels; use image_to_desktop mapping",
             "browser_transport":"native Chromium CDP, explicit loopback endpoints only",
             "image_max_decoded_bytes":400*1024,
             "image_formats":["image/png","image/jpeg"],
