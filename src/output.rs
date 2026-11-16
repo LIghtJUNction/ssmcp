@@ -47,6 +47,9 @@ enum Access {
 }
 
 pub const INLINE_BYTES: usize = 32 * 1024;
+/// Screenshot blocks travel as images, independently of the text spill budget.
+pub const MAX_IMAGE_BYTES: usize = 400 * 1024;
+pub const MAX_INLINE_IMAGE_RESULT_BYTES: usize = 1024 * 1024;
 pub const INLINE_LINES: u64 = 500;
 pub const RETENTION_SECS: u64 = 24 * 60 * 60;
 pub const RETAINED_BYTES: u64 = 512 * 1024 * 1024;
@@ -779,6 +782,9 @@ impl OutputStore {
     /// Spill a large native result as JSON while preserving the MCP error flag
     /// and a small set of execution-status fields useful without opening the log.
     pub fn guard_result(self: &Arc<Self>, value: Value) -> Value {
+        if inline_image_result(&value, &self.policy) {
+            return value;
+        }
         let mut capture = self.capture("native_tool_result_json");
         if has_long_lines(&value, self.policy.inline_lines) {
             let _ = capture.spill();
@@ -821,6 +827,65 @@ impl OutputStore {
         json!({"isError":value.get("isError").and_then(Value::as_bool).unwrap_or(false) || capture.error().is_some(),
             "content":[{"type":"text","text":summary.to_string()}],"structuredContent":summary})
     }
+}
+
+/// Validate bounded standard-base64 PNG/JPEG blocks before forwarding binary content.
+pub(crate) fn validate_image_content(value: &Value) -> Result<usize, String> {
+    if value["type"] != "image" {
+        return Err("image content must have type=image".into());
+    }
+    let mime = value["mimeType"]
+        .as_str()
+        .filter(|mime| matches!(*mime, "image/png" | "image/jpeg"))
+        .ok_or("image MIME type must be image/png or image/jpeg")?;
+    let data = value["data"].as_str().ok_or("image data must be base64")?;
+    if data.is_empty() || data.len() > MAX_IMAGE_BYTES.div_ceil(3) * 4 {
+        return Err("image data exceeds 400 KiB or is empty".into());
+    }
+    let decoded = STANDARD
+        .decode(data)
+        .map_err(|_| "image data must be canonical base64")?;
+    if decoded.len() > MAX_IMAGE_BYTES || STANDARD.encode(&decoded) != data {
+        return Err("image data must be canonical base64 within 400 KiB".into());
+    }
+    let matches = match mime {
+        "image/png" => decoded.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => decoded.starts_with(&[0xff, 0xd8, 0xff]),
+        _ => false,
+    };
+    if !matches {
+        return Err("image bytes do not match the declared PNG or JPEG MIME type".into());
+    }
+    Ok(decoded.len())
+}
+
+fn inline_image_result(value: &Value, policy: &Policy) -> bool {
+    let Some(content) = value.get("content").and_then(Value::as_array) else {
+        return false;
+    };
+    let images: Vec<_> = content
+        .iter()
+        .filter(|item| item["type"] == "image")
+        .collect();
+    if images.is_empty()
+        || images.len() > 4
+        || images
+            .iter()
+            .any(|image| validate_image_content(image).is_err())
+        || value.to_string().len() > MAX_INLINE_IMAGE_RESULT_BYTES
+    {
+        return false;
+    }
+    // Only binary image payloads get a larger allowance. Large text, duplicate
+    // base64 in structuredContent and oversized metadata still use artifacts.
+    let mut metadata = value.clone();
+    for item in metadata["content"].as_array_mut().unwrap() {
+        if item["type"] == "image" {
+            item["data"] = Value::Null;
+        }
+    }
+    metadata.to_string().len() <= policy.inline_bytes
+        && !has_long_lines(&metadata, policy.inline_lines)
 }
 
 struct Artifact {
@@ -1567,6 +1632,48 @@ mod tests {
         assert!(!manifest.complete);
         assert!(manifest.error.unwrap().contains("before completion"));
         assert_eq!(fixture.store.cleanup().unwrap()["removed_files"], 1);
+    }
+
+    #[test]
+    fn screenshots_keep_binary_content_above_the_text_budget() {
+        let fixture = Fixture::new(Policy {
+            inline_bytes: 192,
+            ..Policy::default()
+        });
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=";
+        let native = json!({
+            "isError":false,
+            "content":[{"type":"image","mimeType":"image/png","data":png}],
+            "structuredContent":{"width":1,"height":1}
+        });
+        assert!(native.to_string().len() > 192);
+        assert_eq!(fixture.store.guard_result(native.clone()), native);
+        let mut invalid = native.clone();
+        invalid["content"][0]["mimeType"] = "image/jpeg".into();
+        assert!(validate_image_content(&invalid["content"][0]).is_err());
+        assert_eq!(
+            fixture.store.guard_result(invalid)["structuredContent"]["spilled"],
+            true
+        );
+        let mut large_text = native;
+        large_text["structuredContent"]["text"] = "x".repeat(256).into();
+        assert_eq!(
+            fixture.store.guard_result(large_text)["structuredContent"]["spilled"],
+            true
+        );
+    }
+
+    #[test]
+    fn image_payload_validation_bounds_decode_and_rejects_mismatched_types() {
+        for image in [
+            json!({"type":"image","mimeType":"image/png","data":"not base64"}),
+            json!({"type":"image","mimeType":"image/jpeg","data":"YWJj"}),
+            json!({"type":"image","mimeType":"image/svg+xml","data":"PHN2Zy8+"}),
+            json!({"type":"image","mimeType":"image/png","data":""}),
+            json!({"type":"image","mimeType":"image/png","data":"A".repeat(MAX_IMAGE_BYTES.div_ceil(3)*4+4)}),
+        ] {
+            assert!(validate_image_content(&image).is_err());
+        }
     }
 
     #[test]

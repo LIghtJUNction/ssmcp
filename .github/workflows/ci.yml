@@ -2,6 +2,11 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact commit to validate
+        required: false
+        type: string
   workflow_call:
     inputs:
       ref:
@@ -96,6 +101,9 @@ jobs:
         run: python3 scripts/e2e_agents.py --bin-dir target/debug
       - name: Exercise unified execution, audit and connection isolation
         run: python3 scripts/e2e_unified.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-unified-report.json" --revision "$(git rev-parse HEAD)"
+      - name: Exercise native browser control and image transport
+        if: matrix.runner == 'ubuntu-24.04'
+        run: python3 scripts/e2e_native_control.py --bin-dir target/debug --evidence-dir "$RUNNER_TEMP/ssmcp-native-control" --report "$RUNNER_TEMP/ssmcp-native-control-report.json"
       - name: Exercise terminal dashboard and Git observer through a real PTY
         run: python3 scripts/e2e_dashboard.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-dashboard-report.json"
       - name: Save unified acceptance evidence
@@ -106,6 +114,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ssmcp-unified-report*
             ${{ runner.temp }}/ssmcp-dashboard-report*
+            ${{ runner.temp }}/ssmcp-native-control-report.json
           if-no-files-found: warn
           retention-days: 14
       - run: cargo build --locked --release

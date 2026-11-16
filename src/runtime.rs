@@ -2,6 +2,8 @@
 use crate::rsync::Rsync;
 use crate::{
     backend::{self, Backend, events::EventLog},
+    browser::Browser,
+    computer::Computer,
     context::Context,
     output::OutputStore,
     registry::{Provider, Registry},
@@ -124,6 +126,8 @@ pub struct Runtime {
     backend: Arc<Backend>,
     registry: Arc<Registry>,
     workspace: Workspace,
+    browser: Browser,
+    computer: Computer,
     context: Context,
     rsync: Rsync,
     output: Arc<OutputStore>,
@@ -144,8 +148,12 @@ impl Runtime {
         let registry = backend.registry.clone();
         let workspace = Workspace::with_output(root.clone(), output.clone())?;
         let context = Context::with_output(root.clone(), context_roots, output.clone())?;
+        let browser = Browser::new(root.clone())?;
+        let computer = Computer::new(root.clone())?;
         let rsync = Rsync::new(root)?;
         registry.replace(Provider::Workspace, Workspace::tools())?;
+        registry.replace(Provider::Browser, Browser::tools())?;
+        registry.replace(Provider::Computer, Computer::tools())?;
         registry.replace(Provider::Context, Context::tools())?;
         registry.replace(Provider::Rsync, Rsync::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
@@ -160,6 +168,8 @@ impl Runtime {
             backend,
             registry,
             workspace,
+            browser,
+            computer,
             context,
             rsync,
             audit: EventLog::with_output("audit", output.clone()),
@@ -227,11 +237,19 @@ impl Runtime {
                 "file_audit":"unknown","approval":"native"}),
             );
         }
+        let control = matches!(tool.provider, Provider::Browser | Provider::Computer);
+        if control {
+            self.audit
+                .push(json!({"type":"ssmcp.control.started","call_id":call_id,
+                "provider":tool.provider.label(),"tool":name,"generation":tool.generation}));
+        }
         let skill_path = arguments
             .get("path")
             .and_then(Value::as_str)
             .map(str::to_owned);
         let outcome = match tool.provider {
+            Provider::Browser => self.browser.perform(&tool.native_name, arguments).await,
+            Provider::Computer => self.computer.perform(&tool.native_name, arguments).await,
             Provider::Workspace => self
                 .workspace
                 .perform(&tool.native_name, arguments)
@@ -264,6 +282,13 @@ impl Runtime {
                 "success":outcome.as_ref().is_ok_and(|result|result["isError"]!=true),
                 "file_audit":"unknown","approval":"native"}),
             );
+        }
+        if control {
+            self.audit
+                .push(json!({"type":"ssmcp.control.completed","call_id":call_id,
+                "provider":tool.provider.label(),"tool":name,
+                "duration_ms":started.elapsed().as_millis() as u64,
+                "success":outcome.as_ref().is_ok_and(|result| result["isError"] != true)}));
         }
         if let Ok(value) = &outcome
             && value["isError"] != true
@@ -324,6 +349,8 @@ impl Runtime {
             .clear();
         tokio::join!(
             self.workspace.shutdown(),
+            self.browser.shutdown(),
+            self.computer.shutdown(),
             self.rsync.shutdown(),
             self.backend.shutdown()
         );

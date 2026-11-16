@@ -2,9 +2,11 @@ pub(crate) mod audit;
 pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod broker;
+pub mod browser;
 pub mod client;
 #[cfg(target_os = "linux")]
 pub mod code_mode;
+pub mod computer;
 pub mod context;
 #[cfg(target_os = "linux")]
 pub mod http;
