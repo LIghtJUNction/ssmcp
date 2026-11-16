@@ -60,6 +60,7 @@ fn display() -> &'static Mutex<Renderer> {
     })
 }
 
+#[cfg(unix)]
 fn terminal_width() -> usize {
     let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
     // SAFETY: ioctl writes a winsize into valid, aligned storage.
@@ -71,6 +72,15 @@ fn terminal_width() -> usize {
         }
     }
     100
+}
+
+#[cfg(not(unix))]
+fn terminal_width() -> usize {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|v| *v > 8)
+        .unwrap_or(100)
 }
 
 fn color_enabled(tty: bool, no_color: bool) -> bool {
@@ -125,7 +135,7 @@ impl Renderer {
     fn event(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<()> {
         if self.raw {
             writeln!(out, "{value}")?;
-        } else if !self.rpc(out, label, value)? {
+        } else if !self.activity(out, label, value)? && !self.rpc(out, label, value)? {
             self.value(out, label, value, "Event", 0)?;
         }
         if self.verbose && !self.raw {
@@ -141,6 +151,132 @@ impl Renderer {
             )?;
         }
         out.flush()
+    }
+
+    fn activity(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<bool> {
+        let kind = value["type"].as_str().unwrap_or("");
+        let id = value["job_id"].as_str().unwrap_or("");
+        match kind {
+            "ssmcp.exec.started" => {
+                let command = command_label(&value["command"]);
+                self.summary(out, label, "Running", &format!("{id}  {command}"))?;
+                if let Some(cwd) = value["cwd"].as_str() {
+                    painted(
+                        out,
+                        self.color,
+                        self.ui.theme.color("gray"),
+                        &format!("       {}\n", clean(cwd)),
+                    )?;
+                }
+            }
+            "ssmcp.exec.finished" => {
+                let failed = value["exit_code"].as_i64().is_some_and(|v| v != 0)
+                    || !value["error"].is_null();
+                let title = if value["timed_out"] == true {
+                    "Timeout"
+                } else if value["cancelled"] == true {
+                    "Warning"
+                } else if failed {
+                    "Error"
+                } else {
+                    "Success"
+                };
+                let state = value["state"].as_str().unwrap_or("completed");
+                let elapsed = value["duration_ms"].as_u64().unwrap_or(0) as f64 / 1000.0;
+                let exit = value["exit_code"]
+                    .as_i64()
+                    .map(|v| format!("  exit={v}"))
+                    .unwrap_or_default();
+                self.summary(
+                    out,
+                    label,
+                    title,
+                    &format!("{id}  {state}{exit}  {elapsed:.2}s"),
+                )?;
+                if let Some(error) = value["error"].as_str() {
+                    self.block(out, label, "Error", error)?;
+                }
+                for stream in ["stdout", "stderr"] {
+                    if let Some(artifact) = value[stream].get("artifact").filter(|v| !v.is_null()) {
+                        self.artifact(out, label, id, stream, artifact)?;
+                    } else if let Some(error) = value[stream]["error"].as_str() {
+                        self.summary(out, label, "Warning", &format!("{id}  {stream}: {error}"))?;
+                    }
+                }
+            }
+            "ssmcp.output_archived" => self.artifact(
+                out,
+                label,
+                id,
+                value["stream"].as_str().unwrap_or("output"),
+                &value["artifact"],
+            )?,
+            "ssmcp.fileread" => {
+                self.summary(out, label, "Read", value["path"].as_str().unwrap_or(""))?
+            }
+            "ssmcp.filechange" => {
+                self.summary(out, label, "Edit", value["path"].as_str().unwrap_or(""))?;
+                if let Some(diff) = value["diff"].as_str().filter(|v| !v.is_empty()) {
+                    self.text(out, label, diff)?;
+                    self.finish(out, label)?;
+                } else if value["preview_available"] == false {
+                    self.text(
+                        out,
+                        label,
+                        "Binary or large file updated; preview unavailable\n",
+                    )?;
+                }
+            }
+            "ssmcp.skill_use" => self.summary(
+                out,
+                label,
+                "Skill",
+                &format!(
+                    "{}  {}",
+                    value["tool"].as_str().unwrap_or(""),
+                    value["skill"].as_str().unwrap_or("")
+                ),
+            )?,
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn artifact(
+        &mut self,
+        out: &mut impl Write,
+        label: &str,
+        id: &str,
+        stream: &str,
+        artifact: &Value,
+    ) -> io::Result<()> {
+        let bytes = artifact["bytes"].as_u64().unwrap_or(0);
+        let lines = artifact["lines"].as_u64().unwrap_or(0);
+        let state = if artifact["complete"] == true {
+            "saved"
+        } else if artifact["error"].is_string() {
+            "partial"
+        } else {
+            "saving"
+        };
+        self.summary(
+            out,
+            label,
+            "Output",
+            &format!("{id}  {stream} {state}  {bytes} bytes · {lines} lines"),
+        )?;
+        if let Some(path) = artifact["path"].as_str() {
+            painted(
+                out,
+                self.color,
+                self.ui.theme.color("gray"),
+                &format!("       {}\n", clean(path)),
+            )?;
+        }
+        if let Some(error) = artifact["error"].as_str() {
+            self.summary(out, label, "Warning", error)?;
+        }
+        Ok(())
     }
 
     // Correlate at the RPC boundary, scoped by backend so identical IDs cannot collide.
@@ -312,6 +448,11 @@ impl Renderer {
         }
         let (tag, color) = match title {
             "Request" | "User" => ("REQ ", "blue"),
+            "Running" => ("RUN ", "blue"),
+            "Read" => ("READ", "cyan"),
+            "Edit" => ("EDIT", "purple"),
+            "Skill" => ("SKIL", "purple"),
+            "Output" => ("SAVE", "gray"),
             "Success" | "Connected" => ("OK  ", "green"),
             "Error" | "Timeout" => ("ERR ", "red"),
             "Warning" => ("WARN", "yellow"),
@@ -513,7 +654,7 @@ impl Renderer {
             if !self.streams.contains_key(&key) {
                 self.heading(
                     out,
-                    label,
+                    &format!("{label} · {process}"),
                     if stream == "stderr" {
                         "stderr"
                     } else {
@@ -781,6 +922,29 @@ impl Renderer {
 }
 
 /// A bounded description, never a giant JSON dump in the default transcript.
+fn command_label(command: &Value) -> String {
+    command
+        .as_array()
+        .map(|args| {
+            args.iter()
+                .map(|arg| {
+                    let arg = arg.as_str().unwrap_or("");
+                    if !arg.is_empty()
+                        && arg
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || "_./:-=".contains(c))
+                    {
+                        arg.to_owned()
+                    } else {
+                        format!("{arg:?}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
 fn compact(value: &Value, depth: usize) -> String {
     if depth > 2 {
         return "… (--verbose for JSON)".into();
@@ -824,20 +988,38 @@ pub(crate) fn connection(output: &Value) -> io::Result<()> {
     if !out.is_terminal() || renderer.raw {
         writeln!(out, "{output}")?;
     } else {
-        writeln!(out, "MCP: {}", clean(output["url"].as_str().unwrap_or("")))?;
+        writeln!(out)?;
+        painted(
+            &mut out,
+            renderer.color,
+            renderer.ui.theme.color("blue"),
+            concat!("  ssmcp  ", env!("CARGO_PKG_VERSION"), "\n"),
+        )?;
         if let Some(title) = output["title"].as_str() {
-            writeln!(out, "Session: {}", clean(title))?;
+            writeln!(out, "  {}", clean(title))?;
         }
+        writeln!(out)?;
+        writeln!(
+            out,
+            "  MCP    {}",
+            clean(output["url"].as_str().unwrap_or(""))
+        )?;
         if let Some(code) = output["login_code"].as_str() {
             writeln!(
                 out,
-                "OAuth login code: {}  ({}s)",
+                "  Login  {}  ·  expires in {}s",
                 clean(code),
                 output["login_expires_in"]
             )?;
         } else {
-            writeln!(out, "OAuth: sign in with an allowed GitHub account")?;
+            writeln!(out, "  Login  GitHub account")?;
         }
+        painted(
+            &mut out,
+            renderer.color,
+            renderer.ui.theme.color("gray"),
+            "\n  Commands run here. Parallel jobs keep separate output.\n  Ctrl-C disconnects and stops owned processes.\n\n",
+        )?;
     }
     out.flush()
 }
@@ -1387,23 +1569,53 @@ mod tests {
     }
 
     #[test]
+    fn job_lifecycle_has_commands_status_and_distinct_stream_labels() {
+        let output = render(
+            &[
+                json!({"type":"ssmcp.exec.started","job_id":"42-1","command":["cargo","test"],"cwd":"/work"}),
+                json!({"method":"command/exec/outputDelta","params":{"processId":"42-1","stream":"stdout","deltaBase64":STANDARD.encode("ok\n")}}),
+                json!({"type":"ssmcp.exec.finished","job_id":"42-1","state":"completed","exit_code":0,"duration_ms":1234}),
+                json!({"type":"ssmcp.fileread","path":"src/main.rs"}),
+                json!({"type":"ssmcp.skill_use","tool":"ssmcp.skills.read","skill":"skills/review/SKILL.md"}),
+            ],
+            false,
+            false,
+        );
+        assert_eq!(output.matches("cargo test").count(), 1);
+        assert!(output.contains("[RUN ] codex  42-1"));
+        assert!(output.contains("codex · 42-1"));
+        assert!(output.contains("completed  exit=0  1.23s"));
+        assert!(output.contains("[READ] codex  src/main.rs"));
+        assert!(output.contains("[SKIL] codex  ssmcp.skills.read"));
+        assert!(!output.contains("{\"type\""));
+    }
+
+    #[test]
     fn terminal_preview_fixture() {
         let Some(path) = std::env::var_os("SSMCP_RENDER_PREVIEW") else {
             return;
         };
-        let text = render(
-            &[
-                json!({"type":"ssmcp.status","level":"Connected","message":"CONNECTED  client=light-codex  mode=codex  cwd=/workspace/ssmcp"}),
-                json!({"id":"r1","method":"server/diagnostics","params":{}}),
-                json!({"id":"r1","result":{"process":{"id":2263065,"rssBytes":129900000},"in_flight":1}}),
-                json!({"id":"r2","method":"command/exec","params":{"command":["bash","-lc","printf 'SSMCP_PROBE_OK\\n'; pwd; codex --version"],"cwd":"/workspace/ssmcp","timeoutMs":10000}}),
-                json!({"stderr":"warning: codex wrapper triggered tool install\nmise downloading codex@0.169.0 16.3/192.3 MB 2.3 MB/s\n"}),
-                json!({"id":"r2","result":{"exitCode":124,"stdout":"SSMCP_PROBE_OK\n/workspace/ssmcp\n","stderr":"error: command timeout after 10s"}}),
-            ],
-            false,
-            true,
-        );
-        std::fs::write(path, text).unwrap();
+        let events = [
+            json!({"type":"ssmcp.status","level":"Connected","message":"ssmcp · improve command execution"}),
+            json!({"type":"ssmcp.exec.started","job_id":"1842-1","command":["cargo","test","--locked"],"cwd":"~/projects/ssmcp"}),
+            json!({"type":"ssmcp.exec.started","job_id":"1842-2","command":["cargo","clippy","--locked"],"cwd":"~/projects/ssmcp"}),
+            json!({"method":"command/exec/outputDelta","params":{"processId":"1842-1","stream":"stdout","deltaBase64":STANDARD.encode("running 7 command lifecycle tests\ntest parallel_commands ... ok\ntest wait_keeps_command_running ... ok\n")}}),
+            json!({"type":"ssmcp.exec.finished","job_id":"1842-2","state":"completed","exit_code":0,"duration_ms":890}),
+            json!({"type":"ssmcp.exec.finished","job_id":"1842-1","state":"completed","exit_code":0,"duration_ms":1280}),
+            json!({"type":"ssmcp.fileread","path":"src/backend/shell.rs"}),
+            json!({"type":"ssmcp.filechange","path":"src/backend/shell.rs","diff":"--- a/src/backend/shell.rs\n+++ b/src/backend/shell.rs\n@@ -18,1 +18,1 @@\n-const MAX_WAIT: u64 = 5_000;\n+const MAX_WAIT: u64 = 60_000;\n"}),
+            json!({"type":"ssmcp.skill_use","tool":"ssmcp.skills.read","skill":"skills/ssmcp/SKILL.md"}),
+            json!({"type":"ssmcp.output_archived","job_id":"1842-3","stream":"stdout","artifact":{"path":"/tmp/ssmcp/1000/command-output.log","bytes":126720,"lines":2400,"complete":true}}),
+            json!({"type":"ssmcp.status","level":"Progress","message":"Reload acknowledged · reconnecting with updated client"}),
+        ];
+        let mut renderer = Renderer::new(false, true, 100);
+        renderer.ui.theme = super::super::ui::Theme::Minimal;
+        let mut output = Vec::new();
+        for event in &events {
+            renderer.event(&mut output, "dev", event).unwrap();
+        }
+        renderer.finish_group(&mut output, "dev").unwrap();
+        std::fs::write(path, output).unwrap();
     }
 }
 

@@ -48,7 +48,7 @@ impl ClientMetadata {
                 ));
             }
         }
-        if !std::path::Path::new(&self.cwd).is_absolute() {
+        if !absolute_client_path(&self.cwd) {
             return Err("client cwd must be an absolute path".into());
         }
         if self.allow.len() > MAX_ALLOWED_PRINCIPALS {
@@ -66,6 +66,25 @@ impl ClientMetadata {
         }
         Ok(())
     }
+}
+
+// Metadata crosses operating systems: the Linux gateway must accept Windows
+// drive and UNC paths without interpreting them as paths on the gateway itself.
+fn absolute_client_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if path.starts_with('/')
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'))
+    {
+        return true;
+    }
+    path.strip_prefix("\\\\").is_some_and(|rest| {
+        let mut parts = rest.split('\\');
+        parts.next().is_some_and(|server| !server.is_empty())
+            && parts.next().is_some_and(|share| !share.is_empty())
+    })
 }
 
 pub fn validate_title(title: Option<&str>) -> Result<(), String> {
@@ -352,6 +371,20 @@ mod tests {
             allow: Vec::new(),
         };
         assert!(valid.validate().is_ok());
+        for cwd in [
+            r"C:\Users\developer\project",
+            "D:/work/project",
+            r"\\server\share\project",
+            r"\\?\C:\work",
+        ] {
+            let metadata = ClientMetadata {
+                cwd: cwd.into(),
+                ..valid.clone()
+            };
+            let decoded: ClientMetadata =
+                serde_json::from_value(serde_json::to_value(&metadata).unwrap()).unwrap();
+            assert!(decoded.validate().is_ok(), "rejected client path {cwd}");
+        }
         for name in ["".into(), "  ".into(), "bad\nname".into(), "x".repeat(129)] {
             assert!(
                 ClientMetadata {
@@ -364,6 +397,9 @@ mod tests {
         }
         for cwd in [
             "relative".into(),
+            "C:relative".into(),
+            r"\relative".into(),
+            r"\\server".into(),
             "/bad\0path".into(),
             format!("/{}", "x".repeat(4096)),
         ] {

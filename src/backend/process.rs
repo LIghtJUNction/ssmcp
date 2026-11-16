@@ -1,11 +1,17 @@
 //! Owned process sessions. Keep the leader unreaped until all ordinary jobs are stopped.
-use std::{io, os::fd::OwnedFd};
+use std::io;
+#[cfg(target_os = "linux")]
+use std::os::fd::OwnedFd;
 use tokio::process::{Child, Command};
 
 pub struct Managed {
     pub child: Child,
+    #[cfg(unix)]
     pid: libc::pid_t,
+    #[cfg(target_os = "linux")]
     leader: OwnedFd,
+    #[cfg(windows)]
+    job: crate::platform::WindowsJob,
     stopped: bool,
 }
 
@@ -13,6 +19,7 @@ impl Managed {
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
         command.kill_on_drop(true);
         // SAFETY: after fork, only the async-signal-safe setsid syscall is used.
+        #[cfg(unix)]
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() < 0 {
@@ -21,10 +28,38 @@ impl Managed {
                 Ok(())
             });
         }
-        let mut child = command.spawn()?;
+        #[cfg(windows)]
+        let job = crate::platform::WindowsJob::new()?;
+        #[cfg(windows)]
+        command.creation_flags(
+            windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP
+                | windows_sys::Win32::System::Threading::CREATE_SUSPENDED,
+        );
+        let child = command.spawn()?;
+        #[cfg(any(target_os = "linux", windows))]
+        let mut child = child;
+        #[cfg(windows)]
+        if let Some(handle) = child.raw_handle()
+            && let Err(error) = job.assign(handle)
+        {
+            let _ = child.start_kill();
+            return Err(error);
+        }
+        #[cfg(windows)]
+        if let Err(error) = crate::platform::resume_process(
+            child
+                .id()
+                .ok_or_else(|| io::Error::other("child has no PID"))?,
+        ) {
+            job.terminate();
+            let _ = child.start_kill();
+            return Err(error);
+        }
+        #[cfg(unix)]
         let pid = child
             .id()
             .ok_or_else(|| io::Error::other("child has no PID"))? as libc::pid_t;
+        #[cfg(target_os = "linux")]
         let leader = match crate::pty::open_pidfd(pid) {
             Ok(fd) => fd,
             Err(error) => {
@@ -34,8 +69,12 @@ impl Managed {
         };
         Ok(Self {
             child,
+            #[cfg(unix)]
             pid,
+            #[cfg(target_os = "linux")]
             leader,
+            #[cfg(windows)]
+            job,
             stopped: false,
         })
     }
@@ -47,7 +86,14 @@ impl Managed {
         if self.stopped {
             return;
         }
+        #[cfg(target_os = "linux")]
         crate::pty::stop_session(self.pid, &self.leader);
+        #[cfg(all(unix, not(target_os = "linux")))]
+        if self.child.id().is_some() {
+            crate::platform::stop_unix_descendants(self.pid);
+        }
+        #[cfg(windows)]
+        self.job.terminate();
         let _ = self.child.start_kill();
         self.stopped = true;
     }
@@ -65,7 +111,45 @@ impl Drop for Managed {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::{
+        os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+        process::Stdio,
+        time::Duration,
+    };
+    use tokio::{
+        io::{AsyncBufReadExt, BufReader},
+        time::timeout,
+    };
+    use windows_sys::Win32::{Foundation::WAIT_OBJECT_0, System::Threading::*};
+
+    #[tokio::test]
+    async fn cancellation_terminates_the_owned_process_tree() {
+        let mut command = Command::new("python");
+        command.args(["-u", "-c", "import subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); print(child.pid,flush=True); time.sleep(60)"])
+            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        let mut process = Managed::spawn(&mut command).unwrap();
+        let mut stdout = BufReader::new(process.child.stdout.take().unwrap());
+        let mut line = String::new();
+        timeout(Duration::from_secs(10), stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        let pid = line.trim().parse().unwrap();
+        let raw = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, pid) };
+        assert!(!raw.is_null());
+        let child = unsafe { OwnedHandle::from_raw_handle(raw) };
+        process.shutdown().await;
+        assert_eq!(
+            unsafe { WaitForSingleObject(child.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use std::{process::Stdio, time::Duration};

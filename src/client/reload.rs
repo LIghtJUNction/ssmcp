@@ -1,12 +1,10 @@
 //! Re-execute the installed client entry point after an acknowledged reload.
 use crate::wire::Operation;
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::os::unix::{fs::MetadataExt, process::CommandExt};
 use std::{
     ffi::{OsStr, OsString},
-    os::unix::{
-        fs::{MetadataExt, PermissionsExt},
-        process::CommandExt,
-    },
     path::{Path, PathBuf},
 };
 
@@ -54,11 +52,14 @@ impl Restart {
         let mut args = std::env::args_os();
         let entry = args.next().ok_or("client executable path is missing")?;
         let cwd = std::env::current_dir()?;
+        let current = std::env::current_exe()?;
+        #[cfg(target_os = "linux")]
         let running = std::fs::metadata("/proc/self/exe")?;
+        #[cfg(not(target_os = "linux"))]
+        let running = std::fs::metadata(&current)?;
         let program = resolve_entry(&entry, &cwd, std::env::var_os("PATH").as_deref())
             .and_then(|path| {
-                let candidate = std::fs::metadata(&path).map_err(|error| error.to_string())?;
-                if candidate.dev() == running.dev() && candidate.ino() == running.ino() {
+                if same_executable(&path, &current, &running) {
                     // Compare the resolved file identity but retain the entry
                     // path, so changing its installation symlink still works.
                     Ok(path)
@@ -69,9 +70,8 @@ impl Restart {
             .or_else(|_| {
                 // exec -a can supply any display name, including the name of
                 // another program in PATH. Only the actual client is a fallback.
-                let path = std::env::current_exe().map_err(|error| error.to_string())?;
-                validate_executable(&path)?;
-                Ok::<_, String>(path)
+                validate_executable(&current)?;
+                Ok::<_, String>(current)
             })?;
         Ok(Self {
             program,
@@ -98,15 +98,50 @@ impl Restart {
     }
 
     pub(crate) fn execute(&self) -> crate::Result<()> {
-        let error = std::process::Command::new(&self.program)
-            .args(&self.arguments)
-            .current_dir(&self.cwd)
-            .exec();
-        Err(format!(
-            "could not reload client from {}: {error}",
-            self.program.display()
-        )
-        .into())
+        let mut command = std::process::Command::new(&self.program);
+        command.args(&self.arguments).current_dir(&self.cwd);
+        #[cfg(unix)]
+        {
+            let error = command.exec();
+            Err(format!(
+                "could not reload client from {}: {error}",
+                self.program.display()
+            )
+            .into())
+        }
+        #[cfg(windows)]
+        {
+            // Windows has no exec. Keep the original console invocation alive
+            // while its replacement uses the same inherited standard handles.
+            let status = command.status().map_err(|error| {
+                format!(
+                    "could not reload client from {}: {error}",
+                    self.program.display()
+                )
+            })?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("reloaded client exited with {status}").into())
+            }
+        }
+    }
+}
+
+fn same_executable(candidate: &Path, _current: &Path, running: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        std::fs::metadata(candidate).is_ok_and(|metadata| {
+            metadata.dev() == running.dev() && metadata.ino() == running.ino()
+        })
+    }
+    #[cfg(windows)]
+    {
+        let _ = running;
+        match (candidate.canonicalize(), _current.canonicalize()) {
+            (Ok(candidate), Ok(current)) => candidate == current,
+            _ => false,
+        }
     }
 }
 
@@ -117,7 +152,7 @@ fn validate_executable(path: &Path) -> Result<(), String> {
             path.display()
         )
     })?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+    if !metadata.is_file() || !crate::platform::is_executable(path) {
         return Err(format!(
             "reload target {} is not an executable file",
             path.display()
@@ -156,9 +191,9 @@ mod tests {
     #[test]
     fn reload_rejects_arguments_and_inflight_requests_before_acceptance() {
         let restart = Restart {
-            program: "/bin/sh".into(),
+            program: std::env::current_exe().unwrap(),
             arguments: Vec::new(),
-            cwd: "/".into(),
+            cwd: std::env::temp_dir(),
         };
         assert!(
             restart
@@ -173,6 +208,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn reload_resolves_path_without_canonicalizing_the_installation_entry() {
         assert_eq!(
             resolve_entry(OsStr::new("/bin/sh"), Path::new("/tmp"), None).unwrap(),
@@ -189,6 +225,17 @@ mod tests {
                 Some(OsStr::new("/bin"))
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn reload_resolves_the_current_executable_from_its_directory() {
+        let current = std::env::current_exe().unwrap();
+        let directory = current.parent().unwrap();
+        let path = std::env::join_paths([directory]).unwrap();
+        assert_eq!(
+            resolve_entry(current.file_name().unwrap(), directory, Some(&path)).unwrap(),
+            current
         );
     }
 }

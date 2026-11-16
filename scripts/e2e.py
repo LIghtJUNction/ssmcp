@@ -19,10 +19,12 @@ from pathlib import Path
 import pwd
 import re
 import selectors
+import shlex
 import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.parse import urlencode, urlsplit, parse_qs
@@ -48,6 +50,9 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.rsync.status", "ssmcp.rsync.close",
     "ssmcp.client.reload",
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
+    "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
+    "ssmcp.exec.read", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
+    "ssmcp.harnesses.list",
 })
 
 
@@ -102,7 +107,7 @@ class Harness:
         self.checks.append(description)
         print(f"PASS {description}", flush=True)
 
-    def spawn(self, label, command, *, stdout=None, cwd=None):
+    def spawn(self, label, command, *, stdout=None, cwd=None, env=None):
         log_path = self.directory / f"{label}.log"
         log = log_path.open("w+")
         self.logs.append((log_path, log))
@@ -113,6 +118,7 @@ class Harness:
             stderr=log,
             start_new_session=True,
             cwd=cwd,
+            env=env,
         )
         self.processes.append(process)
         return process
@@ -409,21 +415,32 @@ class Harness:
         wait_for(ssh_ready, description="isolated sshd")
 
     def start_client(self, label="client", *, name="workstation", cwd=None, mode=None,
-                     backend=None, backend_args=(), destination=None):
+                     backend=None, backend_args=(), destination=None, harnesses=()):
+        # Discover only fixtures and ordinary test commands. Inheriting PATH here
+        # would also register a developer's real coding harnesses.
+        tools = self.directory / f"{label}-bin"
+        tools.mkdir(mode=0o700)
+        for executable in ("ssh", "sh", "stty", "sleep", "tty", "python3", "rsync", "head", "tr", "cat", "env"):
+            program = shutil.which(executable)
+            if program:
+                (tools / executable).symlink_to(program)
+        installed = list(harnesses)
+        if backend is not None:
+            installed.append((mode, backend, backend_args))
+        programs = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode"}
+        for kind, program, arguments in installed:
+            entry = tools / programs[kind]
+            fixture = " ".join(shlex.quote(str(value)) for value in [sys.executable, program])
+            extra = " ".join(shlex.quote(str(value)) for value in arguments)
+            entry.write_text(f'#!/bin/sh\nexec {fixture} "$@" {extra}\n')
+            entry.chmod(0o700)
+        environment = dict(os.environ, PATH=str(tools), ENV="/dev/null", BASH_ENV="/dev/null")
         command = [
             str(self.binary_dir / "ssmcp"), "-F", str(self.directory / "ssh_config"),
-            "--name", name,
+            "--name", name, "--shell", "/bin/sh",
         ]
-        if mode is not None:
-            command += ["-t", mode]
-        if mode in (None, "shell"):
-            command += ["--shell", "/bin/sh"]
-        if backend is not None:
-            command += ["--backend", str(backend)]
         command += [destination or f"{self.user}@ssmcp-e2e"]
-        if backend_args:
-            command += ["--", *map(str, backend_args)]
-        process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd)
+        process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd, env=environment)
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
             if not selector.select(timeout=10):

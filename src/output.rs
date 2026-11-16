@@ -7,16 +7,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    ffi::CString,
     fs::{File, OpenOptions},
     io::{self, Read, Write},
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+#[cfg(windows)]
+use std::os::windows::fs::{FileExt, MetadataExt, OpenOptionsExt};
+#[cfg(unix)]
+use std::{
+    ffi::CString,
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
-    path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 pub const INLINE_BYTES: usize = 32 * 1024;
@@ -74,6 +80,7 @@ pub struct ArtifactMetadata {
 
 pub struct OutputStore {
     directory: PathBuf,
+    #[cfg_attr(windows, allow(dead_code))]
     directory_fd: File,
     policy: Policy,
 }
@@ -83,39 +90,54 @@ impl OutputStore {
         static STORE: OnceLock<Result<Arc<OutputStore>, String>> = OnceLock::new();
         STORE
             .get_or_init(|| {
-                let base = Path::new("/tmp/ssmcp");
-                match std::fs::DirBuilder::new().mode(0o1777).create(base) {
-                    Ok(()) => {
-                        // Creation is affected by umask; make the shared parent sticky.
-                        std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o1777))
-                            .map_err(error)?;
-                    }
-                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                    Err(e) => return Err(error(e)),
-                }
-                let base_fd = open_directory(base).map_err(error)?;
-                let metadata = base_fd.metadata().map_err(error)?;
-                let uid = unsafe { libc::geteuid() };
-                if (metadata.uid() != 0 && metadata.uid() != uid)
-                    || (metadata.mode() & 0o002 != 0 && metadata.mode() & 0o1000 == 0)
+                #[cfg(unix)]
                 {
-                    return Err(
-                        "output directory /tmp/ssmcp has unsafe ownership or permissions".into(),
-                    );
+                    let base = Path::new("/tmp/ssmcp");
+                    match std::fs::DirBuilder::new().mode(0o1777).create(base) {
+                        Ok(()) => {
+                            // Creation is affected by umask; make the shared parent sticky.
+                            std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o1777))
+                                .map_err(error)?;
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                        Err(e) => return Err(error(e)),
+                    }
+                    let base_fd = open_directory(base).map_err(error)?;
+                    let metadata = base_fd.metadata().map_err(error)?;
+                    let uid = unsafe { libc::geteuid() };
+                    if (metadata.uid() != 0 && metadata.uid() != uid)
+                        || (metadata.mode() & 0o002 != 0 && metadata.mode() & 0o1000 == 0)
+                    {
+                        return Err(
+                            "output directory /tmp/ssmcp has unsafe ownership or permissions"
+                                .into(),
+                        );
+                    }
+                    Self::at(base.join(uid.to_string()), Policy::default())
                 }
-                Self::at(base.join(uid.to_string()), Policy::default())
+                #[cfg(windows)]
+                {
+                    let base = std::env::var_os("LOCALAPPDATA")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(std::env::temp_dir)
+                        .join("ssmcp");
+                    std::fs::create_dir_all(&base).map_err(error)?;
+                    Self::at(base.join("output"), Policy::default())
+                }
             })
             .clone()
     }
 
     fn at(directory: PathBuf, policy: Policy) -> Result<Arc<Self>, String> {
-        match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+        match crate::platform::private_directory(&directory) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(error(e)),
         }
         let directory_fd = open_directory(&directory).map_err(error)?;
+        #[cfg(unix)]
         let metadata = directory_fd.metadata().map_err(error)?;
+        #[cfg(unix)]
         if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
             return Err(
                 "output directory must be owned by this user with private permissions".into(),
@@ -158,6 +180,7 @@ impl OutputStore {
         }
     }
 
+    #[cfg(unix)]
     fn open(&self, name: &str, flags: i32) -> io::Result<File> {
         let name = CString::new(name).map_err(io::Error::other)?;
         // SAFETY: the directory fd is live; names are single, checked components.
@@ -187,6 +210,37 @@ impl OutputStore {
         Ok(file)
     }
 
+    #[cfg(windows)]
+    fn open(&self, name: &str, flags: i32) -> io::Result<File> {
+        if name.contains(['/', '\\', ':']) || name == "." || name == ".." {
+            return Err(io::Error::other("invalid output filename"));
+        }
+        let path = self.directory.join(name);
+        let mut options = OpenOptions::new();
+        let access = flags & (libc::O_RDWR | libc::O_WRONLY);
+        options
+            .read(access != libc::O_WRONLY)
+            .write(access != libc::O_RDONLY);
+        if flags & libc::O_EXCL != 0 {
+            options.create_new(true);
+        } else {
+            options.create(flags & libc::O_CREAT != 0);
+        }
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = options.open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.file_attributes()
+                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+                != 0
+        {
+            return Err(io::Error::other(
+                "output artifact must be a regular file without reparse points",
+            ));
+        }
+        Ok(file)
+    }
+
     fn directory_lock(&self) -> Result<File, String> {
         let file = self
             .open(".cleanup.lock", libc::O_RDWR | libc::O_CREAT)
@@ -200,9 +254,7 @@ impl OutputStore {
         let _guard = self.directory_lock()?;
         for _ in 0..8 {
             let mut random = [0u8; 16];
-            File::open("/dev/urandom")
-                .and_then(|mut f| f.read_exact(&mut random))
-                .map_err(error)?;
+            crate::platform::random_bytes(&mut random).map_err(error)?;
             let id: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
             let name = artifact_name(&id);
             // Publish a recognizable manifest first. A crash between these two
@@ -281,19 +333,31 @@ impl OutputStore {
         let result = (|| {
             serde_json::to_writer(&mut file, metadata).map_err(error)?;
             file.flush().map_err(error)?;
-            let source = CString::new(temporary.as_str()).unwrap();
-            let destination = CString::new(manifest_name(&metadata.id)).unwrap();
-            // SAFETY: both paths are single components relative to the owned directory.
-            if unsafe {
-                libc::renameat(
-                    self.directory_fd.as_raw_fd(),
-                    source.as_ptr(),
-                    self.directory_fd.as_raw_fd(),
-                    destination.as_ptr(),
-                )
-            } < 0
+            #[cfg(unix)]
             {
-                return Err(error(io::Error::last_os_error()));
+                let source = CString::new(temporary.as_str()).unwrap();
+                let destination = CString::new(manifest_name(&metadata.id)).unwrap();
+                // SAFETY: both paths are single components relative to the owned directory.
+                if unsafe {
+                    libc::renameat(
+                        self.directory_fd.as_raw_fd(),
+                        source.as_ptr(),
+                        self.directory_fd.as_raw_fd(),
+                        destination.as_ptr(),
+                    )
+                } < 0
+                {
+                    return Err(error(io::Error::last_os_error()));
+                }
+            }
+            #[cfg(windows)]
+            {
+                drop(file);
+                std::fs::rename(
+                    self.directory.join(&temporary),
+                    self.directory.join(manifest_name(&metadata.id)),
+                )
+                .map_err(error)?;
             }
             Ok(())
         })();
@@ -303,12 +367,18 @@ impl OutputStore {
         result
     }
 
+    #[cfg(unix)]
     fn unlink(&self, name: &str) -> bool {
         let Ok(name) = CString::new(name) else {
             return false;
         };
         // SAFETY: the fd is owned; unlinkat does not follow the final component.
         unsafe { libc::unlinkat(self.directory_fd.as_raw_fd(), name.as_ptr(), 0) == 0 }
+    }
+
+    #[cfg(windows)]
+    fn unlink(&self, name: &str) -> bool {
+        std::fs::remove_file(self.directory.join(name)).is_ok()
     }
 
     /// Evict expired and oldest completed artifacts; held writer locks always win.
@@ -318,8 +388,11 @@ impl OutputStore {
         let mut files = Vec::new();
         let mut active = 0u64;
         // Read through the opened directory, not a possibly replaced pathname.
-        let entries = std::fs::read_dir(format!("/proc/self/fd/{}", self.directory_fd.as_raw_fd()))
-            .map_err(error)?;
+        #[cfg(target_os = "linux")]
+        let directory = PathBuf::from(format!("/proc/self/fd/{}", self.directory_fd.as_raw_fd()));
+        #[cfg(not(target_os = "linux"))]
+        let directory = self.directory.clone();
+        let entries = std::fs::read_dir(directory).map_err(error)?;
         for entry in entries {
             let entry = entry.map_err(error)?;
             let name = entry.file_name();
@@ -442,7 +515,7 @@ impl OutputStore {
                 let mut data = vec![0; args.max_bytes.min((size - args.offset) as usize)];
                 let mut read = 0;
                 while read < data.len() {
-                    match file.read_at(&mut data[read..], args.offset + read as u64) {
+                    match read_at(&file, &mut data[read..], args.offset + read as u64) {
                         Ok(0) => break,
                         Ok(n) => read += n,
                         Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -805,29 +878,39 @@ fn validate_id(id: &str) -> Result<(), String> {
         Err("output id must be 32 lowercase hexadecimal characters".into())
     }
 }
+#[cfg(unix)]
 fn open_directory(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
 }
-fn lock(file: &File, nonblocking: bool) -> io::Result<()> {
-    loop {
-        // SAFETY: file owns a valid fd; flock only changes its advisory lock state.
-        let result = unsafe {
-            libc::flock(
-                file.as_raw_fd(),
-                libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 },
-            )
-        };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(error);
-        }
+#[cfg(windows)]
+fn open_directory(path: &Path) -> io::Result<File> {
+    use windows_sys::Win32::Storage::FileSystem::*;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::other(
+            "output directory cannot be a reparse point",
+        ));
     }
+    Ok(file)
+}
+fn read_at(file: &File, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+    #[cfg(unix)]
+    {
+        file.read_at(bytes, offset)
+    }
+    #[cfg(windows)]
+    {
+        file.seek_read(bytes, offset)
+    }
+}
+fn lock(file: &File, nonblocking: bool) -> io::Result<()> {
+    crate::platform::lock_file(file, nonblocking)
 }
 fn timestamp(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
@@ -842,6 +925,37 @@ fn error(error: impl std::fmt::Display) -> String {
 }
 
 #[cfg(test)]
+mod portable_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn live_spilled_output_is_readable_before_writer_unlocks() {
+        let mut random = [0u8; 16];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let path = std::env::temp_dir().join(format!("ssmcp-output-portable-{suffix}"));
+        let store = OutputStore::at(path.clone(), Policy::default()).unwrap();
+        let mut capture = store.capture("portable-test");
+        capture.push(&vec![b'x'; INLINE_BYTES + 100]).unwrap();
+        let metadata = capture.metadata().unwrap();
+        let read = store
+            .perform(
+                "ssmcp.output.read",
+                json!({"id":metadata.id,"max_bytes":64}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read["bytes"], 64);
+        assert_eq!(read["text"], "x".repeat(64));
+        assert_eq!(store.cleanup().unwrap()["active_artifacts"], 1);
+        capture.finish().unwrap();
+        drop(capture);
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};

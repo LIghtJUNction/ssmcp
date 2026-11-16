@@ -5,6 +5,7 @@ mod ui;
 
 use crate::{
     backend::Backend,
+    platform::{interrupt_signal, terminate_signal},
     runtime::Runtime,
     wire::{
         ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
@@ -23,7 +24,6 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, BufReader},
     process::{Child, ChildStdout, Command},
-    signal::unix::{SignalKind, signal},
     sync::{Mutex, mpsc, watch},
     task::{JoinHandle, JoinSet},
     time::timeout,
@@ -36,11 +36,11 @@ Usage: ssmcp [options] [user@]host
   -i identity          SSH private key file
   -p port              SSH port
   -F ssh_config        OpenSSH configuration file
-  --name NAME          Display name (default: hostname-type-pid)
+  --name NAME          Display name (default: hostname-pid)
   --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (at most 32 distinct users; case-insensitive)
-  --shell /path        Shell executable (default: $SHELL or /bin/sh)
+  --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
   --log-format FORMAT  pretty (default), pretty-verbose, or jsonl
   --no-color           Disable ANSI colors (also honors NO_COLOR)
@@ -72,7 +72,8 @@ of a login_code. Add url to the MCP client and sign in with an allowed GitHub
 account in the browser. The CLI needs no GitHub login; SSH keys stay unchanged.
 --allow requires a server that supports GitHub authorization and cannot be
 combined with --list-tools.
-Live input, output and native agent events appear on stderr as readable blocks.
+Live input, output and native tool events appear on stderr as readable blocks.
+Independent commands run concurrently and support status, output, wait and cancel.
 Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
 Unified diffs show old/new line numbers. --raw and --raw-events select jsonl.
 --verbose expands folded output and shows the full original JSON event.
@@ -80,7 +81,7 @@ Workspace file operations are rooted at the startup directory. System rsync
 transfers and loopback TCP forwards are available to every backend.
 Skill summaries and AGENTS.md views stay inside the workspace unless an operator
 adds --context-root. These extra roots expose context documents, not file writes.
-Keep this process running; Ctrl-C disconnects and stops its local backend.
+Keep this process running; Ctrl-C disconnects and stops local harnesses and jobs.
 Without --allow, disconnecting revokes this connection's OAuth grants and
 reconnecting needs a new OAuth login. An MCP app restart can reuse valid tokens.
 "#;
@@ -207,10 +208,7 @@ impl Options {
         let mut max_inline_output = None;
         let mut no_color = false;
         let (mut identity, mut port, mut config) = (None, None, None);
-        let mut shell = std::env::var_os("SHELL")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| PathBuf::from("/bin/sh"));
+        let mut shell = crate::platform::default_shell();
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 Some("-h" | "--help") => {
@@ -366,9 +364,7 @@ impl Options {
     }
 
     fn metadata(&self) -> crate::Result<ClientMetadata> {
-        let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")?
-            .trim_end_matches('\n')
-            .to_owned();
+        let hostname = crate::platform::hostname()?;
         let cwd = std::env::current_dir()?
             .into_os_string()
             .into_string()
@@ -376,13 +372,10 @@ impl Options {
         let short_hostname: String = hostname.chars().take(24).collect();
         let metadata = ClientMetadata {
             title: self.title.clone(),
-            name: self.name.clone().unwrap_or_else(|| {
-                format!(
-                    "{short_hostname}-{}-{}",
-                    "shell",
-                    std::process::id()
-                )
-            }),
+            name: self
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("{short_hostname}-{}", std::process::id())),
             cwd,
             hostname,
             allow: self.allow.clone(),
@@ -481,6 +474,7 @@ fn validate_destination(destination: &str) -> Result<(), String> {
 }
 
 pub async fn run() -> crate::Result<()> {
+    #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__rsync-transport")) {
         return crate::rsync::transport_main().await;
     }
@@ -500,8 +494,8 @@ pub async fn run() -> crate::Result<()> {
     ui.timestamps |= options.timestamps;
     ui.color &= !options.no_color;
     render::configure(ui);
-    let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = interrupt_signal()?;
+    let mut terminate = terminate_signal()?;
     if options.list_tools {
         let backend = tokio::select! {
             result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
@@ -577,7 +571,11 @@ pub async fn run() -> crate::Result<()> {
     }
     let login_received_at = std::time::Instant::now();
     let mut incoming = Incoming::start(reader);
-    render::status("shell", "Progress", "Starting local backend");
+    render::status(
+        "shell",
+        "Progress",
+        "Starting shell and discovering installed harness tools",
+    );
     let backend = tokio::select! {
         biased;
         error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(error.into()); },
@@ -631,10 +629,7 @@ pub async fn run() -> crate::Result<()> {
         "Connected",
         &format!(
             "CONNECTED  client={}  mode={}  cwd={}  id={}",
-            metadata.name,
-            "shell",
-            metadata.cwd,
-            client_id
+            metadata.name, "shell", metadata.cwd, client_id
         ),
     );
     render::status(
@@ -899,8 +894,6 @@ mod tests {
 
     #[test]
     fn session_title_rejects_missing_blank_controls_and_utf8_byte_overflow() {
-        use std::os::unix::ffi::OsStringExt;
-
         assert!(Options::parse([OsString::from("--title")]).is_err());
         for title in [
             "".to_owned(),
@@ -919,6 +912,14 @@ mod tests {
                 .is_err()
             );
         }
+        let maximum = "a".repeat(crate::wire::MAX_TITLE_BYTES);
+        assert!(Options::parse(["--title", &maximum, "host"].map(OsString::from)).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn session_title_rejects_non_utf8_arguments() {
+        use std::os::unix::ffi::OsStringExt;
         assert!(
             Options::parse([
                 OsString::from("--title"),
@@ -927,8 +928,6 @@ mod tests {
             ])
             .is_err()
         );
-        let maximum = "a".repeat(crate::wire::MAX_TITLE_BYTES);
-        assert!(Options::parse(["--title", &maximum, "host"].map(OsString::from)).is_ok());
     }
 
     #[test]
