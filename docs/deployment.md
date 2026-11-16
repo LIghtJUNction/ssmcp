@@ -246,9 +246,9 @@ ssmcpd serve --public-url https://ssmcp.example.com \
   --client-registration-ttl 31536000
 ```
 
-数值必须为正整数秒，并满足 `access ≤ idle ≤ max ≤ registration ≤ 315360000`；上限为 3650 天。登录码、授权表单与短时 authorization code 使用上表固定期限。配置在守护进程启动时生效；重启服务会清空当前连接、登记和授权，因此应安排好任务，再重新连接并登录。
+数值必须为正整数秒，并满足 `access ≤ idle ≤ max ≤ registration ≤ 315360000`；上限为 3650 天。登录码、授权表单与短时 authorization code 使用上表固定期限。配置在守护进程启动时生效；重启服务会清空当前连接和授权；启用持久化后的客户端登记会保留，因此应安排好任务，再重新连接并登录。
 
-在客户端身份、resource 和 PKCE 等绑定仍正确的前提下，重放已成功兑换的授权码或已使用的 refresh token，会撤销该授权族。登录码授权会在其签发 SSH 连接退出时失效。GitHub 授权不锚定某条 SSH 连接，但每次调用只允许操作当前在线且允许该身份的目标。所有 OAuth 状态仍只在内存中，服务重启后需要重新注册和登录。
+在客户端身份、resource 和 PKCE 等绑定仍正确的前提下，重放已成功兑换的授权码或已使用的 refresh token，会撤销该授权族。登录码授权会在其签发 SSH 连接退出时失效。GitHub 授权不锚定某条 SSH 连接，但每次调用只允许操作当前在线且允许该身份的目标。0.4.1 起，安装的 systemd 服务默认持久化 DCR 客户端登记；授权码、访问令牌和刷新令牌仍只在内存中。重启后重新登录，但不必重新创建尚未到期的客户端登记。
 
 手工测试 MCP HTTP 时，`Authorization: Bearer <access_token>` 中的令牌必须来自上述 OAuth 流程。把 stdout 中的 `login_code` 填进该请求头会被拒绝。浏览器回调 URL 中出现的是短时、PKCE 绑定的 OAuth authorization code，和用户粘贴的动态登录码是两个不同凭据。
 
@@ -299,3 +299,21 @@ bubblewrap 需要系统允许创建用户和网络命名空间。Ubuntu 24.04 �
 - [Caddy reverse_proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
 - [后端接口与资源边界](backends.md)
 - [验收报告](validation.md)
+
+
+## 0.4.1：重启后保留 OAuth 客户端登记
+
+安装的 systemd 单元使用 `StateDirectory=ssmcpd`、目录权限 `0700`。守护进程自动从该目录读取和写入 `oauth-clients.toml`；也可以在私有配置中明确指定：
+
+```toml
+[oauth]
+client_registry = "/var/lib/ssmcpd/oauth-clients.toml"
+```
+
+命令行 `--client-registry PATH` 和环境变量 `SSMCP_CLIENT_REGISTRY` 可以覆盖此路径。手动运行、不使用 systemd 时，先为服务账户创建 `0700` 的父目录；文件与锁文件使用 `0600`。父目录不可经过符号链接、不可被其他用户改写，同一文件只能由一个守护进程打开。未配置路径且没有 `STATE_DIRECTORY` 时仍是内存模式，启动日志会明确警告。
+
+DCR 响应在文件写入、文件同步、原子重命名和目录同步全部完成后才返回成功；保存失败返回 HTTP 503。记录只包含客户端元数据、密钥摘要和原始绝对到期时间，不保存客户端密钥明文，不会因重启延长登记寿命。文件损坏、issuer 不匹配、权限不安全或锁冲突都会使启动失败，不会默默清空注册表。备份时保留文件权限和所有权，恢复时保持同一 issuer。
+
+这不等于“所有 OAuth 令牌跨重启有效”：短时授权事务、授权码、AT 和 RT 仍需重新取得。首次从 0.4.0 升级无法找回已经丢失的内存登记；必要时仅在这次迁移后删除并重新添加 MCP 连接。之后同一有效 `client_id` 能跨服务重启重新授权。
+
+回归验证：`python3 scripts/test_registry_restart.py --bin-dir target/debug` 会启动临时守护进程，注册客户端，完整停止并重启进程，再用同一 ID 发起授权，同时检查密钥不落明文、回调精确匹配和损坏文件拒绝启动。不会操作已安装服务。

@@ -43,6 +43,11 @@ Token lifetime options for serve (whole seconds; TOML keys are under [oauth]):
   --client-registration-ttl N   SSMCP_CLIENT_REGISTRATION_TTL   [31536000 / 365 days]
   Required: 1 <= access <= refresh idle <= refresh max <= client <= 315360000.
   TOML keys use underscores, e.g. access_token_ttl = 28800.
+  --client-registry PATH       SSMCP_CLIENT_REGISTRY
+  TOML: [oauth] client_registry = "/var/lib/ssmcpd/oauth-clients.toml".
+  Installed systemd service defaults to its StateDirectory automatically.
+  Parent directory must exist, be daemon-owned and mode 0700; files use 0600.
+  Registrations survive restart; tokens and unfinished logins still require reauthorization.
   Login codes and authorization forms last 30 minutes.
 
 Run serve in the foreground under systemd. OpenSSH runs attach as the authenticated user.
@@ -54,6 +59,7 @@ struct Config {
     socket: PathBuf,
     oauth: OAuthConfig,
     github: Option<GitHubConfig>,
+    client_registry: Option<PathBuf>,
 }
 
 // Plain TOML configuration. Never derive Debug or include source text in errors:
@@ -81,6 +87,7 @@ struct TokenConfig {
     refresh_token_idle_ttl: Option<u64>,
     refresh_token_max_ttl: Option<u64>,
     client_registration_ttl: Option<u64>,
+    client_registry: Option<PathBuf>,
 }
 
 #[derive(Default, Deserialize)]
@@ -159,6 +166,7 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
             *target = seconds(&value.to_string(), name)?;
         }
     }
+    config.client_registry = file.oauth.client_registry;
     config.github = file.auth.github;
     Ok(())
 }
@@ -208,6 +216,7 @@ fn run() -> ssmcp::Result<()> {
         socket: SOCKET.into(),
         oauth: OAuthConfig::default(),
         github: None,
+        client_registry: None,
     };
     if mode == "serve" {
         let path = options
@@ -221,6 +230,15 @@ fn run() -> ssmcp::Result<()> {
             });
         if let Some(path) = path {
             load_file_config(&path, &mut config)?;
+        }
+        if !options.contains_key("--client-registry")
+            && let Some(value) = std::env::var_os("SSMCP_CLIENT_REGISTRY")
+        {
+            config.client_registry = Some(value.into());
+        }
+        if config.client_registry.is_none() {
+            config.client_registry = std::env::var_os("STATE_DIRECTORY")
+                .map(|path| PathBuf::from(path).join("oauth-clients.toml"));
         }
         // Environment retains compatibility with installations predating TOML.
         if !options.contains_key("--listen")
@@ -243,6 +261,7 @@ fn run() -> ssmcp::Result<()> {
     for (arg, value) in options {
         match arg {
             "--config" if mode == "serve" => {}
+            "--client-registry" if mode == "serve" => config.client_registry = Some(value.into()),
             "--socket" => config.socket = value.into(),
             "--listen" if mode == "serve" => config.listen = value.parse()?,
             "--public-url" if mode == "serve" => config.public_url = normalize_origin(value)?,
@@ -463,11 +482,16 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     use std::future::IntoFuture;
     let tcp = TcpListener::bind(config.listen).await?;
     let (unix, _socket_file) = bind_socket(&config.socket).await?;
-    let broker = Arc::new(Broker::with_identity_config(
-        config.public_url,
-        config.oauth,
-        config.github,
-    )?);
+    let mut broker = Broker::with_identity_config(config.public_url, config.oauth, config.github)?;
+    if let Some(path) = config.client_registry {
+        broker.oauth.enable_client_registry(&path)?;
+        eprintln!("ssmcpd: durable OAuth client registrations enabled");
+    } else {
+        eprintln!(
+            "ssmcpd: warning: OAuth client registry is memory-only; configure --client-registry for restart recovery"
+        );
+    }
+    let broker = Arc::new(broker);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let server = axum::serve(tcp, http::router(broker.clone()))
         .with_graceful_shutdown(async {
@@ -569,6 +593,7 @@ client_secret = "example-test-secret"
             socket: SOCKET.into(),
             oauth: OAuthConfig::default(),
             github: None,
+            client_registry: None,
         };
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
