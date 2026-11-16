@@ -15,6 +15,8 @@ import tempfile
 
 STATE = Path('/var/lib/ssmcpd/portal/accounts.json')
 OUTPUT = Path('/var/lib/ssmcp-ssh')
+# Rewritten by the installer together with the daemon's installation prefix.
+FORCE_COMMAND = '/usr/local/bin/ssmcpd attach'
 
 
 def validate(database):
@@ -89,9 +91,10 @@ def verify_sshd(name):
     effective = subprocess.check_output([
         '/usr/sbin/sshd', '-T', '-C',
         f'user={name},host=localhost,addr=127.0.0.1'], text=True)
-    settings = dict(line.split(' ', 1) for line in effective.lower().splitlines() if ' ' in line)
+    settings = {key.lower(): value for line in effective.splitlines()
+                if ' ' in line for key, value in [line.split(' ', 1)]}
     required = {
-        'forcecommand': '/usr/local/bin/ssmcpd attach',
+        'forcecommand': FORCE_COMMAND,
         'authorizedkeysfile': '/var/lib/ssmcp-ssh/%u',
         'authenticationmethods': 'publickey', 'passwordauthentication': 'no',
         'kbdinteractiveauthentication': 'no', 'disableforwarding': 'yes',
