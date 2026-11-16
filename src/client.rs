@@ -29,12 +29,10 @@ use tokio::{
     time::timeout,
 };
 
-const HELP: &str = r#"ssmcp — expose a local shell or coding agent over an SSH-authenticated MCP endpoint
+const HELP: &str = r#"ssmcp — expose a local shell and every installed coding harness over SSH
 
-Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_args...]
-       ssmcp -t TYPE [--backend PROGRAM] --list-tools [-- backend_args...]
+Usage: ssmcp [options] [user@]host
 
-  -t, --type TYPE       Backend (default: shell)
   -i identity          SSH private key file
   -p port              SSH port
   -F ssh_config        OpenSSH configuration file
@@ -42,8 +40,7 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
   --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (at most 32 distinct users; case-insensitive)
-  --shell /path        Shell executable (shell mode only)
-  --backend PROGRAM    Override the native agent executable
+  --shell /path        Shell executable (default: $SHELL or /bin/sh)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
   --log-format FORMAT  pretty (default), pretty-verbose, or jsonl
   --no-color           Disable ANSI colors (also honors NO_COLOR)
@@ -55,16 +52,16 @@ Usage: ssmcp [-t shell|codex|cc|pi|opencode] [options] [user@]host [-- backend_a
   --max-inline-output N  Maximum lines per buffered output block (default 12)
   --list-tools         Discover native and workspace tools as JSON, then exit without SSH
 
-Uses system OpenSSH and ~/.ssh/config, including Host aliases, User,
-IdentityFile, ssh-agent and ProxyJump. An explicit user@host overrides User.
-Uses only SSH public-key authentication and standard known_hosts checks.
+The client always connects as shell. Installed Codex, Claude Code, Pi and OpenCode
+harnesses are discovered automatically and their native tools are registered in
+one code_mode. Tools keep their native schemas and permission/approval behavior.
 
 Examples:
   ssmcp --name laptop my-server
   ssmcp --title "Fix ssmcp client reload" my-server
-  ssmcp -t codex -F ~/.ssh/work_config my-server
+  ssmcp -F ~/.ssh/work_config my-server
   ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
-  ssmcp --allow octocat@github,alice@github -t codex my-server
+  ssmcp --allow octocat@github,alice@github my-server
 
 Redirected stdout (or jsonl mode) emits one connection JSON object.
 Interactive stdout shows the MCP URL and OAuth login instructions.
@@ -180,9 +177,6 @@ struct Options {
     name: Option<String>,
     title: Option<String>,
     allow: Vec<String>,
-    mode: Mode,
-    backend: Option<OsString>,
-    backend_args: Vec<OsString>,
     context_roots: Vec<PathBuf>,
     list_tools: bool,
     log_format: Option<render::LogFormat>,
@@ -204,9 +198,6 @@ impl Options {
         let mut name = None;
         let mut title = None;
         let mut allow = Vec::new();
-        let mut mode = Mode::Shell;
-        let mut backend = None;
-        let mut backend_args = Vec::new();
         let mut context_roots = Vec::new();
         let mut list_tools = false;
         let mut log_format = None;
@@ -215,7 +206,6 @@ impl Options {
         let mut timestamps = false;
         let mut max_inline_output = None;
         let mut no_color = false;
-        let mut explicit_shell = false;
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = std::env::var_os("SHELL")
             .map(PathBuf::from)
@@ -231,12 +221,11 @@ impl Options {
                     println!("ssmcp {}", env!("CARGO_PKG_VERSION"));
                     return Ok(None);
                 }
-                Some("-t" | "--type") => {
-                    let value = args.next().ok_or("-t requires a backend type")?;
-                    mode = Mode::parse(value.to_str().ok_or("backend type must be UTF-8")?)?;
+                Some("-t" | "--type" | "--backend") => {
+                    return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; installed harnesses are discovered automatically".into());
                 }
-                Some("--backend") => {
-                    backend = Some(args.next().ok_or("--backend requires a program")?)
+                Some(value) if value.starts_with("--type=") || value.starts_with("--backend=") || value.starts_with("-t=") => {
+                    return Err("harness selection was removed; remove -t/--type/--backend; installed harnesses are discovered automatically".into());
                 }
                 Some("--name") => {
                     name = Some(
@@ -315,10 +304,6 @@ impl Options {
                             .ok_or("--max-inline-output must be in 1..=10000")?,
                     );
                 }
-                Some("--") => {
-                    backend_args.extend(args);
-                    break;
-                }
                 Some("-i") => identity = Some(args.next().ok_or("-i requires a file")?),
                 Some("-F") => config = Some(args.next().ok_or("-F requires a file")?),
                 Some("-p") => {
@@ -330,8 +315,7 @@ impl Options {
                     );
                 }
                 Some("--shell") => {
-                    explicit_shell = true;
-                    shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?)
+                    shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?);
                 }
                 Some(value) if !value.starts_with('-') && destination.is_none() => {
                     destination = Some(value.to_owned())
@@ -352,15 +336,6 @@ impl Options {
                 "--allow requires an SSH connection and cannot be used with --list-tools".into(),
             );
         }
-        if mode == Mode::Shell && (backend.is_some() || !backend_args.is_empty()) {
-            return Err(
-                "shell mode uses --shell; --backend and backend arguments select an agent only"
-                    .into(),
-            );
-        }
-        if mode != Mode::Shell && explicit_shell {
-            return Err("--shell is only valid with -t shell".into());
-        }
         if !shell.is_absolute() {
             return Err("--shell requires an absolute path".into());
         }
@@ -375,9 +350,6 @@ impl Options {
             name,
             title,
             allow,
-            mode,
-            backend,
-            backend_args,
             context_roots,
             list_tools,
             log_format,
@@ -407,7 +379,7 @@ impl Options {
             name: self.name.clone().unwrap_or_else(|| {
                 format!(
                     "{short_hostname}-{}-{}",
-                    self.mode.name(),
+                    "shell",
                     std::process::id()
                 )
             }),
@@ -532,12 +504,11 @@ pub async fn run() -> crate::Result<()> {
     let mut terminate = signal(SignalKind::terminate())?;
     if options.list_tools {
         let backend = tokio::select! {
-            result = timeout(Duration::from_secs(120), Backend::start(options.mode, &options.shell, options.backend.as_deref(), &options.backend_args)) => result.map_err(|_| "local backend startup timed out")??,
+            result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
         let backend = Runtime::with_context_roots(
-            backend,
             std::env::current_dir()?,
             options.context_roots.clone(),
         )?;
@@ -547,7 +518,7 @@ pub async fn run() -> crate::Result<()> {
             _ = terminate.recv() => { backend.shutdown().await; return Ok(()); },
         };
         backend.shutdown().await;
-        println!("{}", json!({"type":options.mode.name(),"tools":tools?}));
+        println!("{}", json!({"type":"shell","tools":tools?}));
         return Ok(());
     }
     let restart = reload::Restart::capture()?;
@@ -576,7 +547,7 @@ pub async fn run() -> crate::Result<()> {
         &mut writer,
         &Frame::Hello {
             version: VERSION,
-            mode: options.mode,
+            mode: Mode::Shell,
             metadata: metadata.clone(),
         },
     )
@@ -606,14 +577,14 @@ pub async fn run() -> crate::Result<()> {
     }
     let login_received_at = std::time::Instant::now();
     let mut incoming = Incoming::start(reader);
-    render::status(options.mode.name(), "Progress", "Starting local backend");
+    render::status("shell", "Progress", "Starting local backend");
     let backend = tokio::select! {
         biased;
         error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(error.into()); },
         status = ssh.wait() => return Err(ssh_ended(status).into()),
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(()); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(()); },
-        result = timeout(Duration::from_secs(120), Backend::start(options.mode, &options.shell, options.backend.as_deref(), &options.backend_args)) => result.map_err(|_| "local backend startup timed out")??,
+        result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = Runtime::with_context_roots(
         backend,
@@ -637,7 +608,7 @@ pub async fn run() -> crate::Result<()> {
         return Err(error.into());
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
-    let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":options.mode.name()});
+    let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":"shell"});
     if let Some(title) = &metadata.title {
         output["title"] = json!(title);
     }
@@ -656,18 +627,18 @@ pub async fn run() -> crate::Result<()> {
         return Err(error.into());
     }
     render::status(
-        options.mode.name(),
+        "shell",
         "Connected",
         &format!(
             "CONNECTED  client={}  mode={}  cwd={}  id={}",
             metadata.name,
-            options.mode.name(),
+            "shell",
             metadata.cwd,
             client_id
         ),
     );
     render::status(
-        options.mode.name(),
+        "shell",
         "Result",
         if github_auth {
             "Sign in with an allowed GitHub account. Ctrl-C disconnects this client."
@@ -771,7 +742,7 @@ pub async fn run() -> crate::Result<()> {
     let _ = ssh.start_kill();
     backend.shutdown().await;
     let _ = ssh.wait().await;
-    render::status(options.mode.name(), "Result", "DISCONNECTED");
+    render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {
         return restart.execute();
     }
@@ -807,6 +778,17 @@ mod tests {
             jsonl.command().as_std().get_args().collect::<Vec<_>>()
         );
         assert!(Options::parse(["--log-format", "xml", "host"].map(OsString::from)).is_err());
+    }
+
+    #[test]
+    fn harness_selection_flags_are_removed() {
+        for args in [
+            ["-t", "codex", "host"],
+            ["--type", "pi", "host"],
+            ["--backend", "/bin/codex", "host"],
+        ] {
+            assert!(Options::parse(args.map(OsString::from)).is_err());
+        }
     }
 
     #[test]
@@ -861,11 +843,9 @@ mod tests {
 
     #[test]
     fn client_names_are_bounded_display_metadata() {
-        let options = Options::parse(
-            ["--name", "My workstation", "-t", "codex", "user@host"].map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
+        let options = Options::parse(["--name", "My workstation", "user@host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
         let info = options.metadata().unwrap();
         assert_eq!(info.name, "My workstation");
         assert!(std::path::Path::new(&info.cwd).is_absolute());
@@ -1062,7 +1042,6 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(options.context_roots, vec![root.clone(), root.clone()]);
-        assert!(options.backend_args.is_empty());
         assert!(
             !options
                 .command()
@@ -1079,24 +1058,10 @@ mod tests {
         .unwrap();
         assert!(local.list_tools);
         assert_eq!(local.context_roots.len(), 1);
-        let native = Options::parse(
-            [
-                "-t",
-                "codex",
-                "my-server",
-                "--",
-                "--context-root",
-                "native-option",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert!(native.context_roots.is_empty());
-        assert_eq!(
-            native.backend_args,
-            ["--context-root", "native-option"].map(OsString::from)
-        );
+        assert!(Options::parse(
+            ["-t", "codex", "my-server", "--", "--context-root", "native-option"]
+                .map(OsString::from)
+        ).is_err());
     }
 
     #[test]
@@ -1127,3 +1092,4 @@ mod tests {
         assert!(error.contains("at most 8"), "{error}");
     }
 }
+

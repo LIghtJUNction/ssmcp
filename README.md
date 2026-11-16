@@ -55,7 +55,7 @@ Host my-ssmcp
 
 ```sh
 cd ~/projects/ssmcp
-ssmcp --name ssmcp-project -t codex --allow octocat@github my-ssmcp
+ssmcp --name ssmcp-project --allow octocat@github my-ssmcp
 ```
 
 `my-ssmcp` 是 SSH 配置别名；用户名、地址、端口和密钥交给系统 OpenSSH 解析。也可使用 `ssmcp alice@ssmcp.example.com`，或 `-F ~/.ssh/work_config` 指定配置文件。0.3.1 起支持省略用户名；已安装的 0.3.0 若提示 `destination must be user@host`，可先用 `alice@my-ssmcp`，或[重新构建安装](#安装与升级)。[SSH 配置细节](docs/configuration.md)
@@ -77,7 +77,7 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
   "allow": ["octocat@github"],
   "client_id": "服务端分配的连接 ID",
   "name": "ssmcp-project",
-  "type": "codex",
+  "type": "shell",
   "cwd": "/home/alice/projects/ssmcp",
   "hostname": "workstation"
 }
@@ -105,29 +105,44 @@ ssmcp 自己签发的 access token 默认有效 **8 小时**。refresh token 每
 
 **访问令牌到期后，MCP 客户端可以用 refresh token 自动续期。** 新注册省略 `grant_types` 时，服务端默认提供刷新授权；客户端需保存每次返回的新 refresh token，并实现刷新请求。服务器返回到期提示与新令牌，自动发起刷新由 MCP 客户端负责。[静默续期流程](docs/configuration.md#silent-refresh)
 
-## 五种后端，同一个入口
+## 一个 Shell 入口，发现可用 Harness
 
-| 本机后端 | 启动方式 | 运行内容 |
-| --- | --- | --- |
-| Shell | `ssmcp --name terminal my-ssmcp` | 有状态的本机 Shell 与 PTY；默认模式 |
-| Codex | `ssmcp -t codex --name coder my-ssmcp` | 已安装 Codex 的 App Server |
-| Claude Code | `ssmcp -t cc --name claude my-ssmcp` | 已安装 Claude Code 的 MCP 工具 |
-| Pi | `ssmcp -t pi --name pi my-ssmcp` | 已安装 Pi 的 JSONL RPC |
-| OpenCode | `ssmcp -t opencode --name opencode my-ssmcp` | 已安装 OpenCode v2 的服务接口 |
+ssmcp 客户端以 Shell / PTY 入口连接，启动时探测本机已安装的 Codex、Claude Code、Pi 和 OpenCode。可调用能力以当前客户端完成原生握手后返回的工具目录为准。迁移旧命令时删除 `-t`、`--type` 或 `--backend`；这些选择参数已移除。
 
-每个进程提供一个后端，同一账号最多同时在线 128 个客户端。`--name` 是显示名称，调用始终按服务端分配的 ID 路由；`cwd` 记录启动目录。Agent 的安装、模型配置和原生权限在本机完成，支持范围以实际发现的 schema 为准。[后端要求与示例](docs/backends.md)
+~~~sh
+ssmcp --name ssmcp-project --allow octocat@github my-ssmcp
+~~~
 
-```sh
-# 本机发现工具，无需 SSH，也不建立远程连接。
-ssmcp -t codex --list-tools
+list({client_id}) 和 tools(client_id, cursor?) 可以分页读取合并后的工具目录。每个 Harness 使用独立命名空间：codex.*、cc.*、pi.*、opencode.*。某个 Harness 未安装或启动失败，不影响 Shell 和其他可用 Harness。
 
-# 使用另一份 SSH 配置或已有私钥。
-ssmcp -F ~/.ssh/work_config -t codex my-ssmcp
-ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
+### 并行与后台 Shell 命令
 
-# 自定义后端路径；-- 后的参数交给本机后端。
-ssmcp -t pi --backend /opt/pi/bin/pi my-ssmcp -- --no-session
-```
+code_mode 可以用 Promise.all 并行调用 Harness 工具。独立 Shell 命令通过 ssmcp.exec.start 启动，不占用交互式 PTY，并支持后台任务 ID、分开的 stdout/stderr、增量读取、等待、取消和超时：
+
+~~~js
+const client = clients.find(c => c.name === "ssmcp-project");
+if (!client) throw new Error("client is offline");
+const jobs = await Promise.all([
+  call(client.id, "ssmcp.exec.start", {
+    command: ["cargo", "test", "--locked"],
+    cwd: client.cwd,
+    timeout_ms: 600000
+  }),
+  call(client.id, "ssmcp.exec.start", {
+    command: ["git", "status", "--short", "--branch"],
+    cwd: client.cwd
+  })
+]);
+return jobs;
+~~~
+
+通过 `ssmcp.exec.status/wait/read/cancel/list/events` 管理任务和读取事件。`start` 成功表示任务已启动；命令结果由最终状态、退出码和输出决定。`terminal.*` 用于交互式 Shell；后台命令使用独立任务，终端显示适配器提供的活动与输出事件。
+
+### 文件 Diff 与技能审计
+
+`ssmcp.fs.read/write` 等原语操作客户端工作区。文件操作的完成状态、路径和可观察的 Diff 以调用结果及审计记录为准；通过当前目录暴露的事件接口读取记录。`ssmcp.skills.list/view` 发现技能元数据，`ssmcp.skills.read` 读取正文；发现或读取不会自行执行技能，也不表明模型已使用它。
+
+`ssmcp.harnesses.list` 返回当前探测状态与工具数量。各 Harness 的 MCP Server、插件和扩展能力以原生接口实际暴露的目录为准；缺少机器接口或 Schema 时应查看不可用诊断。原生接口未暴露的外部文件操作不在完整审计范围内。
 
 ## 两个工具就够了
 
@@ -137,23 +152,22 @@ ssmcp -t pi --backend /opt/pi/bin/pi my-ssmcp -- --no-session
 | `list({client_id})` | 读取指定客户端的原生工具名称与参数 schema；用 `nextCursor` 分页 |
 | `code_mode({code, timeout_ms})` | 用 JavaScript 调用原生工具，返回结果和日志 |
 
-例如，对名为 `terminal` 的 Shell 客户端执行 `pwd`。将下面源码放入 `code_mode` 的 `code` 参数：
+例如，在已确认唯一的 `terminal` 客户端上启动 `pwd`。先检查其目录包含以下原语，再将源码放入 `code_mode` 的 `code` 参数：
 
 ```javascript
-const client = clients.find(c => c.name === "terminal" && c.type === "shell");
-if (!client) throw new Error("terminal is offline");
+const matches = clients.filter(c => c.name === "terminal" && c.type === "shell");
+if (matches.length !== 1) throw new Error("Select a unique client ID from list");
+const client = matches[0];
 
-const before = await call(client.id, "terminal.status", {});
-if (before.isError) return before;
-const sent = await call(client.id, "terminal.write", { data: "pwd\n" });
-if (sent.isError) return sent;
-return await call(client.id, "terminal.read", {
-  cursor: before.structuredContent.next_cursor,
+const started = await call(client.id, "ssmcp.exec.start", { command: ["pwd"] });
+if (started.isError) return started;
+return await call(client.id, "ssmcp.exec.wait", {
+  job_id: started.structuredContent.job_id,
   wait_ms: 1000
 });
 ```
 
-单次读取可能只有部分输出，继续用返回的 `next_cursor` 读取。若 `structuredContent.spilled` 为 `true`，PTY 的 `next_cursor` 已推进至本次输出末尾，正文需根据 `artifact.id` 用 `outputs.read` 读取。
+等待返回时任务可能仍在运行，继续检查状态并通过 `ssmcp.exec.read` 分别读取 stdout、stderr。交互式 PTY 的 `terminal.read` 使用独立的 `next_cursor`；若返回 `spilled: true`，按 `artifact.id` 用 `outputs.read` 读取已保存字节。
 
 调用 Agent 时，先用 `list({client_id})` 或 `await tools(client.id)` 检查实际 schema。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批数据；原生后端的长结果转为元数据，PTY 保存原始终端流，其他后端结果保存原始 MCP 结果 JSON。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
 
@@ -229,7 +243,7 @@ return await rsync({
 
 ## 安装与升级
 
-当前支持 Linux 5.3+，仓库固定构建工具链为 Rust 1.100.0。客户端需要 OpenSSH 和所选本机后端；服务端需要 OpenSSH Server、系统 Node.js 18+、bubblewrap 0.8+、util-linux 的 prlimit 及 HTTPS 反向代理。[完整部署教程](docs/deployment.md)
+当前支持 Linux 5.3+，仓库固定构建工具链为 Rust 1.100.0。客户端需要 OpenSSH，Harness 按需安装；服务端需要 OpenSSH Server、系统 Node.js 18+、bubblewrap 0.8+、util-linux 的 prlimit 及 HTTPS 反向代理。[完整部署教程](docs/deployment.md)
 
 ```sh
 # 在仓库目录构建，并安装程序、运行脚本、man page 和文档。
@@ -268,7 +282,7 @@ python3 scripts/e2e.py --bin-dir target/debug
 python3 scripts/e2e_agents.py --bin-dir target/debug
 ```
 
-CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、独立 sshd、临时 known_hosts 和 loopback 端口；五模式链路测试使用确定性 Agent 协议 fixture，不发起模型推理。默认测试中需要系统隔离或单独安装原生 CLI 的探针会明确标为 ignored。[测试结果与范围](docs/validation.md) · [CI 工作流](.github/workflows/ci.yml)
+CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、独立 sshd、临时 known_hosts 和 loopback 端口；原生接口链路测试使用确定性协议 fixture，不发起模型推理。默认测试中需要系统隔离或单独安装原生 CLI 的探针会明确标为 ignored。[测试结果与范围](docs/validation.md) · [CI 工作流](.github/workflows/ci.yml)
 
 ## 文档导航
 
@@ -296,11 +310,13 @@ CI 在 Linux x86_64 与 arm64 上运行检查。SSH 测试使用临时密钥、�
 上图来自真实渲染器的固定测试事件，用于展示样式。完整说明见 [日志与主题配置](docs/logging.md)。
 
 ```sh
-ssmcp -t codex --log-format pretty my-server          # 默认彩色摘要
-ssmcp -t codex --log-format pretty-verbose my-server  # 展开输出和原始 JSON
-ssmcp -t codex --log-format jsonl my-server           # 每行一个原始事件
-ssmcp -t codex --no-color my-server
-ssmcp -t codex --theme nord --timestamps my-server
+ssmcp --log-format pretty my-server          # 默认彩色摘要
+ssmcp --log-format pretty-verbose my-server  # 展开输出和原始 JSON
+ssmcp --log-format jsonl my-server           # 每行一个原始事件
+ssmcp --no-color my-server
+ssmcp --theme nord --timestamps my-server
+NO_COLOR=1 ssmcp my-server                   # 环境变量关闭颜色
+ssmcp my-server 2> activity.log              # 重定向日志，无 ANSI
 ```
 
 `--verbose`、`--raw-events`、原有 `--raw` 分别提供详细/JSONL 快捷方式。`~/.config/ssmcp/config.toml` 的 `[ui]` 支持主题、时间戳、请求 ID 和输出行数；`NO_COLOR` 和重定向 stderr 自动关闭颜色。展示变化不修改 SSH/MCP 协议或工具结果。

@@ -24,6 +24,8 @@ pub struct Codex {
     tools: Vec<Value>,
     methods: Methods,
     schemas: BTreeMap<String, Value>,
+    mcp_thread_id: Option<String>,
+    mcp_tools: BTreeMap<String, (String, String)>,
 }
 
 impl Codex {
@@ -80,11 +82,30 @@ impl Codex {
             peer.shutdown().await;
             return Err(error.into());
         }
+        let (mcp_thread_id, mcp_tools, dynamic_tools) = discover_mcp_tools(&peer).await;
+        let mut tools = tools;
+        let mut registered: BTreeSet<String> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_owned))
+            .collect();
+        for tool in dynamic_tools {
+            if let Some(name) = tool["name"].as_str() {
+                if registered.insert(name.to_owned()) {
+                    tools.push(tool);
+                }
+            }
+        }
+        eprintln!(
+            "[ssmcp harness] Codex MCP tools registered: {}",
+            mcp_tools.len()
+        );
         Ok(Arc::new(Self {
             peer,
             tools,
             methods,
             schemas,
+            mcp_thread_id,
+            mcp_tools,
         }))
     }
 
@@ -131,6 +152,13 @@ impl Codex {
                 ))
             }
             _ => {
+                if let Some((server, tool)) = self.mcp_tools.get(name) {
+                    let thread_id = self
+                        .mcp_thread_id
+                        .as_deref()
+                        .ok_or("Codex MCP thread is unavailable")?;
+                    return Ok(result(self.peer.request("mcpServer/tool/call", json!({"server":server,"threadId":thread_id,"tool":tool,"arguments":args})).await?));
+                }
                 let (method, null_params) = self
                     .methods
                     .get(name)
@@ -149,6 +177,124 @@ impl Codex {
 
     pub async fn shutdown(&self) {
         self.peer.shutdown().await;
+    }
+}
+
+async fn discover_mcp_tools(
+    peer: &Arc<Peer>,
+) -> (
+    Option<String>,
+    BTreeMap<String, (String, String)>,
+    Vec<Value>,
+) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let thread = match timeout(
+        Duration::from_secs(15),
+        peer.request("thread/start", json!({"cwd":cwd,"ephemeral":true})),
+    )
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            eprintln!("[ssmcp harness] Codex MCP thread unavailable: {error}");
+            return (None, BTreeMap::new(), Vec::new());
+        }
+        Err(_) => {
+            eprintln!("[ssmcp harness] Codex MCP thread startup timed out");
+            return (None, BTreeMap::new(), Vec::new());
+        }
+    };
+    let Some(thread_id) = thread
+        .pointer("/thread/id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        eprintln!("[ssmcp harness] Codex MCP thread response omitted thread.id");
+        return (None, BTreeMap::new(), Vec::new());
+    };
+    let mut cursor: Option<String> = None;
+    let mut methods = BTreeMap::new();
+    let mut definitions = Vec::new();
+    for _ in 0..128 {
+        let mut params = json!({"detail":"toolsAndAuthOnly","limit":1});
+        if let Some(value) = &cursor {
+            params["cursor"] = json!(value);
+        }
+        let page = match timeout(
+            Duration::from_secs(5),
+            peer.request("mcpServerStatus/list", params),
+        )
+        .await
+        {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => {
+                eprintln!("[ssmcp harness] Codex MCP discovery stopped: {error}");
+                break;
+            }
+            Err(_) => {
+                eprintln!("[ssmcp harness] Codex MCP discovery page timed out");
+                break;
+            }
+        };
+        if let Some(servers) = page.get("data").and_then(Value::as_array) {
+            for server in servers {
+                let Some(server_name) = server.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(tools) = server.get("tools").and_then(Value::as_object) else {
+                    continue;
+                };
+                for (tool_name, spec) in tools {
+                    let Some(schema) = spec.get("inputSchema").filter(|v| v.is_object()) else {
+                        continue;
+                    };
+                    let server_part = safe_tool_segment(server_name);
+                    let tool_part = safe_tool_segment(tool_name);
+                    let name = format!("codex.mcp.{server_part}.{tool_part}");
+                    if name.len() > 128 || methods.contains_key(&name) {
+                        continue;
+                    }
+                    let description = spec
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Native MCP server tool exposed by Codex");
+                    let mut definition = json!({"name":name,"description":description,"inputSchema":schema,"annotations":spec.get("annotations").cloned().unwrap_or_else(||json!({"readOnlyHint":false,"destructiveHint":false,"openWorldHint":true}))});
+                    if let Some(meta) = spec.get("_meta") {
+                        definition["_meta"] = meta.clone();
+                    }
+                    methods.insert(name, (server_name.to_owned(), tool_name.to_owned()));
+                    definitions.push(definition);
+                }
+            }
+        }
+        let next = page
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned);
+        if next.is_none() || next == cursor {
+            break;
+        }
+        cursor = next;
+    }
+    (Some(thread_id), methods, definitions)
+}
+
+fn safe_tool_segment(value: &str) -> String {
+    let value: String = value
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"_.-".contains(&b) {
+                b as char
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if value.is_empty() {
+        "unknown".into()
+    } else {
+        value
     }
 }
 

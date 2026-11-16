@@ -1,9 +1,8 @@
-.TH SSMCP 1 "2026-11-16" "ssmcp 0.4.0" "User Commands"
+.TH SSMCP 1 "2026-11-16" "ssmcp 0.4.1" "User Commands"
 .SH NAME
-ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP gateway
+ssmcp \- expose a local shell and installed coding harnesses through an SSH-authenticated MCP gateway
 .SH SYNOPSIS
 .B ssmcp
-.RB [ \-t " shell|codex|cc|pi|opencode" ]
 .RB [ \-\-name " name" ]
 .RB [ \-\-title " title" ]
 .RB [ \-\-allow " username@github[,username@github...]" ]
@@ -11,49 +10,29 @@ ssmcp \- expose a local shell or coding agent through an SSH-authenticated MCP g
 .RB [ \-i " identity" ]
 .RB [ \-p " port" ]
 .RB [ \-\-shell " path" ]
-.RB [ \-\-backend " program" ]
 .I [user@]host
-.RB [ \-\- " backend_args..." ]
 .PP
 .B ssmcp
-.RB [ \-t " type" ]
-.RB [ \-\-backend " program" ]
 .B \-\-list-tools
-.RB [ \-\- " backend_args..." ]
 .SH DESCRIPTION
-ssmcp authenticates to OpenSSH using a public key and starts a local shell or
-coding-agent backend. Multiple clients may connect under the same SSH account.
-The server assigns each connection a random client ID. With \-\-allow, it
-returns the global HTTPS /mcp URL for GitHub identity authorization. Without
-\-\-allow, it returns the SSH account's /username URL and a one-time login code.
+ssmcp authenticates to OpenSSH using a public key and starts one local shell/PTY client. Coding harnesses installed on the client are discovered automatically and their actual native tools are registered in the same code_mode catalog. Supported harness integrations include Codex App Server, Claude Code MCP, Pi RPC and OpenCode v2 API.
 .PP
-One JSON object containing url, client_id, name, type, hostname and cwd is
-written to standard output. GitHub mode adds auth:"github" and the canonical
-allow list; login-code mode adds login_code and login_expires_in. Live activity and
-diagnostics use standard error. The cwd field is the startup directory; it does
-not track shell directory changes or the workspaces of native agent sessions.
+The server assigns each connection a random client ID. With \-\-allow, it returns the global HTTPS /mcp URL for GitHub identity authorization. Without \-\-allow, it returns the SSH account's /username URL and a one-time login code.
 .PP
-The external MCP catalog contains exactly two tools: list and code_mode.
-Use list to discover clients and their native capabilities. Use code_mode to
-run JavaScript that calls a selected capability over SSH. Selecting a different
-backend with \-t does not add external MCP tools.
+One JSON object containing url, client_id, name, type, hostname and cwd, plus title when set, is written to standard output. The type is always shell. GitHub mode adds auth:"github" and the canonical allow list; login-code mode adds login_code and login_expires_in. Live activity and diagnostics use standard error. The cwd field is the startup directory.
 .PP
-Keep the program running while its backend is in use. Ctrl-C or SIGTERM closes
-the SSH connection and stops its backend. Login-code grants issued by that
-connection are revoked. GitHub identity grants remain subject to their own
-lifetimes and each currently connected client's allow policy.
+The external MCP catalog contains exactly two tools: list and code_mode. list discovers clients and their merged native tool catalog. code_mode runs JavaScript that calls a selected capability over SSH. The client uses one shell entry point. Remove obsolete \-t, \-\-type and \-\-backend options when migrating an older command.
+.PP
+Keep the program running while its client is in use. Ctrl-C or SIGTERM closes the SSH connection and stops its harnesses and background jobs. Login-code grants issued by that connection are revoked. GitHub identity grants remain subject to their own lifetimes and each currently connected client's allow policy.
 .SH OPTIONS
 .TP
-.BI \-t " type"
-.TQ
-.BI \-\-type " type"
-Select shell, codex, cc, pi or opencode. The default is shell.
-.TP
 .BI \-\-name " name"
-Set the client display name. The default combines hostname, backend type and
-process ID. Names are limited to 128 UTF-8 bytes and may not contain control
-characters or consist only of whitespace. Duplicate names are allowed; use the
-server-generated client ID to select an unambiguous target.
+Set the client display name. The default combines hostname and process ID. Names are limited to 128 UTF-8 bytes and may not contain control characters. Duplicate names are allowed; use the server-generated client ID to select an unambiguous target.
+.TP
+.BI \-\-allow " username@github[,username@github...]"
+Allow verified GitHub users to access this connection. Repeat this option or separate entries with commas. At most 32 distinct users are accepted; case is normalized and duplicates are removed. Usernames contain 1 to 39 ASCII letters or digits with optional single hyphens between them.
+.PP
+This option requires an SSH destination and cannot accompany \-\-list-tools. No GitHub login is performed in the CLI; existing SSH keys and configuration remain in use. The server must support and configure GitHub OAuth.
 .TP
 .BI \-\-title " title"
 Set the session task shown in client discovery, code_mode's clients snapshot
@@ -66,18 +45,6 @@ A nonempty title requires a server that supports this metadata field.
 .BI \-F " file"
 Use a separate OpenSSH client configuration file.
 .TP
-.BI \-\-allow " username@github[,username@github...]"
-Allow verified GitHub users to access this connection. Repeat this option or
-separate entries with commas. At most 32 distinct users are accepted; case is
-normalized and duplicates are removed. The identity syntax is username@provider;
-github is the currently supported provider. Usernames contain 1 to 39 ASCII
-letters or digits with optional single hyphens between them.
-.PP
-This option requires an SSH destination and cannot accompany \-\-list-tools.
-No GitHub login is performed in the CLI; existing SSH keys and configuration
-remain in use. The server must support and configure GitHub OAuth. An unsupported
-server causes startup to fail before exposing the local backend.
-.TP
 .BI \-i " file"
 Use the specified private key. ssh-agent is also supported.
 .TP
@@ -85,21 +52,10 @@ Use the specified private key. ssh-agent is also supported.
 Connect to the specified SSH port.
 .TP
 .BI \-\-shell " path"
-Run the specified absolute shell path in a local pseudo-terminal. Valid only
-with shell mode. The default is the absolute path in SHELL, or /bin/sh.
-.TP
-.BI \-\-backend " program"
-Override the native executable used by an agent backend. Not valid in shell mode.
+Run the specified absolute shell path in the local pseudo-terminal. The default is the absolute path in SHELL, or /bin/sh.
 .TP
 .B \-\-list-tools
-Start the local backend, discover its native capabilities, print a JSON catalog
-and shut it down. Does not connect to SSH and does not accept user@host. This is
-the native capability catalog, not the two-tool external MCP catalog.
-.TP
-.B \-\-
-Pass remaining arguments to the selected agent executable without an additional
-shell. Shell mode does not accept these arguments. Transport settings managed
-by ssmcp must not be overridden.
+Probe local providers, print the discovered capability catalog and shut them down. Does not connect to SSH and does not accept user@host.
 .TP
 .B \-h, \-\-help
 Print usage information and exit.
@@ -109,18 +65,10 @@ Print the version and exit.
 .SH MCP TOOLS
 .TP
 .B list
-With no arguments, return online client IDs, names, backend types, hostnames and
-startup directories that the current authorization may access. With client_id, return
-that client's native tool names, descriptions and schemas. Pass a returned
-nextCursor as cursor to read another capability page.
+With no arguments, return online client IDs, names, shell type, hostnames and startup directories that the current authorization may access. With client_id, return that client's merged native tool names, descriptions and schemas. Pass a returned nextCursor as cursor to read another capability page.
 .TP
 .B code_mode
-Accept a code string and optional timeout_ms. JavaScript has clients (a metadata
-snapshot), await call(clientId, toolName, arguments), await tools(clientId,
-cursor), print, console.log and top-level return. Calls return complete native
-MCP results, including isError and structuredContent. Inspect isError even when
-the JavaScript promise resolves. The code-mode structuredContent has result
-(the script return value) and logs (an array of strings).
+Accept a code string and optional timeout_ms. JavaScript has clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), Promise.all, print, console.log and top-level return. Calls return complete native MCP results, including isError and structuredContent. Inspect isError even when the JavaScript promise resolves.
 .PP
 The server starts a system-installed Node.js process inside bubblewrap for each
 request. Node.js 18 or newer, bubblewrap 0.8 or newer and util-linux prlimit are
@@ -143,38 +91,19 @@ or unavailable namespace isolation cause code_mode to fail; list remains usable.
 Timeout stops orchestration, but an already-started native action may continue.
 Inspect native state before retrying a mutating action. Retain output cursors
 and agent session IDs in the calling application for subsequent requests.
-.SH BACKENDS
+Native capabilities include terminal.*, ssmcp.exec.*, ssmcp.fs.*, ssmcp.skills.*, and tools exposed by installed harnesses. Harness namespaces are codex.*, cc.*, pi.* and opencode.*. Only actually discovered capabilities are registered.
+.SH EXECUTION
 .TP
-.B shell
-An interactive local shell and PTY. Internal capabilities are terminal.read,
-terminal.write, terminal.resize and terminal.status.
+.B ssmcp.exec.start
+Starts an independent argv process in the background and returns a job ID. stdout and stderr have separate cursors. Observe tasks with ssmcp.exec.list, ssmcp.exec.status, ssmcp.exec.wait, ssmcp.exec.read and ssmcp.exec.events; stop a task with ssmcp.exec.cancel. Use any returned output artifact metadata to read retained bytes.
 .TP
-.B codex
-Codex App Server over stdio. Requires schema generation support. The installed
-CLI's generated client methods, events and approval responses are callable.
-.TP
-.B cc
-Claude Code's native claude mcp serve entry point. Tools are discovered and
-prefixed with cc.; their schemas and results are preserved. Native MCP tool
-calls do not imply the interactive terminal's confirmation behavior.
-.TP
-.B pi
-Pi's native JSONL RPC interface. Control commands use pi.; pi.rpc forwards
-additional commands supported by the installed CLI. Events and extension
-dialogs retain explicit read and response capabilities.
-.TP
-.B opencode
-OpenCode v2 serve with a private loopback listener, stdio ready handshake and
-OpenAPI discovery. Requires the v2 entry point; v1 is not supported. HTTP,
-SSE and WebSocket capabilities use the same code-mode interface.
-.SH AUTHENTICATION
-Only SSH public-key authentication is permitted. Standard OpenSSH host-key
-verification remains enabled. With \-\-allow, add the returned /mcp URL to an
-OAuth-capable MCP client. Sign in with GitHub in the browser, then review the
-verified identity, MCP client name, registered callback origin and resource URL
-on ssmcp's separate consent page. Explicitly allow or cancel that MCP client's
-request. GitHub sign-in alone does not grant the MCP client access.
+.B ssmcp.fs.write
+Atomically writes a workspace-relative file. Inspect the result and available audit events for completion and observable changes. File paths in tool arguments alone do not establish successful reads or writes. Skills discovered by list/view and documents read by skills.read are distinct from a native skill invocation. External operations absent from the native event interface are outside the observable audit scope.
 .PP
+Independent jobs do not share the interactive PTY. code_mode supports Promise.all for independent calls. Check each task's final state and exit code; a start acknowledgement only confirms that the process was launched.
+.PP
+Native permissions and approvals remain enforced by the provider. MCP does not guarantee that the caller's model identity is exposed; ssmcp does not infer it.
+.SH AUTHENTICATION
 The server resolves allowed GitHub usernames to stable user IDs when each
 connection attaches. Discovery and calls check that connection's IDs. A rename
 does not change an existing connection's identity match; reconnecting resolves
@@ -233,15 +162,13 @@ login code when a fresh login-code authorization is needed.
 Reopening an MCP application can reuse its saved, valid OAuth tokens. GitHub
 grants survive local client reconnects, while session IDs and backends change;
 the new connection must explicitly allow the identity. Login-code grants require
-their source connection to remain alive. Daemon state is memory-only, so restarting
-ssmcpd requires new registration and login in both modes. Access-token expiry can
+their source connection to remain alive. Restarting ssmcpd clears connections and active authorizations, so both modes require a new login. With DCR persistence enabled, unexpired client registrations remain available. Access-token expiry can
 be handled by silent refresh. Expired, revoked or replayed refresh tokens produce
 invalid_grant; sign in again using the selected mode. Updating source alone does
 not upgrade the running daemon.
 .PP
 Native agent permissions, request IDs and approval responses remain explicit.
-ssmcp does not automatically answer native requests. Install and configure the
-selected agent on the client; the gateway does not need that agent installed.
+ssmcp does not automatically answer native requests. Install and configure optional harnesses on the client; the gateway does not need those harnesses installed.
 .SH CONTEXT AND TEXT FILES
 Every backend provides native skill metadata, instruction views and UTF-8 file
 primitives through code_mode. Use context.roots, skills.list/read/view,
@@ -320,25 +247,14 @@ ssmcp --name build-shell my-server
 ssmcp --name build-shell --title "Fix the client build" my-server
 ssmcp --allow octocat@github --name build-shell my-server
 ssmcp --allow alice@github,bob@github --allow carol@github my-server
-ssmcp -t codex --name review-codex user@host
-ssmcp -t cc --list-tools
-.fi
-.PP
-Example JavaScript supplied as code_mode's code argument, using an ID from list:
-.nf
-return await call("CLIENT_ID_FROM_LIST", "terminal.status", {});
+ssmcp --list-tools
 .fi
 .SH FILES
-.TP
-.I ~/.ssh/config
-Default OpenSSH client configuration.
-.TP
-.I ~/.ssh/known_hosts
-Trusted SSH host keys.
+The bridge script is installed at PREFIX/libexec/ssmcp/code-mode.js, normally /usr/local/libexec/ssmcp/code-mode.js. The server environment variable SSMCP_CODE_MODE_RUNNER may select an absolute script path.
 .SH SEE ALSO
-.BR ssmcpd (8),
 .BR ssh (1),
-.BR ssh_config (5)
+.BR ssh_config (5),
+.BR ssmcpd (8)
 
 .SH LOG OUTPUT
 .TP

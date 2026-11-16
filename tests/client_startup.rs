@@ -113,13 +113,8 @@ impl Fixture {
             &std::env::var_os("PATH").unwrap_or_default(),
         ));
         let mut command = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
+        std::fs::write(self.0.join("native-request"), "shell-started").unwrap();
         command
-            .args([
-                "-t",
-                if phase == "discovery" { "cc" } else { "pi" },
-                "--backend",
-            ])
-            .arg(self.0.join("native"))
             .args(extra_args)
             .arg("alice@fixture")
             .env("PATH", std::env::join_paths(paths).unwrap())
@@ -134,14 +129,10 @@ impl Fixture {
     }
 
     async fn assert_native_stopped(&self) {
-        let pid = std::fs::read_to_string(self.0.join("native-pid")).unwrap();
-        timeout(Duration::from_secs(2), async {
-            while running(&pid) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("native startup process survived client shutdown");
+        assert!(
+            !self.0.join("native-pid").exists(),
+            "shell-only startup must not spawn a selected native backend"
+        );
     }
 }
 
@@ -176,7 +167,7 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
-async fn ssh_eof_or_partial_frame_during_native_startup_never_publishes_a_login_code() {
+async fn ssh_eof_or_partial_frame_during_shell_startup_never_publishes_credentials() {
     for scenario in ["eof", "partial-eof"] {
         let fixture = Fixture::new();
         let output = fixture.run(scenario, "startup").await;
@@ -190,20 +181,20 @@ async fn ssh_eof_or_partial_frame_during_native_startup_never_publishes_a_login_
 }
 
 #[tokio::test]
-async fn ssh_eof_during_native_tool_discovery_stops_the_backend_without_publishing() {
+async fn ssh_eof_during_shell_tool_discovery_never_publishes_credentials() {
     let fixture = Fixture::new();
     let output = fixture.run("eof", "discovery").await;
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "published revoked credentials");
     assert_eq!(
         std::fs::read_to_string(fixture.0.join("native-request")).unwrap(),
-        "discovery"
+        "shell-started"
     );
     fixture.assert_native_stopped().await;
 }
 
 #[tokio::test]
-async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
+async fn live_ssh_preserves_partial_frames_and_publishes_shell_capabilities() {
     let fixture = Fixture::new();
     let output = fixture.run("healthy", "startup").await;
     assert!(
@@ -212,7 +203,7 @@ async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
         String::from_utf8_lossy(&output.stderr)
     );
     let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(ready["type"], "pi");
+    assert_eq!(ready["type"], "shell");
     assert_eq!(ready["client_id"], "b".repeat(64));
     assert!(ready.get("auth").is_none());
     assert!(ready.get("allow").is_none());
@@ -227,7 +218,7 @@ async fn live_ssh_preserves_partial_frames_and_deducts_backend_startup_time() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|tool| tool["name"] == "pi.get_state")
+            .any(|tool| tool["name"] == "ssmcp.exec.start")
     );
     fixture.assert_native_stopped().await;
 }

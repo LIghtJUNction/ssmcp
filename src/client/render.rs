@@ -469,7 +469,11 @@ impl Renderer {
             "stderr"
         } else if lower.contains("token") || lower.contains("usage") {
             "Usage"
-        } else if lower.contains("diff") || lower.contains("filechange") || lower.contains("patch")
+        } else if lower.contains("diff")
+            || lower.contains("filechange")
+            || lower.contains("patch")
+            || lower.contains("file")
+            || lower.contains("directory")
         {
             "Files"
         } else if lower.contains("command") || lower.contains("bash") || lower.contains("output") {
@@ -1402,3 +1406,4 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 }
+
