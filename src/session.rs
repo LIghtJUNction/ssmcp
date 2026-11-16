@@ -1552,7 +1552,17 @@ mod tests {
         let second = std::env::temp_dir().join("two");
         assert_ne!(manager_id(&first, "same"), manager_id(&second, "same"));
         assert_ne!(manager_id(&first, "same"), manager_id(&first, "other"));
-        for invalid in ["", "--json", "-workstation", "../x", "a/b", "a\\b", "line\nbreak", " spaced ", ".."] {
+        for invalid in [
+            "",
+            "--json",
+            "-workstation",
+            "../x",
+            "a/b",
+            "a\\b",
+            "line\nbreak",
+            " spaced ",
+            "..",
+        ] {
             assert!(validate_name(invalid).is_err());
         }
         assert!(validate_name("中文 work-station").is_ok());
