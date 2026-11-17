@@ -13,17 +13,19 @@
 color = true
 dashboard = true
 log_format = "pretty"
-# Built-in palettes: minimal, codex-dark, nord, solarized, light.
+# Built-in palettes: dark, codex-dark, nord, solarized, light, minimal.
 # minimal follows your terminal's colors; others include background/foreground.
-theme = "codex-dark"
+theme = "dark"
 
-# split shares the workspace; shell or logs gives that pane all available rows.
-layout = "split"
-log_height_percent = 30 # 10..80; the shell keeps the remaining height.
+# chat shows the event flow with a fixed request composer.
+# split adds the code_mode audit browser; audit or logs expands that view.
+# terminal.* stays available separately.
+layout = "chat"
+log_height_percent = 60 # 10..80; controls the log height in split layout only.
 sidebar = true
 sidebar_width = 30 # 20..60 columns; hides when the terminal is too narrow.
 # Omit, reorder, or remove panels. [] hides all sidebar content.
-panels = ["controller", "tasks", "progress", "git", "history"]
+panels = ["agents", "queue", "controller", "tasks", "progress", "git", "history"]
 hide_empty = true
 
 timestamps = false
@@ -37,7 +39,7 @@ activity_interval_secs = 5
 # Omitted colors (or "") inherit the selected theme. "default" follows the
 # terminal's own colors. Values accept #RRGGBB or ANSI names (black, red, green,
 # yellow, blue, magenta, cyan, white; bright- variants).
-# background = "#101216"
+# background = "#101214"
 # foreground = "#E8EAED"
 # muted = "#9AA0A6"
 # accent = "#8AB4F8"

@@ -20,6 +20,8 @@
 
 `code_mode` 也提供 `collab.join/list/update/send/receive/ack/leave(clientId, options)`。这些 helper 返回解包后的业务结果，错误会抛出异常。`agents.*` 继续用于读取 AGENTS 指令文件。
 
+另有 `collab.bind(clientId, {agent_id, token})` 用于把本次 `code_mode` 编排绑定到已登记成员，以接收客户端输入框中的定向用户要求。它是代码模式 helper，不是直接 `collab` 工具新增的 action。[绑定与用户要求](#绑定本次编排并接收用户要求)
+
 **持续等待消息时，直接调用公开 `collab` 工具。** 直接 `receive` 最长等待 30 秒，由 Rust 服务端处理，不占用 `code_mode` 的四个 JavaScript 执行槽。JavaScript 中的 `collab.receive` 最长等待 1 秒，适合在一次编排中收取消息。
 
 ## 加入并发现成员
@@ -71,6 +73,25 @@ return await collab.list("CLIENT_ID_FROM_LIST");
 ~~~
 
 公开资料包含 `agent_id`、`name`、`role`、`status`、`capabilities`、加入时间、最近活动时间和租约到期时间。`status` 初始为 `available`；角色、能力与状态都是成员自行填写的工作信息。名称允许重复，消息目标始终使用 `agent_id`。
+
+## 绑定本次编排并接收用户要求
+
+客户端输入框可以把用户要求定向给一个已登记成员。该成员在每次 `code_mode` 开始时，使用自己保存的凭证声明本次身份：
+
+~~~javascript
+const clientId = "CLIENT_ID_FROM_LIST";
+await collab.bind(clientId, {
+  agent_id: "AGENT_ID_FROM_JOIN",
+  token: "PRIVATE_TOKEN_FROM_JOIN"
+});
+return await exec.list(clientId);
+~~~
+
+绑定只覆盖本次编排，同一客户端不能在一次运行中切换到另一成员。服务端校验当前授权、目标连接和成员凭证，在响应交付前再次核对成员仍然有效。名称、角色和 `controller` 展示字段不参与接收身份判断；不要把同名成员视为同一身份。
+
+客户端与服务器支持协议 v7 时，本地要求可附加到下一次符合目标的 `code_mode` 响应，位于 `structuredContent.user_messages` 和独立的用户要求文本块。模型或前端应同时检查这部分内容。`Next caller` 面向下一位实际访问本客户端的合格调用方；指定成员 ID 的要求只交付给绑定该身份的编排。
+
+这条通道与成员邮箱分别管理：`collab.send/receive/ack` 用于 agent 之间的 JSON 消息；`ssmcp.ui.queue` 用于设备操作者提交、取回和修改用户要求。输入框要求不通过 `collab.ack` 确认，`delivered` 只表示附加到了响应，不代表模型已经阅读或执行。编辑竞争、队列容量和重载恢复见[客户端 UI](client-ui.md#输入要求与队列)。
 
 ## 发送私信与广播
 

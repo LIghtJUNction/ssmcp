@@ -1,12 +1,12 @@
 # 常驻会话服务与 attach
 
-ssmcp 服务保存具名客户端会话，终端通过 attach 接入它们。会话继续拥有 SSH 连接、PTY 和命令；关闭 attach 窗口只分离显示与输入端。显式 close 会停止会话并保留配置，start 可以再次启动。
+ssmcp 服务保存具名客户端会话，终端通过 attach 接入它们。会话继续拥有服务器连接、PTY 和命令；关闭 attach 窗口只分离显示与输入端。显式 close 会停止会话并保留配置，start 可以再次启动。
 
 本页的 `sessions list` 与 `attach` 管理本机保存会话。查看 GitHub 账号可控的在线会话、从另一台设备进入终端或生成临时接入命令，请使用 `ssmcp list`、`ssmcp -i` 和 `ssmcp invite`，详见[客户端账号与临时接入](client-accounts.md)。
 
 ## Linux：安装、启用、启动
 
-先完成正常的 SSH 公钥与主机配置，再安装客户端服务。系统服务始终以明确指定的普通用户运行，使用该用户的 HOME、状态目录和 SSH 配置：
+下方示例沿用 SSH 接入，先完成 SSH 公钥与主机配置，再安装客户端服务。系统服务始终以明确指定的普通用户运行，使用该用户的 HOME、状态目录和连接配置。使用具名 HTTPS 账号时，应先以同一用户完成前台授权，再创建对应会话。
 
 ```sh
 sudo "$(command -v ssmcp)" service install --system --user "$(id -un)"
@@ -26,7 +26,7 @@ ssmcp service status --system --json
 在项目目录创建会话，或用 `--cwd` 明确指定工作目录。连接参数使用已经配置的 SSH 目标，例如：
 
 ```sh
-ssmcp sessions create dev --cwd /path/to/project \
+ssmcp sessions create dev --ssh --cwd /path/to/project \
   --allow octocat@github my-ssmcp
 
 ssmcp sessions list --json
@@ -65,7 +65,11 @@ ssmcp attach -- list
 
 裸 attach 始终列出保存的会话；不会自动选择唯一会话，也不创建不存在的会话。最后一条用于名称恰好为 `list` 的会话。
 
-交互前端复用正常日志渲染与终端面板，保留真实脚本、文件操作、输出和状态。Ctrl-] 分离并恢复本地终端模式；Ctrl-C 发送给会话中选中的 PTY。F7 切换独立终端，F6 切换到可滚动日志区域。只读前端不发送输入，不改变工作终端尺寸。
+attach 复用客户端界面展示会话事件。日志区滚轮直接回看；`/audit` 打开源码审计，`/filter 文本` 筛选日志，F9 切换日志类别，F1 查看帮助。输入框与内容区通过 Tab 切换焦点，内容区中的 ↑/↓ 用于浏览记录。源码审计需要客户端与服务器都支持协议 v6 或更新版本，旧连接继续提供其已有事件。[界面与原子操作](client-ui.md)
+
+Ctrl-] 分离并恢复本地终端模式，后台会话继续运行。仪表盘中的普通输入不会交给隐藏 PTY；需要直接交互时，在另一终端运行 `ssmcp -i`，或为 attach 使用 `dashboard = false` 的配置。直接终端输入模式中的 Ctrl-C 发送给选中的 PTY。只读前端不发送输入，不改变工作终端尺寸。
+
+当前 attach 不转发自己的输入框要求队列，也不持有后台连接的队列传输。管理后台要求时，通过该在线客户端的 `ssmcp.ui.queue` 原子接口；重新启动后台会话使用 `ssmcp sessions restart NAME`。输入框 `/reload` 的重启与草稿交接功能用于直接持有服务器连接的前台客户端。
 
 一个会话同时只允许一个交互输入前端，其他连接可使用只读模式。输入控制权带租约，异常关闭的前端不会永久占住会话。历史事件保存在有界缓冲区；早期内容已经滚动丢失时会明确标记缺口。初次 SSH 连接失败时仍能 attach 查看重试日志；在后端尚未就绪时，输入会被拒绝，不排队留给未来连接执行。
 
@@ -76,7 +80,7 @@ ssmcp attach -- list
 只有显式使用 `--session-control` 的连接注册会话管理工具。给专用管理连接授予这一能力：
 
 ```sh
-ssmcp sessions create manager --cwd /path/to/projects \
+ssmcp sessions create manager --ssh --cwd /path/to/projects \
   --session-control --allow octocat@github my-ssmcp
 ```
 
@@ -103,7 +107,7 @@ await sessions.close(managerClientId, {
 });
 ```
 
-`inventory.sessions` 是会话数组。便捷入口依赖新版服务端的 code_mode 脚本；原生形式保持为 `call(managerClientId, "ssmcp.session.create", {...})`，返回 MCP structuredContent。工具名为 `ssmcp.session.list/status/create/restart/close`，公开 MCP 入口仍只有 list 与 code_mode。
+`inventory.sessions` 是会话数组。便捷入口依赖新版服务端的 code_mode 脚本；原生形式保持为 `call(managerClientId, "ssmcp.session.create", {...})`，返回 MCP structuredContent。工具名为 `ssmcp.session.list/status/create/restart/close`。公开 MCP 提供 `list`、`code_mode` 和 `collab`；会话管理通过 `code_mode` 调用，`collab` 用于在线客户端内的成员通信。[Agent 协作](agent-collaboration.md)
 
 新建会话继承管理连接的 SSH 目标、配置和 GitHub 允许列表；原子参数不允许替换身份或传入任意启动 argv。cwd 必须是该连接工作区内的现有目录，拒绝父级遍历和越界符号链接。子会话默认不继承 session-control 授权。带 `expected_generation` 的操作在串行管理事务中检查实例是否变化，避免基于旧状态关闭新进程。
 
@@ -111,7 +115,7 @@ await sessions.close(managerClientId, {
 
 ## 兼容、升级与本地通信
 
-旧网关兼容只在初次注册收到结构化 `Reject` 帧、且拒绝内容精确匹配协议版本错误时启用。每个 runner 进程最多进行一次 v5 → v4 协商，随后以 v4 进行普通断线重连。v4 仍被明确拒绝时，该 runner 失败退出；启用了 watchdog 的管理器仍按原有延迟启动新的 runner。网络错误、认证失败和其他拒绝不会触发协议回退。
+旧网关兼容只在初次注册收到结构化 `Reject` 帧、且拒绝内容匹配协议版本错误时启用。客户端尝试构建支持的兼容版本，随后沿用协商结果处理普通断线重连；支持的版本均被明确拒绝时，该 runner 失败退出。启用了 watchdog 的管理器仍按原有延迟启动新的 runner。网络错误、认证失败和其他拒绝不会触发协议回退。
 
 v4 兼容连接不向网关发送任务 `title`，本地保存的标题保持不变；旧协议也不提供每次调用的 `controller` 信息。SSH 验证、GitHub 允许列表与 OAuth 授权规则保持不变。更早的网关如果无法解析初始 Hello、因而没有返回结构化版本拒绝，不会触发回退。`reload` 仍等待并校验服务端 receipt；没有确认时不执行重载，协议回退不会绕过这项校验。
 

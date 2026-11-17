@@ -1,14 +1,17 @@
 # 终端日志与服务端诊断
 
-客户端默认使用 `pretty`：请求蓝色，成功绿色，响应元信息青色，工具及 stdout 标题紫色，警告与进度黄色，错误和超时红色。stderr 在成功调用中为黄色，失败调用中为红色。默认摘要限制为终端内的一行，任务与请求 ID 使用短显示形式，工作区内路径相对启动目录显示；完整 ID、路径和参数仍保留在原生事件及工具结果里。Diff 保留行号与原有布局。
+客户端默认使用 `pretty`，按请求、输出、结果和诊断分别排版。每个命令显示任务 ID，stdout 与 stderr 明确标记来源，结束时显示实际退出状态与耗时；颜色由主题和语义配色决定。默认摘要限制为终端内的一行，任务与请求 ID 使用短显示形式，工作区内路径相对启动目录显示。完整 ID、路径和参数仍保留在原生事件及工具结果里，Diff 保留行号与原有布局。
 
 ## 三种输出模式
 
 ```sh
+ssmcp --log-format pretty
+ssmcp --log-format pretty-verbose
+ssmcp --log-format jsonl 2>events.jsonl
+ssmcp --no-color
+
+# 使用已有 SSH 配置时，显式选择 SSH 路径。
 ssmcp --ssh --log-format pretty my-server
-ssmcp --ssh --log-format pretty-verbose my-server
-ssmcp --ssh --log-format jsonl my-server 2>events.jsonl
-ssmcp --ssh --no-color my-server
 ```
 
 `--verbose` 选择 `pretty-verbose`，展开脱敏后的事件元数据；已经实时显示的 stdout/stderr 和 Diff 预览不会在附加 JSON 中再次打印。`--raw-events` 和原有的 `--raw` 选择 `jsonl`。JSONL 每个事件独占一行，连接状态、SSH stderr、原生 stderr 和 PTY 输出都以事件表示。PTY 字节使用 base64，进入审计的副本仍经过敏感信息检查；不要将 JSONL 的 raw 名称理解为绕过脱敏。启动参数解析或配置加载失败发生在日志配置生效之前，错误使用默认可读格式。
@@ -21,47 +24,58 @@ stdout 用于连接信息。重定向 stdout 或选择 JSONL 时，保留单行�
 
 ## 固定状态区与窗口尺寸
 
-真实交互终端默认启用 `ui.dashboard = true`。窗口至少 96 列、18 行时，左上显示日志，左下保留交互式 Shell，右侧依次显示并行任务、原生进度、Git 状态和最近提交。右栏宽度为终端列数的四分之一，限制在 28–36 列；106 列窗口对应 77 列工作区、1 列分隔和 28 列状态区。少于 96 列或 18 行时收起右栏；例如 80 列窗口仍保留上下分开的日志与 Shell，并使用全宽。终端高度至少 5 行时可以切换日志焦点；不足 5 行时优先保留 PTY，F6 不再作为界面快捷键拦截。物理终端尺寸和交互 PTY 尺寸分别处理，调整窗口会更新布局与 Shell 的可用尺寸。[布局](../src/client/panel.rs) · [终端合成](../src/client/terminal.rs)
+真实交互终端默认启用 `ui.dashboard = true` 和 `layout = "chat"`。主区域连续显示调用、输出和结果，底部保留用户要求输入框，右侧显示登记成员、要求队列、控制者、任务、原生进度、Git 状态与最近提交。F2 在活动、源码审计、成员、队列内容间切换；F3 收起侧栏。也可配置 `split`、`audit`、`logs` 专用布局。[完整配置与预览](client-ui.md) · [布局](../src/client/panel.rs)
 
-日志和交互 Shell 使用各自的终端状态，后台输出不会覆盖正在输入的命令。面板只接收文字和语义颜色；分支、路径、任务名和进度消息中的控制字符转成可见文字，按 Unicode 显示宽度截断。`NO_COLOR` 和 `--no-color` 仅关闭颜色。JSONL、重定向 stderr、`TERM=dumb` 或 `ui.dashboard = false` 保留行式输出。
+仪表盘中的文字用于用户要求和本地命令，不会传给隐藏的 PTY。Tab 切换输入与内容焦点。需要直接终端输入时，在另一个终端运行 `ssmcp -i`，或由自定义前端调用 `terminal.read/write/resize`。面板只接收文字和语义颜色；分支、路径、任务名和进度消息中的控制字符转成可见文字，按 Unicode 显示宽度截断。`NO_COLOR` 和 `--no-color` 仅关闭颜色。JSONL、重定向 stderr、`TERM=dumb` 或 `ui.dashboard = false` 保留行式输出。[终端原语](terminal-control.md)
 
 Git 状态在授权启动目录独立查询，约每 2 秒刷新；读取本地 Git 信息，不执行 fetch；面板不展示工作区文件正文。右栏显示分支、已知的 ahead/behind、暂存/工作区/未跟踪项计数、冲突和少量路径。未跟踪目录可能作为一项计数。查询失败时保留的旧数据标为 Last known state；没有成功观测时显示 pending、unavailable 或 checking，不报告工作区干净。Git 观察不代替成功文件操作的审计事件。[Git 观察器](../src/client/git_status.rs) · [Git porcelain v2 与后台刷新](https://git-scm.com/docs/git-status)
 
-右栏各段连续排列，用细分隔线区分任务、工作区与提交历史；Git 状态不再固定到窗口底部。最近提交从已观察的完整 HEAD 读取，最多保留 5 条：每条显示短 SHA、原生提交时间的相对值，以及最多两行标题。标题先脱敏再按 Unicode 字符宽度换行；有足够空间时显示 3–5 条，更矮的窗口减少条数并标明当前显示数量。
+右栏各段连续排列，以留白分隔任务、工作区与提交历史；Git 状态不再固定到窗口底部。最近提交从已观察的完整 HEAD 读取，最多保留 5 条：每条显示短 SHA、原生提交时间的相对值，以及最多两行标题。标题先脱敏再按 Unicode 字符宽度换行；有足够空间时显示 3–5 条，更矮的窗口减少条数并标明当前显示数量。
 
 HEAD 改变时先清除旧历史，再读取对应提交链，失败显示 unavailable，空仓库显示 No commits yet。Git 状态过期时，保留的历史明确标为 stale，不把其他 HEAD 的提交当作当前分支记录。相对时间依据实际观察时间推进；未知时间不会补成当前时间。[最近提交观察](../src/client/git_status.rs) · [侧栏排版](../src/client/panel.rs)
 
-### 回看日志与返回 Shell
+### 直接回看与筛选日志
 
-窗口底部显示当前焦点、可用快捷键，以及日志回看位置。快捷键只在启用面板且存在日志区域时生效：
+鼠标停在日志区时，滚轮直接回看，无需先切换焦点。窗口底部显示当前布局、筛选条件和可用操作：
 
-| 按键 | 所在焦点 | 作用 |
-| --- | --- | --- |
-| F6 | Shell 或日志 | 在日志与 Shell 间切换 |
-| PgUp / PgDn | 日志 | 向前或向后翻一页 |
-| Home / End | 日志 | 到最早保留的日志或最新输出 |
-| Esc | 日志 | 返回 Shell |
-| 普通字符输入 | 日志 | 返回 Shell，并把输入原样交给 PTY |
+| 操作 | 作用 |
+| --- | --- |
+| 鼠标滚轮、PgUp / PgDn | 向前或向后滚动当前内容 |
+| Ctrl-Home / Ctrl-End | 到最早保留日志或最新输出 |
+| `/filter 文本` | 应用不区分大小写的普通文本筛选 |
+| F9 | 在 `all`、`commands`、`errors` 类别间切换 |
+| Esc | 关闭帮助或详情，返回输入；普通复制草稿可恢复暂存的原稿 |
+| 内容区 ↑ / ↓、Enter 或 →、← | 选择审计记录、展开源码、返回列表 |
 
-返回 Shell 时，日志自动跟随最新输出。日志焦点之外的 PgUp、PgDn、Home、End 和 Esc 保持原生输入用途；粘贴内容中的快捷键序列不触发焦点切换。需要把 F6 交给终端内应用时，可用 `ui.dashboard = false` 关闭面板。[键盘路由](../src/client/terminal.rs) · [输入处理](../src/client/input.rs)
+上表对应默认 `chat` 布局，输入框中的 Home/End 和方向键仍用于编辑。筛选保留命中命令的输出与结果上下文：`commands` 显示命令相关记录，`errors` 显示错误、警告或 stderr 等诊断记录。`/filter` 清除文本，`/filter --all` 恢复全部类别；筛选只改变当前保留历史的显示，不改变任务和事件归档。自定义前端可调用 `ssmcp.ui.filter`，或读取事件后自行筛选。[键盘与鼠标操作](client-ui.md#键盘与鼠标操作) · [原子 UI 接口](client-ui.md#原子-ui-接口)
 
-日志窗配置 512 行滚动历史。这只是屏幕回看范围，完整输出、事件游标和 artifact 保留策略仍使用原有存储；不要把滚动到最早一行理解为执行输出已经完整显示。正常退出时恢复原终端屏幕、光标和输入模式；平台实测与恢复检查的结果见[验收记录](validation-0.6.0.md)。
+日志窗保留 512 行滚动历史。这只是屏幕回看范围，输出流、事件游标和 artifact 另有保留规则；滚动到最早一行不代表已经读完命令输出。Ctrl-End 返回最新日志。正常退出时恢复原终端屏幕、光标和输入模式。
+
+## code_mode 源码与事件
+
+审计区按运行 ID 展示调用方提交的 `code_mode.code`。使用 `/audit` 或 Ctrl-O 打开审计，在内容区用 ↑/↓ 选择记录，Enter 或 → 展开带行号与语法颜色的源码，← 返回列表；鼠标滚轮浏览。源码经过现有审计脱敏处理，界面最多保留 128 次运行、合计 2 MiB 的浏览数据，单段源码上限为 64 KiB。
+
+源码审计需要客户端与服务器都支持协议 v6 或更新版本。v4/v5 连接继续使用已有能力，但不能提供这份源码；连接提示会说明缺失原因。服务器仅向本次编排实际访问的客户端发送源码，设备列表中的其他客户端不会收到。`ssmcp.audit.events` 按游标提供本地审计事件，其中的源码与编排生命周期同样依赖 v6 或更新版本；JSONL 或“原始事件”模式不会补出旧连接未接收的源码，也不会绕过脱敏。[源码审计与运行状态](client-ui.md#源码审计与运行状态)
+
+编排完成、原生调用返回和后台命令退出是三个独立状态。`exec.start` 返回后，编排可以已经完成而命令仍在执行；原生错误也可能被 JavaScript 捕获。判断命令结果时，继续读取实际任务的 `running`、`exit_code` 和输出，不能只看编排的完成标签。
+
+底部输入框的要求队列使用协议 v7。要求与工具执行输出分别展示；`delivered` 只表示附加到符合目标的 `code_mode` 响应。它不代表模型已经阅读或执行，也不改变该次工具调用的错误或退出状态。排队、取回、重新选目标与重载恢复见[要求队列](client-ui.md#输入要求与队列)。
 
 ## 并行任务与真实进度
 
-任务开始时显示短任务号、命令与工作目录，结束时再次显示对应命令、实际状态、退出码或信号及耗时。只有明确的 exit 0 才显示命令成功；缺少最终退出信息时显示 `exit unknown`。多个任务同时运行时，摘要列出活跃数量与短任务号。
+任务开始时显示短任务号、命令与工作目录，stdout/stderr 各自标注来源和任务号，结束时显示对应命令、实际状态、退出码或信号及耗时。只有明确的 exit 0 才显示命令成功；缺少最终退出信息或耗时时显示 unknown。多个任务同时运行时，摘要列出活跃数量与短任务号。
 
-`python -c`、`node -e`、`bash -lc` 等多行脚本默认显示带行号的源码预览，命令中的 `<script>` 对应下方正文。任务摘要从源码中选取一条非空、非导入语句，便于区分同时运行的脚本；这条摘要是源码摘录，执行结果由退出信息和文件审计事件报告。默认完整显示不超过 12 行的脚本；更长的脚本显示前 8 行和末 4 行，并注明折叠的原始行号范围。`--max-inline-output N` 同时调整脚本和缓冲输出的行数；`--verbose` 展开全部脱敏源码。单行超过 512 个字符时，默认预览标明剩余字符数和展开方式。源码按终端显示宽度换行，续行保留缩进，不修改实际传给程序的参数。[命令展示](../src/client/command.rs) · [渲染器](../src/client/render.rs)
+`python -c`、`node -e`、`bash -lc` 等内联脚本使用 `python3 -c · 83 lines` 这样的中性标签，按解释器与源码行数识别命令，不把某一条赋值或文件操作当作执行结论。默认日志直接展示命令输出与退出状态；`--verbose` 额外展开带行号的脱敏脚本正文。编排源码可在审计视图浏览，`--max-inline-output N` 控制缓冲输出的展示行数。[命令展示](../src/client/command.rs) · [渲染器](../src/client/render.rs)
 
 Codex 命令调用以一次原生 `command/exec` 请求和响应为显示单位。外层工具调用通过桥接端生成的 `harness_call_id` 与原生请求精确对应；默认日志显示一套开始和结果，右侧活动区跟踪同一条命令。并行命令乱序完成时仍按各自 ID 配对。派发或发送失败、没有收到原生响应时保留外层失败提示；verbose 和 JSONL 保留外层审计元数据。其他工具调用继续显示各自的开始和结束。[调用关联](../src/backend/rpc.rs) · [回归事件](../src/client/readable_log_fixture.rs)
 
-![80 列下的命令与脚本日志](assets/readable-logs-80.png)
+![默认活动流、输入框与侧栏](assets/client-ui.png)
 
-这张图由实际渲染器回放固定事件生成，覆盖 7 行读取脚本、83 行更新脚本、两条并行命令和一次编译失败。图片中的命令与结果属于测试样例；测试没有执行这些命令。使用 `SSMCP_READABLE_LOG_PREVIEW_DIR=target/readable-log-preview cargo test --lib client::render::readable_log_fixture::readable_inline_command_fixture_at_80_and_100_columns -- --exact` 生成 80 列与 100 列的原始文本，再用 `scripts/render_log_preview.py --columns 80` 生成图片。
+图片使用固定示例数据，由客户端实际渲染器生成；其中的命令与耗时属于样例。运行 `ssmcp ui preview` 可以在自己的终端检查布局、配色和操作。
 
 启用固定状态区时，活跃任务持续显示活动标记与已运行时间，周期刷新不向日志重复追加心跳。未使用面板时，默认每 5 秒追加活动摘要；非 TTY 日志至少间隔 30 秒，近期有交互式 PTY 输出时推迟提示。活动标记只说明任务仍在运行。只有原生 `notifications/progress` 同时给出合法 `progress` 与正数 `total` 时才显示百分比条；未知总量显示原生数值和 total unknown。原生进度按来源与 token 独立展示，不推断它属于哪个 Shell 任务；长时间没有更新时注明更新时间。
 
-程序打印的 JSON 保留 stdout/stderr 来源，默认显示字段摘要，多行字符串和超大 JSON 记录有界折叠，不裸打印转义换行或完整对象墙。JSON 中的 `status`、`exit_code` 等字段仍是程序输出，不会被提升为命令成功事件。JSONL 保留脱敏后的原始事件；完整输出仍按原有捕获与查询规则访问。显示短 ID 只用于辨认，调用 `exec.status/read/wait` 时使用 `exec.list` 或原生结果中的完整任务 ID。
+程序打印的 JSON 保留 stdout/stderr 来源，字段值和多行字符串按可读文本排版，长输出与超大记录明确标记折叠。JSON 中的 `status`、`exit_code` 等字段仍是程序输出，不会被提升为命令成功事件。JSONL 保留脱敏后的原始事件；输出正文按捕获与查询规则访问。显示短 ID 只用于辨认，调用 `exec.status/read/wait` 时使用 `exec.list` 或原生结果中的完整任务 ID。
 
 已明确标记为内部发现的重复成功 RPC 摘要在默认 pretty 中折叠，首次观察、错误、恢复和显式用户调用仍可见。原生工具目录或可用性变化由发现事件报告。pretty-verbose 与 JSONL 保留脱敏后的事件来源；来源不明的 stderr 不按文本猜测或隐藏。
 
@@ -82,7 +96,13 @@ Codex 命令调用以一次原生 `command/exec` 请求和响应为显示单位�
 color = true
 dashboard = true
 log_format = "pretty"
-theme = "codex-dark"
+theme = "dark"
+layout = "chat"
+log_height_percent = 60
+sidebar = true
+sidebar_width = 30
+panels = ["agents", "queue", "controller", "tasks", "progress", "git", "history"]
+hide_empty = true
 timestamps = true
 show_request_id = true
 show_raw_json = false
@@ -92,11 +112,9 @@ activity_interval_secs = 5
 
 `dashboard` 控制交互式面板，默认 true。`activity_interval_secs` 可设为 0–300 秒，控制行式日志的周期活动提示；0 关闭该提示，面板、开始、完成、文件和原生调用事件仍会更新。两个设置都不改变任务并发或执行超时。
 
-支持 `minimal`、`codex-dark`、`nord`、`solarized` 四种主题。`--theme nord`、`--timestamps` 可直接覆盖。时间戳使用 UTC；终端主题不改变原生工具返回。`NO_COLOR`、`--no-color`、`TERM=dumb` 和重定向 stderr 都关闭日志 ANSI 颜色。交互式 PTY 的原始捕获独立于配色。启用面板时，合成器解析终端状态并在所属区域重绘文字、光标和退格；关闭面板后，真实终端直接接收原始 PTY 字节。JSONL 模式仍输出事件格式。非 TTY 日志输出使用安全可读展示。
+支持 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题，F4 按此顺序循环。默认 `dark` 绘制自己的背景，`minimal` 跟随终端；`[ui.colors]` 可以按语义覆盖十六进制真彩色、ANSI 颜色名或 `default`。F5 重载显示配置，F8 保存当前设置；输入框中的 `/reload` 则重新启动客户端。`dashboard` 与 `log_format` 是启动设置，切换这两项需要修改文件并重启。[主题与颜色](client-ui.md#主题与颜色)
 
-![终端日志渲染器示例](assets/terminal-logs.png)
-
-上图由项目的真实渲染器运行固定测试事件生成，展示排版与颜色；它是可复现的渲染示例，不是生产命令耗时记录。
+`--theme nord`、`--timestamps` 可直接覆盖对应设置，时间戳使用 UTC。`NO_COLOR`、`--no-color`、`TERM=dumb` 和重定向 stderr 都关闭日志 ANSI 颜色。主题只影响显示；原生工具结果、终端字节和 JSONL 事件不受配色影响。
 
 ## 后台会话日志
 
