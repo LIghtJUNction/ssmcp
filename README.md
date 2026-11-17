@@ -104,7 +104,7 @@ ssmcp trust list
 
 ## 定制客户端
 
-客户端默认使用 `dark` 主题和 `chat` 布局：连续事件流展示调用、输出和结果，底部输入框用于追加用户要求。运行期间可以继续输入，待交付要求保留在队列中，支持取回编辑；下一次符合目标的 `code_mode` 响应携带这些要求时，界面标记为已交付。已交付表示附加到了响应，不代表模型已经阅读或执行。
+0.8.0 客户端默认使用 `dark` 主题和 `chat` 布局：连续事件流展示调用、输出和结果，底部输入框用于追加用户要求。运行期间可以继续输入，待交付要求保留在队列中，支持取回编辑；下一次符合目标的 `code_mode` 响应携带这些要求时，界面标记为已交付。已交付表示附加到了响应，不代表模型已经阅读或执行。
 
 `/help` 查看操作，`/audit` 浏览原始编排源码，`/agents` 选择真实登记成员，`/queue` 管理待交付要求。Tab 切换输入和浏览焦点，F2 切换事件流、审计、成员和队列，F3 收起侧栏。`/reload` 重新启动客户端，F5 只重载显示配置。终端输入继续通过 `terminal.*` 或 `ssmcp -i` 使用。
 
@@ -270,7 +270,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-协议与 Harness 测试使用确定性 fixture。[客户端交互验证](docs/reports/client-experience-20261118/README.md)提供真实 PTY、队列、重载和截图的复现步骤；[历史权限验收](docs/validation.md)保留早期 SSH 与 OAuth 记录；发布与平台构建见[发布流程](docs/releases.md)。提交改动时，请附上对应验证结果；界面修改同时附上渲染截图。
+协议与 Harness 测试使用确定性 fixture。[0.8.0 集成验证](docs/reports/client-experience-0.8.0-20261118/README.md)记录完整 Rust 回归、真实 PTY、账号队列、重载及观察窗口的结果与复现范围；[首轮客户端交互验证](docs/reports/client-experience-20261118/README.md)保留此前证据与渲染截图；[历史权限验收](docs/validation.md)保留早期 SSH 与 OAuth 记录。发布与平台构建见[发布流程](docs/releases.md)。提交改动时，请附上对应验证结果；界面修改同时附上渲染截图。
 
 ## 文档
 
