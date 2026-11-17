@@ -474,7 +474,7 @@ fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
 
-const INSTRUCTIONS: &str = "Use list to discover clients allowed for your authenticated identity and this endpoint, then use tools.search(clientId,{query,limit:20}) inside code_mode for concise native tool discovery. Request include_schemas:true for complete native descriptors before calling; list({client_id}) and tools(clientId,cursor) retain full-schema pagination. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. Each client provides shell tools and discovers installed native providers, including Codex, Claude Code, Pi, OpenCode and Playwright MCP. For an existing Chrome session, inspect ssmcp.browser.discover and ssmcp.harnesses.list, then use only a verified connection or dynamically discovered extension tools; do not launch an isolated browser as a substitute. Use exec.run or exec.parallel for isolated commands, and exec.start/read/wait/cancel for managed background work. Native policies and approvals remain in effect. Each client's access policy is enforced for discovery and native calls. Clients connect outbound over HTTPS/WebSocket or SSH. Login-code grants end when their issuing connection ends. Read ssmcp://guide and ssmcp://skill for usage, ssmcp://limits for budgets, and ssmcp://clients for a paged live inventory. Client metadata and tool schemas are exposed through resources/list and resources/read; resource reads are snapshots without subscriptions.";
+const INSTRUCTIONS: &str = "Use list to discover clients allowed for your authenticated identity and this endpoint, then use tools.search(clientId,{query,limit:20}) inside code_mode for concise native tool discovery. Request include_schemas:true for complete native descriptors before calling; list({client_id}) and tools(clientId,cursor) retain full-schema pagination. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. Each client provides shell tools and discovers installed native providers, including Codex, Claude Code, Pi, OpenCode and Playwright MCP. For an existing Chrome session, inspect ssmcp.browser.discover and ssmcp.harnesses.list, then use only a verified connection or dynamically discovered extension tools; do not launch an isolated browser as a substitute. Use exec.run or exec.parallel for isolated commands, and exec.start/read/wait/cancel for managed background work. Native policies and approvals remain in effect. Each client's access policy is enforced for discovery and native calls. Clients connect outbound over HTTPS/WebSocket or SSH. Login-code grants end when their issuing connection ends. Read ssmcp://guide and ssmcp://skill for usage, ssmcp://limits for budgets, and ssmcp://clients for a paged live inventory. Client metadata, tool schemas, current AGENTS.md content, skill summaries, full skill documents and project-over-global skill views are exposed through resources/list and resources/read. Read context resources again for current on-disk contents; no subscriptions are advertised. Use rtk.status/run/start in code_mode for explicit RTK command-output compression with managed exec jobs.";
 
 fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
     match request.method {
@@ -531,9 +531,12 @@ fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
                 .param("uri")
                 .and_then(Value::as_str)
                 .ok_or_else(|| Fault::params("resource uri must be a string"))?;
-            if uri.is_empty() || uri.len() > 1024 || uri.chars().any(char::is_control) {
+            if uri.is_empty()
+                || uri.len() > resources::MAX_URI_BYTES
+                || uri.chars().any(char::is_control)
+            {
                 return Err(Fault::params(
-                    "resource uri must be 1..=1024 bytes without control characters",
+                    "resource uri must be 1..=8192 bytes without control characters",
                 ));
             }
             Ok(Action::ResourceRead(uri.into()))
