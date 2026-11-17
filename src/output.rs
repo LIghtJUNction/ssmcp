@@ -213,6 +213,11 @@ impl OutputStore {
         Self::at_restoring(directory, policy, None)
     }
 
+    #[cfg(test)]
+    pub(crate) fn at_for_test(directory: PathBuf) -> Result<Arc<Self>, String> {
+        Self::at(directory, Policy::default())
+    }
+
     fn at_restoring(
         directory: PathBuf,
         policy: Policy,
@@ -953,6 +958,48 @@ impl Capture {
     pub fn inline_bytes(&self) -> &[u8] {
         &self.inline
     }
+    /// Read an exact bounded range without retaining a second copy of a capture.
+    /// Completed artifacts still follow the store's normal TTL and quota policy;
+    /// an unavailable or shortened archive is an error, never a successful EOF.
+    pub(crate) fn read_range(&self, offset: u64, limit: usize) -> Result<Vec<u8>, String> {
+        if !(1..=READ_BYTES).contains(&limit) {
+            return Err(format!("max_bytes must be 1..={READ_BYTES}"));
+        }
+        if offset > self.bytes {
+            return Err("output cursor is ahead of the captured stream".into());
+        }
+        let length = limit.min((self.bytes - offset) as usize);
+        let Some(artifact) = &self.artifact else {
+            let start = offset as usize;
+            return self
+                .inline
+                .get(start..start + length)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| "captured output is shorter than its recorded length".into());
+        };
+        let file = self
+            .store
+            .open(&artifact_name(&artifact.id), Access::Read)
+            .map_err(|error| format!("captured output archive is unavailable: {error}"))?;
+        if file.metadata().map_err(error)?.len() < self.bytes {
+            return Err("captured output archive is shorter than its recorded length".into());
+        }
+        let mut data = vec![0; length];
+        let mut read = 0;
+        while read < data.len() {
+            match read_at(&file, &mut data[read..], offset + read as u64) {
+                Ok(0) => {
+                    return Err("captured output archive ended before its recorded length".into());
+                }
+                Ok(count) => read += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(format!("could not read captured output archive: {error}"));
+                }
+            }
+        }
+        Ok(data)
+    }
     pub fn error(&self) -> Option<&str> {
         self.failure.as_deref()
     }
@@ -1102,6 +1149,7 @@ impl Capture {
         {
             self.fail(format!("could not finalize output artifact: {e}"));
         }
+        self.inline.shrink_to_fit();
         self.modified = now();
         self.finished = true;
         if let Some(metadata) = self.metadata()

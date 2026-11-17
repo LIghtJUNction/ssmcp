@@ -22,6 +22,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
 const MAX_SESSIONS: usize = 16;
+// Rendered cells cost much more than UTF-8 output. Keep a short interactive
+// window; raw command/event captures keep their existing retention policy.
+const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;2004s\x1b[?1049h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
 const LEAVE: &[u8] = b"\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[?1;6;25;66;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
@@ -507,11 +510,15 @@ impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let geometry = Geometry::new(rows, cols);
         Self {
-            logs: vt100::Parser::new(nonzero(geometry.log_rows), nonzero(geometry.left), 512),
+            logs: vt100::Parser::new(
+                nonzero(geometry.log_rows),
+                nonzero(geometry.left),
+                SCROLLBACK_ROWS,
+            ),
             pty: vt100::Parser::new_with_callbacks(
                 nonzero(geometry.pty_rows),
                 nonzero(geometry.left),
-                512,
+                SCROLLBACK_ROWS,
                 Replies::default(),
             ),
             active_session: "main".into(),
@@ -539,7 +546,7 @@ impl State {
                 vt100::Parser::new_with_callbacks(
                     nonzero(self.geometry.pty_rows),
                     nonzero(self.geometry.left),
-                    512,
+                    SCROLLBACK_ROWS,
                     Replies::default(),
                 ),
             );
@@ -1421,9 +1428,12 @@ mod tests {
         assert!(state.keyboard(b"\x1b[5~", now, false).is_empty());
         assert!(state.logs.screen().scrollback() > 0);
         state.keyboard(b"\x1b[H", now, false);
-        assert!(state.logs.screen().contents().contains("audit record 000"));
+        assert_eq!(state.logs.screen().scrollback(), SCROLLBACK_ROWS);
+        assert!(state.logs.screen().contents().contains("audit record"));
+        assert!(!state.logs.screen().contents().contains("audit record 000"));
         state.keyboard(b"\x1b[F", now, false);
         assert_eq!(state.logs.screen().scrollback(), 0);
+        assert!(state.logs.screen().contents().contains("audit record 199"));
         assert!(state.keyboard(b"\x1b", now, false).is_empty());
         assert!(
             state
