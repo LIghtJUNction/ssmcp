@@ -53,7 +53,7 @@ impl Default for BrowserSettings {
 }
 
 impl BrowserSettings {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if let Some(path) = &self.playwright_mcp {
             let text = path.to_str().ok_or("browser CLI path must be UTF-8")?;
             if !path.is_absolute() || text.len() > 4096 || text.chars().any(char::is_control) {
