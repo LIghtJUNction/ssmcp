@@ -13,7 +13,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 pub(super) fn routes() -> Router<Arc<Broker>> {
     Router::new()
@@ -21,6 +21,7 @@ pub(super) fn routes() -> Router<Arc<Broker>> {
         .route("/account/history", get(history))
         .route("/account/admin", get(admin))
         .route("/account/admin/history", get(admin_history))
+        .route("/account/admin/users", post(user_policy))
         .route("/account/sessions/disconnect", post(disconnect))
 }
 
@@ -173,7 +174,131 @@ async fn admin(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<
             AuditOutcome::Success,
         )
         .await?;
-    Ok(Html(dashboard_view::admin(&snapshot, &users, &csrf)).into_response())
+    Ok(Html(dashboard_view::admin(
+        &snapshot,
+        &users,
+        &csrf,
+        &identity.subject,
+    ))
+    .into_response())
+}
+
+// Decimal MiB/s keeps the visible unit separate from persisted bytes per second.
+fn parse_rate_limit(raw: &str) -> Result<Option<u64>, Problem> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 64 {
+        return Err(Problem::ManagementInvalid);
+    }
+    let (whole, fractional) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty() && fractional.is_empty()
+        || !whole.bytes().all(|c| c.is_ascii_digit())
+        || !fractional.bytes().all(|c| c.is_ascii_digit())
+        || fractional.len() > 20
+        || value.ends_with('.')
+    {
+        return Err(Problem::ManagementInvalid);
+    }
+    let whole = if whole.is_empty() {
+        0
+    } else {
+        whole
+            .parse::<u128>()
+            .map_err(|_| Problem::ManagementInvalid)?
+    };
+    let fractional_value = if fractional.is_empty() {
+        0
+    } else {
+        fractional
+            .parse::<u128>()
+            .map_err(|_| Problem::ManagementInvalid)?
+    };
+    if whole > 1024 || whole == 1024 && fractional_value != 0 {
+        return Err(Problem::ManagementInvalid);
+    }
+    let denominator = 10_u128.pow(fractional.len() as u32);
+    let bytes = whole * 1_048_576 + (fractional_value * 1_048_576 + denominator / 2) / denominator;
+    if !(1..=1_073_741_824).contains(&bytes) {
+        return Err(Problem::ManagementInvalid);
+    }
+    Ok(Some(bytes as u64))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct UserPolicyChange {
+    subject: String,
+    banned: Option<bool>,
+    rate_limit_bps: Option<Option<u64>>,
+}
+
+fn policy_change(
+    values: &HashMap<String, String>,
+    actor_subject: &str,
+) -> Result<UserPolicyChange, Problem> {
+    let action = values.get("action").ok_or(Problem::ManagementInvalid)?;
+    let (banned, rate_limit_bps) = match action.as_str() {
+        "rate" => {
+            only(values, &["csrf", "subject", "action", "rate_mib"])?;
+            (None, Some(parse_rate_limit(&values["rate_mib"])?))
+        }
+        "ban" | "unban" => {
+            only(values, &["csrf", "subject", "action"])?;
+            (Some(action == "ban"), None)
+        }
+        _ => return Err(Problem::ManagementInvalid),
+    };
+    let subject = &values["subject"];
+    if !crate::management::valid_subject(subject) {
+        return Err(Problem::ManagementInvalid);
+    }
+    if subject == actor_subject && banned == Some(true) {
+        return Err(Problem::Forbidden);
+    }
+    Ok(UserPolicyChange {
+        subject: subject.clone(),
+        banned,
+        rate_limit_bps,
+    })
+}
+
+async fn user_policy(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
+    let audit_identity = broker.portal.identity_for_audit(request.headers()).await;
+    let result = async {
+        let (headers, values) = form(request).await?;
+        broker
+            .portal
+            .verify(&headers, &values, &broker.public_url)?;
+        let (identity, _) = authenticate(&broker.portal, &headers).await?;
+        checked_snapshot(&broker.portal, &identity, Scope::All).await?;
+        let change = policy_change(&values, &identity.subject)?;
+        management(&broker.portal)?
+            .set_user_policy(
+                &identity,
+                &change.subject,
+                change.banned,
+                change.rate_limit_bps,
+            )
+            .await
+            .map_err(management_error)?;
+        Ok(Redirect::to("/account/admin").into_response())
+    }
+    .await;
+    if matches!(result, Err(Problem::Csrf | Problem::Unauthorized)) {
+        broker
+            .portal
+            .record_audit(
+                audit_identity.as_ref(),
+                AuditAction::AccessDenied,
+                AuditOutcome::Denied,
+            )
+            .await?;
+    }
+    result
 }
 
 async fn admin_history(
@@ -244,27 +369,5 @@ async fn disconnect(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn history_cursor_rejects_identity_scope_and_duplicate_fields() {
-        assert_eq!(before_parameter(None), Ok(None));
-        assert_eq!(before_parameter(Some("before=42")), Ok(Some(42)));
-        for query in [
-            "before=0",
-            "before=-1",
-            "before=x",
-            "before=2&before=1",
-            "subject=123",
-            "scope=all",
-            "before=2&admin=true",
-        ] {
-            assert_eq!(
-                before_parameter(Some(query)),
-                Err(Problem::Invalid),
-                "{query}"
-            );
-        }
-    }
-}
+#[path = "dashboard_tests.rs"]
+mod tests;

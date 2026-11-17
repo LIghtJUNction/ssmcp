@@ -27,6 +27,7 @@ impl Broker {
     ) -> Result<&management::State, ManagementError> {
         let state = self.management.as_ref().ok_or(ManagementError::Disabled)?;
         if !management::valid_identity(actor)
+            || self.user_policies.is_banned(&actor.subject)
             || (scope == Scope::All && !state.policy.is_admin(actor))
         {
             return Err(ManagementError::Forbidden);
@@ -99,6 +100,7 @@ impl Broker {
             audit: page.events,
             audit_next_before: page.next_before,
             retention_days: state.audit.retention_days(),
+            default_rate_limit_bps: self.user_policies.default_rate(),
         })
     }
 
@@ -181,6 +183,102 @@ impl Broker {
         Ok(())
     }
 
+    /// Apply a partial account policy update under a single administrator
+    /// mutation lock, then invalidate every live form of access on a ban.
+    pub async fn management_set_user_policy(
+        &self,
+        actor: &Identity,
+        subject: &str,
+        banned: Option<bool>,
+        rate_limit_bps: Option<Option<u64>>,
+    ) -> Result<(), ManagementError> {
+        let state = self.management_access(actor, Scope::All)?;
+        let _update = self.user_policy_updates.lock().await;
+        if self.user_policies.is_banned(&actor.subject) {
+            return Err(ManagementError::Forbidden);
+        }
+        if !management::valid_subject(subject)
+            || (banned.is_none() && rate_limit_bps.is_none())
+            || rate_limit_bps
+                .flatten()
+                .is_some_and(|rate| !crate::user_policy::valid_rate(rate))
+        {
+            return Err(ManagementError::Invalid);
+        }
+        if subject == actor.subject && banned == Some(true) {
+            return Err(ManagementError::Forbidden);
+        }
+        let target = subject.to_owned();
+        self.portal
+            .storage(move |store| store.account_record(&target))
+            .await
+            .map_err(policy_error)?;
+        let audit = state.audit.clone();
+        let mut event = AuditEvent::new(AuditAction::UserPolicyChanged, AuditOutcome::Pending);
+        event.actor_subject = Some(actor.subject.clone());
+        event.owner_subject = Some(subject.into());
+        let intent = event.clone();
+        tokio::task::spawn_blocking(move || audit.record(intent))
+            .await
+            .map_err(|_| ManagementError::Unavailable)?
+            .map_err(|_| ManagementError::Unavailable)?;
+
+        let target = subject.to_owned();
+        let account = self
+            .portal
+            .storage(move |store| store.set_policy(&target, banned, rate_limit_bps))
+            .await
+            .map_err(policy_error)?;
+        self.user_policies
+            .set(subject, account.banned, account.rate_limit_bps);
+        if account.banned {
+            self.oauth.revoke_subject(subject);
+            self.portal
+                .revoke_browser_sessions(subject)
+                .map_err(policy_error)?;
+            let target = subject.to_owned();
+            self.portal
+                .client_storage(move |store| store.revoke_subject(&target))
+                .await
+                .map_err(policy_error)?;
+            let active: Vec<_> = self
+                .sessions
+                .read()
+                .await
+                .values()
+                .flat_map(|clients| clients.values())
+                .filter(|session| session.owner_subject.as_deref() == Some(subject))
+                .cloned()
+                .collect();
+            for session in &active {
+                session.alive.store(false, Ordering::Release);
+                session.disconnect.notify_one();
+            }
+            tokio::time::timeout(Duration::from_secs(5), async {
+                for session in &active {
+                    loop {
+                        let notified = session.closed_notify.notified();
+                        tokio::pin!(notified);
+                        notified.as_mut().enable();
+                        if session.closed.load(Ordering::Acquire) || session.sender.is_closed() {
+                            break;
+                        }
+                        notified.await;
+                    }
+                }
+            })
+            .await
+            .map_err(|_| ManagementError::Unavailable)?;
+        }
+        event.outcome = AuditOutcome::Success;
+        let audit = state.audit.clone();
+        tokio::task::spawn_blocking(move || audit.record(event))
+            .await
+            .map_err(|_| ManagementError::Unavailable)?
+            .map_err(|_| ManagementError::Unavailable)?;
+        Ok(())
+    }
+
     /// Portal-originated events contain only a verified actor and an allowed
     /// action; a caller cannot append arbitrary tool arguments or result data.
     pub async fn management_record(
@@ -220,6 +318,17 @@ impl Broker {
             .map_err(|_| ManagementError::Unavailable)?
             .map_err(|_| ManagementError::Unavailable)?;
         Ok(())
+    }
+}
+
+fn policy_error(error: crate::portal::Problem) -> ManagementError {
+    use crate::portal::Problem;
+    match error {
+        Problem::Invalid | Problem::UsernameInvalid => ManagementError::Invalid,
+        Problem::Unauthorized => ManagementError::NotFound,
+        Problem::Forbidden | Problem::Banned => ManagementError::Forbidden,
+        Problem::Disabled => ManagementError::Disabled,
+        _ => ManagementError::Unavailable,
     }
 }
 
