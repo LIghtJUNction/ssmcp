@@ -415,22 +415,21 @@ impl Hub {
         let fingerprint: [u8; 32] = Sha256::digest(canonical).into();
         let mut state = self.locked()?;
         let sender = state.authenticated(owner, id, token)?;
-        if let Some(key) = &args.idempotency_key {
-            if let Some(attempt) = sender
+        if let Some(key) = &args.idempotency_key
+            && let Some(attempt) = sender
                 .dedup
                 .iter()
                 .find(|attempt| attempt.key.as_ref() == Some(key))
-            {
-                if attempt.fingerprint != fingerprint {
-                    return Err(
-                        "idempotency_key was already used for different message content".into(),
-                    );
-                }
-                let mut receipt = attempt.receipt.clone();
-                receipt["duplicate"] = json!(true);
-                sender.renew();
-                return Ok(receipt);
+        {
+            if attempt.fingerprint != fingerprint {
+                return Err(
+                    "idempotency_key was already used for different message content".into(),
+                );
             }
+            let mut receipt = attempt.receipt.clone();
+            receipt["duplicate"] = json!(true);
+            sender.renew();
+            return Ok(receipt);
         }
         let recipients: Vec<String> = if args.to == "*" {
             state
@@ -578,13 +577,10 @@ impl Hub {
                 agent.expires
             };
             let changed = changes.as_mut().expect("waiting receiver");
-            match tokio::time::timeout_at(deadline.min(expires), changed.changed()).await {
-                Ok(Err(_)) => {
-                    return Err(
-                        "agent membership or collaboration session ended; join again".into(),
-                    );
-                }
-                Ok(Ok(())) | Err(_) => {}
+            if let Ok(Err(_)) =
+                tokio::time::timeout_at(deadline.min(expires), changed.changed()).await
+            {
+                return Err("agent membership or collaboration session ended; join again".into());
             }
         }
     }
