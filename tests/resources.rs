@@ -7,6 +7,7 @@ use ssmcp::{
     wire::{self, ClientMetadata, Frame, Mode, Operation},
 };
 use std::{
+    collections::BTreeSet,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -21,6 +22,34 @@ use tokio::{
 };
 
 type NativeReply = Result<Value, String>;
+
+const CLIENT_RESOURCE_KINDS: [&str; 9] = [
+    "info",
+    "tools",
+    "capabilities",
+    "resources",
+    "resource-templates",
+    "context",
+    "skills",
+    "skills/view",
+    "agents",
+];
+
+fn client_resource_uris(id: &str) -> BTreeSet<String> {
+    CLIENT_RESOURCE_KINDS
+        .iter()
+        .map(|kind| format!("ssmcp://clients/{id}/{kind}"))
+        .collect()
+}
+
+fn resource_uris(body: &Value) -> BTreeSet<String> {
+    body["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|resource| resource["uri"].as_str().unwrap().to_owned())
+        .collect()
+}
 
 struct Client {
     access_token: String,
@@ -447,37 +476,46 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
         let (status, body) = server.rpc("resources/list", json!({}), modern, 0).await;
         assert_eq!(status, 200, "{body}");
         let resources = body["result"]["resources"].as_array().unwrap();
-        assert_eq!(resources.len(), 11);
-        for kind in [
-            "info",
-            "tools",
-            "context",
-            "skills",
-            "skills/view",
-            "agents",
-        ] {
-            assert!(
-                resources
-                    .iter()
-                    .any(|resource| resource["uri"] == format!("ssmcp://clients/{id}/{kind}"))
-            );
-        }
-        assert!(resources.iter().any(|r| r["uri"] == "ssmcp://skill"));
-        assert!(
-            resources
-                .iter()
-                .any(|r| r["uri"] == "ssmcp://collaboration")
-        );
+        assert_eq!(resources.len(), 14);
+        let expected = [
+            "ssmcp://guide",
+            "ssmcp://limits",
+            "ssmcp://collaboration",
+            "ssmcp://skill",
+            "ssmcp://clients",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain(client_resource_uris(&id))
+        .collect::<BTreeSet<_>>();
+        assert_eq!(resource_uris(&body), expected);
         let (_, body) = server
             .rpc("resources/templates/list", json!({}), modern, 0)
             .await;
-        assert_eq!(
-            body["result"]["resourceTemplates"]
-                .as_array()
-                .unwrap()
-                .len(),
-            9
-        );
+        let templates = body["result"]["resourceTemplates"].as_array().unwrap();
+        assert_eq!(templates.len(), 13);
+        let actual = templates
+            .iter()
+            .map(|template| template["uriTemplate"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "ssmcp://clients/{client_id}/capabilities",
+            "ssmcp://clients/{client_id}/resources{?cursor}",
+            "ssmcp://clients/{client_id}/resource-templates{?cursor}",
+            "ssmcp://clients/{client_id}/resource{?uri}",
+            "ssmcp://clients{?cursor}",
+            "ssmcp://clients/{client_id}/info",
+            "ssmcp://clients/{client_id}/tools{?cursor}",
+            "ssmcp://clients/{client_id}/context",
+            "ssmcp://clients/{client_id}/skills{?root,scope,cursor}",
+            "ssmcp://clients/{client_id}/skills/view{?root,scope,cursor}",
+            "ssmcp://clients/{client_id}/skills/read{?root,path}",
+            "ssmcp://clients/{client_id}/agents/read{?root,path}",
+            "ssmcp://clients/{client_id}/agents{?root,path}",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected);
 
         let (_, body) = server
             .rpc(
@@ -538,7 +576,17 @@ async fn snapshots_change_with_connections_and_offline_resource_ids_are_denied()
     let (_, after) = server.rpc("resources/list", json!({}), false, 0).await;
     assert_eq!(
         after["result"]["resources"].as_array().unwrap().len(),
-        before["result"]["resources"].as_array().unwrap().len() + 6
+        before["result"]["resources"].as_array().unwrap().len() + 9
+    );
+    let before_uris = resource_uris(&before);
+    let after_uris = resource_uris(&after);
+    assert!(before_uris.is_subset(&after_uris));
+    assert_eq!(
+        after_uris
+            .difference(&before_uris)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        client_resource_uris(&sibling)
     );
     let uri = format!("ssmcp://clients/{sibling}/info");
     let (_, info) = server
@@ -547,14 +595,11 @@ async fn snapshots_change_with_connections_and_offline_resource_ids_are_denied()
     assert_eq!(data(&info)["type"], "pi");
     server.disconnect(1).await;
     for modern in [false, true] {
-        for kind in [
-            "info",
-            "tools",
-            "context",
-            "skills",
-            "skills/view",
-            "agents",
-        ] {
+        for kind in
+            CLIENT_RESOURCE_KINDS
+                .into_iter()
+                .chain(["resource", "skills/read", "agents/read"])
+        {
             let uri = format!("ssmcp://clients/{sibling}/{kind}");
             let (status, body) = server
                 .rpc("resources/read", json!({"uri":uri}), modern, 0)
@@ -562,6 +607,12 @@ async fn snapshots_change_with_connections_and_offline_resource_ids_are_denied()
             assert_eq!(body["error"]["code"], -32002, "{body}");
             assert_eq!(status, if modern { 404 } else { 200 });
         }
+        let (_, remaining) = server.rpc("resources/list", json!({}), modern, 0).await;
+        assert_eq!(
+            remaining["result"]["resources"].as_array().unwrap().len(),
+            14
+        );
+        assert_eq!(resource_uris(&remaining), before_uris);
     }
     let (_, inventory) = server
         .rpc("resources/read", json!({"uri":"ssmcp://clients"}), false, 0)

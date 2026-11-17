@@ -65,6 +65,8 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 要求附加在 `code_mode` 响应的 `structuredContent.user_messages` 和单独的用户要求文本块中，不替换原生输出，也不改变原本的成功或错误状态。`list` 和直接 `collab` 响应不承担这条交付通道。[队列原子接口](#要求队列接口)
 
+为代理包装或压缩工具结果时，应保留 `user_messages` 及对应文本块，并将要求交给代理处理。只转发原生结果里的 `result` 或 `stdout` 会丢掉这条交付通道；界面的已交付状态仍只表示服务器把要求放进了响应。
+
 ## 本地命令
 
 输入框中的 `/` 用于本地命令，日志搜索使用 `/filter 文本`。
