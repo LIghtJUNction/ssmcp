@@ -34,6 +34,15 @@ pub(super) struct Account {
     pub keys: Vec<PublicKey>,
 }
 
+/// Account directory data deliberately excludes public keys and their fingerprints.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AccountSummary {
+    pub subject: String,
+    pub username: String,
+    pub github_login: String,
+    pub key_count: usize,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Database {
@@ -159,6 +168,23 @@ impl Store {
             .get(subject)
             .cloned()
             .ok_or(Problem::Unauthorized)
+    }
+
+    pub fn summaries(&self) -> Result<Vec<AccountSummary>, Problem> {
+        if self.failed {
+            return Err(Problem::Storage);
+        }
+        Ok(self
+            .database
+            .accounts
+            .values()
+            .map(|account| AccountSummary {
+                subject: account.subject.clone(),
+                username: account.username.clone(),
+                github_login: account.github_login.clone(),
+                key_count: account.keys.len(),
+            })
+            .collect())
     }
 
     pub fn login(&mut self, identity: &Identity) -> Result<Account, Problem> {

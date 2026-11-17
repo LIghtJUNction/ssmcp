@@ -1,5 +1,12 @@
 use serde::Deserialize;
-use ssmcp::{broker::Broker, http, identity::GitHubConfig, oauth::OAuthConfig};
+use ssmcp::{
+    broker::Broker,
+    history::{AuditConfig, AuditLog},
+    http,
+    identity::GitHubConfig,
+    management::{ManagementPolicy, ManagementServer},
+    oauth::OAuthConfig,
+};
 use std::{
     collections::HashMap,
     ffi::OsString,
@@ -24,7 +31,7 @@ const CONFIG_FILE: &str = "/etc/ssmcpd/ssmcpd.toml";
 const HELP: &str = r#"ssmcpd - SSH-authenticated terminal MCP gateway
 
 Usage:
-  ssmcpd serve [--config PATH] [--public-url https://HOST] [--listen 127.0.0.1:8080] [--socket PATH]
+  ssmcpd serve [--config PATH] [--public-url https://HOST] [--listen 127.0.0.1:8080] [--socket PATH] [--portal-only]
   ssmcpd attach [--socket PATH]
 
 Configuration:
@@ -32,6 +39,12 @@ Configuration:
   Otherwise /etc/ssmcpd/ssmcpd.toml is read when present.
   Precedence: command line > environment > TOML > built-in defaults.
   Portal: --portal-state-dir PATH overrides [portal] state_dir (private persistent directory).
+  --portal-only runs the account HTTP portal without binding an SSH attachment socket.
+  --gateway-socket PATH overrides [portal] gateway_socket (private gateway management socket).
+  Management: [portal] admin_github_ids, admin_github_users, owner_mappings.
+  Admin IDs are immutable GitHub numeric ID strings; username entries resolve once at startup.
+  Audit: [portal] audit_dir, audit_retention_days (default 7), audit_max_events (default 20000).
+  The gateway requires audit_dir when gateway_socket is configured. Portal-only is a socket client.
   Server settings: [server] listen, public_url, socket.
   Environment: SSMCP_LISTEN, SSMCP_PUBLIC_URL, SSMCP_SOCKET.
   GitHub: [auth.github] client_id, client_secret (private file mode 0600).
@@ -61,7 +74,8 @@ struct Config {
     oauth: OAuthConfig,
     github: Option<GitHubConfig>,
     client_registry: Option<PathBuf>,
-    portal_dir: Option<PathBuf>,
+    portal: PortalConfig,
+    portal_only: bool,
 }
 
 // Plain TOML configuration. Never derive Debug or include source text in errors:
@@ -75,10 +89,33 @@ struct FileConfig {
     portal: PortalConfig,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct PortalConfig {
     state_dir: Option<PathBuf>,
+    gateway_socket: Option<PathBuf>,
+    admin_github_ids: Vec<String>,
+    admin_github_users: Vec<String>,
+    owner_mappings: HashMap<String, String>,
+    audit_dir: Option<PathBuf>,
+    audit_retention_days: u32,
+    audit_max_events: usize,
+}
+
+impl Default for PortalConfig {
+    fn default() -> Self {
+        let audit = AuditConfig::default();
+        Self {
+            state_dir: None,
+            gateway_socket: None,
+            admin_github_ids: Vec::new(),
+            admin_github_users: Vec::new(),
+            owner_mappings: HashMap::new(),
+            audit_dir: None,
+            audit_retention_days: audit.retention_days,
+            audit_max_events: audit.max_events,
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -129,6 +166,11 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
     if !metadata.is_file() || metadata.len() > 64 * 1024 {
         return Err("configuration must be a regular file of at most 64 KiB".into());
     }
+    // Authorization policy is security-sensitive even when the file contains no provider secret.
+    // SAFETY: geteuid has no preconditions.
+    if metadata.mode() & 0o022 != 0 || ![0, unsafe { libc::geteuid() }].contains(&metadata.uid()) {
+        return Err("configuration must be root/service-owned and not group/world writable".into());
+    }
     let mut source = String::new();
     Read::by_ref(&mut file)
         .take(64 * 1024 + 1)
@@ -176,7 +218,7 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
         }
     }
     config.client_registry = file.oauth.client_registry;
-    config.portal_dir = file.portal.state_dir;
+    config.portal = file.portal;
     config.github = file.auth.github;
     Ok(())
 }
@@ -210,16 +252,7 @@ fn run() -> ssmcp::Result<()> {
         print!("{HELP}");
         return Ok(());
     }
-    let (pairs, remainder) = remaining.as_chunks::<2>();
-    if !remainder.is_empty() {
-        return Err(format!("missing value for {}", remaining.last().unwrap()).into());
-    }
-    let mut options = HashMap::new();
-    for pair in pairs {
-        if options.insert(pair[0].as_str(), pair[1].as_str()).is_some() {
-            return Err(format!("duplicate option {}", pair[0]).into());
-        }
-    }
+    let (options, portal_only) = parse_options(&remaining, &mode)?;
     let mut config = Config {
         listen: "127.0.0.1:8080".parse()?,
         public_url: String::new(),
@@ -227,7 +260,8 @@ fn run() -> ssmcp::Result<()> {
         oauth: OAuthConfig::default(),
         github: None,
         client_registry: None,
-        portal_dir: None,
+        portal: PortalConfig::default(),
+        portal_only,
     };
     if mode == "serve" {
         let path = options
@@ -276,7 +310,10 @@ fn run() -> ssmcp::Result<()> {
             "--socket" => config.socket = value.into(),
             "--listen" if mode == "serve" => config.listen = value.parse()?,
             "--public-url" if mode == "serve" => config.public_url = normalize_origin(value)?,
-            "--portal-state-dir" if mode == "serve" => config.portal_dir = Some(value.into()),
+            "--portal-state-dir" if mode == "serve" => config.portal.state_dir = Some(value.into()),
+            "--gateway-socket" if mode == "serve" => {
+                config.portal.gateway_socket = Some(value.into())
+            }
             "--access-token-ttl" if mode == "serve" => {
                 lifetime_options.insert("SSMCP_ACCESS_TOKEN_TTL", seconds(value, arg)?);
             }
@@ -304,6 +341,7 @@ fn run() -> ssmcp::Result<()> {
         std::env::var_os(name)
     })?;
     config.oauth.validate()?;
+    validate_portal_config(&config)?;
     if !config.listen.ip().is_loopback() {
         return Err(
             "--listen must be a loopback address; expose HTTPS through a reverse proxy".into(),
@@ -317,6 +355,97 @@ fn run() -> ssmcp::Result<()> {
         .enable_all()
         .build()?
         .block_on(serve(config))
+}
+
+fn parse_options<'a>(
+    args: &'a [String],
+    mode: &str,
+) -> ssmcp::Result<(HashMap<&'a str, &'a str>, bool)> {
+    let mut options = HashMap::new();
+    let mut portal_only = false;
+    let mut index = 0;
+    while index < args.len() {
+        let option = args[index].as_str();
+        if option == "--portal-only" {
+            if mode != "serve" {
+                return Err("--portal-only is available only with serve".into());
+            }
+            if portal_only {
+                return Err("duplicate option --portal-only".into());
+            }
+            portal_only = true;
+            index += 1;
+            continue;
+        }
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("missing value for {option}"))?;
+        if options.insert(option, value.as_str()).is_some() {
+            return Err(format!("duplicate option {option}").into());
+        }
+        index += 2;
+    }
+    Ok((options, portal_only))
+}
+
+fn absolute_path(path: &Path, label: &str) -> ssmcp::Result<()> {
+    if !path.is_absolute()
+        || path.file_name().is_none()
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(format!("{label} must be an absolute path without '..'").into());
+    }
+    Ok(())
+}
+
+fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
+    let portal = &config.portal;
+    AuditConfig {
+        retention_days: portal.audit_retention_days,
+        max_events: portal.audit_max_events,
+    }
+    .validate()?;
+    ManagementPolicy::new(
+        portal.admin_github_ids.clone(),
+        portal.owner_mappings.clone(),
+    )?;
+    for login in &portal.admin_github_users {
+        ssmcp::wire::canonical_github_principal(&format!("{login}@github"))
+            .map_err(|_| "portal.admin_github_users contains an invalid GitHub username")?;
+    }
+    if config.portal_only && portal.state_dir.is_none() {
+        return Err("--portal-only requires portal.state_dir or --portal-state-dir".into());
+    }
+    match &portal.gateway_socket {
+        Some(path) => {
+            absolute_path(path, "portal.gateway_socket")?;
+            if path == &config.socket {
+                return Err(
+                    "portal.gateway_socket must differ from the SSH attachment socket".into(),
+                );
+            }
+            if !config.portal_only && portal.audit_dir.is_none() {
+                return Err(
+                    "gateway management requires portal.audit_dir for durable audit history".into(),
+                );
+            }
+        }
+        None => {
+            if !portal.admin_github_ids.is_empty()
+                || !portal.admin_github_users.is_empty()
+                || !portal.owner_mappings.is_empty()
+                || portal.audit_dir.is_some()
+            {
+                return Err("portal administrator, ownership and audit configuration requires gateway_socket".into());
+            }
+        }
+    }
+    if let Some(path) = &portal.audit_dir {
+        absolute_path(path, "portal.audit_dir")?;
+    }
+    Ok(())
 }
 
 fn seconds(value: &str, name: &str) -> ssmcp::Result<Duration> {
@@ -492,8 +621,6 @@ async fn bind_socket(path: &Path) -> ssmcp::Result<(UnixListener, SocketFile)> {
 
 async fn serve(config: Config) -> ssmcp::Result<()> {
     use std::future::IntoFuture;
-    let tcp = TcpListener::bind(config.listen).await?;
-    let (unix, _socket_file) = bind_socket(&config.socket).await?;
     let mut broker = Broker::with_identity_config(config.public_url, config.oauth, config.github)?;
     if let Some(path) = config.client_registry {
         broker.oauth.enable_client_registry(&path)?;
@@ -509,13 +636,68 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
             &[("event", "client_registry_memory_only".into())],
         );
     }
-    if let Some(path) = config.portal_dir {
+    if let Some(path) = &config.portal.state_dir {
         if !broker.identities.enabled("github") {
             return Err("portal.state_dir requires the existing auth.github configuration".into());
         }
-        broker.portal = ssmcp::portal::Portal::open(&path)?;
+        broker.portal = ssmcp::portal::Portal::open(path)?;
+        if let Some(socket) = &config.portal.gateway_socket {
+            broker.portal.configure_management(socket.clone());
+        }
     }
+
+    // A portal-only process never opens audit storage or binds either gateway socket.
+    let mut audit = None;
+    let management_server = if !config.portal_only
+        && let Some(socket) = &config.portal.gateway_socket
+    {
+        let mut admins = config.portal.admin_github_ids;
+        if !config.portal.admin_github_users.is_empty() {
+            let principals = config
+                .portal
+                .admin_github_users
+                .iter()
+                .map(|login| format!("{login}@github"))
+                .collect::<Vec<_>>();
+            let resolved = broker.identities.resolve_allow(&principals).await.map_err(
+                |_| "could not resolve portal administrator GitHub usernames; refusing to start",
+            )?;
+            admins.extend(resolved.into_iter().map(|identity| identity.subject));
+        }
+        let policy = ManagementPolicy::new(admins, config.portal.owner_mappings)?;
+        let log = Arc::new(AuditLog::open(
+            config
+                .portal
+                .audit_dir
+                .as_deref()
+                .ok_or("gateway management requires portal.audit_dir")?,
+            AuditConfig {
+                retention_days: config.portal.audit_retention_days,
+                max_events: config.portal.audit_max_events,
+            },
+        )?);
+        broker.configure_management(policy, log.clone());
+        audit = Some(log);
+        Some(ManagementServer::bind(socket).await?)
+    } else {
+        None
+    };
+    let (unix, _socket_file) = if config.portal_only {
+        (None, None)
+    } else {
+        let (listener, guard) = bind_socket(&config.socket).await?;
+        (Some(listener), Some(guard))
+    };
+    let tcp = TcpListener::bind(config.listen).await?;
     let broker = Arc::new(broker);
+    let management_broker = broker.clone();
+    let management_loop = async move {
+        match management_server {
+            Some(server) => server.run(management_broker).await,
+            None => std::future::pending::<io::Result<()>>().await,
+        }
+    };
+    tokio::pin!(management_loop);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let server = axum::serve(tcp, http::router(broker.clone()))
         .with_graceful_shutdown(async {
@@ -528,20 +710,36 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     tokio::pin!(interrupt);
     let connections = Arc::new(Semaphore::new(128));
     let mut tasks = JoinSet::new();
+    let mut prune = tokio::time::interval(Duration::from_secs(60));
+    prune.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ssmcp::observability::log(
         "info",
         "session",
         &[
             ("event", "listening".into()),
             ("listen", config.listen.to_string()),
-            ("socket", config.socket.display().to_string()),
+            (
+                "mode",
+                if config.portal_only {
+                    "portal_only"
+                } else {
+                    "gateway"
+                }
+                .into(),
+            ),
         ],
     );
     let mut server_finished = false;
     let result = loop {
         tokio::select! {
             result = &mut server => { server_finished = true; break result.map_err(Into::into); }
-            result = unix.accept() => {
+            result = &mut management_loop => { break result.map_err(Into::into); }
+            result = async {
+                match &unix {
+                    Some(listener) => listener.accept().await,
+                    None => std::future::pending().await,
+                }
+            } => {
                 let (stream,_) = match result { Ok(pair) => pair, Err(e) => break Err(e.into()) };
                 let Ok(permit) = connections.clone().try_acquire_owned() else { drop(stream); continue; };
                 let broker = broker.clone();
@@ -549,6 +747,12 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
                     let _permit = permit;
                     if broker.attach(stream).await.is_err() { ssmcp::observability::log("warn","session",&[("event","attach_failed".into())]); }
                 });
+            }
+            _ = prune.tick(), if audit.is_some() => {
+                let log = audit.as_ref().expect("guarded audit timer").clone();
+                if !matches!(tokio::task::spawn_blocking(move || log.prune()).await, Ok(Ok(_))) {
+                    ssmcp::observability::log("error", "persistence", &[("event", "audit_prune_failed".into())]);
+                }
             }
             Some(result) = tasks.join_next(), if !tasks.is_empty() => {
                 if result.is_err() { ssmcp::observability::log("error","session",&[("event","connection_task_failed".into())]); }
@@ -562,7 +766,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     while tasks.join_next().await.is_some() {}
     let _ = stop_tx.send(());
     if !server_finished {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), &mut server).await;
+        let _ = tokio::time::timeout(Duration::from_secs(3), &mut server).await;
     }
     result
 }
@@ -570,6 +774,109 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn portal_config_fixture() -> Config {
+        Config {
+            listen: "127.0.0.1:8080".parse().unwrap(),
+            public_url: "https://ssmcp.test".into(),
+            socket: "/tmp/control.sock".into(),
+            oauth: OAuthConfig::default(),
+            github: None,
+            client_registry: None,
+            portal: PortalConfig::default(),
+            portal_only: false,
+        }
+    }
+
+    #[test]
+    fn portal_only_flag_does_not_consume_an_option_value() {
+        let args = [
+            "--portal-only",
+            "--listen",
+            "127.0.0.1:8081",
+            "--socket",
+            "/tmp/control",
+        ]
+        .map(String::from);
+        let (options, portal_only) = parse_options(&args, "serve").unwrap();
+        assert!(portal_only);
+        assert_eq!(options["--listen"], "127.0.0.1:8081");
+        assert_eq!(options["--socket"], "/tmp/control");
+        assert!(parse_options(&["--portal-only".into(), "--portal-only".into()], "serve").is_err());
+        assert!(parse_options(&["--portal-only".into()], "attach").is_err());
+        assert!(parse_options(&["--listen".into()], "serve").is_err());
+    }
+
+    #[test]
+    fn management_configuration_fails_closed_and_has_bounded_defaults() {
+        let mut config = portal_config_fixture();
+        assert_eq!(config.portal.audit_retention_days, 7);
+        assert_eq!(config.portal.audit_max_events, 20000);
+        validate_portal_config(&config).unwrap();
+        config.portal.admin_github_ids.push("123".into());
+        assert!(validate_portal_config(&config).is_err());
+        config.portal.gateway_socket = Some("/tmp/management.sock".into());
+        assert!(
+            validate_portal_config(&config).is_err(),
+            "durable audit directory is required"
+        );
+        config.portal.audit_dir = Some("/tmp/audit".into());
+        validate_portal_config(&config).unwrap();
+        config.portal.admin_github_ids = vec!["01".into()];
+        assert!(validate_portal_config(&config).is_err());
+        config.portal.admin_github_ids = vec!["123".into()];
+        config
+            .portal
+            .owner_mappings
+            .insert("gh-123".into(), "456".into());
+        assert!(
+            validate_portal_config(&config).is_err(),
+            "immutable ownership cannot be overridden"
+        );
+        config.portal.owner_mappings.clear();
+        config.portal.audit_retention_days = 0;
+        assert!(validate_portal_config(&config).is_err());
+        config.portal.audit_retention_days = 7;
+        config.portal.audit_max_events = 100001;
+        assert!(validate_portal_config(&config).is_err());
+        config.portal.audit_max_events = 20000;
+        config.portal.gateway_socket = Some("/tmp/../management.sock".into());
+        assert!(validate_portal_config(&config).is_err());
+        config.portal.gateway_socket = Some(config.socket.clone());
+        assert!(validate_portal_config(&config).is_err());
+    }
+
+    #[test]
+    fn authorization_config_cannot_be_group_or_world_writable_without_provider_secrets() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("ssmcp-policy-{}-{nonce}.toml", std::process::id()));
+        std::fs::write(&path, "[portal]\nadmin_github_ids = ['123']\n").unwrap();
+        let mut config = portal_config_fixture();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        load_file_config(&path, &mut config).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(
+            load_file_config(&path, &mut config)
+                .unwrap_err()
+                .to_string()
+                .contains("not group/world writable")
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn portal_only_requires_account_storage_and_never_needs_its_own_audit_store() {
+        let mut config = portal_config_fixture();
+        config.portal_only = true;
+        assert!(validate_portal_config(&config).is_err());
+        config.portal.state_dir = Some("/tmp/accounts".into());
+        config.portal.gateway_socket = Some("/tmp/management.sock".into());
+        validate_portal_config(&config).unwrap();
+    }
 
     #[test]
     fn toml_schema_rejects_typos_and_redacts_secret_source_in_errors() {
@@ -615,7 +922,8 @@ client_secret = "example-test-secret"
             oauth: OAuthConfig::default(),
             github: None,
             client_registry: None,
-            portal_dir: None,
+            portal: PortalConfig::default(),
+            portal_only: false,
         };
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(

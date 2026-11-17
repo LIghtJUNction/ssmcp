@@ -322,25 +322,37 @@ impl Access {
     }
 
     async fn call(&self, id: &str, name: &str, arguments: Value) -> Result<Value, String> {
-        let session = self.session(id).await?;
+        let (broker, authorization) = self.authorized().await?;
+        let session = broker.client(&self.user, &authorization, id).await?;
         let value = session
-            .call(Operation::CallTool {
-                name: name.into(),
-                arguments,
-            })
+            .call_with_authorization(
+                Operation::CallTool {
+                    name: name.into(),
+                    arguments,
+                },
+                None,
+                &authorization,
+            )
             .await?;
         self.session(id).await?;
         unpack(value)
     }
 
     async fn accept(&self, listener: &Remote, task: &Task) -> Result<Option<Remote>, String> {
-        let session = self.session(&listener.client_id).await?;
+        let (broker, authorization) = self.authorized().await?;
+        let session = broker
+            .client(&self.user, &authorization, &listener.client_id)
+            .await?;
         let value = unpack(
             session
-                .call(Operation::CallTool {
-                    name: "ssmcp.net.accept".into(),
-                    arguments: json!({"id":listener.id,"wait_ms":500}),
-                })
+                .call_with_authorization(
+                    Operation::CallTool {
+                        name: "ssmcp.net.accept".into(),
+                        arguments: json!({"id":listener.id,"wait_ms":500}),
+                    },
+                    None,
+                    &authorization,
+                )
                 .await?,
         )?;
         let remote = match value.get("stream").filter(|v| v.is_object()) {
@@ -379,14 +391,19 @@ impl Access {
         args: Value,
         task: &Task,
     ) -> Result<Remote, String> {
-        let session = self.session(client_id).await?;
+        let (broker, authorization) = self.authorized().await?;
+        let session = broker.client(&self.user, &authorization, client_id).await?;
         // Retain the authenticated session solely for cleanup even after authorization expires.
         let value = unpack(
             session
-                .call(Operation::CallTool {
-                    name: name.into(),
-                    arguments: args,
-                })
+                .call_with_authorization(
+                    Operation::CallTool {
+                        name: name.into(),
+                        arguments: args,
+                    },
+                    None,
+                    &authorization,
+                )
                 .await?,
         )?;
         let id = value["id"]
@@ -448,7 +465,7 @@ impl Remote {
             }
             let result = tokio::time::timeout_at(
                 deadline,
-                self.session.call(Operation::CallTool {
+                self.session.call_cleanup(Operation::CallTool {
                     name: format!("{}.close", self.namespace),
                     arguments: json!({"id":self.id}),
                 }),

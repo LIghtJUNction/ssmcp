@@ -775,7 +775,7 @@ async fn execute(
             let result = crate::observability::REQUEST_ID
                 .scope(
                     request_id,
-                    session.call_with_controller(operation, controller),
+                    session.call_with_authorization(operation, controller, &authorization),
                 )
                 .await?;
             // The authorized lifecycle action deliberately invalidates its old

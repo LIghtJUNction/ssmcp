@@ -217,7 +217,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         github_login: "<script>".into(),
         keys: vec![],
     };
-    let html = view::home(Some(&a), Some("csrf"), true);
+    let html = view::home(Some(&a), Some("csrf"), true, false);
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
     for step in [
@@ -430,4 +430,358 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
     );
     server.abort();
     mock_task.abort();
+}
+
+#[tokio::test]
+async fn audit_unavailable_prevents_key_logout_and_login_mutations() {
+    let temporary = Temp::new();
+    let mut broker = Broker::new("https://ssmcp.test".into());
+    broker.portal = Portal::open(&temporary.0.join("accounts")).unwrap();
+    broker
+        .portal
+        .configure_management(temporary.0.join("missing.sock"));
+    broker
+        .portal
+        .storage(|store| store.login(&identity("123", "alice")))
+        .await
+        .unwrap();
+    let raw = random().unwrap();
+    let csrf = random().unwrap();
+    let session = digest(&raw);
+    broker.portal.browser.lock().unwrap().sessions.insert(
+        session,
+        Session {
+            subject: Some("123".into()),
+            csrf: csrf.clone(),
+            expires: Instant::now() + SESSION_TTL,
+        },
+    );
+    let broker = Arc::new(broker);
+    let request = |path: &str, fields: Vec<(&str, String)>| {
+        axum::http::Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::COOKIE, format!("{COOKIE}={raw}"))
+            .header(header::ORIGIN, "https://ssmcp.test")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(
+                serde_urlencoded::to_string(fields).unwrap(),
+            ))
+            .unwrap()
+    };
+    let added = add_key(
+        State(broker.clone()),
+        request(
+            "/account/keys",
+            vec![
+                ("csrf", csrf.clone()),
+                ("label", "fixture".into()),
+                ("public_key", key()),
+            ],
+        ),
+    )
+    .await;
+    assert_eq!(added.err(), Some(Problem::AuditUnavailable));
+    assert!(
+        broker
+            .portal
+            .storage(|store| Ok(store.account("123")?.keys.is_empty()))
+            .await
+            .unwrap()
+    );
+
+    let public_key = parse_key(&key(), "existing").unwrap();
+    let fingerprint = public_key.fingerprint.clone();
+    broker
+        .portal
+        .storage(move |store| store.add("123", public_key))
+        .await
+        .unwrap();
+    let removed = delete_key(
+        State(broker.clone()),
+        request(
+            "/account/keys/delete",
+            vec![("csrf", csrf.clone()), ("fingerprint", fingerprint)],
+        ),
+    )
+    .await;
+    assert_eq!(removed.err(), Some(Problem::AuditUnavailable));
+    assert_eq!(
+        broker
+            .portal
+            .storage(|store| Ok(store.account("123")?.keys.len()))
+            .await
+            .unwrap(),
+        1
+    );
+
+    let logged_out = logout(
+        State(broker.clone()),
+        request("/account/logout", vec![("csrf", csrf.clone())]),
+    )
+    .await;
+    assert_eq!(logged_out.err(), Some(Problem::AuditUnavailable));
+    assert!(
+        broker
+            .portal
+            .browser
+            .lock()
+            .unwrap()
+            .sessions
+            .contains_key(&session)
+    );
+
+    let anonymous = digest("login-audit-fixture");
+    broker.portal.browser.lock().unwrap().sessions.insert(
+        anonymous,
+        Session {
+            subject: None,
+            csrf,
+            expires: Instant::now() + LOGIN_TTL,
+        },
+    );
+    assert_eq!(
+        finish_identity(&broker.portal, anonymous, identity("789", "new-user"))
+            .await
+            .err(),
+        Some(Problem::AuditUnavailable)
+    );
+    assert!(
+        broker
+            .portal
+            .browser
+            .lock()
+            .unwrap()
+            .sessions
+            .contains_key(&anonymous)
+    );
+    assert_eq!(
+        broker
+            .portal
+            .storage(|store| store.account("789"))
+            .await
+            .err(),
+        Some(Problem::Unauthorized)
+    );
+}
+
+#[tokio::test]
+async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits() {
+    use crate::{
+        history::{AuditConfig, AuditLog},
+        management::{ManagementPolicy, ManagementServer},
+    };
+    use tokio::net::TcpListener;
+    let temporary = Temp::new();
+    let log = Arc::new(AuditLog::open(&temporary.0.join("audit"), AuditConfig::default()).unwrap());
+    let mut gateway = Broker::new("https://ssmcp.test".into());
+    gateway.configure_management(
+        ManagementPolicy::new(vec!["456".into()], HashMap::new()).unwrap(),
+        log.clone(),
+    );
+    let management = ManagementServer::bind(&temporary.0.join("management.sock"))
+        .await
+        .unwrap();
+    let management_task = tokio::spawn(management.run(Arc::new(gateway)));
+
+    let mut portal_broker = Broker::new("https://ssmcp.test".into());
+    portal_broker.portal = Portal::open(&temporary.0.join("accounts")).unwrap();
+    portal_broker
+        .portal
+        .configure_management(temporary.0.join("management.sock"));
+    portal_broker
+        .portal
+        .storage(|store| {
+            store.login(&identity("123", "alice"))?;
+            store.login(&identity("456", "bob"))?;
+            store.login(&identity("789", "reader"))?;
+            store.add("456", parse_key(&key(), "admin private metadata")?)
+        })
+        .await
+        .unwrap();
+    let csrf = random().unwrap();
+    let mut cookies = Vec::new();
+    for subject in ["123", "456", "789"] {
+        let raw = random().unwrap();
+        portal_broker
+            .portal
+            .browser
+            .lock()
+            .unwrap()
+            .sessions
+            .insert(
+                digest(&raw),
+                Session {
+                    subject: Some(subject.into()),
+                    csrf: csrf.clone(),
+                    expires: Instant::now() + SESSION_TTL,
+                },
+            );
+        cookies.push(format!("{COOKIE}={raw}"));
+    }
+    let broker = Arc::new(portal_broker);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let router = routes().with_state(broker.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    assert_eq!(
+        client
+            .get(format!("{base}/account/admin?subject=456&admin=true"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    let own = client
+        .get(format!("{base}/account/sessions?subject=456&admin=true"))
+        .header("cookie", &cookies[0])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(own.status(), 200);
+    assert!(
+        !own.text()
+            .await
+            .unwrap()
+            .contains("href=\"/account/admin\"")
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/account/admin?subject=456&admin=true"))
+            .header("cookie", &cookies[0])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/account/admin/history"))
+            .header("cookie", &cookies[0])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let administrator = client
+        .get(format!("{base}/account/admin"))
+        .header("cookie", &cookies[1])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(administrator.status(), 200);
+    let body = administrator.text().await.unwrap();
+    assert!(body.contains("alice") && body.contains("bob"));
+    assert!(!body.contains(&key()));
+    assert!(!body.contains("admin private metadata"));
+
+    let denied = client
+        .post(format!("{base}/account/sessions/disconnect"))
+        .header("cookie", &cookies[0])
+        .header("origin", "https://evil.test")
+        .form(&[
+            ("csrf", csrf.as_str()),
+            ("session_id", "unknown"),
+            ("return_to", "/account/admin"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+    assert_eq!(
+        client
+            .get(format!("{base}/account/history?subject=456"))
+            .header("cookie", &cookies[0])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    let own_events = log.query(Some("123"), 200, None).unwrap().events;
+    assert!(
+        own_events
+            .iter()
+            .any(|event| event.action == AuditAction::AccessDenied)
+    );
+    assert!(
+        own_events
+            .iter()
+            .all(|event| event.actor_subject.as_deref() == Some("123")
+                || event.owner_subject.as_deref() == Some("123"))
+    );
+
+    // The first unauthenticated request above consumed one of thirty slots.
+    for _ in 1..30 {
+        assert_eq!(
+            client
+                .get(format!("{base}/account/sessions"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+    }
+    let count = log.query(None, 200, None).unwrap().events.len();
+    assert_eq!(
+        client
+            .get(format!("{base}/account/sessions"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        429
+    );
+    assert_eq!(log.query(None, 200, None).unwrap().events.len(), count);
+    let anonymous = log
+        .query(None, 200, None)
+        .unwrap()
+        .events
+        .into_iter()
+        .filter(|event| event.actor_subject.is_none() && event.action == AuditAction::AccessDenied)
+        .count();
+    assert_eq!(anonymous, 30);
+
+    for _ in 0..120 {
+        assert_eq!(
+            client
+                .get(format!("{base}/account/sessions"))
+                .header("cookie", &cookies[2])
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    let count = log.query(None, 200, None).unwrap().events.len();
+    assert_eq!(
+        client
+            .get(format!("{base}/account/sessions"))
+            .header("cookie", &cookies[2])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        429
+    );
+    assert_eq!(log.query(None, 200, None).unwrap().events.len(), count);
+    let persisted = serde_json::to_string(&log.query(None, 200, None).unwrap()).unwrap();
+    assert!(!persisted.contains(&csrf));
+    assert!(!persisted.contains(&key()));
+    server.abort();
+    let _ = server.await;
+    management_task.abort();
+    let _ = management_task.await;
 }

@@ -46,7 +46,7 @@ name换成账号名
 
 ![本机工具通过 SSH 连接服务器，MCP 客户端经 HTTPS 和 OAuth 发现并调用工具；结果沿原连接返回。](docs/assets/connection-flow.svg)
 
-[**首页与逐步骤教程**](https://ssmcp.lmm.best) · [客户端配置](docs/configuration.md) · [服务器部署](docs/deployment.md) · [后端与工具接口](docs/backends.md) · [验收记录](docs/validation.md) · [真实操作视频](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk)
+[**首页与逐步骤教程**](https://ssmcp.lmm.best) · [账号门户与安全审计](docs/portal-console.md) · [客户端配置](docs/configuration.md) · [服务器部署](docs/deployment.md) · [后端与工具接口](docs/backends.md) · [验收记录](docs/validation.md) · [真实操作视频](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk)
 
 
 # 应用场景
@@ -72,6 +72,8 @@ name换成账号名
 在 [ChatGPT Plugins](https://chatgpt.com/plugins) 点击 **Add**，**Name** 填 `ssmcp`，**Connection** 填 `https://ssmcp.lmm.best/mcp`，勾选同意后点击 **Create**。再按提示使用 GitHub 登录，核对身份和当前 MCP 客户端，明确允许连接。首页登录不会自动授予插件访问权限。
 
 自助公钥目前只接受单行 Ed25519 公钥，最多 20 把；只上传 `.pub`，私钥留在本机。服务器需先启用[门户与 SSH 同步](docs/deployment.md#account-portal)，变更通常在 15 秒内应用；删除公钥仅阻止后续 SSH 认证，已有连接须在本机退出。未启用门户时，首页会说明状态，原有 SSH 账户仍可使用。
+
+启用[会话管理与审计](docs/portal-console.md)后，用户可管理自己的在线会话并查看账号活动和连接历史。管理员由服务器中的 GitHub 数字 ID 名单指定，可查看统计、连接拓扑、注册用户与全部审计。默认保留 7 天、最多 20,000 条，自动清理；日志不记录命令正文、工具参数、结果或凭据。会话归属按 SSH 账户校验，`--allow` 工具访问权不授予关闭会话的权限。
 
 ## 首次连接向导
 
