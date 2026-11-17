@@ -678,8 +678,8 @@ class Harness:
         status, result, _ = self.rpc("notifications/initialized", notification=True)
         self.check(status == 202 and result is None, "initialized notification returns empty 202")
         status, result, headers = self.rpc("tools/list")
-        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode"],
-                   "legacy tools/list exposes exactly list and code_mode")
+        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab"],
+                   "legacy tools/list exposes list, code_mode and collab")
         inventory = self.public_call("list")
         self.check(len(inventory["clients"]) == 1
                    and inventory["clients"][0]["id"] == self.client_id
@@ -718,8 +718,8 @@ class Harness:
         self.check(status == 200 and result["result"]["resultType"] == "complete"
                    and MODERN in result["result"]["supportedVersions"], "modern server/discover completes")
         status, result, _ = self.rpc("tools/list", modern=True)
-        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode"],
-                   "modern tools/list exposes the same two tools")
+        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab"],
+                   "modern tools/list exposes the same public tools")
         self.check(self.rpc("tools/list", modern=True, headers={"Mcp-Method": "ping"})[0] == 400,
                    "modern method header must match body")
         self.check(self.rpc("tools/list", modern=True, headers={"MCP-Protocol-Version": LEGACY})[0] == 400,

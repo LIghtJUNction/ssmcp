@@ -385,7 +385,7 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["list", "code_mode"]);
+        assert_eq!(names, ["list", "code_mode", "collab"]);
         let method = if modern {
             "server/discover"
         } else {
@@ -414,7 +414,7 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
         let (status, body) = server.rpc("resources/list", json!({}), modern, 0).await;
         assert_eq!(status, 200, "{body}");
         let resources = body["result"]["resources"].as_array().unwrap();
-        assert_eq!(resources.len(), 9);
+        assert_eq!(resources.len(), 10);
         for kind in ["info", "tools", "context", "skills", "agents"] {
             assert!(
                 resources
@@ -460,7 +460,7 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
         let page = data(&body);
         assert_eq!(page["tools"][0]["name"], "fixture.second");
         assert!(page.get("nextUri").is_none());
-        for uri in ["ssmcp://guide", "ssmcp://skill"] {
+        for uri in ["ssmcp://guide", "ssmcp://skill", "ssmcp://collaboration"] {
             let (status, body) = server
                 .rpc("resources/read", json!({"uri":uri}), modern, 0)
                 .await;
@@ -476,7 +476,10 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
         let (_, body) = server
             .rpc("resources/read", json!({"uri":"ssmcp://limits"}), modern, 0)
             .await;
-        assert_eq!(data(&body)["public_tools"], json!(["list", "code_mode"]));
+        assert_eq!(
+            data(&body)["public_tools"],
+            json!(["list", "code_mode", "collab"])
+        );
         assert_eq!(server.clients[0].calls.load(Ordering::Acquire), 0);
     }
 }

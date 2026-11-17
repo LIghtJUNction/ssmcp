@@ -3,7 +3,8 @@
 登录 GitHub 后，客户端通过 HTTPS / WSS 接入服务器，自动归属自己的账号。下面的例子使用已经部署客户端账号 API 的服务器；默认服务器或自建实例都须同步更新实际运行的 ssmcpd。
 
 ~~~sh
-ssmcp login --server https://ssmcp.example.com
+ssmcp config set server https://ssmcp.example.com
+ssmcp login
 ssmcp whoami
 ssmcp --name device-a
 
@@ -13,7 +14,7 @@ ssmcp -i
 ssmcp invite
 ~~~
 
-`login` 保存按服务器隔离的客户端凭据；`whoami` 核对当前身份。`ssmcp` 开放当前目录的 Shell 和本机工具，`list` 显示账号可控的在线会话，`-i` 进入选中的远端终端。`invite` 默认生成仅需连接该服务器的下载与接入命令，B 不必登录 GitHub 或配置 SSH。
+`login` 保存按服务器隔离的客户端凭据；`whoami` 核对当前身份。`ssmcp` 开放当前目录的 Shell 和本机工具，`list` 显示账号可控的在线会话，`-i` 进入选中的远端终端。`invite` 使用当前选中的服务器生成接入命令，B 不必登录 GitHub 或配置 SSH。未固定公钥时会下载临时客户端；已固定公钥时要求 B 预先安装新版客户端，并在接入前登记 A 传来的可信指纹。[默认服务器与公钥信任](client-server.md)
 
 看门狗默认开启，连接中断后每 5 秒重试；`--no-watchdog` 可关闭，`--reconnect-delay SECONDS` 可修改间隔。邀请默认 10 分钟内兑换一次，B 兑换后的会话默认有效 1 小时。B 按 Ctrl-C 结束会话；A 在控制界面按 Ctrl-] 仅离开控制界面。登录存储、可配置期限、撤销和 `client_download_dir` 见[客户端账号与临时接入](client-accounts.md)。
 
@@ -21,12 +22,14 @@ ssmcp invite
 
 | 你要做什么 | 从这里开始 |
 | --- | --- |
+| 设置默认中转服务器、编辑客户端配置 | [默认服务器](client-server.md#设置默认服务器) |
+| 固定 HTTPS 服务器公钥、核验或轮换指纹 | [服务器公钥信任](client-server.md#信任公钥写到哪里) |
 | GitHub 登录、会话列表、临时控制 B | [客户端账号](client-accounts.md) |
 | 安装客户端、选择 Windows／macOS／Linux 下载 | [平台与安装](releases.md) |
 | 执行命令、并行任务或继续等待已有工作 | [独立命令指南](commands.md) |
 | 从旧版 `-t`／`--backend` 命令迁移 | [参数迁移](backends.md#从旧的后端选择参数迁移) |
 | 复用现有 SSH 配置、用别名连接 | [SSH 配置](#ssh-config) |
-| 首次安装或更换公钥 | [公钥管理](#public-keys) |
+| 首次安装或更换 SSH 登录公钥 | [SSH 公钥管理](#public-keys) |
 | 在 ChatGPT 或其他 MCP 客户端完成登录 | [OAuth 登录](#oauth-login) |
 | 用 GitHub 身份控制指定客户端 | [`--allow` 与访问规则](#github-allow) |
 | 了解令牌怎样自动续期 | [静默续期](#silent-refresh) |
@@ -307,7 +310,7 @@ ssmcp --name ssmcp-project my-ssmcp
 
 该授权绑定签发登录码的 SSH 连接，只能发现和调用同一 SSH 账号下未设置 `--allow` 的连接。即使使用同一个 SSH 账户，登录码授权也不能访问设置了 `--allow` 的客户端。签发连接退出会撤销对应授权。[授权隔离](../src/broker.rs)
 
-远程 MCP 的工具列表始终只有 `list` 和 `code_mode`。本机 `--list-tools` 展示的是后端的原生工具；远程调用这些工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[两工具接口](../README.md)
+远程 MCP 的工具列表包含 `list`、`code_mode` 和 `collab`。`collab` 管理同一在线连接内的 agent 身份与消息，本机 `--list-tools` 展示后端原生工具；远程调用原生工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[MCP 接口](../README.md#mcp-接口) · [Agent 协作](agent-collaboration.md)
 
 两种方式都要求 MCP 客户端支持 Authorization Code、S256 PKCE 和动态客户端注册（DCR）。注册时省略 `grant_types` 默认获得 `authorization_code` 与 `refresh_token`，响应返回实际登记类型；显式只请求 `["authorization_code"]` 的客户端只获得访问令牌。注册、资源绑定及回调细节见 [OAuth 兼容性](deployment.md#oauth-兼容性)。
 

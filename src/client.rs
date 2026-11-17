@@ -1,6 +1,7 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod account;
 mod audit_view;
+mod config;
 mod git_status;
 pub(crate) mod input;
 pub(crate) mod interface;
@@ -12,6 +13,7 @@ mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;
 pub(crate) mod terminal;
+mod trust;
 pub(crate) mod ui;
 mod ui_command;
 
@@ -48,9 +50,12 @@ Usage: ssmcp login [--server URL] [--no-browser]
        ssmcp whoami|logout [--server URL] [--json]
        ssmcp list [--json | -i] [--client ID]
        ssmcp -i [--server URL] [--client ID]
-       ssmcp invite [--ttl 600] [--session-ttl 3600] [--shell sh|powershell]
+       ssmcp config <set|get|unset> server [URL]
+       ssmcp config path
+       ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
+       ssmcp invite [--server URL] [--ttl 600] [--session-ttl 3600] [--shell sh|powershell]
                     [--no-bootstrap] [--json]
-       ssmcp join --server URL --token INVITATION [options]
+       ssmcp join [--server URL] --token INVITATION [options]
        ssmcp [options] [--server URL]
        ssmcp [options] [user@]host
        ssmcp setup [options] [user@]host
@@ -60,7 +65,7 @@ Usage: ssmcp login [--server URL] [--no-browser]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
 
-  --server URL         HTTPS server (default: the account used by ssmcp login)
+  --server URL         Relay for this command; overrides config and last login
   -i, --interactive    Select an authorized account session and open its terminal
   --identity FILE      SSH private key file; legacy -i FILE HOST remains supported
   -p port              SSH port
@@ -93,6 +98,7 @@ harnesses are discovered automatically and their native tools are registered in
 one code_mode. Tools keep their native schemas and permission/approval behavior.
 
 Examples:
+  ssmcp config set server https://relay.example.com
   ssmcp login
   ssmcp whoami
   ssmcp --name laptop
@@ -967,7 +973,7 @@ fn join_request(args: &mut Vec<OsString>) -> crate::Result<Option<JoinRequest>> 
             _ => remaining.push(arg),
         }
     }
-    let server = server.unwrap_or_else(|| account::DEFAULT_SERVER.into());
+    let server = account::resolve_server(server.as_deref())?;
     let token = token.ok_or("usage: ssmcp join --server URL --token INVITATION [--name NAME]")?;
     remaining.extend([OsString::from("--server"), OsString::from(&server)]);
     *args = remaining;
@@ -1049,6 +1055,10 @@ pub async fn run() -> crate::Result<()> {
     if args.first().is_some_and(|arg| arg == "ui") {
         return ui_command::run(args.into_iter().skip(1).collect()).await;
     }
+    config::normalize_args(&mut args)?;
+    if config::dispatch(&args)? || trust::dispatch(&args)? {
+        return Ok(());
+    }
     if account::dispatch(&args).await? {
         return Ok(());
     }
@@ -1056,7 +1066,7 @@ pub async fn run() -> crate::Result<()> {
         && args.iter().any(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp join --server URL --token INVITATION [--name NAME] [--no-watchdog]\nStarts a temporary controlled session over HTTPS. Keep this terminal open; Ctrl-C stops it."
+            "Usage: ssmcp join [--server URL] --token INVITATION [--name NAME] [--no-watchdog]\nStarts a temporary controlled session over HTTPS. Keep this terminal open; Ctrl-C stops it."
         );
         return Ok(());
     }

@@ -276,9 +276,25 @@ fn save_at(root: &Path, credential: &Credential) -> Result<()> {
     Ok(())
 }
 
+/// One selector for login, account commands, normal connections and invitation redemption.
+pub(super) fn resolve_server(explicit: Option<&str>) -> Result<String> {
+    if let Some(server) = explicit {
+        return normalize_server(server);
+    }
+    if let Some(server) = super::config::server()? {
+        return Ok(server);
+    }
+    let root = state_root()?;
+    if root.exists() {
+        verify_directory(&root)?;
+    }
+    selected_server(&root, None)
+}
+
 /// Resolve only the selected origin; never borrow another server's credential.
 pub(super) async fn credentials(server: Option<&str>) -> Result<Option<Credential>> {
-    load_at(&state_root()?, server, false)
+    let server = resolve_server(server)?;
+    load_at(&state_root()?, Some(&server), false)
 }
 
 #[derive(Clone)]
@@ -294,14 +310,18 @@ struct Reply {
 
 impl Api {
     fn new(server: &str) -> Result<Self> {
+        let server = normalize_server(server)?;
+        let mut builder = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION"), " client"));
+        if let Some(tls) = super::trust::tls_config(&server)? {
+            builder = builder.use_preconfigured_tls((*tls).clone());
+        }
         Ok(Self {
-            client: Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_secs(5))
-                .timeout(Duration::from_secs(15))
-                .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION"), " client"))
-                .build()?,
-            server: normalize_server(server)?,
+            client: builder.build()?,
+            server,
         })
     }
     async fn request(
@@ -323,7 +343,7 @@ impl Api {
         let mut response = request
             .send()
             .await
-            .map_err(|_| "server request failed or timed out")?;
+            .map_err(|_| "server request failed or timed out; check connectivity, the TLS certificate and trusted server public keys")?;
         let status = response.status();
         if status.is_redirection() {
             return Err("server API redirected the request; credentials were not forwarded".into());
@@ -453,7 +473,12 @@ impl Arguments {
                     .to_owned())
             };
             match arg.to_str() {
-                Some("--server") => result.server = Some(normalize_server(&value()?)?),
+                Some("--server") => {
+                    if result.server.is_some() {
+                        return Err("--server may be supplied only once".into());
+                    }
+                    result.server = Some(normalize_server(&value()?)?);
+                }
                 Some("--json") => result.json = true,
                 Some("-i" | "--interactive") => result.interactive = true,
                 Some("--remote") => {}
@@ -562,12 +587,7 @@ async fn open_browser(url: &Url) -> Result<()> {
 
 async fn login(args: &Arguments) -> Result<()> {
     let root = state_root()?;
-    let server = if root.exists() {
-        verify_directory(&root)?;
-        selected_server(&root, args.server.as_deref())?
-    } else {
-        normalize_server(args.server.as_deref().unwrap_or(DEFAULT_SERVER))?
-    };
+    let server = resolve_server(args.server.as_deref())?;
     let api = Api::new(&server)?;
     let name = args
         .name
@@ -726,7 +746,8 @@ async fn whoami(args: &Arguments) -> Result<()> {
 
 async fn logout(args: &Arguments) -> Result<()> {
     let root = state_root()?;
-    let Some(credential) = load_at(&root, args.server.as_deref(), true)? else {
+    let server = resolve_server(args.server.as_deref())?;
+    let Some(credential) = load_at(&root, Some(&server), true)? else {
         println!("Not signed in.");
         return Ok(());
     };
@@ -829,6 +850,47 @@ fn command(server: &str, token: &str, bootstrap: bool, powershell: bool) -> Resu
     }
 }
 
+/// Carry device A's explicitly trusted keys to an already installed client on B.
+/// Downloaded shell code cannot enforce a pin before it has itself been verified.
+fn pinned_join_command(
+    server: &str,
+    token: &str,
+    pins: &[String],
+    powershell: bool,
+) -> Result<String> {
+    let server = normalize_server(server)?;
+    let join = command(&server, token, false, powershell)?;
+    let mut trust = Vec::new();
+    for pin in pins {
+        let encoded = pin
+            .strip_prefix("sha256//")
+            .ok_or("invalid server public key pin")?;
+        if STANDARD
+            .decode(encoded)
+            .map_or(true, |bytes| bytes.len() != 32)
+        {
+            return Err("invalid server public key pin".into());
+        }
+        trust.push(format!(
+            "ssmcp trust add --server {} --pin {}",
+            shell_quote(&server, powershell),
+            shell_quote(pin, powershell),
+        ));
+    }
+    if trust.is_empty() {
+        return Ok(join);
+    }
+    if powershell {
+        // Windows PowerShell 5.1 does not support &&. Check every native exit code.
+        let guard =
+            "; if ($LASTEXITCODE -ne 0) { throw 'Cannot save trusted server public key' }; ";
+        Ok(format!("& {{ {}{guard}{join} }}", trust.join(guard)))
+    } else {
+        trust.push(join);
+        Ok(trust.join(" && "))
+    }
+}
+
 async fn invite(args: &Arguments) -> Result<()> {
     let ttl = args.ttl.unwrap_or(600);
     let session_ttl = args.session_ttl.unwrap_or(3600);
@@ -848,12 +910,23 @@ async fn invite(args: &Arguments) -> Result<()> {
     let token = value["token"]
         .as_str()
         .ok_or("server omitted the enrollment token")?;
-    let sh = if args.no_bootstrap {
-        join_command(&credential.server, token)?
+    let pins = super::trust::pins(&credential.server)?;
+    let bootstrap = !args.no_bootstrap && pins.is_empty();
+    let (sh, powershell) = if pins.is_empty() {
+        (
+            if bootstrap {
+                command(&credential.server, token, true, false)?
+            } else {
+                join_command(&credential.server, token)?
+            },
+            command(&credential.server, token, bootstrap, true)?,
+        )
     } else {
-        command(&credential.server, token, true, false)?
+        (
+            pinned_join_command(&credential.server, token, &pins, false)?,
+            pinned_join_command(&credential.server, token, &pins, true)?,
+        )
     };
-    let powershell = command(&credential.server, token, !args.no_bootstrap, true)?;
     let selected =
         if args
             .shell
@@ -868,11 +941,17 @@ async fn invite(args: &Arguments) -> Result<()> {
     if args.json {
         println!(
             "{}",
-            json!({"command":selected,"command_sh":sh,"command_powershell":powershell,
+            json!({"server":credential.server,"command":selected,"command_sh":sh,"command_powershell":powershell,
+            "bootstrap":bootstrap,"requires_installed_client":!bootstrap,"server_pins":pins,
             "expires_in":value["expires_in"],"session_expires_in":value["session_expires_in"]})
         );
     } else {
         println!("{selected}");
+        if !pins.is_empty() {
+            eprintln!(
+                "Server public key pinning is enabled. Install ssmcp on device B from a trusted source first; this command saves the trusted keys before joining."
+            );
+        }
         eprintln!(
             "Run this once on device B. Claim within {} seconds; session access lasts {} seconds.",
             value["expires_in"].as_u64().unwrap_or(ttl),
@@ -1288,6 +1367,51 @@ mod tests {
         assert!(join_command("https://example.com", "$(whoami)").is_err());
         assert!(join_command("https://example.com", &(token + "'")).is_err());
     }
+    #[test]
+    fn pinned_invitations_carry_keys_and_never_download_unverified_code() {
+        let pin = format!("sha256//{}", STANDARD.encode([7u8; 32]));
+        let token = "b".repeat(64);
+        let shell = pinned_join_command(
+            "https://relay.example",
+            &token,
+            std::slice::from_ref(&pin),
+            false,
+        )
+        .unwrap();
+        assert!(
+            shell.starts_with("ssmcp trust add --server 'https://relay.example' --pin 'sha256//")
+        );
+        assert!(shell.contains(" && ssmcp join --server 'https://relay.example' --token "));
+        assert!(!shell.contains("curl"));
+        assert!(!shell.contains("install.sh"));
+        let powershell =
+            pinned_join_command("https://relay.example", &token, &[pin], true).unwrap();
+        assert!(powershell.contains("if ($LASTEXITCODE -ne 0)"));
+        assert!(!powershell.contains("&&"));
+        assert!(!powershell.contains("Invoke-WebRequest"));
+        assert!(
+            pinned_join_command(
+                "https://relay.example",
+                &token,
+                &["$(whoami)".into()],
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn duplicate_account_servers_are_rejected() {
+        let args = [
+            "--server",
+            "https://one.example",
+            "--server",
+            "https://two.example",
+        ]
+        .map(OsString::from);
+        assert!(Arguments::parse(&args).is_err());
+    }
+
     #[test]
     fn login_link_never_carries_poll_secret_or_changes_origin() {
         let code = "a".repeat(64);

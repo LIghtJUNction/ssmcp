@@ -6,6 +6,8 @@ pub mod browser;
 pub mod client;
 #[cfg(target_os = "linux")]
 pub mod code_mode;
+#[cfg(target_os = "linux")]
+mod collab;
 pub mod computer;
 pub mod context;
 #[cfg(target_os = "linux")]
