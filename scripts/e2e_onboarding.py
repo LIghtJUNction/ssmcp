@@ -475,7 +475,7 @@ while True: time.sleep(1)
             )
         self.original_config = self.config.read_bytes()
         self.command = [
-            str(binary), "--no-color", "--name", "onboarding-fixture",
+            str(binary), "--no-color", "--no-watchdog", "--name", "onboarding-fixture",
             "-F", str(self.config), "-p", str(closed_port),
             "--portal", portal.base, "127.0.0.1",
         ]
