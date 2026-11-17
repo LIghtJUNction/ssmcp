@@ -3,6 +3,8 @@ mod git_status;
 pub(crate) mod input;
 mod onboarding;
 mod panel;
+#[cfg(test)]
+mod protocol_tests;
 pub(crate) mod reload;
 pub(crate) mod render;
 pub(crate) mod terminal;
@@ -13,8 +15,8 @@ use crate::{
     platform::{interrupt_signal, terminate_signal},
     runtime::Runtime,
     wire::{
-        ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
-        canonical_github_principal, read_frame, validate_title, write_frame,
+        ClientMetadata, Frame, LEGACY_VERSION, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT,
+        Mode, VERSION, canonical_github_principal, read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -960,6 +962,7 @@ pub async fn run() -> crate::Result<()> {
     let mut attempt = 0u64;
     let mut setup_attempted = setup_requested;
     let mut ever_registered = false;
+    let mut protocol = VERSION;
     loop {
         if let Some(runner) = &service
             && runner.stop_requested()
@@ -979,6 +982,7 @@ pub async fn run() -> crate::Result<()> {
             attachment.as_ref(),
             attempt,
             &mut registered,
+            &mut protocol,
         )
         .await
         {
@@ -1018,7 +1022,12 @@ pub async fn run() -> crate::Result<()> {
         }
         ever_registered |= registered;
         let error = result.as_ref().err().map(ToString::to_string);
+        let unsupported_protocol = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.downcast_ref::<UnsupportedWireProtocol>().is_some());
         if error.is_some()
+            && !unsupported_protocol
             && !ever_registered
             && !setup_attempted
             && service.is_none()
@@ -1035,7 +1044,7 @@ pub async fn run() -> crate::Result<()> {
             }
             continue;
         }
-        if !options.watchdog {
+        if !options.watchdog || unsupported_protocol {
             if let Some(runner) = &service {
                 runner.record("disconnected", attempt, None, None, error.as_deref())?;
             }
@@ -1089,6 +1098,176 @@ enum ConnectionExit {
     },
 }
 
+const UNSUPPORTED_WIRE_PROTOCOL: &str = "unsupported ssmcp wire protocol";
+
+#[derive(Debug)]
+struct UnsupportedWireProtocol;
+
+impl std::fmt::Display for UnsupportedWireProtocol {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
+        )
+    }
+}
+
+impl std::error::Error for UnsupportedWireProtocol {}
+
+struct RegisteredSsh {
+    ssh: Child,
+    stderr_pump: Option<SshStderr>,
+    writer: tokio::process::ChildStdin,
+    reader: BufReader<ChildStdout>,
+    ready: (String, String, u64, String),
+}
+
+// A replacement transport must not start until the rejected SSH process and its
+// reader task are gone. No local backend or input binding exists at this stage.
+async fn stop_registration(
+    ssh: &mut Child,
+    stderr_pump: &mut Option<SshStderr>,
+) -> crate::Result<()> {
+    let _ = ssh.start_kill();
+    let reaped = timeout(Duration::from_secs(10), ssh.wait()).await;
+    if let Some(pump) = stderr_pump {
+        pump.0.abort();
+        let _ = (&mut pump.0).await;
+    }
+    reaped.map_err(|_| "SSH process did not terminate before registration cleanup")??;
+    Ok(())
+}
+
+async fn register_ssh(
+    metadata: &ClientMetadata,
+    protocol: &mut u32,
+    registered: &mut bool,
+    mut command: impl FnMut() -> Command,
+    cancelled: impl std::future::Future<Output = ()>,
+    deadline: Duration,
+) -> crate::Result<Option<RegisteredSsh>> {
+    tokio::pin!(cancelled);
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut cancelled => return Ok(None),
+            _ = std::future::ready(()) => {},
+        }
+        let mut ssh = command()
+            .spawn()
+            .map_err(|error| format!("could not start OpenSSH ssh: {error}"))?;
+        let mut stderr_pump = ssh.stderr.take().map(|mut stderr| {
+            SshStderr(tokio::spawn(async move {
+                let mut bytes = [0u8; 4096];
+                while let Ok(count) = stderr.read(&mut bytes).await {
+                    if count == 0 {
+                        break;
+                    }
+                    render::event(
+                        "ssh",
+                        &json!({"stderr":String::from_utf8_lossy(&bytes[..count])}),
+                    );
+                }
+            }))
+        });
+        let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
+        let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
+        let mut wire_metadata = metadata.clone();
+        if *protocol == LEGACY_VERSION {
+            // Early v4 peers have a strict metadata schema predating title.
+            // Keep local display context and every authorization field intact.
+            wire_metadata.title = None;
+        }
+        if let Err(error) = write_frame(
+            &mut writer,
+            &Frame::Hello {
+                version: *protocol,
+                mode: Mode::Shell,
+                metadata: wire_metadata,
+            },
+        )
+        .await
+        {
+            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            return Err(error.into());
+        }
+        let response = tokio::select! {
+            result = timeout(deadline, read_frame(&mut reader)) => {
+                result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSH authentication timed out"))
+                    .and_then(|frame| frame)
+            },
+            _ = &mut cancelled => {
+                stop_registration(&mut ssh, &mut stderr_pump).await?;
+                return Ok(None);
+            },
+        };
+        let response = match response {
+            Ok(frame) => frame,
+            Err(error) => {
+                stop_registration(&mut ssh, &mut stderr_pump).await?;
+                return Err(error.into());
+            }
+        };
+        let ready = match response {
+            Some(Frame::Ready {
+                url,
+                login_code,
+                login_expires_in,
+                client_id,
+            }) => (url, login_code, login_expires_in, client_id),
+            Some(Frame::Reject { message }) => {
+                stop_registration(&mut ssh, &mut stderr_pump).await?;
+                // Only the first parsed response to this Hello may negotiate.
+                // Text on stderr, EOF, timeouts, and later Reject frames cannot.
+                if message == UNSUPPORTED_WIRE_PROTOCOL {
+                    if *protocol == VERSION {
+                        *protocol = LEGACY_VERSION;
+                        render::status(
+                            "ssh",
+                            "Warning",
+                            &format!(
+                                "Gateway rejected wire protocol {VERSION}; retrying once with version {LEGACY_VERSION}. Task titles stay local; per-call controller attribution is unavailable."
+                            ),
+                        );
+                        continue;
+                    }
+                    if *protocol == LEGACY_VERSION {
+                        return Err(UnsupportedWireProtocol.into());
+                    }
+                }
+                return Err(message.into());
+            }
+            None => {
+                stop_registration(&mut ssh, &mut stderr_pump).await?;
+                return Err(
+                    "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions".into()
+                );
+            }
+            _ => {
+                stop_registration(&mut ssh, &mut stderr_pump).await?;
+                return Err("unexpected registration response".into());
+            }
+        };
+        *registered = true;
+        let github_auth = !metadata.allow.is_empty();
+        if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
+            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            return Err("server did not acknowledge the --allow GitHub access policy; upgrade ssmcpd with GitHub authorization configured before connecting".into());
+        }
+        if !github_auth && (ready.1.is_empty() || ready.2 == 0) {
+            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
+        }
+        return Ok(Some(RegisteredSsh {
+            ssh,
+            stderr_pump,
+            writer,
+            reader,
+            ready,
+        }));
+    }
+}
+
 async fn connect(
     options: &Options,
     ui: &ui::Ui,
@@ -1096,6 +1275,7 @@ async fn connect(
     attachment: Option<&crate::session::attach::Handle>,
     attempt: u64,
     registered: &mut bool,
+    protocol: &mut u32,
 ) -> crate::Result<ConnectionExit> {
     let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
@@ -1110,78 +1290,54 @@ async fn connect(
             options.destination.as_deref().unwrap_or("configured host")
         ),
     );
-    let mut command = options.command();
-    if service.is_some() {
-        // No terminal exists for a service to answer SSH authentication prompts.
-        // Existing keys, agents and host-key policy still decide access.
-        // Insert before the destination: OpenSSH parses options in order.
-        let arguments = command
-            .as_std()
-            .get_args()
-            .map(OsString::from)
-            .collect::<Vec<_>>();
-        let mut background = Command::new(onboarding::ssh_executable());
-        background
-            .args(["-o", "BatchMode=yes"])
-            .args(arguments)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        command = background;
-    }
-    let mut ssh = command
-        .spawn()
-        .map_err(|e| format!("could not start OpenSSH ssh: {e}"))?;
-    let _stderr_pump = ssh.stderr.take().map(|mut stderr| {
-        SshStderr(tokio::spawn(async move {
-            let mut bytes = [0u8; 4096];
-            while let Ok(n) = stderr.read(&mut bytes).await {
-                if n == 0 {
-                    break;
-                }
-                render::event(
-                    "ssh",
-                    &json!({"stderr":String::from_utf8_lossy(&bytes[..n])}),
-                );
+    let cancelled = async {
+        tokio::select! {
+            _ = interrupt.recv() => {},
+            _ = terminate.recv() => {},
+        }
+    };
+    let registration = register_ssh(
+        &metadata,
+        protocol,
+        registered,
+        || {
+            let mut command = options.command();
+            if service.is_some() {
+                // No terminal exists for a service to answer SSH authentication prompts.
+                // Existing keys, agents and host-key policy still decide access.
+                // Insert before the destination: OpenSSH parses options in order.
+                let arguments = command
+                    .as_std()
+                    .get_args()
+                    .map(OsString::from)
+                    .collect::<Vec<_>>();
+                let mut background = Command::new(onboarding::ssh_executable());
+                background
+                    .args(["-o", "BatchMode=yes"])
+                    .args(arguments)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true);
+                command = background;
             }
-        }))
-    });
-    let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
-    let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
-    write_frame(
-        &mut writer,
-        &Frame::Hello {
-            version: VERSION,
-            mode: Mode::Shell,
-            metadata: metadata.clone(),
+            command
         },
+        cancelled,
+        Duration::from_secs(120),
     )
     .await?;
-    let ready = tokio::select! {
-        result = timeout(Duration::from_secs(120),read_frame(&mut reader)) => result.map_err(|_| "SSH authentication timed out")??,
-        _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
-        _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
+    let Some(RegisteredSsh {
+        mut ssh,
+        stderr_pump: _stderr_pump,
+        writer,
+        reader,
+        ready: (url, login_code, login_expires_in, client_id),
+    }) = registration
+    else {
+        return Ok(ConnectionExit::Stopped);
     };
-    let (url, login_code, login_expires_in, client_id) = match ready {
-        Some(Frame::Ready { url, login_code, login_expires_in, client_id }) => (url, login_code, login_expires_in, client_id),
-        Some(Frame::Reject { message }) => return Err(message.into()),
-        None => return Err(
-            "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions"
-                .into(),
-        ),
-        _ => return Err("unexpected registration response".into()),
-    };
-    *registered = true;
     let github_auth = !metadata.allow.is_empty();
-    if github_auth && (!login_code.is_empty() || login_expires_in != 0) {
-        let _ = ssh.kill().await;
-        return Err("server did not acknowledge the --allow GitHub access policy; upgrade ssmcpd with GitHub authorization configured before connecting".into());
-    }
-    if !github_auth && (login_code.is_empty() || login_expires_in == 0) {
-        let _ = ssh.kill().await;
-        return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
-    }
     let login_received_at = std::time::Instant::now();
     let display_session = match terminal::Session::start(ui) {
         Ok(session) => session,

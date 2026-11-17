@@ -11,6 +11,7 @@ ssmcp \- bridge local tools and independent commands through an SSH-authenticate
 .RB [ \-p " port" ]
 .RB [ \-\-shell " path" ]
 .RB [ \-\-daemon ]
+.RB [ \-\-session-control ]
 .RB [ \-\-watchdog ]
 .RB [ \-\-reconnect-delay " seconds" ]
 .RB [ \-\-portal " https://origin" ]
@@ -25,8 +26,38 @@ ssmcp \- bridge local tools and independent commands through an SSH-authenticate
 .B \-\-list-tools
 .PP
 .B ssmcp sessions
-.IR "list | status NAME | start NAME | stop NAME | restart NAME | logs NAME | remove NAME | auth NAME"
+.IR "list | status NAME | start NAME | close NAME | stop NAME | restart NAME | logs NAME | remove NAME | auth NAME"
 .RB [ \-\-json ]
+.PP
+.B ssmcp sessions create
+.I NAME
+.RB [ \-\-cwd " dir" ]
+.RB [ \-\-json ]
+.RI [ "connection options" ]
+.I [user@]host
+.PP
+.B ssmcp attach
+.RI [ list ]
+.RB [ \-\-json ]
+.PP
+.B ssmcp attach
+.I NAME
+.RB [ \-\-read-only ]
+.PP
+.B ssmcp service install
+.RB [ \-\-system ]
+.RB [ \-\-user " account" ]
+.RB [ \-\-state-dir " path" ]
+.RB [ \-\-password-stdin ]
+.RB [ \-\-dry-run ]
+.RB [ \-\-json ]
+.PP
+.B ssmcp service
+.IR "start | stop | restart | status | uninstall"
+.RB [ \-\-system ]
+.RB [ \-\-json ]
+.PP
+.B ssmcp service run
 .SH DESCRIPTION
 ssmcp authenticates to OpenSSH using a public key and always provides a local
 shell, managed command jobs and file tools. It discovers installed Codex, Claude
@@ -82,8 +113,11 @@ service install defaults to the current user's persistent manager. Linux
 system scope requires --system --user USER; macOS provides launchd agent and
 daemon scopes; Windows provides an interactive user task and a native SCM
 service entrypoint with an explicit non-LocalSystem account.
-Use service install --dry-run --json to review definitions. service status,
-start, stop, restart and uninstall accept --system for system scope.
+Use service install --dry-run --json to review definitions. Options follow the
+service operation. --user ACCOUNT is accepted only with install --system;
+the default per-user scope uses no --user option. service status, start, stop,
+restart and uninstall accept --system for system scope. Windows named-account
+installation reads its password through --password-stdin.
 .PP
 A connection started with --session-control exposes ssmcp.session.list, status,
 create, restart and close through code_mode. Remote-created sessions inherit
@@ -180,20 +214,30 @@ native JSON catalog and shut them down. Does not connect to SSH and does not acc
 the native capability catalog, not the two-tool external MCP catalog.
 .TP
 .B \-\-daemon
-Save a private session definition and an executable copy, and ask the current
-user's native manager to start it. Does not enable boot/login startup or watchdog.
+Save a private session definition and an executable copy. When the persistent
+session manager is running, create a service-managed session; the installed
+manager's startup policy restores sessions that are still expected to run.
+Otherwise use the legacy per-session native manager, without configuring
+boot/login startup. Neither path implicitly enables watchdog.
 A successful launch request is not proof of an SSH or Broker connection.
 Cannot accompany \-\-list-tools. Existing saved names are not overwritten.
+.TP
+.B \-\-session-control
+Expose saved-session management tools on this connection for the current OS
+user. Child sessions do not inherit this authority. Use another management
+connection or the local CLI to restart or close this control session.
 .TP
 .B \-\-watchdog
 Retry failed or disconnected SSH connections until explicitly stopped. Can be
 used in the foreground or with \-\-daemon; cannot accompany \-\-list-tools.
-Background sessions also configure native recovery after process failure.
+Service-managed sessions use supervisor recovery after process failure;
+legacy background sessions configure their native manager's recovery policy.
 .TP
 .BI \-\-reconnect-delay " seconds"
 Set the delay between connection attempts to an integer from 1 through 3600.
-Defaults to 5 seconds and requires \-\-watchdog. Native Windows process-failure
-recovery has a separate minimum interval of 60 seconds.
+Defaults to 5 seconds and requires \-\-watchdog. Legacy Windows scheduled-task
+failure recovery has a separate minimum interval of 60 seconds;
+service-managed workers use the configured delay.
 .TP
 .B \-h, \-\-help
 Print usage information and exit.
@@ -468,13 +512,16 @@ The watchdog does not revive an explicitly stopped session.
 Stop and start the same saved configuration. Does not install an updated image.
 .TP
 .BI "ssmcp sessions logs " "NAME [--lines N]"
-Read bounded logs; N defaults to 50 and accepts 1 through 1000. JSON includes
-source, fallback, warning, coverage, unit, events, limit and truncated. Linux
-uses the owned unit's actual journal; unavailable or empty journal queries fall
-back explicitly to lifecycle records. Journal events contain timestamp_us, pid
-and an audited event parsed from MESSAGE, without journal environment or command
-metadata. macOS and Windows currently expose lifecycle_only coverage. Sources
-are not concatenated; lifecycle records are not proof of complete tool output.
+Read bounded logs; N defaults to 50 and accepts 1 through 1000. JSON identifies
+source, fallback, warning, coverage, events, limit and truncated; legacy native
+sessions also report their unit. Service-managed sessions expose lifecycle_only
+coverage on every platform; use attach for live tool and terminal output.
+Legacy Linux sessions read the owned unit's journal, falling back explicitly to
+lifecycle records when that journal is unavailable or empty. Journal events
+contain timestamp_us, pid and an audited event parsed from MESSAGE, without
+journal environment or command metadata. Legacy macOS and Windows sessions
+expose lifecycle_only coverage. Sources are not concatenated; lifecycle records
+are not proof of complete tool output.
 .TP
 .BI "ssmcp sessions auth " NAME
 Explicitly read a current login code from the private auth record. Ordinary
@@ -486,17 +533,25 @@ GitHub-authorized connections do not issue login codes.
 Stop the session and remove only its saved definition, executable and lifecycle
 records. Connection output files retain their separate retention policy.
 .PP
+sessions create requires the persistent session manager. --daemon also uses that
+manager when it is running; previously saved legacy native sessions keep their
+original management mechanism. Service-managed workers follow the installed
+manager's startup scope. Stopping that manager preserves running intent, while
+closing an individual session keeps it stopped after the manager restarts.
+.PP
+The following native policies apply only to legacy per-session registrations.
 Linux uses an existing user systemd manager and a transient service; macOS uses a
 current-user launchd agent; Windows uses a current logged-in user's scheduled
-task, without administrator or SYSTEM credentials. No implicit boot/login
-trigger or Linux linger setting is created. Continued operation after logout
-depends on the existing user manager and login session.
+task, without administrator or SYSTEM credentials. These legacy registrations
+create no boot/login trigger or Linux linger setting. Continued operation after
+logout depends on the existing user manager and login session.
 .PP
-With watchdog, Linux configures Restart=on-failure and the selected RestartSec;
-macOS uses unsuccessful-exit recovery and the selected ThrottleInterval.
-Windows native failure recovery uses max(60, reconnect-delay) seconds and up to
-255 restarts. This native limit is separate from ongoing SSH retries inside a
-live client. Manual stop takes precedence over either form of recovery.
+For those legacy registrations, watchdog configures Linux Restart=on-failure
+with the selected RestartSec, or macOS unsuccessful-exit recovery with the
+selected ThrottleInterval. Legacy Windows task recovery uses
+max(60, reconnect-delay) seconds and up to 255 restarts. This native limit does
+not apply to service-managed workers or SSH retries inside a live client.
+Manual stop takes precedence over every recovery policy.
 .PP
 Default state roots are $XDG_STATE_HOME/ssmcp/sessions, or
 ~/.local/state/ssmcp/sessions on Linux; ~/Library/Application Support/ssmcp/sessions
