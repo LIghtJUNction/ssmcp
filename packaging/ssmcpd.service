@@ -1,5 +1,5 @@
 [Unit]
-Description=SSH terminal MCP gateway
+Description=HTTPS account and MCP gateway
 After=network.target
 StartLimitIntervalSec=60
 StartLimitBurst=10

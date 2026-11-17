@@ -5,6 +5,8 @@ log_format ssmcp_safe '$time_iso8601 request_id=$upstream_http_x_request_id '
 map $http_upgrade $ssmcp_upgrade_connection { default upgrade; '' ''; }
 server {
     listen 443 ssl;
+    http2 on;
+    ssl_protocols TLSv1.2 TLSv1.3;
     server_name ssmcp.example.com;
     ssl_certificate /etc/letsencrypt/live/ssmcp.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/ssmcp.example.com/privkey.pem;

@@ -52,7 +52,7 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends openssh-server nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck
+          sudo apt-get install --yes --no-install-recommends nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck
           if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
             if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
               sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
@@ -77,7 +77,6 @@ jobs:
           shellcheck scripts/install.sh
           python3 scripts/test_release.py
           python3 scripts/test_setup_server.py
-          python3 scripts/test_portal_ssh.py
           python3 scripts/test_installer_download_bounds.py
       - run: cargo clippy --locked --all-targets -- -D warnings
       - name: Render terminal transcript fixture

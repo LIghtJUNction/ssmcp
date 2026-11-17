@@ -1,6 +1,6 @@
 ssmcp.xxxx.yyy {
 	# OAuth and discovery should not wait for a tool's long execution budget.
-	@control path /healthz /.well-known/* /oauth/* /account/* / /portal.css
+	@control path /healthz /.well-known/* /oauth/* /account/* /login/* /api/server-identity /server-key / /portal.css
 	handle @control {
 		reverse_proxy 127.0.0.1:8080 {
 			transport http {

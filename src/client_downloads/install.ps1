@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$Server,
+    [string]$ServerFingerprint,
     [Parameter(Mandatory = $true)][string]$Token,
     [string]$Name,
     [switch]$NoWatchdog,
@@ -62,6 +63,7 @@ try {
         throw 'The client download is empty or incomplete.'
     }
     $joinArguments = @('join', '--server', $Server, '--token', $Token)
+    if ($ServerFingerprint) { $joinArguments += @('--server-fingerprint', $ServerFingerprint) }
     if ($Name) { $joinArguments += @('--name', $Name) }
     if ($NoWatchdog) { $joinArguments += '--no-watchdog' }
     else { $joinArguments += @('--reconnect-delay', $ReconnectDelay.ToString()) }

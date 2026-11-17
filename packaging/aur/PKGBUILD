@@ -1,16 +1,18 @@
 pkgname=ssmcp-git
 pkgver=0.6.0.r0
 pkgrel=1
-pkgdesc='Bridge native local tools and concurrent shell tasks to MCP over SSH'
+pkgdesc='Connect native tools to MCP through an authenticated HTTPS account'
 arch=('x86_64' 'aarch64')
 url='https://github.com/LIghtJUNction/ssmcp'
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'openssh' 'nodejs>=18' 'bubblewrap>=0.8' 'util-linux')
+depends=('gcc-libs' 'glibc')
 makedepends=('git' 'rust' 'cargo')
 checkdepends=('python' 'rsync')
-optdepends=('rsync: synchronize workspace directory contents'
-            'python: GitHub account portal SSH synchronization'
-            'shadow: provision restricted portal SSH accounts')
+optdepends=('nodejs>=18: server JavaScript orchestration'
+            'bubblewrap>=0.8: server JavaScript isolation'
+            'util-linux: server isolation helpers'
+            'python: server provisioning helper'
+            'rsync: optional Linux workspace synchronization')
 provides=('ssmcp')
 conflicts=('ssmcp')
 backup=('etc/ssmcpd/ssmcpd.env')
@@ -34,11 +36,10 @@ check() {
 
 package() {
  cd "$srcdir/ssmcp"
- make install-server install-portal DESTDIR="$pkgdir" PREFIX=/usr
+ make install-server DESTDIR="$pkgdir" PREFIX=/usr
  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
  install -Dm644 /dev/stdin "$pkgdir/usr/lib/sysusers.d/ssmcp.conf" <<'SYSUSERS'
 g ssmcp -
-u ssmcpd -:ssmcp "SSH terminal MCP gateway" /nonexistent /usr/bin/nologin
+u ssmcpd -:ssmcp "HTTPS account and MCP gateway" /nonexistent /usr/bin/nologin
 SYSUSERS
- sed -i 's|/usr/local/bin/|/usr/bin/|g' "$pkgdir/usr/share/doc/ssmcp/examples/sshd-ssmcp.conf"
 }
