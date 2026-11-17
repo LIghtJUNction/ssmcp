@@ -211,17 +211,21 @@ async fn native_requests_wait_for_an_explicit_response() {
 async fn background_output_is_incremental_and_shutdown_stops_jobs_and_watchers() {
     let directory = Directory::new();
     let client = directory.start(&[]).await;
-    client
-        .call("cc.NativeFutureTool", json!({"spawn_child":true}))
-        .await
-        .unwrap();
-    let child: i32 = std::fs::read_to_string(directory.0.join("child-pid"))
-        .unwrap()
-        .parse()
-        .unwrap();
-    // Keep the fixture child bound by pidfd so an assertion failure also cleans it up.
-    let owned = OwnedJobs::for_session(child);
-    assert!(owned.0.iter().any(|(pid, _)| *pid == child));
+    #[cfg(target_os = "linux")]
+    let (child, _owned) = {
+        client
+            .call("cc.NativeFutureTool", json!({"spawn_child":true}))
+            .await
+            .unwrap();
+        let child: i32 = std::fs::read_to_string(directory.0.join("child-pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        // Keep the fixture child bound by pidfd so an assertion failure also cleans it up.
+        let owned = OwnedJobs::for_session(child);
+        assert!(owned.0.iter().any(|(pid, _)| *pid == child));
+        (child, owned)
+    };
     client
         .call("cc.Bash", json!({"fixture_mode":"background"}))
         .await
@@ -265,14 +269,18 @@ async fn background_output_is_incremental_and_shutdown_stops_jobs_and_watchers()
             .unwrap()
             .is_empty()
     );
-    let leader: i32 = std::fs::read_to_string(directory.0.join("pid"))
-        .unwrap()
-        .parse()
-        .unwrap();
-    assert!(!running(leader), "native MCP process survived shutdown");
-    assert!(!running(child), "native child process survived shutdown");
+    #[cfg(target_os = "linux")]
+    {
+        let leader: i32 = std::fs::read_to_string(directory.0.join("pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(!running(leader), "native MCP process survived shutdown");
+        assert!(!running(child), "native child process survived shutdown");
+    }
 }
 
+#[cfg(target_os = "linux")]
 fn running(pid: i32) -> bool {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(stat) => !matches!(
@@ -350,6 +358,7 @@ async fn pagination_loops_and_transport_overrides_fail_with_clear_errors() {
 /// made. Example:
 /// SSMCP_TEST_CLAUDE=/absolute/path/claude cargo test --test cc_backend \
 ///     real_claude_backend_smoke -- --ignored --nocapture
+#[cfg(unix)]
 #[tokio::test]
 #[ignore = "requires an explicitly supplied official Claude Code executable"]
 async fn real_claude_backend_smoke() {
@@ -433,56 +442,64 @@ async fn real_claude_backend_smoke() {
     })
     .await
     .unwrap();
-    // Claude Code 2.1.325 starts background Bash in another Linux session.
-    // Its TaskStop currently reports "No task found" for these native MCP jobs,
-    // so verify cleanup of an actual live Bash and its sleep child via pidfds.
-    let live = client
-        .call(
-            "cc.Bash",
-            json!({
-                "command":"printf '%s\\n' \"$BASHPID\"; sleep 60 & wait",
-                "description":"Exercise owned background process cleanup",
-                "run_in_background":true
-            }),
-        )
+    #[cfg(target_os = "linux")]
+    {
+        // Claude Code 2.1.325 starts background Bash in another Linux session.
+        // Its TaskStop currently reports "No task found" for these native MCP jobs,
+        // so verify cleanup of an actual live Bash and its sleep child via pidfds.
+        let live = client
+            .call(
+                "cc.Bash",
+                json!({
+                    "command":"printf '%s\\n' \"$BASHPID\"; sleep 60 & wait",
+                    "description":"Exercise owned background process cleanup",
+                    "run_in_background":true
+                }),
+            )
+            .await
+            .unwrap();
+        let live: Value =
+            serde_json::from_str(live["content"][0]["text"].as_str().unwrap()).unwrap();
+        let output = PathBuf::from(live["backgroundOutputPath"].as_str().unwrap());
+        let bash_pid = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(output) = std::fs::read_to_string(&output)
+                    && let Ok(pid) = output.trim().parse::<i32>()
+                {
+                    break pid;
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
         .await
         .unwrap();
-    let live: Value = serde_json::from_str(live["content"][0]["text"].as_str().unwrap()).unwrap();
-    let output = PathBuf::from(live["backgroundOutputPath"].as_str().unwrap());
-    let bash_pid = timeout(Duration::from_secs(5), async {
-        loop {
-            if let Ok(output) = std::fs::read_to_string(&output)
-                && let Ok(pid) = output.trim().parse::<i32>()
-            {
-                break pid;
+        sleep(Duration::from_millis(100)).await;
+        let jobs = OwnedJobs::for_session(process_session(bash_pid).unwrap());
+        assert!(jobs.0.iter().any(|(pid, _)| *pid == bash_pid));
+        assert!(
+            jobs.0.len() >= 2,
+            "expected a live Bash and its sleep child"
+        );
+        client.shutdown().await;
+        timeout(Duration::from_secs(2), async {
+            while !jobs.exited() {
+                sleep(Duration::from_millis(10)).await;
             }
-            sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .unwrap();
-    sleep(Duration::from_millis(100)).await;
-    let jobs = OwnedJobs::for_session(process_session(bash_pid).unwrap());
-    assert!(jobs.0.iter().any(|(pid, _)| *pid == bash_pid));
-    assert!(
-        jobs.0.len() >= 2,
-        "expected a live Bash and its sleep child"
-    );
+        })
+        .await
+        .expect("live native Bash or its child survived backend shutdown");
+    }
+    #[cfg(not(target_os = "linux"))]
     client.shutdown().await;
-    timeout(Duration::from_secs(2), async {
-        while !jobs.exited() {
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("live native Bash or its child survived backend shutdown");
     assert_eq!(events(&client, cursor, 0).await["closed"], true);
 }
 
 // A failed smoke assertion must not strand its own 60-second background job.
 // Bind pidfds after validating this fixture's session, never signal a raw PID.
+#[cfg(target_os = "linux")]
 struct OwnedJobs(Vec<(i32, std::os::fd::OwnedFd)>);
 
+#[cfg(target_os = "linux")]
 impl OwnedJobs {
     fn for_session(session: i32) -> Self {
         use std::os::fd::FromRawFd;
@@ -528,6 +545,7 @@ impl OwnedJobs {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for OwnedJobs {
     fn drop(&mut self) {
         use std::os::fd::AsRawFd;
@@ -547,6 +565,7 @@ impl Drop for OwnedJobs {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn process_session(pid: i32) -> Option<i32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     stat.rsplit_once(") ")?

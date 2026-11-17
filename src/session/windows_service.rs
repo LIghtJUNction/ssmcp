@@ -489,7 +489,7 @@ fn verify_owned(service: &ServiceHandle) -> Result<()> {
     let start = bytes.as_ptr() as usize;
     let end = start + bytes.len() * std::mem::size_of::<usize>();
     let position = description as usize;
-    if position < start || position >= end || position % 2 != 0 {
+    if position < start || position >= end || !position.is_multiple_of(2) {
         return Err("invalid service ownership description".into());
     }
     let capacity = (end - position) / 2;

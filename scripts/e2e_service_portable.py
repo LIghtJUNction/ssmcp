@@ -48,7 +48,7 @@ class Portable:
         self.workspace = root / "workspace unicode 中"
         self.workspace.mkdir()
         self.home = root / "sessions"
-        self.home.mkdir(mode=0o700)
+        # The supervisor creates its state root with the platform-private ACL.
         self.artifacts = artifacts
         self.environment = dict(os.environ)
         self.environment.update(SSMCP_SESSION_HOME=str(self.home), NO_COLOR="1")

@@ -1633,8 +1633,20 @@ mod tests {
         assert!(!restored.daemon);
         assert_eq!(restored.title.as_deref(), Some("--daemon"));
         assert_eq!(restored.allow, ["octocat@github"]);
-        assert_eq!(restored.identity, options.identity);
-        assert_eq!(restored.config, options.config);
+        assert_eq!(
+            restored.identity,
+            options
+                .identity
+                .as_ref()
+                .map(|path| spec.cwd.join(path).into_os_string())
+        );
+        assert_eq!(
+            restored.config,
+            options
+                .config
+                .as_ref()
+                .map(|path| spec.cwd.join(path).into_os_string())
+        );
         assert_eq!(restored.port, options.port);
         assert_eq!(restored.destination, options.destination);
         assert_eq!(restored.shell, options.shell);

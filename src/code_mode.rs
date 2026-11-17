@@ -579,7 +579,7 @@ mod tests {
                             return Err("native failure".into());
                         }
                         Ok(
-                            json!({"content":[],"isError":name == "native_error","structuredContent":{"id":client_id,"arguments":arguments},"_meta":{"native":true}}),
+                            json!({"content":[],"isError":name == "native_error","structuredContent":{"id":client_id,"name":name,"arguments":arguments},"_meta":{"native":true}}),
                         )
                     }
                     HostRequest::Tools { client_id, cursor } => Ok(

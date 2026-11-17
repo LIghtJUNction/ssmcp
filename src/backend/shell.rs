@@ -1691,10 +1691,22 @@ with socket.create_connection(("127.0.0.1", {port}), timeout=5) as gate:
     async fn large_output_keeps_the_full_artifact_and_the_bounded_tail() {
         let shell = Shell::new();
         let id = py(&shell, "import sys; sys.stdout.buffer.write(b'x'*100000)").await;
-        shell
-            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
-            .await
-            .unwrap();
+        // A bounded wait may return while the job is still running. Observe
+        // confirmed completion before testing finalized artifact metadata.
+        let completed = timeout(Duration::from_secs(15), async {
+            loop {
+                let state = shell
+                    .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":1000}))
+                    .await
+                    .unwrap();
+                if state["running"] == false {
+                    break state;
+                }
+            }
+        })
+        .await
+        .expect("output job did not reach confirmed completion");
+        assert_eq!(completed["exit_code"], 0, "{completed}");
         let page = shell
             .call("ssmcp.exec.read", json!({"job_id":id}))
             .await
@@ -1702,7 +1714,7 @@ with socket.create_connection(("127.0.0.1", {port}), timeout=5) as gate:
         assert_eq!(page["stdout_truncated"], true);
         let artifact = &page["snapshot"]["stdout"]["artifact"];
         assert_eq!(artifact["bytes"], 100000);
-        assert_eq!(artifact["complete"], true);
+        assert_eq!(artifact["complete"], true, "{}", page["snapshot"]["stdout"]);
         let store = shell.output.clone();
         let saved = store
             .perform(
