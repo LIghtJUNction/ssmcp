@@ -1,0 +1,23 @@
+{
+  "name": "ssmcp-cua-20261118",
+  "client_version": "0.7.4",
+  "wire_version": 5,
+  "manifest_schema": "ssmcp.client.capabilities.v1",
+  "tool_count_at_observation": 1497,
+  "playwright_tools_registered": 28,
+  "private_desktop_running": false,
+  "private_desktop_supported": true,
+  "helpers_installed": {
+    "Xvfb": true,
+    "dbus-daemon": true,
+    "dbus-run-session": true,
+    "magick": true,
+    "xdotool": true,
+    "xprop": true
+  },
+  "original_clients_still_online": 7,
+  "verification_errors": [
+    false,
+    false
+  ]
+}

@@ -265,6 +265,8 @@ image(shot);
 return shot.structuredContent;
 ```
 
+Linux 客户端可用 `computer.desktop_start` 按需创建独立桌面，再通过 `computer.app_launch` 启动应用；后续电脑输入默认发到该桌面。没有独立桌面时，修改鼠标、键盘或焦点必须明确传入 `desktop: "host"`。关闭或丢失独立桌面不会回退到用户桌面。浏览器新标签默认后台打开，`browser.wait_for` 在客户端等待页面条件。运行 `ssmcp setup browser --check --json` 检查环境，或用 `ssmcp setup browser --install` 配置 Playwright 扩展桥接；首次扩展连接仍由用户授权。详见[后台浏览器与独立桌面](docs/browser-desktop.md)。
+
 截图返回 MCP 图片内容块和该张图片的坐标映射。Windows 使用物理桌面像素，Linux 与 macOS 使用逻辑桌面坐标；根据 `image_to_desktop` 转换后再发送鼠标操作。浏览器可以启动独立临时 profile，也可以附着已开启调试的本机浏览器，页面快照中的元素引用可用于点击和填表。
 
 Omarchy 新增 `ssmcp.omarchy.*` 的 21 个系统原语，覆盖主题、背景、字体、音频、亮度、夜灯、保持唤醒、状态栏、动画、工作区、窗口、应用、菜单、电池与网络。设置采用明确的期望值并检查可观察状态；应用和菜单分别报告请求是否接受。先用 `omarchy.status` 检查本机命令与设备，再通过枚举结果选择对象。
@@ -371,10 +373,16 @@ return await outputs.read(clientId, { id: artifactId, offset: 0, max_bytes: 1638
 
 ## 项目上下文：MCP 资源与 code_mode
 
+客户端还负责提供能力清单、工具目录与资源内容；服务端按需转发，不保存另一份客户端文档缓存。`capabilities(clientId)`、`resources.forClient(clientId)` 和 `native(clientId)` 提供动态入口，新注册的原子工具可直接按名称调用。旧服务端仍可通过 `call(clientId, name, args)` 转发新客户端能力；新的 JavaScript 便捷入口与通用资源路由需要一次服务端更新。
+
 MCP 资源直接提供项目 AGENTS.md 内容、技能摘要、技能全文和项目叠加全局的技能视图。每次读取都检查客户端当前文件，编辑、添加或删除后重新读取即可生效。
 
 | 资源路径（位于 ssmcp://clients/{id} 下） | 内容 |
 | --- | --- |
+| /capabilities | 客户端版本、协议版本与注册表能力摘要 |
+| /resources | 客户端资源目录，支持分页 |
+| /resource-templates | 客户端资源 URI 模板 |
+| /resource?uri=... | 转发任意已注册客户端资源的读取 |
 | /agents | 当前目录适用的指令全文与来源 |
 | /skills | 项目技能摘要，含全文 readUri |
 | /skills?scope=effective | 项目覆盖同名全局技能后的有效摘要 |
