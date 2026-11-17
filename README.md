@@ -1,15 +1,37 @@
 # ssmcp
 
-**用 GitHub 账号连接自己的设备，从终端或 MCP 远程控制。**
+用 GitHub 账号连接自己的设备。在终端进入远程 Shell，也可以让 MCP 客户端调用设备上的工具。
 
-> ssmcp项目由网页版Chat模式，astra pro使用ssmcp插件开发
+[![ssmcp 原创短片《日蚀》封面，日冕照亮立体城市天际线](docs/assets/ssmcp-eclipse.jpg)](docs/assets/ssmcp-eclipse.mp4)
+
+[播放《日蚀》 · 24 秒](docs/assets/ssmcp-eclipse.mp4)　 /　 [快速开始](#快速开始)　 /　 [安装与升级](#安装与升级)　 /　 [文档导航](#文档导航)
 
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
 [![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-x86__64%20%C2%B7%20ARM64-64748b?style=flat)](docs/releases.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat)](LICENSE)
 
-ssmcp 把本机 Shell 与已安装工具连接到可信服务器。MCP 的 `list` 找到有权操作的在线设备，`code_mode` 调用它们的原生能力，`collab` 让同一会话的多个 agent 相互发现、发送消息；项目、模型配置和工具执行留在设备上。客户端支持 GitHub 登录后的 HTTPS / WSS 接入，也保留已有 SSH 配置。[工作原理](docs/backends.md)
+## 新版连接体验
+
+宣传片展示开发中的新版入口。连接方式和 SSH 一样，直接输入用户名和服务器：
+
+```sh
+ssmcp alice@relay.example.com
+```
+
+首次连接会引导完成 GitHub 授权，之后复用本机凭据。新版移除了独立的 `ssmcp login` 步骤。进入会话后，交互体验类似 Claude Code。当前 `main` 的操作步骤见下方快速开始。
+
+## 从设备到会话
+
+| 你想做什么 | 入口 |
+| --- | --- |
+| 进入另一台设备的终端 | 运行 `ssmcp -i`，选择已授权的在线设备 |
+| 让模型使用设备上的工具 | 用 `list` 发现设备，再用 `code_mode` 调用原生能力 |
+| 让多个 agent 配合工作 | 用 `collab` 在同一会话中发现彼此并发送消息 |
+
+项目、模型配置和工具执行都留在设备上。客户端可通过 HTTPS / WSS 接入可信服务器，也支持已有 SSH 配置。[了解工作原理](docs/backends.md)
+
+本项目由 Astra Pro 在网页版 Chat 模式下使用 ssmcp 插件开发。
 
 ## 快速开始
 
