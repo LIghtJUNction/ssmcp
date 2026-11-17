@@ -509,3 +509,230 @@ async fn overlapping_scan_paths_retain_their_own_depth_and_invalid_yaml_is_not_s
     }
     assert!(codes(&result).contains(&"unsupported_yaml"));
 }
+
+#[tokio::test]
+async fn effective_skills_overlay_granted_roots_and_reveal_global_after_project_removal() {
+    let f = Fixture::new();
+    let global = f.extra.join(".agents/skills/shared/SKILL.md");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::write(
+        &global,
+        "---\nname: shared\ndescription: Global description\n---\nGLOBAL BODY\n",
+    )
+    .unwrap();
+    let only = f.extra.join("skills/global-only/SKILL.md");
+    fs::create_dir_all(only.parent().unwrap()).unwrap();
+    fs::write(
+        &only,
+        "---\nname: global-only\ndescription: Global helper\n---\n",
+    )
+    .unwrap();
+    f.write(
+        "skills/shared/SKILL.md",
+        "---\nname: shared\ndescription: Project description\n---\nPROJECT BODY\n",
+    );
+    f.write(
+        ".agents/skills/shared/SKILL.md",
+        "---\nname: shared\ndescription: Highest priority project\n---\nFIRST BODY\n",
+    );
+
+    let page = f
+        .call("ssmcp.skills.list", json!({"scope":"effective"}))
+        .await;
+    assert_eq!(page["total"], 2);
+    assert_eq!(page["scope"], "effective");
+    let shared = page["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "shared")
+        .unwrap();
+    assert_eq!(shared["root"]["id"], "workspace");
+    assert_eq!(shared["scope"], "project");
+    assert_eq!(shared["path"], ".agents/skills/shared/SKILL.md");
+    assert_eq!(shared["description"], "Highest priority project");
+    assert_eq!(shared["shadowed"].as_array().unwrap().len(), 2);
+    assert_eq!(shared["shadowed"][1]["root"]["id"], "context-1");
+    assert!(!page.to_string().contains("BODY"));
+    let view = f.call("ssmcp.skills.view", json!({})).await;
+    assert_eq!(view["scope"], "effective");
+    assert_eq!(view["snapshot"], page["snapshot"]);
+    assert!(view["markdown"].as_str().unwrap().contains("context-1"));
+    assert!(
+        view["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("Highest priority project")
+    );
+    assert!(view.get("skills").is_none());
+    assert_eq!(
+        f.call("ssmcp.skills.list", json!({})).await["scope"],
+        "root"
+    );
+    assert_eq!(
+        f.call("ssmcp.skills.view", json!({"root":"context-1"}))
+            .await["scope"],
+        "root"
+    );
+
+    fs::remove_file(f.root.join(".agents/skills/shared/SKILL.md")).unwrap();
+    fs::remove_file(f.root.join("skills/shared/SKILL.md")).unwrap();
+    let page = f
+        .call("ssmcp.skills.list", json!({"scope":"effective"}))
+        .await;
+    let shared = page["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "shared")
+        .unwrap();
+    assert_eq!(shared["root"]["id"], "context-1");
+    assert_eq!(shared["scope"], "global");
+    assert_eq!(shared["shadowed"], json!([]));
+    assert_eq!(
+        f.call(
+            "ssmcp.skills.read",
+            json!({"root":shared["root"]["id"],"path":shared["path"]})
+        )
+        .await["content"],
+        "---\nname: shared\ndescription: Global description\n---\nGLOBAL BODY\n"
+    );
+    fs::write(
+        &global,
+        "---\nname: shared\ndescription: Edited global\n---\nNEW BODY\n",
+    )
+    .unwrap();
+    let current = f
+        .call("ssmcp.skills.list", json!({"scope":"effective"}))
+        .await;
+    assert_ne!(current["snapshot"], page["snapshot"]);
+    assert_eq!(current["skills"][1]["description"], "Edited global");
+}
+
+#[tokio::test]
+async fn effective_cursor_rejects_changed_global_sources_and_root_scope() {
+    let f = Fixture::new();
+    f.write(
+        "skills/a/SKILL.md",
+        "---\nname: a\ndescription: Project\n---\n",
+    );
+    let path = f.extra.join("skills/b/SKILL.md");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "---\nname: b\ndescription: Global\n---\n").unwrap();
+    let page = f
+        .call("ssmcp.skills.list", json!({"scope":"effective","limit":1}))
+        .await;
+    let cursor = page["next_cursor"].clone();
+    let next = f
+        .call(
+            "ssmcp.skills.list",
+            json!({"scope":"effective","limit":1,"cursor":cursor}),
+        )
+        .await;
+    assert_eq!(next["skills"][0]["name"], "b");
+    assert_eq!(next["skills"][0]["root"]["id"], "context-1");
+    assert!(
+        f.context
+            .perform("ssmcp.skills.list", json!({"cursor":cursor}))
+            .await
+            .unwrap_err()
+            .contains("changed")
+    );
+    fs::write(&path, "---\nname: b\ndescription: Updated\n---\n").unwrap();
+    assert!(
+        f.context
+            .perform(
+                "ssmcp.skills.list",
+                json!({"scope":"effective","cursor":cursor})
+            )
+            .await
+            .unwrap_err()
+            .contains("changed")
+    );
+    for args in [
+        json!({"scope":"effective","root":"context-1"}),
+        json!({"scope":"unrecognized"}),
+        json!({"scope":"effective","paths":["../"]}),
+        json!({"scope":"effective","limit":0}),
+    ] {
+        assert!(f.context.perform("ssmcp.skills.list", args).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn effective_views_only_use_granted_roots_and_preserve_invalid_metadata_diagnostics() {
+    let f = Fixture::new();
+    f.write(
+        "skills/shared/SKILL.md",
+        "---\nname: shared\ndescription: [unsupported]\n---\n",
+    );
+    let global = f.extra.join("skills/shared/SKILL.md");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::write(
+        &global,
+        "---\nname: shared\ndescription: Valid global\n---\n",
+    )
+    .unwrap();
+    let outside = f.base.join("skills/outside/SKILL.md");
+    fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    fs::write(
+        &outside,
+        "---\nname: outside\ndescription: Not granted\n---\n",
+    )
+    .unwrap();
+    let page = f
+        .call("ssmcp.skills.list", json!({"scope":"effective"}))
+        .await;
+    assert_eq!(page["total"], 2);
+    assert!(
+        page["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["description"] == "Valid global")
+    );
+    assert!(!page.to_string().contains("Not granted"));
+    assert!(
+        page["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["root"]["id"] == "workspace")
+    );
+    let partial = f
+        .call(
+            "ssmcp.skills.list",
+            json!({"scope":"effective","paths":["skills"],"max_depth":0}),
+        )
+        .await;
+    assert_eq!(partial["truncated"], true);
+}
+
+#[tokio::test]
+async fn effective_global_roots_respect_configuration_order_and_custom_search_paths() {
+    let f = Fixture::new();
+    let later = f.base.join("later");
+    fs::create_dir_all(later.join("custom/shared")).unwrap();
+    fs::create_dir_all(f.extra.join("custom/shared")).unwrap();
+    fs::write(
+        f.extra.join("custom/shared/SKILL.md"),
+        "---\nname: shared\ndescription: First configured global\n---\n",
+    )
+    .unwrap();
+    fs::write(
+        later.join("custom/shared/SKILL.md"),
+        "---\nname: shared\ndescription: Later configured global\n---\n",
+    )
+    .unwrap();
+    let context = Context::new(f.root.clone(), vec![f.extra.clone(), later]).unwrap();
+    let page = context
+        .perform(
+            "ssmcp.skills.list",
+            json!({"scope":"effective","paths":["custom"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["skills"][0]["root"]["id"], "context-1");
+    assert_eq!(page["skills"][0]["shadowed"][0]["root"]["id"], "context-2");
+}

@@ -223,3 +223,66 @@ test('piped input and multiple terminal helpers preserve native arguments and st
   });
   assert.deepEqual(result(record).replies, expected.map(([name, args]) => ({ name, arguments: args, nativeResult: true })));
 });
+
+
+test('skill views declare effective defaults while preserving explicit scope and roots', async () => {
+  const record = await run(`
+    const options = {cursor:'next',limit:8};
+    const replies = [
+      await skills.view('one'),
+      await skills.view('one', {}),
+      await skills.view('one', options),
+      await skills.view('one', {root:'workspace'}),
+      await skills.view('one', {root:'context-1',cursor:'next'}),
+      await skills.view('one', {scope:'root'}),
+      await skills.view('one', {scope:'effective'}),
+    ];
+    return {replies,options};
+  `, request => {
+    assert.equal(request.op, 'call');
+    assert.equal(request.client_id, 'one');
+    assert.equal(request.name, 'ssmcp.skills.view');
+    return native(request.arguments);
+  });
+  succeeded(record);
+  const expected = [
+    {scope:'effective'},
+    {scope:'effective'},
+    {cursor:'next',limit:8,scope:'effective'},
+    {root:'workspace'},
+    {root:'context-1',cursor:'next'},
+    {scope:'root'},
+    {scope:'effective'},
+  ];
+  assert.deepEqual(record.requests.map(request => request.arguments), expected);
+  assert.deepEqual(result(record).replies, expected);
+  assert.deepEqual(result(record).options, {cursor:'next',limit:8}, 'caller options are not mutated');
+});
+
+test('skill views preserve invalid argument errors and never retry a rejected effective request', async () => {
+  const invalid = await run(`
+    const failures = [];
+    for (const args of [null,[],1,'invalid',true]) {
+      try { await skills.view('one',args); failures.push('unexpected success'); }
+      catch (failure) { failures.push(failure.message); }
+    }
+    return failures;
+  `, () => assert.fail('invalid argument types must not reach the native provider'));
+  succeeded(invalid);
+  assert.deepEqual(result(invalid), Array(5).fill('tool arguments must be a JSON object'));
+  assert.equal(invalid.requests.length, 0);
+
+  for (const response of [
+    {ok:false,error:'invalid context arguments: unknown field scope'},
+    {ok:true,value:{isError:true,content:[{type:'text',text:'invalid context arguments: unknown field scope'}]}},
+  ]) {
+    const record = await run(`return await skills.view('one');`, request => {
+      assert.equal(request.name, 'ssmcp.skills.view');
+      assert.deepEqual(request.arguments, {scope:'effective'});
+      return response;
+    });
+    assert.match(error(record), /unknown field scope/);
+    assert.equal(result(record), undefined);
+    assert.equal(record.requests.length, 1, 'an older client must fail without a single-root fallback');
+  }
+});

@@ -64,6 +64,7 @@ impl Context {
         let path = json!({"type":"string","maxLength":MAX_PATH,"description":"Path relative to the selected root. Parent traversal and symlinks are rejected."});
         let scan = json!({
             "root":root,
+            "scope":{"type":"string","enum":["root","effective"],"description":"root scans one granted root; effective overlays workspace skills over explicit context roots in configuration order. view defaults to effective when neither root nor scope is supplied; list defaults to root."},
             "paths":{"type":"array","minItems":1,"maxItems":16,"items":path,"default":DEFAULT_PATHS},
             "max_depth":{"type":"integer","minimum":0,"maximum":8,"default":4},
             "max_nodes":{"type":"integer","minimum":1,"maximum":4096,"default":2048},
@@ -87,7 +88,7 @@ impl Context {
             ),
             tool(
                 "ssmcp.skills.view",
-                "Generate a compact Markdown skill index from the same bounded metadata page as skills.list. The skill body is not included.",
+                "Generate a live Markdown skill index. Defaults to the effective project-over-global view across explicitly granted roots; root selects a single root. Same-name project skills win and origins remain visible. Bodies are read separately.",
                 scan,
                 &[],
             ),
@@ -128,9 +129,25 @@ impl Context {
                 })).collect::<Vec<_>>(),"boundary":boundary()})
             }
             "ssmcp.skills.list" | "ssmcp.skills.view" => {
+                let view = name.ends_with(".view");
+                let mut args = args;
+                if view
+                    && args.get("root").is_none()
+                    && args.get("scope").is_none()
+                    && let Some(object) = args.as_object_mut()
+                {
+                    object.insert("scope".into(), json!("effective"));
+                }
                 let args: ScanArgs = parse(args)?;
-                let root = self.root(&args.root)?;
-                skills(root, args, name.ends_with(".view")).await?
+                let (all, result) = if args.scope == SkillScope::Effective {
+                    if args.root != "workspace" {
+                        return Err("effective skills use workspace as the project root; omit root or select scope: root".into());
+                    }
+                    effective_skills(&self.roots, &args).await?
+                } else {
+                    scan_skills(self.root(&args.root)?, &args).await?
+                };
+                skill_page(all, result, &args, view)?
             }
             "ssmcp.skills.read" | "ssmcp.agents.read" => {
                 let args: ReadArgs = parse(args)?;
@@ -189,11 +206,21 @@ impl Context {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Empty {}
+#[derive(Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SkillScope {
+    #[default]
+    Root,
+    Effective,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScanArgs {
     #[serde(default = "default_root")]
     root: String,
+    #[serde(default)]
+    scope: SkillScope,
     paths: Option<Vec<String>>,
     #[serde(default = "default_depth")]
     max_depth: usize,
@@ -333,7 +360,7 @@ async fn read_document(
     String::from_utf8(data).map_err(|_| format!("{path} is not valid UTF-8 text"))
 }
 
-async fn skills(root: &ContextRoot, args: ScanArgs, view: bool) -> Result<Value, String> {
+async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>, Value), String> {
     if args.max_depth > 8
         || args.max_nodes == 0
         || args.max_nodes > 4096
@@ -344,6 +371,7 @@ async fn skills(root: &ContextRoot, args: ScanArgs, view: bool) -> Result<Value,
     }
     let requested = args
         .paths
+        .clone()
         .unwrap_or_else(|| DEFAULT_PATHS.iter().map(|path| (*path).into()).collect());
     if requested.is_empty() || requested.len() > 16 {
         return Err("paths must contain 1..=16 relative directories".into());
@@ -520,7 +548,7 @@ async fn skills(root: &ContextRoot, args: ScanArgs, view: bool) -> Result<Value,
                                 );
                                 json!({"name":null,"description":null,"status":"invalid","parser":"yaml-frontmatter-subset"})
                             };
-                            found.insert(path.clone(), json!({"path":path,"directory":directory,"source":source,"name":meta["name"],"description":meta["description"],"metadata_status":meta["status"],"size":size,"metadata_sha256":digest(&data)}));
+                            found.insert(path.clone(), json!({"root":origin(root),"path":path,"directory":directory,"source":source,"name":meta["name"],"description":meta["description"],"metadata_status":meta["status"],"size":size,"metadata_sha256":digest(&data)}));
                         }
                         Err(error) => {
                             truncated = true;
@@ -547,6 +575,122 @@ async fn skills(root: &ContextRoot, args: ScanArgs, view: bool) -> Result<Value,
         }
     }
     let fingerprint = digest(&serde_json::to_vec(&json!({"root":origin(root),"paths":paths,"max_depth":args.max_depth,"max_nodes":args.max_nodes,"skills":all,"sources":sources,"truncated":truncated})).map_err(|error|error.to_string())?);
+    let result = json!({"root":origin(root),"scope":"root","sources":sources,"diagnostics":diagnostics,"total":all.len(),"truncated":truncated,"snapshot":fingerprint,"boundary":boundary(),"limits":{"max_depth":args.max_depth,"max_nodes":args.max_nodes,"visited_nodes":nodes,"metadata_bytes":read_bytes,"max_metadata_bytes_per_file":MAX_METADATA_BYTES,"max_metadata_bytes_total":MAX_SCAN_BYTES,"metadata_field_bytes":2048,"page_size":args.limit},"metadata_parser":"yaml-frontmatter-subset"});
+    Ok((all, result))
+}
+
+/// Scan each authorized root once per read. No file contents or metadata are cached.
+async fn effective_skills(
+    roots: &[ContextRoot],
+    args: &ScanArgs,
+) -> Result<(Vec<Value>, Value), String> {
+    let paths = args
+        .paths
+        .clone()
+        .unwrap_or_else(|| DEFAULT_PATHS.iter().map(|path| (*path).into()).collect());
+    let mut effective = Vec::<Value>::new();
+    let mut names = BTreeMap::<String, usize>::new();
+    let mut snapshots = Vec::new();
+    let mut sources = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut truncated = false;
+    let mut visited_nodes = 0;
+    let mut metadata_bytes = 0;
+    for root in roots {
+        let (mut candidates, scan) = scan_skills(root, args).await?;
+        snapshots.push(scan["snapshot"].clone());
+        truncated |= scan["truncated"] == true;
+        visited_nodes += scan["limits"]["visited_nodes"].as_u64().unwrap_or(0);
+        metadata_bytes += scan["limits"]["metadata_bytes"].as_u64().unwrap_or(0);
+        for source in scan["sources"].as_array().ok_or("invalid skill sources")? {
+            let mut source = source.clone();
+            source["root"] = origin(root);
+            sources.push(source);
+        }
+        for item in scan["diagnostics"]
+            .as_array()
+            .ok_or("invalid skill diagnostics")?
+        {
+            let mut item = item.clone();
+            item["root"] = origin(root);
+            diagnostics.push(item);
+        }
+        // Explicit search-path order breaks ties within one root.
+        candidates.sort_by_key(|skill| {
+            (
+                paths
+                    .iter()
+                    .position(|path| normalize(path).ok().as_deref() == skill["source"].as_str())
+                    .unwrap_or(usize::MAX),
+                skill["path"].as_str().unwrap_or("").to_owned(),
+            )
+        });
+        for mut candidate in candidates {
+            let name = (candidate["metadata_status"] == "ok")
+                .then(|| candidate["name"].as_str())
+                .flatten()
+                .map(str::to_owned);
+            if let Some(index) = name.as_ref().and_then(|name| names.get(name)).copied() {
+                effective[index]["shadowed"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                        "root":candidate["root"],"path":candidate["path"],
+                        "source":candidate["source"]
+                    }));
+            } else {
+                if let Some(name) = name {
+                    names.insert(name, effective.len());
+                }
+                candidate["scope"] = json!(if root.id == "workspace" {
+                    "project"
+                } else {
+                    "global"
+                });
+                candidate["shadowed"] = json!([]);
+                effective.push(candidate);
+            }
+        }
+    }
+    effective.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .cmp(&b["name"].as_str())
+            .then_with(|| a["root"]["id"].as_str().cmp(&b["root"]["id"].as_str()))
+            .then_with(|| a["path"].as_str().cmp(&b["path"].as_str()))
+    });
+    let fingerprint = digest(
+        &serde_json::to_vec(&json!({
+            "scope":"effective","snapshots":snapshots,"skills":effective
+        }))
+        .map_err(|error| error.to_string())?,
+    );
+    let result = json!({
+        "root":origin(&roots[0]),"roots":roots.iter().map(origin).collect::<Vec<_>>(),
+        "scope":"effective","sources":sources,"diagnostics":diagnostics,
+        "total":effective.len(),"truncated":truncated,"snapshot":fingerprint,
+        "boundary":"Only workspace and explicitly granted context roots are inspected. No implicit home or native agent context is included.",
+        "precedence":"workspace, then context roots in configuration order; within a root, requested paths in order, then lexical file path. Valid same-name skills shadow later entries.",
+        "limits":{"max_depth":args.max_depth,"max_nodes_per_root":args.max_nodes,
+            "visited_nodes":visited_nodes,"metadata_bytes":metadata_bytes,
+            "max_metadata_bytes_per_file":MAX_METADATA_BYTES,
+            "max_metadata_bytes_total":MAX_SCAN_BYTES * roots.len(),
+            "metadata_field_bytes":2048,"page_size":args.limit},
+        "metadata_parser":"yaml-frontmatter-subset"
+    });
+    Ok((effective, result))
+}
+
+fn skill_page(
+    all: Vec<Value>,
+    mut result: Value,
+    args: &ScanArgs,
+    view: bool,
+) -> Result<Value, String> {
+    let fingerprint = result["snapshot"]
+        .as_str()
+        .ok_or("missing skill snapshot")?
+        .to_owned();
     let offset = if let Some(cursor) = &args.cursor {
         if cursor.len() > 128 {
             return Err("invalid skill cursor".into());
@@ -568,12 +712,12 @@ async fn skills(root: &ContextRoot, args: ScanArgs, view: bool) -> Result<Value,
     }
     let end = offset.saturating_add(args.limit).min(all.len());
     let page = &all[offset..end];
-    let mut result = json!({"root":origin(root),"sources":sources,"diagnostics":diagnostics,"total":all.len(),"shown":page.len(),"truncated":truncated,"snapshot":fingerprint,"boundary":boundary(),"limits":{"max_depth":args.max_depth,"max_nodes":args.max_nodes,"visited_nodes":nodes,"metadata_bytes":read_bytes,"max_metadata_bytes_per_file":MAX_METADATA_BYTES,"max_metadata_bytes_total":MAX_SCAN_BYTES,"metadata_field_bytes":2048,"page_size":args.limit},"metadata_parser":"yaml-frontmatter-subset"});
+    result["shown"] = json!(page.len());
     if end < all.len() {
         result["next_cursor"] = json!(format!("{fingerprint}:{end}"));
     }
     if view {
-        result["markdown"] = json!(markdown(page));
+        result["markdown"] = json!(markdown(page, result["scope"] == "effective"));
     } else {
         result["skills"] = json!(page);
     }
@@ -943,18 +1087,24 @@ fn block_scalar(header: &str, lines: &[&str]) -> Result<String, String> {
     }
     Ok(output)
 }
-fn markdown(skills: &[Value]) -> String {
-    let mut output = "# Available skills\n\nGenerated from name and description frontmatter only.\n\n| Skill | Description | Path |\n| --- | --- | --- |\n".to_string();
+fn markdown(skills: &[Value], effective: bool) -> String {
+    let mut output = if effective {
+        "# Available skills\n\nProject skills overlay explicitly configured global roots. Metadata only; read SKILL.md for the complete content.\n\n| Skill | Description | Root | Path | Shadowed |\n| --- | --- | --- | --- | --- |\n"
+    } else {
+        "# Available skills\n\nGenerated from name and description frontmatter only.\n\n| Skill | Description | Root | Path | Shadowed |\n| --- | --- | --- | --- | --- |\n"
+    }.to_string();
     for skill in skills {
         let name = skill["name"].as_str().unwrap_or("Metadata unavailable");
         let description = skill["description"]
             .as_str()
             .unwrap_or("Read SKILL.md and inspect metadata diagnostics.");
         output.push_str(&format!(
-            "| {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} |\n",
             escape_markdown(name),
             escape_markdown(description),
-            escape_markdown(skill["path"].as_str().unwrap_or(""))
+            escape_markdown(skill["root"]["id"].as_str().unwrap_or("")),
+            escape_markdown(skill["path"].as_str().unwrap_or("")),
+            skill["shadowed"].as_array().map_or(0, Vec::len)
         ));
     }
     output
