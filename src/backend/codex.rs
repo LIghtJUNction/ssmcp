@@ -132,10 +132,6 @@ impl Codex {
             return Err("Codex generated no ClientRequest.json".into());
         }
         let (tools, methods) = catalog(&schemas.read("ClientRequest.json")?)?;
-        let tools = tools
-            .into_iter()
-            .map(ToolDescriptor::from_value)
-            .collect::<Result<Vec<_>, _>>()?;
         let mcp_supported = [
             "thread/start",
             "mcpServerStatus/list",
@@ -521,12 +517,13 @@ async fn discover_mcp_tools(codex: &Codex) -> Result<McpCatalog, String> {
         if let Some(cursor) = &cursor {
             params["cursor"] = json!(cursor);
         }
-        let page = codex.discovery_page(params).await?;
+        let mut page = codex.discovery_page(params).await?;
         let servers = page
-            .get("data")
-            .and_then(Value::as_array)
+            .get_mut("data")
+            .and_then(Value::as_array_mut)
+            .map(std::mem::take)
             .ok_or("Codex MCP discovery returned no data array")?;
-        for server in servers {
+        for mut server in servers {
             if descriptors.len() + catalog.omitted.len() >= MAX_MCP_TOOLS {
                 return Err("Codex MCP tool catalog exceeds 4096 entries".into());
             }
@@ -534,40 +531,45 @@ async fn discover_mcp_tools(codex: &Codex) -> Result<McpCatalog, String> {
                 .get("name")
                 .and_then(Value::as_str)
                 .filter(|name| !name.is_empty())
-                .ok_or("Codex MCP server has no name")?;
-            if !servers_seen.insert(server_name.to_owned()) {
+                .ok_or("Codex MCP server has no name")?
+                .to_owned();
+            if !servers_seen.insert(server_name.clone()) {
                 return Err("Codex MCP discovery repeated a server".into());
             }
-            let Some(tools) = server.get("tools").and_then(Value::as_object) else {
+            let Some(tools) = server
+                .get_mut("tools")
+                .and_then(Value::as_object_mut)
+                .map(std::mem::take)
+            else {
                 catalog.omitted.push(json!({"server":server_name,"reason":"Native server did not expose a tool catalog"}));
                 continue;
             };
-            for (key, spec) in tools {
+            for (key, mut spec) in tools {
                 if descriptors.len() + catalog.omitted.len() >= MAX_MCP_TOOLS {
                     return Err("Codex MCP tool catalog exceeds 4096 entries".into());
                 }
                 let native_name = spec
                     .get("name")
                     .and_then(Value::as_str)
-                    .unwrap_or(key.as_str());
+                    .unwrap_or(key.as_str())
+                    .to_owned();
                 if native_name.is_empty() || !spec.get("inputSchema").is_some_and(Value::is_object)
                 {
                     catalog.omitted.push(json!({"server":server_name,"tool":native_name,"reason":"Native tool has no usable name or inputSchema; not enumerable"}));
                     continue;
                 }
-                let name = mcp_tool_name(server_name, native_name);
-                let mut definition = spec.clone();
-                // Keep the complete native Tool. Only its bridge routing name
+                let name = mcp_tool_name(&server_name, &native_name);
+                // Move the complete native Tool. Only its bridge routing name
                 // changes; never synthesize schemas, annotations or approvals.
-                definition["name"] = json!(name);
-                descriptors.insert(name.clone(), ToolDescriptor::from_value(definition)?);
+                spec["name"] = json!(name);
+                descriptors.insert(name.clone(), ToolDescriptor::from_value(spec)?);
                 if catalog
                     .routes
                     .insert(
                         name,
                         McpRoute {
-                            server: server_name.to_owned(),
-                            tool: native_name.to_owned(),
+                            server: server_name.clone(),
+                            tool: native_name,
                         },
                     )
                     .is_some()
@@ -621,7 +623,7 @@ fn mcp_tool_name(server: &str, tool: &str) -> String {
     format!("codex.mcp._h{:x}", digest.finalize())
 }
 
-fn catalog(schema: &Value) -> Result<(Vec<Value>, Methods), String> {
+fn catalog(schema: &Value) -> Result<(Vec<ToolDescriptor>, Methods), String> {
     let variants = schema["oneOf"]
         .as_array()
         .ok_or("Codex ClientRequest schema has no oneOf")?;
@@ -692,15 +694,15 @@ fn catalog(schema: &Value) -> Result<(Vec<Value>, Methods), String> {
             .unwrap_or(
                 "Forward this native Codex App Server method with its version-matched parameters.",
             );
-        tools.push(json!({"name":name,"description":format!("Codex {method}. {description}"),"inputSchema":input}));
+        tools.push(ToolDescriptor::from_value(json!({"name":name,"description":format!("Codex {method}. {description}"),"inputSchema":input}))?);
     }
-    tools.extend([
+    tools.extend(crate::catalog::compact(vec![
         json!({"name":"codex.rpc","description":"Forward any native Codex App Server method. The connection is already initialized. Native sandbox, approval and feature policies apply. Agent turns execute all locally available Codex tools; tool progress and approvals appear in ssmcp.codex.events/requests.","inputSchema":{"type":"object","properties":{"method":{"type":"string"},"params":{"type":["object","null"]}},"required":["method"],"additionalProperties":false}}),
         json!({"name":"ssmcp.codex.events","description":"Read native Codex events, command output, tool execution and turn completion from a retained cursor. Read continuously while work runs.","inputSchema":super::events::schema()}),
         json!({"name":"ssmcp.codex.requests","description":"Read pending native approvals, user-input, elicitation and dynamic tool requests. No request is automatically approved or answered.","inputSchema":{"type":"object","additionalProperties":false}}),
         json!({"name":"ssmcp.codex.respond","description":"Answer an existing native server request, preserving its ID and required result shape. Use ssmcp.codex.schema to inspect generated response types. Supply exactly one of result or error.","inputSchema":{"type":"object","properties":{"id":{"type":["string","integer"]},"result":{},"error":{"type":"object","properties":{"code":{"type":"integer"},"message":{"type":"string"},"data":{}},"required":["code","message"]}},"required":["id"],"additionalProperties":false}}),
         json!({"name":"ssmcp.codex.schema","description":"Read version-matched generated Codex schemas, including approval responses and dynamic tool results. Omit name to list all schema filenames.","inputSchema":{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":false}}),
-    ]);
+    ])?);
     Ok((tools, methods))
 }
 
@@ -945,6 +947,7 @@ mod tests {
             {"properties":{"method":{"enum":["future/method"]},"params":{"type":["object","null"]}}}
         ],"definitions":{"Params":{"type":"object","properties":{"node":{"$ref":"#/definitions/Node"}}},"Node":{"type":"object","properties":{"child":{"$ref":"#/definitions/Node"}}},"Unused":{"type":"string"}}});
         let (tools, methods) = catalog(&schema).unwrap();
+        let tools: Vec<_> = tools.iter().map(|tool| tool.value().unwrap()).collect();
         assert_eq!(methods.len(), 2);
         let input = &tools[0]["inputSchema"];
         assert!(input["definitions"].get("Node").is_some());
