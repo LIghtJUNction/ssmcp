@@ -1,6 +1,6 @@
 # 实时项目上下文资源与 RTK 验收
 
-验证日期：2026-11-18（Asia/Taipei）。变更入口：[PR #17](https://github.com/LIghtJUNction/ssmcp/pull/17)。本报告的实现与测试对应提交 [7390d16](https://github.com/LIghtJUNction/ssmcp/commit/7390d1690a3016835ed71f2c7ef960a5b5ba77c7)。
+验证日期：2026-11-18（Asia/Taipei）。变更入口：[PR #17](https://github.com/LIghtJUNction/ssmcp/pull/17)。功能实现初验对应 [7390d16](https://github.com/LIghtJUNction/ssmcp/commit/7390d1690a3016835ed71f2c7ef960a5b5ba77c7)；合并主分支账号管理后的最终验证对应 [0461533](https://github.com/LIghtJUNction/ssmcp/commit/0461533856232ab28a17c7959911401dc9ba3656)。
 
 本轮共通过 **28 项 Rust 测试和 20 项 JavaScript 测试**。真实 RTK 调用、完整隔离的 code_mode 技能读取，以及服务端资源接口均有验证。此处记录源码和测试交付；运行中的服务端与客户端尚未由本任务升级。
 
@@ -27,7 +27,7 @@ code_mode 新增 rtk.status、rtk.run、rtk.start。RTK 参数数组逐项传给
 
 ## 验证结果
 
-所有下列测试均针对 7390d16。Rust 工具链为 rustc 1.100.0、cargo 1.100.0；Linux 独立构建使用 CARGO_BUILD_JOBS=2。
+下列 Rust 测试针对最终合并源码 0461533。Node 的 20 项结果来自 7390d16；逐文件 SHA-256 比对确认 runner 和三个测试脚本与 0461533 完全一致，因此沿用该结果。Rust 工具链为 rustc 1.100.0、cargo 1.100.0；Linux 独立构建使用 CARGO_BUILD_JOBS=2。
 
 | 验证项 | 环境 | 通过 | 失败 | 忽略 |
 | --- | --- | ---: | ---: | ---: |
@@ -38,7 +38,7 @@ code_mode 新增 rtk.status、rtk.run、rtk.start。RTK 参数数组逐项传给
 | 指定 context_helpers 隔离集成测试 | Linux 开发机 | 1 | 0 | 0 |
 | CUA、执行 helper 与 RTK 的 Node worker 回归 | 独立 Linux 环境 | 20 | 0 | 0 |
 
-过滤未选择的测试不计为通过：resources 单元命令另有 598 项被过滤；context_helpers 仅选择本轮相关的一个用例，另一个用例被过滤。未执行全仓库完整测试套件，也未以 CI 状态代替本地验收。
+过滤未选择的测试不计为通过：resources 单元命令另有 631 项被过滤；context_helpers 仅选择本轮相关的一个用例，另一个用例被过滤。未执行全仓库完整测试套件，也未以 CI 状态代替本地验收。
 
 附加检查通过：变更 Rust 文件的 rustfmt、git diff --check、仓库内 ssmcp 技能的 frontmatter 校验。没有增加运行时依赖。
 
@@ -48,11 +48,11 @@ code_mode 新增 rtk.status、rtk.run、rtk.start。RTK 参数数组逐项传给
 
 | 校验对象 | SHA-256 |
 | --- | --- |
-| 压缩包，2,313,391 字节 | `3c9a764c8ad52932fc7238c35b3baa867a7cc33970fbd4179712cf0ba75e189a` |
-| 解压后测试二进制，6,820,128 字节 | `33c1bb00706f9bdfa22aee4dfa363059f3aeca9bf5366a2acfd16152eecc9cce` |
+| 压缩包，2,318,619 字节 | `065b910923b9b64e8fe220731798c23b788a016a8124dfb40cc8a1bf617ee801` |
+| 解压后测试二进制，6,836,096 字节 | `6f4c8fb6aecb259d1f21ab559d377565cf1bc2429661375ed117d70becb4ade0` |
 | src/code_mode.js，35,741 字节 | `dcc3e2ddfcea350bf1af107002a0caba21cb7a920b603eb92a45364e99dcadb5` |
 
-运行使用现有 SSMCP_CODE_MODE_RUNNER 接口选择开发机中同提交的 runner，保留原有 bubblewrap 隔离。指定用例输出为 1 passed、0 failed、0 ignored，退出码 0，测试耗时 0.43 秒。仅编译和列出用例均未计入通过数量。
+运行使用现有 SSMCP_CODE_MODE_RUNNER 接口选择开发机中同提交的 runner，保留原有 bubblewrap 隔离。指定用例输出为 1 passed、0 failed、0 ignored，退出码 0，测试耗时 0.62 秒。仅编译和列出用例均未计入通过数量。
 
 ## 行为覆盖
 
@@ -63,7 +63,7 @@ code_mode 新增 rtk.status、rtk.run、rtk.start。RTK 参数数组逐项传给
 - 资源测试覆盖现有两个 MCP 协议代际、授权与连接状态检查、MIME 类型、分页、完整原文和默认 effective 范围。旧客户端拒绝 scope 时不会重试为单根。
 - JavaScript 测试确认显式 root/scope 透传、调用者参数不被修改、无效参数保持错误，以及旧客户端错误不被隐藏。
 - RTK 测试覆盖状态探测、字面参数、工作目录和环境透传、stdin、后台任务、取消、非零退出码、信号、输出制品以及观察阶段错误中的 job_id。
-- 合并主分支已有的协作功能后，保留 collab 工具、JavaScript namespace 和协作资源。
+- 合并主分支已有的协作功能后，保留 collab 工具、JavaScript namespace 和协作资源；账号管理与授权层合并后，资源 HTTP 和上下文回归再次通过。
 
 ## 真实 RTK 样本
 

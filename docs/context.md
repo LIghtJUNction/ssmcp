@@ -102,7 +102,7 @@ return await agents.read(clientId, {path: "AGENTS.md"});
 
 ~~~sh
 cd /path/to/project
-ssmcp --context-root "$HOME" --name development YOUR_SSH_TARGET
+ssmcp --ssh --context-root "$HOME" --name development YOUR_SSH_TARGET
 ~~~
 
 最多支持 8 个附加目录。目录必须存在，路径在连接前解析；相对路径以启动目录为基准。额外目录对应 context-1、context-2 等 ID：
