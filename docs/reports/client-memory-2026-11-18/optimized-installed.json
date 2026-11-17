@@ -1,0 +1,641 @@
+{
+  "schema": "ssmcp.client-memory.v1",
+  "binary": "/home/lightjunction/.cache/ssmcp-memory/ssmcp-memory-candidate-v7",
+  "providers": "installed",
+  "binary_file": {
+    "sha256": "2f40a5c2d61586171d3243f8fd453c48af403255ab4238b6ed731cd1f7818436",
+    "bytes": 7034096,
+    "mtime_ns": 1794949539357463106,
+    "ctime_ns": 1794949540227499431,
+    "device": 68,
+    "inode": 180660155
+  },
+  "binary_unchanged_during_run": true,
+  "platform": {
+    "system": "Linux",
+    "release": "7.3.4-arch1-1",
+    "machine": "x86_64"
+  },
+  "memory_details_capture": "end_of_phase",
+  "tty": true,
+  "measurement": "client process RSS + swap; child runtimes excluded",
+  "units": "KiB",
+  "sample_interval_ms": 50,
+  "settings": {
+    "providers": "installed",
+    "tools": 1500,
+    "description_bytes": 2300,
+    "scans": 4,
+    "catalog_metrics": true,
+    "commands": 40,
+    "forget_jobs": false,
+    "command_bytes": 512,
+    "idle_seconds": 35.0,
+    "discovery_timeout": 120,
+    "timeout": 240,
+    "sample_ms": 50,
+    "max_footprint_mib": 9.5367431640625,
+    "no_tty": false
+  },
+  "elapsed_seconds": 79.531,
+  "client_exit_code": 0,
+  "workload": {
+    "ok": true,
+    "catalog_scans": [
+      {
+        "tools": 1450,
+        "pages": 23,
+        "compact_json_bytes": 4261078,
+        "search_matches": 13,
+        "sha256": "983bf8813af97733943756d30ad6689c40b376cde86b9f1f98e8f78810fb1158",
+        "probe": null
+      },
+      {
+        "tools": 1450,
+        "pages": 23,
+        "compact_json_bytes": 4261078,
+        "search_matches": 13,
+        "sha256": "983bf8813af97733943756d30ad6689c40b376cde86b9f1f98e8f78810fb1158",
+        "probe": null
+      },
+      {
+        "tools": 1450,
+        "pages": 23,
+        "compact_json_bytes": 4261078,
+        "search_matches": 13,
+        "sha256": "983bf8813af97733943756d30ad6689c40b376cde86b9f1f98e8f78810fb1158",
+        "probe": null
+      },
+      {
+        "tools": 1450,
+        "pages": 23,
+        "compact_json_bytes": 4261078,
+        "search_matches": 13,
+        "sha256": "983bf8813af97733943756d30ad6689c40b376cde86b9f1f98e8f78810fb1158",
+        "probe": null
+      }
+    ],
+    "post_idle_catalog": {
+      "tools": 1450,
+      "pages": 23,
+      "compact_json_bytes": 4261078,
+      "search_matches": 13,
+      "sha256": "983bf8813af97733943756d30ad6689c40b376cde86b9f1f98e8f78810fb1158",
+      "probe": null
+    },
+    "catalog_transition": {
+      "initial_tool_count": 1450,
+      "observed_before_idle_tool_count": 1450,
+      "final_tool_count": 1450,
+      "added_name_count": 0,
+      "added_names": [],
+      "removed_name_count": 0,
+      "removed_names": [],
+      "addition_basis": "first scan",
+      "removal_basis": "all scans before final idle",
+      "initial_ready_providers": [
+        "claude",
+        "codex"
+      ],
+      "final_ready_providers": [
+        "claude",
+        "codex"
+      ],
+      "ready_provider_regressions": []
+    },
+    "post_idle_harnesses": [
+      {
+        "provider": "codex",
+        "status": "ready",
+        "tools": 1323,
+        "version": "codex-cli 0.169.0"
+      },
+      {
+        "provider": "claude",
+        "status": "ready",
+        "tools": 27,
+        "version": "2.1.326 (Claude Code)"
+      },
+      {
+        "provider": "pi",
+        "status": "unavailable",
+        "tools": 0,
+        "version": "1.5.2"
+      },
+      {
+        "provider": "opencode",
+        "status": "unavailable",
+        "tools": 0,
+        "version": "opencode v2.3.0"
+      },
+      {
+        "provider": "playwright",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      }
+    ],
+    "commands_verified": 40,
+    "command_output_bytes": 21040,
+    "harnesses": [
+      {
+        "provider": "codex",
+        "status": "ready",
+        "tools": 1270,
+        "version": "codex-cli 0.169.0"
+      },
+      {
+        "provider": "claude",
+        "status": "ready",
+        "tools": 27,
+        "version": "2.1.326 (Claude Code)"
+      },
+      {
+        "provider": "pi",
+        "status": "unavailable",
+        "tools": 0,
+        "version": "1.5.2"
+      },
+      {
+        "provider": "opencode",
+        "status": "unavailable",
+        "tools": 0,
+        "version": "opencode v2.3.0"
+      },
+      {
+        "provider": "playwright",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      }
+    ]
+  },
+  "catalog_payload_estimates": {
+    "tools": 1450,
+    "compact_json_utf8_bytes": 4258653,
+    "routed_name_utf8_bytes": 79354,
+    "raw_deflate_per_tool_bytes": {
+      "level_1": 2104728,
+      "level_6": 1550878
+    },
+    "serialization": "UTF-8 JSON with sorted keys, compact separators, and unescaped Unicode",
+    "method": "Independent zlib raw-deflate stream per tool; payload estimate, excluding allocator overhead",
+    "computed_after_client_exit": true
+  },
+  "phases": {
+    "startup": {
+      "samples": 3,
+      "rss_kib": {
+        "median": 7716,
+        "max": 7716,
+        "last": 7716
+      },
+      "swap_kib": {
+        "median": 0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 7716,
+        "max": 7716,
+        "last": 7716
+      },
+      "pss_kib": {
+        "median": 5296,
+        "max": 5297,
+        "last": 5297
+      },
+      "resident_high_water_kib": {
+        "median": 7716,
+        "max": 7716,
+        "last": 7716
+      }
+    },
+    "discovery": {
+      "samples": 132,
+      "rss_kib": {
+        "median": 9756.0,
+        "max": 70820,
+        "last": 70820
+      },
+      "swap_kib": {
+        "median": 0.0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 9756.0,
+        "max": 70820,
+        "last": 70820
+      },
+      "pss_kib": {
+        "median": 6538.5,
+        "max": 67682,
+        "last": 67682
+      },
+      "resident_high_water_kib": {
+        "median": 12372.0,
+        "max": 70820,
+        "last": 70820
+      }
+    },
+    "idle": {
+      "samples": 682,
+      "rss_kib": {
+        "median": 12636.0,
+        "max": 73988,
+        "last": 14544
+      },
+      "swap_kib": {
+        "median": 172.0,
+        "max": 772,
+        "last": 316
+      },
+      "rss_swap_kib": {
+        "median": 12808.0,
+        "max": 74428,
+        "last": 14860
+      },
+      "pss_kib": {
+        "median": 9520.0,
+        "max": 71047,
+        "last": 8043
+      },
+      "resident_high_water_kib": {
+        "median": 70268.0,
+        "max": 73988,
+        "last": 73240
+      }
+    },
+    "catalog_scan_and_search": {
+      "samples": 30,
+      "rss_kib": {
+        "median": 14338.0,
+        "max": 15916,
+        "last": 14248
+      },
+      "swap_kib": {
+        "median": 284.0,
+        "max": 288,
+        "last": 284
+      },
+      "rss_swap_kib": {
+        "median": 14622.0,
+        "max": 16200,
+        "last": 14532
+      },
+      "pss_kib": {
+        "median": 11330.0,
+        "max": 12976,
+        "last": 11308
+      },
+      "resident_high_water_kib": {
+        "median": 73240.0,
+        "max": 73240,
+        "last": 73240
+      }
+    },
+    "commands_and_logs": {
+      "samples": 13,
+      "rss_kib": {
+        "median": 14512,
+        "max": 14568,
+        "last": 14320
+      },
+      "swap_kib": {
+        "median": 256,
+        "max": 256,
+        "last": 256
+      },
+      "rss_swap_kib": {
+        "median": 14768,
+        "max": 14824,
+        "last": 14576
+      },
+      "pss_kib": {
+        "median": 11572,
+        "max": 11628,
+        "last": 11380
+      },
+      "resident_high_water_kib": {
+        "median": 73240,
+        "max": 73240,
+        "last": 73240
+      }
+    },
+    "after_workload_idle": {
+      "samples": 673,
+      "rss_kib": {
+        "median": 13632,
+        "max": 73088,
+        "last": 14984
+      },
+      "swap_kib": {
+        "median": 256,
+        "max": 944,
+        "last": 344
+      },
+      "rss_swap_kib": {
+        "median": 13912,
+        "max": 73584,
+        "last": 15328
+      },
+      "pss_kib": {
+        "median": 10507,
+        "max": 69946,
+        "last": 12089
+      },
+      "resident_high_water_kib": {
+        "median": 73240,
+        "max": 73240,
+        "last": 73240
+      }
+    },
+    "post_idle_verification": {
+      "samples": 5,
+      "rss_kib": {
+        "median": 15416,
+        "max": 15544,
+        "last": 15368
+      },
+      "swap_kib": {
+        "median": 304,
+        "max": 312,
+        "last": 300
+      },
+      "rss_swap_kib": {
+        "median": 15724,
+        "max": 15848,
+        "last": 15668
+      },
+      "pss_kib": {
+        "median": 12521,
+        "max": 12648,
+        "last": 12472
+      },
+      "resident_high_water_kib": {
+        "median": 73240,
+        "max": 73240,
+        "last": 73240
+      }
+    },
+    "complete": {
+      "samples": 2,
+      "rss_kib": {
+        "median": 15580.0,
+        "max": 15792,
+        "last": 15792
+      },
+      "swap_kib": {
+        "median": 280.0,
+        "max": 300,
+        "last": 260
+      },
+      "rss_swap_kib": {
+        "median": 15860.0,
+        "max": 16052,
+        "last": 16052
+      },
+      "pss_kib": {
+        "median": 12673.0,
+        "max": 12874,
+        "last": 12874
+      },
+      "resident_high_water_kib": {
+        "median": 73240.0,
+        "max": 73240,
+        "last": 73240
+      }
+    }
+  },
+  "budget_mib": 9.5367431640625,
+  "memory_details": {
+    "after_workload_idle": {
+      "rollup": {
+        "rss_kib": 14984,
+        "swap_kib": 344,
+        "rss_swap_kib": 15328,
+        "pss_kib": 12089,
+        "swap_pss_kib": 161,
+        "resident_high_water_kib": 73240
+      },
+      "top_mappings": [
+        {
+          "mapping": "[heap]",
+          "Rss_kib": 8836,
+          "Pss_kib": 8836,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 8836,
+          "Swap_kib": 68
+        },
+        {
+          "mapping": "/home/lightjunction/.cache/ssmcp-memory/ssmcp-memory-candidate-v7",
+          "Rss_kib": 2736,
+          "Pss_kib": 2349,
+          "Shared_Clean_kib": 580,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 1264,
+          "Pss_kib": 3,
+          "Shared_Clean_kib": 1264,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/home/lightjunction/.cache/ssmcp-memory/ssmcp-memory-candidate-v7",
+          "Rss_kib": 600,
+          "Pss_kib": 598,
+          "Shared_Clean_kib": 4,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/etc/ld.so.cache",
+          "Rss_kib": 316,
+          "Pss_kib": 10,
+          "Shared_Clean_kib": 316,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 228,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 228,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/ld-linux-x86-64.so.2",
+          "Rss_kib": 200,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 200,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "[stack]",
+          "Rss_kib": 112,
+          "Pss_kib": 106,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 104,
+          "Swap_kib": 88
+        },
+        {
+          "mapping": "/home/lightjunction/.cache/ssmcp-memory/ssmcp-memory-candidate-v7",
+          "Rss_kib": 44,
+          "Pss_kib": 22,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 112
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 144,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 144,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "[anonymous]",
+          "Rss_kib": 88,
+          "Pss_kib": 88,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 88,
+          "Swap_kib": 12
+        },
+        {
+          "mapping": "/usr/lib/libm.so.6",
+          "Rss_kib": 64,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 64,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        }
+      ]
+    },
+    "idle": {
+      "rollup": {
+        "rss_kib": 14544,
+        "swap_kib": 316,
+        "rss_swap_kib": 14860,
+        "pss_kib": 8043,
+        "swap_pss_kib": 92,
+        "resident_high_water_kib": 73240
+      },
+      "top_mappings": [
+        {
+          "mapping": "[heap]",
+          "Rss_kib": 7140,
+          "Pss_kib": 3692,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 244,
+          "Swap_kib": 60
+        },
+        {
+          "mapping": "/home/lightjunction/.cache/ssmcp-memory/ssmcp-memory-candidate-v7",
+          "Rss_kib": 4088,
+          "Pss_kib": 3606,
+          "Shared_Clean_kib": 644,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 1264,
+          "Pss_kib": 3,
+          "Shared_Clean_kib": 1264,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/home/lightjunction/.cache/ssmcp-memory/ssmcp-memory-candidate-v7",
+          "Rss_kib": 604,
+          "Pss_kib": 602,
+          "Shared_Clean_kib": 4,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/etc/ld.so.cache",
+          "Rss_kib": 316,
+          "Pss_kib": 7,
+          "Shared_Clean_kib": 316,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 228,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 228,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/ld-linux-x86-64.so.2",
+          "Rss_kib": 200,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 200,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "[stack]",
+          "Rss_kib": 112,
+          "Pss_kib": 66,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 24,
+          "Swap_kib": 88
+        },
+        {
+          "mapping": "/home/lightjunction/.cache/ssmcp-memory/ssmcp-memory-candidate-v7",
+          "Rss_kib": 44,
+          "Pss_kib": 14,
+          "Shared_Clean_kib": 12,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 112
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 144,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 144,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libm.so.6",
+          "Rss_kib": 64,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 64,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libm.so.6",
+          "Rss_kib": 64,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 64,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        }
+      ]
+    }
+  },
+  "sampled_peak_rss_kib": 73988,
+  "sampled_peak_rss_swap_kib": 74428,
+  "kernel_peak_rss_kib": 73988,
+  "steady_and_workload_max_rss_swap_kib": 74428,
+  "passed": false,
+  "execution_environment": {
+    "allocator_overrides": {},
+    "LD_PRELOAD": null,
+    "GLIBC_TUNABLES": null,
+    "MALLOC_and_MIMALLOC_environment_variables_cleared": true
+  }
+}

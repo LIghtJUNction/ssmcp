@@ -1,0 +1,38 @@
+{
+  "verified_at_utc": "2026-11-17T21:11:21.127112+00:00",
+  "client_name": "ssmcp-memory-verification-20261118",
+  "transport": "existing authenticated HTTPS/WebSocket connection to https://ssmcp.lmm.best",
+  "exec": {
+    "command": [
+      "/usr/bin/printf",
+      "memory-live-ok\n"
+    ],
+    "exit_code": 0,
+    "stdout": "memory-live-ok\n",
+    "stderr": "",
+    "exact_output_verified": true
+  },
+  "harnesses": {
+    "codex": {
+      "status": "ready",
+      "tools": 1270
+    },
+    "claude": {
+      "status": "ready",
+      "tools": 27
+    },
+    "pi": {
+      "status": "unavailable",
+      "tools": 0
+    },
+    "opencode": {
+      "status": "unavailable",
+      "tools": 0
+    },
+    "playwright": {
+      "status": "unavailable",
+      "tools": 0
+    }
+  },
+  "model_turns_invoked": false
+}
