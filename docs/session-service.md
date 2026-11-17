@@ -2,6 +2,8 @@
 
 ssmcp 服务保存具名客户端会话，终端通过 attach 接入它们。会话继续拥有 SSH 连接、PTY 和命令；关闭 attach 窗口只分离显示与输入端。显式 close 会停止会话并保留配置，start 可以再次启动。
 
+本页的 `sessions list` 与 `attach` 管理本机保存会话。查看 GitHub 账号可控的在线会话、从另一台设备进入终端或生成临时接入命令，请使用 `ssmcp list`、`ssmcp -i` 和 `ssmcp invite`，详见[客户端账号与临时接入](client-accounts.md)。
+
 ## Linux：安装、启用、启动
 
 先完成正常的 SSH 公钥与主机配置，再安装客户端服务。系统服务始终以明确指定的普通用户运行，使用该用户的 HOME、状态目录和 SSH 配置：
@@ -25,7 +27,7 @@ ssmcp service status --system --json
 
 ```sh
 ssmcp sessions create dev --cwd /path/to/project \
-  --watchdog --allow octocat@github my-ssmcp
+  --allow octocat@github my-ssmcp
 
 ssmcp sessions list --json
 ssmcp sessions status dev --json
@@ -35,7 +37,9 @@ ssmcp sessions start dev
 ssmcp sessions remove dev
 ```
 
-将 `octocat@github`、项目路径和 `my-ssmcp` 替换为自己的配置。名称直接跟在 create 后，不重复传 `--name`。同名 create 明确拒绝覆盖。`--watchdog` 控制失败重连和崩溃恢复；手动 close 优先于该策略。
+将 `octocat@github`、项目路径和 `my-ssmcp` 替换为自己的配置。名称直接跟在 create 后，不重复传 `--name`。同名 create 明确拒绝覆盖。
+
+新会话默认启用 watchdog，连接失败后重试，并由管理器恢复失败退出的工作进程。使用 `--no-watchdog` 禁用；`--watchdog` 保留为显式启用的兼容参数。重试默认等待 5 秒，`--reconnect-delay SECONDS` 可设为 1–3600 秒，不需要另加 `--watchdog`，也不能与 `--no-watchdog` 同用。手动 close 优先于自动恢复策略。
 
 | 操作 | 执行结果 | 保存配置 |
 | --- | --- | --- |
@@ -73,7 +77,7 @@ ssmcp attach -- list
 
 ```sh
 ssmcp sessions create manager --cwd /path/to/projects \
-  --session-control --watchdog --allow octocat@github my-ssmcp
+  --session-control --allow octocat@github my-ssmcp
 ```
 
 通过公开 list 选择它的唯一 client ID，再调用：
@@ -111,7 +115,7 @@ await sessions.close(managerClientId, {
 
 v4 兼容连接不向网关发送任务 `title`，本地保存的标题保持不变；旧协议也不提供每次调用的 `controller` 信息。SSH 验证、GitHub 允许列表与 OAuth 授权规则保持不变。更早的网关如果无法解析初始 Hello、因而没有返回结构化版本拒绝，不会触发回退。`reload` 仍等待并校验服务端 receipt；没有确认时不执行重载，协议回退不会绕过这项校验。
 
-原有 `--daemon` 在管理服务运行时创建受管会话；没有管理服务时仍支持原来的 per-session native 管理。旧 native 定义保持原有管理方式，列表明确标出它们。前台进程不会自动变成托管会话；需要 attach 的工作从 sessions create 或后台模式启动。
+原有 `--daemon` 在管理服务运行时创建受管会话；没有管理服务时仍支持原来的 per-session native 管理。旧 native 定义保持原有管理方式，列表明确标出它们。旧保存会话继续采用 manifest 记录的 watchdog 策略，原来关闭的不会因默认值变化而自动开启。前台进程不会自动变成托管会话；需要 attach 的工作从 sessions create 或后台模式启动。
 
 会话继续运行创建时保存的可执行文件快照。restart 保留该快照及配置；升级主安装入口后，要升级已有会话版本，应处理好其输出、remove 旧定义，再用相同连接参数重新创建。这样重启不会悄悄改变工作会话的软件版本。
 

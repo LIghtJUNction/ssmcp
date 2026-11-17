@@ -1,4 +1,32 @@
-# 独立命令、并行执行与后台任务
+# 客户端命令与独立任务
+
+## 登录、设备列表与临时控制
+
+先在 A 登录 GitHub，再启动自己的被控会话。随后在另一个终端查看账号下的设备，或生成命令交给 B：
+
+~~~sh
+ssmcp login --server https://ssmcp.example.com
+ssmcp whoami
+ssmcp --name device-a
+
+# 在 A 的另一个终端：
+ssmcp list
+ssmcp -i
+ssmcp invite
+~~~
+
+| 命令 | 用途 |
+| --- | --- |
+| `ssmcp login` / `whoami` / `logout` | 登录、确认身份、撤销这次客户端登录 |
+| `ssmcp list` / `ls` / `sessions list --remote` | 当前账号在所选服务器可控的在线会话 |
+| `ssmcp -i` / `list -i` | 选择会话并进入远端终端，Ctrl-] 离开 |
+| `ssmcp invite` | 生成 B 可直接执行的临时接入命令；默认从服务器下载客户端 |
+| `ssmcp invite --shell powershell` | 生成给 Windows PowerShell 的命令 |
+| `ssmcp sessions list` / `attach NAME` | 当前设备保存的本地后台会话 |
+
+邀请默认 10 分钟内兑换一次，B 会话默认可用 1 小时；`--ttl`、`--session-ttl` 可调整。已安装兼容客户端的 B 可用 `--no-bootstrap`。看门狗默认开启，`--no-watchdog` 可禁用，显式停止或授权到期后不会继续恢复。[完整账号流程与服务器配置](client-accounts.md)
+
+## 独立命令接口
 
 `exec` 在选定客户端启动独立进程，并用任务 ID 保存状态。每个任务有自己的工作目录、退出码和 stdout/stderr。它适合构建、测试、开发服务器等可由 argv 表达的命令。需要持续交互、终端控制或修改同一 Shell 状态时，使用 `terminal.*`。
 

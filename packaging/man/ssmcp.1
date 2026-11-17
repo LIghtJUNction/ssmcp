@@ -1,18 +1,59 @@
-.TH SSMCP 1 "2026-11-17" "ssmcp 0.6.4" "User Commands"
+.TH SSMCP 1 "2026-11-17" "ssmcp 0.7.0" "User Commands"
 .SH NAME
-ssmcp \- bridge local tools and independent commands through an SSH-authenticated MCP gateway
+ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .SH SYNOPSIS
+.B ssmcp login
+.RB [ \-\-server " https://origin" ]
+.RB [ \-\-no-browser ]
+.PP
+.B ssmcp
+.IR "whoami | logout"
+.RB [ \-\-server " https://origin" ]
+.RB [ \-\-json ]
+.PP
+.B ssmcp list
+.RB [ \-\-server " https://origin" ]
+.RB [ \-\-json " | " \-i ]
+.RB [ \-\-client " id" ]
+.RB [ \-\-terminal " id" ]
+.PP
+.B ssmcp \-i
+.RB [ \-\-server " https://origin" ]
+.RB [ \-\-client " id" ]
+.RB [ \-\-terminal " id" ]
+.PP
+.B ssmcp invite
+.RB [ \-\-server " https://origin" ]
+.RB [ \-\-ttl " seconds" ]
+.RB [ \-\-session-ttl " seconds" ]
+.RB [ \-\-shell " sh|powershell" ]
+.RB [ \-\-no-bootstrap ]
+.RB [ \-\-json ]
+.PP
+.B ssmcp join
+.BI \-\-server " https://origin"
+.BI \-\-token " invitation"
+.RB [ \-\-name " name" ]
+.RB [ \-\-no-watchdog ]
+.PP
+.B ssmcp
+.RB [ \-\-server " https://origin" ]
+.RB [ \-\-name " name" ]
+.RB [ \-\-title " title" ]
+.RB [ \-\-no-watchdog ]
+.RB [ \-\-reconnect-delay " seconds" ]
+.PP
 .B ssmcp
 .RB [ \-\-name " name" ]
 .RB [ \-\-title " title" ]
 .RB [ \-\-allow " username@github[,username@github...]" ]
 .RB [ \-F " ssh_config" ]
-.RB [ \-i " identity" ]
+.RB [ \-\-identity " file" ]
 .RB [ \-p " port" ]
 .RB [ \-\-shell " path" ]
 .RB [ \-\-daemon ]
 .RB [ \-\-session-control ]
-.RB [ \-\-watchdog ]
+.RB [ \-\-no-watchdog ]
 .RB [ \-\-reconnect-delay " seconds" ]
 .RB [ \-\-portal " https://origin" ]
 .RB [ \-\-no-setup ]
@@ -34,7 +75,7 @@ ssmcp \- bridge local tools and independent commands through an SSH-authenticate
 .RB [ \-\-cwd " dir" ]
 .RB [ \-\-json ]
 .RI [ "connection options" ]
-.I [user@]host
+.RI [ "[user@]host" ]
 .PP
 .B ssmcp attach
 .RI [ list ]
@@ -59,13 +100,21 @@ ssmcp \- bridge local tools and independent commands through an SSH-authenticate
 .PP
 .B ssmcp service run
 .SH DESCRIPTION
-ssmcp authenticates to OpenSSH using a public key and always provides a local
-shell, managed command jobs and file tools. It discovers installed Codex, Claude
-Code, Pi and OpenCode executables on PATH; optional harness failures leave other
-capabilities available. Multiple clients may connect under the same SSH account.
-The server assigns each connection a random client ID. With \-\-allow, it
-returns the global HTTPS /mcp URL for GitHub identity authorization. Without
-\-\-allow, it returns the SSH account's /username URL and a one-time login code.
+ssmcp provides a local shell, managed command jobs and file tools. After
+ssmcp login, running ssmcp without an SSH destination connects to the saved
+HTTPS server over WebSocket and grants the signed-in GitHub account access.
+No SSH key or repeated \-\-allow option is needed for this account connection.
+.PP
+An explicit SSH destination uses OpenSSH public-key authentication. An existing
+client login can supply the user's verified GitHub identity for the SSH allow
+policy; explicit \-\-allow remains available for sharing with other users.
+Without a client login or \-\-allow, SSH connections return the account's
+/username URL and a one-time login code. GitHub-authorized connections return
+/mcp. Each connection has a random client ID.
+.PP
+ssmcp discovers installed Codex, Claude Code, Pi and OpenCode executables on PATH;
+optional harness failures leave other capabilities available. Multiple clients
+may connect under the same account.
 .PP
 For foreground clients, interactive standard output shows a connection summary. Redirected output or
 JSONL mode emits one JSON object containing url, client_id, name, type, hostname
@@ -76,8 +125,8 @@ not track shell directory changes or the workspaces of native agent sessions.
 .PP
 The external MCP catalog contains exactly two tools: list and code_mode.
 Use list to discover clients and their native capabilities. Use code_mode to
-run JavaScript that calls a selected capability over SSH. One registry owns all
-Shell, workspace, Harness and MCP routes. Only usable native interfaces are
+run JavaScript that calls a selected capability through its live connection.
+One registry owns all Shell, workspace, Harness and MCP routes. Only usable native interfaces are
 registered; installation alone is not a tool inventory. Native names, schemas,
 results, errors and approval requests retain their meaning through namespaced
 routes. Each call checks the live connection, provider and current authorization.
@@ -87,6 +136,59 @@ stops its owned background jobs and closes native provider connections.
 Operator-managed external Pi and OpenCode services are not terminated. Login-code grants issued by that
 connection are revoked. GitHub identity grants remain subject to their own
 lifetimes and each currently connected client's allow policy.
+.SH CLIENT ACCOUNTS AND TEMPORARY ACCESS
+.TP
+.B ssmcp login
+Open the server's GitHub authorization flow and save a private credential on this
+device. Use \-\-no-browser to print the authorization URL for manual opening.
+The selected server becomes the default for subsequent account commands.
+.TP
+.B ssmcp whoami
+Verify and display the current GitHub identity and server. \-\-json includes
+credential expiry but never the bearer token.
+.TP
+.B ssmcp logout
+Revoke the selected client login on the server and remove its local credential.
+.TP
+.B ssmcp list
+List online sessions the current GitHub account can control. The alias is ls;
+\-\-json provides machine-readable results. Use list \-i or standalone
+ssmcp \-i to select a session and enter its terminal. \-\-client ID selects
+a known session; \-\-terminal ID selects an existing terminal (default main).
+Ctrl-C is delivered to that terminal; Ctrl-] detaches and leaves it running.
+These account commands are separate from saved local sessions list and attach.
+.TP
+.B ssmcp invite
+Print a single-use command to copy from the logged-in device A to device B.
+The invitation can be redeemed for 600 seconds by default (\-\-ttl accepts
+30 through 3600). The resulting controlled session lasts at most 3600 seconds
+by default (\-\-session-ttl accepts 60 through 86400).
+.PP
+The default command downloads a temporary client from the same server, runs
+join, and removes the temporary files when it exits. B needs an outbound HTTPS
+connection, plus sh and curl or wget on Linux/macOS, or PowerShell on Windows.
+No SSH access or prior ssmcp installation is required. The server must publish
+the matching binary using client_download_dir. Use \-\-shell sh or
+\-\-shell powershell for B's terminal; the default matches A's platform.
+Use \-\-no-bootstrap when B already has a compatible ssmcp installation.
+Treat the generated command as a temporary credential.
+.TP
+.B ssmcp join
+Redeem \-\-token against \-\-server and run this device as a controlled
+foreground session owned by the inviting account. Temporary device credentials
+remain in memory; they cannot list or control other sessions or create invites.
+Keep B's terminal open. Default watchdog reconnects with the redeemed device
+credential; it does not redeem the invitation again. Authorization expiry or
+revocation stops retries. Ctrl-C on B stops its session and owned jobs.
+Temporary join sessions cannot be saved with \-\-daemon or grant
+\-\-session-control.
+.PP
+Account commands accept \-\-server to select an HTTPS origin. Login defaults
+to https://ssmcp.lmm.best when no server has been selected. See
+.UR https://github.com/LIghtJUNction/ssmcp/blob/main/docs/client-accounts.md
+client account and temporary access documentation
+.UE
+for credentials, server routing and bootstrap requirements.
 .SH PERSISTENT CLIENT SERVICE
 The client service is ssmcp.service; it is separate from the remote ssmcpd gateway.
 Install a system unit with an explicit non-root owner, then enable and start it:
@@ -94,7 +196,7 @@ Install a system unit with an explicit non-root owner, then enable and start it:
 .nf
 sudo /path/to/ssmcp service install --system --user alice
 sudo systemctl enable --now ssmcp
-ssmcp sessions create dev --watchdog --allow alice@github my-ssmcp
+ssmcp sessions create dev --allow alice@github my-ssmcp
 ssmcp attach
 ssmcp attach dev
 .fi
@@ -129,8 +231,8 @@ the current control session.
 Saved sessions pin their executable snapshot. Restart preserves that version;
 remove and recreate to upgrade a saved worker. Explicit service stop preserves
 running intent for restoration; closed sessions stay stopped.
-.SH FIRST CONNECTION
-An interactive first connection failure opens the GitHub authorization page on
+.SH FIRST SSH CONNECTION
+An interactive first SSH connection failure opens the GitHub authorization page on
 the target ssmcp portal. Compare the browser pairing code with the terminal,
 sign in, and explicitly authorize the requesting computer. The account is the
 ssmcp account associated with that GitHub identity; registering a key does not
@@ -173,6 +275,12 @@ The title is independent of the display name and client ID; it does not execute
 commands or change access policy. When omitted, no title field is sent.
 A nonempty title requires a server that supports this metadata field.
 .TP
+.BI \-\-server " https://origin"
+Select the HTTPS server for account login, session listing, interactive control,
+invitations or a direct account connection. Without an explicit value, account
+commands use the saved default server. An SSH destination and \-\-server
+cannot be combined. \-\-portal remains the separate SSH setup origin.
+.TP
 .BI \-F " file"
 Use a separate OpenSSH client configuration file.
 .TP
@@ -183,9 +291,10 @@ normalized and duplicates are removed. The identity syntax is username@provider;
 github is the currently supported provider. Usernames contain 1 to 39 ASCII
 letters or digits with optional single hyphens between them.
 .PP
-This option requires an SSH destination and cannot accompany \-\-list-tools.
-The flag selects access policy. Existing SSH keys and configuration remain
-usable; interactive first-connection setup may open the portal in a browser.
+Sharing with additional users requires an SSH destination. An HTTPS account
+connection is owned by its signed-in account. This option cannot accompany
+\-\-list-tools. The flag selects access policy. Existing SSH keys and
+configuration remain usable; interactive first-connection setup may open the portal in a browser.
 The server must support and configure GitHub OAuth. An unsupported
 server causes startup to fail before exposing the local backend.
 .TP
@@ -198,8 +307,10 @@ Disable automatic first-connection setup. Noninteractive commands and saved
 background services do not start interactive setup even without this flag.
 Cannot accompany the setup subcommand.
 .TP
-.BI \-i " file"
-Use the specified private key. ssh-agent is also supported.
+.BI \-\-identity " file"
+Use the specified SSH private key. The historical \-i FILE HOST form remains
+supported; ssh-agent is also supported. A standalone \-i without a file,
+or \-\-interactive, selects remote account terminal control instead.
 .TP
 .BI \-p " port"
 Connect to the specified SSH port.
@@ -218,7 +329,8 @@ Save a private session definition and an executable copy. When the persistent
 session manager is running, create a service-managed session; the installed
 manager's startup policy restores sessions that are still expected to run.
 Otherwise use the legacy per-session native manager, without configuring
-boot/login startup. Neither path implicitly enables watchdog.
+boot/login startup. New sessions use watchdog by default; \-\-no-watchdog
+disables it. Existing saved sessions retain their recorded watchdog policy.
 A successful launch request is not proof of an SSH or Broker connection.
 Cannot accompany \-\-list-tools. Existing saved names are not overwritten.
 .TP
@@ -227,16 +339,24 @@ Expose saved-session management tools on this connection for the current OS
 user. Child sessions do not inherit this authority. Use another management
 connection or the local CLI to restart or close this control session.
 .TP
+.B \-\-no-watchdog
+Disable automatic retries after connection failure or disconnection. New
+foreground and background sessions enable watchdog by default. An explicit stop
+takes precedence; expired or revoked account authorization also stops retries.
+Disabling watchdog does not change saved sessions created earlier.
+.TP
 .B \-\-watchdog
-Retry failed or disconnected SSH connections until explicitly stopped. Can be
-used in the foreground or with \-\-daemon; cannot accompany \-\-list-tools.
+Explicitly enable the default recovery policy for compatibility with existing
+commands. Cannot accompany \-\-no-watchdog or \-\-list-tools.
 Service-managed sessions use supervisor recovery after process failure;
 legacy background sessions configure their native manager's recovery policy.
+Local \-\-list-tools discovery remains a one-shot operation.
 .TP
 .BI \-\-reconnect-delay " seconds"
 Set the delay between connection attempts to an integer from 1 through 3600.
-Defaults to 5 seconds and requires \-\-watchdog. Legacy Windows scheduled-task
-failure recovery has a separate minimum interval of 60 seconds;
+Defaults to 5 seconds; no explicit \-\-watchdog flag is needed. Cannot
+accompany \-\-no-watchdog. Legacy Windows scheduled-task failure recovery
+has a separate minimum interval of 60 seconds;
 service-managed workers use the configured delay.
 .TP
 .B \-h, \-\-help
@@ -354,9 +474,10 @@ has a persistent artifact: use outputs.read for its captured prefix and inspect
 capture completeness. Exiting or reloading the client stops its managed work.
 
 .SH AUTHENTICATION
-Only SSH public-key authentication is permitted. Standard OpenSSH host-key
-verification remains enabled. With \-\-allow, add the returned /mcp URL to an
-OAuth-capable MCP client. Sign in with GitHub in the browser, then review the
+Account connections use a server-issued credential over HTTPS/WebSocket.
+SSH connections require public-key authentication, with standard OpenSSH
+host-key verification. For GitHub-authorized connections, add the returned
+/mcp URL to an OAuth-capable MCP client. Sign in with GitHub in the browser, then review the
 verified identity, MCP client name, registered callback origin and resource URL
 on ssmcp's separate consent page. Explicitly allow or cancel that MCP client's
 request. GitHub sign-in alone does not grant the MCP client access.
@@ -368,13 +489,13 @@ the startup usernames again. Update \-\-allow after a username change. No
 cross-connection username pin is persisted. An authorized MCP client may see
 an empty list until a matching connection comes online.
 .PP
-Without \-\-allow, add the returned /username URL and enter login_code on the
-OAuth page. This grant covers only clients without an allow list under that SSH
+For SSH without a client login or \-\-allow, add the returned /username URL
+and enter login_code on the OAuth page. This grant covers only clients without an allow list under that SSH
 account and depends on its issuing connection. It cannot access any client
 started with \-\-allow, even under the same SSH account.
 .PP
-Both modes complete Authorization Code with S256 PKCE and use ssmcp-issued
-access tokens as Bearer credentials. GitHub tokens are used to read the verified
+Both MCP authorization modes complete Authorization Code with S256 PKCE and
+use ssmcp-issued access tokens as Bearer credentials. GitHub tokens are used to read the verified
 identity and are not retained. Repository and email scopes are not requested.
 .PP
 The destination may be a Host alias from ~/.ssh/config. OpenSSH resolves its
@@ -392,7 +513,7 @@ connection, then remove only the old key. Removing a key affects new SSH
 authentication; close an existing connection to revoke its OAuth grants.
 .PP
 The login code expires 1800 seconds after issue and is consumed by one successful
-authorization. login_expires_in subtracts backend startup time. In 0.4.0, access
+authorization. login_expires_in subtracts backend startup time. MCP access
 tokens default to at most 8 hours. Refresh tokens rotate on successful use and
 have a default 30-day idle period that slides forward on each refresh, bounded
 by a 90-day authorization-family lifetime measured from initial authorization.
@@ -493,7 +614,8 @@ Quote names containing internal spaces. Saved names are unique within the chosen
 state directory; ordinary foreground display names may still repeat.
 .TP
 .B ssmcp sessions list
-List saved sessions, including stopped sessions.
+List saved local sessions, including stopped sessions. Use ssmcp list for
+online account sessions; sessions list \-\-remote is an account-list alias.
 .TP
 .BI "ssmcp sessions status " NAME
 Report manager_state, manager_active and manager_pid separately from
@@ -551,7 +673,10 @@ with the selected RestartSec, or macOS unsuccessful-exit recovery with the
 selected ThrottleInterval. Legacy Windows task recovery uses
 max(60, reconnect-delay) seconds and up to 255 restarts. This native limit does
 not apply to service-managed workers or SSH retries inside a live client.
-Manual stop takes precedence over every recovery policy.
+Manual stop takes precedence over every recovery policy. New saved sessions
+enable watchdog by default. Older saved manifests keep their recorded policy,
+including disabled watchdog; \-\-no-watchdog is stored explicitly in new
+disabled definitions.
 .PP
 Default state roots are $XDG_STATE_HOME/ssmcp/sessions, or
 ~/.local/state/ssmcp/sessions on Linux; ~/Library/Application Support/ssmcp/sessions
@@ -614,6 +739,14 @@ output thresholds.
 
 .SH EXAMPLES
 .nf
+ssmcp login --server https://ssmcp.example.com
+ssmcp whoami
+ssmcp --name laptop
+ssmcp list
+ssmcp -i --client CLIENT_ID
+ssmcp invite --shell sh
+ssmcp invite --shell powershell
+ssmcp --no-watchdog --name one-attempt
 ssmcp --name build-shell user@host
 ssmcp --name build-shell my-server
 ssmcp --name build-shell --title "Fix the client build" my-server
