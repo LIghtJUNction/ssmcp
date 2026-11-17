@@ -29,6 +29,15 @@ use tokio::process::Command;
 use crate::{Result, platform};
 
 const FORMAT: u32 = 1;
+// Configuration locations contain no credentials. Native service workers need
+// the same account and trust store as the process that created their session.
+const INHERITED_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "SSH_AUTH_SOCK",
+    "XDG_CONFIG_HOME",
+    "SSMCP_AUTH_HOME",
+    "SSMCP_CLIENT_CONFIG",
+];
 const MAX_DOCUMENT: usize = 128 * 1024;
 const LOG_BYTES: u64 = 256 * 1024;
 const MANAGER_TIMEOUT: Duration = Duration::from_secs(25);
@@ -265,7 +274,7 @@ fn prepare(root: &Path, mut spec: SessionSpec, supervised: bool) -> Result<(Path
         let executable_sha256 =
             snapshot_executable(&std::env::current_exe()?, &executable(&temporary))?;
         let mut environment = BTreeMap::new();
-        for key in ["PATH", "SSH_AUTH_SOCK"] {
+        for &key in INHERITED_ENVIRONMENT {
             if let Some(value) = std::env::var_os(key) {
                 let value = value
                     .into_string()
@@ -841,7 +850,7 @@ fn status_observed(
     }))
 }
 
-fn validate_name(name: &str) -> Result<()> {
+pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.starts_with('-')
         || name.len() > 128
@@ -1013,10 +1022,7 @@ fn load(root: &Path, name: &str) -> Result<(PathBuf, Manifest)> {
             .map(String::as_str)
             != Some(path_text(root)?)
         || manifest.environment.keys().any(|key| {
-            !matches!(
-                key.as_str(),
-                "PATH" | "SSH_AUTH_SOCK" | "SSMCP_SESSION_HOME"
-            )
+            key != "SSMCP_SESSION_HOME" && !INHERITED_ENVIRONMENT.contains(&key.as_str())
         })
     {
         return Err("session manifest does not match this user state directory/name".into());
@@ -1084,7 +1090,7 @@ fn private_open(path: &Path, write: bool, create: bool, append: bool) -> Result<
     Ok(file)
 }
 
-fn lock(path: &Path, nonblocking: bool) -> Result<File> {
+pub(crate) fn lock(path: &Path, nonblocking: bool) -> Result<File> {
     let file = private_open(path, true, true, false)?;
     platform::lock_file(&file, nonblocking).map_err(|error| {
         if error.kind() == io::ErrorKind::WouldBlock {
@@ -1109,11 +1115,11 @@ fn read_private(path: &Path, limit: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     Ok(serde_json::from_slice(&read_private(path, MAX_DOCUMENT)?)?)
 }
 
-fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
+pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value)?;
     if bytes.len() > MAX_DOCUMENT {
         return Err("session document exceeds its size limit".into());
