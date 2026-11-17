@@ -54,6 +54,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
     "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.audit.events",
+    "ssmcp.browser.discover",
     "ssmcp.browser.status",
     "ssmcp.browser.launch",
     "ssmcp.browser.connect",
