@@ -107,12 +107,22 @@ impl AuditRun {
         targets
     }
 
-    /// UI frontends may poll and change display state through code_mode. Their
-    /// calls still carry source audit, but cannot consume a human requirement
-    /// intended for the next agent operation merely by refreshing the screen.
+    /// UI and client metadata queries still carry source audit, but cannot
+    /// consume a human requirement merely by refreshing display or discovery.
+    /// Only these explicit observation APIs are exempt; other read operations
+    /// and runs that explicitly bind an agent retain normal delivery semantics.
     pub(crate) fn native_dispatched(&self, client_id: &str, tool: Option<&str>) {
         self.dispatched(client_id);
-        if tool.is_some_and(|name| !name.starts_with("ssmcp.ui.")) {
+        if tool.is_some_and(|name| {
+            !name.starts_with("ssmcp.ui.")
+                && !matches!(
+                    name,
+                    "ssmcp.client.capabilities"
+                        | "ssmcp.resources.list"
+                        | "ssmcp.resources.templates"
+                        | "ssmcp.resources.read"
+                )
+        }) {
             self.interacted(client_id);
         }
     }
@@ -761,8 +771,16 @@ mod tests {
             "ssmcp.ui.set",
             "ssmcp.ui.action",
             "ssmcp.ui.filter",
+            "ssmcp.client.capabilities",
+            "ssmcp.resources.list",
+            "ssmcp.resources.templates",
+            "ssmcp.resources.read",
         ] {
             run.native_dispatched("display", Some(tool));
+            assert!(
+                run.steering_targets().is_empty(),
+                "unbound observation {tool} must not claim a user requirement"
+            );
         }
         run.native_dispatched("catalog", None);
         assert_eq!(run.targets(), ["catalog", "display"]);

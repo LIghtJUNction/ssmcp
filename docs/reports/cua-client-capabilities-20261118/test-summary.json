@@ -1,0 +1,35 @@
+{
+  "source_commit": "e1e58155f3c5b0bd862bd8715ef298cfaf529f88",
+  "client_version": "0.7.4",
+  "rust_summaries": [
+    {
+      "passed": 658,
+      "failed": 0,
+      "ignored": 8
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "node_summary": [
+    "ℹ tests 23",
+    "ℹ pass 23",
+    "ℹ fail 0",
+    "ℹ cancelled 0",
+    "ℹ skipped 0",
+    "ℹ todo 0"
+  ],
+  "release_build": "optimized build succeeded",
+  "source_logs": [
+    "target/cua-validation/merged-rust-tests.log",
+    "target/cua-validation/merged-release-build.log",
+    "target/cua-validation/final-node-tests.log"
+  ]
+}

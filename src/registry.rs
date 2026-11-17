@@ -10,6 +10,7 @@ use std::{
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
+    Client,
     Terminal,
     Ui,
     Exec,
@@ -33,6 +34,7 @@ pub enum Provider {
 impl Provider {
     pub fn label(self) -> &'static str {
         match self {
+            Self::Client => "client",
             Self::Terminal => "terminal",
             Self::Ui => "ui",
             Self::Exec => "exec",
@@ -259,6 +261,22 @@ impl Registry {
         }
         Ok(())
     }
+    /// Small, atomic capability summary; native schemas remain on the client.
+    pub fn capabilities(&self) -> Result<Value, String> {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        if state.closed {
+            return Err("client connection is closed".into());
+        }
+        let mut providers = BTreeMap::<&str, usize>::new();
+        for tool in state.tools.values() {
+            *providers.entry(tool.provider.label()).or_default() += 1;
+        }
+        Ok(serde_json::json!({
+            "generation": state.generation,
+            "tool_count": state.tools.len(),
+            "providers": providers,
+        }))
+    }
     pub fn generation(&self) -> u64 {
         self.state
             .read()
@@ -294,6 +312,9 @@ fn prepare(
             native_name.clone()
         };
         let allowed = match provider {
+            Provider::Client => {
+                id == "ssmcp.client.capabilities" || id.starts_with("ssmcp.resources.")
+            }
             Provider::Terminal => id.starts_with("terminal."),
             Provider::Ui => id.starts_with("ssmcp.ui."),
             Provider::Exec => id.starts_with("ssmcp.exec."),

@@ -1,0 +1,24 @@
+{
+  "checks": [
+    "real PTY, ANSI, literal Unicode/spaced argv, combined output and exact exit 7",
+    "sequential commands reuse one live viewer",
+    "overlapping jobs allocate two real viewers and survive tool return",
+    "pipe stdin and EOF retain execution semantics",
+    "cancellation reaps the command and owned child",
+    "manually closed viewer reopens while its command continues",
+    "existing interactive PTY commands appear in observer windows"
+  ],
+  "passed": 7,
+  "output_mode": "pty",
+  "first_slot": 1,
+  "parallel_slots": [
+    1,
+    2
+  ],
+  "recorded_viewers": 3,
+  "terminal": "recording launcher with real ssmcp viewer",
+  "exit_code": 0,
+  "duration_seconds": 13.816,
+  "binary": "<worktree>/target/debug/ssmcp",
+  "source_commit": "397a14a5ef18b6444226298284e66ab784af9443"
+}

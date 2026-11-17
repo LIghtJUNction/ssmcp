@@ -1,8 +1,16 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod account;
 mod audit_view;
+mod browser_setup;
 mod composer;
 mod config;
+
+pub(crate) use config::BrowserSettings;
+
+/// Settings are read on demand so setup changes apply on the next client connection.
+pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
+    config::browser()
+}
 mod git_status;
 pub(crate) mod input;
 pub(crate) mod interface;
@@ -18,6 +26,8 @@ pub(crate) mod terminal;
 mod trust;
 pub(crate) mod ui;
 mod ui_command;
+#[cfg(target_os = "linux")]
+mod zero;
 
 use crate::{
     backend::Backend,
@@ -62,11 +72,13 @@ Usage: ssmcp username@server [options]
        ssmcp [options] [--server URL]
        ssmcp --ssh [options] [user@]host
        ssmcp setup [options] [user@]host
+       ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [NAME|list] [--read-only]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
+       ssmcp 007 <install|run|start|stop|status|uninstall|sessions> [options]
 
   --server URL         Relay for this command; overrides config and last login
   --username NAME      Named account on the selected server
@@ -1176,8 +1188,15 @@ pub async fn run() -> crate::Result<()> {
     if args.first().is_some_and(|arg| arg == "ui") {
         return ui_command::run(args.into_iter().skip(1).collect()).await;
     }
+    if args.first().is_some_and(|arg| arg == "007") {
+        #[cfg(target_os = "linux")]
+        return zero::dispatch(args.into_iter().skip(1).collect()).await;
+        #[cfg(not(target_os = "linux"))]
+        return Err("007 recovery mode currently requires Linux and systemd".into());
+    }
     config::normalize_args(&mut args)?;
-    if config::dispatch(&args)? || trust::dispatch(&args)? {
+    if browser_setup::dispatch(&args).await? || config::dispatch(&args)? || trust::dispatch(&args)?
+    {
         return Ok(());
     }
     if account::dispatch(&args).await? {
@@ -1260,6 +1279,7 @@ pub async fn run() -> crate::Result<()> {
         if !onboarding::verify_after_setup(&options).await? {
             return Ok(());
         }
+        browser_setup::configure_existing().await?;
     } else if options.daemon && !options.no_setup && onboarding::interactive() {
         match onboarding::probe(&options).await {
             Ok(true) => {}

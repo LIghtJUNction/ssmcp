@@ -214,6 +214,35 @@ const bootstrap = `(() => {
     }
     return dispatch('call', id, name, args);
   };
+  // Future client tools need no relay helper or provider-name update.
+  // This object only constructs names; the live client registry remains authoritative.
+  const NativeProxy = Proxy;
+  const nativeApi = id => {
+    if (typeof id !== 'string' || !id || id.length > 128) {
+      throw new Failure('native() requires a client ID');
+    }
+    const path = name => new NativeProxy(() => {}, {
+      get: (_target, key) => {
+        if (key === 'then' || key === 'toJSON' || typeof key !== 'string') return undefined;
+        if (!/^[A-Za-z0-9_-]+$/.test(key) || ['constructor','prototype','__proto__'].includes(key)) {
+          throw new Failure('invalid native API component');
+        }
+        const next = name ? name + '.' + key : key;
+        if (next.length > 128) throw new Failure('native tool name exceeds 128 bytes');
+        return path(next);
+      },
+      apply: (_target, _this, args) => {
+        if (!name || args.length > 1) throw new Failure('native calls accept one argument object');
+        return call(id, name, args[0] === undefined ? {} : args[0]);
+      },
+      set: () => false,
+      defineProperty: () => false,
+      deleteProperty: () => false,
+      setPrototypeOf: () => false,
+    });
+    return path('');
+  };
+  const capabilities = id => call(id, 'ssmcp.client.capabilities', {});
   const image = value => {
     if (value?.isError) {
       const detail = value.content?.find(item => item?.type === 'text')?.text;
@@ -229,11 +258,11 @@ const bootstrap = `(() => {
     }
   };
   const browser = freeze(Object.fromEntries(
-    ['discover','status','launch','connect','tabs','open','navigate','snapshot','click','fill','key','scroll','evaluate','screenshot','close','disconnect']
+    ['discover','status','launch','connect','tabs','open','navigate','snapshot','wait_for','click','fill','key','scroll','evaluate','screenshot','close','disconnect']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.browser.' + name, args)])
   ));
   const computer = freeze(Object.fromEntries(
-    ['status','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
+    ['status','desktop_start','desktop_status','desktop_stop','app_launch','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.computer.' + name, args)])
   ));
   // CUA reuses native desktop and browser calls, preserving complete MCP results.
@@ -665,6 +694,11 @@ const bootstrap = `(() => {
     list: (cursor = null) => builtin('resources.list', {cursor}),
     read: uri => builtin('resources.read', {uri}),
     templates: () => builtin('resources.templates'),
+    forClient: id => freeze({
+      list: (args = {}) => workspaceResult(id, 'ssmcp.resources.list', args),
+      read: uri => workspaceResult(id, 'ssmcp.resources.read', {uri}),
+      templates: (args = {}) => workspaceResult(id, 'ssmcp.resources.templates', args),
+    }),
   });
   const print = (...args) => {
     const line = args.map(value => typeof value === 'string' ? value : stringify(value) ?? text(value)).join(' ');
@@ -673,6 +707,8 @@ const bootstrap = `(() => {
   Object.defineProperties(globalThis, {
     clients: { value: clients, enumerable: true },
     call: { value: call, enumerable: true },
+    native: { value: nativeApi, enumerable: true },
+    capabilities: { value: capabilities, enumerable: true },
     tools: { value: tools, enumerable: true },
     image: { value: image, enumerable: true },
     browser: { value: browser, enumerable: true },

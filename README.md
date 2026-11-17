@@ -165,8 +165,13 @@ ssmcp --tty ztty alice@ssmcp.example.com
 
 ssmcp 的显示和执行能力各自提供小接口。自定义 TUI、桌面面板或其他 MCP 客户端可以读取状态、选择终端、控制任务和调整主题，不必解析屏幕文字。`ssmcp.ui.get` 支持按 JSON Pointer 读取字段和分页，界面轮询可以只取需要的状态。
 
+客户端提供自己的版本、能力清单、工具目录与资源内容，服务器按当前授权转发。`capabilities(clientId)` 读取能力清单，`resources.forClient(clientId)` 列出或读取客户端资源，`native(clientId)` 在查询 schema 后按工具名生成调用入口。新原语可通过原有 `call` 在旧服务器上使用；新增的 JavaScript helper 和通用资源路由需要服务器支持。[客户端能力与资源](docs/browser-desktop.md#client-owned-capabilities-and-resources)
+
+UI 状态、工具目录、能力清单和客户端资源查询默认不领取 `Next caller` 要求；下一次符合条件的工作调用仍会收到队列内容。显式 `collab.bind` 绑定身份的编排保持可领取状态。
+
 | 能力 | 接口 |
 | --- | --- |
+| 当前客户端能力与资源 | `capabilities`、`resources.forClient`、动态 `native(clientId)` |
 | 界面配置、状态与筛选 | `ssmcp.ui.get`、`ssmcp.ui.set`、`ssmcp.ui.action`、`ssmcp.ui.filter` |
 | 用户要求队列 | `ssmcp.ui.queue`：读取、提交、取回、编辑、取消与重新选择目标 |
 | 源码与调用审计 | `ssmcp.audit.events`，按游标读取 |
@@ -247,13 +252,17 @@ return await collab.join(clientId, {
 
 **后台会话。** `ssmcp --daemon --name dev` 创建本地后台会话；使用 `ssmcp sessions list/status/logs/stop` 管理，`ssmcp attach dev` 打开观察界面。需要开机或登录后常驻时，安装平台对应的服务。[常驻服务](docs/session-service.md) · [平台说明](docs/client-service-platforms.md)
 
+**007 轻量值守。** Linux 上可用 `ssmcp 007 install` 安装独立的恢复连接，需要工作时再唤醒完整会话。它在空闲时不加载终端或工具目录，并保存一份可用于恢复的程序；普通客户端升级或启动失败时，恢复连接仍可创建独立会话。安装前应完成账号授权，工作区和完整客户端路径通过安装参数指定。[安装、唤醒与恢复边界](docs/007.md)
+
 **本机工具发现。** Shell、文件、命令任务和上下文接口内置于客户端。Codex、Claude Code、Pi、OpenCode 及 Playwright MCP 按本机安装与配置发现，工具保留原生参数和审批行为。`ssmcp --list-tools` 查看实际目录；`ssmcp.harnesses.list` 查看提供者状态。[后端指南](docs/backends.md)
 
 **项目上下文。** MCP 资源直接提供当前 AGENTS 内容、技能摘要和技能全文；修改文件后重新读取即可获取最新内容。项目技能覆盖同名全局技能，额外只读根通过 `--context-root` 显式加入。[上下文资源与原语](docs/context.md)
 
 **命令输出压缩。** 设备已安装 RTK 时，可使用 `rtk.run(clientId, {command:["git","status"]})`。参数按数组原样传入，返回退出码和 RTK 的原文恢复提示，后台任务继续通过 `exec.read/wait/cancel` 管理。[RTK 用法与限制](docs/rtk.md)
 
-**浏览器与桌面。** 浏览器接口提供标签页、页面快照、点击、填表与截图；桌面接口提供窗口和输入操作。实际可用能力由 `browser.status`、`computer.status` 返回。已有 Chrome 扩展与 CDP 会话的接入方式见[现有浏览器指南](docs/browser-existing-session.md)。
+**浏览器与桌面。** 浏览器接口提供标签页、页面快照、点击、填表与截图；新标签页默认在后台打开，`browser.wait_for` 在客户端等待页面文字变化。Linux 可通过 `computer.desktop_start` 创建隔离桌面，再用 `computer.app_launch` 启动应用；输入默认使用运行中的隔离桌面。直接控制宿主桌面需要显式指定 `desktop: "host"`，隔离桌面关闭或失效时不会自动改为控制宿主。实际能力由 `browser.status`、`computer.status` 返回。
+
+运行 `ssmcp setup browser --check --json` 检查浏览器接入，`ssmcp setup browser --install` 配置 Playwright MCP；首次扩展连接仍由用户在浏览器中批准。[后台浏览器与隔离桌面](docs/browser-desktop.md) · [已有 Chrome 接入](docs/browser-existing-session.md)
 
 ## 执行与授权
 
@@ -293,8 +302,9 @@ cargo test --locked
 | 多终端、后台输入和控制者显示 | [终端控制](docs/terminal-control.md) |
 | 复用终端窗口查看命令与输出 | [命令观察窗口](docs/terminal-observers.md) |
 | 自动发现、本机工具和 JavaScript 编排 | [后端与代码模式](docs/backends.md) |
-| 浏览器、桌面和 Omarchy | [电脑控制](docs/computer-use.md) · [现有 Chrome](docs/browser-existing-session.md) |
+| 浏览器、隔离桌面和客户端能力 | [后台浏览器与桌面](docs/browser-desktop.md) · [电脑控制](docs/computer-use.md) · [现有 Chrome](docs/browser-existing-session.md) |
 | 后台会话、常驻服务和重载 | [会话管理](docs/session-control.md) · [常驻服务](docs/session-service.md) |
+| 轻量值守、唤醒与升级恢复 | [007 恢复连接](docs/007.md) |
 | 技能、项目指令与文件操作 | [上下文接口](docs/context.md) · [工作区](docs/workspaces.md) |
 | 服务器、账号门户和 SSH 配置 | [部署](docs/deployment.md) · [门户](docs/portal-console.md) · [配置](docs/configuration.md) |
 | 安装升级、平台要求和发布 | [Release 指南](docs/releases.md) |

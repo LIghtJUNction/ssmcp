@@ -147,7 +147,7 @@ impl Control {
     }
 }
 
-fn resolve_cwd(root: &Path, value: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_cwd(root: &Path, value: Option<&str>) -> Result<PathBuf, String> {
     let value = value.unwrap_or(".");
     if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
         return Err("session cwd must be a nonempty path without control characters".into());

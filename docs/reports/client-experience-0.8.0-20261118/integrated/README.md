@@ -1,6 +1,6 @@
 # 0.8.0 集成候选验收记录
 
-本目录记录客户端体验改进与 PR #21 内存优化合并后的验证。Rust 门禁、release 构建、隔离安装及六组客户端场景均已通过：默认库测试 **729 通过、0 失败、8 个 ignored**，六组场景共 **299 项功能检查**。另一次 synthetic 协议流程样本通过，未设置性能预算。dashboard 首次失败与修订后成功分别保留；本集成候选的打包、staging 和用户入口安装／发布仍为 **pending**。[Rust 门禁](rust-gates.json) · [Release 构建](release-build.json) · [最终场景门禁](release-ui-gates.json)
+本目录记录客户端体验改进与 PR #21 内存优化合并后的验证。Rust 门禁、release 构建、隔离安装及六组客户端场景均已通过：默认库测试 **729 通过、0 失败、8 个 ignored**，六组场景共 **299 项功能检查**。另一次 synthetic 协议流程样本通过，未设置性能预算。dashboard 首次失败与修订后成功分别保留。固定提交 `555307f` 的安装包、隔离 staging 与专用入口安装均已完成；正式发布与生产切换未执行。本页保留这次候选快照，不包含之后主分支 `95b5f26` 的 007 与后台电脑控制集成。[Rust 门禁](rust-gates.json) · [Release 构建](release-build.json) · [最终场景门禁](release-ui-gates.json)
 
 ## 源码与制品来源
 
@@ -65,9 +65,10 @@ HTTP 的 9 项包含默认已通过的 2 项与默认 ignored 的 7 项；code_m
 | Relay composer | **通过** | **45 项**，退出 0，命令耗时 **6.276 秒**；release 客户端与 debug router fixture；[详细报告](relay-composer-e2e.json) |
 | TTY observer | **通过** | **7 项**，退出 0，命令耗时 **12.740 秒**；recording launcher 启动实际 viewer；[详细报告](observer-e2e.json) |
 | Synthetic benchmark | **协议流程通过** | 退出 0，命令耗时 **2.47 秒**；未设置性能预算；[详细报告](synthetic-benchmark.json) |
-| 本集成候选的安装包 | **pending** | 待填固定打包提交、包摘要和包内二进制对应关系 |
-| 本集成候选的隔离 staging | **pending** | 待填检查结果、清理状态及生产服务是否发生变化 |
-| 本集成候选的用户入口安装／发布 | **pending** | 待填实际安装入口或发布产物；历史候选操作不移记到本轮 |
+| 本集成候选的安装包 | **通过** | `555307f` 的原生 Arch 包，包内二进制与本页 release 哈希一致；[打包记录](arch-package.json) |
+| 本集成候选的隔离 staging | **通过** | 12 项检查，生产状态保持相同，临时 unit 与端口已释放；[试运行](server-stage.json) · [清理核对](post-stage.json) |
+| 专用用户入口安装 | **完成** | `~/.local/bin/ssmcp-0.8.0` 原子切换到本候选；保留默认安装和旧候选目录；[安装记录](versioned-install.json) |
+| 正式发布与生产切换 | **未执行** | 线上网关在这次核对时仍为 0.7.2 |
 
 表中耗时均为外层命令计时。详细报告内部计时分别为 composer **14.911 秒**、dashboard 首次运行 **29.436 秒**、dashboard 重跑 **25.578 秒**、relay composer **6.093 秒**、synthetic 流程 **2.093 秒**；计时边界不同，不能混用。Account relay、observer 与 preview 的详细报告没有独立耗时字段。首轮汇总因 dashboard 失败保留 `status: failed`，其中 preview 与 composer 的通过结果仍分别有效。[首轮汇总](release-initial-attempt.json) · [最终汇总](release-ui-gates.json)
 
@@ -106,4 +107,12 @@ SSH composer 与 dashboard 使用实际 release 客户端和 daemon、隔离 Ope
 
 Relay composer 的上游 GitHub 是合成提供方，传输是回环 HTTP/WS，报告明确 `tls_verified: false`、`real_github_account: false`、`models_started: false`；不作为公网 TLS、真实 GitHub 授权或 release daemon 账号 relay 的证明。Observer 的 recording launcher 也不等于特定桌面终端的人工视觉验收。[Relay 范围](relay-composer-e2e.json) · [Observer 范围](observer-e2e.json)
 
-本轮测试证据已归档；本集成候选的安装包、staging 和用户入口安装／发布仍保留 pending，待各自真实记录补齐。
+## 安装包与隔离试运行
+
+包名为 `ssmcp-git-0.8.0.r240.g555307f-1-x86_64.pkg.tar.zst`，大小 **11,973,352 字节**，SHA-256 为 `6193aad06a98cd8b0103bfe4030793e34d7106ab865693946ad28a741d65de54`。打包来源为 `555307f8ceb70c729762bc11ea099360e87e5dee`；与构建来源 `51ec5ad…` 的差异仅为 README、报告和已审查的 dashboard 测试脚本。包内客户端、daemon 和 runner 摘要与通过验收的产物一致。[包记录](arch-package.json)
+
+2026-11-17 22:09–22:10 UTC 的安装与核对显示：专用入口指向 `0.8.0-555307f` 目录，默认客户端未被替换，没有重启服务或重载在线连接。旧候选目录保留。这里记录的是当时安装状态，后续入口切换应以新的安装回执为准。[安装记录](versioned-install.json)
+
+隔离网关使用独立 unit、端口和状态目录，12 项检查全部通过。生产 PID、磁盘与运行中二进制、包版本和配置均保持相同；后续核对确认临时 unit 不再加载、状态 inactive，18087 端口可用，生产网关仍为 0.7.2。stage 回执有效期为一小时，实际生产切换前需重新核验；本次没有执行 apply。[Stage](server-stage.json) · [清理核对](post-stage.json)
+
+本页 JSON 对私有路径作规范化，不公开生产配置摘要；前后相等的判断保留。备份和生产切换边界见[前次回滚归档](../rollback-archive.json)与[部署说明](../ROLLOUT.md)。

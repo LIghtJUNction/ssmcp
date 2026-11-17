@@ -1,0 +1,23 @@
+{
+  "installed": true,
+  "deployment": "isolated named user service",
+  "unit": "ssmcp-cua-20261118.service",
+  "name": "ssmcp-cua-20261118",
+  "binary": "~/.local/share/ssmcp/builds/cua-397a14a5ef18/ssmcp",
+  "profile": "~/.config/ssmcp/profiles/cua-20261118.toml",
+  "version": "ssmcp 0.7.4 development build with CUA and memory changes",
+  "source_commit": "397a14a5ef18b6444226298284e66ab784af9443",
+  "merged_main": "a9fbd53c4d52c8e178cbb32defc297defe135a3f",
+  "previous_source_commit": "e1e58155f3c5b0bd862bd8715ef298cfaf529f88",
+  "sha256": "2f097558335a468ed847abf9148fe0f5686fcaa70282a69311374b078f0f8734",
+  "bytes": 7283200,
+  "release_cli_smoke": true,
+  "browser_setup_check": true,
+  "tty_preserved": true,
+  "memory_optimizations_preserved": true,
+  "default_binary_replaced": false,
+  "default_binary_sha256_unchanged": true,
+  "other_clients_restarted": false,
+  "service_state": "active",
+  "service_persistence": "transient user service; active until stopped or user manager restarts"
+}
