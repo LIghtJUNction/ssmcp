@@ -75,3 +75,23 @@ pub(crate) fn parse(raw: &str) -> Result<(String, String), String> {
         format!("SHA256:{}", STANDARD_NO_PAD.encode(Sha256::digest(&bytes))),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openssh_validates_security_keys_without_a_hardware_token() {
+        let algorithm = "sk-ssh-ed25519@openssh.com";
+        let mut blob = Vec::new();
+        for field in [algorithm.as_bytes(), &[1u8; 32], b"ssh:test"] {
+            blob.extend_from_slice(&(field.len() as u32).to_be_bytes());
+            blob.extend_from_slice(field);
+        }
+        let raw = format!("{algorithm} {}", STANDARD.encode(&blob));
+        assert!(parse(&raw).is_ok());
+        assert!(parse(&format!("command=\"id\" {raw}")).is_err());
+        blob.push(1);
+        assert!(parse(&format!("{algorithm} {}", STANDARD.encode(blob))).is_err());
+    }
+}

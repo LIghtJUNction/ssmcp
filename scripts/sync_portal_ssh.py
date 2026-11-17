@@ -32,15 +32,27 @@ def validate(database):
         keys = []
         for key in account['keys']:
             text = key['public_key']
-            if not isinstance(text, str) or len(text) > 100 or not text.startswith('ssh-ed25519 '):
+            if (not isinstance(text, str) or len(text) > 16384
+                    or any(ord(ch) < 32 or ord(ch) == 127 for ch in text)):
                 raise ValueError('invalid public key')
-            encoded = text[12:]
+            fields = text.split(' ')
+            if len(fields) != 2 or not all(fields):
+                raise ValueError('expected a canonical public key without options')
+            algorithm, encoded = fields
             blob = base64.b64decode(encoded, validate=True)
+            size = int.from_bytes(blob[:4], 'big')
+            end = 4 + size
             fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip('=')
-            if (len(blob) != 51 or blob[:19] != b'\0\0\0\x0bssh-ed25519\0\0\0\x20'
-                    or blob[19:] == bytes(32) or base64.b64encode(blob).decode() != encoded
+            if (len(blob) < 4 or blob[4:end] != algorithm.encode('ascii')
+                    or not any(blob[end:]) or base64.b64encode(blob).decode() != encoded
                     or key['fingerprint'] != fingerprint or text in keys):
                 raise ValueError('invalid public key blob or fingerprint')
+            try:
+                subprocess.check_output(['ssh-keygen', '-l', '-f', '-', '-E', 'sha256'],
+                                        input=(text + '\n').encode(),
+                                        stderr=subprocess.DEVNULL, timeout=3)
+            except (OSError, subprocess.SubprocessError) as error:
+                raise ValueError('OpenSSH rejected the public key') from error
             keys.append(text)
         result[username] = keys
     return result

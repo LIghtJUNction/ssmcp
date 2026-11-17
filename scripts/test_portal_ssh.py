@@ -34,15 +34,25 @@ class SyncTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sync.validate(data)
 
+    def test_security_key_is_validated_by_openssh_without_hardware(self):
+        fields = [b'sk-ssh-ed25519@openssh.com', bytes([1]) * 32, b'ssh:test']
+        blob = b''.join(len(value).to_bytes(4, 'big') + value for value in fields)
+        data = fixture()
+        key = data['accounts']['123']['keys'][0]
+        key['public_key'] = fields[0].decode() + ' ' + base64.b64encode(blob).decode()
+        key['fingerprint'] = 'SHA256:' + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip('=')
+        self.assertEqual(sync.validate(data)['gh-123'], [key['public_key']])
+
     def test_collision_preserves_existing_files_and_never_runs_useradd(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             old = directory / 'gh-123'
             old.write_text('legacy key')
             user = SimpleNamespace(pw_uid=1001, pw_dir='/home/old', pw_shell='/bin/bash')
+            validated = sync.validate(fixture())
             with patch.object(sync.subprocess, 'run') as run:
                 with self.assertRaises(ValueError):
-                    sync.sync(sync.validate(fixture()), directory, lookup=lambda _: user, run=run)
+                    sync.sync(validated, directory, lookup=lambda _: user, run=run)
                 run.assert_not_called()
             self.assertEqual(old.read_text(), 'legacy key')
 
@@ -77,7 +87,7 @@ PermitUserRC no
                 self.assertTrue((stage / prefix.lstrip('/') / 'share/doc/ssmcp/examples/sshd-ssmcp-portal.conf').is_file())
                 portal = (stage / 'usr/lib/systemd/system/ssmcp-portal.service').read_text()
                 self.assertIn(f'EnvironmentFile=-{config}/ssmcpd/ssmcpd.env', portal)
-                self.assertIn(f'ExecStart={prefix}/bin/ssmcpd serve --config {config}/ssmcpd/ssmcpd.toml', portal)
+                self.assertIn(f'ExecStart={prefix}/bin/ssmcpd serve --portal-only --config {config}/ssmcpd/ssmcpd.toml', portal)
                 self.assertIn('--listen 127.0.0.1:8086 --socket /run/ssmcp-portal/control.sock', portal)
                 self.assertIn('--portal-state-dir /var/lib/ssmcpd/portal', portal)
                 self.assertIn('RuntimeDirectory=ssmcp-portal', portal)
