@@ -3,6 +3,7 @@ pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod broker;
 pub mod browser;
+pub(crate) mod catalog;
 pub mod client;
 #[cfg(target_os = "linux")]
 pub mod code_mode;
