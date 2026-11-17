@@ -5,10 +5,10 @@
 ## 三种输出模式
 
 ```sh
-ssmcp --log-format pretty my-server
-ssmcp --log-format pretty-verbose my-server
-ssmcp --log-format jsonl my-server 2>events.jsonl
-ssmcp --no-color my-server
+ssmcp --ssh --log-format pretty my-server
+ssmcp --ssh --log-format pretty-verbose my-server
+ssmcp --ssh --log-format jsonl my-server 2>events.jsonl
+ssmcp --ssh --no-color my-server
 ```
 
 `--verbose` 选择 `pretty-verbose`，展开脱敏后的事件元数据；已经实时显示的 stdout/stderr 和 Diff 预览不会在附加 JSON 中再次打印。`--raw-events` 和原有的 `--raw` 选择 `jsonl`。JSONL 每个事件独占一行，连接状态、SSH stderr、原生 stderr 和 PTY 输出都以事件表示。PTY 字节使用 base64，进入审计的副本仍经过敏感信息检查；不要将 JSONL 的 raw 名称理解为绕过脱敏。启动参数解析或配置加载失败发生在日志配置生效之前，错误使用默认可读格式。

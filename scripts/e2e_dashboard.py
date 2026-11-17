@@ -118,7 +118,7 @@ class Frontend:
             os.tcsetpgrp(0, os.getpgrp())
 
         self.process = subprocess.Popen(
-            [str(harness.binary_dir / "ssmcp"), "-F", str(harness.directory / "ssh_config"),
+            [str(harness.binary_dir / "ssmcp"), "--ssh", "-F", str(harness.directory / "ssh_config"),
              "--name", label, "--shell", "/bin/sh", f"{harness.user}@ssmcp-e2e"],
             stdin=self.slave, stdout=subprocess.PIPE, stderr=self.slave,
             cwd=harness.workspace, env=environment, preexec_fn=own_controlling_terminal,

@@ -443,7 +443,7 @@ ssmcp --ssh --name ssmcp-project my-ssmcp
 ssmcp --ssh --title "检查构建与测试" --allow octocat@github my-ssmcp
 ssmcp --ssh --theme nord --timestamps --allow octocat@github my-ssmcp
 ssmcp --ssh --log-format jsonl --allow octocat@github my-ssmcp
-NO_COLOR=1 ssmcp --allow octocat@github my-ssmcp
+NO_COLOR=1 ssmcp --ssh --allow octocat@github my-ssmcp
 ```
 
 更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../tests/client_reload.rs)

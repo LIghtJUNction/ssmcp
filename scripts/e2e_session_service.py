@@ -77,7 +77,7 @@ class Sessions(Harness):
 
     def create(self, name, *, control=False, expected=0):
         self.names.add(name)
-        args = ["sessions", "create", name, "--json", "--watchdog", "--reconnect-delay", "1",
+        args = ["sessions", "create", name, "--json", "--ssh", "--watchdog", "--reconnect-delay", "1",
                 "--title", "session lifecycle acceptance", "-F", str(self.directory / "ssh_config"),
                 "--shell", "/bin/sh"]
         if control:

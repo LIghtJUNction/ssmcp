@@ -9,7 +9,7 @@
 `--title` 把任务说明放进客户端元数据，agent 调用 `list` 就能看到它。标题支持中文和空格，最多 512 个 UTF-8 字节；空值、纯空白和控制字符会被拒绝。
 
 ```sh
-ssmcp --name dev --title "完善 ssmcp 客户端重载和输出转储" \
+ssmcp --ssh --name dev --title "完善 ssmcp 客户端重载和输出转储" \
   --allow octocat@github my-ssmcp
 ```
 
@@ -76,7 +76,7 @@ Unix 使用 `exec` 替换当前进程映像。Windows 启动替代客户端，�
 在项目目录中创建一个具名后台会话：
 
 ```sh
-ssmcp --daemon --reconnect-delay 5 \
+ssmcp --ssh --daemon --reconnect-delay 5 \
   --name workstation --title "修复项目并执行测试" \
   --allow octocat@github my-ssmcp
 ssmcp sessions status workstation --json

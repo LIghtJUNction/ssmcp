@@ -157,6 +157,7 @@ impl Fixture {
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("config.toml"), "").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         for (name, source) in [("ssh", SSH), ("replacement", REPLACEMENT)] {
             let file = path.join(name);
@@ -198,6 +199,7 @@ impl Fixture {
             std::fs::copy(executable, &entry).unwrap();
         }
         let mut arguments: Vec<String> = [
+            "--ssh",
             "--no-watchdog",
             "--shell",
             "/bin/sh",
@@ -234,6 +236,9 @@ impl Fixture {
             .current_dir(self.0.join("working directory"))
             // Only fixture tools are visible; never start installed real harnesses.
             .env("PATH", &self.0)
+            .env("SSMCP_AUTH_HOME", self.0.join("auth"))
+            .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
+            .env_remove("SSMCP_UI_CONFIG")
             .env("SSMCP_RELOAD_DIR", &self.0)
             .env("SSMCP_RELOAD_SCENARIO", scenario)
             .env("SSMCP_RELOAD_BINARY", executable)

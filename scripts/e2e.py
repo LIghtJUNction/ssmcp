@@ -473,6 +473,7 @@ class Harness:
         """
         directory = self.directory / f"{label}-bin"
         directory.mkdir(mode=0o700)
+        (directory / "client.toml").touch(exist_ok=True)
         for name in ("ssh", "stty", "tty", "sleep", "head", "tr"):
             executable = shutil.which(name)
             if not executable:
@@ -502,10 +503,12 @@ class Harness:
             )
             wrapper.chmod(0o700)
         inherited = {key: value for key, value in os.environ.items()
-                     if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "SSMCP_PLAYWRIGHT_MCP")}
+                     if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "SSMCP_PLAYWRIGHT_MCP", "SSMCP_UI_CONFIG")}
         return {
             **inherited,
             "PATH": str(directory.resolve()),
+            "SSMCP_AUTH_HOME": str((directory / "auth").resolve()),
+            "SSMCP_CLIENT_CONFIG": str((directory / "client.toml").resolve()),
             "ENV": "/dev/null",
             "BASH_ENV": "/dev/null",
         }
@@ -513,7 +516,7 @@ class Harness:
     def start_client(self, label="client", *, name="workstation", cwd=None, harness=None,
                      fixture=None, fixture_args=(), destination=None, harnesses=(), extra_env=None):
         command = [
-            str(self.binary_dir / "ssmcp"), "-F", str(self.directory / "ssh_config"),
+            str(self.binary_dir / "ssmcp"), "--ssh", "-F", str(self.directory / "ssh_config"),
             "--name", name, "--shell", "/bin/sh",
             destination or f"{self.user}@ssmcp-e2e",
         ]
