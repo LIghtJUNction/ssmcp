@@ -11,7 +11,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 pub const PAGE_SIZE: usize = 32;
 pub const MAX_RESOURCE_BYTES: usize = 1024 * 1024;
-const MAX_URI_BYTES: usize = 1024;
+pub const MAX_URI_BYTES: usize = 8192;
 
 const GUIDE: &str = "# Using ssmcp\n\n\
 Clients connect outbound over HTTPS/WebSocket or SSH. Read ssmcp://clients for the clients currently available to your identity and endpoint. \
@@ -54,6 +54,11 @@ incremental cursors and a snapshot containing output artifact metadata. wait_ms 
 and only limits waiting; the command keeps running when this wait expires. Set code_mode \
 timeout_ms above wait_ms. A command timeout_ms of 0, the default, has no time limit; a positive \
 timeout_ms terminates the process tree after that interval.\n\n\
+Use rtk.status(clientId) to check the installed RTK version. rtk.run(clientId,{command:[\"git\",\"status\"],cwd:\".\"}) \
+executes literal RTK argv and returns the same job, output and exit-code fields as exec.run. \
+rtk.start creates a background job managed through exec.read/wait/cancel. Command arguments \
+exclude the rtk prefix; compression follows RTK subcommands. RTK recall and tee hints remain \
+in output. Missing RTK fails without automatic installation or rerunning the original command.\n\n\
 Use exec.start(clientId,options) to launch background work, exec.list(clientId) to find jobs, \
 exec.status(clientId,jobId) to inspect one, exec.wait(clientId,jobId,{wait_ms:60000}) to wait, \
 and exec.read(clientId,jobId,{stdout_cursor,stderr_cursor,max_bytes}) to read new output. \
@@ -95,9 +100,13 @@ retains completed artifacts for up to 24 hours within a 512 MiB budget. Each art
 capped at 256 MiB with explicit partial/error metadata. Active captures are not deleted. \
 PTY artifacts describe the cumulative terminal session, not individual shell commands.\n\n\
 Read ssmcp://clients/{id}/context for configured context roots, /skills for skill metadata, \
- and /agents for the applicable AGENTS.md chain. skills pages accept root and cursor; agents \
- accepts root and a workspace-relative path. Follow skills nextUri without changing its cursor. \
- context.roots, skills.list/read/view and agents.list/read/resolve expose these native views \
+ /skills/view for a Markdown index with project skills overlaid on explicitly granted global \
+ roots, and /agents for the applicable AGENTS.md chain including exact contents. /skills accepts \
+ scope=effective for the same overlay; root selects one granted root. Metadata pages include \
+ readUri links to /skills/read?root=...&path=... for exact SKILL.md content; /agents/read accepts \
+ an instruction path. Follow nextUri to continue a page without changing its cursor. Every \
+ read fetches the current files from the client; no build-time or server-side file cache is used. \
+ context.roots, skills.list/read/view and agents.list/read/resolve expose the same native views \
  in code_mode without invoking a model. Additional --context-root directories are explicit, \
  read-only context sources; they do not expand filesystem write access.\n\n\
 Use fs.readText for bounded UTF-8 text with byte offsets and next_offset, fs.writeText to \
@@ -269,6 +278,12 @@ pub async fn list(
             "application/json",
         ));
         entries.push(descriptor(
+            format!("ssmcp://clients/{id}/skills/view"),
+            format!("{}: effective skill view", info.name),
+            "Live Markdown skill index. Project skills override same-named skills in explicitly granted global roots.",
+            "text/markdown",
+        ));
+        entries.push(descriptor(
             format!("ssmcp://clients/{id}/agents"),
             format!("{}: workspace instructions", info.name),
             "The applicable AGENTS.md instruction chain for the workspace root.",
@@ -312,10 +327,28 @@ pub fn templates() -> Value {
             "mimeType":"application/json"
         },
         {
-            "uriTemplate":"ssmcp://clients/{client_id}/skills{?root,cursor}",
+            "uriTemplate":"ssmcp://clients/{client_id}/skills{?root,scope,cursor}",
             "name":"Client skills",
-            "description":"Read skill metadata in a discovered root (default workspace); follow nextUri for further pages.",
+            "description":"Read live skill metadata in a discovered root (default workspace), or scope=effective for project-over-global resolution; follow nextUri for further pages.",
             "mimeType":"application/json"
+        },
+        {
+            "uriTemplate":"ssmcp://clients/{client_id}/skills/view{?root,scope,cursor}",
+            "name":"Live skill view",
+            "description":"Read a Markdown skill index. Defaults to project-over-global resolution; an explicit root selects only that granted root.",
+            "mimeType":"text/markdown"
+        },
+        {
+            "uriTemplate":"ssmcp://clients/{client_id}/skills/read{?root,path}",
+            "name":"Live skill content",
+            "description":"Read exact current SKILL.md text from a discovered root and relative path, using a metadata page's readUri.",
+            "mimeType":"text/markdown"
+        },
+        {
+            "uriTemplate":"ssmcp://clients/{client_id}/agents/read{?root,path}",
+            "name":"Live instruction content",
+            "description":"Read exact current AGENTS.md, AGENTS.override.md or agents.md text from a discovered root and relative path.",
+            "mimeType":"text/markdown"
         },
         {
             "uriTemplate":"ssmcp://clients/{client_id}/agents{?root,path}",
@@ -360,7 +393,8 @@ fn limits() -> Value {
                 "cua","cua.browser","terminal.open","terminal.list","terminal.select","terminal.close",
                 "terminal.read","terminal.write","terminal.status","terminal.resize",
                 "exec.start","exec.list","exec.status","exec.wait","exec.read","exec.write",
-                "exec.cancel","exec.forget","exec.events","exec.run","exec.parallel"
+                "exec.cancel","exec.forget","exec.events","exec.run","exec.parallel",
+                "rtk.status","rtk.run","rtk.start"
             ],
             "text_files":{
                 "max_write_bytes":262144,
@@ -371,7 +405,8 @@ fn limits() -> Value {
             },
             "context":{
                 "model_invocation":false,
-                "additional_roots":"explicit --context-root directories; read-only context access"
+                "additional_roots":"explicit --context-root directories; read-only context access",
+                "skill_overlay":"project skills override same-named skills in explicitly granted roots; fresh scan per read"
             }
         },
         "tool_catalog":{
@@ -512,7 +547,7 @@ fn query_encoding_valid(query: &str) -> bool {
 fn parse_uri(uri: &str) -> Result<(&str, Query), ResourceError> {
     if uri.is_empty() || uri.len() > MAX_URI_BYTES || uri.chars().any(char::is_control) {
         return Err(ResourceError::InvalidParams(
-            "resource uri must be 1..=1024 bytes without control characters",
+            "resource uri must be 1..=8192 bytes without control characters",
         ));
     }
     let (base, query) = uri
@@ -534,8 +569,8 @@ fn parse_uri(uri: &str) -> Result<(&str, Query), ResourceError> {
             .map(|(_, kind)| kind)
         {
             Some("tools") => &["cursor"],
-            Some("skills") => &["root", "cursor"],
-            Some("agents") => &["root", "path"],
+            Some("skills" | "skills/view") => &["root", "scope", "cursor"],
+            Some("agents" | "agents/read" | "skills/read") => &["root", "path"],
             Some("info" | "context") => &[],
             _ => return Err(ResourceError::NotFound),
         }
@@ -568,6 +603,14 @@ fn parse_uri(uri: &str) -> Result<(&str, Query), ResourceError> {
     if values.is_empty() {
         return Err(ResourceError::InvalidParams("invalid resource query"));
     }
+    if values
+        .get("scope")
+        .is_some_and(|scope| !matches!(scope.as_str(), "root" | "effective"))
+    {
+        return Err(ResourceError::InvalidParams(
+            "skill scope must be root or effective",
+        ));
+    }
     Ok((base, values))
 }
 
@@ -582,19 +625,33 @@ async fn native_view(
     let (name, field) = match kind {
         "context" => ("ssmcp.context.roots", "roots"),
         "skills" => ("ssmcp.skills.list", "skills"),
+        "skills/view" => ("ssmcp.skills.view", "markdown"),
+        "skills/read" => ("ssmcp.skills.read", "content"),
         "agents" => ("ssmcp.agents.resolve", "files"),
+        "agents/read" => ("ssmcp.agents.read", "content"),
         _ => return Err(ResourceError::NotFound),
     };
     let mut arguments = json!({});
     if let Some(root) = query.get("root") {
         arguments["root"] = json!(root);
     }
-    if kind == "skills" {
+    if matches!(kind, "skills" | "skills/view") {
         if let Some(cursor) = query.get("cursor") {
             arguments["cursor"] = json!(cursor);
         }
+        if let Some(scope) = query.get("scope") {
+            arguments["scope"] = json!(scope);
+        } else if kind == "skills/view" && !query.contains_key("root") {
+            // Declare the requested semantics so older clients fail explicitly
+            // instead of returning their single-root default as an effective view.
+            arguments["scope"] = json!("effective");
+        }
     } else if kind == "agents" {
         arguments["path"] = json!(query.get("path").map(String::as_str).unwrap_or("."));
+    } else if matches!(kind, "skills/read" | "agents/read") {
+        arguments["path"] = json!(query.get("path").ok_or(ResourceError::InvalidParams(
+            "instruction content reads require a relative path"
+        ),)?);
     }
     let response = session
         .call(Operation::CallTool {
@@ -616,11 +673,43 @@ async fn native_view(
     }
     let mut view = response
         .get("structuredContent")
-        .filter(|value| value.is_object() && value[field].is_array())
+        .filter(|value| {
+            value.is_object()
+                && if matches!(field, "markdown" | "content") {
+                    value[field].is_string()
+                } else {
+                    value[field].is_array()
+                }
+        })
         .cloned()
         .ok_or(ResourceError::Unavailable)?;
     view["client"] = client_info(session);
     Ok(view)
+}
+
+fn add_read_uris(page: &mut Value, client_id: &str) -> Result<(), ResourceError> {
+    let default_root = page["root"]["id"]
+        .as_str()
+        .unwrap_or("workspace")
+        .to_owned();
+    for (field, kind) in [("skills", "skills"), ("files", "agents")] {
+        if let Some(entries) = page.get_mut(field).and_then(Value::as_array_mut) {
+            for entry in entries {
+                let Some(path) = entry["path"].as_str() else {
+                    continue;
+                };
+                let root = entry["root"]["id"].as_str().unwrap_or(&default_root);
+                let query = serde_urlencoded::to_string([("root", root), ("path", path)])
+                    .map_err(|_| ResourceError::Unavailable)?;
+                let uri = format!("ssmcp://clients/{client_id}/{kind}/read?{query}");
+                if uri.len() > MAX_URI_BYTES {
+                    return Err(ResourceError::TooLarge);
+                }
+                entry["readUri"] = json!(uri);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub async fn read(
@@ -684,27 +773,54 @@ pub async fn read(
                 }
                 json_content(uri, page)
             }
-            "context" | "skills" | "agents" => {
+            "context" | "skills" | "skills/view" | "skills/read" | "agents" | "agents/read" => {
                 let mut page =
                     native_view(broker, user, authorization, &session, kind, &query).await?;
-                if kind == "skills"
+                if matches!(kind, "skills" | "skills/view")
                     && let Some(next) = page.get("next_cursor").filter(|value| !value.is_null())
                 {
                     let next = next.as_str().ok_or(ResourceError::Unavailable)?;
                     if next.len() > 128 || next.is_empty() || next.chars().any(char::is_control) {
                         return Err(ResourceError::Unavailable);
                     }
-                    let mut pairs = vec![("cursor", next)];
-                    if let Some(root) = query.get("root") {
-                        pairs.push(("root", root));
-                    }
-                    let query = serde_urlencoded::to_string(pairs)
+                    let mut continuation = query.clone();
+                    continuation.insert("cursor".into(), next.into());
+                    let encoded = serde_urlencoded::to_string(continuation)
                         .map_err(|_| ResourceError::Unavailable)?;
-                    let next_uri = format!("{base}?{query}");
+                    let next_uri = format!("{base}?{encoded}");
                     if next_uri.len() > MAX_URI_BYTES {
                         return Err(ResourceError::Unavailable);
                     }
                     page["nextUri"] = json!(next_uri);
+                }
+                if matches!(kind, "skills/read" | "agents/read") {
+                    return content(
+                        uri,
+                        "text/markdown",
+                        page["content"].as_str().unwrap().to_owned(),
+                    );
+                }
+                add_read_uris(&mut page, id)?;
+                if kind == "skills/view" {
+                    let mut markdown = page["markdown"].as_str().unwrap().to_owned();
+                    if page["truncated"] == true {
+                        markdown.push_str("\n\nSkill discovery is incomplete; inspect the metadata diagnostics and narrow the scanned paths.\n");
+                    }
+                    let mut metadata_query = query.clone();
+                    if !metadata_query.contains_key("root") && !metadata_query.contains_key("scope")
+                    {
+                        metadata_query.insert("scope".into(), "effective".into());
+                    }
+                    let metadata_query = serde_urlencoded::to_string(metadata_query)
+                        .map_err(|_| ResourceError::Unavailable)?;
+                    let metadata_uri = format!("ssmcp://clients/{id}/skills?{metadata_query}");
+                    markdown.push_str(&format!(
+                        "\n\n[Skill metadata and full-content links]({metadata_uri})\n"
+                    ));
+                    if let Some(next) = page["nextUri"].as_str() {
+                        markdown.push_str(&format!("\n\n[Next skill page]({next})\n"));
+                    }
+                    return content(uri, "text/markdown", markdown);
                 }
                 json_content(uri, page)
             }
@@ -758,7 +874,16 @@ mod tests {
         assert!(text.contains(alice.client_id()));
         assert!(!text.contains(bob.client_id()));
         assert!(list(&broker, "bob", &auth, None).await.is_err());
-        for kind in ["info", "tools", "context", "skills", "agents"] {
+        for kind in [
+            "info",
+            "tools",
+            "context",
+            "skills",
+            "skills/view",
+            "skills/read",
+            "agents",
+            "agents/read",
+        ] {
             assert_eq!(
                 read(
                     &broker,
@@ -809,7 +934,7 @@ mod tests {
                 .iter()
                 .map(|page| page["resources"].as_array().unwrap().len())
                 .collect::<Vec<_>>(),
-            [32, 32, 32, 14]
+            [32, 32, 32, 32, 3]
         );
         let all: Vec<_> = pages
             .iter()
@@ -817,7 +942,7 @@ mod tests {
             .map(|r| r["uri"].as_str().unwrap())
             .collect();
         let unique: std::collections::HashSet<_> = all.iter().collect();
-        assert_eq!(all.len(), 110);
+        assert_eq!(all.len(), 131);
         assert_eq!(all.len(), unique.len());
         broker.test_register("alice", &"a".repeat(64)).await;
         assert!(matches!(
@@ -882,6 +1007,10 @@ mod tests {
             "ssmcp://clients/abc/skills?root=one&root=two",
             "ssmcp://clients/abc/skills?root=one&ro%6Ft=two",
             "ssmcp://clients/abc/skills?path=.",
+            "ssmcp://clients/abc/skills?scope=unknown",
+            "ssmcp://clients/abc/skills/view?scope=effective&scope=root",
+            "ssmcp://clients/abc/skills/read?cursor=next",
+            "ssmcp://clients/abc/agents/read?scope=effective",
             "ssmcp://clients/abc/agents?cursor=next",
             "ssmcp://clients/abc/agents?path=%00",
             "ssmcp://guide#fragment",

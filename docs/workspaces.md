@@ -136,6 +136,9 @@ return await ports.close(mappingId);
 | `ssmcp://clients` | 当前可访问的在线客户端 |
 | `ssmcp://clients/{id}/info` | 指定客户端的实时信息 |
 | `ssmcp://clients/{id}/tools` | 该客户端的工具 schema 和分页信息 |
+| `ssmcp://clients/{id}/agents` | 项目指令全文和来源 |
+| `ssmcp://clients/{id}/skills` | 项目技能摘要与全文 readUri |
+| `ssmcp://clients/{id}/skills/view` | 项目叠加显式全局根的实时技能视图 |
 
 不方便直接调用 MCP 资源方法的宿主，可以从 `code_mode` 读取同一资源：
 

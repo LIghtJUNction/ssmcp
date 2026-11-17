@@ -1,6 +1,6 @@
 ---
 name: ssmcp
-description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, automatically discovered coding harnesses, scoped file access and audit, existing Chrome and native browser discovery, concise tool search, skills and instruction discovery, Linux rsync transfers, and loopback TCP forwarding.
+description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, automatically discovered coding harnesses, scoped file access and audit, existing Chrome and native browser discovery, concise tool search, live project-context resources, project-over-global skill views, RTK command-output compression, Linux rsync transfers, and loopback TCP forwarding.
 ---
 
 # ssmcp unified workspace bridge
@@ -30,11 +30,13 @@ Use the operator's configured SSH destination and authorized identity. Do not co
 
 ## Inspect available skills and instruction files
 
-Use `context.roots(id)` to see the workspace and any explicit read-only context roots. Start with `skills.view(id)` for a compact Markdown index or `skills.list(id,options)` for metadata. Follow `next_cursor` using the same scan options. Names can repeat; choose by root and path, then call `skills.read(id,{path})` for the full SKILL.md.
+Use `context.roots(id)` to discover the workspace and explicitly granted read-only context roots. Start with `skills.view(id)` for a live Markdown index that overlays project skills on global roots. Use `skills.list(id,{scope:"effective"})` for the same resolved metadata, or `skills.list(id)` for all project entries. Same-name valid project skills win; inspect root, path and shadowed origins. Read a selected document with `skills.read(id,{root:entry.root.id,path:entry.path})`. Follow next_cursor with the same scan options; restart without a cursor when the scan changes.
+
+Use standard MCP resources/read as a second channel: read `ssmcp://clients/{id}/agents` for the current instruction chain, `/skills` for project metadata, `/skills?scope=effective` for resolved metadata, and `/skills/view` for the effective Markdown view. Follow each metadata entry's readUri for exact skill or instruction text. Every read fetches current files; reread after edits, additions or deletions. The transport has no subscriptions, so previously loaded host context updates only on a new read.
 
 `agents.resolve(id,{path:"src/lib.rs"})` returns instruction origins and exact content in root-to-target order. `agents.list` returns origins only, and `agents.read` reads a selected file. At each directory ssmcp selects the first nonempty AGENTS.override.md, AGENTS.md, or agents.md. Review provenance and diagnostics before applying relevant instructions.
 
-The default root is the client's startup workspace. An operator may add up to eight read-only roots with repeated `--context-root PATH`; select their returned IDs explicitly with the `root` option. A root that directly contains skill folders can be scanned with `paths:["."]`. These context roots do not extend ordinary file-write access. This is a current disk view, not an inventory of a backend model's loaded prompt. Metadata parsing uses the documented YAML subset; read diagnostics and do not infer missing descriptions from body text.
+The default root is the client's startup workspace. An operator may add up to eight read-only roots with repeated `--context-root PATH`; use the `root` option for a single root or the effective skill view to merge them in configuration order. A root that directly contains skill folders can be scanned with `paths:["."]`. These context roots do not extend ordinary file-write access. This is a current disk view, not an inventory of a backend model's loaded prompt. Metadata parsing uses the documented YAML subset; read diagnostics and do not infer missing descriptions from body text.
 
 ## Run and manage commands
 
@@ -72,6 +74,12 @@ Carry `stdout_cursor` and `stderr_cursor` separately between reads. Each stream 
 Use `exec.parallel(clientId,[{command:[...]},...],{concurrency:4})` for up to 32 commands with 1..8 workers. Each worker waits until its command actually ends before starting the next; an initial `wait_ms:0` never releases a running slot. Results keep input order and contain fulfilled/value or rejected/reason. Observation failures retain job_id when available and stop that worker; queued entries never launched are marked not_started:true. Inspect each exit code and recover uncertain jobs before retrying. Internal bounded waits count toward code_mode's 128-call budget and outer timeout. Use exec.start for persistent servers. Parallel output defaults to 2048 bytes per stream.
 
 Expect at most 32 running jobs and 128 retained records per client. On reaching the record limit, new starts evict the oldest completed job; running jobs stay registered. Jobs survive `code_mode` completion but stop on client disconnect or reload. `forget` does not immediately delete output artifacts. Use `exec.*` for commands; `jobs.*` manages rsync transfer jobs. Use `terminal.*` when a shared interactive shell is necessary, and do not infer command completion from one terminal read.
+
+## Compress command output with RTK
+
+Check `rtk.status(id)` for the client's installed RTK version. Use `rtk.run(id,{command:["git","status"],cwd:".",wait_ms:5000})` for bounded output or `rtk.start(id,{command:["cargo","test"]})` for a background job. Pass RTK arguments without the rtk prefix; the helper prepends it and preserves literal argv. Manage the returned job through exec.read/wait/write/cancel.
+
+Inspect exit_code, running, capture completeness and RTK's recall or tee hints. RTK's supported subcommands determine compression; bypass/proxy pass output through. To recover a saved original, use `rtk.run(id,{command:["recall",returnedHash,"--full"]})` when RTK provides that identifier. The helper does not install RTK, evaluate rewritten shell text, or rerun an unfiltered command after a failure. Connection and permission errors remain errors.
 
 ## Write background input and select terminals
 
@@ -123,7 +131,7 @@ Check `spilled`, `artifact`, and source-specific metadata in long-output results
 
 Use `outputs.stat(clientId,{id})` to refresh file size, SHA-256, line count and completion metadata. A live capture can grow after a snapshot; `complete:false` or `error` must not be reported as a complete log. Underlying backend truncation cannot be recovered.
 
-Expect automatic spilling above 32 KiB or 500 lines, up to 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live in the client's private storage, normally `/tmp/ssmcp/<uid>` on Unix and `%LOCALAPPDATA%\ssmcp\output` on Windows. Use returned metadata rather than assuming a path on other platforms. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. Artifacts, jobs and audit records are scoped to their owning connection. Retention on disk does not grant another client or a replacement connection access; use only IDs authorized by the current interface.
+Read bounded context documents directly: the context provider preserves complete structured results up to its 1 MiB response limit and 256 KiB document limit, including through MCP resources. For other ordinary output, expect automatic spilling above 32 KiB or 500 lines, up to 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live in the client's private storage, normally `/tmp/ssmcp/<uid>` on Unix and `%LOCALAPPDATA%\ssmcp\output` on Windows. Use returned metadata rather than assuming a path on other platforms. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. Artifacts, jobs and audit records are scoped to their owning connection. Retention on disk does not grant another client or a replacement connection access; use only IDs authorized by the current interface.
 
 ## Read and write workspace files
 
