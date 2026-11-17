@@ -16,14 +16,15 @@ ssmcp 把本机 Shell 与已安装工具连接到可信服务器。MCP 的 `list
 先[安装新版客户端](#安装与升级)，并使用已启用 GitHub OAuth、账号门户和客户端 API 的新版服务器。将示例域名换成你的服务地址：
 
 ~~~sh
-ssmcp login --server https://ssmcp.example.com
+ssmcp config set server https://ssmcp.example.com
+ssmcp login
 ssmcp whoami
 
 # 在项目目录启动自己的被控会话，保持终端打开。
 ssmcp --name device-a
 ~~~
 
-登录后自动使用自己的 GitHub 身份，无须每次填写自己的 `--allow`。新接入路径不需要 SSH、公钥或设备入站端口；看门狗默认启用，掉线后自动重连，`--no-watchdog` 可关闭。
+登录后自动使用自己的 GitHub 身份，无须每次填写自己的 `--allow`。新接入路径不需要 SSH 密钥或设备入站端口；看门狗默认启用，掉线后自动重连，`--no-watchdog` 可关闭。
 
 在 A 的另一个终端查看或进入可控会话：
 
@@ -33,6 +34,42 @@ ssmcp -i
 ~~~
 
 `-i` 列出设备供选择，随后进入它的终端。Ctrl-C 交给远端 Shell；Ctrl-] 离开控制界面，远端会话继续运行。本地后台服务仍用 `ssmcp sessions list` 管理。
+
+## 设置默认中转服务器
+
+保存默认地址后，后续登录、邀请和连接都可以省略 `--server`：
+
+~~~sh
+ssmcp config set server https://relay.example.com
+ssmcp config get server
+ssmcp config path
+
+# 只让这一次邀请使用另一台已登录的服务器。
+ssmcp invite --server https://other.example.com
+~~~
+
+也可以编辑 `ssmcp config path` 输出的文件，默认是 `~/.config/ssmcp/config.toml`，添加或修改：
+
+~~~toml
+[client]
+server = "https://relay.example.com"
+~~~
+
+地址优先级为 **`--server` → `[client].server` → 最后登录的服务器 → `https://ssmcp.lmm.best`**。命令设置会保留已有 UI 配置与注释。`ssmcp config unset server` 移除配置覆盖，`SSMCP_CLIENT_CONFIG` 可指定另一份绝对路径配置文件。切换服务器后，先在该服务器执行 `ssmcp login`；各服务器的账号令牌分别保存。[配置路径与完整说明](docs/client-server.md#设置默认服务器)
+
+## 固定可信服务器的公钥
+
+把管理员通过可信渠道提供的 **HTTPS 入口公钥**登记到本机：
+
+~~~sh
+ssmcp trust add --server https://relay.example.com --public-key ./server-public.pem
+ssmcp trust path
+ssmcp trust list
+~~~
+
+公钥记录保存在配置文件同目录的 **`trusted-servers.toml`**，默认是 `~/.config/ssmcp/trusted-servers.toml`，也可直接编辑其中的 `public_keys` 或 `pins`。这里使用 TLS 证书的 SPKI 公钥；由 Nginx、Caddy 或 CDN 提供 HTTPS 时，登记该入口的公钥。首次公钥应通过已核验的管理员渠道取得。
+
+登记后，HTTPS API 与 WSS 会话在正常证书链、域名和有效期校验之外，还要求公钥匹配；不匹配时停止连接。这能抵御使用另一把密钥伪装服务器的连接。证书沿用原公钥续签时无需更新，换钥需先核验并登记新公钥。[信任文件格式、指纹与轮换](docs/client-server.md#信任公钥写到哪里)
 
 ## 临时控制 B 设备
 
@@ -45,7 +82,9 @@ ssmcp invite
 ssmcp invite --shell powershell
 ~~~
 
-默认命令只从你的服务器下载临时客户端，前台接入，并在退出后清理。B 无须安装 SSH 或登录 GitHub。邀请默认 **10 分钟内兑换一次**，兑换后的会话默认 **1 小时**有效；用 `--ttl` 与 `--session-ttl` 调整。A 再运行 `ssmcp list` 或 `ssmcp -i` 即可控制 B。B 按 Ctrl-C 结束会话，A 的 `logout` 会撤销该次登录派生的邀请与设备授权。
+未固定服务器公钥时，默认命令只从所选服务器下载临时客户端，前台接入，并在退出后清理。B 无须安装 SSH 或登录 GitHub。邀请默认 **10 分钟内兑换一次**，兑换后的会话默认 **1 小时**有效；用 `--ttl` 与 `--session-ttl` 调整。A 再运行 `ssmcp list` 或 `ssmcp -i` 即可控制 B。B 按 Ctrl-C 结束会话，A 的 `logout` 会撤销该次登录派生的邀请与设备授权。
+
+**已固定公钥的服务器会自动使用预安装客户端流程**：B 先从可信来源安装新版 ssmcp，邀请命令把 A 的可信指纹写入 B，再执行接入。这样在传送邀请令牌前就完成公钥校验。两种流程均支持 `invite --server URL` 选择服务器。
 
 服务端须配置 `client_download_dir` 并准备 B 对应平台的客户端；缺少文件时返回明确的 503。B 已安装兼容版本时可使用 `ssmcp invite --no-bootstrap`。完整流程、期限、账号存储和服务器下载配置见[客户端账号与临时接入](docs/client-accounts.md)。
 
@@ -55,7 +94,7 @@ ssmcp invite --shell powershell
 
 设备操作者决定开放哪个工作目录和系统用户权限；服务器按已验证的 GitHub 数字 ID 与会话规则检查每次调用。临时设备凭据不能查看或控制 A 的其他设备。中转服务器会处理连接和原生工具调用，应使用你信任的服务器。[授权实现](src/device.rs) · [会话访问检查](src/broker.rs)
 
-[客户端账号教程](docs/client-accounts.md) · [账号门户与审计](docs/portal-console.md) · [配置与 SSH](docs/configuration.md) · [服务器部署](docs/deployment.md) · [命令接口](docs/commands.md)
+[默认服务器与公钥](docs/client-server.md) · [客户端账号教程](docs/client-accounts.md) · [账号门户与审计](docs/portal-console.md) · [配置与 SSH](docs/configuration.md) · [服务器部署](docs/deployment.md) · [命令接口](docs/commands.md)
 
 ## 使用已有 SSH 配置
 
