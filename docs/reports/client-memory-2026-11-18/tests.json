@@ -1,0 +1,114 @@
+[
+  {
+    "group": "catalog::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 657 filtered out; finished in 0.10s"
+    ]
+  },
+  {
+    "group": "registry::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 656 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "group": "runtime::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 654 filtered out; finished in 0.07s"
+    ]
+  },
+  {
+    "group": "backend::codex::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 654 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "group": "backend::events::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 655 filtered out; finished in 2.03s"
+    ]
+  },
+  {
+    "group": "backend::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 657 filtered out; finished in 0.00s"
+    ]
+  },
+  {
+    "group": "backend::opencode::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 15 passed; 0 failed; 1 ignored; 0 measured; 643 filtered out; finished in 4.21s"
+    ]
+  },
+  {
+    "group": "backend::playwright::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 654 filtered out; finished in 0.89s"
+    ]
+  },
+  {
+    "group": "backend::rpc::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 647 filtered out; finished in 2.23s"
+    ]
+  },
+  {
+    "group": "browser::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 644 filtered out; finished in 0.49s"
+    ]
+  },
+  {
+    "group": "client::terminal::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 644 filtered out; finished in 0.06s"
+    ]
+  },
+  {
+    "group": "backend::shell::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 639 filtered out; finished in 23.53s"
+    ]
+  },
+  {
+    "group": "output::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 640 filtered out; finished in 0.27s"
+    ]
+  },
+  {
+    "group": "session::attach::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 654 filtered out; finished in 0.21s"
+    ]
+  },
+  {
+    "group": "observer::tests",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 648 filtered out; finished in 2.08s"
+    ]
+  },
+  {
+    "group": "cc_backend",
+    "exit_code": 0,
+    "summary": [
+      "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.78s"
+    ]
+  }
+]
