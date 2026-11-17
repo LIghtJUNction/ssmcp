@@ -27,6 +27,9 @@ const VERSIONS: &[&str] = &[MODERN, "2025-11-25", "2025-06-18", "2025-03-26"];
 const VERSION_META: &str = "io.modelcontextprotocol/protocolVersion";
 const CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
 
+#[cfg(test)]
+mod relay_composer_fixture;
+
 pub fn router(broker: Arc<Broker>) -> Router {
     Router::new()
         .merge(crate::oauth::routes())
