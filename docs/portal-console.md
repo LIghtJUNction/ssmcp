@@ -75,6 +75,8 @@ ssmcpd serve --config /etc/ssmcpd/ssmcpd.toml --portal-only
   --client-registry /var/lib/ssmcpd/portal-oauth-clients.toml
 ```
 
+**账号 CLI、邀请和设备连接使用单进程标准部署**，迁移命令见[部署指南](deployment.md#标准账号部署与旧配置迁移)。下述双进程模式仅供旧 SSH 门户使用，不适用于账号 CLI。
+
 双进程 Nginx 配置可参考 [`packaging/nginx-ssmcp-portal.conf.example`](../packaging/nginx-ssmcp-portal.conf.example)。它把首页、CSS、`/account/`、`/setup`、`/setup/` 和 `/api/setup/` 转发到门户；GitHub 回调按门户 state 前缀分流。配对页面和 API 必须进入同一个门户进程，否则无法共享短期配对状态。单进程部署继续使用原有 `nginx-ssmcp.conf.example`。
 
 新增的会话管理入口都在现有 `/account/` 前缀下：

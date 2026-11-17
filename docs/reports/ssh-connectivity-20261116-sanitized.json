@@ -65,7 +65,7 @@
             "exit_code": 0,
             "settings": {
               "user": "arch",
-              "hostname": "216.126.239.69",
+              "hostname": "192.0.2.10",
               "port": "22",
               "addressfamily": "inet",
               "batchmode": "no",
@@ -89,7 +89,7 @@
             "exit_code": 0,
             "settings": {
               "user": "ssmcp",
-              "hostname": "216.126.239.69",
+              "hostname": "192.0.2.10",
               "port": "22",
               "addressfamily": "inet",
               "batchmode": "no",
@@ -121,7 +121,7 @@
             "pid": 13413,
             "sockets": [
               {
-                "remote_ip": "216.126.239.69",
+                "remote_ip": "192.0.2.10",
                 "remote_port": 22,
                 "state": "ESTABLISHED",
                 "tx_queued_bytes": 0,
@@ -133,7 +133,7 @@
             "pid": 86769,
             "sockets": [
               {
-                "remote_ip": "216.126.239.69",
+                "remote_ip": "192.0.2.10",
                 "remote_port": 22,
                 "state": "ESTABLISHED",
                 "tx_queued_bytes": 0,
@@ -154,14 +154,14 @@
         },
         "tcp_probes": [
           {
-            "ip": "216.126.239.69",
+            "ip": "192.0.2.10",
             "port": 22,
             "timeout_seconds": 3,
             "connected": true,
             "elapsed_ms": 1
           },
           {
-            "ip": "216.126.239.69",
+            "ip": "192.0.2.10",
             "port": 443,
             "timeout_seconds": 3,
             "connected": true,
@@ -176,7 +176,7 @@
       "report": {
         "utc": "2026-11-16T14:05:06Z",
         "ssh_banner": {
-          "ip": "216.126.239.69",
+          "ip": "192.0.2.10",
           "port": 22,
           "authenticated": false,
           "error_type": "TimeoutError",
@@ -187,7 +187,7 @@
           "exit_code": 0,
           "records": [
             {
-              "dst": "216.126.239.69",
+              "dst": "192.0.2.10",
               "gateway": "198.18.0.2",
               "dev": "Meta",
               "table": "2022",
@@ -203,7 +203,7 @@
       "exit_code": 0,
       "report": {
         "utc": "2026-11-16T14:05:29Z",
-        "ip": "216.126.239.69",
+        "ip": "192.0.2.10",
         "port": 22,
         "phase": "receive_banner",
         "authenticated": false,
@@ -220,7 +220,7 @@
       "report": {
         "utc": "2026-11-16T14:06:15Z",
         "ssh_banner": {
-          "ip": "216.126.239.69",
+          "ip": "192.0.2.10",
           "port": 22,
           "phase": "complete",
           "authenticated": false,
@@ -244,7 +244,7 @@
     }
   ],
   "conclusions": [
-    "Both effective SSH configurations target 216.126.239.69:22 directly, and both previously running SSH sockets were ESTABLISHED.",
+    "Both effective SSH configurations target 192.0.2.10:22 directly, and both previously running SSH sockets were ESTABLISHED.",
     "The current route uses device Meta via 198.18.0.2/table 2022. A successful TCP connect alone did not demonstrate remote SSH application responsiveness.",
     "At 14:05:29 UTC TCP connected in 1 ms but the banner receive phase timed out after 3 seconds.",
     "At 14:06:15 UTC a new unauthed TCP connection received SSH-2.0-OpenSSH_10.6 within 554 ms total.",

@@ -116,9 +116,9 @@
   },
   "network_evidence": {
     "worktree_path": "docs/reports/ssh-connectivity-20261116-sanitized.json",
-    "bytes": 8812,
-    "sha256": "5e7873466a8fe60a48acad505ba67f73d5636d012adce95e9fe1b2ab113b48bb",
+    "bytes": 8768,
+    "sha256": "0c992212679e61facfeb97f7d4048f7b9427049035b36182fd9e8b5d1181eac6",
     "verified_by_complete_readback": true,
-    "note": "14:05:29 UTC banner receive timed out; 14:06:15 UTC a later connection received the SSH banner. Intermittency is observed; its cause remains unproved. No configuration or service was changed."
+    "note": "14:05:29 UTC banner receive timed out; 14:06:15 UTC a later connection received the SSH banner. Intermittency is observed; its cause remains unproved. No configuration or service was changed. Server addresses were replaced with documentation addresses before release; this checksum describes the redacted file."
   }
 }
