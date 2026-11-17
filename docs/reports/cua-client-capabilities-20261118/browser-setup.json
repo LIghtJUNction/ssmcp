@@ -1,0 +1,19 @@
+{
+  "passed": 9,
+  "checks": [
+    "check_preserves_configuration",
+    "real_cli_background_support_and_setting_preservation",
+    "repeated_setup_is_idempotent",
+    "real_client_ui_load_accepts_setup_configuration_offline",
+    "configured_check_is_read_only",
+    "explicit_foreground_preference_persists",
+    "invalid_requests_never_mutate_configuration",
+    "environment_override_is_reported_without_fallback",
+    "diagnostics_preserve_native_approval_boundaries"
+  ],
+  "exit_code": 0,
+  "duration_seconds": 9.436,
+  "binary": "<worktree>/target/debug/ssmcp",
+  "playwright_mcp": "~/.config/ssmcp/browser/playwright-0.0.85/node_modules/@playwright/mcp/cli.js",
+  "temporary_config": true
+}

@@ -1,6 +1,14 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod account;
+mod browser_setup;
 mod config;
+
+pub(crate) use config::BrowserSettings;
+
+/// Settings are read on demand so setup changes apply on the next client connection.
+pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
+    config::browser()
+}
 mod git_status;
 pub(crate) mod input;
 mod onboarding;
@@ -58,6 +66,7 @@ Usage: ssmcp username@server [options]
        ssmcp [options] [--server URL]
        ssmcp --ssh [options] [user@]host
        ssmcp setup [options] [user@]host
+       ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [NAME|list] [--read-only]
@@ -1175,7 +1184,8 @@ pub async fn run() -> crate::Result<()> {
         return Err("007 recovery mode currently requires Linux and systemd".into());
     }
     config::normalize_args(&mut args)?;
-    if config::dispatch(&args)? || trust::dispatch(&args)? {
+    if browser_setup::dispatch(&args).await? || config::dispatch(&args)? || trust::dispatch(&args)?
+    {
         return Ok(());
     }
     if account::dispatch(&args).await? {
@@ -1258,6 +1268,7 @@ pub async fn run() -> crate::Result<()> {
         if !onboarding::verify_after_setup(&options).await? {
             return Ok(());
         }
+        browser_setup::configure_existing().await?;
     } else if options.daemon && !options.no_setup && onboarding::interactive() {
         match onboarding::probe(&options).await {
             Ok(true) => {}

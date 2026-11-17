@@ -1,0 +1,24 @@
+{
+  "source_commit": "397a14a5ef18b6444226298284e66ab784af9443",
+  "merged_main": "a9fbd53c4d52c8e178cbb32defc297defe135a3f",
+  "stages": [
+    {
+      "stage": "memory-merged-debug",
+      "exit_code": 0,
+      "elapsed_seconds": 44.901,
+      "log": "target/cua-validation/memory-merged-debug.log"
+    },
+    {
+      "stage": "memory-merged-rust",
+      "exit_code": 0,
+      "elapsed_seconds": 138.189,
+      "log": "target/cua-validation/memory-merged-rust.log"
+    },
+    {
+      "stage": "memory-merged-release",
+      "exit_code": 0,
+      "elapsed_seconds": 273.224,
+      "log": "target/cua-validation/memory-merged-release.log"
+    }
+  ]
+}

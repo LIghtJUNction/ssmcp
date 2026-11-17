@@ -1,0 +1,19 @@
+{
+  "installed": true,
+  "deployment": "isolated named user service",
+  "unit": "ssmcp-cua-20261118.service",
+  "name": "ssmcp-cua-20261118",
+  "binary": "~/.local/share/ssmcp/builds/cua-e1e58155f3c5/ssmcp",
+  "profile": "~/.config/ssmcp/profiles/cua-20261118.toml",
+  "version": "0.7.4 development build with CUA changes",
+  "source_commit": "e1e58155f3c5b0bd862bd8715ef298cfaf529f88",
+  "sha256": "7d9807464587a9ab212850c7ea5a52da9d5ef50badfd3d189e5e58e25a834b69",
+  "bytes": 11357376,
+  "release_cli_smoke": true,
+  "tty_preserved": true,
+  "browser_background": true,
+  "playwright_mcp": "~/.config/ssmcp/browser/playwright-0.0.85/node_modules/@playwright/mcp/cli.js",
+  "default_binary_replaced": false,
+  "existing_clients_restarted": false,
+  "service_persistence": "transient user service; active until stopped or user manager restarts"
+}
