@@ -200,7 +200,7 @@ ssmcp 每次连接创建新的 PTY 和连接内工具运行时；退出会清理
 
 ### 本机后台客户端
 
-需要离开交互终端后保持客户端运行时，在本机项目目录使用 `ssmcp --daemon --watchdog --name workstation --allow octocat@github my-ssmcp`。这启动当前用户管理的客户端会话，与服务器的 `ssmcpd.service` 分开。服务端账户、SSH 公钥和 OAuth 配置继续生效；不自动启用开机或登录自启。[完整会话管理](session-control.md#后台运行与延时重连)
+需要离开交互终端后保持客户端运行时，在本机项目目录使用 `ssmcp --ssh --daemon --watchdog --name workstation --allow octocat@github my-ssmcp`。这启动当前用户管理的客户端会话，与服务器的 `ssmcpd.service` 分开。服务端账户、SSH 公钥和 OAuth 配置继续生效；不自动启用开机或登录自启。[完整会话管理](session-control.md#后台运行与延时重连)
 
 `sessions status workstation --json` 分别报告管理器与 Broker 连接状态；启动命令成功不证明已连通。watchdog 默认每 5 秒重试连接，可用 `--reconnect-delay SECONDS` 设置 1–3600 秒；该参数要求 `--watchdog`。手动 `sessions stop workstation` 后不会因延时到期重新启动。断线仍清理旧连接的命令与转发，新连接重新发现能力并取得新 ID。
 

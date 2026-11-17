@@ -139,7 +139,7 @@ install -m 0755 "$ssmcp_unpack_dir/ssmcp" "$HOME/.local/bin/ssmcp"
 rm -rf "$ssmcp_unpack_dir"
 ```
 
-核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --name dev --title "维护当前项目" --allow octocat@github my-ssmcp`。安装网关还需要配置 OpenSSH、HTTPS 与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
+核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --ssh --name dev --title "维护当前项目" --allow octocat@github my-ssmcp`。安装网关还需要配置 OpenSSH、HTTPS 与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
 
 ## 维护者：先预检 main，再推版本 tag
 

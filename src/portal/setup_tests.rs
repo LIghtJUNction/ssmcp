@@ -272,6 +272,7 @@ fn grant_capacity_expiry_and_callback_binding_are_bounded() {
 fn comparison_code_alone_cannot_authorize_and_decisions_are_owner_bound() {
     let mut grant = Grant {
         client_name: "test".into(),
+        requested_username: None,
         expires: Instant::now() + TTL,
         decision: Decision::Pending,
         last_poll: None,
@@ -299,6 +300,9 @@ fn setup_html_escapes_device_names_and_explains_the_exact_permission() {
         username: "gh-123".into(),
         github_login: "alice".into(),
         keys: vec![],
+        handle: None,
+        banned: false,
+        rate_limit_bps: None,
     };
     let page = consent_page(
         "<script>alert('x')</script>",
@@ -884,4 +888,380 @@ async fn ssh_identity_verification_rejects_reassigned_or_missing_github_names() 
         .await
         .unwrap();
     assert_eq!(query(&alice, true).await.unwrap().status(), 409);
+}
+
+async fn named_login(fixture: &Fixture, username: &str) -> Value {
+    let response = fixture
+        .client
+        .post(format!("{}/api/client/login/start", fixture.base))
+        .json(&json!({"name":"laptop","username":username}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.json().await.unwrap()
+}
+
+async fn poll_client(fixture: &Fixture, secret: &str) -> (StatusCode, Value) {
+    let response = fixture
+        .client
+        .post(format!("{}/api/client/login/poll", fixture.base))
+        .json(&json!({"device_code":secret}))
+        .send()
+        .await
+        .unwrap();
+    (response.status(), response.json().await.unwrap())
+}
+
+#[tokio::test]
+async fn named_login_validates_before_oauth_and_claims_only_after_consent() {
+    let fixture = Fixture::new().await;
+    for username in ["root", "gh-123", "alice-", "invalid/name", "ab"] {
+        let response = fixture
+            .client
+            .post(format!("{}/api/client/login/start", fixture.base))
+            .json(&json!({"name":"laptop","username":username}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error: Value = response.json().await.unwrap();
+        assert_eq!(error["error"], "username_invalid");
+    }
+    assert!(
+        fixture
+            .broker
+            .portal
+            .setup
+            .lock()
+            .unwrap()
+            .grants
+            .is_empty()
+    );
+    let start = named_login(&fixture, "ALice-home").await;
+    let secret = start["device_code"].as_str().unwrap();
+    let code = start["user_code"].as_str().unwrap();
+    assert_eq!(start["username"], "alice-home");
+    assert_eq!(start["username_available"], true);
+    assert_eq!(poll_client(&fixture, secret).await.1["status"], "pending");
+    assert!(
+        fixture
+            .broker
+            .portal
+            .storage(|store| store.handle_available("alice-home"))
+            .await
+            .unwrap()
+    );
+    let (cookie, csrf) = fixture.session("123");
+    let page = fixture
+        .client
+        .get(format!("{}/setup?code={code}", fixture.base))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("alice-home"));
+    assert!(page.contains("服务器用户名"));
+    assert!(
+        fixture
+            .broker
+            .portal
+            .storage(|store| store.handle_available("alice-home"))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        fixture
+            .consent(&cookie, &csrf, code, "allow")
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    fixture.reset_poll(secret).await;
+    let (status, login) = poll_client(&fixture, secret).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(login["status"], "authorized");
+    assert_eq!(login["identity"]["username"], "alice-home");
+    assert_eq!(login["identity"]["subject"], "123");
+    assert_eq!(poll_client(&fixture, secret).await.1["status"], "expired");
+}
+
+#[tokio::test]
+async fn concurrent_username_claims_have_one_owner_and_original_owner_can_login() {
+    let fixture = Fixture::new().await;
+    let first = named_login(&fixture, "shared-name").await;
+    let second = named_login(&fixture, "Shared-name").await;
+    let (alice_cookie, alice_csrf) = fixture.session("123");
+    let (bob_cookie, bob_csrf) = fixture.session("456");
+    let (alice, bob) = tokio::join!(
+        fixture.consent(
+            &alice_cookie,
+            &alice_csrf,
+            first["user_code"].as_str().unwrap(),
+            "allow"
+        ),
+        fixture.consent(
+            &bob_cookie,
+            &bob_csrf,
+            second["user_code"].as_str().unwrap(),
+            "allow"
+        )
+    );
+    assert_eq!(
+        [alice.status(), bob.status()]
+            .iter()
+            .filter(|status| **status == StatusCode::SEE_OTHER)
+            .count(),
+        1
+    );
+    assert_eq!(
+        [alice.status(), bob.status()]
+            .iter()
+            .filter(|status| **status == StatusCode::CONFLICT)
+            .count(),
+        1
+    );
+    let owner = fixture
+        .broker
+        .portal
+        .storage(|store| store.account_by_handle("shared-name"))
+        .await
+        .unwrap()
+        .unwrap();
+    let (winner_cookie, winner_csrf, loser_cookie, loser_csrf) = if owner.subject == "123" {
+        (alice_cookie, alice_csrf, bob_cookie, bob_csrf)
+    } else {
+        (bob_cookie, bob_csrf, alice_cookie, alice_csrf)
+    };
+    let existing = named_login(&fixture, "SHARED-name").await;
+    assert_eq!(existing["username_available"], false);
+    let code = existing["user_code"].as_str().unwrap();
+    let secret = existing["device_code"].as_str().unwrap();
+    assert_eq!(poll_client(&fixture, secret).await.1["status"], "pending");
+    assert_eq!(
+        fixture
+            .consent(&loser_cookie, &loser_csrf, code, "allow")
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    // Poll immediately, without resetting the interval: the browser failure is
+    // terminal and must take precedence over slow_down or pending.
+    for _ in 0..2 {
+        let (status, failure) = poll_client(&fixture, secret).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(failure["error"], "username_taken");
+        assert!(failure.get("access_token").is_none());
+    }
+    assert_eq!(
+        fixture
+            .consent(&winner_cookie, &winner_csrf, code, "allow")
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    // The rightful owner can still log in through a fresh request.
+    let retry = named_login(&fixture, "shared-name").await;
+    assert_eq!(
+        fixture
+            .consent(
+                &winner_cookie,
+                &winner_csrf,
+                retry["user_code"].as_str().unwrap(),
+                "allow"
+            )
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    let (_, login) = poll_client(&fixture, retry["device_code"].as_str().unwrap()).await;
+    assert_eq!(login["identity"]["subject"], owner.subject);
+    let extra = named_login(&fixture, "another-name").await;
+    let extra_secret = extra["device_code"].as_str().unwrap();
+    assert_eq!(
+        poll_client(&fixture, extra_secret).await.1["status"],
+        "pending"
+    );
+    assert_eq!(
+        fixture
+            .consent(
+                &winner_cookie,
+                &winner_csrf,
+                extra["user_code"].as_str().unwrap(),
+                "allow"
+            )
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let (status, failure) = poll_client(&fixture, extra_secret).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(failure["error"], "username_bound");
+    assert!(failure.get("access_token").is_none());
+    assert!(
+        fixture
+            .broker
+            .portal
+            .storage(|store| store.handle_available("another-name"))
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn denied_and_banned_logins_do_not_issue_username_credentials() {
+    let fixture = Fixture::new().await;
+    let denied = named_login(&fixture, "declined-name").await;
+    let (cookie, csrf) = fixture.session("123");
+    assert_eq!(
+        fixture
+            .consent(
+                &cookie,
+                &csrf,
+                denied["user_code"].as_str().unwrap(),
+                "deny"
+            )
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert!(
+        fixture
+            .broker
+            .portal
+            .storage(|store| store.handle_available("declined-name"))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        fixture
+            .consent(
+                &cookie,
+                &csrf,
+                denied["user_code"].as_str().unwrap(),
+                "allow"
+            )
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let pending = named_login(&fixture, "alice-home").await;
+    assert_eq!(
+        fixture
+            .consent(
+                &cookie,
+                &csrf,
+                pending["user_code"].as_str().unwrap(),
+                "allow"
+            )
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    fixture
+        .broker
+        .portal
+        .storage(|store| store.set_policy("123", Some(true), None))
+        .await
+        .unwrap();
+    let (status, login) = poll_client(&fixture, pending["device_code"].as_str().unwrap()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(login["error"], "account_banned");
+    assert!(login.get("access_token").is_none());
+    // A subsequent unban cannot resurrect a request that already failed.
+    fixture
+        .broker
+        .portal
+        .storage(|store| store.set_policy("123", Some(false), None))
+        .await
+        .unwrap();
+    let (status, retry) = poll_client(&fixture, pending["device_code"].as_str().unwrap()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(retry["error"], "account_banned");
+
+    let blocked = named_login(&fixture, "alice-home").await;
+    let secret = blocked["device_code"].as_str().unwrap();
+    assert_eq!(poll_client(&fixture, secret).await.1["status"], "pending");
+    fixture
+        .broker
+        .portal
+        .storage(|store| store.set_policy("123", Some(true), None))
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .consent(
+                &cookie,
+                &csrf,
+                blocked["user_code"].as_str().unwrap(),
+                "allow"
+            )
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let (status, failure) = poll_client(&fixture, secret).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(failure["error"], "account_banned");
+}
+
+#[tokio::test]
+async fn banned_github_callback_terminates_client_poll_without_waiting_for_expiry() {
+    let fixture = Fixture::new().await;
+    let start = named_login(&fixture, "alice-home").await;
+    let secret = start["device_code"].as_str().unwrap();
+    assert_eq!(poll_client(&fixture, secret).await.1["status"], "pending");
+    let response = fixture
+        .client
+        .get(format!(
+            "{}/setup?code={}",
+            fixture.base,
+            start["user_code"].as_str().unwrap()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let cookie = response.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let login = reqwest::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+    let params: HashMap<_, _> = login.query_pairs().into_owned().collect();
+
+    fixture
+        .broker
+        .portal
+        .storage(|store| store.set_policy("123", Some(true), None))
+        .await
+        .unwrap();
+    let response = fixture
+        .client
+        .get(format!(
+            "{}/oauth/callback/github?state={}&code=fixture-code",
+            fixture.base, params["state"]
+        ))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let (status, failure) = poll_client(&fixture, secret).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(failure["error"], "account_banned");
+    assert!(failure.get("access_token").is_none());
+    assert!(
+        fixture
+            .broker
+            .portal
+            .storage(|store| store.handle_available("alice-home"))
+            .await
+            .unwrap()
+    );
 }

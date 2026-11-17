@@ -70,7 +70,7 @@ class SessionFeatures(Harness):
 
     def titled_client(self, label, title, cwd):
         command = [
-            str(self.binary_dir / "ssmcp"),
+            str(self.binary_dir / "ssmcp"), "--ssh",
             "-F", str(self.directory / "ssh_config"),
             "--name", label, "--title", title, "--shell", "/bin/sh",
             "ssmcp-e2e",

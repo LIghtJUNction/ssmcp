@@ -42,7 +42,8 @@ use tokio::{
 
 const HELP: &str = r#"ssmcp — connect your devices and control authorized sessions
 
-Usage: ssmcp login [--server URL] [--no-browser]
+Usage: ssmcp username@server [options]
+       ssmcp [--server URL] [options]
        ssmcp whoami|logout [--server URL] [--json]
        ssmcp list [--json | -i] [--client ID]
        ssmcp -i [--server URL] [--client ID]
@@ -53,7 +54,7 @@ Usage: ssmcp login [--server URL] [--no-browser]
                     [--no-bootstrap] [--json]
        ssmcp join [--server URL] --token INVITATION [options]
        ssmcp [options] [--server URL]
-       ssmcp [options] [user@]host
+       ssmcp --ssh [options] [user@]host
        ssmcp setup [options] [user@]host
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
@@ -61,6 +62,9 @@ Usage: ssmcp login [--server URL] [--no-browser]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
 
   --server URL         Relay for this command; overrides config and last login
+  --username NAME      Named account on the selected server
+  --no-browser         Print the GitHub authorization link without opening it
+  --ssh                Explicitly select a legacy SSH destination
   -i, --interactive    Select an authorized account session and open its terminal
   --identity FILE      SSH private key file; legacy -i FILE HOST remains supported
   -p port              SSH port
@@ -93,8 +97,9 @@ harnesses are discovered automatically and their native tools are registered in
 one code_mode. Tools keep their native schemas and permission/approval behavior.
 
 Examples:
+  ssmcp alice@ssmcp.lmm.best
+  ssmcp alice@my-server.example:8443 --name laptop
   ssmcp config set server https://relay.example.com
-  ssmcp login
   ssmcp whoami
   ssmcp --name laptop
   ssmcp list
@@ -116,8 +121,12 @@ Examples:
   ssmcp attach workstation
   ssmcp sessions close workstation
 
-GitHub login is saved privately for the selected server. Bare ssmcp uses HTTPS
-and automatically grants your own account access. No SSH key or --allow is needed.
+username@server connects over HTTPS/WSS. The first connection opens GitHub
+authorization, validates and binds your chosen username, then connects automatically.
+The username belongs to this server and can differ from your GitHub login.
+Credentials are saved privately for this origin. Later connections reuse them;
+expired credentials reopen authorization. --no-browser prints a link and code.
+Bare ssmcp reuses your last authorized account. No SSH key or --allow is needed.
 ssmcp list shows the account's online controllable sessions; sessions list keeps
 listing local saved sessions. Ctrl-] leaves remote interactive control; Ctrl-C
 is delivered to the selected terminal. A temporary invitation can be redeemed
@@ -278,6 +287,8 @@ fn ssh_ended(status: io::Result<ExitStatus>) -> String {
 struct Options {
     destination: Option<String>,
     server: Option<String>,
+    username: Option<String>,
+    no_browser: bool,
     relay: Option<account::Credential>,
     temporary: bool,
     name: Option<String>,
@@ -312,23 +323,37 @@ impl Options {
         args: impl IntoIterator<Item = OsString>,
         default_destination: Option<&str>,
     ) -> Result<Option<Self>, String> {
-        Self::parse_with_policy(args, default_destination, true)
+        Self::parse_with_policy(
+            args,
+            default_destination,
+            true,
+            default_destination.is_some(),
+        )
     }
 
     // Older saved manifests omitted --no-watchdog. Their recorded policy remains
     // authoritative as the parsing default; explicit flags must still match it.
     fn parse_saved(spec: &crate::session::SessionSpec) -> Result<Option<Self>, String> {
-        Self::parse_with_policy(spec.args.iter().map(OsString::from), None, spec.watchdog)
+        Self::parse_with_policy(
+            spec.args.iter().map(OsString::from),
+            None,
+            spec.watchdog,
+            true,
+        )
     }
 
     fn parse_with_policy(
         args: impl IntoIterator<Item = OsString>,
         default_destination: Option<&str>,
         default_watchdog: bool,
+        legacy_destination: bool,
     ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter();
         let mut destination = None;
         let mut server = None;
+        let mut username = None;
+        let mut no_browser = false;
+        let mut ssh = false;
         let mut name = None;
         let mut title = None;
         let mut allow = Vec::new();
@@ -368,6 +393,14 @@ impl Options {
                         || value.starts_with("-t=") =>
                 {
                     return Err("harness selection was removed; remove -t/--type/--backend; installed harnesses are discovered automatically".into());
+                }
+                Some("--ssh") => ssh = true,
+                Some("--no-browser") => no_browser = true,
+                Some("--username") => {
+                    let value = args.next().ok_or("--username requires a name")?;
+                    username = Some(crate::username::normalize(
+                        value.to_str().ok_or("--username must be UTF-8")?,
+                    )?);
                 }
                 Some("--server") => {
                     let value = args
@@ -507,6 +540,34 @@ impl Options {
         if destination.is_none() && server.is_none() && !list_tools {
             destination = default_destination.map(str::to_owned);
         }
+        // Explicit SSH switches and old saved manifests retain their established
+        // transport. A new username@host invocation always selects HTTPS.
+        ssh |= identity.is_some() || port.is_some() || config.is_some();
+        if !ssh
+            && !legacy_destination
+            && let Some(target) = destination.as_deref().filter(|value| value.contains('@'))
+        {
+            let (account_name, origin) =
+                account::parse_target(target).map_err(|e| e.to_string())?;
+            if username
+                .as_ref()
+                .is_some_and(|value| value != &account_name)
+            {
+                return Err("--username differs from the username in the destination".into());
+            }
+            if server.as_ref().is_some_and(|value| value != &origin) {
+                return Err("--server differs from the server in the destination".into());
+            }
+            username = Some(account_name);
+            server = Some(origin);
+            destination = None;
+        }
+        if username.is_some() && (destination.is_some() || ssh) {
+            return Err("a username selects HTTPS and cannot be combined with SSH options".into());
+        }
+        if ssh && destination.is_none() {
+            return Err("--ssh and SSH options require an explicit SSH destination".into());
+        }
         if let Some(destination) = &destination {
             validate_destination(destination)?;
         }
@@ -518,8 +579,10 @@ impl Options {
                     .into(),
             );
         }
-        if list_tools && server.is_some() {
-            return Err("--list-tools is local and cannot be combined with --server".into());
+        if list_tools && (server.is_some() || username.is_some()) {
+            return Err(
+                "--list-tools is local and cannot be combined with an account destination".into(),
+            );
         }
         if list_tools && destination.is_some() {
             return Err("--list-tools is local and does not take an SSH destination".into());
@@ -555,6 +618,8 @@ impl Options {
         Ok(Some(Self {
             destination,
             server,
+            username,
+            no_browser,
             relay: None,
             temporary: false,
             name,
@@ -648,7 +713,12 @@ impl Options {
         }
         if let Some(server) = &self.server {
             args.extend([OsString::from("--server"), OsString::from(server)]);
+            if let Some(username) = &self.username {
+                args.extend([OsString::from("--username"), OsString::from(username)]);
+            }
         } else {
+            // Explicitly serialize the legacy transport; @ no longer chooses SSH.
+            args.push(OsString::from("--ssh"));
             args.push(OsString::from(
                 self.destination
                     .as_ref()
@@ -834,7 +904,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     let Some(mut options) = Options::parse(connection)? else {
         return Ok(());
     };
-    apply_account(&mut options, None).await?;
+    apply_account(&mut options, None, true).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
     validate_session_spec(&spec)?;
@@ -857,6 +927,7 @@ fn connection_option_takes_value(option: &str) -> bool {
         option,
         "--name"
             | "--server"
+            | "--username"
             | "--identity"
             | "--title"
             | "--allow"
@@ -974,7 +1045,11 @@ fn join_request(args: &mut Vec<OsString>) -> crate::Result<Option<JoinRequest>> 
     Ok(Some(JoinRequest { server, token }))
 }
 
-async fn apply_account(options: &mut Options, join: Option<JoinRequest>) -> crate::Result<()> {
+async fn apply_account(
+    options: &mut Options,
+    join: Option<JoinRequest>,
+    allow_login: bool,
+) -> crate::Result<()> {
     if options.list_tools {
         if join.is_some() {
             return Err("join starts a controlled session; --list-tools is local".into());
@@ -997,12 +1072,22 @@ async fn apply_account(options: &mut Options, join: Option<JoinRequest>) -> crat
         }
         options.temporary = true;
         Some(account::enroll(&join.server, &join.token).await?)
+    } else if options.server.is_some() || options.destination.is_none() {
+        Some(
+            account::connect_credential(
+                options.server.as_deref(),
+                options.username.as_deref(),
+                options.no_browser,
+                allow_login,
+            )
+            .await?,
+        )
     } else {
-        account::credentials(options.server.as_deref()).await?
+        account::credentials(None).await?
     };
     if options.server.is_some() || options.destination.is_none() {
         let credential =
-            credential.ok_or("not logged in; run ssmcp login [--server URL], then run ssmcp")?;
+            credential.ok_or("connect with ssmcp username@server to authorize this device")?;
         if options
             .allow
             .iter()
@@ -1011,6 +1096,7 @@ async fn apply_account(options: &mut Options, join: Option<JoinRequest>) -> crat
             return Err("HTTPS account sessions belong to the logged-in account; --allow for additional users is supported on SSH connections".into());
         }
         options.server = Some(credential.server.clone());
+        options.username = credential.username.clone();
         options.allow = vec![credential.principal.clone()];
         options.relay = Some(credential);
         options.no_setup = true;
@@ -1111,7 +1197,7 @@ pub async fn run() -> crate::Result<()> {
             "setup configures SSH; use ssmcp login --server URL for HTTPS account access".into(),
         );
     }
-    apply_account(&mut options, join).await?;
+    apply_account(&mut options, join, service.is_none()).await?;
     if let Some(runner) = &service
         && (options.daemon
             || options.list_tools
@@ -1223,6 +1309,7 @@ pub async fn run() -> crate::Result<()> {
     let mut setup_attempted = setup_requested;
     let mut ever_registered = false;
     let mut protocol = VERSION;
+    let mut reauthenticated = false;
     loop {
         if let Some(runner) = &service
             && runner.stop_requested()
@@ -1237,16 +1324,26 @@ pub async fn run() -> crate::Result<()> {
                 .as_secs()
                 >= credential.expires_at
         }) {
-            if let Some(runner) = &service {
-                runner.record(
-                    "disconnected",
-                    attempt,
-                    None,
-                    None,
-                    Some(relay::AUTH_EXPIRED),
-                )?;
+            if service.is_none()
+                && !options.temporary
+                && options.username.is_some()
+                && !reauthenticated
+            {
+                reauthenticated = true;
+                options.allow.clear();
+                apply_account(&mut options, None, true).await?;
+            } else {
+                if let Some(runner) = &service {
+                    runner.record(
+                        "disconnected",
+                        attempt,
+                        None,
+                        None,
+                        Some(relay::AUTH_EXPIRED),
+                    )?;
+                }
+                return Err(relay::failure(relay::AUTH_EXPIRED.into()));
             }
-            return Err(relay::failure(relay::AUTH_EXPIRED.into()));
         }
         attempt = attempt.saturating_add(1);
         if let Some(runner) = &service {
@@ -1327,6 +1424,18 @@ pub async fn run() -> crate::Result<()> {
             .as_ref()
             .err()
             .is_some_and(|error| error.downcast_ref::<relay::PermanentFailure>().is_some());
+        if permanent
+            && error.as_deref() == Some(relay::AUTH_EXPIRED)
+            && service.is_none()
+            && !options.temporary
+            && options.username.is_some()
+            && !reauthenticated
+        {
+            reauthenticated = true;
+            options.allow.clear();
+            apply_account(&mut options, None, true).await?;
+            continue;
+        }
         if !options.watchdog || unsupported_protocol || permanent {
             if let Some(runner) = &service {
                 runner.record("disconnected", attempt, None, None, error.as_deref())?;
@@ -2358,9 +2467,10 @@ mod tests {
 
     #[test]
     fn client_names_are_bounded_display_metadata() {
-        let options = Options::parse(["--name", "My workstation", "user@host"].map(OsString::from))
-            .unwrap()
-            .unwrap();
+        let options =
+            Options::parse(["--name", "My workstation", "alice@host"].map(OsString::from))
+                .unwrap()
+                .unwrap();
         let info = options.metadata().unwrap();
         assert_eq!(info.name, "My workstation");
         assert!(std::path::Path::new(&info.cwd).is_absolute());
@@ -2370,7 +2480,7 @@ mod tests {
                 Options::parse([
                     OsString::from("--name"),
                     OsString::from(bad),
-                    OsString::from("user@host")
+                    OsString::from("alice@host")
                 ])
                 .is_err()
             );
@@ -2381,7 +2491,15 @@ mod tests {
     fn session_title_preserves_unicode_task_context_without_becoming_an_ssh_argument() {
         let title = "修复会话重启 · issue #42";
         let options = Options::parse(
-            ["--name", "workstation", "--title", title, "user@host"].map(OsString::from),
+            [
+                "--ssh",
+                "--name",
+                "workstation",
+                "--title",
+                title,
+                "user@host",
+            ]
+            .map(OsString::from),
         )
         .unwrap()
         .unwrap();
@@ -2619,5 +2737,85 @@ mod tests {
         args.push(OsString::from("my-server"));
         let error = Options::parse(args).err().unwrap();
         assert!(error.contains("at most 8"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod named_entry_tests {
+    use super::*;
+
+    fn options(args: &[&str]) -> Options {
+        Options::parse(args.iter().map(OsString::from))
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn username_destination_uses_https_without_ssh_options() {
+        let options = options(&["Alice@EXAMPLE.com:8443", "--no-browser", "--name", "dev"]);
+        assert!(options.destination.is_none());
+        assert_eq!(options.server.as_deref(), Some("https://example.com:8443"));
+        assert_eq!(options.username.as_deref(), Some("alice"));
+        assert!(options.no_browser);
+        assert!(options.identity.is_none());
+        let spec = options.session_spec().unwrap();
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|args| args == ["--username", "alice"])
+        );
+        let restored = Options::parse_saved(&spec).unwrap().unwrap();
+        assert_eq!(restored.username.as_deref(), Some("alice"));
+        assert_eq!(restored.server, options.server);
+        assert!(restored.destination.is_none());
+    }
+
+    #[test]
+    fn named_destination_rejects_conflicting_transport_or_identity() {
+        for args in [
+            vec!["--server", "https://other.example", "alice@example.com"],
+            vec!["--username", "bob", "alice@example.com"],
+            vec!["--username", "alice", "--ssh", "alice@example.com"],
+            vec!["--list-tools", "alice@example.com"],
+            vec!["admin@example.com"],
+            vec!["alice@example.com/path"],
+        ] {
+            assert!(
+                Options::parse(args.iter().map(OsString::from)).is_err(),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_ssh_and_existing_saved_sessions_preserve_their_transport() {
+        for args in [
+            vec!["--ssh", "alice@example.com"],
+            vec!["-p", "22", "alice@example.com"],
+            vec!["--identity", "/tmp/key", "alice@example.com"],
+        ] {
+            let options = options(&args);
+            assert_eq!(options.destination.as_deref(), Some("alice@example.com"));
+            assert!(options.server.is_none());
+            assert!(options.username.is_none());
+        }
+        let saved = crate::session::SessionSpec {
+            name: "legacy".into(),
+            cwd: std::env::current_dir().unwrap(),
+            args: vec!["--name".into(), "legacy".into(), "old@host".into()],
+            watchdog: true,
+            reconnect_delay_secs: 5,
+        };
+        let restored = Options::parse_saved(&saved).unwrap().unwrap();
+        assert_eq!(restored.destination.as_deref(), Some("old@host"));
+        assert!(restored.server.is_none());
+        assert!(
+            restored
+                .session_spec()
+                .unwrap()
+                .args
+                .iter()
+                .any(|arg| arg == "--ssh")
+        );
     }
 }

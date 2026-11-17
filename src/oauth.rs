@@ -460,6 +460,35 @@ impl OAuth {
         family.binding.live()
     }
 
+    /// Revoke current MCP grants and pending codes for a banned account.
+    pub(crate) fn revoke_subject(&self, subject: &str) {
+        let mut state = self.state.lock().unwrap();
+        let matches = |authorization: &Authorization| {
+            matches!(
+                authorization, Authorization::Identity(identity) if identity.subject == subject
+            )
+        };
+        for family in state.families.values_mut() {
+            if matches(&family.binding.authorization) {
+                family.revoked = true;
+            }
+        }
+        state
+            .codes
+            .retain(|_, code| !matches(&code.binding.authorization));
+        state.transactions.retain(|_, transaction| {
+            transaction
+                .identity
+                .as_ref()
+                .is_none_or(|identity| identity.subject != subject)
+        });
+        state.pending_codes = state
+            .transactions
+            .values()
+            .filter(|transaction| transaction.busy)
+            .count();
+    }
+
     fn resource(&self, user: &str) -> String {
         format!("{}/{user}", self.issuer)
     }
@@ -1831,6 +1860,10 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
             }
             let identity = attempt.transaction.identity.clone()
                 .ok_or_else(|| OAuthError::invalid("Sign in before granting this client access"))?;
+            let _policy_update = broker.user_policy_updates.lock().await;
+            if broker.user_policies.is_banned(&identity.subject) {
+                return Err(OAuthError::grant());
+            }
             let authorization = Authorization::Identity(identity);
             return broker.oauth.finish_authorization(attempt, authorization);
         }
@@ -1848,6 +1881,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
                 None,
             ));
         }
+        let _policy_update = broker.user_policy_updates.lock().await;
         let Some(session) = broker.redeem_login(&attempt.transaction.user, code).await else {
             return Ok(consent_response(
                 id,
@@ -1858,6 +1892,12 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
                 None,
             ));
         };
+        let authorization = Authorization::Legacy {
+            user: attempt.transaction.user.clone(),
+            anchor: Arc::downgrade(&session),
+        };
+        broker.clients(&attempt.transaction.user, &authorization)
+            .await.map_err(|_| OAuthError::grant())?;
         broker.oauth.finish_login(attempt, session)
     }
     .await;
@@ -1899,6 +1939,9 @@ async fn provider_callback(
                 Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
                 StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
         };
+        // A ban can occur during the upstream exchange. Validate and save the
+        // identity under the policy lock so its consent cannot outlive revocation.
+        let _policy_update = broker.user_policy_updates.lock().await;
         let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
             .map_err(|_| OAuthError::grant())?.len();
         let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
@@ -1917,6 +1960,7 @@ async fn token(State(broker): State<Arc<Broker>>, request: Request) -> Response 
         let parameters = Parameters::parse(
             std::str::from_utf8(&bytes).map_err(|_| OAuthError::invalid("Invalid form text"))?,
         )?;
+        let _policy_update = broker.user_policy_updates.lock().await;
         broker.oauth.token(&parameters, &headers)
     }
     .await;
@@ -2107,6 +2151,115 @@ mod tests {
                 .await
                 .is_some()
         );
+    }
+
+    fn identity_code(oauth: &OAuth, client: &str, subject: &str) -> String {
+        let form = consent(oauth, client);
+        let (state, _) = ok(oauth.begin_provider_login(&form.id, &form.csrf, "github"));
+        let upstream = ok(oauth.take_provider_login(&state, &form.csrf, "github"));
+        ok(oauth.finish_provider_login(upstream, github_identity(subject, "alice")));
+        let attempt = ok(oauth.begin_login(&form.id, &form.csrf));
+        let code = attempt.code.clone();
+        ok(oauth.finish_authorization(
+            attempt,
+            Authorization::Identity(github_identity(subject, "alice")),
+        ));
+        code
+    }
+
+    #[tokio::test]
+    async fn account_ban_revokes_pending_codes_access_and_refresh_families() {
+        let broker = Broker::new(ISSUER.into());
+        let registered = ok(broker.oauth.register(registration(true)));
+        let client = registered["client_id"].as_str().unwrap();
+        let code = identity_code(&broker.oauth, client, "42");
+        let exchange = |code: &str| {
+            parameters(&[
+                ("client_id", client),
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("code_verifier", VERIFIER),
+                ("resource", RESOURCE),
+            ])
+        };
+        let tokens = ok(broker.oauth.token(&exchange(&code), &HeaderMap::new()));
+        let pending = identity_code(&broker.oauth, client, "42");
+        let other = identity_code(&broker.oauth, client, "43");
+        broker.user_policies.set("42", true, None);
+        broker.oauth.revoke_subject("42");
+        assert!(
+            broker
+                .authenticate("alice", tokens["access_token"].as_str().unwrap())
+                .await
+                .is_none()
+        );
+        assert!(
+            broker
+                .oauth
+                .token(&exchange(&pending), &HeaderMap::new())
+                .is_err()
+        );
+        assert!(
+            broker
+                .oauth
+                .token(
+                    &parameters(&[
+                        ("client_id", client),
+                        ("grant_type", "refresh_token"),
+                        ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+                        ("resource", RESOURCE),
+                    ]),
+                    &HeaderMap::new()
+                )
+                .is_err()
+        );
+        assert!(
+            broker
+                .oauth
+                .token(&exchange(&other), &HeaderMap::new())
+                .is_ok()
+        );
+        broker.user_policies.set("42", false, None);
+        assert!(
+            broker
+                .authenticate("alice", tokens["access_token"].as_str().unwrap())
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_late_verified_identity_cannot_authorize_while_banned() {
+        let broker = Arc::new(Broker::new(ISSUER.into()));
+        let registered = ok(broker.oauth.register(registration(true)));
+        let client = registered["client_id"].as_str().unwrap();
+        let form = consent(&broker.oauth, client);
+        let (state, _) = ok(broker
+            .oauth
+            .begin_provider_login(&form.id, &form.csrf, "github"));
+        let upstream = ok(broker
+            .oauth
+            .take_provider_login(&state, &form.csrf, "github"));
+        // The upstream request began before the ban, when its subject was not known.
+        broker.user_policies.set("42", true, None);
+        broker.oauth.revoke_subject("42");
+        ok(broker
+            .oauth
+            .finish_provider_login(upstream, github_identity("42", "alice")));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/oauth/authorize")
+            .header(header::ORIGIN, ISSUER)
+            .header(header::COOKIE, format!("{COOKIE}={}", form.csrf))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(format!(
+                "transaction_id={}&decision=allow",
+                form.id
+            )))
+            .unwrap();
+        let response = login(State(broker.clone()), request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(broker.oauth.state.lock().unwrap().codes.is_empty());
     }
 
     #[test]
