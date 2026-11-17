@@ -87,6 +87,7 @@ Usage: ssmcp username@server [options]
   --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (SSH sharing; at most 32 users; your logged-in account is automatic)
+  --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
   --log-format FORMAT  pretty (default), pretty-verbose, or jsonl
@@ -320,6 +321,7 @@ struct Options {
     port: Option<u16>,
     config: Option<OsString>,
     shell: PathBuf,
+    tty: Option<String>,
 }
 
 impl Options {
@@ -382,6 +384,7 @@ impl Options {
         let mut portal = None;
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = crate::platform::default_shell();
+        let mut tty = None;
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 Some("-h" | "--help") => {
@@ -536,6 +539,20 @@ impl Options {
                             .ok_or("-p requires a port in 1..=65535")?,
                     );
                 }
+                Some("--tty") => {
+                    let value = args
+                        .next()
+                        .ok_or("--tty requires a terminal executable")?
+                        .into_string()
+                        .map_err(|_| "--tty must be UTF-8")?;
+                    crate::observer::validate_terminal(&value)?;
+                    tty = Some(value);
+                }
+                Some(value) if value.starts_with("--tty=") => {
+                    let value = &value["--tty=".len()..];
+                    crate::observer::validate_terminal(value)?;
+                    tty = Some(value.into());
+                }
                 Some("--shell") => {
                     shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?);
                 }
@@ -651,6 +668,7 @@ impl Options {
             port,
             config,
             shell,
+            tty,
         }))
     }
 
@@ -702,6 +720,9 @@ impl Options {
                 OsString::from("--context-root"),
                 path.clone().into_os_string(),
             ]);
+        }
+        if let Some(tty) = &self.tty {
+            args.extend([OsString::from("--tty"), OsString::from(tty)]);
         }
         args.extend([
             OsString::from("--shell"),
@@ -950,6 +971,7 @@ fn connection_option_takes_value(option: &str) -> bool {
             | "-p"
             | "-F"
             | "--shell"
+            | "--tty"
     )
 }
 
@@ -1120,6 +1142,17 @@ async fn apply_account(
 }
 
 pub async fn run() -> crate::Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__tty-view")) {
+        let args: Vec<_> = std::env::args_os().skip(2).collect();
+        if args.len() != 2 {
+            return Err("terminal viewer requires endpoint directory and slot".into());
+        }
+        let slot = args[1]
+            .to_str()
+            .and_then(|value| value.parse().ok())
+            .ok_or("invalid observer slot")?;
+        return crate::observer::viewer(std::path::Path::new(&args[0]), slot).await;
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__relay")) {
         let code = match relay::run().await {
             Ok(()) => 0,
@@ -1293,7 +1326,7 @@ pub async fn run() -> crate::Result<()> {
     if options.list_tools {
         let management = session_control(&options, service.as_ref())?;
         let backend = tokio::select! {
-            result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
+            result = timeout(Duration::from_secs(120), Backend::start_with_tty(&options.shell, options.tty.as_deref())) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
@@ -1860,7 +1893,7 @@ async fn connect(
         },
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
-        result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
+        result = timeout(Duration::from_secs(120), Backend::start_with_tty(&options.shell, options.tty.as_deref())) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = match Runtime::with_session_control(
         backend.clone(),
@@ -2952,5 +2985,34 @@ mod named_entry_tests {
                 .iter()
                 .any(|arg| arg == "--ssh")
         );
+    }
+}
+
+#[cfg(test)]
+mod tty_option_tests {
+    use super::*;
+    #[test]
+    fn terminal_selection_survives_saved_sessions_without_entering_ssh_argv() {
+        let options =
+            Options::parse(["--ssh", "fixture.invalid", "--tty", "kitty"].map(OsString::from))
+                .unwrap()
+                .unwrap();
+        assert_eq!(options.tty.as_deref(), Some("kitty"));
+        let saved = options.session_spec().unwrap();
+        let restored = Options::parse_saved(&saved).unwrap().unwrap();
+        assert_eq!(restored.tty.as_deref(), Some("kitty"));
+        let options = Options::parse(
+            [
+                "--ssh",
+                "fixture.invalid",
+                "--tty=/tmp/terminal with spaces",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.tty.as_deref(), Some("/tmp/terminal with spaces"));
+        assert!(Options::parse(["--tty"].map(OsString::from)).is_err());
+        assert!(Options::parse(["--tty="].map(OsString::from)).is_err());
     }
 }

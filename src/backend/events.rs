@@ -186,6 +186,7 @@ pub struct EventLog {
     buffer: Mutex<Buffer>,
     changed: Notify,
     archive: Mutex<Option<crate::output::Capture>>,
+    observer: Option<std::sync::Weak<crate::observer::Pool>>,
 }
 
 impl EventLog {
@@ -219,15 +220,39 @@ impl EventLog {
             audit_mode,
             buffer: Mutex::new(Buffer::default()),
             changed: Notify::new(),
+            observer: output
+                .as_ref()
+                .and_then(|output| output.observer())
+                .map(|pool| Arc::downgrade(&pool)),
             archive: Mutex::new(output.map(|store| store.capture(format!("events:{label}:jsonl")))),
         })
     }
 
+    pub(crate) fn map_background(&self, path: &std::path::Path) {
+        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+            pool.map_background(path);
+        }
+    }
     pub fn push(&self, event: Value) {
         let mut event = self.audit_mode.event(event);
+        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+            pool.native_event(&self.label, &event);
+        }
         // Serialise persistence, display and sequence assignment for this stream.
         let mut archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
-        crate::client::render::event(&self.label, &event);
+        let external_output = self
+            .observer
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some()
+            && (event["method"] == "command/exec/outputDelta"
+                || matches!(
+                    event["type"].as_str(),
+                    Some("background_output" | "bash_execution_update")
+                ));
+        if !external_output {
+            crate::client::render::event(&self.label, &event);
+        }
         // Codex command streaming carries bytes as base64. Keep the original event
         // and add readable text so both the local transcript and MCP consumers can inspect it.
         if event["method"] == "command/exec/outputDelta"
