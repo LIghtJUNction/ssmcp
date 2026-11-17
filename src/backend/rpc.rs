@@ -568,7 +568,7 @@ impl Peer {
         Ok(json!({"sent":true,"id":id}))
     }
 
-    fn receive(&self, message: Value) -> Result<(), String> {
+    fn receive(&self, mut message: Value) -> Result<(), String> {
         if !message.is_object() {
             return Err("native message must be an object".into());
         }
@@ -609,7 +609,7 @@ impl Peer {
                 } else if let Some(error) = message.get("error") {
                     Err(format!("native RPC error: {error}"))
                 } else {
-                    Ok(message["result"].clone())
+                    Ok(message["result"].take())
                 };
                 let _ = waiting.reply.send(result);
             } else {

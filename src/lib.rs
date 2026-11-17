@@ -19,6 +19,7 @@ pub mod http;
 pub mod identity;
 #[cfg(target_os = "linux")]
 pub mod management;
+pub(crate) mod memory;
 #[cfg(target_os = "linux")]
 pub mod oauth;
 pub mod omarchy;

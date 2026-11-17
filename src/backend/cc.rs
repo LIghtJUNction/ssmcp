@@ -8,6 +8,7 @@
 //! does not send a background-completion notification, so watchers live until
 //! disconnect or file removal. A fixed limit bounds concurrent watchers.
 use super::rpc::{Dialect, Peer};
+use crate::catalog::ToolDescriptor;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
@@ -93,30 +94,39 @@ impl Claude {
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
-        // Always discover again. This also honours notifications/tools/list_changed
-        // without a second catalogue cache that could become stale.
-        let mut tools = control_tools();
+        self.compact_tools()
+            .await?
+            .iter()
+            .map(ToolDescriptor::value)
+            .collect()
+    }
+
+    pub(crate) async fn compact_tools(&self) -> Result<Vec<ToolDescriptor>, String> {
+        // Always rediscover so notifications/tools/list_changed stay current.
+        // Compact each page before fetching the next; the registry owns the
+        // retained snapshot, without an expanded provider-side catalog copy.
+        let mut tools = crate::catalog::compact(control_tools())?;
         let mut names = HashSet::new();
         let mut cursors = HashSet::new();
         let mut params = json!({});
         for _ in 0..MAX_TOOL_PAGES {
-            let page = self.peer.request("tools/list", params).await?;
+            let mut page = self.peer.request("tools/list", params).await?;
             let entries = page["tools"]
-                .as_array()
+                .as_array_mut()
                 .ok_or("Claude Code tools/list returned no tools array")?;
-            for entry in entries {
+            for mut entry in std::mem::take(entries) {
                 let name = entry["name"]
                     .as_str()
                     .filter(|name| !name.is_empty())
-                    .ok_or("Claude Code returned a tool without a name")?;
-                if !names.insert(name.to_owned()) {
+                    .ok_or("Claude Code returned a tool without a name")?
+                    .to_owned();
+                if !names.insert(name.clone()) {
                     return Err(format!("Claude Code returned duplicate tool name {name:?}"));
                 }
-                let mut entry = entry.clone();
                 // Keep schemas, annotations, extension fields, and descriptions
                 // intact; only the namespace on the public tool name changes.
                 entry["name"] = Value::String(format!("cc.{name}"));
-                tools.push(entry);
+                tools.push(ToolDescriptor::from_value(entry)?);
             }
             match page.get("nextCursor") {
                 None | Some(Value::Null) => return Ok(tools),
