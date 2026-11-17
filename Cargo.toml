@@ -143,7 +143,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 strip = true

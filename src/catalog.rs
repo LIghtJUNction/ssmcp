@@ -18,11 +18,16 @@ pub(crate) struct ToolDescriptor(Arc<Descriptor>);
 impl ToolDescriptor {
     pub(crate) fn from_value(value: Value) -> Result<Self, String> {
         let raw = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
+        let name = value.get("name").and_then(Value::as_str).map(str::to_owned);
+        let input_object = value.get("inputSchema").is_some_and(Value::is_object);
+        // Drop the expanded tree before allocating its long-lived compressed
+        // representation, so temporary JSON nodes do not pin adjacent heap pages.
+        drop(value);
         let original_len = raw.len();
         // Tiny schemas are cheaper to retain directly. Larger descriptions contain
         // repeated JSON keys and prose; decode only the requested page or route.
         let compressed = if raw.len() >= 512 {
-            let encoded = miniz_oxide::deflate::compress_to_vec(&raw, 1);
+            let encoded = miniz_oxide::deflate::compress_to_vec(&raw, 6);
             (encoded.len() + 64 < raw.len()).then_some(encoded)
         } else {
             None
@@ -32,8 +37,8 @@ impl ToolDescriptor {
             bytes: compressed.unwrap_or(raw).into_boxed_slice(),
             original_len,
             compressed: is_compressed,
-            name: value.get("name").and_then(Value::as_str).map(str::to_owned),
-            input_object: value.get("inputSchema").is_some_and(Value::is_object),
+            name,
+            input_object,
         })))
     }
 
