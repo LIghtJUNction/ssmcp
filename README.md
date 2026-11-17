@@ -101,7 +101,7 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 }
 ```
 
-将 `url` 添加到支持 OAuth 的 MCP 客户端，选择 GitHub 登录。返回 ssmcp 后，核对 GitHub 身份、MCP 客户端名称和回调来源，点击“允许连接”。随后调用 `list` 查看获准访问的在线客户端，再用 `list({client_id})` 读取原生工具及参数。**保持本机 ssmcp 进程运行，才能继续操作它的后端。** [逐步登录教程](docs/configuration.md#登录流程)
+将 `url` 添加到支持 OAuth 的 MCP 客户端，选择 GitHub 登录。返回 ssmcp 后，核对 GitHub 身份、MCP 客户端名称和回调来源，点击“允许连接”。随后调用 `list` 查看获准访问的在线客户端，再在 `code_mode` 中用 `tools.search(clientId,{query,include_schemas:true})` 查询所需原生工具及参数；旧服务端可继续用 `list({client_id})` 分页。**保持本机 ssmcp 进程运行，才能继续操作它的后端。** [逐步登录教程](docs/configuration.md#登录流程)
 
 需要原有登录码方式时，省略 `--allow`。终端返回 `https://ssmcp.example.com/SSH用户名` 和一次性 `login_code`，在对应 OAuth 页面填写即可。该授权只覆盖同一 SSH 账号下未设置 `--allow` 的客户端。[两种授权方式](docs/configuration.md#authorization-modes)
 
@@ -163,7 +163,8 @@ ssmcp 自己签发的 access token 默认有效 **8 小时**。refresh token 每
 | Shell | 始终提供 | 有状态的 PTY 与独立、可并行的命令任务 |
 | 电脑控制 | 原生桌面会话与系统依赖探测 | `ssmcp.computer.*`：Linux / Windows / macOS 的截图、窗口、鼠标、键盘和滚轮 |
 | Omarchy 系统 | 安装、命令接口与设备探测 | `ssmcp.omarchy.*`：21 个主题、音频、亮度、工作区、窗口、应用及状态原语 |
-| 浏览器控制 | 原生 Chromium CDP | `ssmcp.browser.*`：启动与附着、页面快照、标签页、点击填表和截图 |
+| 浏览器控制 | 原生 Chromium CDP | `ssmcp.browser.*`：只读发现、启动与附着、页面快照、标签页、点击填表和截图 |
+| 现有 Chrome 扩展 | 已安装并通过握手的 Playwright MCP，固定 `--extension` 模式 | 实时枚举的 `playwright.*`；保留扩展自己的连接确认与原生审批 |
 | Codex | 版本匹配的 App Server Schema 与原生握手 | `codex.*`，以及由 `mcpServerStatus/list` 动态发现并由 `mcpServer/tool/call` 调用的 MCP 工具 |
 | Claude Code | `claude mcp serve` 的实际 MCP 目录 | `claude.*`，保留原生 Schema 和结果 |
 | Pi | 显式连接已初始化的本机私有 Unix RPC socket | 四项 RPC 桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
@@ -199,6 +200,8 @@ return shot.structuredContent;
 Omarchy 新增 `ssmcp.omarchy.*` 的 21 个系统原语，覆盖主题、背景、字体、音频、亮度、夜灯、保持唤醒、状态栏、动画、工作区、窗口、应用、菜单、电池与网络。设置采用明确的期望值并检查可观察状态；应用和菜单分别报告请求是否接受。先用 `omarchy.status` 检查本机命令与设备，再通过枚举结果选择对象。
 
 先读取 `computer.status` 查看桌面会话、权限和逐项能力。三平台适配器已实现，实际可用性与验证证据按平台记录：Linux/Omarchy 可在当前开发机运行，Windows/macOS 的交叉编译结果不等于真机交互验收。完整接口与权限说明见 [computer-use 指南](docs/computer-use.md)，当前验证见[验收记录](docs/validation-computer-use.md)。`image()` 和 `computer/browser/omarchy` 便捷命名空间需要同步更新服务端。
+
+用户要求操作现有 Chrome 时，先用 `ssmcp.browser.discover` 检查只读元数据，再用 `ssmcp.harnesses.list` 与 `tools.search` 确认可调用的原生能力。扩展安装不等于已连接；缺少 Playwright MCP server 时只报告不可用，发现阶段不下载依赖，也不会改用隔离 Chromium 会话。已有 CDP 端点可显式附着，详见[复用现有 Chrome](docs/browser-existing-session.md)。
 
 ## 两个工具就够了
 
@@ -255,7 +258,7 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 
 `wait_ms` 只控制这次等待；`timeout_ms` 才是命令的执行期限，默认没有期限。完成的任务不会被下一次启动立即删除，达到 128 条记录时才淘汰最早完成的记录。每个流保留 64 KiB 内存尾部，长输出另存完整文件；检查截断标记并通过 `outputs.read` 读取转储。[命令接口、边界和恢复方式](docs/commands.md)
 
-调用 Harness 或 MCP 工具时，先用 `list({client_id})` 或 `await tools(client.id)` 检查实际 Schema。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批状态；大结果使用 artifact 保存原生 MCP JSON，独立命令分别保存 stdout/stderr，PTY 保存会话合并流，OpenCode HTTP 正文使用 `body_artifact` 与 `body_format`。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
+调用 Harness 或 MCP 工具时，先用 `await tools.search(client.id,{query:'所需能力',limit:20})` 定位工具，再用 `include_schemas:true` 获取完整原生 Schema。`list({client_id})` 和 `await tools(client.id,cursor)` 继续提供完整目录分页。检索减少返回给模型的无关描述，不减少首次扫描的底层分页；`tools.search` 需要服务端更新。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批状态；大结果使用 artifact 保存原生 MCP JSON，独立命令分别保存 stdout/stderr，PTY 保存会话合并流，OpenCode HTTP 正文使用 `body_artifact` 与 `body_format`。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
 
 代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过 SSH 将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
 

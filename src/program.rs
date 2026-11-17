@@ -16,6 +16,68 @@ pub const NODE_FLAGS: &[&str] = &[
     "--stack-size=256",
 ];
 
+// The code-mode service is Linux-only. Keep its successful compatibility probe
+// while this exact native file is unchanged; never give portable platforms a
+// weaker cache identity or make a failed probe sticky.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NodeIdentity {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    bytes: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+#[cfg(target_os = "linux")]
+impl NodeIdentity {
+    fn read(path: &Path) -> Result<Self, String> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+        if !metadata.is_file() {
+            return Err("Node runtime is not a regular file".into());
+        }
+        Ok(Self {
+            path: path.to_owned(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            bytes: metadata.len(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+static NODE_VALIDATION: std::sync::Mutex<Option<NodeIdentity>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+fn validated_node(
+    path: PathBuf,
+    cache: &std::sync::Mutex<Option<NodeIdentity>>,
+    probe: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<PathBuf, String> {
+    // First callers share one probe. This lock and the bounded native probe run
+    // on a blocking worker, never on code_mode's async executor thread.
+    let mut validated = cache
+        .lock()
+        .map_err(|_| "Node validation cache is unavailable".to_owned())?;
+    let identity = NodeIdentity::read(&path)?;
+    if validated.as_ref() == Some(&identity) {
+        return Ok(path);
+    }
+    *validated = None;
+    probe(&path)?;
+    if NodeIdentity::read(&path)? != identity {
+        return Err("Node runtime changed during compatibility validation; retry discovery".into());
+    }
+    *validated = Some(identity);
+    Ok(path)
+}
+
 pub fn executable(name: &str) -> Result<PathBuf, String> {
     let search = std::env::var_os("PATH").unwrap_or_default();
     let home = std::env::var_os("HOME")
@@ -248,9 +310,21 @@ pub fn node() -> Result<PathBuf, String> {
             "Node entry is not a native executable; refusing to pass --jitless to a shim".into(),
         );
     }
+    #[cfg(target_os = "linux")]
+    {
+        validated_node(path, &NODE_VALIDATION, probe_node)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        probe_node(&path)?;
+        Ok(path)
+    }
+}
+
+fn probe_node(path: &Path) -> Result<(), String> {
     let probe_timeout = Duration::from_secs(3);
     let spawn_started = Instant::now();
-    let mut child = Command::new(&path)
+    let mut child = Command::new(path)
         .args(NODE_FLAGS)
         .args(["--eval", "if (!process.versions.node) process.exit(1)"])
         .env_remove("NODE_OPTIONS")
@@ -271,7 +345,7 @@ pub fn node() -> Result<PathBuf, String> {
     let pid = child.id();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(path),
+            Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(status)) => {
                 return Err(format!(
                     "installed Node does not support the isolated executor flags ({status}) (runtime={path:?}, stage=compatibility_exit, elapsed_ms={}, wait_timeout_ms={}, pid={pid})",
@@ -349,6 +423,106 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         root
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn node_cache_shares_one_successful_probe_across_concurrent_callers() {
+        use std::sync::{
+            Barrier, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let root = directory();
+        let path = root.join("runtime");
+        std::fs::write(&path, b"native file identity fixture").unwrap();
+        let cache = Mutex::new(None);
+        let calls = AtomicUsize::new(0);
+        let ready = Barrier::new(8);
+        std::thread::scope(|scope| {
+            let mut workers = Vec::new();
+            for _ in 0..8 {
+                workers.push(scope.spawn(|| {
+                    ready.wait();
+                    validated_node(path.clone(), &cache, |_| {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .unwrap();
+                }));
+            }
+            for worker in workers {
+                worker.join().unwrap();
+            }
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn node_cache_retries_failures_and_revalidates_replaced_or_modified_files() {
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let root = directory();
+        let path = root.join("runtime");
+        std::fs::write(&path, b"native file identity fixture").unwrap();
+        let cache = Mutex::new(None);
+        let calls = AtomicUsize::new(0);
+        let error = validated_node(path.clone(), &cache, |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err("unsupported flags fixture".into())
+        })
+        .unwrap_err();
+        assert!(error.contains("unsupported flags"));
+        assert!(cache.lock().unwrap().is_none());
+        let success = |_: &Path| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        };
+        validated_node(path.clone(), &cache, success).unwrap();
+        validated_node(path.clone(), &cache, success).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        // Equal bytes/size do not make a replacement inode the same runtime.
+        let replacement = root.join("replacement");
+        std::fs::copy(&path, &replacement).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        validated_node(path.clone(), &cache, success).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+        let previous = NodeIdentity::read(&path).unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_times(
+            std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1)),
+        )
+        .unwrap();
+        assert_ne!(NodeIdentity::read(&path).unwrap(), previous);
+        validated_node(path, &cache, success).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn node_cache_does_not_accept_a_runtime_replaced_during_its_probe() {
+        let root = directory();
+        let path = root.join("runtime");
+        let replacement = root.join("replacement");
+        std::fs::write(&path, b"native file identity fixture").unwrap();
+        std::fs::copy(&path, &replacement).unwrap();
+        let cache = std::sync::Mutex::new(None);
+        let error = validated_node(path.clone(), &cache, |_| {
+            std::fs::rename(&replacement, &path).unwrap();
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.contains("changed during compatibility validation"));
+        assert!(cache.lock().unwrap().is_none());
+        validated_node(path, &cache, |_| Ok(())).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn resolves_mise_without_ever_running_it_or_downloading() {
         let root = directory();

@@ -26,6 +26,7 @@ pub enum Provider {
     Claude,
     Pi,
     OpenCode,
+    Playwright,
 }
 impl Provider {
     pub fn label(self) -> &'static str {
@@ -47,6 +48,7 @@ impl Provider {
             Self::Claude => "claude",
             Self::Pi => "pi",
             Self::OpenCode => "opencode",
+            Self::Playwright => "playwright",
         }
     }
     pub fn is_harness(self) -> bool {
@@ -246,6 +248,9 @@ fn prepare(
             Provider::Claude => true,
             Provider::Pi => id.starts_with("pi.") || id.starts_with("ssmcp.pi."),
             Provider::OpenCode => id.starts_with("opencode."),
+            Provider::Playwright => {
+                id.starts_with("playwright.") || id.starts_with("ssmcp.playwright.")
+            }
         };
         if !allowed
             || id.len() > 128
@@ -273,7 +278,7 @@ fn prepare(
             description: descriptor["description"].as_str().map(str::to_owned),
             input_schema,
             output_schema: descriptor.get("outputSchema").cloned(),
-            approval: if provider.is_harness() {
+            approval: if provider.is_harness() || provider == Provider::Playwright {
                 ApprovalPolicy::Native
             } else {
                 ApprovalPolicy::AuthorizedConnection

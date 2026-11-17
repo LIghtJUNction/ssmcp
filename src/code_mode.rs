@@ -31,6 +31,7 @@ pub const MAX_NATIVE_INFLIGHT: usize = 16;
 pub const MAX_CONCURRENT: usize = 4;
 const MAX_ERROR_BYTES: usize = 4096;
 static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
+static PREPARATIONS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -239,7 +240,25 @@ pub async fn execute(
     clients: Value,
     host: Host,
 ) -> Result<Value, String> {
-    execute_process(sandbox_command()?, code, timeout_ms, clients, host).await
+    let command = prepare_command(sandbox_command).await?;
+    execute_process(command, code, timeout_ms, clients, host).await
+}
+
+async fn prepare_command(
+    prepare: impl FnOnce() -> Result<Command, String> + Send + 'static,
+) -> Result<Command, String> {
+    // Runtime discovery may run its bounded native compatibility probe. An
+    // aborted request drops only this await: the blocking worker still owns the
+    // probe, reaches its existing deadline, and terminates/reaps it if needed.
+    let permit = PREPARATIONS
+        .try_acquire()
+        .map_err(|_| "code_mode runtime preparation is busy; retry later".to_owned())?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        prepare()
+    })
+    .await
+    .map_err(|_| "code_mode runtime preparation failed".to_owned())?
 }
 
 async fn execute_process(
@@ -555,11 +574,67 @@ mod tests {
         clients: Value,
         host: Host,
     ) -> Result<Value, String> {
-        let mut command = Command::new(executable("node")?);
-        command.env_clear();
-        node_arguments(&mut command);
-        command.arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_mode.js"));
+        let command = prepare_command(|| {
+            let mut command = Command::new(executable("node")?);
+            command.env_clear();
+            node_arguments(&mut command);
+            command.arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_mode.js"));
+            Ok(command)
+        })
+        .await?;
         execute_process(command, code, timeout_ms, clients, host).await
+    }
+
+    #[tokio::test]
+    async fn runtime_preparation_leaves_the_async_executor_responsive() {
+        let _guard = TESTS.lock().await;
+        let (entered, notice) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let task = tokio::spawn(prepare_command(move || {
+            entered.send(()).map_err(|_| "fixture listener closed")?;
+            gate.recv_timeout(Duration::from_secs(2))
+                .map_err(|_| "async executor did not release runtime preparation")?;
+            Ok(Command::new("unused-command-fixture"))
+        }));
+        // This test uses Tokio's single-thread runtime. A synchronous builder
+        // cannot receive this release until its bounded fixture wait fails.
+        notice.await.unwrap();
+        release.send(()).unwrap();
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancelled_runtime_preparation_still_finishes_owned_cleanup() {
+        let _guard = TESTS.lock().await;
+        let (entered, notice) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let (cleaned, cleanup) = tokio::sync::oneshot::channel();
+        struct Cleanup(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+        let task = tokio::spawn(prepare_command(move || {
+            let _cleanup = Cleanup(Some(cleaned));
+            entered.send(()).map_err(|_| "fixture listener closed")?;
+            gate.recv_timeout(Duration::from_secs(2))
+                .map_err(|_| "fixture release missing")?;
+            Ok(Command::new("unused-command-fixture"))
+        }));
+        notice.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(PREPARATIONS.available_permits(), MAX_CONCURRENT - 1);
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            cleanup.await.unwrap();
+            while PREPARATIONS.available_permits() != MAX_CONCURRENT {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     fn host() -> Host {

@@ -1,13 +1,13 @@
 ---
 name: ssmcp
-description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, automatically discovered coding harnesses, scoped file access and audit, skills and instruction discovery, Linux rsync transfers, and loopback TCP forwarding.
+description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, automatically discovered coding harnesses, scoped file access and audit, existing Chrome and native browser discovery, concise tool search, skills and instruction discovery, Linux rsync transfers, and loopback TCP forwarding.
 ---
 
 # ssmcp unified workspace bridge
 
 ## Discover the machines and their capabilities
 
-Call `list` first. Use each client's optional `title` to understand its task, then check its `name` and `cwd`. Select clients by their returned `id`; titles, names and hostnames are labels and may repeat. Call `list({client_id})` and follow `nextCursor` before using a native tool. Respect each native backend's permission and approval policy.
+Call `list` first. Use each client's optional `title` to understand its task, then check its `name` and `cwd`. Select clients by their returned `id`; titles, names and hostnames are labels and may repeat. Use `tools.search(clientId,{query,limit:20})` inside code_mode to locate concise tool summaries; request `include_schemas:true` for the complete native descriptor before calling. On older brokers, use `list({client_id})` or `tools(clientId,cursor)` pagination. Respect each native backend's permission and approval policy.
 
 Keep each tool-catalog traversal on its returned cursor. Its pages share a snapshot even if a native tool directory changes; start a fresh cursor-free request to discover updates. A client retains at most four snapshots and 64 MiB of serialized JSON total. Each successful page read renews the 120-second idle timeout, but a snapshot expires at most 900 seconds after creation. Invalid cursors do not renew it, and reusing an unchanged catalog does not reset its creation time; LRU and capacity limits may evict it earlier. Restart discovery if the server reports that a snapshot expired or was evicted.
 
@@ -15,7 +15,7 @@ Current clients connect as `type:"shell"` and provide a main interactive termina
 
 Discovery must not install runtimes, dependencies or Harnesses, submit model requests, or relax native permissions. Do not treat offline package caches as proof that nothing will be installed. Providers without a verified safe startup remain unavailable. Pi discovery connects only to an explicitly configured, already initialized native JSONL RPC session through `SSMCP_PI_RPC_SOCKET`. The absolute Unix socket and its direct parent must belong to the current UID, have no group/other permissions and not be symlinks; the connected peer UID, installed binary and version are checked before a five-second `get_state` handshake. OpenCode discovery attaches only to an existing service at `http://127.0.0.1:PORT/` (`SSMCP_OPENCODE_URL`, `OPENCODE_PASSWORD`). The explicit port and root path are required; proxies, redirects, other hosts, userinfo, query and fragment are rejected. Native discovery reads only info and OpenAPI; event subscription is lazy. Missing endpoints mean unavailable. Neither adapter starts an external service or disables user extensions to manufacture a complete catalog.
 
-`list` and `tools` use one registry, preserving native Schema and descriptors with routing namespaces. Namespaces include `codex.*`, `claude.*`, `pi.*`, and `opencode.*`; exact names come from the current catalog. Codex MCP tools are enumerated through native `mcpServerStatus/list` and forwarded through `mcpServer/tool/call`; select discovered `codex.mcp.*` names without hardcoding a server. Pi exposes only the `pi.rpc`, `ssmcp.pi.events`, `ssmcp.pi.requests`, and `ssmcp.pi.respond` bridge operations when available. A CLI installation or known control-command list is not an enumeration of its model, plugin or internal MCP tool Schema.
+`list` and `tools` use one registry, preserving native Schema and descriptors with routing namespaces. Namespaces include `codex.*`, `claude.*`, `pi.*`, `opencode.*`, and `playwright.*` when its native MCP discovery succeeds; exact names come from the current catalog. Codex MCP tools are enumerated through native `mcpServerStatus/list` and forwarded through `mcpServer/tool/call`; select discovered `codex.mcp.*` names without hardcoding a server. Pi exposes only the `pi.rpc`, `ssmcp.pi.events`, `ssmcp.pi.requests`, and `ssmcp.pi.respond` bridge operations when available. A CLI installation or known control-command list is not an enumeration of its model, plugin or internal MCP tool Schema.
 
 Read `ssmcp://guide`, `ssmcp://limits`, and `ssmcp://clients` through MCP resources or `resources.read(uri)` inside `code_mode`. Use `resources.templates()` for client-specific resources. Check current catalogs when a connected client has an older version.
 
@@ -88,12 +88,22 @@ Use cua.status and native cua screenshot/input/window methods for computer use; 
 ```js
 const client = clients.find(c => c.id === "CLIENT_ID_FROM_LIST");
 if (!client) throw new Error("Select an online client from list");
-return await tools(client.id);
+return await tools.search(client.id, {query:"browser", limit:10, include_schemas:true});
 ```
+
+Search matches case-insensitive name/description substrings. By default it returns names, observed routing namespaces and descriptions shortened to 240 Unicode characters; include_schemas preserves the complete native descriptor. Keep the same client/query/limit/schema options when continuing with nextCursor. Search reduces model-visible catalog output and manual pagination, not the first underlying page scan. Each page is still authorized and counts toward the call budget; use max_pages for bounded work. A changed or expired page requires restarting discovery. Oversized schemas fail explicitly rather than being truncated. See ssmcp://limits for budgets; the helper requires an updated broker.
 
 Call a discovered operation with `await call(clientId, toolName, arguments)`. Check `isError` and read `structuredContent` when present. Short results remain inline; oversized backend results return artifact metadata instead of the full body. Await every call. Return only the output needed for the task. Never start an agent or model through a native backend unless the user authorized that delegation.
 
 The native command primitives are `ssmcp.exec.start/list/status/wait/read/write/cancel/events`, plus `ssmcp.exec.forget` for completed records. When an older server lacks `exec` helpers, call these discovered tools with `call(clientId, toolName, arguments)` and inspect the full MCP result. The schemas remain authoritative. Use `Promise.all` for independent native calls; every call is separately authorized. Concurrent Cargo commands can still contend for their shared build lock.
+
+## Reuse the operator's existing Chrome
+
+When the user names an existing Chrome session, start with `call(id,"ssmcp.browser.discover",{})` and `ssmcp.harnesses.list`. Discovery reads metadata; installed extension files do not establish a paired, authorized connection. Do not launch an isolated profile or substitute Chromium or another browser family. Use an observed CDP endpoint with browser.connect, or call only actually enumerated extension tools.
+
+Playwright MCP must already be installed: discover `playwright-mcp` on PATH or an explicit `SSMCP_PLAYWRIGHT_MCP` entry, verify it and enumerate its native `--extension` service. Missing packages remain unavailable; do not run npx or install dependencies during discovery. Read the actual `playwright.*` Schema with tools.search, then forward through call. Preserve extension approval and native pending-request states; do not extract extension tokens or invoke a Harness model to proxy browser actions.
+
+The ChatGPT extension requires its own originating browser context; do not claim ssmcp can reuse it when that connection is absent. Claude browser tools are usable only when its native interface actually enumerates them. Keep dependent actions on one page ordered; independent CDP pages can run concurrently. Prefer bounded page text and element refs when sufficient, and use images for visual checks. Native discovery and the Playwright bridge require a client update; tools.search requires a broker update. See [existing Chrome workflow](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/browser-existing-session.md) for examples and the dated machine inventory.
 
 ## Reload an updated client
 

@@ -271,7 +271,11 @@ impl Runtime {
         }
         let control = matches!(
             tool.provider,
-            Provider::Browser | Provider::Computer | Provider::Omarchy | Provider::Sessions
+            Provider::Browser
+                | Provider::Computer
+                | Provider::Omarchy
+                | Provider::Sessions
+                | Provider::Playwright
         );
         if control {
             self.audit
