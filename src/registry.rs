@@ -1,8 +1,9 @@
 //! The single authority for callable capabilities on one live client connection.
+use crate::catalog::{self, ToolDescriptor};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map::Entry},
     sync::{Arc, RwLock},
 };
 
@@ -83,9 +84,38 @@ pub struct RegisteredTool {
     // Preserve the complete native object, including extensions, refs and annotations.
     pub descriptor: Value,
 }
+struct StoredTool {
+    provider: Provider,
+    native_name: String,
+    generation: u64,
+    descriptor: ToolDescriptor,
+}
+
+impl StoredTool {
+    fn materialize(&self, id: &str) -> Result<RegisteredTool, String> {
+        let descriptor = self.descriptor.value()?;
+        Ok(RegisteredTool {
+            id: id.into(),
+            provider: self.provider,
+            native_name: self.native_name.clone(),
+            description: descriptor["description"].as_str().map(str::to_owned),
+            input_schema: descriptor["inputSchema"].clone(),
+            output_schema: descriptor.get("outputSchema").cloned(),
+            approval: if self.provider.is_harness() || self.provider == Provider::Playwright {
+                ApprovalPolicy::Native
+            } else {
+                ApprovalPolicy::AuthorizedConnection
+            },
+            availability: ToolAvailability::Ready,
+            generation: self.generation,
+            descriptor,
+        })
+    }
+}
+
 #[derive(Default)]
 struct State {
-    tools: BTreeMap<String, RegisteredTool>,
+    tools: BTreeMap<String, StoredTool>,
     generation: u64,
     closed: bool,
 }
@@ -100,6 +130,14 @@ impl Registry {
 
     /// Replace one provider atomically. Failure revokes only that provider's old snapshot.
     pub fn replace(&self, provider: Provider, tools: Vec<Value>) -> Result<u64, String> {
+        self.replace_catalog(provider, catalog::compact(tools)?)
+    }
+
+    pub(crate) fn replace_catalog(
+        &self,
+        provider: Provider,
+        tools: Vec<ToolDescriptor>,
+    ) -> Result<u64, String> {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         if state.closed {
             return Err("client connection is closed".into());
@@ -126,30 +164,49 @@ impl Registry {
                 provider.label()
             ));
         }
-        let old: BTreeMap<_, _> = state
+        let old_count = state
             .tools
-            .iter()
-            .filter(|(_, t)| t.provider == provider)
-            .map(|(id, t)| (id.clone(), t.descriptor.clone()))
-            .collect();
-        let next: BTreeMap<_, _> = entries
-            .iter()
-            .map(|(id, t)| (id.clone(), t.descriptor.clone()))
-            .collect();
-        if old == next {
+            .values()
+            .filter(|t| t.provider == provider)
+            .count();
+        if old_count == entries.len()
+            && entries.iter().all(|(id, next)| {
+                state.tools.get(id).is_some_and(|old| {
+                    old.native_name == next.native_name && old.descriptor == next.descriptor
+                })
+            })
+        {
             return Ok(state.generation);
         }
-        if state.tools.len().saturating_sub(old.len()) + entries.len() > 8192 {
+        if state.tools.len().saturating_sub(old_count) + entries.len() > 8192 {
             state.tools.retain(|_, tool| tool.provider != provider);
             state.generation += 1;
             return Err("combined tool registry exceeds 8192 entries".into());
         }
         state.generation += 1;
         let generation = state.generation;
-        state.tools.retain(|_, tool| tool.provider != provider);
+        state
+            .tools
+            .retain(|id, tool| tool.provider != provider || entries.contains_key(id));
         for (id, mut entry) in entries {
             entry.generation = generation;
-            state.tools.insert(id, entry);
+            match state.tools.entry(id) {
+                Entry::Occupied(mut current) => {
+                    let previous = current.get_mut();
+                    if previous.native_name == entry.native_name
+                        && previous.descriptor == entry.descriptor
+                    {
+                        // Keep the existing allocations, but revoke handles from
+                        // the old provider generation even for unchanged tools.
+                        previous.generation = generation;
+                    } else {
+                        *previous = entry;
+                    }
+                }
+                Entry::Vacant(current) => {
+                    current.insert(entry);
+                }
+            }
         }
         Ok(generation)
     }
@@ -168,6 +225,9 @@ impl Registry {
         Ok(())
     }
     pub fn catalog(&self) -> Result<Vec<Value>, String> {
+        self.snapshot()?.iter().map(ToolDescriptor::value).collect()
+    }
+    pub(crate) fn snapshot(&self) -> Result<Vec<ToolDescriptor>, String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         if state.closed {
             return Err("client connection is closed".into());
@@ -182,15 +242,19 @@ impl Registry {
         state
             .tools
             .get(id)
-            .cloned()
-            .ok_or_else(|| format!("tool is unavailable or not registered: {id}; refresh tools"))
+            .ok_or_else(|| format!("tool is unavailable or not registered: {id}; refresh tools"))?
+            .materialize(id)
     }
     pub fn validate(&self, tool: &RegisteredTool) -> Result<(), String> {
-        let current = self.lookup(&tool.id)?;
-        if current.provider != tool.provider
-            || current.generation != tool.generation
-            || current.native_name != tool.native_name
-        {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        if state.closed {
+            return Err("client connection is closed".into());
+        }
+        if !state.tools.get(&tool.id).is_some_and(|current| {
+            current.provider == tool.provider
+                && current.generation == tool.generation
+                && current.native_name == tool.native_name
+        }) {
             return Err("tool registration changed before dispatch; refresh tools".into());
         }
         Ok(())
@@ -226,15 +290,14 @@ impl Registry {
 }
 fn prepare(
     provider: Provider,
-    tools: Vec<Value>,
-) -> Result<BTreeMap<String, RegisteredTool>, String> {
+    tools: Vec<ToolDescriptor>,
+) -> Result<BTreeMap<String, StoredTool>, String> {
     let mut result = BTreeMap::new();
     for mut descriptor in tools {
-        let native_name = descriptor["name"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or("native tool has no name")?
-            .to_owned();
+        let (native_name, has_input_schema) = descriptor.header()?;
+        if native_name.is_empty() {
+            return Err("native tool has no name".into());
+        }
         let id = if provider == Provider::Claude {
             if let Some(name) = native_name.strip_prefix("cc.") {
                 format!("claude.{}", component(name))
@@ -281,30 +344,24 @@ fn prepare(
         {
             return Err(format!("invalid {} route: {id}", provider.label()));
         }
-        if descriptor.to_string().len() > 896 * 1024 {
+        if descriptor.len() > 896 * 1024 {
             return Err(format!(
                 "native tool {native_name} exceeds the transport schema limit"
             ));
         }
-        let input_schema = descriptor
-            .get("inputSchema")
-            .filter(|s| s.is_object())
-            .ok_or_else(|| format!("native tool {native_name} has no enumerable input schema"))?
-            .clone();
-        descriptor["name"] = id.clone().into();
-        let tool = RegisteredTool {
-            id: id.clone(),
+        if !has_input_schema {
+            return Err(format!(
+                "native tool {native_name} has no enumerable input schema"
+            ));
+        }
+        if id != native_name {
+            let mut value = descriptor.value()?;
+            value["name"] = id.clone().into();
+            descriptor = ToolDescriptor::from_value(value)?;
+        }
+        let tool = StoredTool {
             provider,
             native_name,
-            description: descriptor["description"].as_str().map(str::to_owned),
-            input_schema,
-            output_schema: descriptor.get("outputSchema").cloned(),
-            approval: if provider.is_harness() || provider == Provider::Playwright {
-                ApprovalPolicy::Native
-            } else {
-                ApprovalPolicy::AuthorizedConnection
-            },
-            availability: ToolAvailability::Ready,
             generation: 0,
             descriptor,
         };
@@ -374,6 +431,77 @@ mod tests {
         registry.close();
         assert!(registry.lookup("ssmcp.exec.start").is_err());
     }
+    #[test]
+    fn partial_catalog_updates_reuse_allocations_and_revoke_old_handles() {
+        let registry = Registry::new();
+        registry
+            .replace(Provider::Exec, vec![tool("ssmcp.exec.start")])
+            .unwrap();
+        let other = registry.lookup("ssmcp.exec.start").unwrap();
+        let before = registry
+            .replace(
+                Provider::Codex,
+                vec![
+                    tool("codex.keep"),
+                    tool("codex.change"),
+                    tool("codex.remove"),
+                ],
+            )
+            .unwrap();
+        let old = registry.lookup("codex.keep").unwrap();
+        let removed = registry.lookup("codex.remove").unwrap();
+        let (key_pointer, native_pointer, descriptor) = {
+            let state = registry.state.read().unwrap();
+            let (key, stored) = state.tools.get_key_value("codex.keep").unwrap();
+            (
+                key.as_ptr(),
+                stored.native_name.as_ptr(),
+                stored.descriptor.clone(),
+            )
+        };
+
+        let mut changed = tool("codex.change");
+        changed["inputSchema"]["additionalProperties"] = false.into();
+        let generation = registry
+            .replace(
+                Provider::Codex,
+                vec![
+                    tool("codex.keep"),
+                    changed.clone(),
+                    tool("codex.new1"),
+                    tool("codex.new2"),
+                ],
+            )
+            .unwrap();
+        assert!(generation > before);
+        {
+            let state = registry.state.read().unwrap();
+            let (key, stored) = state.tools.get_key_value("codex.keep").unwrap();
+            assert_eq!(key.as_ptr(), key_pointer);
+            assert_eq!(stored.native_name.as_ptr(), native_pointer);
+            assert!(stored.descriptor.shares_storage(&descriptor));
+            assert!(
+                state
+                    .tools
+                    .values()
+                    .filter(|tool| tool.provider == Provider::Codex)
+                    .all(|tool| tool.generation == generation)
+            );
+        }
+        assert!(registry.validate(&old).is_err());
+        assert!(registry.validate(&removed).is_err());
+        assert!(registry.lookup("codex.remove").is_err());
+        assert!(
+            registry
+                .validate(&registry.lookup("codex.keep").unwrap())
+                .is_ok()
+        );
+        assert_eq!(registry.lookup("codex.change").unwrap().descriptor, changed);
+        assert!(registry.lookup("codex.new1").is_ok());
+        assert!(registry.lookup("codex.new2").is_ok());
+        assert!(registry.validate(&other).is_ok());
+    }
+
     #[test]
     fn names_are_injective_and_missing_schemas_are_not_invented() {
         assert_ne!(component("a.b"), component("a_b"));

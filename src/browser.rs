@@ -41,7 +41,7 @@ pub fn discovery() -> Value {
 
 pub struct Browser {
     root: PathBuf,
-    http: reqwest::Client,
+    http: OnceCell<reqwest::Client>,
     session: Mutex<Option<Arc<Session>>>,
     closed: AtomicBool,
     next_snapshot: AtomicU64,
@@ -365,16 +365,9 @@ impl Browser {
         let root = root
             .canonicalize()
             .map_err(|e| format!("browser workspace: {e}"))?;
-        let http = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(CALL_TIMEOUT)
-            .build()
-            .map_err(|e| e.to_string())?;
         Ok(Self {
             root,
-            http,
+            http: OnceCell::new(),
             session: Mutex::new(None),
             closed: AtomicBool::new(false),
             next_snapshot: AtomicU64::new(1),
@@ -745,8 +738,21 @@ impl Browser {
     }
 
     async fn get_json(&self, endpoint: &Url, path: &str) -> Result<Value, String> {
-        let mut response = self
+        // Native browser tools remain available before any browser is attached.
+        // Initialize HTTP/TLS machinery only when discovery actually needs it.
+        let http = self
             .http
+            .get_or_try_init(|| async {
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .connect_timeout(Duration::from_secs(3))
+                    .timeout(CALL_TIMEOUT)
+                    .build()
+                    .map_err(|e| e.to_string())
+            })
+            .await?;
+        let mut response = http
             .get(endpoint.join(path).map_err(|e| e.to_string())?)
             .send()
             .await

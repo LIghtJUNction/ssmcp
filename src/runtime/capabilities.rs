@@ -342,7 +342,7 @@ impl Runtime {
             "tools" => {
                 let mut page = match query.get("cursor") {
                     Some(cursor) => self.catalog.next(cursor)?,
-                    None => self.catalog.first(self.registry.catalog()?)?,
+                    None => self.catalog.first(self.registry.snapshot()?)?,
                 };
                 if let Some(next) = page["nextCursor"].as_str() {
                     let query = serde_urlencoded::to_string([("cursor", next)])
