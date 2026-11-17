@@ -1,0 +1,60 @@
+{
+  "schema": "ssmcp.client-experience.http.v1",
+  "schema_version": 1,
+  "collected_at_utc": "2026-11-17T20:23:21.795964+00:00",
+  "platform": "Linux",
+  "sanitization": {
+    "raw_terminal_output_included": false,
+    "authentication_values_included": false,
+    "path_redactions": [
+      "developer build-output prefix",
+      "ephemeral reload fixture directory"
+    ],
+    "original_report_hashes_refer_to_unmodified_source_files": true
+  },
+  "status": "passed",
+  "scope": "Real HTTP integration target two_tools, including its normally ignored tests.",
+  "run": {
+    "stage": "http",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--test",
+      "two_tools",
+      "-j1",
+      "--",
+      "--include-ignored",
+      "--test-threads=2"
+    ],
+    "exit_code": 0,
+    "seconds": 7.51,
+    "summary": [
+      "    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.29s",
+      "     Running tests/two_tools.rs (<build-output>/debug/build/ssmcp/8c3df6bc2cdd5385/out/two_tools-8c3df6bc2cdd5385)",
+      "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.88s"
+    ],
+    "tail": [],
+    "status": "passed",
+    "provenance": {
+      "source_file": "/tmp/client-integrated-gates.json",
+      "original_sha256": "8900ded373a9e5719060b9a3155aca5da52c54c01f06028ded50c3d5af92e8aa",
+      "original_bytes": 5430,
+      "source_file_modified_at_utc": "2026-11-17T20:14:55.902792+00:00"
+    },
+    "test_counts": {
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered_out": 0
+    }
+  },
+  "test_counts": {
+    "passed": 9,
+    "failed": 0,
+    "ignored": 0,
+    "measured": 0,
+    "filtered_out": 0
+  }
+}

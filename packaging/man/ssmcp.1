@@ -100,6 +100,10 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .RB [ \-\-json ]
 .PP
 .B ssmcp service run
+.PP
+.B ssmcp ui
+.IR "show | check | init | preview"
+.RB [ \-\-ui-config " file" ]
 .SH DESCRIPTION
 ssmcp provides a local shell, managed command jobs and file tools.
 Run ssmcp username@server to connect over HTTPS and WSS. The first connection
@@ -823,14 +827,52 @@ Alias for --log-format jsonl. --raw remains supported.
 .B --ui-config FILE
 Load local TOML display settings. Default: ~/.config/ssmcp/config.toml.
 .TP
-.B --theme minimal|codex-dark|nord|solarized
-Select the terminal palette.
+.B --theme dark|codex-dark|nord|solarized|light|minimal
+Select the terminal palette. Default: dark. Individual semantic colors may be
+overridden in the local [ui.colors] table.
 .TP
 .B --timestamps
 Include UTC timestamps on event headings.
 .TP
 .B --max-inline-output N
 Show at most N lines per buffered output block. Default: 12.
+
+.SH CONVERSATION INTERFACE
+The default chat layout shows command activity above a multiline requirement
+input, with a collapsible status sidebar. F3 toggles the sidebar; F4 changes
+theme, F5 reloads display configuration, and F8 saves the current appearance.
+Run ssmcp ui preview to inspect the actual renderer with fixed sample events.
+Preview submissions do not contact an agent or restart a real session.
+.PP
+Enter queues a local user requirement. Tab switches input and content focus.
+Use /queue and the arrow keys to select queued requests; Enter takes a pending
+request back for editing after server acknowledgement, Delete cancels a
+retractable request, and Right/Left opens/closes details. /agents selects a
+registered recipient by its authenticated member ID. Multiple requests remain
+queued until an eligible tool response can carry them.
+.PP
+Requirements are delivered separately from native execution output in the next
+eligible code_mode response. Delivered means attached to a response, not proof
+that a model has read or executed the requirement. Exact recipients bind their
+collaboration identity for that run. Queue support requires protocol 7 on both
+ends. Local attach remains observational; use the foreground client or the
+ssmcp.ui.queue primitive to manage requirements.
+.PP
+Mouse wheel and PageUp/PageDown scroll content directly. /filter TEXT searches
+the retained log history while keeping matching command output and completion.
+Use --all, --commands or --errors with /filter to select a category.
+/audit or Ctrl-O opens source audit; Up/Down browse runs, Enter/Right opens
+syntax-highlighted source, and Left returns to the list. Source audit requires
+protocol 6 or later.
+.PP
+/reload restarts the client connection and restores its controlled draft/queue
+handoff. Existing connection-owned tasks end according to the session lifecycle.
+Uncertain delivery is not replayed automatically. F5 and the native UI action
+named reload only reload appearance. /help lists local commands and shortcuts.
+.PP
+Alternate frontends use ssmcp.ui.get/set/action/filter/queue. UI get supports
+JSON Pointer projections and array/string pages, bounded to 8 KiB per projected
+response. Pure UI polling does not implicitly claim next-caller requirements.
 
 .SH PLATFORMS
 The client supports Linux, macOS and Windows. Linux releases contain ssmcp and
