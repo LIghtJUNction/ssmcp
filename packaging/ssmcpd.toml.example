@@ -5,7 +5,9 @@
 [server]
 listen = "127.0.0.1:8080"
 public_url = "https://ssmcp.example.com"
-socket = "/run/ssmcpd/control.sock"
+# Public SPKI PEM extracted from the reverse proxy TLS certificate.
+# Keep the TLS private key on certificate renewal so existing client pins remain valid.
+identity_public_key = "/var/lib/ssmcp/server-key.pem"
 # Optional: let an invited device download a temporary client from this server.
 # Serve /client/* from this daemon; missing platform binaries return HTTP 503.
 # Use an absolute directory, owned by root or the service user, without symlinks
@@ -35,16 +37,12 @@ client_registration_ttl = 31536000
 # client_id = "YOUR_GITHUB_OAUTH_CLIENT_ID"
 # client_secret = "YOUR_GITHUB_OAUTH_CLIENT_SECRET"
 
-# Optional browser portal; reuse auth.github above and the SAME callback.
-# Client login needs the account portal. Route /setup, /api/client/*, /mcp and
-# the GitHub callback to the SAME Broker, including its account portal routes.
+# Account portal; reuse auth.github and the same OAuth callback.
+# Login, /api/client/*, /mcp and the GitHub callback share this gateway.
 # Forward WebSocket Upgrade for /api/client/connect. An independent portal-only
 # process does not share the gateway's in-memory login or session state.
 # [portal]
 # state_dir = "/var/lib/ssmcpd/portal"
-# Legacy SSH deployments can use a separate portal service: omit state_dir
-# here and use --portal-only with --portal-state-dir in that service.
-# Client account endpoints and connected sessions must still share one Broker.
 # See docs/portal-console.md and docs/client-accounts.md.
 # gateway_socket = "/run/ssmcpd/management.sock"
 # audit_dir = "/var/lib/ssmcpd/audit"
@@ -52,4 +50,3 @@ client_registration_ttl = 31536000
 # admin_github_users = []
 # audit_retention_days = 7
 # audit_max_events = 20000
-# owner_mappings = { legacy_ssh_user = "123456" }

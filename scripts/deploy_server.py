@@ -228,6 +228,8 @@ def main():
             check('checkpoint_created')
             portal_active=run(['systemctl','show','ssmcp-portal.service','-p','ActiveState','--value'])=='active'
             try:
+                if portal_active:
+                    run(['systemctl','stop','ssmcp-portal.service'],timeout=45)
                 run(['pacman','-U','--noconfirm',str(args.package)],timeout=120)
                 check('installed_version',run(['/usr/bin/ssmcpd','--version'])==expected_binary)
                 if args.proxy_config:
@@ -247,10 +249,11 @@ def main():
                 run(['systemctl','restart','ssmcpd.service'],timeout=45)
                 wait_health('http://127.0.0.1:8080')
                 check('production_DCR_survives_restart',request('http://127.0.0.1:8080',url)[0]==200)
-                if portal_active:
-                    run(['systemctl','restart','ssmcp-portal.service'],timeout=45)
-                    wait_health('http://127.0.0.1:8086')
-                    check('portal_remains_healthy')
+                # The account portal and client relay now share one gateway.
+                for unit in ('ssmcp-portal.service', 'ssmcp-portal-ssh.timer', 'ssmcp-portal-ssh.service'):
+                    if run(['systemctl','show',unit,'-p','LoadState','--value']) not in ('not-found',''):
+                        run(['systemctl','disable','--now',unit])
+                check('unified_portal', request('http://127.0.0.1:8080','/')[0]==200)
                 wait_health(issuer);metadata(issuer,issuer)
                 check('public_health_discovery_and_auth_rejection')
                 check('public_homepage',request(issuer,'/')[0]==200)

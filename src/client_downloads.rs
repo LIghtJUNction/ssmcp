@@ -1,4 +1,4 @@
-//! Temporary client bootstrap and bounded downloads from this server only.
+//! Public client installation and invitation bootstrap with bounded binary downloads.
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -21,11 +21,15 @@ use std::{
 use tokio::io::AsyncReadExt;
 
 const MAX_BINARY: u64 = 256 * 1024 * 1024;
+const INSTALL_SH: &str = include_str!("../scripts/install.sh");
+const INSTALL_POWERSHELL: &str = include_str!("../scripts/install.ps1");
 const SH: &str = include_str!("client_downloads/install.sh");
 const POWERSHELL: &str = include_str!("client_downloads/install.ps1");
 
 #[derive(Clone)]
 struct Downloads {
+    install_shell: Arc<str>,
+    install_powershell: Arc<str>,
     shell: Arc<str>,
     powershell: Arc<str>,
     directory: Option<Arc<File>>,
@@ -35,6 +39,12 @@ struct Downloads {
 pub fn router(public_url: &str, directory: Option<&Path>) -> crate::Result<Router> {
     let origin = trusted_origin(public_url)?;
     let state = Downloads {
+        install_shell: INSTALL_SH
+            .replace("'https://ssmcp.lmm.best'", &shell_quote(&origin))
+            .into(),
+        install_powershell: INSTALL_POWERSHELL
+            .replace("'https://ssmcp.lmm.best'", &powershell_quote(&origin))
+            .into(),
         shell: SH.replace("@@ORIGIN@@", &shell_quote(&origin)).into(),
         powershell: POWERSHELL
             .replace("@@ORIGIN@@", &powershell_quote(&origin))
@@ -47,6 +57,8 @@ pub fn router(public_url: &str, directory: Option<&Path>) -> crate::Result<Route
         },
     };
     Ok(Router::new()
+        .route("/install.sh", get(install_shell))
+        .route("/install.ps1", get(install_powershell))
         .route("/client/install.sh", get(shell))
         .route("/client/install.ps1", get(powershell))
         .route("/client/bin/{target}", get(binary))
@@ -170,6 +182,12 @@ fn script(source: &str) -> Response {
     )
         .into_response()
 }
+async fn install_shell(State(state): State<Downloads>) -> Response {
+    script(&state.install_shell)
+}
+async fn install_powershell(State(state): State<Downloads>) -> Response {
+    script(&state.install_powershell)
+}
 async fn shell(State(state): State<Downloads>) -> Response {
     script(&state.shell)
 }
@@ -291,6 +309,8 @@ mod tests {
         let bytes = b"binary bytes\0\0test";
         std::fs::write(root.join(&name), bytes).unwrap();
         let state = Downloads {
+            install_shell: "".into(),
+            install_powershell: "".into(),
             shell: "".into(),
             powershell: "".into(),
             directory: Some(Arc::new(open_directory(&root).unwrap())),
@@ -336,9 +356,14 @@ mod tests {
         let app = router("https://configured.example", Some(&root)).unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = reqwest::Client::new();
-        for path in ["install.sh", "install.ps1"] {
+        for path in [
+            "install.sh",
+            "install.ps1",
+            "client/install.sh",
+            "client/install.ps1",
+        ] {
             let response = client
-                .get(format!("http://{address}/client/{path}"))
+                .get(format!("http://{address}/{path}"))
                 .header("Host", "injected.example")
                 .send()
                 .await

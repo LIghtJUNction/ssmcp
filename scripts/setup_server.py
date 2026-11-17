@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Configure one account/SSH/MCP gateway; check by default, --apply to migrate.
+"""Configure one HTTPS account/MCP gateway; check by default, --apply to migrate.
 
 Requires an installed ssmcpd, systemd, Nginx, Python 3.11+, a private TOML
 configuration with GitHub OAuth, and existing TLS certificates. No secrets
@@ -51,7 +51,32 @@ def configure_text(text, state_dir):
     return text.rstrip() + '\n\n[portal]\n' + setting
 
 
-def configuration(config, state_dir, nginx_site, template):
+def certificate_public_key(proxy, runner=run):
+    # Publish only the certificate's public SPKI; the TLS private key stays in Nginx.
+    certificates = re.findall(r'(?m)^\s*ssl_certificate\s+([^;]+);', proxy)
+    if len(certificates) != 1:
+        raise ValueError('configure exactly one TLS certificate for the pinned server identity')
+    certificate = certificates[0].strip().strip('"')
+    if not certificate.startswith('/') or '$' in certificate:
+        raise ValueError('ssl_certificate must name an absolute certificate file')
+    key = runner(['openssl', 'x509', '-in', certificate, '-pubkey', '-noout']).strip()
+    if not key.startswith('-----BEGIN PUBLIC KEY-----\n') or not key.endswith('-----END PUBLIC KEY-----'):
+        raise ValueError('TLS certificate did not yield a public SPKI key')
+    return key + '\n'
+
+
+def configure_identity(text, path):
+    data = tomllib.loads(text)
+    if data.get('server', {}).get('identity_public_key'):
+        return text
+    header = re.search(r'(?m)^\s*\[server\]\s*(?:#.*)?$', text)
+    if not header:
+        raise ValueError('configuration requires a server section')
+    setting = 'identity_public_key = ' + json.dumps(str(path)) + '\n'
+    return text[:header.end()] + '\n' + setting + text[header.end():]
+
+
+def configuration(config, state_dir, nginx_site, template, extract_key=certificate_public_key):
     original = config.read_text()
     data = tomllib.loads(original)
     if not data.get('auth', {}).get('github'):
@@ -88,7 +113,13 @@ def configuration(config, state_dir, nginx_site, template):
             raise ValueError('custom HTTPS ports require an existing Nginx site')
         proxy = template.read_text().replace('ssmcp.example.com', origin.hostname)
         proxy = proxy.replace('127.0.0.1:8080', listen)
-    return {config: candidate, nginx_site: proxy}, state_dir, 'http://' + listen
+    identity_path = Path(data['server'].get('identity_public_key', '/var/lib/ssmcp/server-key.pem'))
+    if not identity_path.is_absolute() or '..' in identity_path.parts:
+        raise ValueError('server.identity_public_key must be absolute without parent traversal')
+    if any(parent.is_symlink() for parent in (identity_path, *identity_path.parents)):
+        raise ValueError('server identity path must not contain symlinks')
+    candidate = configure_identity(candidate, identity_path)
+    return {config: candidate, nginx_site: proxy, identity_path: extract_key(proxy)}, state_dir, 'http://' + listen
 
 
 def atomic_write(path, content, metadata=None):
@@ -139,16 +170,18 @@ def probe(base):
         if request('/api/client/whoami')[0] != 401 or request('/api/client/sessions')[0] != 401:
             raise RuntimeError('unauthenticated account endpoints did not reject access')
     finally:
-        request('/api/setup/cancel', {'device_code': grant['device_code']})
+        request('/api/client/login/cancel', {'device_code': grant['device_code']})
 
 
 def disable_legacy(runner):
-    try:
-        loaded = runner(['systemctl', 'show', 'ssmcp-portal.service', '-p', 'LoadState', '--value'])
-    except RuntimeError:
-        return
-    if loaded not in ('not-found', ''):
-        runner(['systemctl', 'disable', 'ssmcp-portal.service'])
+    # Only retire ssmcp-specific units; the host's administrative services are untouched.
+    for unit in ('ssmcp-portal.service', 'ssmcp-portal-ssh.timer', 'ssmcp-portal-ssh.service'):
+        try:
+            loaded = runner(['systemctl', 'show', unit, '-p', 'LoadState', '--value'])
+        except RuntimeError:
+            continue
+        if loaded not in ('not-found', ''):
+            runner(['systemctl', 'disable', '--now', unit])
 
 
 def apply(changes, base, checkpoint_root, runner=run, health=probe, public_health=None):
@@ -161,8 +194,6 @@ def apply(changes, base, checkpoint_root, runner=run, health=probe, public_healt
         health(base)
         if public_health:
             public_health()
-        runner(['systemctl', 'enable', '--now', 'ssmcp-portal-ssh.timer'])
-        runner(['systemctl', 'start', 'ssmcp-portal-ssh.service'])
         disable_legacy(runner)
         return 'unchanged'
     checkpoint_root.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -191,8 +222,6 @@ def apply(changes, base, checkpoint_root, runner=run, health=probe, public_healt
             runner(['systemctl', 'enable', '--now', 'nginx.service'])
         if public_health:
             public_health()
-        runner(['systemctl', 'enable', '--now', 'ssmcp-portal-ssh.timer'])
-        runner(['systemctl', 'start', 'ssmcp-portal-ssh.service'])
         disable_legacy(runner)
         return 'configured'
     except Exception:

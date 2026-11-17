@@ -239,7 +239,8 @@ try {
         if ($InstallDir -notin @($env:Path -split ';')) { $env:Path = "$InstallDir;$env:Path" }
     }
     Write-Host "Installed $reported -> $installed"
-    Write-Host 'Connect from your project directory: ssmcp user@host'
+    Write-Host ('Sign in: ssmcp login --server ' + 'https://ssmcp.lmm.best')
+    Write-Host 'Then enter your project directory and run: ssmcp'
 } finally {
     if ($pending -and (Test-Path -LiteralPath $pending)) { Remove-Item -LiteralPath $pending -Force }
     if (Test-Path -LiteralPath $workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force }
