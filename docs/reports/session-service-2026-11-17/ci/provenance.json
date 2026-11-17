@@ -1,0 +1,127 @@
+{
+  "repository": "LIghtJUNction/ssmcp",
+  "pull_request": 12,
+  "branch": "fix/session-service-compatibility-20261117",
+  "version": "0.6.4",
+  "source_commit": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+  "run_id": 44026424894,
+  "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44026424894",
+  "checkout": "Workflow explicitly checks out pull_request.head.sha and supplies that exact SHA to the lifecycle report --revision argument.",
+  "scope": "Native builds, fmt, all-target Clippy, session unit tests, registration-only protocol subprocess tests, isolated foreground supervisor lifecycle and installation-definition dry runs. No privileged macOS or Windows installation; protocol fixtures invoke no backend, external network, coding harness, or model.",
+  "jobs": {
+    "linux": {
+      "id": 133847749822,
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44026424894/job/133847749822",
+      "session_unit_tests": 36,
+      "protocol_unit_tests": 6,
+      "portable_checks": 35
+    },
+    "darwin": {
+      "id": 133847750472,
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44026424894/job/133847750472",
+      "session_unit_tests": 36,
+      "protocol_unit_tests": 6,
+      "portable_checks": 33
+    },
+    "win32": {
+      "id": 133847750252,
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44026424894/job/133847750252",
+      "session_unit_tests": 33,
+      "protocol_unit_tests": 6,
+      "portable_checks": 34
+    }
+  },
+  "passed_protocol_tests_on_each_platform": [
+    "client::protocol_tests::current_protocol_is_preferred_without_changing_metadata",
+    "client::protocol_tests::explicit_legacy_rejection_is_terminal_without_a_third_transport",
+    "client::protocol_tests::explicit_rejection_uses_one_fresh_legacy_transport_and_remembers_it",
+    "client::protocol_tests::authentication_errors_and_untyped_failures_never_trigger_downgrade",
+    "client::protocol_tests::compatibility_preserves_both_allow_checks_and_login_code_requirement",
+    "client::protocol_tests::handshake_deadline_never_selects_a_legacy_protocol"
+  ],
+  "artifacts": [
+    {
+      "id": 14303960705,
+      "name": "session-service-windows-2025",
+      "size_in_bytes": 1117,
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/actions/artifacts/14303960705",
+      "archive_download_url": "https://api.github.com/repos/LIghtJUNction/ssmcp/actions/artifacts/14303960705/zip",
+      "expired": false,
+      "created_at": "2026-11-17T05:49:43Z",
+      "expires_at": "2026-12-01T05:49:43Z",
+      "updated_at": "2026-11-17T05:49:43Z",
+      "digest": "sha256:8d1910049eeeaf41baf8f0ea5dd2997cab65ac501dc8a4cae248e23f6ab3c8c9",
+      "workflow_run": {
+        "id": 44026424894,
+        "repository_id": 1459020791,
+        "head_repository_id": 1459020791,
+        "head_branch": "fix/session-service-compatibility-20261117",
+        "head_sha": "868e92f5d2b39237a2bed62f45f9a666cd4f0192"
+      }
+    },
+    {
+      "id": 14303930281,
+      "name": "session-service-ubuntu-24.04",
+      "size_in_bytes": 1066,
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/actions/artifacts/14303930281",
+      "archive_download_url": "https://api.github.com/repos/LIghtJUNction/ssmcp/actions/artifacts/14303930281/zip",
+      "expired": false,
+      "created_at": "2026-11-17T05:48:12Z",
+      "expires_at": "2026-12-01T05:48:11Z",
+      "updated_at": "2026-11-17T05:48:12Z",
+      "digest": "sha256:d825e530b0a0c60d06d4e88f31412fe72a4cb53b8d066fe64ed8981e914dfbf6",
+      "workflow_run": {
+        "id": 44026424894,
+        "repository_id": 1459020791,
+        "head_repository_id": 1459020791,
+        "head_branch": "fix/session-service-compatibility-20261117",
+        "head_sha": "868e92f5d2b39237a2bed62f45f9a666cd4f0192"
+      }
+    },
+    {
+      "id": 14303521164,
+      "name": "session-service-macos-15",
+      "size_in_bytes": 1059,
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/actions/artifacts/14303521164",
+      "archive_download_url": "https://api.github.com/repos/LIghtJUNction/ssmcp/actions/artifacts/14303521164/zip",
+      "expired": false,
+      "created_at": "2026-11-17T05:49:27Z",
+      "expires_at": "2026-12-01T05:49:25Z",
+      "updated_at": "2026-11-17T05:49:27Z",
+      "digest": "sha256:0fe32a8351db44028171d3b1cb899efae85280dfea1575c37ffa443d2e2040e2",
+      "workflow_run": {
+        "id": 44026424894,
+        "repository_id": 1459020791,
+        "head_repository_id": 1459020791,
+        "head_branch": "fix/session-service-compatibility-20261117",
+        "head_sha": "868e92f5d2b39237a2bed62f45f9a666cd4f0192"
+      }
+    }
+  ],
+  "downloaded_reports": [
+    {
+      "path": "session-service-macos-15/session-service.json",
+      "sha256": "703e028b0a4f7bff402f0341ab365c934635cb82cbe34d54302daaaa9070cd39",
+      "revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+      "status": "passed",
+      "checks": 33,
+      "platform": "darwin"
+    },
+    {
+      "path": "session-service-ubuntu-24.04/session-service.json",
+      "sha256": "caf14f00a6e2d29b4f613de3b47b3d787a3e9279a2b8d5d6248b7f8891a26cfb",
+      "revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+      "status": "passed",
+      "checks": 35,
+      "platform": "linux"
+    },
+    {
+      "path": "session-service-windows-2025/session-service.json",
+      "sha256": "33f4b122f6c95e3c1c75a8979bfc436c5316a31d4dbc68fb9e1031ff86361cc4",
+      "revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+      "status": "passed",
+      "checks": 34,
+      "platform": "win32"
+    }
+  ]
+}
