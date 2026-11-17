@@ -158,6 +158,7 @@ impl Fixture {
             std::process::id()
         ));
         std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("config.toml"), "").unwrap();
         for (name, source) in [("ssh", SSH), ("native", NATIVE)] {
             let file = path.join(name);
             std::fs::write(&file, source).unwrap();
