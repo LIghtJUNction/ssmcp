@@ -62,6 +62,9 @@ pub struct Terminal {
     changed: Arc<Notify>,
     closed: AtomicBool,
     pid: u32,
+    observer: Option<std::sync::Weak<crate::observer::Pool>>,
+    display_id: String,
+    observer_cwd: std::path::PathBuf,
     #[cfg(windows)]
     job: crate::platform::WindowsJob,
 }
@@ -184,6 +187,11 @@ impl Terminal {
             changed: Arc::new(Notify::new()),
             closed: AtomicBool::new(false),
             pid,
+            observer: store.observer().map(|pool| Arc::downgrade(&pool)),
+            display_id: display_id.into(),
+            observer_cwd: cwd
+                .map(Path::to_path_buf)
+                .unwrap_or(std::env::current_dir()?),
             #[cfg(windows)]
             job,
         });
@@ -196,6 +204,7 @@ impl Terminal {
         let display_id = display_id.to_owned();
         let output = terminal.output.clone();
         let changed = terminal.changed.clone();
+        let observer = terminal.observer.clone();
         std::thread::Builder::new()
             .name("ssmcp-pty-read".into())
             .spawn(move || {
@@ -242,6 +251,10 @@ impl Terminal {
                             #[cfg(unix)]
                             let visible = &data[..n];
                             output.lock().unwrap().push(visible);
+                            if let Some(pool) = observer.as_ref().and_then(std::sync::Weak::upgrade)
+                            {
+                                pool.terminal_output(&display_id, visible);
+                            }
                             if live {
                                 crate::client::render::terminal_output_for(&display_id, visible);
                             }
@@ -266,6 +279,9 @@ impl Terminal {
                             break;
                         }
                     }
+                }
+                if let Some(pool) = observer.as_ref().and_then(std::sync::Weak::upgrade) {
+                    pool.terminal_closed(&display_id);
                 }
                 let mut output = output.lock().unwrap();
                 output.eof = true;
@@ -322,6 +338,10 @@ impl Terminal {
             Operation::Write { data } => {
                 if !self.running() {
                     return Err("terminal has exited".into());
+                }
+                if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+                    pool.terminal_begin(&self.display_id, &self.observer_cwd)
+                        .await?;
                 }
                 let sender = self
                     .input
@@ -521,6 +541,9 @@ impl Terminal {
     }
 
     pub async fn shutdown(&self) {
+        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+            pool.terminal_closed(&self.display_id);
+        }
         let deadline = Instant::now() + Duration::from_secs(5);
         if let Some(completed) = self.stop() {
             let _ = timeout_at(deadline, completed).await;

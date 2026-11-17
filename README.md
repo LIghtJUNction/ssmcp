@@ -541,3 +541,11 @@ ssmcp --ssh --theme nord --timestamps my-server
 ```
 
 `--verbose`、`--raw-events`、原有 `--raw` 分别提供详细/JSONL 快捷方式。`~/.config/ssmcp/config.toml` 的 `[ui]` 支持主题、时间戳、请求 ID 和输出行数；`NO_COLOR` 和重定向 stderr 自动关闭颜色。日志脱敏不改写原生调用结果。真实终端的交互式 PTY 保留原始字节与控制序列，配色开关只影响日志颜色。后台输出实时显示；查询历史 `read/wait` 结果不会重复打印同一段正文。
+
+## Command observer windows
+
+Use `ssmcp --tty kitty username@ssmcp.lmm.best` (or `--tty ztty`) to watch commands
+in reusable terminal windows. Parallel commands open additional windows; closing a
+view keeps its task running. See [command observer terminals](docs/terminal-observers.md)
+for output semantics, other launchers and verification.
+
