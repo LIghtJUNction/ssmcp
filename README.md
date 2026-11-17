@@ -1,6 +1,6 @@
 # ssmcp
 
-**通过 SSH，把本机命令、电脑控制和浏览器原生能力统一接入 MCP。**
+** Bridge local shell access with remote MCP services **
 
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
@@ -8,6 +8,39 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat)](LICENSE)
 
 一条 SSH 连接，两个 MCP 工具。`list` 找到在线客户端，`code_mode` 调用它们的原生能力；命令、输出和智能体事件实时显示在本机终端。项目、模型配置和后端工具执行都留在本机。[工作原理](docs/backends.md)
+
+
+## 快速开始
+- 下载软件
+- ChatGPT网页端配置：
+新增插件
+名字 ssmcp
+地址 https://ssmcp.lmm.best/mcp
+
+使用你的github账号登录
+
+下载/安装 ssmcp 客户端
+一个命令行工具，确保你电脑有ssh
+
+ssmcp setup 
+按提示做完即可
+
+现阶段需要一个github账号（如果没有就注册一个，很简单）进行登录
+
+把你的ssh公钥粘贴到门户网站（https://ssmcp.lmm.best)
+
+- 开启一个会话
+···bash
+ssmcp name@ssmcp.lmm.best --allow name@github
+# name换成账号名
+···
+
+- 连接
+打开chatgpt网页版
+输入
+
+@ssmcp （插件名）帮我连接到我的开发机器，继续开发<项目名>.
+
 
 0.6.0 移除了后端选择参数：客户端始终提供 Shell，后台独立发现可用原生接口。升级方法见[迁移与发行说明](docs/release-notes-0.6.0.md)，本轮已验证范围与未覆盖项见[验收记录](docs/validation-0.6.0.md)。
 
