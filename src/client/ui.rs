@@ -285,7 +285,7 @@ impl Default for Ui {
     }
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Document {
     ui: Ui,

@@ -72,6 +72,8 @@ async fn server(websocket: bool, expired: bool) -> (SocketAddr, JoinHandle<Vec<u
         if websocket {
             let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
             let captured = seen.clone();
+            // Tungstenite fixes the callback's error type to an HTTP response.
+            #[allow(clippy::result_large_err)]
             let callback = move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
                                  response: tokio_tungstenite::tungstenite::handshake::server::Response| {
                 if let Some(authorization) = request.headers().get("authorization") {

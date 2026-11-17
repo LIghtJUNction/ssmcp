@@ -1310,7 +1310,7 @@ impl State {
                     .unwrap_or_else(|| screen_row(self.logs.screen(), row, g.left, &self.ui))
             } else if row == g.log_rows && g.log_rows > 0 {
                 let title = " CODE_MODE  ·  ↑↓ Browse  ·  Enter/→ Details  ·  ← Back ";
-                let text = fit(&title, g.left);
+                let text = fit(title, g.left);
                 let padding = usize::from(g.left).saturating_sub(text.width());
                 self.tone(PanelTone::Muted, &format!("{text}{}", "─".repeat(padding)))
             } else {
@@ -1915,7 +1915,7 @@ mod tests {
     }
     #[test]
     fn appearance_resizes_preserve_history_and_render_rgb_defaults() {
-        let ui = Ui::parse("[ui]\nlog_height_percent=80\nsidebar=false\n[ui.colors]\nbackground='#000000'\nforeground='#abcdef'").unwrap();
+        let ui = Ui::parse("[ui]\nlayout='split'\nlog_height_percent=80\nsidebar=false\n[ui.colors]\nbackground='#000000'\nforeground='#abcdef'").unwrap();
         let mut state = State::new(1000, 120, &ui);
         assert_eq!(state.geometry.log_rows, 798);
         state.pty_session("main", b"retained shell");
@@ -2473,7 +2473,7 @@ mod tests {
     #[test]
     fn text_filter_keeps_matched_command_output_and_completion() {
         let mut state = State::new(58, 106, &split_ui());
-        state.log(b"[RUN ] shell #41 cargo test\n[OUT ] shell #41\n  unit tests passed\n[OK  ] shell #41 completed exit=0\n[RUN ] shell #42 npm run lint\n[OUT ] shell #42\n  unrelated lint output\n[OK  ] shell #42 completed exit=0\n");
+        state.log(b"[RUN ] shell #41 cargo test\n[OUT ] shell #41\n  unit tests passed\n[OK  ] shell #41 completed exit=0\n[READY] Standalone observer status\n  unrelated background activity\n[RUN ] shell #42 npm run lint\n[OUT ] shell #42\n  unrelated lint output\n[OK  ] shell #42 completed exit=0\n");
         let now = Instant::now();
         assert!(state.keyboard(b"/cargo test\r", now, false).is_empty());
         assert_eq!(state.log_query, "cargo test");
@@ -2484,6 +2484,21 @@ mod tests {
         assert!(text.contains("#41 completed exit=0"), "{text}");
         assert!(!text.contains("npm run lint"), "{text}");
         assert!(!text.contains("unrelated lint output"), "{text}");
+        assert!(!text.contains("Standalone observer status"), "{text}");
+        assert!(!text.contains("unrelated background activity"), "{text}");
+        state.log_query = "standalone".into();
+        let standalone = physical(&state.frame(now)).screen().contents();
+        assert!(
+            standalone.contains("Standalone observer status"),
+            "{standalone}"
+        );
+        assert!(
+            standalone.contains("unrelated background activity"),
+            "{standalone}"
+        );
+        assert!(!standalone.contains("cargo test"), "{standalone}");
+        assert!(!standalone.contains("unit tests passed"), "{standalone}");
+        assert!(!standalone.contains("npm run lint"), "{standalone}");
         state.keyboard(b"\x1b", now, false);
         state.keyboard(&[], now + Duration::from_millis(100), true);
         assert!(state.log_query.is_empty());
