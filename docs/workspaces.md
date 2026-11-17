@@ -1,6 +1,6 @@
 # 工作区同步与端口映射
 
-ssmcp 通过已经认证的客户端连接，在两个工作区之间传文件或转发 TCP。公开 MCP 工具仍然只有 `list` 和 `code_mode`，文件、同步任务、端口映射和资源读取都放在 `code_mode` 内。
+ssmcp 通过已经认证的客户端连接，在两个工作区之间传文件或转发 TCP。公开 MCP 工具仍然只有 `list` 和 `code_mode`，文件、同步任务和端口映射由 `code_mode` 编排；资源同时提供标准 MCP 读取入口。
 
 ## 先确定每一端在哪里
 
@@ -136,6 +136,9 @@ return await ports.close(mappingId);
 | `ssmcp://clients` | 当前可访问的在线客户端 |
 | `ssmcp://clients/{id}/info` | 指定客户端的实时信息 |
 | `ssmcp://clients/{id}/tools` | 该客户端的工具 schema 和分页信息 |
+| `ssmcp://clients/{id}/agents` | 项目指令全文和来源 |
+| `ssmcp://clients/{id}/skills` | 项目技能摘要与全文 readUri |
+| `ssmcp://clients/{id}/skills/view` | 项目叠加显式全局根的实时技能视图 |
 
 不方便直接调用 MCP 资源方法的宿主，可以从 `code_mode` 读取同一资源：
 

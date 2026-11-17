@@ -48,6 +48,11 @@ incremental cursors and a snapshot containing output artifact metadata. wait_ms 
 and only limits waiting; the command keeps running when this wait expires. Set code_mode \
 timeout_ms above wait_ms. A command timeout_ms of 0, the default, has no time limit; a positive \
 timeout_ms terminates the process tree after that interval.\n\n\
+Use rtk.status(clientId) to check the installed RTK version. rtk.run(clientId,{command:[\"git\",\"status\"],cwd:\".\"}) \
+executes literal RTK argv and returns the same job, output and exit-code fields as exec.run. \
+rtk.start creates a background job managed through exec.read/wait/cancel. Command arguments \
+exclude the rtk prefix; compression follows RTK subcommands. RTK recall and tee hints remain \
+in output. Missing RTK fails without automatic installation or rerunning the original command.\n\n\
 Use exec.start(clientId,options) to launch background work, exec.list(clientId) to find jobs, \
 exec.status(clientId,jobId) to inspect one, exec.wait(clientId,jobId,{wait_ms:60000}) to wait, \
 and exec.read(clientId,jobId,{stdout_cursor,stderr_cursor,max_bytes}) to read new output. \
@@ -374,7 +379,8 @@ fn limits() -> Value {
                 "cua","cua.browser","terminal.open","terminal.list","terminal.select","terminal.close",
                 "terminal.read","terminal.write","terminal.status","terminal.resize",
                 "exec.start","exec.list","exec.status","exec.wait","exec.read","exec.write",
-                "exec.cancel","exec.forget","exec.events","exec.run","exec.parallel"
+                "exec.cancel","exec.forget","exec.events","exec.run","exec.parallel",
+                "rtk.status","rtk.run","rtk.start"
             ],
             "text_files":{
                 "max_write_bytes":262144,
