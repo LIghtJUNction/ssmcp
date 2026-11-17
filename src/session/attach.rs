@@ -1,6 +1,6 @@
 //! Local terminal frontends for an existing background session. Detaching only
 //! releases an input lease; it never changes the session's desired state.
-mod input;
+pub(crate) mod input;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;

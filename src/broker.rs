@@ -447,7 +447,31 @@ impl Broker {
     pub async fn attach(self: Arc<Self>, stream: UnixStream) -> crate::Result<()> {
         let uid = stream.peer_cred()?.uid();
         let user = tokio::task::spawn_blocking(move || username(uid)).await??;
-        let (reader, mut writer) = stream.into_split();
+        self.attach_stream(stream, user, None).await
+    }
+
+    pub(crate) async fn attach_device<T>(
+        self: Arc<Self>,
+        stream: T,
+        registration: crate::device::Registration,
+    ) -> crate::Result<()>
+    where
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        self.attach_stream(stream, registration.username.clone(), Some(registration))
+            .await
+    }
+
+    async fn attach_stream<T>(
+        self: Arc<Self>,
+        stream: T,
+        user: String,
+        registration: Option<crate::device::Registration>,
+    ) -> crate::Result<()>
+    where
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
         let (wire_version, mode, metadata) = match timeout(
             IO_TIMEOUT,
@@ -487,8 +511,36 @@ impl Broker {
             .await?;
             return Ok(());
         }
-        let restricted = !metadata.allow.is_empty();
-        let allow = if restricted {
+        if let Some(registration) = &registration
+            && !registration.is_live(&self).await
+        {
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reject {
+                    message: "ssmcp authorization expired or revoked".into(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        let restricted = registration.is_some() || !metadata.allow.is_empty();
+        let allow = if let Some(registration) = &registration {
+            let principal = format!(
+                "{}@github",
+                registration.identity.login.to_ascii_lowercase()
+            );
+            if metadata.allow.iter().any(|allowed| allowed != &principal) {
+                wire::write_frame(
+                    &mut writer,
+                    &Frame::Reject {
+                        message: "account devices cannot grant access to another identity".into(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+            vec![registration.identity.clone()]
+        } else if restricted {
             match self.identities.resolve_allow(&metadata.allow).await {
                 Ok(identities) if !identities.is_empty() => identities,
                 result => {
@@ -530,10 +582,14 @@ impl Broker {
             slots: Semaphore::new(wire::MAX_INFLIGHT),
             alive: AtomicBool::new(true),
             ssh_user: user.clone(),
-            owner_subject: self
-                .management
+            owner_subject: registration
                 .as_ref()
-                .and_then(|state| state.policy.owner_subject(&user)),
+                .map(|r| r.identity.subject.clone())
+                .or_else(|| {
+                    self.management
+                        .as_ref()
+                        .and_then(|state| state.policy.owner_subject(&user))
+                }),
             connected_at: crate::management::now(),
             audit: self.management.as_ref().map(|state| state.audit.clone()),
             disconnect: Notify::new(),
@@ -589,6 +645,17 @@ impl Broker {
         );
         let result: crate::Result<()> = tokio::select! {
             _ = session.disconnect.notified() => Ok(()),
+            _ = async {
+                match &registration {
+                    Some(registration) => registration.wait_revoked(&self).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                let _ = timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::Reject {
+                    message: "ssmcp authorization expired or revoked".into(),
+                })).await;
+                Ok(())
+            },
             result = async {
             session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone() }).await?;

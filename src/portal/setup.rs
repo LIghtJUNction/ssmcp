@@ -49,6 +49,8 @@ struct Grant {
     last_poll: Option<Instant>,
     registered_fingerprint: Option<String>,
     registration_saved: bool,
+    client_login: bool,
+    login_issued: bool,
 }
 #[derive(Clone)]
 enum Decision {
@@ -135,6 +137,8 @@ impl SetupState {
                     last_poll: None,
                     registered_fingerprint: None,
                     registration_saved: false,
+                    client_login: false,
+                    login_issued: false,
                 })),
             },
         );
@@ -406,6 +410,14 @@ fn public_account(account: Account) -> Value {
 
 pub(super) fn routes() -> Router<Arc<Broker>> {
     Router::new()
+        .route(
+            "/api/client/login/start",
+            post(client_start).fallback(method_not_allowed),
+        )
+        .route(
+            "/api/client/login/poll",
+            post(client_poll).fallback(method_not_allowed),
+        )
         .route("/setup", get(page))
         .route("/setup/authorize", post(authorize))
         .route("/api/setup/start", post(start).fallback(method_not_allowed))
@@ -469,6 +481,9 @@ async fn poll(
         return Ok(Json(json!({"status":"expired"})));
     };
     let mut grant = grant.lock().await;
+    if grant.client_login {
+        return Err(ApiError::invalid("This grant is only for client login."));
+    }
     if grant.alive().is_err() {
         return Ok(Json(json!({"status":"expired"})));
     }
@@ -510,6 +525,9 @@ async fn register(
             .ok_or_else(ApiError::expired)?
     };
     let mut grant = grant.lock().await;
+    if grant.client_login {
+        return Err(ApiError::invalid("This grant is only for client login."));
+    }
     let owner = grant.owner()?;
     if grant
         .registered_fingerprint
@@ -708,13 +726,22 @@ async fn page_inner(
         state.charge("page", 600)?;
         state.by_code(&values["code"])?
     };
-    let (name, decision) = {
+    let (name, decision, client_login) = {
         let grant = grant.lock().await;
         grant.alive()?;
-        (grant.client_name.clone(), grant.decision.clone())
+        (
+            grant.client_name.clone(),
+            grant.decision.clone(),
+            grant.client_login,
+        )
     };
     if matches!(decision, Decision::Denied) {
-        return Ok(Html(completed_page(false)).into_response());
+        return Ok(Html(if client_login {
+            client_completed_page(false)
+        } else {
+            completed_page(false)
+        })
+        .into_response());
     }
     let (browser, csrf, subject, new_cookie) = browser_session(&broker.portal, headers)?;
     if let Decision::Authorized(owner) = decision {
@@ -725,7 +752,12 @@ async fn page_inner(
                 "This setup request has already been approved by its account owner.",
             ));
         }
-        return Ok(Html(completed_page(true)).into_response());
+        return Ok(Html(if client_login {
+            client_completed_page(true)
+        } else {
+            completed_page(true)
+        })
+        .into_response());
     }
     if subject.is_none() {
         let mut response = start_login(broker, browser, Some(return_to))?;
@@ -739,7 +771,12 @@ async fn page_inner(
         .portal
         .storage(move |store| store.account(&subject))
         .await?;
-    Ok(Html(consent_page(&name, &values["code"], &csrf, &account)).into_response())
+    Ok(Html(if client_login {
+        client_consent_page(&name, &values["code"], &csrf, &account)
+    } else {
+        consent_page(&name, &values["code"], &csrf, &account)
+    })
+    .into_response())
 }
 async fn authorize(State(broker): State<Arc<Broker>>, request: Request) -> Response {
     web_result(authorize_inner(&broker, request).await)
@@ -774,3 +811,118 @@ async fn authorize_inner(broker: &Broker, request: Request) -> Result<Response, 
 #[cfg(test)]
 #[path = "setup_tests.rs"]
 mod tests;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClientStart {
+    name: String,
+}
+
+async fn client_start(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    enabled(&broker)?;
+    let input: ClientStart = body(request, &broker.public_url).await?;
+    let name = input.name.trim();
+    if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
+        return Err(ApiError::invalid(
+            "name must contain 1..80 UTF-8 bytes without control characters.",
+        ));
+    }
+    let (device_code, user_code, grant) = {
+        let mut state = lock(&broker.portal)?;
+        state.charge("start", 60)?;
+        let (device_code, user_code) = state.issue(name.into())?;
+        let grant = state
+            .by_device(&device_code)?
+            .ok_or_else(ApiError::unavailable)?;
+        (device_code, user_code, grant)
+    };
+    grant.lock().await.client_login = true;
+    let base = broker.public_url.trim_end_matches('/');
+    Ok(Json(
+        json!({"device_code":device_code,"user_code":user_code,
+        "verification_uri":format!("{base}/setup"),
+        "verification_uri_complete":format!("{base}/setup?code={user_code}"),
+        "expires_in":TTL.as_secs(),"interval":POLL_INTERVAL.as_secs()}),
+    ))
+}
+async fn client_poll(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    enabled(&broker)?;
+    let input: Device = body(request, &broker.public_url).await?;
+    let grant = {
+        let mut state = lock(&broker.portal)?;
+        state.charge("poll", 18000)?;
+        state.by_device(&input.device_code)?
+    };
+    let Some(grant) = grant else {
+        return Ok(Json(json!({"status":"expired"})));
+    };
+    let mut grant = grant.lock().await;
+    if !grant.client_login {
+        return Err(ApiError::invalid("This grant is only for SSH setup."));
+    }
+    if grant.alive().is_err() || grant.login_issued {
+        return Ok(Json(json!({"status":"expired"})));
+    }
+    let now = Instant::now();
+    if grant
+        .last_poll
+        .is_some_and(|last| now.saturating_duration_since(last) < POLL_INTERVAL)
+    {
+        return Err(ApiError::rate(POLL_INTERVAL.as_secs()));
+    }
+    grant.last_poll = Some(now);
+    let subject = match &grant.decision {
+        Decision::Pending => return Ok(Json(json!({"status":"pending"}))),
+        Decision::Denied => return Ok(Json(json!({"status":"denied"}))),
+        Decision::Authorized(subject) => subject.clone(),
+    };
+    let identity = broker.portal.identity_for_subject(subject.clone()).await?;
+    broker
+        .portal
+        .record_audit(
+            Some(&identity),
+            crate::history::AuditAction::Login,
+            crate::history::AuditOutcome::Pending,
+        )
+        .await?;
+    // The async grant mutex serializes competing poll requests through the durable
+    // write. A successful grant can mint exactly one controller credential.
+    let (token, expires) = broker
+        .portal
+        .client_storage(move |store| store.login(subject))
+        .await?;
+    grant.login_issued = true;
+    Ok(Json(json!({"status":"authorized","access_token":token,
+        "identity":crate::device::identity_json(&identity),"expires_in":expires})))
+}
+fn client_consent_page(name: &str, code: &str, csrf: &str, account: &Account) -> String {
+    view::page(
+        "登录 ssmcp 客户端",
+        &format!(
+            "<section class=card><p class=eyebrow>SSMCP · CLIENT LOGIN</p><h1>登录客户端</h1>        <p>设备：<strong>{}</strong></p><p>请核对终端中的代码：</p><pre>{}</pre>        <p>GitHub 账户：<strong>{}</strong></p>        <p>允许后，此客户端可以连接和控制你已授权的会话，并为其他设备生成临时接入命令。登录有效期为 30 天，可随时通过 ssmcp logout 撤销。</p>        <form method=post action=\"/setup/authorize\"><input type=hidden name=csrf value=\"{}\">        <input type=hidden name=code value=\"{}\">        <button class=button type=submit name=decision value=allow>允许登录</button>        <button class=secondary type=submit name=decision value=deny>拒绝</button></form></section>",
+            escape(name),
+            escape(code),
+            escape(&account.github_login),
+            escape(csrf),
+            escape(code)
+        ),
+    )
+}
+fn client_completed_page(allowed: bool) -> String {
+    if !allowed {
+        return view::page(
+            "已拒绝客户端登录",
+            "<section class=card><p class=eyebrow>SSMCP · CLIENT LOGIN</p><h1>已拒绝登录</h1><p>没有为此设备创建登录凭据。需要登录时，请从终端重新开始。</p><a class=button href=/>查看账户</a></section>",
+        );
+    }
+    view::page(
+        "客户端已获准登录",
+        "<section class=card><p class=eyebrow>SSMCP · CLIENT LOGIN</p><h1>已允许登录</h1>        <p>返回终端继续。客户端会保存此设备的登录凭据。</p><a class=button href=/>查看账户</a></section>",
+    )
+}

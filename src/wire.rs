@@ -1,4 +1,4 @@
-//! Private, bounded, newline-delimited JSON protocol carried inside SSH.
+//! Private, bounded JSON frames carried over outbound HTTPS/WebSocket or SSH connections.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io;
@@ -16,8 +16,8 @@ pub const MAX_CLIENTS_PER_USER: usize = 128;
 pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 pub const MAX_TITLE_BYTES: usize = 512;
 
-/// Metadata and access policy supplied by the SSH-authenticated local client.
-/// These fields never select or replace the authenticated SSH account.
+/// Metadata and requested access policy supplied by the authenticated local client.
+/// These fields never select or replace the server-authenticated account.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ClientMetadata {

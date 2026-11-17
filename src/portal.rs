@@ -3,7 +3,7 @@
 mod dashboard;
 mod dashboard_view;
 mod setup;
-mod store;
+pub(crate) mod store;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -49,6 +49,7 @@ pub struct Portal {
     browser: Mutex<BrowserState>,
     setup: Mutex<setup::SetupState>,
     store: Option<Arc<Mutex<Store>>>,
+    credentials: Option<Arc<Mutex<crate::device::Credentials>>>,
     management: Option<ManagementClient>,
 }
 
@@ -118,7 +119,7 @@ impl BrowserState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Problem {
+pub(crate) enum Problem {
     Invalid,
     Unauthorized,
     Csrf,
@@ -136,7 +137,7 @@ enum Problem {
     ManagementInvalid,
 }
 impl Problem {
-    fn status(self) -> StatusCode {
+    pub(crate) fn status(self) -> StatusCode {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Csrf | Self::Forbidden => StatusCode::FORBIDDEN,
@@ -234,6 +235,9 @@ impl Portal {
             browser: Mutex::default(),
             setup: Mutex::default(),
             store: Some(Arc::new(Mutex::new(Store::open(path)?))),
+            credentials: Some(Arc::new(Mutex::new(crate::device::Credentials::open(
+                path,
+            )?))),
             management: None,
         })
     }
@@ -242,7 +246,7 @@ impl Portal {
         self.management = Some(ManagementClient::new(socket));
     }
 
-    async fn identity_for_subject(&self, subject: String) -> Result<Identity, Problem> {
+    pub(crate) async fn identity_for_subject(&self, subject: String) -> Result<Identity, Problem> {
         self.storage(move |store| store.account(&subject))
             .await
             .map(|account| Identity {
@@ -302,14 +306,26 @@ impl Portal {
         result.map_err(|_| Problem::AuditUnavailable)
     }
 
-    fn enabled(&self, broker: &Broker) -> bool {
+    pub(crate) fn enabled(&self, broker: &Broker) -> bool {
         self.store.is_some() && broker.identities.enabled("github")
     }
-    async fn storage<T: Send + 'static>(
+    pub(crate) async fn storage<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&mut Store) -> Result<T, Problem> + Send + 'static,
     ) -> Result<T, Problem> {
         let store = self.store.clone().ok_or(Problem::Disabled)?;
+        tokio::task::spawn_blocking(move || {
+            let mut guard = store.lock().map_err(|_| Problem::Storage)?;
+            operation(&mut guard)
+        })
+        .await
+        .map_err(|_| Problem::Storage)?
+    }
+    pub(crate) async fn client_storage<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut crate::device::Credentials) -> Result<T, Problem> + Send + 'static,
+    ) -> Result<T, Problem> {
+        let store = self.credentials.clone().ok_or(Problem::Disabled)?;
         tokio::task::spawn_blocking(move || {
             let mut guard = store.lock().map_err(|_| Problem::Storage)?;
             operation(&mut guard)

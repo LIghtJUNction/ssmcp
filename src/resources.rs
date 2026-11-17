@@ -14,7 +14,7 @@ pub const MAX_RESOURCE_BYTES: usize = 1024 * 1024;
 const MAX_URI_BYTES: usize = 1024;
 
 const GUIDE: &str = "# Using ssmcp\n\n\
-Read ssmcp://clients for the clients currently available to your identity and endpoint. \
+Clients connect outbound over HTTPS/WebSocket or SSH. Read ssmcp://clients for the clients currently available to your identity and endpoint. \
 A client id identifies one live connection; names are labels, title is optional operator-supplied \
 task context, and cwd is its startup directory. Select the intended task by title, then dispatch by id.\n\n\
 Read ssmcp://clients/{id}/tools to discover native tool names and JSON schemas. \
@@ -77,8 +77,9 @@ display unknown. list reports controller_metadata; v4 clients require an update 
 Use await reload(clientId) after installing an updated client binary. The client acknowledges \
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
-must finish first. Call list again for the new ID. GitHub --allow access persists; login-code \
-connections need new OAuth login. Both client and server must support reload.\n\n\
+must finish first. Call list again for the new ID. Account sessions reconnect using saved login \
+credentials; GitHub --allow access persists. Login-code connections need new OAuth login. \
+Temporary joined sessions cannot reload; create a new invitation. Both client and server must support reload.\n\n\
 Long command output is streamed to the client's private ssmcp storage \
 (normally /tmp/ssmcp/<uid> on Unix or LOCALAPPDATA/ssmcp/output on Windows). Read the \
 returned artifact metadata, including SHA-256, bytes, lines, complete and expiry. Use \

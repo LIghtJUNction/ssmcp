@@ -1,10 +1,12 @@
-//! Foreground SSH client. Connection details are emitted once as JSON on stdout.
+//! Foreground account or SSH client. Connection details are emitted once as JSON.
+mod account;
 mod git_status;
 pub(crate) mod input;
 mod onboarding;
 mod panel;
 #[cfg(test)]
 mod protocol_tests;
+mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;
 pub(crate) mod terminal;
@@ -36,16 +38,26 @@ use tokio::{
     time::timeout,
 };
 
-const HELP: &str = r#"ssmcp — expose a local shell and every installed coding harness over SSH
+const HELP: &str = r#"ssmcp — connect your devices and control authorized sessions
 
-Usage: ssmcp [options] [user@]host
+Usage: ssmcp login [--server URL] [--no-browser]
+       ssmcp whoami|logout [--server URL] [--json]
+       ssmcp list [--json | -i] [--client ID]
+       ssmcp -i [--server URL] [--client ID]
+       ssmcp invite [--ttl 600] [--session-ttl 3600] [--shell sh|powershell]
+                    [--no-bootstrap] [--json]
+       ssmcp join --server URL --token INVITATION [options]
+       ssmcp [options] [--server URL]
+       ssmcp [options] [user@]host
        ssmcp setup [options] [user@]host
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [NAME|list] [--read-only]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
 
-  -i identity          SSH private key file
+  --server URL         HTTPS server (default: the account used by ssmcp login)
+  -i, --interactive    Select an authorized account session and open its terminal
+  --identity FILE      SSH private key file; legacy -i FILE HOST remains supported
   -p port              SSH port
   -F ssh_config        OpenSSH configuration file
   --name NAME          Display name (default: hostname-pid)
@@ -58,7 +70,7 @@ Usage: ssmcp [options] [user@]host
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
   --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
-                       (at most 32 distinct users; case-insensitive)
+                       (SSH sharing; at most 32 users; your logged-in account is automatic)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
   --log-format FORMAT  pretty (default), pretty-verbose, or jsonl
@@ -76,6 +88,14 @@ harnesses are discovered automatically and their native tools are registered in
 one code_mode. Tools keep their native schemas and permission/approval behavior.
 
 Examples:
+  ssmcp login
+  ssmcp whoami
+  ssmcp --name laptop
+  ssmcp list
+  ssmcp -i
+  ssmcp invite
+  ssmcp invite --shell powershell
+  ssmcp --no-watchdog --name one-shot
   ssmcp --name laptop my-server
   ssmcp --title "Fix ssmcp client reload" my-server
   ssmcp -F ~/.ssh/work_config my-server
@@ -89,6 +109,16 @@ Examples:
   ssmcp sessions create workstation --watchdog --allow octocat@github my-server
   ssmcp attach workstation
   ssmcp sessions close workstation
+
+GitHub login is saved privately for the selected server. Bare ssmcp uses HTTPS
+and automatically grants your own account access. No SSH key or --allow is needed.
+ssmcp list shows the account's online controllable sessions; sessions list keeps
+listing local saved sessions. Ctrl-] leaves remote interactive control; Ctrl-C
+is delivered to the selected terminal. A temporary invitation can be redeemed
+once (default 10 minutes) and creates a controlled session (default 1 hour).
+The generated bootstrap command downloads its client from this server only.
+Temporary credentials stay in memory; Ctrl-C on the controlled device stops it.
+ssmcp logout revokes this login and its derived invitations/devices.
 
 Redirected stdout (or jsonl mode) emits one connection JSON object.
 Interactive stdout shows the MCP URL and OAuth login instructions.
@@ -113,8 +143,8 @@ forwards work on every client; system rsync transfers require Linux clients.
 Skill summaries and AGENTS.md views stay inside the workspace unless an operator
 adds --context-root. These extra roots expose context documents, not file writes.
 Keep this process running; Ctrl-C disconnects and stops local harnesses and jobs.
-Without --allow, disconnecting revokes this connection's OAuth grants and
-reconnecting needs a new OAuth login. An MCP app restart can reuse valid tokens.
+An SSH connection without a saved account or --allow uses a one-time login code;
+disconnecting revokes that connection's grants and reconnecting needs new OAuth. An MCP app restart can reuse valid tokens.
 Install the persistent session manager with `ssmcp service install`; choose
 --system with an explicit non-root owner for boot startup, or a per-user service.
 New sessions use the running manager. Legacy --daemon also supports per-session
@@ -122,7 +152,7 @@ systemd --user, launchd and Task Scheduler when the manager is not installed.
 Bare `ssmcp attach` lists sessions. Ctrl-] detaches without stopping the session;
 Ctrl-C inside interactive attach is sent to the selected terminal.
 --session-control explicitly grants this OS user's saved-session management.
-New remote-created sessions inherit SSH access settings and stay in the current
+New remote-created sessions inherit connection settings and stay in the current
 workspace; children do not inherit this management grant.
 Use sessions auth NAME to read private OAuth connection details explicitly.
 Background logs use JSONL without terminal colors; foreground display options
@@ -161,7 +191,11 @@ impl Incoming {
                         "SSH stream failed before local backend readiness: {error}"
                     )),
                     Ok(Some(Frame::Reject { message })) => {
-                        Some(format!("SSH server rejected the connection: {message}"))
+                        if message == relay::AUTH_EXPIRED {
+                            Some(message.clone())
+                        } else {
+                            Some(format!("SSH server rejected the connection: {message}"))
+                        }
                     }
                     _ => None,
                 };
@@ -190,6 +224,15 @@ impl Incoming {
                 return "SSH reader stopped before local backend readiness".into();
             }
         }
+    }
+
+    // A relay can flush its final Reject and exit before this task consumes
+    // stdout. Preserve that authorization outcome instead of treating the child
+    // exit as a transient network failure and restarting the watchdog.
+    async fn after_relay_exit(&mut self, fallback: String) -> String {
+        timeout(Duration::from_secs(2), self.disconnected())
+            .await
+            .unwrap_or(fallback)
     }
 
     fn ensure_open(&self, ssh: &mut Child) -> Result<(), String> {
@@ -228,6 +271,9 @@ fn ssh_ended(status: io::Result<ExitStatus>) -> String {
 
 struct Options {
     destination: Option<String>,
+    server: Option<String>,
+    relay: Option<account::Credential>,
+    temporary: bool,
     name: Option<String>,
     title: Option<String>,
     allow: Vec<String>,
@@ -276,6 +322,7 @@ impl Options {
     ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter();
         let mut destination = None;
+        let mut server = None;
         let mut name = None;
         let mut title = None;
         let mut allow = Vec::new();
@@ -315,6 +362,14 @@ impl Options {
                         || value.starts_with("-t=") =>
                 {
                     return Err("harness selection was removed; remove -t/--type/--backend; installed harnesses are discovered automatically".into());
+                }
+                Some("--server") => {
+                    let value = args
+                        .next()
+                        .ok_or("--server requires an HTTPS origin")?
+                        .into_string()
+                        .map_err(|_| "--server must be UTF-8")?;
+                    server = Some(account::normalize_server(&value).map_err(|e| e.to_string())?);
                 }
                 Some("--name") => {
                     name = Some(
@@ -422,7 +477,9 @@ impl Options {
                             .ok_or("--max-inline-output must be in 1..=10000")?,
                     );
                 }
-                Some("-i") => identity = Some(args.next().ok_or("-i requires a file")?),
+                Some("-i" | "--identity") => {
+                    identity = Some(args.next().ok_or("--identity requires a file")?)
+                }
                 Some("-F") => config = Some(args.next().ok_or("-F requires a file")?),
                 Some("-p") => {
                     port = Some(
@@ -441,13 +498,22 @@ impl Options {
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
             }
         }
-        if destination.is_none() && !list_tools {
+        if destination.is_none() && server.is_none() && !list_tools {
             destination = default_destination.map(str::to_owned);
         }
         if let Some(destination) = &destination {
             validate_destination(destination)?;
-        } else if !list_tools {
-            return Err("expected an SSH host alias or user@host; see ssmcp --help".into());
+        }
+        if server.is_some()
+            && (destination.is_some() || identity.is_some() || port.is_some() || config.is_some())
+        {
+            return Err(
+                "--server uses HTTPS and cannot be combined with an SSH destination or SSH options"
+                    .into(),
+            );
+        }
+        if list_tools && server.is_some() {
+            return Err("--list-tools is local and cannot be combined with --server".into());
         }
         if list_tools && destination.is_some() {
             return Err("--list-tools is local and does not take an SSH destination".into());
@@ -482,6 +548,9 @@ impl Options {
         }
         Ok(Some(Self {
             destination,
+            server,
+            relay: None,
+            temporary: false,
             name,
             title,
             allow,
@@ -571,9 +640,15 @@ impl Options {
         if self.session_control {
             args.push(OsString::from("--session-control"));
         }
-        args.push(OsString::from(
-            self.destination.as_ref().ok_or("missing SSH destination")?,
-        ));
+        if let Some(server) = &self.server {
+            args.extend([OsString::from("--server"), OsString::from(server)]);
+        } else {
+            args.push(OsString::from(
+                self.destination
+                    .as_ref()
+                    .ok_or("missing connection destination")?,
+            ));
+        }
         let args = args
             .into_iter()
             .map(|arg| {
@@ -651,6 +726,7 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
         Options::parse_saved(spec)?.ok_or("saved session must contain connection options")?;
     if options.daemon
         || options.list_tools
+        || (options.destination.is_none() && options.server.is_none())
         || options.name.as_deref() != Some(spec.name.as_str())
         || options.watchdog != spec.watchdog
         || options.reconnect_delay_secs != spec.reconnect_delay_secs
@@ -705,11 +781,11 @@ fn session_control(
     if !options.session_control {
         return Ok(None);
     }
-    let template = options
-        .destination
-        .as_ref()
-        .map(|_| options.session_spec())
-        .transpose()?;
+    let template = if options.destination.is_some() || options.server.is_some() {
+        Some(options.session_spec()?)
+    } else {
+        None
+    };
     Ok(Some(crate::session::control::Control::new(
         std::env::current_dir()?,
         template,
@@ -749,9 +825,10 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
             _ => connection.push(arg),
         }
     }
-    let Some(options) = Options::parse(connection)? else {
+    let Some(mut options) = Options::parse(connection)? else {
         return Ok(());
     };
+    apply_account(&mut options, None).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
     validate_session_spec(&spec)?;
@@ -773,6 +850,8 @@ fn connection_option_takes_value(option: &str) -> bool {
     matches!(
         option,
         "--name"
+            | "--server"
+            | "--identity"
             | "--title"
             | "--allow"
             | "--context-root"
@@ -834,7 +913,125 @@ fn validate_destination(destination: &str) -> Result<(), String> {
     Ok(())
 }
 
+struct JoinRequest {
+    server: String,
+    token: String,
+}
+
+fn join_request(args: &mut Vec<OsString>) -> crate::Result<Option<JoinRequest>> {
+    if !args.first().is_some_and(|arg| arg == "join") {
+        return Ok(None);
+    }
+    args.remove(0);
+    let mut remaining = Vec::new();
+    let mut server = None;
+    let mut token = None;
+    let mut source = std::mem::take(args).into_iter();
+    while let Some(arg) = source.next() {
+        match arg.to_str() {
+            Some("--token") => {
+                if token.is_some() {
+                    return Err("--token may be supplied only once".into());
+                }
+                token = Some(
+                    source
+                        .next()
+                        .ok_or("--token requires a one-time invitation")?
+                        .into_string()
+                        .map_err(|_| "invitation must be UTF-8")?,
+                );
+            }
+            Some("--server") => {
+                if server.is_some() {
+                    return Err("--server may be supplied only once".into());
+                }
+                let value = source
+                    .next()
+                    .ok_or("--server requires an HTTPS origin")?
+                    .into_string()
+                    .map_err(|_| "--server must be UTF-8")?;
+                server = Some(account::normalize_server(&value)?);
+            }
+            Some(flag) if connection_option_takes_value(flag) => {
+                let value = source
+                    .next()
+                    .ok_or_else(|| format!("{flag} requires a value"))?;
+                remaining.extend([arg, value]);
+            }
+            _ => remaining.push(arg),
+        }
+    }
+    let server = server.unwrap_or_else(|| account::DEFAULT_SERVER.into());
+    let token = token.ok_or("usage: ssmcp join --server URL --token INVITATION [--name NAME]")?;
+    remaining.extend([OsString::from("--server"), OsString::from(&server)]);
+    *args = remaining;
+    Ok(Some(JoinRequest { server, token }))
+}
+
+async fn apply_account(options: &mut Options, join: Option<JoinRequest>) -> crate::Result<()> {
+    if options.list_tools {
+        if join.is_some() {
+            return Err("join starts a controlled session; --list-tools is local".into());
+        }
+        return Ok(());
+    }
+    if join.is_none()
+        && options.destination.is_some()
+        && options.server.is_none()
+        && !options.allow.is_empty()
+    {
+        return Ok(());
+    }
+    let credential = if let Some(join) = join {
+        if !options.allow.is_empty() {
+            return Err("join takes its account identity from the invitation; omit --allow".into());
+        }
+        if options.daemon || options.session_control {
+            return Err("temporary join sessions run in the foreground without saved-session management; keep this terminal open".into());
+        }
+        options.temporary = true;
+        Some(account::enroll(&join.server, &join.token).await?)
+    } else {
+        account::credentials(options.server.as_deref()).await?
+    };
+    if options.server.is_some() || options.destination.is_none() {
+        let credential =
+            credential.ok_or("not logged in; run ssmcp login [--server URL], then run ssmcp")?;
+        if options
+            .allow
+            .iter()
+            .any(|principal| principal != &credential.principal)
+        {
+            return Err("HTTPS account sessions belong to the logged-in account; --allow for additional users is supported on SSH connections".into());
+        }
+        options.server = Some(credential.server.clone());
+        options.allow = vec![credential.principal.clone()];
+        options.relay = Some(credential);
+        options.no_setup = true;
+    } else if options.allow.is_empty() {
+        // A cached, verified public principal selects the existing SSH ACL.
+        // The account bearer credential is never sent to an SSH destination.
+        if let Some(credential) = credential {
+            let identity = account::verify_identity(&credential).await?;
+            options.allow.push(identity.principal);
+        }
+    }
+    Ok(())
+}
+
 pub async fn run() -> crate::Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__relay")) {
+        let code = match relay::run().await {
+            Ok(()) => 0,
+            Err(error) => {
+                report_error(&error.to_string());
+                1
+            }
+        };
+        // This transport child owns no native tools. Exit also ends Tokio's
+        // blocking stdin reader when the remote WebSocket closes first.
+        std::process::exit(code);
+    }
     if let Some(code) = onboarding::run_askpass_helper() {
         std::process::exit(code);
     }
@@ -843,6 +1040,18 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if account::dispatch(&args).await? {
+        return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "join")
+        && args.iter().any(|arg| arg == "--help" || arg == "-h")
+    {
+        println!(
+            "Usage: ssmcp join --server URL --token INVITATION [--name NAME] [--no-watchdog]\nStarts a temporary controlled session over HTTPS. Keep this terminal open; Ctrl-C stops it."
+        );
+        return Ok(());
+    }
+    let join = join_request(&mut args)?;
     if args.first().is_some_and(|arg| arg == "service") {
         return crate::session::install::manage(args.into_iter().skip(1).collect()).await;
     }
@@ -887,6 +1096,12 @@ pub async fn run() -> crate::Result<()> {
     let Some(mut options) = parsed else {
         return Ok(());
     };
+    if setup_requested && (options.server.is_some() || join.is_some()) {
+        return Err(
+            "setup configures SSH; use ssmcp login --server URL for HTTPS account access".into(),
+        );
+    }
+    apply_account(&mut options, join).await?;
     if let Some(runner) = &service
         && (options.daemon
             || options.list_tools
@@ -1005,6 +1220,24 @@ pub async fn run() -> crate::Result<()> {
             runner.record("stopped", attempt, None, None, None)?;
             return Ok(());
         }
+        if options.relay.as_ref().is_some_and(|credential| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                >= credential.expires_at
+        }) {
+            if let Some(runner) = &service {
+                runner.record(
+                    "disconnected",
+                    attempt,
+                    None,
+                    None,
+                    Some(relay::AUTH_EXPIRED),
+                )?;
+            }
+            return Err(relay::failure(relay::AUTH_EXPIRED.into()));
+        }
         attempt = attempt.saturating_add(1);
         if let Some(runner) = &service {
             runner.record("starting", attempt, None, None, None)?;
@@ -1067,6 +1300,7 @@ pub async fn run() -> crate::Result<()> {
             && !setup_attempted
             && service.is_none()
             && !options.no_setup
+            && options.relay.is_none()
             && onboarding::interactive()
         {
             setup_attempted = true;
@@ -1079,7 +1313,11 @@ pub async fn run() -> crate::Result<()> {
             }
             continue;
         }
-        if !options.watchdog || unsupported_protocol {
+        let permanent = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.downcast_ref::<relay::PermanentFailure>().is_some());
+        if !options.watchdog || unsupported_protocol || permanent {
             if let Some(runner) = &service {
                 runner.record("disconnected", attempt, None, None, error.as_deref())?;
             }
@@ -1270,7 +1508,7 @@ async fn register_ssh(
                         return Err(UnsupportedWireProtocol.into());
                     }
                 }
-                return Err(message.into());
+                return Err(relay::failure(message));
             }
             None => {
                 stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -1317,13 +1555,29 @@ async fn connect(
     let mut terminate = terminate_signal()?;
     let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
+    let relay_executable = options
+        .relay
+        .as_ref()
+        .map(|_| std::env::current_exe())
+        .transpose()?;
     render::status(
-        "ssh",
+        if options.relay.is_some() {
+            "https"
+        } else {
+            "ssh"
+        },
         "Progress",
-        &format!(
-            "Connecting to {} with OpenSSH",
-            options.destination.as_deref().unwrap_or("configured host")
-        ),
+        &if let Some(credential) = &options.relay {
+            format!(
+                "Connecting to {} with an authenticated HTTPS relay",
+                credential.server
+            )
+        } else {
+            format!(
+                "Connecting to {} with OpenSSH",
+                options.destination.as_deref().unwrap_or("configured host")
+            )
+        },
     );
     let cancelled = async {
         tokio::select! {
@@ -1336,8 +1590,13 @@ async fn connect(
         protocol,
         registered,
         || {
-            let mut command = options.command();
-            if service.is_some() {
+            let mut command =
+                if let (Some(executable), Some(credential)) = (&relay_executable, &options.relay) {
+                    relay::command(executable, credential)
+                } else {
+                    options.command()
+                };
+            if service.is_some() && options.relay.is_none() {
                 // No terminal exists for a service to answer SSH authentication prompts.
                 // Existing keys, agents and host-key policy still decide access.
                 // Insert before the destination: OpenSSH parses options in order.
@@ -1393,8 +1652,12 @@ async fn connect(
     );
     let backend = tokio::select! {
         biased;
-        error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(error.into()); },
-        status = ssh.wait() => return Err(ssh_ended(status).into()),
+        error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(relay::failure(error)); },
+        status = ssh.wait() => {
+            let mut error = ssh_ended(status);
+            if options.relay.is_some() { error = incoming.after_relay_exit(error).await; }
+            return Err(relay::failure(error));
+        },
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
@@ -1431,22 +1694,34 @@ async fn connect(
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
-        status = ssh.wait() => Err(ssh_ended(status)),
+        status = ssh.wait() => {
+            let error = ssh_ended(status);
+            Err(if options.relay.is_some() { incoming.after_relay_exit(error).await } else { error })
+        },
         _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         result = timeout(Duration::from_secs(120), backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
     };
-    if let Err(error) = discovered.and_then(|_| incoming.ensure_open(&mut ssh)) {
+    let readiness = discovered.and_then(|_| incoming.ensure_open(&mut ssh));
+    if let Err(mut error) = readiness {
+        if options.relay.is_some() && ssh.try_wait()?.is_some() {
+            error = incoming.after_relay_exit(error).await;
+        }
         let _ = ssh.start_kill();
         backend.shutdown().await;
         incoming.stop().await;
         let _ = ssh.wait().await;
-        return Err(error.into());
+        return Err(relay::failure(error));
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
     let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":"shell"});
     if let Some(title) = &metadata.title {
         output["title"] = json!(title);
+    }
+    if let Some(credential) = &options.relay {
+        output["transport"] = json!("https");
+        output["temporary"] = json!(options.temporary);
+        output["expires_at"] = json!(credential.expires_at);
     }
     if github_auth {
         output["auth"] = json!("github");
@@ -1532,7 +1807,11 @@ async fn connect(
                     if reload::is_reload(&operation) {
                         let _controller = render::controller_started(id, controller.as_ref());
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
-                        let response = backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth));
+                        let response = if options.temporary {
+                            Err("temporary joined sessions keep their credential only in memory; stop this session and create a new invitation to restart it".into())
+                        } else {
+                            backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
+                        };
                         let accepted = response.is_ok();
                         let sent = timeout(Duration::from_secs(10), async {
                             let mut writer = writer.lock().await;
@@ -1595,7 +1874,7 @@ async fn connect(
                     });
                 }
                 Some(Ok(None)) | None => break Ok(()),
-                Some(Ok(Some(Frame::Reject {message}))) => break Err(message.into()),
+                Some(Ok(Some(Frame::Reject {message}))) => break Err(relay::failure(message)),
                 Some(Ok(Some(_))) => break Err("unexpected SSH protocol frame".into()),
                 Some(Err(error)) => break Err(error.into()),
             },
@@ -1668,7 +1947,11 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(explicit.destination.as_deref(), Some("user@example.test"));
-        assert!(Options::parse(["--name", "dev"].map(OsString::from)).is_err());
+        let account = Options::parse(["--name", "dev"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert!(account.destination.is_none() && account.server.is_none());
+        assert_eq!(account.name.as_deref(), Some("dev"));
     }
 
     #[test]
@@ -1812,6 +2095,88 @@ mod tests {
         for flag in ["--daemon", "--watchdog"] {
             assert!(Options::parse([flag, "--list-tools"].map(OsString::from)).is_err());
         }
+    }
+
+    #[test]
+    fn account_connections_preserve_origin_and_never_store_credentials_in_session_args() {
+        let options = Options::parse(
+            [
+                "--server",
+                "https://example.com",
+                "--name",
+                "account-device",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(options.destination.is_none());
+        assert_eq!(options.server.as_deref(), Some("https://example.com"));
+        let spec = options.session_spec().unwrap();
+        validate_session_spec(&spec).unwrap();
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|pair| pair == ["--server", "https://example.com"])
+        );
+        assert!(
+            !spec
+                .args
+                .iter()
+                .any(|arg| arg.contains("token") || arg.contains("credential"))
+        );
+        for args in [
+            vec!["--server", "https://example.com", "ssh-host"],
+            vec!["--server", "https://example.com", "-i", "key"],
+            vec!["--server", "https://example.com", "-p", "22"],
+            vec!["--server", "https://example.com", "--list-tools"],
+            vec!["--server", "http://example.com"],
+        ] {
+            assert!(Options::parse(args.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_ssh_identity_and_new_long_identity_option_remain_equivalent() {
+        for flag in ["-i", "--identity"] {
+            let options = Options::parse([flag, "/tmp/key", "ssh-host"].map(OsString::from))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                options.identity.as_deref(),
+                Some(std::ffi::OsStr::new("/tmp/key"))
+            );
+            assert!(options.server.is_none());
+        }
+    }
+
+    #[test]
+    fn temporary_join_removes_invitation_from_reusable_connection_options() {
+        let mut args = [
+            "join",
+            "--server",
+            "https://example.com",
+            "--token",
+            "ci_1234567890",
+            "--name",
+            "temporary",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        let join = join_request(&mut args).unwrap().unwrap();
+        assert_eq!(join.token, "ci_1234567890");
+        assert_eq!(join.server, "https://example.com");
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--token" || arg == "ci_1234567890")
+        );
+        let options = Options::parse(args).unwrap().unwrap();
+        assert_eq!(options.name.as_deref(), Some("temporary"));
+        let mut invalid = ["join", "--token", "first", "--token", "second"]
+            .map(OsString::from)
+            .to_vec();
+        assert!(join_request(&mut invalid).is_err());
     }
 
     #[test]

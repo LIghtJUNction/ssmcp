@@ -42,3 +42,9 @@ pub mod rsync;
 pub mod runtime;
 
 pub mod observability;
+
+#[cfg(target_os = "linux")]
+pub mod device;
+
+#[cfg(target_os = "linux")]
+pub mod client_downloads;
