@@ -216,8 +216,17 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         username: "gh-1".into(),
         github_login: "<script>".into(),
         keys: vec![],
+        handle: None,
+        banned: false,
+        rate_limit_bps: None,
     };
-    let html = view::home(Some(&a), Some("csrf"), true, false);
+    let html = view::home(
+        Some(&a),
+        Some("csrf"),
+        true,
+        false,
+        "https://ssmcp.lmm.best",
+    );
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
     for step in [
@@ -227,7 +236,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         "Connection",
         "https://ssmcp.lmm.best/mcp",
         "Create",
-        "gh-1",
+        "ssmcp myname@ssmcp.lmm.best",
     ] {
         assert!(html.contains(step), "missing {step}");
     }
