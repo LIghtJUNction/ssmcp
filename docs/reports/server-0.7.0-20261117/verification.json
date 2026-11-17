@@ -1,0 +1,73 @@
+{
+  "schema": "ssmcp.server-deployment.v1",
+  "status": "verified",
+  "version": "0.7.0",
+  "source_commit": "6d2802b8533314fb8a43a962d88d74165c026b0c",
+  "package": "ssmcp-git 0.7.0.r171.g6d2802b-1",
+  "server_checks": {
+    "audit_directory_private": true,
+    "configurations_preserved": true,
+    "gateway_portal_public_health": true,
+    "installed_binary_matches_candidate": true,
+    "installed_runner_matches_candidate": true,
+    "installed_version": true,
+    "known_override_ssmcp-portal.service.d": true,
+    "known_override_ssmcpd.service.d": true,
+    "management_socket_private": true,
+    "matching_stage": true,
+    "package_digest": true,
+    "package_identity": true,
+    "production_lease": true,
+    "public_homepage": true,
+    "public_oauth_metadata": true,
+    "public_setup_requires_grant": true,
+    "public_unauthenticated_mcp_rejected": true,
+    "rollback_ready": true,
+    "running_new_binary": true,
+    "services_stable": true
+  },
+  "services": {
+    "ssmcp-portal.service": {
+      "active": "active",
+      "executable": "/usr/bin/ssmcpd",
+      "pid": 3550578,
+      "restarts": 0,
+      "sha256": "1fdaf72fc647a29c7574534965ef75998cb8478450d5324d6c192898ae28bafb",
+      "version": "ssmcpd 0.7.0"
+    },
+    "ssmcpd.service": {
+      "active": "active",
+      "executable": "/usr/bin/ssmcpd",
+      "pid": 3550563,
+      "restarts": 0,
+      "sha256": "1fdaf72fc647a29c7574534965ef75998cb8478450d5324d6c192898ae28bafb",
+      "version": "ssmcpd 0.7.0"
+    }
+  },
+  "binary_sha256": "1fdaf72fc647a29c7574534965ef75998cb8478450d5324d6c192898ae28bafb",
+  "runner_sha256": "260b06a3d82b848ac6f00c9c979560b681c1033704a1343064bfa45882846a58",
+  "server_started_unix": 1794926801.835041,
+  "server_finished_unix": 1794926809.9481394,
+  "reconnection": {
+    "schema": "ssmcp.deployment-verification.v1",
+    "status": "verified",
+    "source_commit": "6d2802b8533314fb8a43a962d88d74165c026b0c",
+    "version": "0.7.0",
+    "verified_at_utc": "2026-11-17 14:52:39 UTC",
+    "authenticated_mcp_list": true,
+    "online_clients_before": 6,
+    "online_clients_after": 6,
+    "all_pre_restart_clients_restored": true,
+    "all_reconnected_client_ids_changed": true,
+    "native_command": {
+      "client_name": "ssmcp-manager",
+      "marker": "SSMCP_RECONNECT_OK",
+      "exit_code": 0
+    },
+    "server_status": "deployed",
+    "package": "ssmcp-git 0.7.0.r171.g6d2802b-1",
+    "rollback_checkpoint": "/var/lib/ssmcp-rollouts/6d2802b8533314fb8a43a962d88d74165c026b0c-0.7.0-final",
+    "temporary_files_cleaned": true
+  },
+  "rollback_checkpoint": "/var/lib/ssmcp-rollouts/6d2802b8533314fb8a43a962d88d74165c026b0c-0.7.0-final"
+}
