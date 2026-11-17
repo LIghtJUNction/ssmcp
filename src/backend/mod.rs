@@ -317,7 +317,11 @@ impl Backend {
     pub async fn dispatch(&self, tool: &RegisteredTool, arguments: Value) -> Result<Value, String> {
         self.registry.validate(tool)?;
         match tool.provider {
-            Provider::Ui => crate::client::interface::call(&tool.native_name, arguments, &self.terminal).await.map(result),
+            Provider::Ui => {
+                crate::client::interface::call(&tool.native_name, arguments, &self.terminal)
+                    .await
+                    .map(result)
+            }
             Provider::Terminal => self
                 .terminal
                 .call(&tool.native_name, arguments)

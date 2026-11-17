@@ -77,6 +77,7 @@ struct LoginCode {
 
 pub struct Session {
     pub(crate) collaboration: crate::collab::Hub,
+    pub(crate) steering: crate::steering::Queue,
     login: Mutex<Option<LoginCode>>,
     // Resolved provider subject IDs are immutable for this SSH connection.
     allow: Vec<Identity>,
@@ -113,7 +114,7 @@ impl Session {
     }
 
     fn supports_code_context(&self) -> bool {
-        self.wire_version >= wire::VERSION
+        self.wire_version >= wire::CODE_VERSION
     }
 
     /// Called only after the HTTP caller rechecks its current token and ACL.
@@ -125,6 +126,17 @@ impl Session {
         self.reports
             .try_send(completion)
             .map_err(|_| "code audit completion queue unavailable".into())
+    }
+
+    fn steering_command(
+        &self,
+        command: wire::SteeringCommand,
+    ) -> Result<wire::SteeringSnapshot, String> {
+        if !self.is_alive() || self.wire_version < wire::VERSION {
+            return Err("the local composer requires wire protocol version 7".into());
+        }
+        self.steering
+            .command(self.client_id(), self.collaboration.presence()?, command)
     }
 
     pub async fn call(&self, operation: Operation) -> CallResult {
@@ -233,7 +245,7 @@ impl Session {
             return Err("client disconnected or busy; tool was not dispatched".into());
         }
         if carries_source && let Some(run) = audit_run {
-            run.dispatched(self.client_id());
+            run.native_dispatched(self.client_id(), audit_tool.as_deref());
         }
         let started = std::time::Instant::now();
         let result = match timeout(duration, response).await {
@@ -377,6 +389,7 @@ impl Broker {
         let id = generate_secret().unwrap();
         let session = Arc::new(Session {
             collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -519,7 +532,10 @@ impl Broker {
                 metadata,
             }) if matches!(
                 version,
-                wire::VERSION | wire::CONTROLLER_VERSION | wire::LEGACY_VERSION
+                wire::VERSION
+                    | wire::CODE_VERSION
+                    | wire::CONTROLLER_VERSION
+                    | wire::LEGACY_VERSION
             ) =>
             {
                 (version, mode, metadata)
@@ -528,7 +544,7 @@ impl Broker {
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5 and v6)".into(),
+                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5, v6 and v7)".into(),
                     },
                 )
                 .await?;
@@ -604,6 +620,7 @@ impl Broker {
         let (reports, mut code_reports) = mpsc::channel::<wire::CodeCompletion>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
             collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -744,6 +761,10 @@ impl Broker {
                     }
                 };
                 match received {
+                    Some(Frame::Steering { id, command }) => {
+                        let result = session.steering_command(command);
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::SteeringReply { id, result })).await??;
+                    }
                     Some(Frame::Reply {id, result}) => {
                         if let Some((reply, _, reload)) = pending.remove(&id) {
                             if reload && result.as_ref().is_ok_and(crate::client::reload::accepted) {
@@ -919,6 +940,7 @@ mod tests {
         for version in [
             wire::LEGACY_VERSION,
             wire::CONTROLLER_VERSION,
+            wire::CODE_VERSION,
             wire::VERSION,
         ] {
             let broker = Arc::new(Broker::new("https://example.test".into()));
@@ -985,7 +1007,7 @@ mod tests {
             } else {
                 assert_eq!(controller.unwrap().model.as_deref(), Some("test-model"));
             }
-            if version == wire::VERSION {
+            if version >= wire::CODE_VERSION {
                 assert_eq!(code_context.unwrap().code, code);
                 assert_eq!(run.targets(), vec![reports.client_id().to_owned()]);
             } else {
@@ -1003,7 +1025,7 @@ mod tests {
             .unwrap();
             let result = request.await.unwrap();
             assert!(result.as_ref().unwrap()["ok"] == true);
-            if version == wire::VERSION {
+            if version >= wire::CODE_VERSION {
                 reports.report_code_mode(run.completion(&result)).unwrap();
                 let Some(Frame::CodeModeFinished { completion }) =
                     timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
@@ -1087,6 +1109,7 @@ mod tests {
         for version in [
             wire::LEGACY_VERSION,
             wire::CONTROLLER_VERSION,
+            wire::CODE_VERSION,
             wire::VERSION,
         ] {
             let (sender, mut receiver) = mpsc::channel(4);
@@ -1171,6 +1194,7 @@ mod tests {
         let (reports, _reports_rx) = mpsc::channel(1);
         Arc::new(Session {
             collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),

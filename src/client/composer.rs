@@ -1,0 +1,688 @@
+//! Local draft editing and rendering; submission and queue ownership live outside this module.
+use super::ui::Ui;
+use std::collections::VecDeque;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+pub(super) const MAX_DRAFT_BYTES: usize = 16 * 1024;
+const MAX_HISTORY_ENTRIES: usize = 64;
+const MAX_HISTORY_BYTES: usize = 256 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SlashCommand {
+    pub name: &'static str,
+    pub description: &'static str,
+}
+
+pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        name: "/help",
+        description: "Show keyboard shortcuts and commands",
+    },
+    SlashCommand {
+        name: "/reload",
+        description: "Restart this client session; preserve pending requests",
+    },
+    SlashCommand {
+        name: "/agents",
+        description: "Show agents",
+    },
+    SlashCommand {
+        name: "/queue",
+        description: "Show queued requests",
+    },
+    SlashCommand {
+        name: "/audit",
+        description: "Open code audit",
+    },
+    SlashCommand {
+        name: "/logs",
+        description: "Show logs",
+    },
+    SlashCommand {
+        name: "/filter",
+        description: "Filter logs by text",
+    },
+    SlashCommand {
+        name: "/theme",
+        description: "Choose a display theme",
+    },
+    SlashCommand {
+        name: "/sidebar",
+        description: "Toggle sidebar",
+    },
+    SlashCommand {
+        name: "/clear",
+        description: "Clear visible logs",
+    },
+];
+
+/// Cursor coordinates are zero based and relative to `lines`.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ComposerRows {
+    pub lines: Vec<String>,
+    pub cursor_row: u16,
+    pub cursor_col: u16,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct Composer {
+    text: String,
+    cursor: usize,
+    preferred_column: Option<usize>,
+    history: VecDeque<String>,
+    history_bytes: usize,
+    history_index: Option<usize>,
+    saved_draft: Option<(String, usize)>,
+}
+
+impl Composer {
+    pub(super) fn text(&self) -> &str {
+        &self.text
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+    /// A byte offset that always falls on a UTF-8 boundary.
+    pub(super) fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Reject oversized edits as a whole so a submitted request is never silently truncated.
+    pub(super) fn insert(&mut self, text: &str) -> bool {
+        if text.len() > MAX_DRAFT_BYTES.saturating_sub(self.text.len()) {
+            return false;
+        }
+        if !text.is_empty() {
+            self.detach_history();
+            self.text.insert_str(self.cursor, text);
+            self.cursor += text.len();
+        }
+        true
+    }
+
+    /// Normalize pasted line endings while preserving other request content.
+    pub(super) fn paste(&mut self, text: &str) -> bool {
+        if !text.contains('\r') {
+            return self.insert(text);
+        }
+        let remaining = MAX_DRAFT_BYTES.saturating_sub(self.text.len());
+        let mut normalized = String::with_capacity(text.len().min(remaining));
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            let ch = if ch == '\r' {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                '\n'
+            } else {
+                ch
+            };
+            if normalized.len() + ch.len_utf8() > remaining {
+                return false;
+            }
+            normalized.push(ch);
+        }
+        self.insert(&normalized)
+    }
+
+    pub(super) fn set_text(&mut self, text: &str) -> bool {
+        if text.len() > MAX_DRAFT_BYTES {
+            return false;
+        }
+        self.detach_history();
+        self.text.clear();
+        self.text.push_str(text);
+        self.cursor = self.text.len();
+        true
+    }
+
+    /// Draining a draft does not mark it as submitted; call `remember` after queue acceptance.
+    pub(super) fn take_text(&mut self) -> String {
+        self.detach_history();
+        self.cursor = 0;
+        std::mem::take(&mut self.text)
+    }
+
+    pub(super) fn backspace(&mut self) -> bool {
+        let Some((start, _)) = self.text[..self.cursor].char_indices().next_back() else {
+            return false;
+        };
+        self.remove(start, self.cursor)
+    }
+
+    pub(super) fn delete(&mut self) -> bool {
+        let Some(ch) = self.text[self.cursor..].chars().next() else {
+            return false;
+        };
+        self.remove(self.cursor, self.cursor + ch.len_utf8())
+    }
+
+    pub(super) fn left(&mut self) -> bool {
+        self.preferred_column = None;
+        let Some((cursor, _)) = self.text[..self.cursor].char_indices().next_back() else {
+            return false;
+        };
+        self.cursor = cursor;
+        true
+    }
+
+    pub(super) fn right(&mut self) -> bool {
+        self.preferred_column = None;
+        let Some(ch) = self.text[self.cursor..].chars().next() else {
+            return false;
+        };
+        self.cursor += ch.len_utf8();
+        true
+    }
+
+    /// Home / Ctrl+A move to the beginning of the current logical line.
+    pub(super) fn home(&mut self) -> bool {
+        self.preferred_column = None;
+        let cursor = self.line_start();
+        let changed = cursor != self.cursor;
+        self.cursor = cursor;
+        changed
+    }
+
+    /// End / Ctrl+E move to the end of the current logical line.
+    pub(super) fn end(&mut self) -> bool {
+        self.preferred_column = None;
+        let cursor = self.line_end();
+        let changed = cursor != self.cursor;
+        self.cursor = cursor;
+        changed
+    }
+
+    /// Move vertically within a multiline draft; return false at its first line.
+    pub(super) fn up(&mut self) -> bool {
+        let start = self.line_start();
+        if start == 0 {
+            return false;
+        }
+        let column = self
+            .preferred_column
+            .unwrap_or_else(|| display_column(&self.text[start..self.cursor]));
+        let end = start - 1;
+        let previous_start = self.text[..end].rfind('\n').map_or(0, |offset| offset + 1);
+        self.cursor = previous_start + offset_at_column(&self.text[previous_start..end], column);
+        self.preferred_column = Some(column);
+        true
+    }
+
+    /// Move vertically within a multiline draft; return false at its last line.
+    pub(super) fn down(&mut self) -> bool {
+        let end = self.line_end();
+        if end == self.text.len() {
+            return false;
+        }
+        let column = self
+            .preferred_column
+            .unwrap_or_else(|| display_column(&self.text[self.line_start()..self.cursor]));
+        let next_start = end + 1;
+        let next_end = self.text[next_start..]
+            .find('\n')
+            .map_or(self.text.len(), |offset| next_start + offset);
+        self.cursor = next_start + offset_at_column(&self.text[next_start..next_end], column);
+        self.preferred_column = Some(column);
+        true
+    }
+
+    /// Ctrl+U removes the part of this logical line before the cursor.
+    pub(super) fn clear_before(&mut self) -> bool {
+        self.remove(self.line_start(), self.cursor)
+    }
+
+    /// Ctrl+K removes to the end of the line, or joins the next line at its end.
+    pub(super) fn clear_after(&mut self) -> bool {
+        let end = self.line_end();
+        let end = if end == self.cursor && end < self.text.len() {
+            end + 1
+        } else {
+            end
+        };
+        self.remove(self.cursor, end)
+    }
+
+    /// Ctrl+W removes preceding whitespace and then the preceding word.
+    pub(super) fn delete_word(&mut self) -> bool {
+        let mut start = self.cursor;
+        let mut word = false;
+        for (offset, ch) in self.text[..self.cursor].char_indices().rev() {
+            if word && ch.is_whitespace() {
+                break;
+            }
+            word |= !ch.is_whitespace();
+            start = offset;
+        }
+        self.remove(start, self.cursor)
+    }
+
+    /// Keep accepted requests locally, without changing the current draft.
+    pub(super) fn remember(&mut self, text: &str) {
+        if text.trim().is_empty() || text.len() > MAX_DRAFT_BYTES {
+            return;
+        }
+        self.history_index = None;
+        self.saved_draft = None;
+        if self.history.back().is_some_and(|previous| previous == text) {
+            return;
+        }
+        self.history.push_back(text.to_owned());
+        self.history_bytes += text.len();
+        while self.history.len() > MAX_HISTORY_ENTRIES || self.history_bytes > MAX_HISTORY_BYTES {
+            if let Some(removed) = self.history.pop_front() {
+                self.history_bytes -= removed.len();
+            }
+        }
+    }
+
+    pub(super) fn history_previous(&mut self) -> bool {
+        let index = match self.history_index {
+            Some(0) => return false,
+            Some(index) => index - 1,
+            None => {
+                let Some(index) = self.history.len().checked_sub(1) else {
+                    return false;
+                };
+                self.saved_draft = Some((self.text.clone(), self.cursor));
+                index
+            }
+        };
+        self.text.clone_from(&self.history[index]);
+        self.cursor = self.text.len();
+        self.preferred_column = None;
+        self.history_index = Some(index);
+        true
+    }
+
+    pub(super) fn history_next(&mut self) -> bool {
+        let Some(index) = self.history_index else {
+            return false;
+        };
+        if index + 1 < self.history.len() {
+            self.history_index = Some(index + 1);
+            self.text.clone_from(&self.history[index + 1]);
+            self.cursor = self.text.len();
+        } else {
+            self.history_index = None;
+            let (text, cursor) = self.saved_draft.take().unwrap_or_default();
+            self.text = text;
+            self.cursor = cursor;
+        }
+        self.preferred_column = None;
+        true
+    }
+
+    pub(super) fn suggestions(&self) -> Vec<&'static SlashCommand> {
+        if self.text.contains('\n') {
+            return Vec::new();
+        }
+        let prefix = self.text.trim_start();
+        if !prefix.starts_with('/') || prefix.chars().any(char::is_whitespace) {
+            return Vec::new();
+        }
+        SLASH_COMMANDS
+            .iter()
+            .filter(|command| command.name.starts_with(prefix))
+            .collect()
+    }
+
+    /// Render only safe text and validated UI colors. The viewport always contains the cursor.
+    pub(super) fn rows(&self, width: u16, max_height: u16, ui: &Ui) -> ComposerRows {
+        if width == 0 || max_height == 0 {
+            return ComposerRows::default();
+        }
+        let width = usize::from(width);
+        let height = usize::from(max_height);
+        let prefix_width = if width >= 4 {
+            2
+        } else if width == 3 {
+            1
+        } else {
+            0
+        };
+        // Leave a trailing cursor cell instead of depending on terminal autowrap.
+        let content_width = width.saturating_sub(prefix_width + 1).max(1);
+        let (wrapped, cursor_row, cursor_col) = self.wrapped(content_width);
+        let suggestions = self.suggestions();
+        let hint_count = suggestions
+            .len()
+            .min(3)
+            .min(height.saturating_sub(wrapped.len().min(height)));
+        let visible_height = height - hint_count;
+        let first = cursor_row
+            .saturating_sub(visible_height / 2)
+            .min(wrapped.len().saturating_sub(visible_height));
+        let last = (first + visible_height).min(wrapped.len());
+        let mut lines = Vec::with_capacity(last - first + hint_count);
+        for (index, body) in wrapped[first..last].iter().enumerate() {
+            let prompt = match (prefix_width, index) {
+                (2, 0) => "❯ ",
+                (1, 0) => "❯",
+                (2, _) => "  ",
+                (1, _) => " ",
+                _ => "",
+            };
+            let (body, tone) = if self.text.is_empty() {
+                ("Message the agent · / commands", "muted")
+            } else {
+                (body.as_str(), "foreground")
+            };
+            lines.push(paint_row(&[(prompt, "accent"), (body, tone)], width, ui));
+        }
+        for command in suggestions.into_iter().take(hint_count) {
+            lines.push(paint_row(
+                &[
+                    ("  ", "muted"),
+                    (command.name, "accent"),
+                    ("  ", "muted"),
+                    (command.description, "muted"),
+                ],
+                width,
+                ui,
+            ));
+        }
+        ComposerRows {
+            lines,
+            cursor_row: (cursor_row - first) as u16,
+            cursor_col: (prefix_width + cursor_col).min(width - 1) as u16,
+        }
+    }
+
+    fn remove(&mut self, start: usize, end: usize) -> bool {
+        if start == end {
+            return false;
+        }
+        self.detach_history();
+        self.text.replace_range(start..end, "");
+        self.cursor = start;
+        true
+    }
+
+    fn detach_history(&mut self) {
+        self.history_index = None;
+        self.saved_draft = None;
+        self.preferred_column = None;
+    }
+
+    fn line_start(&self) -> usize {
+        self.text[..self.cursor]
+            .rfind('\n')
+            .map_or(0, |offset| offset + 1)
+    }
+    fn line_end(&self) -> usize {
+        self.text[self.cursor..]
+            .find('\n')
+            .map_or(self.text.len(), |offset| self.cursor + offset)
+    }
+
+    fn wrapped(&self, width: usize) -> (Vec<String>, usize, usize) {
+        let mut lines = vec![String::new()];
+        let mut used = 0;
+        let mut cursor = (0, 0);
+        for (offset, ch) in self.text.char_indices() {
+            if ch == '\n' {
+                if offset == self.cursor {
+                    cursor = (lines.len() - 1, lines.last().unwrap().width());
+                }
+                lines.push(String::new());
+                used = 0;
+                continue;
+            }
+            let visible = if ch == '\t' {
+                " ".repeat(4 - used % 4)
+            } else {
+                safe_char(ch).to_string()
+            };
+            for (index, mut ch) in visible.chars().enumerate() {
+                let mut cells = ch.width().unwrap_or(0);
+                if cells > width {
+                    ch = '�';
+                    cells = 1;
+                }
+                if used + cells > width {
+                    lines.push(String::new());
+                    used = 0;
+                }
+                if index == 0 && offset == self.cursor {
+                    cursor = (lines.len() - 1, lines.last().unwrap().width());
+                }
+                if cells == 0 && used == 0 {
+                    lines.last_mut().unwrap().push('◌');
+                    used = 1;
+                }
+                lines.last_mut().unwrap().push(ch);
+                used += cells;
+            }
+        }
+        if self.cursor == self.text.len() {
+            cursor = (lines.len() - 1, lines.last().unwrap().width());
+        }
+        (lines, cursor.0, cursor.1)
+    }
+}
+
+fn safe_char(ch: char) -> char {
+    if ch.is_control()
+        || matches!(ch, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    {
+        '�'
+    } else {
+        ch
+    }
+}
+
+fn cells(ch: char, column: usize) -> usize {
+    if ch == '\t' {
+        4 - column % 4
+    } else {
+        safe_char(ch).width().unwrap_or(0)
+    }
+}
+
+fn display_column(text: &str) -> usize {
+    text.chars()
+        .fold(0, |column, ch| column + cells(ch, column))
+}
+
+fn offset_at_column(text: &str, target: usize) -> usize {
+    let mut column = 0;
+    let mut result = 0;
+    for (offset, ch) in text.char_indices() {
+        let width = cells(ch, column);
+        if column + width > target {
+            break;
+        }
+        column += width;
+        result = offset + ch.len_utf8();
+    }
+    result
+}
+
+fn paint_row(parts: &[(&str, &str)], width: usize, ui: &Ui) -> String {
+    let mut result = String::new();
+    let mut used = 0;
+    if ui.color {
+        result.push_str(&format!(
+            "\x1b[{};{}m",
+            ui.background(),
+            ui.color("foreground")
+        ));
+    }
+    for (part, tone) in parts {
+        if ui.color {
+            result.push_str(&format!("\x1b[{}m", ui.color(tone)));
+        }
+        let mut text = String::new();
+        let mut part_width = 0;
+        for ch in part.chars().map(safe_char) {
+            let cells = ch.width().unwrap_or(0);
+            if used + part_width + cells > width {
+                break;
+            }
+            text.push(ch);
+            part_width += cells;
+        }
+        used += text.width();
+        result.push_str(&text);
+        if used >= width {
+            break;
+        }
+    }
+    result.push_str(&" ".repeat(width.saturating_sub(used)));
+    if ui.color {
+        result.push_str("\x1b[0m");
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editing_preserves_utf8_and_never_silently_truncates_a_request() {
+        let mut draft = Composer::default();
+        assert!(draft.insert("修复 café"));
+        assert!(draft.left());
+        assert!(draft.backspace());
+        assert_eq!(draft.text(), "修复 caé");
+        assert!(draft.delete());
+        assert_eq!(draft.text(), "修复 ca");
+        assert!(draft.home());
+        assert!(draft.right());
+        assert_eq!(draft.cursor(), "修".len());
+        assert!(draft.insert("好"));
+        assert_eq!(draft.text(), "修好复 ca");
+        assert!(draft.set_text(&"界".repeat(MAX_DRAFT_BYTES / 3)));
+        let before = draft.text().to_owned();
+        assert!(!draft.insert("界"));
+        assert!(!draft.set_text(&"x".repeat(MAX_DRAFT_BYTES + 1)));
+        assert_eq!(draft.text(), before);
+    }
+
+    #[test]
+    fn multiline_movement_retains_display_column_and_line_editing_is_local() {
+        let mut draft = Composer::default();
+        assert!(draft.paste("abcde\r\nx\r界界z"));
+        assert_eq!(draft.text(), "abcde\nx\n界界z");
+        assert!(draft.up());
+        assert_eq!(&draft.text()[..draft.cursor()], "abcde\nx");
+        assert!(draft.up());
+        assert_eq!(draft.cursor(), 5);
+        assert!(!draft.up());
+        assert!(draft.down());
+        assert!(draft.down());
+        assert_eq!(draft.cursor(), draft.text().len());
+        assert!(draft.clear_before());
+        assert_eq!(draft.text(), "abcde\nx\n");
+        assert!(draft.up());
+        assert!(draft.clear_after());
+        assert_eq!(draft.text(), "abcde\n\n");
+        assert!(draft.clear_after());
+        assert_eq!(draft.text(), "abcde\n");
+        assert!(draft.set_text("keep 前一个词   "));
+        assert!(draft.delete_word());
+        assert_eq!(draft.text(), "keep ");
+    }
+
+    #[test]
+    fn history_restores_draft_and_cursor_without_mutating_accepted_requests() {
+        let mut draft = Composer::default();
+        draft.remember("first");
+        draft.remember("second");
+        draft.remember("second");
+        assert_eq!(draft.history.len(), 2);
+        draft.set_text("unfinished");
+        draft.left();
+        let cursor = draft.cursor();
+        assert!(draft.history_previous());
+        assert_eq!(draft.text(), "second");
+        assert!(draft.history_previous());
+        assert_eq!(draft.text(), "first");
+        assert!(!draft.history_previous());
+        assert!(draft.history_next());
+        assert!(draft.history_next());
+        assert_eq!(draft.text(), "unfinished");
+        assert_eq!(draft.cursor(), cursor);
+        assert!(draft.history_previous());
+        draft.insert(" revised");
+        assert!(draft.history_previous());
+        assert_eq!(draft.text(), "second");
+        assert!(draft.history_next());
+        assert_eq!(draft.text(), "second revised");
+        assert_eq!(draft.take_text(), "second revised");
+        assert!(draft.is_empty());
+        assert_eq!(draft.history.len(), 2);
+    }
+
+    #[test]
+    fn history_is_bounded_by_both_entries_and_bytes() {
+        let mut draft = Composer::default();
+        for index in 0..100 {
+            draft.remember(&format!("request {index}"));
+        }
+        assert_eq!(draft.history.len(), MAX_HISTORY_ENTRIES);
+        assert_eq!(draft.history.front().unwrap(), "request 36");
+        for index in 0..100 {
+            draft.remember(&format!("{index}{}", "界".repeat(5000)));
+        }
+        assert!(draft.history_bytes <= MAX_HISTORY_BYTES);
+        assert!(draft.history.len() < MAX_HISTORY_ENTRIES);
+        assert_eq!(
+            draft.history_bytes,
+            draft.history.iter().map(String::len).sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn rendering_keeps_cursor_visible_and_never_emits_pasted_controls() {
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let mut draft = Composer::default();
+        draft.set_text("界e\u{301}\t\x1b]0;injected\x07\u{202e}\nnext\nlast");
+        for width in [1, 2, 3, 4, 12, 40] {
+            let rendered = draft.rows(width, 2, &ui);
+            assert!(!rendered.lines.is_empty());
+            assert!(rendered.lines.len() <= 2);
+            assert!(usize::from(rendered.cursor_row) < rendered.lines.len());
+            assert!(rendered.cursor_col < width);
+            for row in rendered.lines {
+                assert_eq!(row.width(), usize::from(width), "{row:?}");
+                assert!(!row.chars().any(char::is_control));
+                assert!(!row.contains('\u{202e}'));
+            }
+        }
+        draft.home();
+        draft.up();
+        draft.up();
+        let rendered = draft.rows(12, 2, &ui);
+        assert!(rendered.lines[0].starts_with("❯ "));
+        assert_eq!(rendered.cursor_row, 0);
+        assert!(draft.rows(0, 2, &ui).lines.is_empty());
+        assert!(draft.rows(12, 0, &ui).lines.is_empty());
+    }
+
+    #[test]
+    fn slash_suggestions_are_local_and_stop_when_arguments_begin() {
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let mut draft = Composer::default();
+        draft.set_text("/");
+        assert_eq!(draft.suggestions().len(), SLASH_COMMANDS.len());
+        draft.set_text("/re");
+        assert_eq!(draft.suggestions(), vec![&SLASH_COMMANDS[1]]);
+        let rendered = draft.rows(60, 4, &ui);
+        assert_eq!(rendered.lines.len(), 2);
+        assert!(rendered.lines[1].contains("/reload"));
+        assert_eq!(rendered.cursor_col, 5);
+        for value in ["/filter cargo", "/unknown", "message /reload", "/\n"] {
+            draft.set_text(value);
+            assert!(draft.suggestions().is_empty());
+        }
+    }
+}

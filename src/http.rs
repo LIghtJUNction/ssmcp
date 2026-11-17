@@ -145,9 +145,12 @@ async fn endpoint(
                 .await,
             )
         }
-        Ok(Action::Code(arguments)) => crate::code_mode::tool_result(
-            execute(broker, user, authorization, access_token, arguments).await,
-        ),
+        Ok(Action::Code(arguments)) => {
+            match execute(broker, user, authorization, access_token, arguments).await {
+                Ok(response) => response,
+                Err(error) => crate::code_mode::tool_result(Err(error)),
+            }
+        }
         Ok(Action::ResourceList(cursor)) => {
             let result = resources::list(&broker, &user, &authorization, cursor.as_deref()).await;
             if broker.authenticate(&user, &access_token).await.is_none() {
@@ -442,6 +445,16 @@ struct CodeArguments {
     controller: Option<ControllerInput>,
     #[serde(skip)]
     controller_context: Option<Controller>,
+    #[serde(default)]
+    agent: Option<AgentInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentInput {
+    client_id: String,
+    id: String,
+    token: String,
 }
 
 /// A claim is intentionally separate from wire attribution. A caller cannot
@@ -670,7 +683,7 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
         "code_mode" => {
             let mut arguments: CodeArguments = serde_json::from_value(arguments).map_err(|_| {
                 Fault::params(
-                    "code_mode requires code and accepts timeout_ms and controller {name, model}",
+                    "code_mode requires code and accepts timeout_ms, controller {name, model}, and agent {client_id,id,token}",
                 )
             })?;
             arguments.controller_context = match &arguments.controller {
@@ -709,6 +722,7 @@ fn client_info(session: &Session) -> Value {
 fn usage() -> Value {
     json!({
         "language":"javascript",
+        "user_messages":"The local composer queues user requirements for the next authorized code_mode response operating on that client. UI-only ssmcp.ui.* calls and tool discovery remain observational unless this run explicitly binds an agent. Requirements appear in structuredContent.user_messages and a separate USER REQUIREMENTS text block. Bind an existing participant with await collab.bind(clientId,{agent_id,token}) at the start of every run, or pass agent:{client_id,id,token}, for exact-agent delivery. Controller names never authenticate members. Inclusion in a response does not claim the message was read or executed.",
         "collab":"Join a live client session with collab.join(clientId,{name,role?,capabilities?}), save agent_id and private token, discover collab.list(clientId), send JSON with collab.send(clientId,{agent_id,token,to,payload,idempotency_key?}); to:'*' broadcasts to current peers. collab.receive returns messages and next_cursor; collab.ack(clientId,{agent_id,token,through:next_cursor}) releases processed messages. update renews presence; leave ends participation. All helpers take clientId first. Direct public collab accepts action and client_id and supports wait_ms<=30000; JS receive is limited to 1000ms. Read ssmcp://collaboration for limits and delivery semantics.",
         "controller":"Pass optional controller:{name,model} to code_mode to attribute each native call. Values are caller-reported, not verified model identity. Without a model declaration, the terminal shows Model unknown. clientInfo supplies only the current request's application name.",
         "clients":"Online client metadata snapshot; select a client by id from list.",
@@ -772,7 +786,14 @@ struct CodeRunReport {
 impl CodeRunReport {
     async fn finish(&mut self, result: &Result<Value, String>) {
         let completion = self.run.completion(result);
-        deliver_code_completion(&self.broker, &self.user, &self.access_token, &self.run, completion).await;
+        deliver_code_completion(
+            &self.broker,
+            &self.user,
+            &self.access_token,
+            &self.run,
+            completion,
+        )
+        .await;
         self.delivered = true;
     }
 }
@@ -792,7 +813,12 @@ impl Drop for CodeRunReport {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        let (broker, user, access_token, run) = (self.broker.clone(), self.user.clone(), self.access_token.clone(), self.run.clone());
+        let (broker, user, access_token, run) = (
+            self.broker.clone(),
+            self.user.clone(),
+            self.access_token.clone(),
+            self.run.clone(),
+        );
         runtime.spawn(async move {
             deliver_code_completion(&broker, &user, &access_token, &run, completion).await;
         });
@@ -837,9 +863,22 @@ async fn execute(
         .unwrap_or_default();
     let controller = arguments.controller_context.clone();
     let audit_run = code_mode::AuditRun::new(&arguments.code, controller.clone())?;
+    if let Some(agent) = &arguments.agent {
+        let session = broker
+            .client(&user, &authorization, &agent.client_id)
+            .await?;
+        let owner = crate::bridge::owner(&user, &authorization)?;
+        session
+            .collaboration
+            .bind(&owner, &agent.id, &agent.token)?;
+        audit_run.bind(&agent.client_id, &owner, &agent.id, &agent.token)?;
+    }
     let mut audit_report = CodeRunReport {
-        broker: broker.clone(), user: user.clone(), access_token: access_token.clone(),
-        run: audit_run.clone(), delivered: false,
+        broker: broker.clone(),
+        user: user.clone(),
+        access_token: access_token.clone(),
+        run: audit_run.clone(),
+        delivered: false,
     };
     let host_run = audit_run.clone();
     let host: Host = Arc::new(move |request| {
@@ -917,7 +956,94 @@ async fn execute(
     });
     let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
     audit_report.finish(&result).await;
-    result
+    let response = crate::code_mode::tool_result(result);
+    let messages = claim_user_messages(&audit_report).await;
+    Ok(append_user_messages(response, messages))
+}
+
+async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
+    let mut eligible = Vec::new();
+    // Finish all asynchronous authorization lookups before claiming anything.
+    // Cancellation while validating leaves every pending record editable.
+    for client_id in report.run.steering_targets() {
+        let Some(authorization) = report
+            .broker
+            .authenticate(&report.user, &report.access_token)
+            .await
+        else {
+            return Vec::new();
+        };
+        let Ok(session) = report
+            .broker
+            .client(&report.user, &authorization, &client_id)
+            .await
+        else {
+            continue;
+        };
+        let agent_id = if let Some(binding) = report.run.binding(&client_id) {
+            let Ok(owner) = crate::bridge::owner(&report.user, &authorization) else {
+                continue;
+            };
+            if owner != binding.owner
+                || session
+                    .collaboration
+                    .bind(&owner, &binding.agent_id, &binding.token)
+                    .is_err()
+            {
+                continue;
+            }
+            Some(binding.agent_id)
+        } else {
+            None
+        };
+        eligible.push((session, agent_id));
+    }
+    let mut messages = Vec::new();
+    let mut bytes = 0usize;
+    for (session, agent_id) in eligible {
+        if !session.is_alive() {
+            continue;
+        }
+        let claimed = session.steering.claim(
+            session.client_id(),
+            &report.run.context.run_id,
+            agent_id.as_deref(),
+            crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len()),
+            crate::steering::MAX_DELIVERY_BYTES.saturating_sub(bytes),
+        );
+        bytes += claimed
+            .iter()
+            .map(|message| message.to_string().len())
+            .sum::<usize>();
+        messages.extend(claimed);
+    }
+    messages
+}
+
+fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
+    if messages.is_empty() {
+        return response;
+    }
+    let mut text = String::from(
+        "USER REQUIREMENTS — sent from the client's local composer\nThese are new user messages accompanying this tool response. They are separate from the tool's execution output.\n",
+    );
+    for message in &messages {
+        text.push_str(&format!(
+            "\n[Client {} · message {} · revision {}]\n{}\n",
+            message["client_id"].as_str().unwrap_or(""),
+            message["message_id"].as_str().unwrap_or(""),
+            message["revision"],
+            message["text"].as_str().unwrap_or("")
+        ));
+    }
+    if !response["structuredContent"].is_object() {
+        response["structuredContent"] = json!({});
+    }
+    response["structuredContent"]["user_messages"] = json!(messages);
+    if let Some(content) = response["content"].as_array_mut() {
+        content.push(json!({"type":"text","text":text}));
+    }
+    response
 }
 
 fn tool_result(result: Result<Value, String>) -> Value {
@@ -940,10 +1066,11 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools.search(clientId,{query,limit,include_schemas,cursor}) for bounded discovery, await tools(clientId, cursor?) for original native schema pages, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates; collab.join/list/update/send/receive/ack/leave for session agents. Use the direct collab tool for receive waits over 1 second. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All registered native provider actions run through call over the client's outbound HTTPS/WebSocket or SSH connection. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools.search(clientId,{query,limit,include_schemas,cursor}) for bounded discovery, await tools(clientId, cursor?) for original native schema pages, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates; collab.join/list/update/send/receive/ack/leave for session agents; collab.bind(clientId,{agent_id,token}) authenticates this run for exact-agent user messages. Check structuredContent.user_messages and the USER REQUIREMENTS text block on each code_mode response for local user instructions. Use the direct collab tool for receive waits over 1 second. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All registered native provider actions run through call over the client's outbound HTTPS/WebSocket or SSH connection. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
+                "agent":{"type":"object","description":"Optional authenticated collaboration member for this run. Alternatively call collab.bind(clientId,{agent_id,token}) first in JavaScript. Enables exact-agent user messages; controller names never select recipients.","properties":{"client_id":{"type":"string","minLength":1,"maxLength":64},"id":{"type":"string","minLength":1,"maxLength":64},"token":{"type":"string","minLength":64,"maxLength":64}},"required":["client_id","id","token"],"additionalProperties":false},
                 "controller":{
                     "type":"object",
                     "description":"Optional caller-reported application and model shown on each controlled terminal. Display attribution only; cannot prove model identity. Omit unknown fields.",
@@ -1115,10 +1242,46 @@ impl Fault {
 mod tests {
     use super::*;
 
+    #[test]
+    fn user_requirements_preserve_native_success_and_error_envelopes() {
+        let messages = vec![
+            json!({"client_id":"room","message_id":"m","revision":2,"text":"Run the focused tests.","source":"client_user"}),
+        ];
+        let native = json!({"result":{"isError":false,"structuredContent":{"answer":42}},"logs":["native log"]});
+        let before = crate::code_mode::tool_result(Ok(native.clone()));
+        let after = append_user_messages(before.clone(), messages.clone());
+        assert_eq!(after["structuredContent"]["result"], native["result"]);
+        assert_eq!(after["structuredContent"]["logs"], native["logs"]);
+        assert_eq!(after["content"][0], before["content"][0]);
+        assert_eq!(after["structuredContent"]["user_messages"], json!(messages));
+        assert!(
+            after["content"].as_array().unwrap().last().unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .contains("USER REQUIREMENTS")
+        );
+        let failure = append_user_messages(
+            crate::code_mode::tool_result(Err("native execution failed".into())),
+            messages,
+        );
+        assert_eq!(failure["isError"], true);
+        assert!(
+            failure["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("native execution failed")
+        );
+        assert!(failure["structuredContent"]["user_messages"].is_array());
+    }
+
     #[tokio::test]
     async fn cancelled_code_run_reports_failure_after_successful_native_reply() {
         use crate::wire::{self, Frame};
-        use tokio::{io::BufReader, net::{TcpListener, UnixStream}, time::timeout};
+        use tokio::{
+            io::BufReader,
+            net::{TcpListener, UnixStream},
+            time::timeout,
+        };
 
         let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1129,37 +1292,109 @@ mod tests {
         let attachment = tokio::spawn(broker.clone().attach(server));
         let (reader, mut writer) = client.into_split();
         let mut reader = BufReader::new(reader);
-        wire::write_frame(&mut writer, &Frame::Hello {
-            version: wire::VERSION, mode: wire::Mode::Shell,
-            metadata: wire::ClientMetadata { name: "cancel-audit".into(), title: None, cwd: "/tmp".into(), hostname: "fixture".into(), allow: Vec::new() },
-        }).await.unwrap();
-        let Some(Frame::Ready { url, login_code, client_id, .. }) = wire::read_frame(&mut reader).await.unwrap() else { panic!("missing ready frame"); };
+        wire::write_frame(
+            &mut writer,
+            &Frame::Hello {
+                version: wire::VERSION,
+                mode: wire::Mode::Shell,
+                metadata: wire::ClientMetadata {
+                    name: "cancel-audit".into(),
+                    title: None,
+                    cwd: "/tmp".into(),
+                    hostname: "fixture".into(),
+                    allow: Vec::new(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::Ready {
+            url,
+            login_code,
+            client_id,
+            ..
+        }) = wire::read_frame(&mut reader).await.unwrap()
+        else {
+            panic!("missing ready frame");
+        };
         let user = url.rsplit('/').next().unwrap().to_owned();
         let access_token = cancellation_test_token(&base, &url, &login_code).await;
         let authorization = broker.authenticate(&user, &access_token).await.unwrap();
-        let session = broker.client(&user, &authorization, &client_id).await.unwrap();
-        let run = code_mode::AuditRun::new("await call('one', 'fixture.echo', {});\n// wait for more work\n", None).unwrap();
-        let report = CodeRunReport { broker, user, access_token, run: run.clone(), delivered: false };
+        let session = broker
+            .client(&user, &authorization, &client_id)
+            .await
+            .unwrap();
+        let run = code_mode::AuditRun::new(
+            "await call('one', 'fixture.echo', {});\n// wait for more work\n",
+            None,
+        )
+        .unwrap();
+        let report = CodeRunReport {
+            broker,
+            user,
+            access_token,
+            run: run.clone(),
+            delivered: false,
+        };
         let (native_done, replied) = tokio::sync::oneshot::channel();
         let request_run = run.clone();
         let request = tokio::spawn(async move {
             let _report = report;
-            let result = code_mode::AUDIT_RUN.scope(request_run, session.call_with_authorization(
-                Operation::CallTool { name: "fixture.echo".into(), arguments: json!({}) }, None, &authorization,
-            )).await.unwrap();
+            let result = code_mode::AUDIT_RUN
+                .scope(
+                    request_run,
+                    session.call_with_authorization(
+                        Operation::CallTool {
+                            name: "fixture.echo".into(),
+                            arguments: json!({}),
+                        },
+                        None,
+                        &authorization,
+                    ),
+                )
+                .await
+                .unwrap();
             assert_eq!(result["ok"], true);
             native_done.send(()).unwrap();
             // The native operation succeeded; the enclosing HTTP orchestration
             // has not completed and must never inherit that native success.
             std::future::pending::<()>().await;
         });
-        let Some(Frame::Call { id, code_context: Some(context), .. }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader)).await.unwrap().unwrap() else { panic!("missing native call/source"); };
+        let Some(Frame::Call {
+            id,
+            code_context: Some(context),
+            ..
+        }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("missing native call/source");
+        };
         assert_eq!(context.run_id, run.context.run_id);
-        wire::write_frame(&mut writer, &Frame::Reply { id, result: Ok(json!({"ok":true})) }).await.unwrap();
-        timeout(Duration::from_secs(2), replied).await.unwrap().unwrap();
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(json!({"ok":true})),
+            },
+        )
+        .await
+        .unwrap();
+        timeout(Duration::from_secs(2), replied)
+            .await
+            .unwrap()
+            .unwrap();
         request.abort();
         assert!(request.await.unwrap_err().is_cancelled());
-        let Some(Frame::CodeModeFinished { completion }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader)).await.unwrap().unwrap() else { panic!("cancelled run did not reach its target"); };
+        let Some(Frame::CodeModeFinished { completion }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("cancelled run did not reach its target");
+        };
         assert_eq!(completion.run_id, context.run_id);
         assert!(!completion.success);
         assert_eq!(completion.status, "failed");
@@ -1168,7 +1403,11 @@ mod tests {
         assert_eq!(run.completed(), Some(completion));
         drop(reader);
         drop(writer);
-        timeout(Duration::from_secs(2), attachment).await.unwrap().unwrap().unwrap();
+        timeout(Duration::from_secs(2), attachment)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         http_server.abort();
     }
 
@@ -1176,28 +1415,86 @@ mod tests {
         const CALLBACK: &str = "http://127.0.0.1:37401/callback";
         const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
-        let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(5)).build().unwrap();
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
         let response = http.post(format!("{base}/oauth/register"))
             .json(&json!({"client_name":"audit cancellation test","redirect_uris":[CALLBACK],"token_endpoint_auth_method":"none","grant_types":["authorization_code"]})).send().await.unwrap();
         assert_eq!(response.status().as_u16(), 201);
         let registration: Value = response.json().await.unwrap();
         let client_id = registration["client_id"].as_str().unwrap();
-        let response = http.get(format!("{base}/oauth/authorize"))
-            .query(&[("response_type","code"),("client_id",client_id),("redirect_uri",CALLBACK),("resource",resource),("scope","mcp"),("state","audit-cancel"),("code_challenge",CHALLENGE),("code_challenge_method","S256")]).send().await.unwrap();
+        let response = http
+            .get(format!("{base}/oauth/authorize"))
+            .query(&[
+                ("response_type", "code"),
+                ("client_id", client_id),
+                ("redirect_uri", CALLBACK),
+                ("resource", resource),
+                ("scope", "mcp"),
+                ("state", "audit-cancel"),
+                ("code_challenge", CHALLENGE),
+                ("code_challenge_method", "S256"),
+            ])
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status().as_u16(), 200);
-        let cookie = response.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned();
+        let cookie = response.headers()[reqwest::header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
         let html = response.text().await.unwrap();
-        let transaction = html.split_once("name=transaction_id value=\"").unwrap().1.split('"').next().unwrap();
-        let response = http.post(format!("{base}/oauth/authorize"))
-            .header(reqwest::header::COOKIE, cookie).header(reqwest::header::ORIGIN, "https://ssmcp.example")
-            .form(&[("transaction_id",transaction),("login_code",login_code)]).send().await.unwrap();
+        let transaction = html
+            .split_once("name=transaction_id value=\"")
+            .unwrap()
+            .1
+            .split('"')
+            .next()
+            .unwrap();
+        let response = http
+            .post(format!("{base}/oauth/authorize"))
+            .header(reqwest::header::COOKIE, cookie)
+            .header(reqwest::header::ORIGIN, "https://ssmcp.example")
+            .form(&[("transaction_id", transaction), ("login_code", login_code)])
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status().as_u16(), 303);
-        let callback = reqwest::Url::parse(response.headers()[reqwest::header::LOCATION].to_str().unwrap()).unwrap();
-        let code = callback.query_pairs().find(|(name,_)| name == "code").unwrap().1.into_owned();
-        let response = http.post(format!("{base}/oauth/token"))
-            .form(&[("grant_type","authorization_code"),("client_id",client_id),("code",&code),("code_verifier",VERIFIER),("redirect_uri",CALLBACK),("resource",resource)]).send().await.unwrap();
+        let callback = reqwest::Url::parse(
+            response.headers()[reqwest::header::LOCATION]
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let code = callback
+            .query_pairs()
+            .find(|(name, _)| name == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        let response = http
+            .post(format!("{base}/oauth/token"))
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", client_id),
+                ("code", &code),
+                ("code_verifier", VERIFIER),
+                ("redirect_uri", CALLBACK),
+                ("resource", resource),
+            ])
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status().as_u16(), 200);
-        response.json::<Value>().await.unwrap()["access_token"].as_str().unwrap().to_owned()
+        response.json::<Value>().await.unwrap()["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     }
 
     #[test]

@@ -1,5 +1,8 @@
 //! Display primitives shared by the built-in terminal and alternate frontends.
-use super::{render, terminal, ui::Ui};
+use super::{
+    render, terminal,
+    ui::{Theme, Ui},
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -12,18 +15,33 @@ use std::{
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static UPDATES: Mutex<()> = Mutex::new(());
 static RESIZES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static PENDING_THEME: Mutex<Option<Theme>> = Mutex::new(None);
+
+/// Safe while a terminal frame/input lock is held: only enqueue the desired theme.
+pub(super) fn queue_theme(theme: Theme) {
+    *PENDING_THEME
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(theme);
+}
 
 pub(crate) fn initialize_path(explicit: Option<&Path>) {
     let path = Ui::config_path(explicit).map(|path| {
-        if path.is_absolute() { path } else {
+        if path.is_absolute() {
+            path
+        } else {
             std::env::current_dir().unwrap_or_default().join(path)
         }
     });
-    *CONFIG_PATH.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner()) = path;
+    *CONFIG_PATH
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = path;
 }
 
 fn config_path() -> Option<PathBuf> {
-    CONFIG_PATH.get().and_then(|path| path.lock().unwrap_or_else(|e| e.into_inner()).clone())
+    CONFIG_PATH
+        .get()
+        .and_then(|path| path.lock().unwrap_or_else(|e| e.into_inner()).clone())
         .or_else(|| Ui::config_path(None))
 }
 
@@ -34,6 +52,7 @@ pub(crate) fn get() -> Value {
         "config_path": config_path(),
         "display": terminal::snapshot(),
         "activity": render::snapshot(),
+        "steering": super::steering::snapshot(),
     })
 }
 
@@ -45,7 +64,10 @@ fn document_with_ui(ui: &Ui, existing: Option<&str>) -> Result<String, String> {
         toml::Table::new()
     };
     ui.validate()?;
-    document.insert("ui".into(), toml::Value::try_from(ui).map_err(|_| "cannot serialize UI configuration")?);
+    document.insert(
+        "ui".into(),
+        toml::Value::try_from(ui).map_err(|_| "cannot serialize UI configuration")?,
+    );
     toml::to_string_pretty(&document).map_err(|_| "cannot serialize client configuration".into())
 }
 
@@ -57,34 +79,51 @@ fn save(ui: &Ui) -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return Err("cannot read UI configuration".into()),
     };
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent).map_err(|_| "cannot create UI configuration directory")?;
     let data = document_with_ui(ui, existing.as_deref())?;
     let temporary = parent.join(format!(".ssmcp-ui-{}.tmp", std::process::id()));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)] {
+    #[cfg(unix)]
+    {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(&temporary).map_err(|_| "cannot create temporary UI configuration")?;
+    let mut file = options
+        .open(&temporary)
+        .map_err(|_| "cannot create temporary UI configuration")?;
     let result = (|| {
-        file.write_all(data.as_bytes()).map_err(|_| "cannot write UI configuration")?;
-        file.sync_all().map_err(|_| "cannot flush UI configuration")?;
+        file.write_all(data.as_bytes())
+            .map_err(|_| "cannot write UI configuration")?;
+        file.sync_all()
+            .map_err(|_| "cannot flush UI configuration")?;
         drop(file);
         std::fs::rename(&temporary, &path).map_err(|_| "cannot replace UI configuration")
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
     result.map_err(str::to_owned)
 }
 
 fn apply(ui: Ui, persist: bool) -> Result<Option<(u16, u16)>, String> {
     ui.validate()?;
     let current = render::current_ui();
-    if terminal::active() && (ui.dashboard != current.dashboard || ui.log_format != current.log_format) {
-        return Err("dashboard and log_format are startup options; change the file and restart the client".into());
+    if terminal::active()
+        && (ui.dashboard != current.dashboard || ui.log_format != current.log_format)
+    {
+        return Err(
+            "dashboard and log_format are startup options; change the file and restart the client"
+                .into(),
+        );
     }
-    if persist { save(&ui)?; }
+    if persist {
+        save(&ui)?;
+    }
     render::apply_ui(ui.clone());
     Ok(terminal::apply_ui(&ui))
 }
@@ -96,13 +135,24 @@ fn action_inner(action: &str) -> Result<Option<(u16, u16)>, String> {
         "sidebar.toggle" => ui.sidebar = !ui.sidebar,
         "theme.next" => ui.theme = ui.theme.next(),
         "reload" => ui = Ui::load(config_path().as_deref())?,
+        "client.reload" => {
+            super::steering::request_reload()?;
+            return Ok(None);
+        }
         "save" => {
             save(&ui)?;
             terminal::notice("Appearance saved · F5 Reload");
             return Ok(None);
         }
-        "logs.clear" => { terminal::clear_logs(); return Ok(None); }
-        "audit.up"|"audit.down"|"audit.open"|"audit.back"|"logs.page-up"|"logs.page-down"|"logs.end" => { terminal::browse(action)?; return Ok(None); }
+        "logs.clear" => {
+            terminal::clear_logs();
+            return Ok(None);
+        }
+        "audit.up" | "audit.down" | "audit.open" | "audit.back" | "logs.page-up"
+        | "logs.page-down" | "logs.end" => {
+            terminal::browse(action)?;
+            return Ok(None);
+        }
         _ => return Err("unknown UI action; inspect ssmcp.ui.action for supported actions".into()),
     }
     apply(ui, false)
@@ -111,21 +161,53 @@ fn action_inner(action: &str) -> Result<Option<(u16, u16)>, String> {
 /// Called outside the terminal lock by each keyboard frontend.
 pub(crate) fn apply_pending() -> Result<Option<(u16, u16)>, String> {
     let actions = terminal::take_actions();
-    if actions.is_empty() { return Ok(None); }
+    let theme = PENDING_THEME
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    if actions.is_empty() && theme.is_none() {
+        return Ok(None);
+    }
     let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
     let mut geometry = None;
     for action in actions {
         match action_inner(action) {
-            Ok(size) => { if size.is_some() { geometry = size; } }
-            Err(error) => { terminal::notice(&error); }
+            Ok(size) => {
+                if size.is_some() {
+                    geometry = size;
+                }
+            }
+            Err(error) => {
+                terminal::notice(&error);
+            }
+        }
+    }
+    if let Some(theme) = theme {
+        let mut ui = render::current_ui();
+        ui.theme = theme;
+        match apply(ui, false) {
+            Ok(Some(size)) => geometry = Some(size),
+            Ok(None) => {}
+            Err(error) => terminal::notice(&error),
         }
     }
     Ok(geometry)
 }
 
 const ACTIONS: &[&str] = &[
-    "layout.next", "sidebar.toggle", "theme.next", "reload", "save", "logs.clear",
-    "audit.up", "audit.down", "audit.open", "audit.back", "logs.page-up", "logs.page-down", "logs.end",
+    "layout.next",
+    "sidebar.toggle",
+    "theme.next",
+    "reload",
+    "save",
+    "logs.clear",
+    "audit.up",
+    "audit.down",
+    "audit.open",
+    "audit.back",
+    "logs.page-up",
+    "logs.page-down",
+    "logs.end",
 ];
 
 fn validate_get(arguments: &Value) -> Result<(), String> {
@@ -141,7 +223,11 @@ fn parse_set(current: &Ui, arguments: Value) -> Result<(Ui, bool), String> {
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Set { patch: Value, #[serde(default)] persist: bool }
+    struct Set {
+        patch: Value,
+        #[serde(default)]
+        persist: bool,
+    }
     let args: Set = serde_json::from_value(arguments)
         .map_err(|_| "expected patch object and optional persist boolean")?;
     if args.patch.get("dashboard").is_some() || args.patch.get("log_format").is_some() {
@@ -160,7 +246,9 @@ struct Filter {
 }
 
 // Missing optional keys are allowed; explicit null does not satisfy the schema.
-fn present_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+fn present_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
     String::deserialize(deserializer).map(Some)
 }
 
@@ -170,10 +258,18 @@ fn parse_filter(arguments: Value) -> Result<Filter, String> {
     }
     let args: Filter = serde_json::from_value(arguments)
         .map_err(|_| "expected optional text and level strings")?;
-    if args.text.as_ref().is_some_and(|text| text.len() > 256 || text.chars().any(char::is_control)) {
+    if args
+        .text
+        .as_ref()
+        .is_some_and(|text| text.len() > 256 || text.chars().any(char::is_control))
+    {
         return Err("log filter must contain at most 256 bytes of plain text".into());
     }
-    if args.level.as_deref().is_some_and(|level| !matches!(level, "all" | "commands" | "errors")) {
+    if args
+        .level
+        .as_deref()
+        .is_some_and(|level| !matches!(level, "all" | "commands" | "errors"))
+    {
         return Err("log level must be all, commands, or errors".into());
     }
     Ok(args)
@@ -185,18 +281,107 @@ fn parse_action(arguments: Value) -> Result<String, String> {
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Action { action: String }
-    let args: Action = serde_json::from_value(arguments).map_err(|_| "expected one UI action string")?;
+    struct Action {
+        action: String,
+    }
+    let args: Action =
+        serde_json::from_value(arguments).map_err(|_| "expected one UI action string")?;
     if !ACTIONS.contains(&args.action.as_str()) {
         return Err("unknown UI action; inspect ssmcp.ui.action for supported actions".into());
     }
     Ok(args.action)
 }
 
-pub(crate) async fn call(name: &str, arguments: Value, terminals: &crate::terminals::Terminals) -> Result<Value, String> {
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum QueueRequest {
+    Get {},
+    Submit {
+        text: String,
+        #[serde(default, deserialize_with = "present_string")]
+        target: Option<String>,
+    },
+    Takeback {
+        id: String,
+    },
+    Edit {
+        id: String,
+        text: String,
+        #[serde(default, deserialize_with = "present_string")]
+        target: Option<String>,
+    },
+    Cancel {
+        id: String,
+    },
+    Retarget {
+        id: String,
+        #[serde(default, deserialize_with = "present_string")]
+        target: Option<String>,
+    },
+}
+
+fn parse_queue(arguments: Value) -> Result<QueueRequest, String> {
+    if !arguments.is_object() {
+        return Err("expected a request queue action object".into());
+    }
+    let request: QueueRequest =
+        serde_json::from_value(arguments).map_err(|_| "invalid request queue arguments")?;
+    let (id, text, target) = match &request {
+        QueueRequest::Get {} => (None, None, None),
+        QueueRequest::Submit { text, target } => (None, Some(text), target.as_ref()),
+        QueueRequest::Takeback { id } | QueueRequest::Cancel { id } => (Some(id), None, None),
+        QueueRequest::Edit { id, text, target } => (Some(id), Some(text), target.as_ref()),
+        QueueRequest::Retarget { id, target } => (Some(id), None, target.as_ref()),
+    };
+    for value in [id, target].into_iter().flatten() {
+        if value.is_empty()
+            || value.len() > 128
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        {
+            return Err("request and recipient identifiers must be 1..=128 ASCII letters, digits, underscores or hyphens".into());
+        }
+    }
+    if let Some(text) = text {
+        super::steering::validate_text(text)?;
+    }
+    Ok(request)
+}
+
+fn queue_call(request: QueueRequest) -> Result<Value, String> {
+    let id = match request {
+        QueueRequest::Get {} => return Ok(super::steering::snapshot()),
+        QueueRequest::Submit { text, target } => super::steering::submit(&text, target.as_deref())?,
+        QueueRequest::Takeback { id } => {
+            super::steering::take_back(&id)?;
+            id
+        }
+        QueueRequest::Edit { id, text, target } => {
+            super::steering::publish_edit(&id, &text, target.as_deref())?;
+            id
+        }
+        QueueRequest::Cancel { id } => {
+            super::steering::cancel(&id)?;
+            id
+        }
+        QueueRequest::Retarget { id, target } => {
+            super::steering::retarget(&id, target.as_deref())?;
+            id
+        }
+    };
+    Ok(json!({"requested":true,"id":id,"queue":super::steering::snapshot()}))
+}
+
+pub(crate) async fn call(
+    name: &str,
+    arguments: Value,
+    terminals: &crate::terminals::Terminals,
+) -> Result<Value, String> {
     let size = {
         let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
         match name {
+            "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
             "ssmcp.ui.get" => {
                 validate_get(&arguments)?;
                 return Ok(get());
@@ -207,35 +392,39 @@ pub(crate) async fn call(name: &str, arguments: Value, terminals: &crate::termin
             }
             "ssmcp.ui.filter" => {
                 let args = parse_filter(arguments)?;
-                terminal::filter_logs(args.text.as_deref(),args.level.as_deref())?;
+                terminal::filter_logs(args.text.as_deref(), args.level.as_deref())?;
                 None
             }
-            "ssmcp.ui.action" => {
-                action_inner(&parse_action(arguments)?)?
-            }
+            "ssmcp.ui.action" => action_inner(&parse_action(arguments)?)?,
             _ => return Err("unknown UI primitive".into()),
         }
     };
-    if size.is_some() { sync_terminal_sizes(terminals).await?; }
+    if size.is_some() {
+        sync_terminal_sizes(terminals).await?;
+    }
     Ok(get())
 }
 
 /// Serialize PTY updates and read the latest geometry after acquiring the slot.
-pub(crate) async fn sync_terminal_sizes(terminals: &crate::terminals::Terminals) -> Result<(), String> {
+pub(crate) async fn sync_terminal_sizes(
+    terminals: &crate::terminals::Terminals,
+) -> Result<(), String> {
     let _resize = RESIZES.lock().await;
     let (rows, cols) = terminal::pane_size(0, 0);
-    if rows > 0 && cols > 0 { terminals.resize_all(rows, cols).await?; }
+    if rows > 0 && cols > 0 {
+        terminals.resize_all(rows, cols).await?;
+    }
     Ok(())
 }
 
 pub(crate) fn tools() -> Vec<Value> {
     let color = json!({"type":"string","description":"#RRGGBB, ANSI color name, default (terminal color), or empty (inherit theme)."});
     let properties = json!({
-        "theme":{"type":"string","enum":["minimal","codex-dark","nord","solarized","light"]},
-        "layout":{"type":"string","enum":["split","audit","logs"]},
+        "theme":{"type":"string","enum":["dark","minimal","codex-dark","nord","solarized","light"]},
+        "layout":{"type":"string","enum":["chat","split","audit","logs"]},
         "log_height_percent":{"type":"integer","minimum":10,"maximum":80},
         "sidebar":{"type":"boolean"}, "sidebar_width":{"type":"integer","minimum":20,"maximum":60},
-        "panels":{"type":"array","uniqueItems":true,"items":{"type":"string","enum":["controller","tasks","progress","git","history"]}},
+        "panels":{"type":"array","uniqueItems":true,"items":{"type":"string","enum":["agents","queue","controller","tasks","progress","git","history"]}},
         "hide_empty":{"type":"boolean"}, "color":{"type":"boolean"},
         "timestamps":{"type":"boolean"},"show_request_id":{"type":"boolean"},"show_raw_json":{"type":"boolean"},
         "max_inline_output":{"type":"integer","minimum":1,"maximum":10000},
@@ -246,11 +435,39 @@ pub(crate) fn tools() -> Vec<Value> {
         }}
     });
     vec![
+        queue_tool(),
         json!({"name":"ssmcp.ui.filter","description":"Filter the retained visible log history by case-insensitive text and all/commands/errors. Matching blocks keep their output. Does not alter audit events or running commands.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string","maxLength":256,"description":"Plain text, at most 256 UTF-8 bytes; empty clears the text filter."},"level":{"type":"string","enum":["all","commands","errors"]}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         json!({"name":"ssmcp.ui.get","description":"Read versioned display configuration, layout and sanitized controller/task/progress/Git state. Works with or without the built-in TUI. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
         json!({"name":"ssmcp.ui.set","description":"Validate and apply a partial display configuration immediately. Colors merge by key; panels replace the ordered list. Set persist:true to save to this client's UI config. Running jobs and terminal contents are retained.","inputSchema":{"type":"object","required":["patch"],"additionalProperties":false,"properties":{"patch":{"type":"object","properties":properties,"additionalProperties":false},"persist":{"type":"boolean","default":false}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
-        json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates the saved configuration before applying it; save persists current appearance. logs.clear clears only the visible log history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
+        json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
     ]
+}
+
+fn queue_tool() -> Value {
+    let identifier =
+        json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"});
+    let target = json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$","description":"next or an exact current agent ID. submit defaults to next; edit keeps its current recipient; retarget defaults explicitly to next."});
+    let text = json!({"type":"string","minLength":1,"maxLength":16384,"description":"Request text: at most 16384 UTF-8 bytes. Newline and tab are the only allowed control characters."});
+    let variant = |action: &str, required: &[&str], mut properties: Value| {
+        properties["action"] = json!({"const":action});
+        let required = std::iter::once("action")
+            .chain(required.iter().copied())
+            .collect::<Vec<_>>();
+        json!({"type":"object","required":required,"additionalProperties":false,"properties":properties})
+    };
+    json!({
+        "name":"ssmcp.ui.queue",
+        "description":"Read or change this client's local request queue without starting a model. submit and edit request asynchronous publication; read state until acknowledged. takeback reclaims a still-queued request using its current revision before editing the same ID. Delivery can win that race; delivered requests cannot be edited or cancelled. A changed room or uncertain delivery requires explicit retarget, then edit to republish. Agents are the actual public collaboration roster. Requests are included at the next eligible tool response, not evidence that an agent has read or executed them.",
+        "inputSchema":{"type":"object","oneOf":[
+            variant("get", &[], json!({})),
+            variant("submit", &["text"], json!({"text":text,"target":target})),
+            variant("takeback", &["id"], json!({"id":identifier})),
+            variant("edit", &["id","text"], json!({"id":identifier,"text":text,"target":target})),
+            variant("cancel", &["id"], json!({"id":identifier})),
+            variant("retarget", &["id"], json!({"id":identifier,"target":target}))
+        ]},
+        "annotations":{"readOnlyHint":false,"destructiveHint":false}
+    })
 }
 
 #[cfg(test)]
@@ -262,18 +479,29 @@ mod tests {
         let existing = "[client]\nserver='https://relay.example.com'\n[ui]\ntheme='nord'\n";
         let text = document_with_ui(&Ui::default(), Some(existing)).unwrap();
         let doc: toml::Value = toml::from_str(&text).unwrap();
-        assert_eq!(doc["client"]["server"].as_str(), Some("https://relay.example.com"));
+        assert_eq!(
+            doc["client"]["server"].as_str(),
+            Some("https://relay.example.com")
+        );
         assert_eq!(Ui::parse(&text).unwrap(), Ui::default());
     }
 
     #[test]
     fn get_accepts_only_the_declared_empty_object() {
         assert!(validate_get(&json!({})).is_ok());
-        for value in [Value::Null, json!([]), json!(""), json!({"extra":"private-fixture"})] {
+        for value in [
+            Value::Null,
+            json!([]),
+            json!(""),
+            json!({"extra":"private-fixture"}),
+        ] {
             let error = validate_get(&value).unwrap_err();
             assert!(!error.contains("private-fixture"));
         }
-        let schema = tools().into_iter().find(|tool| tool["name"] == "ssmcp.ui.get").unwrap();
+        let schema = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "ssmcp.ui.get")
+            .unwrap();
         assert_eq!(schema["annotations"]["readOnlyHint"], true);
         assert_eq!(schema["inputSchema"]["additionalProperties"], false);
         assert_eq!(schema["inputSchema"]["properties"], json!({}));
@@ -281,22 +509,43 @@ mod tests {
 
     #[test]
     fn partial_set_is_validated_before_any_configuration_is_replaced() {
-        let current = Ui::default().merge_json(json!({"colors":{"accent":"#123456"},"sidebar_width":36})).unwrap();
+        let current = Ui::default()
+            .merge_json(json!({"colors":{"accent":"#123456"},"sidebar_width":36}))
+            .unwrap();
         let original = current.clone();
-        let (updated, persist) = parse_set(&current, json!({"patch":{"colors":{"background":"#010203"},"panels":["tasks","git"]}})).unwrap();
+        let (updated, persist) = parse_set(
+            &current,
+            json!({"patch":{"colors":{"background":"#010203"},"panels":["tasks","git"]}}),
+        )
+        .unwrap();
         assert!(!persist);
         assert_eq!(updated.colors.accent, "#123456");
         assert_eq!(updated.colors.background, "#010203");
         assert_eq!(updated.sidebar_width, 36);
-        assert_eq!(updated.panels, vec![super::super::ui::Panel::Tasks, super::super::ui::Panel::Git]);
+        assert_eq!(
+            updated.panels,
+            vec![super::super::ui::Panel::Tasks, super::super::ui::Panel::Git]
+        );
         assert_eq!(current, original);
-        assert!(parse_set(&current, json!({"patch":{},"persist":true})).unwrap().1);
+        assert!(
+            parse_set(&current, json!({"patch":{},"persist":true}))
+                .unwrap()
+                .1
+        );
         for value in [
-            Value::Null, json!([]), json!([{}, false]), json!({}), json!({"patch":null}), json!({"patch":[]}),
-            json!({"patch":{},"persist":null}), json!({"patch":{},"persist":"private-fixture"}),
-            json!({"patch":{},"extra":true}), json!({"patch":{"unknown":"private-fixture"}}),
+            Value::Null,
+            json!([]),
+            json!([{}, false]),
+            json!({}),
+            json!({"patch":null}),
+            json!({"patch":[]}),
+            json!({"patch":{},"persist":null}),
+            json!({"patch":{},"persist":"private-fixture"}),
+            json!({"patch":{},"extra":true}),
+            json!({"patch":{"unknown":"private-fixture"}}),
             json!({"patch":{"colors":{"accent":"\u{1b}[2Jprivate-fixture"}}}),
-            json!({"patch":{"sidebar_width":1}}), json!({"patch":{"panels":["git","git"]}}),
+            json!({"patch":{"sidebar_width":1}}),
+            json!({"patch":{"panels":["git","git"]}}),
         ] {
             let error = parse_set(&current, value).unwrap_err();
             assert!(!error.contains("private-fixture"));
@@ -308,14 +557,19 @@ mod tests {
     fn set_rejects_startup_options_even_if_their_values_are_unchanged() {
         let current = Ui::default();
         for patch in [
-            json!({"dashboard":true}), json!({"dashboard":false}),
-            json!({"log_format":"pretty"}), json!({"log_format":"jsonl"}),
+            json!({"dashboard":true}),
+            json!({"dashboard":false}),
+            json!({"log_format":"pretty"}),
+            json!({"log_format":"jsonl"}),
             json!({"colors":{"accent":"red"},"dashboard":null}),
         ] {
             let error = parse_set(&current, json!({"patch":patch})).unwrap_err();
             assert!(error.contains("startup options"));
         }
-        let schema = tools().into_iter().find(|tool| tool["name"] == "ssmcp.ui.set").unwrap();
+        let schema = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "ssmcp.ui.set")
+            .unwrap();
         let patch = &schema["inputSchema"]["properties"]["patch"];
         assert_eq!(patch["additionalProperties"], false);
         assert!(patch["properties"].get("dashboard").is_none());
@@ -324,7 +578,10 @@ mod tests {
 
     #[test]
     fn advertised_appearance_enums_and_ranges_match_runtime_validation() {
-        let schema = tools().into_iter().find(|tool| tool["name"] == "ssmcp.ui.set").unwrap();
+        let schema = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "ssmcp.ui.set")
+            .unwrap();
         let properties = &schema["inputSchema"]["properties"]["patch"]["properties"];
         let current = Ui::default();
         for name in ["theme", "layout"] {
@@ -334,13 +591,27 @@ mod tests {
                 assert!(parse_set(&current, json!({"patch":patch})).is_ok());
             }
         }
-        for name in ["log_height_percent", "sidebar_width", "max_inline_output", "activity_interval_secs"] {
+        for name in [
+            "log_height_percent",
+            "sidebar_width",
+            "max_inline_output",
+            "activity_interval_secs",
+        ] {
             let minimum = properties[name]["minimum"].as_i64().unwrap();
             let maximum = properties[name]["maximum"].as_i64().unwrap();
-            for (value, accepted) in [(minimum - 1, false), (minimum, true), (maximum, true), (maximum + 1, false)] {
+            for (value, accepted) in [
+                (minimum - 1, false),
+                (minimum, true),
+                (maximum, true),
+                (maximum + 1, false),
+            ] {
                 let mut patch = serde_json::Map::new();
                 patch.insert(name.into(), json!(value));
-                assert_eq!(parse_set(&current, json!({"patch":patch})).is_ok(), accepted, "{name}={value}");
+                assert_eq!(
+                    parse_set(&current, json!({"patch":patch})).is_ok(),
+                    accepted,
+                    "{name}={value}"
+                );
             }
         }
         assert_eq!(properties["colors"]["additionalProperties"], false);
@@ -355,9 +626,16 @@ mod tests {
         assert_eq!(clear.text.as_deref(), Some(""));
         assert!(parse_filter(json!({})).is_ok());
         for value in [
-            Value::Null, json!([]), json!(["cargo", "all"]), json!({"text":null}), json!({"level":null}),
-            json!({"text":123}), json!({"level":"debug"}), json!({"extra":"private-fixture"}),
-            json!({"text":"private-fixture\n"}), json!({"text":"\u{1b}[2Jprivate-fixture"}),
+            Value::Null,
+            json!([]),
+            json!(["cargo", "all"]),
+            json!({"text":null}),
+            json!({"level":null}),
+            json!({"text":123}),
+            json!({"level":"debug"}),
+            json!({"extra":"private-fixture"}),
+            json!({"text":"private-fixture\n"}),
+            json!({"text":"\u{1b}[2Jprivate-fixture"}),
             json!({"text":"界".repeat(86)}),
         ] {
             let error = parse_filter(value).err().expect("invalid filter accepted");
@@ -369,15 +647,69 @@ mod tests {
     fn action_decoder_validates_the_catalog_without_executing_actions() {
         let catalog = tools();
         let mut names = std::collections::BTreeSet::new();
-        for tool in &catalog { assert!(names.insert(tool["name"].as_str().unwrap())); }
-        assert_eq!(names.len(), 4);
-        let schema = catalog.iter().find(|tool| tool["name"] == "ssmcp.ui.action").unwrap();
-        for action in schema["inputSchema"]["properties"]["action"]["enum"].as_array().unwrap() {
-            assert_eq!(parse_action(json!({"action":action})).unwrap(), action.as_str().unwrap());
+        for tool in &catalog {
+            assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        for value in [Value::Null, json!([]), json!(["save"]), json!({}), json!({"action":null}), json!({"action":"private-fixture"}), json!({"action":"save","extra":true})] {
+        assert_eq!(names.len(), 5);
+        let schema = catalog
+            .iter()
+            .find(|tool| tool["name"] == "ssmcp.ui.action")
+            .unwrap();
+        for action in schema["inputSchema"]["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(
+                parse_action(json!({"action":action})).unwrap(),
+                action.as_str().unwrap()
+            );
+        }
+        for value in [
+            Value::Null,
+            json!([]),
+            json!(["save"]),
+            json!({}),
+            json!({"action":null}),
+            json!({"action":"private-fixture"}),
+            json!({"action":"save","extra":true}),
+        ] {
             let error = parse_action(value).unwrap_err();
             assert!(!error.contains("private-fixture"));
+        }
+    }
+
+    #[test]
+    fn queue_arguments_are_atomic_actions_with_bounded_text_and_exact_identifiers() {
+        for value in [
+            json!({"action":"get"}),
+            json!({"action":"submit","text":"改进客户端\n保持草稿"}),
+            json!({"action":"takeback","id":"request_1"}),
+            json!({"action":"edit","id":"request_1","text":"edited","target":"agent_1"}),
+            json!({"action":"cancel","id":"request_1"}),
+            json!({"action":"retarget","id":"request_1"}),
+        ] {
+            assert!(parse_queue(value).is_ok());
+        }
+        for value in [
+            json!([]),
+            json!({}),
+            json!({"action":"get","id":"private-fixture"}),
+            json!({"action":"submit","text":" "}),
+            json!({"action":"submit","text":"private-fixture\u{1b}"}),
+            json!({"action":"submit","text":"x".repeat(16385)}),
+            json!({"action":"submit","text":"valid","target":null}),
+            json!({"action":"edit","id":"request_1","text":"valid","target":"bad target"}),
+            json!({"action":"cancel","id":""}),
+            json!({"action":"retarget","id":1}),
+            json!({"action":"retarget","id":"request_1","target":null}),
+        ] {
+            let error = parse_queue(value).unwrap_err();
+            assert!(!error.contains("private-fixture"));
+        }
+        let schema = queue_tool();
+        assert_eq!(schema["inputSchema"]["oneOf"].as_array().unwrap().len(), 6);
+        for variant in schema["inputSchema"]["oneOf"].as_array().unwrap() {
+            assert_eq!(variant["additionalProperties"], false);
         }
     }
 }

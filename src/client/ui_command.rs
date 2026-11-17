@@ -25,12 +25,12 @@ Commands:
 
 Options:
   --ui-config FILE  Override SSMCP_UI_CONFIG and the default config path
-  --theme NAME     minimal, codex-dark, nord, solarized, or light
+  --theme NAME     dark (default), minimal, codex-dark, nord, solarized, or light
   --static         Render one preview frame to stdout, including ANSI colors
   --rows N         Static frame height, 1..1000 (default: 36)
   --cols N         Static frame width, 1..1000 (default: 120)
 
-Preview: F1 help; q, Ctrl-C, or Ctrl-] exits. Changes stay in memory unless saved.
+Preview: F1 help; Ctrl-C or Ctrl-] exits. Changes stay in memory unless saved.
 Default configuration: $XDG_CONFIG_HOME/ssmcp/config.toml, or ~/.config/ssmcp/config.toml.
 NO_COLOR disables preview colors, including in static output.
 "#;
@@ -58,7 +58,11 @@ impl Options {
             return Ok(None);
         }
         let mut args = args.into_iter();
-        let command = match args.next().and_then(|value| value.into_string().ok()).as_deref() {
+        let command = match args
+            .next()
+            .and_then(|value| value.into_string().ok())
+            .as_deref()
+        {
             Some("show") => Command::Show,
             Some("check") => Command::Check,
             Some("init") => Command::Init,
@@ -85,15 +89,22 @@ impl Options {
                 }
                 Some("--theme") if matches!(command, Command::Show | Command::Preview) => {
                     let theme = args.next().ok_or("--theme requires a name")?;
-                    options.theme = Some(Theme::parse(theme.to_str().ok_or("theme must be UTF-8")?)?);
+                    options.theme =
+                        Some(Theme::parse(theme.to_str().ok_or("theme must be UTF-8")?)?);
                 }
                 Some("--static") if command == Command::Preview => options.static_frame = true,
                 Some("--rows" | "--cols") if command == Command::Preview => {
                     let value = args.next().ok_or("preview dimensions require a value")?;
-                    let number = value.to_str().and_then(|value| value.parse::<u16>().ok())
+                    let number = value
+                        .to_str()
+                        .and_then(|value| value.parse::<u16>().ok())
                         .filter(|number| (1..=1000).contains(number))
                         .ok_or("preview dimensions must be in 1..=1000")?;
-                    if argument == "--rows" { options.rows = number; } else { options.cols = number; }
+                    if argument == "--rows" {
+                        options.rows = number;
+                    } else {
+                        options.cols = number;
+                    }
                     custom_dimensions = true;
                 }
                 _ => return Err("unsupported UI option; use ssmcp ui --help".into()),
@@ -112,7 +123,8 @@ pub(crate) async fn run(args: Vec<OsString>) -> crate::Result<()> {
         return Ok(());
     };
     if options.command == Command::Init {
-        let path = Ui::config_path(options.path.as_deref()).ok_or("cannot determine a UI config path; use --ui-config FILE")?;
+        let path = Ui::config_path(options.path.as_deref())
+            .ok_or("cannot determine a UI config path; use --ui-config FILE")?;
         initialize_file(&path)?;
         println!("Created UI configuration: {}", path.display());
         return Ok(());
@@ -125,7 +137,9 @@ pub(crate) async fn run(args: Vec<OsString>) -> crate::Result<()> {
         Command::Show => print!("{}", ui.to_toml()?),
         Command::Check => {
             ui.validate()?;
-            if let Some(path) = Ui::config_path(options.path.as_deref()).filter(|path| path.is_file()) {
+            if let Some(path) =
+                Ui::config_path(options.path.as_deref()).filter(|path| path.is_file())
+            {
                 println!("UI configuration valid: {}", path.display());
             } else {
                 println!("UI configuration valid: built-in defaults (no configuration file)");
@@ -162,7 +176,11 @@ fn initialize_file(path: &Path) -> crate::Result<()> {
     let mut file = match options.open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(format!("UI configuration already exists: {}; use ssmcp ui show or edit the file", path.display()).into());
+            return Err(format!(
+                "UI configuration already exists: {}; use ssmcp ui show or edit the file",
+                path.display()
+            )
+            .into());
         }
         Err(error) => return Err(error.into()),
     };
@@ -186,7 +204,7 @@ async fn preview(ui: Ui, explicit: Option<&Path>) -> crate::Result<()> {
         tokio::select! {
             event = keyboard.next() => match event? {
                 Event::Text(text) => {
-                    if text.contains('\u{3}') || text == "q" {
+                    if text.contains('\u{3}') {
                         break;
                     }
                     let _ = super::terminal::keyboard(&text);
@@ -220,14 +238,20 @@ mod tests {
 
     #[test]
     fn dimensions_are_bounded_and_only_apply_to_static_preview() {
-        let options = parse(&["preview", "--static", "--rows", "58", "--cols", "106", "--theme", "light"])
-            .unwrap().unwrap();
+        let options = parse(&[
+            "preview", "--static", "--rows", "58", "--cols", "106", "--theme", "light",
+        ])
+        .unwrap()
+        .unwrap();
         assert_eq!((options.rows, options.cols), (58, 106));
         assert_eq!(options.theme, Some(Theme::Light));
         for args in [
-            vec!["preview", "--rows", "58"], vec!["preview", "--static", "--rows", "0"],
-            vec!["preview", "--static", "--cols", "1001"], vec!["check", "--theme", "nord"],
-            vec!["init", "--static"], vec!["show", "--ui-config", ""],
+            vec!["preview", "--rows", "58"],
+            vec!["preview", "--static", "--rows", "0"],
+            vec!["preview", "--static", "--cols", "1001"],
+            vec!["check", "--theme", "nord"],
+            vec!["init", "--static"],
+            vec!["show", "--ui-config", ""],
         ] {
             assert!(parse(&args).is_err());
         }
@@ -235,8 +259,14 @@ mod tests {
 
     #[test]
     fn init_never_replaces_existing_configuration() {
-        let directory = std::env::temp_dir().join(format!("ssmcp-ui-init-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let directory = std::env::temp_dir().join(format!(
+            "ssmcp-ui-init-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let path = directory.join("config.toml");
         initialize_file(&path).unwrap();
         let bytes = std::fs::read(&path).unwrap();
@@ -246,7 +276,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         std::fs::remove_dir_all(directory).unwrap();
     }

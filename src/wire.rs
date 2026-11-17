@@ -4,7 +4,9 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
+/// Version 6 adds code-mode source auditing; version 7 adds the local composer.
+pub const CODE_VERSION: u32 = 6;
 /// Version 5 supports controller attribution but not code-mode audit metadata.
 pub const CONTROLLER_VERSION: u32 = 5;
 /// Version 4 clients remain usable, but cannot receive controller metadata.
@@ -18,6 +20,83 @@ pub const MAX_CLIENTS_PER_USER: usize = 128;
 pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 pub const MAX_TITLE_BYTES: usize = 512;
 pub const MAX_CODE_BYTES: usize = 64 * 1024;
+pub const MAX_USER_MESSAGE_BYTES: usize = 16 * 1024;
+pub const MAX_USER_MESSAGES: usize = 64;
+
+/// Local operator commands act only on the connection that carries the frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SteeringCommand {
+    Snapshot {},
+    Publish {
+        command_id: String,
+        message_id: String,
+        expected_revision: u64,
+        text: String,
+        /// `next` or an exact registered collaboration agent ID.
+        target: String,
+    },
+    Takeback {
+        command_id: String,
+        message_id: String,
+        expected_revision: u64,
+    },
+    Cancel {
+        command_id: String,
+        message_id: String,
+        expected_revision: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringAgent {
+    pub agent_id: String,
+    pub name: String,
+    pub role: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SteeringState {
+    Queued,
+    Editing,
+    Delivered,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringDelivery {
+    pub run_id: String,
+    pub agent_id: Option<String>,
+    /// Inclusion in an HTTP response, not proof of reading or execution.
+    pub included_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringMessage {
+    pub id: String,
+    pub revision: u64,
+    pub text: String,
+    pub target: String,
+    pub state: SteeringState,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub delivery: Option<SteeringDelivery>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringSnapshot {
+    pub schema_version: u32,
+    pub client_id: String,
+    pub revision: u64,
+    pub agents: Vec<SteeringAgent>,
+    pub messages: Vec<SteeringMessage>,
+}
 
 /// Immutable source of the orchestration that dispatched this native operation.
 /// This is display metadata, never a tool argument or an authorization grant.
@@ -357,6 +436,14 @@ pub enum Frame {
         login_code: String,
         login_expires_in: u64,
         client_id: String,
+    },
+    Steering {
+        id: u64,
+        command: SteeringCommand,
+    },
+    SteeringReply {
+        id: u64,
+        result: Result<SteeringSnapshot, String>,
     },
     Call {
         id: u64,

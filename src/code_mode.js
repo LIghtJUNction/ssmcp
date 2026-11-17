@@ -424,7 +424,7 @@ const bootstrap = `(() => {
 
   const builtin = (name, args = {}) => dispatch('builtin', '_', name, args);
   const collab = freeze(Object.fromEntries(
-    ['join', 'list', 'update', 'send', 'receive', 'ack', 'leave'].map(action => [
+    ['join', 'list', 'update', 'send', 'receive', 'ack', 'leave', 'bind'].map(action => [
       action, (clientId, args = {}) => {
         if (!args || typeof args !== 'object' || isArray(args)) {
           throw new Failure('collab arguments must be an object');

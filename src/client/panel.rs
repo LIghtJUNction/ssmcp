@@ -1,5 +1,8 @@
 //! Pure sidebar layout. The compositor alone owns terminal escape sequences.
-use super::{git_status::{GitSnapshot, GitState}, ui::{Panel, Ui}};
+use super::{
+    git_status::{GitSnapshot, GitState},
+    ui::{Panel, Ui},
+};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -99,40 +102,76 @@ pub(super) struct PanelSnapshot {
 }
 
 /// Ordered sections share the available space; empty sections consume no rows.
-pub(super) fn render_configured(snapshot: &PanelSnapshot, width: u16, height: u16, now: Instant, ui: &Ui) -> Vec<PanelLine> {
-    let panels = ui.panels.iter().copied().filter(|panel| !ui.hide_empty || match panel {
-        Panel::Controller => !snapshot.controllers.is_empty() || snapshot.last_controller.is_some(),
-        Panel::Tasks => !snapshot.tasks.is_empty(),
-        Panel::Progress => !snapshot.progress.is_empty(),
-        Panel::Git => snapshot.git.as_ref().is_some_and(|git| git.status != GitState::NotRepository),
-        Panel::History => snapshot.git.as_deref().is_some_and(show_history),
-    }).collect::<Vec<_>>();
+pub(super) fn render_configured(
+    snapshot: &PanelSnapshot,
+    width: u16,
+    height: u16,
+    now: Instant,
+    ui: &Ui,
+) -> Vec<PanelLine> {
+    let panels = ui
+        .panels
+        .iter()
+        .copied()
+        .filter(|panel| !matches!(panel, Panel::Agents | Panel::Queue))
+        .filter(|panel| {
+            !ui.hide_empty
+                || match panel {
+                    Panel::Agents | Panel::Queue => false,
+                    Panel::Controller => {
+                        !snapshot.controllers.is_empty() || snapshot.last_controller.is_some()
+                    }
+                    Panel::Tasks => !snapshot.tasks.is_empty(),
+                    Panel::Progress => !snapshot.progress.is_empty(),
+                    Panel::Git => snapshot
+                        .git
+                        .as_ref()
+                        .is_some_and(|git| git.status != GitState::NotRepository),
+                    Panel::History => snapshot.git.as_deref().is_some_and(show_history),
+                }
+        })
+        .collect::<Vec<_>>();
     let mut rows = Vec::new();
     let available = usize::from(height);
     for (index, panel) in panels.iter().enumerate() {
         let remaining = available.saturating_sub(rows.len());
         let reserve = panels.len().saturating_sub(index + 1) * 3;
         let budget = remaining.saturating_sub(reserve).max(2).min(remaining);
-        if budget == 0 { break; }
+        if budget == 0 {
+            break;
+        }
         let mut section = match panel {
+            Panel::Agents | Panel::Queue => Vec::new(),
             Panel::Controller => controller_lines(snapshot),
             Panel::Tasks => task_lines(&snapshot.tasks, budget.min(10), now),
-            Panel::Progress => progress_lines(&snapshot.progress, budget.min(8), usize::from(width), now),
+            Panel::Progress => {
+                progress_lines(&snapshot.progress, budget.min(8), usize::from(width), now)
+            }
             Panel::Git => git_lines(snapshot.git.as_deref(), budget.min(9), now),
-            Panel::History => history_lines(snapshot.git.as_deref(), budget, usize::from(width), now),
+            Panel::History => {
+                history_lines(snapshot.git.as_deref(), budget, usize::from(width), now)
+            }
         };
         section.truncate(budget);
         if !rows.is_empty() && !section.is_empty() && rows.len() < available {
             rows.push(PanelLine::default());
         }
-        rows.extend(section.into_iter().take(available.saturating_sub(rows.len())));
+        rows.extend(
+            section
+                .into_iter()
+                .take(available.saturating_sub(rows.len())),
+        );
     }
     if rows.is_empty() && available > 0 {
         rows.push(line("Ready", PanelTone::Accent));
-        if available > 1 { rows.push(line("F1 Help & appearance", PanelTone::Muted)); }
+        if available > 1 {
+            rows.push(line("F1 Help & appearance", PanelTone::Muted));
+        }
     }
     rows.resize_with(available, PanelLine::default);
-    for row in &mut rows { row.text = fit(&row.text, usize::from(width)); }
+    for row in &mut rows {
+        row.text = fit(&row.text, usize::from(width));
+    }
     rows
 }
 
