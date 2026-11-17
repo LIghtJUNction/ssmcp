@@ -6,6 +6,20 @@
 listen = "127.0.0.1:8080"
 public_url = "https://ssmcp.example.com"
 socket = "/run/ssmcpd/control.sock"
+# Optional: let an invited device download a temporary client from this server.
+# Serve /client/* from this daemon; missing platform binaries return HTTP 503.
+# Use an absolute directory, owned by root or the service user, without symlinks
+# or group/other write permission. Store extracted executable bytes, not archives.
+# client_download_dir = "/var/lib/ssmcpd/clients"
+# Prepare the platforms you need, using these exact filenames:
+#   ssmcp-x86_64-unknown-linux-gnu
+#   ssmcp-aarch64-unknown-linux-gnu
+#   ssmcp-x86_64-apple-darwin
+#   ssmcp-aarch64-apple-darwin
+#   ssmcp-x86_64-pc-windows-msvc.exe
+#   ssmcp-aarch64-pc-windows-msvc.exe
+# Override with --client-download-dir or SSMCP_CLIENT_DOWNLOAD_DIR.
+# See https://github.com/LIghtJUNction/ssmcp/blob/main/docs/client-accounts.md.
 
 [oauth]
 client_registry = "/var/lib/ssmcpd/oauth-clients.toml"
@@ -22,10 +36,16 @@ client_registration_ttl = 31536000
 # client_secret = "YOUR_GITHUB_OAUTH_CLIENT_SECRET"
 
 # Optional browser portal; reuse auth.github above and the SAME callback.
+# Client login needs the account portal. Route /setup, /api/client/*, /mcp and
+# the GitHub callback to the SAME Broker, including its account portal routes.
+# Forward WebSocket Upgrade for /api/client/connect. An independent portal-only
+# process does not share the gateway's in-memory login or session state.
 # [portal]
 # state_dir = "/var/lib/ssmcpd/portal"
-# For a separate portal service, omit state_dir here and use --portal-only
-# with --portal-state-dir in that service. See docs/portal-console.md.
+# Legacy SSH deployments can use a separate portal service: omit state_dir
+# here and use --portal-only with --portal-state-dir in that service.
+# Client account endpoints and connected sessions must still share one Broker.
+# See docs/portal-console.md and docs/client-accounts.md.
 # gateway_socket = "/run/ssmcpd/management.sock"
 # audit_dir = "/var/lib/ssmcpd/audit"
 # admin_github_ids = []

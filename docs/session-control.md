@@ -2,7 +2,7 @@
 
 需要持久系统服务、原子新建/重启/关闭，以及 `ssmcp attach [NAME]`，请先阅读[常驻服务与 attach](session-service.md)。本页保留旧 native 后台模式、重连及输出转储的完整说明。
 
-本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具仍是 `list` 和 `code_mode`；`reload`、`outputs` 是 `code_mode` 内的 JavaScript 原语，`ssmcp sessions` 是在客户端机器运行的本地管理命令。
+本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具仍是 `list` 和 `code_mode`；`reload`、`outputs` 是 `code_mode` 内的 JavaScript 原语。`ssmcp sessions list` 枚举本地保存会话；登录后使用 `ssmcp list` 查看账号可控的在线会话，使用 `ssmcp -i` 进入其终端，详见[客户端账号与临时接入](client-accounts.md)。
 
 ## 用标题说明本次任务
 
@@ -67,18 +67,22 @@ Unix 使用 `exec` 替换当前进程映像。Windows 启动替代客户端，�
 
 ## 后台运行与延时重连
 
-`--daemon` 把客户端交给当前用户的原生服务管理器，命令返回后客户端继续运行。`--watchdog` 在连接失败或断开后重试；它也可单独用于前台客户端。`--reconnect-delay SECONDS` 只在指定 `--watchdog` 时有效，默认 **5 秒**，允许 **1–3600 秒**的整数。仅指定 `--daemon` 不会启用 watchdog。[参数与连接循环](../src/client.rs) · [本机会话管理](../src/session.rs)
+新建的前台和后台会话默认启用 watchdog，在连接失败或断开后重试。使用 `--no-watchdog` 禁用，原有 `--watchdog` 保留为显式启用的兼容参数；二者不能同时使用。`--list-tools` 始终只发现一次工具后退出，不会进入重连循环。[参数与连接循环](../src/client.rs)
+
+`--reconnect-delay SECONDS` 设置重试间隔，默认 **5 秒**，允许 **1–3600 秒**的整数，不需要另外指定 `--watchdog`，但不能与 `--no-watchdog` 同用。默认重连不会把前台进程变成后台服务；`--daemon` 才会把客户端交给当前用户的会话管理器，命令返回后继续运行。[本机会话管理](../src/session.rs)
+
+旧保存会话继续使用 manifest 中记录的 watchdog 策略，包括原来未启用的情况；升级不会把已保存的禁用策略改成启用。新保存的禁用配置会明确记录 `--no-watchdog`。
 
 在项目目录中创建一个具名后台会话：
 
 ```sh
-ssmcp --daemon --watchdog --reconnect-delay 5 \
+ssmcp --daemon --reconnect-delay 5 \
   --name workstation --title "修复项目并执行测试" \
   --allow octocat@github my-ssmcp
 ssmcp sessions status workstation --json
 ```
 
-将 GitHub 用户与 SSH 目标替换为已有配置。后台模式沿用 SSH 公钥、`--allow` 和原生工具权限；可用工具仍需真实发现。启动成功只表示原生管理器接受了启动请求，尚不能证明 SSH 或 Broker 已连通。先检查 `connection_state`，再通过 MCP `list` 核对在线客户端。没有 `--allow` 的连接仍使用登录码 OAuth；只有确实需要登录码时，在本机明确执行 `ssmcp sessions auth workstation`。登录码不会进入普通状态或生命周期日志；auth 命令只返回当前已连接会话的可用码，正常断线处理会清除本地 auth 记录。
+将 GitHub 用户与 SSH 目标替换为已有配置。后台模式沿用 SSH 公钥、`--allow` 和原生工具权限；可用工具仍需真实发现。启动成功只表示原生管理器接受了启动请求，尚不能证明 SSH 或 Broker 已连通。先检查 `connection_state`，再通过 MCP `list` 核对在线客户端。未登录客户端账号且没有 `--allow` 的 SSH 连接仍使用登录码 OAuth；只有确实需要登录码时，在本机明确执行 `ssmcp sessions auth workstation`。登录码不会进入普通状态或生命周期日志；auth 命令只返回当前已连接会话的可用码，正常断线处理会清除本地 auth 记录。
 
 ### 查看和管理保存的会话
 
@@ -103,7 +107,7 @@ ssmcp sessions status workstation --json
 
 本节表格描述旧 native 后台模式：没有运行常驻管理服务时，`--daemon` 仍使用已存在的用户管理器，不自动启用系统启动、登录触发或 Linux linger。已安装常驻 `ssmcp` 服务时，新会话由它托管并按保存的运行意图恢复；两种管理类型在状态中明确区分。持久定义与平台 scope 见[平台服务说明](client-service-platforms.md)。
 
-| 平台 | 原生后台管理 | 启用 watchdog 后的进程崩溃恢复 |
+| 平台 | 原生后台管理 | watchdog 启用时的进程崩溃恢复（新会话默认） |
 | --- | --- | --- |
 | Linux | transient `systemd --user` service | `Restart=on-failure`，按所设延时配置 `RestartSec` |
 | macOS | 当前用户的 launchd agent | 失败退出时恢复，按所设延时配置 `ThrottleInterval` |

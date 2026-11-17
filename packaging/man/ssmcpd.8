@@ -1,12 +1,13 @@
-.TH SSMCPD 8 "2026-11-16" "ssmcp 0.4.0" "System Administration"
+.TH SSMCPD 8 "2026-11-17" "ssmcp 0.7.0" "System Administration"
 .SH NAME
-ssmcpd \- SSH-authenticated MCP gateway for local shells and coding agents
+ssmcpd \- GitHub-authorized HTTPS and SSH gateway for local tools
 .SH SYNOPSIS
 .B ssmcpd serve
 .RB [ \-\-config " path" ]
 .RB [ \-\-public-url " https://host" ]
 .RB [ \-\-listen " 127.0.0.1:8080" ]
 .RB [ \-\-socket " path" ]
+.RB [ \-\-client-download-dir " path" ]
 .RB [ \-\-access-token-ttl " seconds" ]
 .RB [ \-\-refresh-token-idle-ttl " seconds" ]
 .RB [ \-\-refresh-token-max-ttl " seconds" ]
@@ -16,8 +17,11 @@ ssmcpd \- SSH-authenticated MCP gateway for local shells and coding agents
 .RB [ \-\-socket " path" ]
 .SH DESCRIPTION
 The serve command listens for MCP HTTP requests and authenticated local bridge
-connections. A reverse proxy supplies public HTTPS. Clients with an allow list
-use /mcp and GitHub identity authorization. Clients without an allow list retain
+connections. A reverse proxy supplies public HTTPS. GitHub client accounts can
+connect over outbound WebSocket without SSH, list their authorized sessions,
+control terminals and issue single-use invitations for temporary devices.
+Clients with an allow list use /mcp and GitHub identity authorization.
+SSH clients without an allow list retain
 the SSH account's /username endpoint and one-time login code. Each connection
 has an independent random client ID. Up to 128 clients may attach to one SSH account.
 .PP
@@ -46,6 +50,14 @@ Loopback HTTP socket address. The default is 127.0.0.1:8080.
 .BI \-\-socket " path"
 Unix control socket path. The default is /run/ssmcpd/control.sock.
 .TP
+.BI \-\-client-download-dir " path"
+Serve raw client binaries from this trusted absolute directory for temporary
+device bootstrap. The TOML key is server.client_download_dir; the environment
+variable is SSMCP_CLIENT_DOWNLOAD_DIR. The directory and assets must be owned
+by root or the service user, with no group or other write permission.
+Symlinks in the directory path or asset files are rejected.
+A missing directory or platform asset returns HTTP 503 with a configuration hint.
+.TP
 .BI \-\-access-token-ttl " seconds"
 Access-token lifetime. The default is 28800 seconds (8 hours).
 The environment variable is SSMCP_ACCESS_TOKEN_TTL.
@@ -70,8 +82,9 @@ Configuration precedence is command line, environment, TOML, then defaults.
 The packaged systemd unit may read variables from /etc/ssmcpd/ssmcpd.env.
 Changes take effect when the daemon starts; restarting clears OAuth state.
 .SH TOML AND GITHUB
-The server section accepts listen, public_url and socket. The oauth section
-accepts access_token_ttl, refresh_token_idle_ttl, refresh_token_max_ttl and
+The server section accepts listen, public_url, socket and client_download_dir.
+The oauth section accepts access_token_ttl, refresh_token_idle_ttl,
+refresh_token_max_ttl and
 client_registration_ttl as integer seconds. The auth.github section contains
 client_id and client_secret from a GitHub OAuth App. Omit that section when
 only login-code authorization is required.
@@ -166,10 +179,45 @@ can remain valid and access other matching sessions or a newly attached allowed
 session. A login-code grant is revoked when its issuing connection disconnects.
 Registrations and OAuth state are in memory and end when the daemon exits, so
 a daemon restart requires registration and login again in both modes.
+.SH CLIENT DOWNLOADS AND ACCOUNT ROUTING
+The routes /client/install.sh and /client/install.ps1 provide temporary bootstrap
+scripts. Their download origin comes from configured public_url, never from the
+request Host header. /client/bin/{target} accepts only supported platform
+triples. Place the extracted executables in client_download_dir with these
+exact filenames (ssmcp-{target}, with .exe appended for Windows):
+.PP
+.nf
+ssmcp-x86_64-unknown-linux-gnu
+ssmcp-aarch64-unknown-linux-gnu
+ssmcp-x86_64-apple-darwin
+ssmcp-aarch64-apple-darwin
+ssmcp-x86_64-pc-windows-msvc.exe
+ssmcp-aarch64-pc-windows-msvc.exe
+.fi
+.PP
+Only the platforms needed by controlled devices need to be present. Supply
+compatible binaries from the release archive, not the archive itself. The
+bootstrap runs a downloaded executable in a temporary directory and removes it
+when the session exits; it does not install a service or change PATH.
+.PP
+Route /setup, /api/client/*, /mcp, and the GitHub callback to the same Broker
+instance that owns login pairing state and live sessions. The browser login
+also uses the account portal routes. /api/client/connect requires WebSocket
+Upgrade forwarding. Route /client/* to this daemon's download service.
+An independent portal-only process cannot share another Broker's in-memory
+pairing records or live session registry. When an older deployment separates
+portal and gateway processes, update its routes before enabling client accounts.
+.PP
+See
+.UR https://github.com/LIghtJUNction/ssmcp/blob/main/docs/client-accounts.md
+client account setup and deployment
+.UE
+for the complete login, bootstrap and account-control flow.
 .SH DEPLOYMENT
 Run the daemon as an unprivileged service account. Restrict access to the control
-socket with a dedicated group. Configure OpenSSH AuthenticationMethods publickey,
-ForceCommand ssmcpd attach, DisableForwarding yes and PermitTTY no for this group.
+socket with a dedicated group. For SSH access, configure OpenSSH
+AuthenticationMethods publickey, ForceCommand ssmcpd attach, DisableForwarding
+yes and PermitTTY no for this group.
 .PP
 Install and configure the selected backend on each client. The daemon does not
 need Codex, Claude Code, Pi or OpenCode installed. Backend operations use the
@@ -183,11 +231,12 @@ so bubblewrap can set limits in its own user namespace. Host kernel permissions
 still apply. Do not use RestrictNamespaces=yes for this service. Follow
 distribution AppArmor or SELinux policy when namespace setup is restricted.
 .PP
-Version 0.4.0 keeps private bridge protocol version 4. Existing clients without
-an allow list retain login-code behavior. To use GitHub authorization, upgrade
-both programs and configure the provider. Unsupported older servers reject
-allow-list metadata; new clients also reject a legacy login-code response when
-an allow policy was requested. Updating source does not replace installed binaries.
+The current private bridge protocol is version 5; the server also accepts
+version 4 SSH clients. Existing SSH clients without an allow list retain
+login-code behavior. Account login, invitations and outbound WebSocket relay
+require the updated client, running daemon and proxy routes. Configure GitHub
+OAuth and the account portal before enabling these flows. Updating source does
+not replace installed binaries.
 .SH FILES
 .TP
 .I /etc/ssmcpd/ssmcpd.toml

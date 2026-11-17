@@ -1,98 +1,61 @@
 # ssmcp
 
-** Bridge local shell access with remote MCP services **
+**用 GitHub 账号连接自己的设备，从终端或 MCP 远程控制。**
 
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
 [![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-x86__64%20%C2%B7%20ARM64-64748b?style=flat)](docs/releases.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat)](LICENSE)
 
-一条 SSH 连接，两个 MCP 工具。`list` 找到在线客户端，`code_mode` 调用它们的原生能力；命令、输出和智能体事件实时显示在本机终端。项目、模型配置和后端工具执行都留在本机。[工作原理](docs/backends.md)
-
-
-## 快速开始
-- 下载软件
-- ChatGPT网页端配置：
-新增插件
-名字 ssmcp
-地址 https://ssmcp.lmm.best/mcp
-
-使用你的github账号登录
-
-下载/安装 ssmcp 客户端
-一个命令行工具，确保你电脑有ssh
-
-ssmcp setup 
-按提示做完即可
-
-现阶段需要一个github账号（如果没有就注册一个，很简单）进行登录
-
-把你的ssh公钥粘贴到门户网站（https://ssmcp.lmm.best)
-
-- 开启一个会话
-···bash
-ssmcp name@ssmcp.lmm.best --allow name@github
-name换成账号名
-···
-
-- 连接
-打开chatgpt网页版
-输入
-
-@ssmcp （插件名）帮我连接到我的开发机器，继续开发<项目名>.
-
-
-0.6.0 移除了后端选择参数：客户端始终提供 Shell，后台独立发现可用原生接口。升级方法见[迁移与发行说明](docs/release-notes-0.6.0.md)，本轮已验证范围与未覆盖项见[验收记录](docs/validation-0.6.0.md)。
-
-![本机工具通过 SSH 连接服务器，MCP 客户端经 HTTPS 和 OAuth 发现并调用工具；结果沿原连接返回。](docs/assets/connection-flow.svg)
-
-[**首页与逐步骤教程**](https://ssmcp.lmm.best) · [账号门户与安全审计](docs/portal-console.md) · [客户端配置](docs/configuration.md) · [服务器部署](docs/deployment.md) · [后端与工具接口](docs/backends.md) · [验收记录](docs/validation.md) · [真实操作视频](https://drive.google.com/file/d/1xAn67HJMXeEKS-rpBpaRXlE368ziIRVn/view?usp=drivesdk)
-
-
-# 应用场景
-
-1. ChatGPT chat模式 Pro模型控制你本地的codex（还支持别的）完成软件工程任务。
-2. 使用我的AI订阅，远程控制朋友的电脑，帮朋友配置电脑环境，安装软件，安装ai工具。
-3. 在多台电脑、多个项目目录启动客户端，用同一个 MCP 入口找到有权操作的环境。
-
-# 安全警告⚠️
-
-本工具安全边界如下：
-
-1. 中转服务器可信任，😌作者我是可信任的，但我还是建议你自己部署。
-2. 服务器通过已经登记的 SSH 公钥接受本机连接。启动时用 `--allow 用户名@github` 指定谁能操作这个客户端，然后把终端返回的完整 URL 添加到 ChatGPT 或其他 MCP 应用。
-3. 0.4.0 支持 GitHub 浏览器登录：核对身份后，再明确同意当前 MCP 客户端连接。本机 CLI 无须登录 GitHub。省略 `--allow` 时保留一次性登录码流程；登录码和 OAuth 令牌都应妥善保管。当前第三方身份提供方为 GitHub，邮箱登录尚未提供。
-4. 建议，最好还是私有化部署，不要用公共的，需要自备域名和服务器，源代码都开源。
-
-
-## 公共服务连接教程
-
-打开 [ssmcp.lmm.best](https://ssmcp.lmm.best)，按首页教程完成 GitHub 登录、公钥登记、本机连接和 ChatGPT 插件配置。自助账户使用 GitHub 账号编号绑定，SSH 用户名固定为 `gh-<ID>`；GitHub 改名后，更新 `--allow`，SSH 用户名和公钥归属保持不变。账户与公钥持久保存，网页登录会话在服务重启后失效。
-
-在 [ChatGPT Plugins](https://chatgpt.com/plugins) 点击 **Add**，**Name** 填 `ssmcp`，**Connection** 填 `https://ssmcp.lmm.best/mcp`，勾选同意后点击 **Create**。再按提示使用 GitHub 登录，核对身份和当前 MCP 客户端，明确允许连接。首页登录不会自动授予插件访问权限。
-
-自助公钥目前只接受单行 Ed25519 公钥，最多 20 把；只上传 `.pub`，私钥留在本机。服务器需先启用[门户与 SSH 同步](docs/deployment.md#account-portal)，变更通常在 15 秒内应用；删除公钥仅阻止后续 SSH 认证，已有连接须在本机退出。未启用门户时，首页会说明状态，原有 SSH 账户仍可使用。
-
-启用[会话管理与审计](docs/portal-console.md)后，用户可管理自己的在线会话并查看账号活动和连接历史。管理员由服务器中的 GitHub 数字 ID 名单指定，可查看统计、连接拓扑、注册用户与全部审计。默认保留 7 天、最多 20,000 条，自动清理；日志不记录命令正文、工具参数、结果或凭据。会话归属按 SSH 账户校验，`--allow` 工具访问权不授予关闭会话的权限。
-
-## 首次连接向导
-
-更新客户端和启用了账户门户的服务器后，可以在项目目录直接运行首次配置向导。向导完成并验证 SSH 后，会继续启动当前客户端：
-
-```sh
-ssmcp setup
-
-# 自建服务：门户地址与 SSH 地址可以不同。
-ssmcp setup --portal https://accounts.example.com ssh.example.com
-```
-
-浏览器会打开 GitHub 登录与电脑授权页；核对终端配对码后，单独点击授权。终端随后检查已有公钥，必要时询问是否安装 SSH、登记已有公钥或创建专用 Ed25519 密钥。确认操作输入 `yes`；电脑名称直接回车使用默认值。新建专用密钥前会说明不设口令，已有密钥不会被覆盖。
-
-**上传的只有公钥，归属当前 GitHub 身份对应的 ssmcp 账户，不是 github.com 的 SSH keys 设置。** 配置变更前备份原 SSH config，保存后用 `ssh -G` 和实际注册握手验证；相同配置重复运行不增加管理段。Windows 缺少 SSH 时可在确认后安装经过官方摘要验证的便携客户端。
-
-已有连接继续复用原 SSH 配置。交互终端在当前进程首次注册前失败时会尝试一次向导；非交互运行、后台服务及成功连接后的 watchdog 重连不会自动打开向导。需要手工管理时使用 `ssmcp --no-setup my-ssmcp`。服务端必须同步升级；安装依赖的期限、镜像与摘要信任边界、备份位置和恢复步骤见[首次连接与 SSH 配置](docs/onboarding.md)。
+ssmcp 把本机 Shell 与已安装工具连接到可信服务器。MCP 的 `list` 找到有权操作的在线设备，`code_mode` 调用它们的原生能力；项目、模型配置和工具执行留在设备上。客户端支持 GitHub 登录后的 HTTPS / WSS 接入，也保留已有 SSH 配置。[工作原理](docs/backends.md)
 
 ## 快速开始
+
+先[安装新版客户端](#安装与升级)，并使用已启用 GitHub OAuth、账号门户和客户端 API 的新版服务器。将示例域名换成你的服务地址：
+
+~~~sh
+ssmcp login --server https://ssmcp.example.com
+ssmcp whoami
+
+# 在项目目录启动自己的被控会话，保持终端打开。
+ssmcp --name device-a
+~~~
+
+登录后自动使用自己的 GitHub 身份，无须每次填写自己的 `--allow`。新接入路径不需要 SSH、公钥或设备入站端口；看门狗默认启用，掉线后自动重连，`--no-watchdog` 可关闭。
+
+在 A 的另一个终端查看或进入可控会话：
+
+~~~sh
+ssmcp list
+ssmcp -i
+~~~
+
+`-i` 列出设备供选择，随后进入它的终端。Ctrl-C 交给远端 Shell；Ctrl-] 离开控制界面，远端会话继续运行。本地后台服务仍用 `ssmcp sessions list` 管理。
+
+## 临时控制 B 设备
+
+在已登录的 A 上生成一条命令，复制到 B 的终端执行：
+
+~~~sh
+ssmcp invite
+
+# B 使用 Windows PowerShell 时：
+ssmcp invite --shell powershell
+~~~
+
+默认命令只从你的服务器下载临时客户端，前台接入，并在退出后清理。B 无须安装 SSH 或登录 GitHub。邀请默认 **10 分钟内兑换一次**，兑换后的会话默认 **1 小时**有效；用 `--ttl` 与 `--session-ttl` 调整。A 再运行 `ssmcp list` 或 `ssmcp -i` 即可控制 B。B 按 Ctrl-C 结束会话，A 的 `logout` 会撤销该次登录派生的邀请与设备授权。
+
+服务端须配置 `client_download_dir` 并准备 B 对应平台的客户端；缺少文件时返回明确的 503。B 已安装兼容版本时可使用 `ssmcp invite --no-bootstrap`。完整流程、期限、账号存储和服务器下载配置见[客户端账号与临时接入](docs/client-accounts.md)。
+
+## 连接 ChatGPT 或其他 MCP 客户端
+
+将实际服务器返回的 `https://你的服务器/mcp` 加入 MCP 客户端，用同一个 GitHub 账号完成 OAuth 授权，再调用 `list`。CLI 登录与 MCP 应用授权各自管理；登录 CLI 后仍需确认允许相应的 MCP 应用。公开实例是否已经支持新版客户端 API，以实际部署为准。
+
+设备操作者决定开放哪个工作目录和系统用户权限；服务器按已验证的 GitHub 数字 ID 与会话规则检查每次调用。临时设备凭据不能查看或控制 A 的其他设备。中转服务器会处理连接和原生工具调用，应使用你信任的服务器。[授权实现](src/device.rs) · [会话访问检查](src/broker.rs)
+
+[客户端账号教程](docs/client-accounts.md) · [账号门户与审计](docs/portal-console.md) · [配置与 SSH](docs/configuration.md) · [服务器部署](docs/deployment.md) · [命令接口](docs/commands.md)
+
+## 使用已有 SSH 配置
 
 服务器已配置 GitHub OAuth 并接受你的 SSH 公钥后，在本机项目目录启动客户端。使用新命令管理和重载能力时，先将两端更新到同一版本。已有 `~/.ssh/config` 可以直接复用：
 
@@ -138,19 +101,19 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 
 将 `url` 添加到支持 OAuth 的 MCP 客户端，选择 GitHub 登录。返回 ssmcp 后，核对 GitHub 身份、MCP 客户端名称和回调来源，点击“允许连接”。随后调用 `list` 查看获准访问的在线客户端，再在 `code_mode` 中用 `tools.search(clientId,{query,include_schemas:true})` 查询所需原生工具及参数；旧服务端可继续用 `list({client_id})` 分页。**保持本机 ssmcp 进程运行，才能继续操作它的后端。** [逐步登录教程](docs/configuration.md#登录流程)
 
-需要原有登录码方式时，省略 `--allow`。终端返回 `https://ssmcp.example.com/SSH用户名` 和一次性 `login_code`，在对应 OAuth 页面填写即可。该授权只覆盖同一 SSH 账号下未设置 `--allow` 的客户端。[两种授权方式](docs/configuration.md#authorization-modes)
+尚未登录 CLI 的旧 SSH 连接省略 `--allow` 时使用登录码方式。终端返回 `https://ssmcp.example.com/SSH用户名` 和一次性 `login_code`，在对应 OAuth 页面填写即可。该授权只覆盖同一 SSH 账号下未设置 `--allow` 的客户端。[两种授权方式](docs/configuration.md#authorization-modes)
 
-需要在退出本机终端后继续运行客户端时，可创建后台会话，并显式开启断线重连：
+需要在退出本机终端后继续运行客户端时，可创建后台会话；断线重连默认启用：
 
 ```sh
-ssmcp --daemon --watchdog --name workstation \
+ssmcp --daemon --name workstation \
   --title "修复项目并执行测试" --allow octocat@github my-ssmcp
 ssmcp sessions status workstation --json
 ssmcp sessions logs workstation --lines 100
 ssmcp sessions stop workstation
 ```
 
-`--watchdog` 默认每 5 秒重试连接；`--reconnect-delay SECONDS` 可指定 1–3600 秒的整数值，必须同时启用 watchdog。`--daemon` 不隐式启用 watchdog。
+看门狗默认开启，每 5 秒重试连接；`--reconnect-delay SECONDS` 可指定 1–3600 秒。`--no-watchdog` 禁用自动重连，不能与重连间隔同时指定。显式停止或授权到期会结束恢复。
 
 管理服务运行时，`--daemon` 创建由该服务托管的会话；管理服务按已安装的开机或登录启动配置运行，并恢复期望运行的会话。管理服务未运行时，`--daemon` 使用旧的逐会话原生后台管理方式，本身不配置开机或登录自启。
 
@@ -164,7 +127,7 @@ Linux 可以安装持久的客户端服务，再用标准 systemctl 启用并启
 sudo "$(command -v ssmcp)" service install --system --user "$(id -un)"
 sudo systemctl enable --now ssmcp
 
-ssmcp sessions create dev --watchdog --allow octocat@github my-ssmcp
+ssmcp sessions create dev --allow octocat@github my-ssmcp
 ssmcp attach
 ssmcp attach dev
 ssmcp sessions restart dev
@@ -175,7 +138,9 @@ ssmcp sessions close dev
 
 macOS 提供 launchd 用户/系统 scope，Windows 提供用户登录任务与 SCM 服务入口。具体安装方式、桌面访问范围和验证边界见[常驻服务与 attach](docs/session-service.md)及[平台服务说明](docs/client-service-platforms.md)。
 
-## SSH 连接，OAuth 授权
+## SSH 接入与 MCP OAuth 授权
+
+本节的 access token / refresh token 属于 MCP 应用授权；CLI 的 30 天登录凭据与临时设备授权见[客户端账号](docs/client-accounts.md)。
 
 SSH 用公钥确认本机可以接入服务器。`--allow` 决定哪些 GitHub 用户可以使用这条连接的后端；浏览器登录确认操作者身份，之后由用户单独同意当前 MCP 客户端连接。服务端在客户端接入时将用户名解析为 GitHub 稳定用户 ID，每次发现和调用都核对目标客户端的允许列表。[身份验证](src/identity.rs) · [授权实现](src/oauth.rs)
 
@@ -224,7 +189,7 @@ ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
 
 ## computer-use：原生电脑、浏览器与 Omarchy 操作
 
-computer-use 内置于 ssmcp 客户端，使用原有 SSH 连接和访问控制。Linux、Windows、macOS 分别通过本机桌面接口处理窗口、截图与鼠标键盘；浏览器由 Rust 直接连接 Chromium CDP。当前专用客户端与用户服务名称为 `ssmcp-computer-use`，原有 `ssmcp.computer.*`、`ssmcp.browser.*` API 名称保持稳定。
+computer-use 内置于 ssmcp 客户端，沿已授权的客户端连接转发。Linux、Windows、macOS 分别通过本机桌面接口处理窗口、截图与鼠标键盘；浏览器由 Rust 直接连接 Chromium CDP。当前专用客户端与用户服务名称为 `ssmcp-computer-use`，原有 `ssmcp.computer.*`、`ssmcp.browser.*` API 名称保持稳定。
 
 ```javascript
 const id = "CLIENT_ID_FROM_LIST";
@@ -299,7 +264,7 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 
 调用 Harness 或 MCP 工具时，先用 `await tools.search(client.id,{query:'所需能力',limit:20})` 定位工具，再用 `include_schemas:true` 获取完整原生 Schema。`list({client_id})` 和 `await tools(client.id,cursor)` 继续提供完整目录分页。检索减少返回给模型的无关描述，不减少首次扫描的底层分页；`tools.search` 需要服务端更新。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批状态；大结果使用 artifact 保存原生 MCP JSON，独立命令分别保存 stdout/stderr，PTY 保存会话合并流，OpenCode HTTP 正文使用 `body_artifact` 与 `body_format`。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
 
-代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过 SSH 将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
+代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过客户端连接将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
 
 ## 会话标题、重载与长输出
 
@@ -373,7 +338,7 @@ return await rsync({
 
 ## 安装与升级
 
-Release 提供 Linux、macOS、Windows 的 x86_64 与 ARM64 预编译客户端。Linux 包还包含服务端；`ssmcpd` 运行于 Linux。Linux 客户端需要内核 5.3+，GNU 包以 glibc 2.35 为构建基线。客户端需要系统 OpenSSH；编码工具按需安装。
+Release 提供 Linux、macOS、Windows 的 x86_64 与 ARM64 预编译客户端。Linux 包还包含服务端；`ssmcpd` 运行于 Linux。Linux 客户端需要内核 5.3+，GNU 包以 glibc 2.35 为构建基线。HTTPS / WSS 客户端无须 OpenSSH；使用 SSH 接入时才需要系统 OpenSSH，编码工具按需安装。
 
 **Linux / macOS：**
 
@@ -408,9 +373,9 @@ sudo pacman -S openssh nodejs bubblewrap util-linux
 sudo dnf install openssh-server nodejs bubblewrap util-linux
 ```
 
-`ssmcpd serve` 发布 HTTPS 后面的 MCP 服务；SSH 登录后的 `ssmcpd attach` 转发连接数据。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js、bubblewrap 和 prlimit。需要目录同步的 Linux 客户端应另行安装系统 rsync。
+`ssmcpd serve` 提供 HTTPS 后面的账号 API、WSS 接入与 MCP 服务；旧 SSH 路径由登录后的 `ssmcpd attach` 转发。`make install-server` 另安装 systemd unit 和初始配置，具体账户、域名与反向代理设置见[服务器部署](docs/deployment.md)。只运行客户端时无需安装服务端的 Node.js、bubblewrap 和 prlimit。需要目录同步的 Linux 客户端应另行安装系统 rsync。
 
-0.4.0 继续使用私有桥接协议 v4，保留旧客户端的登录码方式。使用 `--allow` 需要更新两端，并在服务端配置 GitHub OAuth；遇到不支持该策略的旧服务器时，新客户端会拒绝继续启动后端。
+客户端账号 API、WSS 接入与临时邀请需要同步升级服务端。原有 SSH 与登录码方式继续保留；显式 GitHub `--allow` 仍要求服务端支持相应身份策略。
 
 服务端使用 TOML 配置，支持默认路径 `/etc/ssmcpd/ssmcpd.toml` 和 `--config`。GitHub callback 为公网 origin 后接 `/oauth/callback/github`。更新源码后还需安装新二进制并重启实际服务；重启后重新注册和登录。[TOML 与 GitHub 设置](docs/deployment.md#github-oauth) · [升级步骤](docs/deployment.md#upgrade-040)
 
@@ -434,6 +399,7 @@ python3 scripts/e2e_agents.py --bin-dir target/debug
 
 | 你想做什么 | 从这里开始 |
 | --- | --- |
+| GitHub 登录、列出会话、临时接入 B | [客户端账号](docs/client-accounts.md) |
 | 复用 SSH 配置、首次登记公钥、更新密钥 | [配置教程](docs/configuration.md) |
 | 登录 ChatGPT / MCP，恢复过期授权 | [登录与恢复](docs/configuration.md#登录流程) |
 | 设置 `--allow`，了解哪些客户端会被看到 | [GitHub 身份与访问规则](docs/configuration.md#github-allow) |
