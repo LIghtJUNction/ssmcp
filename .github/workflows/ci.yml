@@ -59,6 +59,18 @@ jobs:
               sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
             fi
           fi
+      - name: Select and identify the installed system Node
+        run: |
+          # Only node is shadowed; cargo, gh and all other runner tools retain
+          # their original PATH lookup. Discovery still validates the real binary.
+          ssmcp_node_bin="$(mktemp -d "$RUNNER_TEMP/ssmcp-node.XXXXXX")"
+          ln -s /usr/bin/node "$ssmcp_node_bin/node"
+          printf '%s\n' "$ssmcp_node_bin" >> "$GITHUB_PATH"
+          export PATH="$ssmcp_node_bin:$PATH"
+          ssmcp_node_real="$(readlink -f "$(command -v node)")"
+          test "$ssmcp_node_real" = "$(readlink -f /usr/bin/node)"
+          printf 'Runtime executable: %s\n' "$ssmcp_node_real"
+          node --version
       - run: cargo fmt --all -- --check
       - name: Check release tooling and installer
         run: |
