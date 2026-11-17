@@ -2,6 +2,8 @@
 
 **用 GitHub 账号连接自己的设备，从终端或 MCP 远程控制。**
 
+> ssmcp项目由网页版Chat模式，astra pro使用ssmcp插件开发
+
 [![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/Rust-1.100.0-64748b?style=flat)](rust-toolchain.toml)
 [![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-x86__64%20%C2%B7%20ARM64-64748b?style=flat)](docs/releases.md)
