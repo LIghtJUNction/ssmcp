@@ -434,14 +434,24 @@ class Dashboard(Harness):
                        f"SIGWINCH at {columns} columns updates child dimensions and sidebar visibility")
             self.check(shot["hide_cursor"], "resizing preserves audit input ownership")
 
-        first = self.run_job([sys.executable, "-c", "import time; time.sleep(8)"])
-        second = self.run_job([sys.executable, "-c", "import time; time.sleep(8)"])
+        first = self.run_job([sys.executable, "-c", "import time; time.sleep(12)"], timeout=20000)
+        second = self.run_job([sys.executable, "-c", "import time; time.sleep(12)"], timeout=20000)
         front.until(lambda s: "Tasks · 2 running" in text(s), "two real simultaneous tasks")
         self.check(first["job_id"] != second["job_id"], "two independent tasks have different identities in the live sidebar")
         front.pump(6.1)
-        shot = front.snapshot(cells=True)
-        side = region(shot, 0, 57, 76, 106)
-        self.check(re.search(r"[6-7](?:\.\d+)?s", side) is not None and "%" not in side,
+
+        def task_rows(snapshot):
+            side = region(snapshot, 0, 57, 76, 106)
+            tasks = side.split("Tasks", 1)[1] if "Tasks" in side else ""
+            return re.split(r"\n\s*(?:Progress|Git|Recent commits)\b", tasks, maxsplit=1)[0]
+
+        # The frame clock can trail wall time by a refresh interval. Observe the
+        # actual label crossing six seconds instead of assuming a particular tick.
+        shot = front.until(
+            lambda snapshot: any(float(value) >= 6 for value in
+                                 re.findall(r"\b(\d+(?:\.\d+)?)s\b", task_rows(snapshot))),
+            "silent tasks displaying at least six elapsed seconds", timeout=3, cells=True)
+        self.check("%" not in task_rows(shot),
                    "tasks silent for over six seconds show elapsed time without inventing a completion percentage")
         self.finish_job(first, front)
         self.finish_job(second, front)
@@ -555,6 +565,9 @@ class Dashboard(Harness):
         front.send(b"\x1b[F")
         front.until(lambda s: "DASH_AUDIT_0699" in text(s), "End at the live tail")
         front.send(b"\x1b")
+        # Escape is an intentionally ambiguous key prefix for 80 ms. The
+        # footer predicate is already true; settle it before the next sequence.
+        front.pump(0.12)
         front.until(lambda s: "Wheel" in s["rows"][-1] and s["hide_cursor"], "Escape retaining audit navigation")
         self.check(True, "End restores live logs and Escape never focuses a hidden shell")
         front.send(b"\x1b[5~x")
