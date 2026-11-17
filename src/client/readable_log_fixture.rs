@@ -87,10 +87,9 @@ fn readable_inline_command_fixture_at_80_and_100_columns() {
         let plain = clean(std::str::from_utf8(&output).unwrap());
         for visible in [
             "python3",
-            "Cargo.toml",
-            "source.read_text()",
+            "7 lines",
+            "83 lines",
             "配置读取完成",
-            "target.write_text",
             "generated/magicnet-android",
             "Updated manifest.json",
             "cargo check --locked",
@@ -105,10 +104,17 @@ fn readable_inline_command_fixture_at_80_and_100_columns() {
                 "{width} columns: missing {visible:?}\n{plain}"
             );
         }
-        assert!(
-            plain.contains("folded"),
-            "{width} columns: missing folding explanation\n{plain}"
-        );
+        for source in [
+            "source.read_text()",
+            "target.write_text",
+            "cmd=python3",
+            "folded",
+        ] {
+            assert!(
+                !plain.contains(source),
+                "{width} columns: source in normal logs\n{plain}"
+            );
+        }
         assert_eq!(plain.matches("[ERR ] codex").count(), 1, "{plain}");
         for duplicate in ["codex.command_exec", "call=110", "call=111", "call=112"] {
             assert!(
@@ -216,6 +222,8 @@ fn verbose_and_jsonl_keep_wrapper_audit_metadata() {
             "harness_call_id",
             "command_rpc_completed",
             "command_rpc_expected",
+            "source.read_text()",
+            "target.write_text",
         ] {
             assert!(
                 text.contains(retained),

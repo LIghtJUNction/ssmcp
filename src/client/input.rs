@@ -140,8 +140,8 @@ async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Resul
 }
 
 async fn apply_display_changes(terminals: &Terminals) -> Result<(), String> {
-    if let Some((rows, cols)) = super::interface::apply_pending()? {
-        terminals.resize_all(rows, cols).await?;
+    if super::interface::apply_pending()?.is_some() {
+        super::interface::sync_terminal_sizes(terminals).await?;
     }
     Ok(())
 }
@@ -150,7 +150,11 @@ async fn resize(terminals: &Terminals, rows: u16, cols: u16) -> Result<(), Strin
     // Some terminals report 0 while being created or minimized.
     if rows > 0 && cols > 0 {
         let (rows, cols) = super::terminal::physical_resize(rows, cols);
-        terminals.resize_all(rows.min(1000), cols.min(1000)).await?;
+        if super::terminal::active() {
+            super::interface::sync_terminal_sizes(terminals).await?;
+        } else {
+            terminals.resize_all(rows.min(1000), cols.min(1000)).await?;
+        }
     }
     Ok(())
 }

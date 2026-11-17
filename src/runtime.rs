@@ -26,6 +26,150 @@ pub(crate) const CATALOG_SNAPSHOT_SECONDS: u64 = 120;
 pub(crate) const CATALOG_SNAPSHOT_MAX_SECONDS: u64 = 15 * 60;
 pub(crate) const MAX_CATALOG_SNAPSHOTS: usize = 4;
 pub(crate) const MAX_CATALOG_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CODE_AUDIT_RUNS: usize = 256;
+
+/// Source is recorded once per run, alongside native-call outcomes. The run's
+/// final result is supplied separately by the orchestration server.
+struct CodeAudit {
+    log: Arc<EventLog>,
+    runs: Mutex<VecDeque<(String, bool)>>,
+}
+
+impl CodeAudit {
+    fn new(log: Arc<EventLog>) -> Self {
+        Self {
+            log,
+            runs: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn begin(
+        &self,
+        operation: &Operation,
+        request_id: u64,
+        controller: Option<&crate::wire::Controller>,
+        context: Option<crate::wire::CodeContext>,
+    ) -> Result<Option<CodeCall>, String> {
+        let Some(context) = context else {
+            return Ok(None);
+        };
+        context.validate()?;
+        let mut runs = self.runs.lock().unwrap_or_else(|error| error.into_inner());
+        if !runs.iter().any(|(id, _)| id == &context.run_id) {
+            if runs.len() >= MAX_CODE_AUDIT_RUNS {
+                runs.pop_front();
+            }
+            runs.push_back((context.run_id.clone(), false));
+            self.log
+                .push(json!({"type":"ssmcp.code_mode","phase":"started",
+                "run_id":context.run_id,"code":context.code,
+                "timestamp_ms":context.timestamp_ms,"controller":controller}));
+        }
+        drop(runs);
+        let tool = match operation {
+            Operation::CallTool { name, .. } => name.as_str(),
+            Operation::ListTools { .. } => "tools/list",
+            Operation::Read { .. } => "terminal.read",
+            Operation::Write { .. } => "terminal.write",
+            Operation::Resize { .. } => "terminal.resize",
+            Operation::Status {} => "terminal.status",
+        }
+        .to_owned();
+        self.log
+            .push(json!({"type":"ssmcp.code_mode","phase":"call-started",
+            "scope":"native-call","run_id":context.run_id,"request_id":request_id,"tool":tool}));
+        Ok(Some(CodeCall {
+            log: self.log.clone(),
+            run_id: context.run_id,
+            request_id,
+            tool,
+            started: Instant::now(),
+            finished: false,
+        }))
+    }
+
+    fn finish(&self, completion: crate::wire::CodeCompletion) -> Result<(), String> {
+        completion.validate()?;
+        let mut runs = self.runs.lock().unwrap_or_else(|error| error.into_inner());
+        let Some((_, finished)) = runs.iter_mut().find(|(id, _)| id == &completion.run_id) else {
+            return Ok(());
+        };
+        if *finished {
+            return Ok(());
+        }
+        *finished = true;
+        self.log
+            .push(json!({"type":"ssmcp.code_mode","phase":"finished",
+            "run_id":completion.run_id,"success":completion.success,"status":completion.status,
+            "duration_ms":completion.duration_ms,"error":completion.error}));
+        Ok(())
+    }
+}
+
+pub(crate) struct CodeCall {
+    log: Arc<EventLog>,
+    run_id: String,
+    request_id: u64,
+    tool: String,
+    started: Instant,
+    finished: bool,
+}
+
+impl CodeCall {
+    pub(crate) fn finish(&mut self, result: &Result<Value, String>) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let success = result.as_ref().is_ok_and(|value| value["isError"] != true);
+        let mut event = json!({"type":"ssmcp.code_mode","phase":"call-finished",
+            "scope":"native-call","run_id":self.run_id,"request_id":self.request_id,"tool":self.tool,
+            "success":success,"duration_ms":self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64});
+        let error = match result {
+            Err(error) => Some(error.as_str()),
+            Ok(value) if !success => value["content"].as_array().and_then(|content| {
+                content.iter().find_map(|item| {
+                    (item["type"] == "text")
+                        .then(|| item["text"].as_str())
+                        .flatten()
+                })
+            }),
+            _ => None,
+        };
+        if let Some(error) = error {
+            let mut end = error.len().min(4096);
+            while !error.is_char_boundary(end) {
+                end -= 1;
+            }
+            event["error"] = json!(&error[..end]);
+        }
+        if let Ok(value) = result {
+            let native = &value["structuredContent"];
+            for field in ["exit_code", "job_id", "state", "running"] {
+                let value = native.get(field).or_else(|| native["snapshot"].get(field));
+                if let Some(value) = value.filter(|value| {
+                    !value.is_null()
+                        && (value.is_number()
+                            || value.is_boolean()
+                            || value.as_str().is_some_and(|text| text.len() <= 256))
+                }) {
+                    event[field] = value.clone();
+                }
+            }
+        }
+        self.log.push(event);
+    }
+}
+
+impl Drop for CodeCall {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.finish(&Err(
+                "native request cancelled before its outcome was received".into(),
+            ));
+        }
+    }
+}
 
 struct CatalogSnapshot {
     fingerprint: String,
@@ -134,6 +278,7 @@ pub struct Runtime {
     rsync: Rsync,
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
+    code_audit: CodeAudit,
     next_call: AtomicU64,
     catalog: Catalog,
     sessions: Option<crate::session::control::Control>,
@@ -179,10 +324,11 @@ impl Runtime {
         }
         registry.replace(Provider::Audit,vec![json!({
             "name":"ssmcp.audit.events",
-            "description":"Read observed tool and skill events for this connection. File operations performed by external harnesses have unknown audit coverage unless their native protocol reports them.",
+            "description":"Read observed tool and skill events for this connection after audit redaction. Wire v6 also includes code_mode source and run/native-call lifecycle outcomes. File operations performed by external harnesses have unknown audit coverage unless their native protocol reports them.",
             "inputSchema":crate::backend::events::schema(),
             "annotations":{"readOnlyHint":true,"destructiveHint":false}
         })])?;
+        let audit = EventLog::with_output("audit", output.clone());
         Ok(Arc::new(Self {
             backend,
             registry,
@@ -192,7 +338,8 @@ impl Runtime {
             omarchy,
             context,
             rsync,
-            audit: EventLog::with_output("audit", output.clone()),
+            code_audit: CodeAudit::new(audit.clone()),
+            audit,
             output,
             next_call: AtomicU64::new(1),
             catalog: Catalog::default(),
@@ -220,6 +367,22 @@ impl Runtime {
     }
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         self.registry.catalog()
+    }
+    pub(crate) fn begin_code_call(
+        &self,
+        operation: &Operation,
+        request_id: u64,
+        controller: Option<&crate::wire::Controller>,
+        context: Option<crate::wire::CodeContext>,
+    ) -> Result<Option<CodeCall>, String> {
+        self.code_audit
+            .begin(operation, request_id, controller, context)
+    }
+    pub(crate) fn code_mode_finished(
+        &self,
+        completion: crate::wire::CodeCompletion,
+    ) -> Result<(), String> {
+        self.code_audit.finish(completion)
     }
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
@@ -429,6 +592,101 @@ impl Runtime {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn code_context(code: &str) -> crate::wire::CodeContext {
+        crate::wire::CodeContext {
+            run_id: "a".repeat(32),
+            code: code.into(),
+            timestamp_ms: 1234,
+        }
+    }
+
+    #[tokio::test]
+    async fn code_audit_preserves_full_source_and_keeps_job_call_and_run_outcomes_separate() {
+        let log = EventLog::new("code-audit-test");
+        let audit = CodeAudit::new(log.clone());
+        let source = format!(
+            "// {}\nconst job = await exec.start('one', {{command:['true']}});\nreturn job;\n",
+            "source line ".repeat(5000)
+        );
+        let context = code_context(&source);
+        let operation = Operation::CallTool {
+            name: "ssmcp.exec.start".into(),
+            arguments: json!({"command":["true"]}),
+        };
+        let mut first = audit
+            .begin(&operation, 1, None, Some(context.clone()))
+            .unwrap()
+            .unwrap();
+        first.finish(&Ok(backend::result(
+            json!({"job_id":"job-a","state":"running","running":true}),
+        )));
+        let mut second = audit
+            .begin(&operation, 2, None, Some(context))
+            .unwrap()
+            .unwrap();
+        second.finish(&Ok(backend::result(
+            json!({"job_id":"job-a","state":"completed","running":false,"exit_code":7}),
+        )));
+        let completion = crate::wire::CodeCompletion {
+            run_id: "a".repeat(32),
+            success: false,
+            status: "failed".into(),
+            duration_ms: 20,
+            error: Some("script failed after native completion".into()),
+        };
+        audit.finish(completion.clone()).unwrap();
+        audit.finish(completion).unwrap();
+        let events = log.read(json!({})).await.unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["event"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 6);
+        assert_eq!(events[0]["code"], source);
+        assert_eq!(events[0]["timestamp_ms"], 1234);
+        assert_eq!(events[2]["phase"], "call-finished");
+        assert_eq!(events[2]["scope"], "native-call");
+        assert_eq!(events[2]["success"], true);
+        assert_eq!(events[2]["state"], "running");
+        assert!(events[2].get("exit_code").is_none());
+        assert_eq!(events[4]["exit_code"], 7);
+        assert_eq!(events[5]["phase"], "finished");
+        assert_eq!(events[5]["success"], false);
+        assert_eq!(events[5]["error"], "script failed after native completion");
+    }
+
+    #[tokio::test]
+    async fn code_audit_redacts_source_secrets_and_reports_cancellation_without_raw_arguments() {
+        let log = EventLog::new("code-audit-redaction-test");
+        let audit = CodeAudit::new(log.clone());
+        let source = "const token = 'sensitive-source-token';\nconst n = 17;\nreturn await call('one','tool.run',{});\n";
+        let operation = Operation::CallTool {
+            name: "tool.run".into(),
+            arguments: json!({"password":"sensitive-native-argument"}),
+        };
+        drop(
+            audit
+                .begin(&operation, 5, None, Some(code_context(source)))
+                .unwrap(),
+        );
+        let page = log.read(json!({})).await.unwrap();
+        let events = page["events"].as_array().unwrap();
+        let clean = events[0]["event"]["code"].as_str().unwrap();
+        assert!(!clean.contains("sensitive-source-token"));
+        assert!(clean.contains("[redacted]"));
+        assert!(clean.contains("const n = 17;\n"));
+        assert!(!page.to_string().contains("sensitive-native-argument"));
+        assert_eq!(events[2]["event"]["success"], false);
+        assert!(
+            events[2]["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("cancelled")
+        );
+        assert!(audit.begin(&operation, 6, None, None).unwrap().is_none());
+    }
 
     fn tools(generation: usize) -> Vec<Value> {
         (0..150)

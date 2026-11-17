@@ -717,6 +717,63 @@ async fn list(
     Ok(json!({"clients":clients,"code_mode":usage()}))
 }
 
+struct CodeRunReport {
+    broker: Arc<Broker>,
+    user: String,
+    access_token: String,
+    run: code_mode::AuditRun,
+    delivered: bool,
+}
+
+impl CodeRunReport {
+    async fn finish(&mut self, result: &Result<Value, String>) {
+        let completion = self.run.completion(result);
+        deliver_code_completion(&self.broker, &self.user, &self.access_token, &self.run, completion).await;
+        self.delivered = true;
+    }
+}
+
+impl Drop for CodeRunReport {
+    fn drop(&mut self) {
+        if self.delivered {
+            return;
+        }
+        // Dropping the HTTP future also stops its JavaScript worker. A native
+        // operation already dispatched can still finish, but must not leave the
+        // enclosing run permanently marked as running. Keep this outcome on the
+        // shared run for background bridge targets that are reached later.
+        let completion = self.run.completed().unwrap_or_else(|| self.run.completion(&Err(
+            "code_mode request cancelled before completion; submitted native operations may continue".into(),
+        )));
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let (broker, user, access_token, run) = (self.broker.clone(), self.user.clone(), self.access_token.clone(), self.run.clone());
+        runtime.spawn(async move {
+            deliver_code_completion(&broker, &user, &access_token, &run, completion).await;
+        });
+    }
+}
+
+async fn deliver_code_completion(
+    broker: &Broker,
+    user: &str,
+    access_token: &str,
+    run: &code_mode::AuditRun,
+    completion: crate::wire::CodeCompletion,
+) {
+    // Source and outcomes remain restricted to actually dispatched targets,
+    // including when this runs after the originating HTTP future was cancelled.
+    for client_id in run.targets() {
+        let Some(authorization) = broker.authenticate(user, access_token).await else {
+            break;
+        };
+        if let Ok(session) = broker.client(user, &authorization, &client_id).await {
+            let _ = session.report_code_mode(completion.clone());
+        }
+    }
+}
+
 async fn execute(
     broker: Arc<Broker>,
     user: String,
@@ -735,13 +792,20 @@ async fn execute(
         .try_with(Clone::clone)
         .unwrap_or_default();
     let controller = arguments.controller_context.clone();
+    let audit_run = code_mode::AuditRun::new(&arguments.code, controller.clone())?;
+    let mut audit_report = CodeRunReport {
+        broker: broker.clone(), user: user.clone(), access_token: access_token.clone(),
+        run: audit_run.clone(), delivered: false,
+    };
+    let host_run = audit_run.clone();
     let host: Host = Arc::new(move |request| {
         let request_id = request_id.clone();
         let controller = controller.clone();
         let broker = broker.clone();
         let user = user.clone();
         let access_token = access_token.clone();
-        Box::pin(async move {
+        let audit_run = host_run.clone();
+        Box::pin(code_mode::AUDIT_RUN.scope(audit_run, async move {
             let (client_id, operation) = match request {
                 HostRequest::Builtin { name, arguments } => {
                     return crate::bridge::dispatch(broker, user, access_token, name, arguments)
@@ -796,9 +860,11 @@ async fn execute(
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             broker.client(&user, &authorization, &client_id).await?;
             Ok(result)
-        })
+        }))
     });
-    code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await
+    let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
+    audit_report.finish(&result).await;
+    result
 }
 
 fn tool_result(result: Result<Value, String>) -> Value {
@@ -909,6 +975,91 @@ impl Fault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_code_run_reports_failure_after_successful_native_reply() {
+        use crate::wire::{self, Frame};
+        use tokio::{io::BufReader, net::{TcpListener, UnixStream}, time::timeout};
+
+        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let router = router(broker.clone());
+        let http_server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let (server, client) = UnixStream::pair().unwrap();
+        let attachment = tokio::spawn(broker.clone().attach(server));
+        let (reader, mut writer) = client.into_split();
+        let mut reader = BufReader::new(reader);
+        wire::write_frame(&mut writer, &Frame::Hello {
+            version: wire::VERSION, mode: wire::Mode::Shell,
+            metadata: wire::ClientMetadata { name: "cancel-audit".into(), title: None, cwd: "/tmp".into(), hostname: "fixture".into(), allow: Vec::new() },
+        }).await.unwrap();
+        let Some(Frame::Ready { url, login_code, client_id, .. }) = wire::read_frame(&mut reader).await.unwrap() else { panic!("missing ready frame"); };
+        let user = url.rsplit('/').next().unwrap().to_owned();
+        let access_token = cancellation_test_token(&base, &url, &login_code).await;
+        let authorization = broker.authenticate(&user, &access_token).await.unwrap();
+        let session = broker.client(&user, &authorization, &client_id).await.unwrap();
+        let run = code_mode::AuditRun::new("await call('one', 'fixture.echo', {});\n// wait for more work\n", None).unwrap();
+        let report = CodeRunReport { broker, user, access_token, run: run.clone(), delivered: false };
+        let (native_done, replied) = tokio::sync::oneshot::channel();
+        let request_run = run.clone();
+        let request = tokio::spawn(async move {
+            let _report = report;
+            let result = code_mode::AUDIT_RUN.scope(request_run, session.call_with_authorization(
+                Operation::CallTool { name: "fixture.echo".into(), arguments: json!({}) }, None, &authorization,
+            )).await.unwrap();
+            assert_eq!(result["ok"], true);
+            native_done.send(()).unwrap();
+            // The native operation succeeded; the enclosing HTTP orchestration
+            // has not completed and must never inherit that native success.
+            std::future::pending::<()>().await;
+        });
+        let Some(Frame::Call { id, code_context: Some(context), .. }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader)).await.unwrap().unwrap() else { panic!("missing native call/source"); };
+        assert_eq!(context.run_id, run.context.run_id);
+        wire::write_frame(&mut writer, &Frame::Reply { id, result: Ok(json!({"ok":true})) }).await.unwrap();
+        timeout(Duration::from_secs(2), replied).await.unwrap().unwrap();
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        let Some(Frame::CodeModeFinished { completion }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader)).await.unwrap().unwrap() else { panic!("cancelled run did not reach its target"); };
+        assert_eq!(completion.run_id, context.run_id);
+        assert!(!completion.success);
+        assert_eq!(completion.status, "failed");
+        assert!(completion.error.as_deref().unwrap().contains("cancelled"));
+        // Late background bridge calls reuse the same terminal outcome.
+        assert_eq!(run.completed(), Some(completion));
+        drop(reader);
+        drop(writer);
+        timeout(Duration::from_secs(2), attachment).await.unwrap().unwrap().unwrap();
+        http_server.abort();
+    }
+
+    async fn cancellation_test_token(base: &str, resource: &str, login_code: &str) -> String {
+        const CALLBACK: &str = "http://127.0.0.1:37401/callback";
+        const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+        let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(5)).build().unwrap();
+        let response = http.post(format!("{base}/oauth/register"))
+            .json(&json!({"client_name":"audit cancellation test","redirect_uris":[CALLBACK],"token_endpoint_auth_method":"none","grant_types":["authorization_code"]})).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 201);
+        let registration: Value = response.json().await.unwrap();
+        let client_id = registration["client_id"].as_str().unwrap();
+        let response = http.get(format!("{base}/oauth/authorize"))
+            .query(&[("response_type","code"),("client_id",client_id),("redirect_uri",CALLBACK),("resource",resource),("scope","mcp"),("state","audit-cancel"),("code_challenge",CHALLENGE),("code_challenge_method","S256")]).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let cookie = response.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned();
+        let html = response.text().await.unwrap();
+        let transaction = html.split_once("name=transaction_id value=\"").unwrap().1.split('"').next().unwrap();
+        let response = http.post(format!("{base}/oauth/authorize"))
+            .header(reqwest::header::COOKIE, cookie).header(reqwest::header::ORIGIN, "https://ssmcp.example")
+            .form(&[("transaction_id",transaction),("login_code",login_code)]).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 303);
+        let callback = reqwest::Url::parse(response.headers()[reqwest::header::LOCATION].to_str().unwrap()).unwrap();
+        let code = callback.query_pairs().find(|(name,_)| name == "code").unwrap().1.into_owned();
+        let response = http.post(format!("{base}/oauth/token"))
+            .form(&[("grant_type","authorization_code"),("client_id",client_id),("code",&code),("code_verifier",VERIFIER),("redirect_uri",CALLBACK),("resource",resource)]).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        response.json::<Value>().await.unwrap()["access_token"].as_str().unwrap().to_owned()
+    }
 
     #[test]
     fn controller_claims_are_explicit_and_cannot_claim_trusted_provenance() {

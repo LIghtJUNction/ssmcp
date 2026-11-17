@@ -295,12 +295,37 @@ class Dashboard(Harness):
             f"return await fs.{method}({json.dumps(self.client_id)}, {json.dumps(arguments)});"
         })["result"]
 
+    def native_until(self, frontend, cursor, marker, *, timeout=8):
+        """Read the real hidden terminal by cursor, without using physical keys."""
+        output = bytearray()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            result = self.call("terminal.read", {"cursor": cursor, "max_bytes": 4096, "wait_ms": 100})
+            if result.get("spilled"):
+                raise AssertionError("small native-terminal fixture unexpectedly exceeded inline output")
+            cursor = result["next_cursor"]
+            output.extend(base64.b64decode(result["data_base64"]))
+            frontend.pump(0.05)
+            if marker.encode() in output:
+                return bytes(output), cursor
+            if result.get("output_eof"):
+                raise AssertionError("native terminal exited before the fixture marker")
+        raise AssertionError(f"timed out reading native-terminal marker {marker}")
+
     def pane_size(self, frontend, expected, marker):
-        frontend.send(f"printf '{marker}='; stty size\n")
-        snapshot = frontend.until(lambda s: f"{marker}={expected[0]} {expected[1]}" in text(s),
-                                  f"inner PTY dimensions {expected}")
-        self.check(f"{marker}={expected[0]} {expected[1]}" in text(snapshot),
-                   f"real child PTY reports {expected[0]} rows and {expected[1]} columns")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            frontend.pump(0.05)
+            pane = self.call("ssmcp.ui.get")["display"]["panes"]["audit"]
+            if (pane["rows"], pane["cols"]) == expected:
+                break
+        else:
+            raise AssertionError(f"display did not resize to native viewport {expected}")
+        cursor = self.call("terminal.status")["next_cursor"]
+        self.call("terminal.write", {"data": f"printf '{marker}='; stty size\n"})
+        output, _ = self.native_until(frontend, cursor, f"{marker}={expected[0]} {expected[1]}")
+        self.check(f"{marker}={expected[0]} {expected[1]}".encode() in output,
+                   f"real hidden PTY reports {expected[0]} rows and {expected[1]} columns through native API")
 
     def run(self):
         self.prepare()
@@ -314,7 +339,7 @@ class Dashboard(Harness):
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5)
         front = self.frontend("dashboard", self.config("dashboard"))
         self.oauth_login(front.credentials)
-        front.until(lambda s: s["alternate_screen"] and "Tasks · 0 running" in text(s),
+        front.until(lambda s: s["alternate_screen"] and "Code mode" in text(s),
                     "NO_COLOR dashboard and sidebar")
         self.check(True, "a real foreground TTY enables the dashboard even with NO_COLOR")
         front.until(lambda s: "Clean working tree" in text(s), "a real clean Git observation")
@@ -330,7 +355,7 @@ class Dashboard(Harness):
             return tuple(result.stdout.rstrip("\n").split("\0", 1))
 
         def sidebar(snapshot):
-            return region(snapshot, 0, 57, 78, 106)
+            return region(snapshot, 0, 57, 76, 106)
 
         initial_head, initial_subject = owned_head()
         initial_history = front.until(
@@ -341,20 +366,41 @@ class Dashboard(Harness):
         self.check(initial_head in sidebar(initial_history)
                    and initial_subject in sidebar(initial_history),
                    "sidebar recent commits match the real owned Git HEAD and subject")
-        self.pane_size(front, (18, 77), "DASH_SIZE_106")
+        self.pane_size(front, (23, 75), "DASH_SIZE_106")
         initial = front.snapshot(cells=True)
-        self.check("Tasks · 0 running" in region(initial, 0, 57, 78, 106)
-                   and "Shell · 1/1 · main · F7 Next · 77×18" in region(initial, 38, 39, 0, 77),
-                   "106-column physical screen has distinct 77-column left panes and 28-column sidebar")
-        self.check(initial["cursor"][0] >= 39 and initial["cursor"][1] < 77,
-                   "physical cursor is translated into the interactive shell pane")
+        self.check("Clean working tree" in sidebar(initial)
+                   and "CODE_MODE" in region(initial, 33, 34, 0, 75)
+                   and "Code mode" in region(initial, 34, 57, 0, 75),
+                   "106-column screen has 75-column log/audit panes and a 30-column sidebar")
+        self.check(initial["hide_cursor"] and not initial["application_cursor"]
+                   and not initial["application_keypad"] and initial["bracketed_paste"],
+                   "audit navigation owns physical input modes and keeps the hidden shell cursor invisible")
+        front.send("touch invisible-shell-leak\n")
+        front.pump(0.2)
+        self.check(not (self.workspace / "invisible-shell-leak").exists(),
+                   "typing into the audit interface never runs commands in a hidden shell")
 
-        for columns, expected in ((80, (18, 80)), (160, (18, 123)), (106, (18, 77))):
+        source = ('const auditMarker = "DASH_CODE_MODE_SOURCE";\n'
+                  f'await call({json.dumps(self.client_id)}, "terminal.status", {{}});\n'
+                  'return auditMarker;')
+        result = self.public_call("code_mode", {"code": source})
+        self.check(result["result"] == "DASH_CODE_MODE_SOURCE", "owned code_mode fixture executes through the real public API")
+        front.until(lambda s: "DASH_CODE_MODE_SOURCE" in text(s), "real source arriving in the audit list")
+        front.send(b"\r")
+        front.until(lambda s: "return auditMarker;" in text(s), "Enter opening real code_mode source")
+        selected = self.call("ssmcp.ui.get")["display"]["audit"]["selected"]
+        self.check(selected["code"] == source and selected["success"] is True,
+                   "opened audit entry retains the exact sanitized source and authoritative final result")
+        front.send(b"\x1b[D")
+        front.until(lambda s: "Enter inspect" in text(s), "Left returning to the code_mode list")
+
+        for columns, expected in ((80, (23, 80)), (160, (23, 129)), (106, (23, 75))):
             front.resize(58, columns)
             self.pane_size(front, expected, f"DASH_SIZE_{columns}_RESIZED")
-            shot = front.snapshot()
-            self.check(("Tasks · 0 running" in text(shot)) == (columns >= 96),
-                       f"SIGWINCH at {columns} columns updates both child dimensions and sidebar visibility")
+            shot = front.snapshot(cells=True)
+            self.check(("Clean working tree" in text(shot)) == (columns >= 96),
+                       f"SIGWINCH at {columns} columns updates child dimensions and sidebar visibility")
+            self.check(shot["hide_cursor"], "resizing preserves audit input ownership")
 
         first = self.run_job([sys.executable, "-c", "import time; time.sleep(8)"])
         second = self.run_job([sys.executable, "-c", "import time; time.sleep(8)"])
@@ -362,12 +408,13 @@ class Dashboard(Harness):
         self.check(first["job_id"] != second["job_id"], "two independent tasks have different identities in the live sidebar")
         front.pump(6.1)
         shot = front.snapshot(cells=True)
-        side = region(shot, 0, 57, 78, 106)
+        side = region(shot, 0, 57, 76, 106)
         self.check(re.search(r"[6-7](?:\.\d+)?s", side) is not None and "%" not in side,
                    "tasks silent for over six seconds show elapsed time without inventing a completion percentage")
         self.finish_job(first, front)
         self.finish_job(second, front)
-        front.until(lambda s: "Tasks · 0 running" in text(s), "completed tasks leaving the active sidebar")
+        front.until(lambda s: "Tasks · 2 running" not in text(s) and "Tasks · 1 running" not in text(s),
+                    "completed tasks leaving the active sidebar")
 
         # Build markers from pieces so the readable command preview cannot
         # satisfy or duplicate the stream-content assertions below.
@@ -377,15 +424,15 @@ class Dashboard(Harness):
         self.finish_job(output, front)
         front.until(lambda s: "DASH_STDERR_ONCE" in text(s), "real stderr in the observation pane")
         shot = front.snapshot(cells=True)
-        logs = region(shot, 0, 38, 0, 77)
-        shell = region(shot, 39, 57, 0, 77)
+        logs = region(shot, 0, 33, 0, 75)
+        audit = region(shot, 34, 57, 0, 75)
         self.check(logs.count("DASH_STDOUT_ONCE") == 1 and logs.count("DASH_STDERR_ONCE") == 1
-                   and "DASH_STDOUT_ONCE" not in shell and "DASH_STDERR_ONCE" not in shell,
-                   "stdout and stderr appear once in logs and never overwrite the manual shell")
+                   and "DASH_STDOUT_ONCE" not in audit and "DASH_STDERR_ONCE" not in audit,
+                   "stdout and stderr appear once in logs and never overwrite code_mode navigation")
         self.call("ssmcp.exec.read", {"job_id": output["job_id"], "max_bytes": 4096})
         self.call("ssmcp.exec.wait", {"job_id": output["job_id"], "wait_ms": 0})
         shot = front.snapshot(cells=True)
-        logs = region(shot, 0, 38, 0, 77)
+        logs = region(shot, 0, 33, 0, 75)
         self.check(logs.count("DASH_STDOUT_ONCE") == 1 and logs.count("DASH_STDERR_ONCE") == 1,
                    "read and wait do not replay stream content in the dashboard")
 
@@ -426,35 +473,49 @@ class Dashboard(Harness):
         fixture.write_text(QUERY_FIXTURE)
         query_result = self.directory / "native-query.json"
         release = self.directory / "release-inner-alt"
-        front.send(shlex.join([sys.executable, str(fixture), str(query_result), str(release)]) + "\n")
-        front.until(lambda s: "INNER_ALT_SCREEN" in text(s), "inner full-screen application")
-        shot = front.snapshot(cells=True)
-        self.check("INNER_ALT_SCREEN" in region(shot, 39, 57, 0, 77)
-                   and "Tasks · 0 running" in region(shot, 0, 57, 78, 106)
-                   and "INNER_ALT_SCREEN" not in region(shot, 0, 38, 0, 77),
-                   "inner alternate screen, clear and extreme cursor movement cannot erase logs or sidebar")
-        release.write_text("continue\n")
-        front.until(lambda s: "DASH_QUERY_DONE" in text(s), "native terminal query replies")
-        queries = json.loads(query_result.read_text())
-        self.check(queries == {"cpr": "\x1b[3;4R", "size": "\x1b[8;18;77t",
-                               "status": "\x1b[0n", "device": "\x1b[?1;2c"},
-                   "CPR, size, status and device queries use virtual shell coordinates and bounded local replies")
-        shot = front.snapshot(cells=True)
-        wide = [cell for row in shot["cells"][39:57] for cell in row[:77] if cell["text"] == "界"]
-        combined = [cell for row in shot["cells"][39:57] for cell in row[:77] if cell["text"] == "e\u0301"]
-        self.check(bool(wide) and wide[0]["wide"] and bool(combined),
-                   "real wide and combining Unicode remain correctly represented in terminal cells")
+        native_cursor = self.call("terminal.status")["next_cursor"]
+        self.call("terminal.write", {"data": shlex.join([sys.executable, str(fixture), str(query_result), str(release)]) + "\n"})
+        before, native_cursor = self.native_until(front, native_cursor, "INNER_ALT_SCREEN")
+        native_decoder = Decoder(self.decoder)
+        try:
+            native_decoder.request(op="resize", rows=23, cols=75)
+            native_decoder.feed(before)
+            native = native_decoder.request(op="snapshot", cells=True)
+            self.check(native["alternate_screen"] and "INNER_ALT_SCREEN" in text(native),
+                       "native API retains a real interactive PTY and its alternate screen")
+            shot = front.snapshot(cells=True)
+            self.check("INNER_ALT_SCREEN" not in text(shot)
+                       and "Code mode" in region(shot, 34, 57, 0, 75)
+                       and "Recent commits" in sidebar(shot),
+                       "hidden terminal clear and extreme cursor movement cannot erase audit panes or sidebar")
+            release.write_text("continue\n")
+            after, native_cursor = self.native_until(front, native_cursor, "DASH_QUERY_DONE")
+            native_decoder.feed(after)
+            queries = json.loads(query_result.read_text())
+            self.check(queries == {"cpr": "\x1b[3;4R", "size": "\x1b[8;23;75t",
+                                   "status": "\x1b[0n", "device": "\x1b[?1;2c"},
+                       "CPR, size, status and device queries still use real hidden PTY coordinates and bounded replies")
+            native = native_decoder.request(op="snapshot", cells=True)
+            wide = [cell for row in native["cells"] for cell in row if cell["text"] == "界"]
+            combined = [cell for row in native["cells"] for cell in row if cell["text"] == "e\u0301"]
+            self.check(bool(wide) and wide[0]["wide"] and bool(combined),
+                       "native terminal reads preserve real wide and combining Unicode cells")
+        finally:
+            native_decoder.close()
 
         history = self.run_job([sys.executable, "-c",
             "import sys; sys.stdout.write(''.join('DASH_AUDIT_%04d\\n'%i for i in range(700))); sys.stdout.flush()"])
         self.finish_job(history, front)
         front.until(lambda s: "DASH_AUDIT_0699" in text(s), "last live audit line")
-        front.send(b"\x1b[17~")
-        front.until(lambda s: "Logs · PgUp/PgDn" in s["rows"][-1], "F6 log focus")
+        front.send(b"\x1b[<64;5;5M")
+        front.pump(0.1)
+        display = self.call("ssmcp.ui.get")["display"]
+        self.check(display["log_scrollback"] > 0,
+                   "the wheel scrolls real log history directly without F6 or a focus switch")
         front.send(b"\x1b[5~")
         paged = front.until(lambda s: "DASH_AUDIT_0699" not in text(s)
-                            and "DASH_AUDIT_" in text(s), "page-up history")
-        self.check(paged["hide_cursor"], "log focus hides the shell cursor while PageUp reveals prior real output")
+                            and "DASH_AUDIT_" in text(s), "direct PageUp history")
+        self.check(paged["hide_cursor"], "PageUp reveals prior output while the audit interface retains input ownership")
         front.send(b"\x1b[H")
         oldest = front.until(lambda s: any(int(n) < 300 for n in re.findall(r"DASH_AUDIT_(\d{4})", text(s))),
                              "Home at the retained history boundary")
@@ -462,21 +523,19 @@ class Dashboard(Harness):
         front.send(b"\x1b[F")
         front.until(lambda s: "DASH_AUDIT_0699" in text(s), "End at the live tail")
         front.send(b"\x1b")
-        front.until(lambda s: "Shell · F6 Logs" in s["rows"][-1] and not s["hide_cursor"], "Escape back to shell")
-        self.check(True, "End and Escape restore live logs and the real shell cursor")
-        front.send(b"\x1b[17~\x1b[5~x")
-        front.until(lambda s: "Shell · F6 Logs" in s["rows"][-1]
-                    and "DASH_AUDIT_0699" in text(s), "combined shortcut chunk returning to the tail")
-        front.send(b"\x15")
-        self.check(True, "one input chunk containing F6, PageUp and text returns shell focus to live logs")
-
-        front.send(b"\x1b[17~")
-        front.until(lambda s: "Logs · PgUp/PgDn" in s["rows"][-1], "log focus before tiny resize")
+        front.until(lambda s: "Wheel" in s["rows"][-1] and s["hide_cursor"], "Escape retaining audit navigation")
+        self.check(True, "End restores live logs and Escape never focuses a hidden shell")
+        front.send(b"\x1b[5~x")
+        front.until(lambda s: "DASH_AUDIT_0699" not in text(s) and "DASH_AUDIT_" in text(s),
+                    "coalesced PageUp and text retaining scroll position")
+        self.check(self.call("ssmcp.ui.get")["display"]["log_scrollback"] > 0,
+                   "typing after PageUp neither jumps to the live tail nor sends shell input")
+        front.send(b"\x1b[F")
         front.resize(4, 80)
-        front.until(lambda s: "compact view" in text(s) and "F6" not in text(s), "tiny terminal prioritizing shell")
-        self.check(not front.snapshot()["hide_cursor"], "shrinking below log-pane height returns visible focus to the shell")
+        tiny = front.until(lambda s: "Code mode" in text(s) and "F6" not in text(s), "tiny terminal showing audit navigation")
+        self.check(tiny["hide_cursor"], "shrinking below log-pane height keeps the hidden shell inaccessible")
         front.resize(58, 106)
-        self.pane_size(front, (18, 77), "DASH_SIZE_FINAL")
+        self.pane_size(front, (23, 75), "DASH_SIZE_FINAL")
         final, restored = front.disconnect()
         self.check(not final["alternate_screen"] and not final["hide_cursor"]
                    and not final["application_cursor"] and not final["bracketed_paste"],

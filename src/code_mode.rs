@@ -9,8 +9,8 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     process::Stdio,
-    sync::Arc,
-    time::Duration,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -19,7 +19,7 @@ use tokio::{
     task::JoinSet,
 };
 
-pub const MAX_CODE_BYTES: usize = 64 * 1024;
+pub const MAX_CODE_BYTES: usize = crate::wire::MAX_CODE_BYTES;
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_TIMEOUT_MS: u64 = 900_000;
 pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
@@ -32,6 +32,104 @@ pub const MAX_CONCURRENT: usize = 4;
 const MAX_ERROR_BYTES: usize = 4096;
 static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
 static PREPARATIONS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
+
+/// Scoped around each host callback, including built-in workspace bridges. A
+/// client receives source only when an authorized native call is dispatched to
+/// that client; discovery inventory alone never broadcasts the program.
+#[derive(Clone)]
+pub(crate) struct AuditRun {
+    pub context: Arc<crate::wire::CodeContext>,
+    pub controller: Option<crate::wire::Controller>,
+    targets: Arc<Mutex<HashSet<String>>>,
+    finished: Arc<Mutex<Option<crate::wire::CodeCompletion>>>,
+    started: Instant,
+}
+
+tokio::task_local! {
+    pub(crate) static AUDIT_RUN: AuditRun;
+}
+
+impl AuditRun {
+    pub(crate) fn new(
+        code: &str,
+        controller: Option<crate::wire::Controller>,
+    ) -> Result<Self, String> {
+        let mut bytes = [0u8; 16];
+        crate::platform::random_bytes(&mut bytes)
+            .map_err(|_| "cannot allocate code audit run ID")?;
+        let context = crate::wire::CodeContext {
+            run_id: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+            code: code.into(),
+            timestamp_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+        };
+        context.validate()?;
+        Ok(Self {
+            context: Arc::new(context),
+            controller,
+            targets: Arc::new(Mutex::new(HashSet::new())),
+            finished: Arc::new(Mutex::new(None)),
+            started: Instant::now(),
+        })
+    }
+
+    pub(crate) fn dispatched(&self, client_id: &str) {
+        self.targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(client_id.into());
+    }
+
+    pub(crate) fn targets(&self) -> Vec<String> {
+        let mut targets = self
+            .targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets
+    }
+
+    pub(crate) fn completion(&self, result: &Result<Value, String>) -> crate::wire::CodeCompletion {
+        let completion = crate::wire::CodeCompletion {
+            run_id: self.context.run_id.clone(),
+            success: result.is_ok(),
+            status: if result.is_ok() {
+                "completed"
+            } else if result
+                .as_ref()
+                .is_err_and(|error| error.starts_with("code_mode timed out"))
+            {
+                "timeout"
+            } else {
+                "failed"
+            }
+            .into(),
+            duration_ms: self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            error: result
+                .as_ref()
+                .err()
+                .map(|error| bounded(error.clone(), 4000)),
+        };
+        *self
+            .finished
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(completion.clone());
+        completion
+    }
+
+    pub(crate) fn completed(&self) -> Option<crate::wire::CodeCompletion> {
+        self.finished
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -935,6 +1033,37 @@ mod tests {
             "old-generation"
         );
         assert_eq!(output["result"]["closed"]["name"], "ssmcp.session.close");
+        assert_eq!(output["result"]["frozen"], true);
+    }
+
+    #[tokio::test]
+    async fn ui_helpers_dispatch_atomic_client_operations_without_rewriting_arguments() {
+        let _guard = TESTS.lock().await;
+        let output = run_code(
+            r#"
+            return {
+                state: await ui.get('one'),
+                theme: await ui.set('one',{theme:'nord'}),
+                action: await ui.action('one',{action:'audit.open'}),
+                filter: await ui.filter('one',{text:'cargo',level:'commands'}),
+                frozen: Object.isFrozen(ui)
+            };
+        "#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(output["result"]["state"]["name"], "ssmcp.ui.get");
+        assert_eq!(output["result"]["state"]["arguments"], json!({}));
+        assert_eq!(output["result"]["theme"]["arguments"]["theme"], "nord");
+        assert_eq!(
+            output["result"]["action"]["arguments"]["action"],
+            "audit.open"
+        );
+        assert_eq!(output["result"]["filter"]["name"], "ssmcp.ui.filter");
+        assert_eq!(
+            output["result"]["filter"]["arguments"],
+            json!({"text":"cargo","level":"commands"})
+        );
         assert_eq!(output["result"]["frozen"], true);
     }
 
