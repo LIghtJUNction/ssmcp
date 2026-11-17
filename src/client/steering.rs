@@ -96,8 +96,8 @@ impl Record {
         if self.message.state == SteeringState::Editing {
             return "editing";
         }
-        if !connected && self.safe_to_publish {
-            "offline"
+        if self.safe_to_publish {
+            if connected { "sending" } else { "offline" }
         } else {
             "queued"
         }
@@ -1521,12 +1521,24 @@ mod tests {
             ..Manager::default()
         };
         let mut receiver = restored.connect("room_two", 7);
+        assert_eq!(
+            restored.snapshot()["queue"][0]["status"],
+            "sending",
+            "a reclaimed record is not server-queued in its replacement room yet"
+        );
         ready(&mut restored, &mut receiver, "room_two");
         restored.poll().unwrap();
-        let (_, request) = command(&mut restored, &mut receiver);
+        let (id, request) = command(&mut restored, &mut receiver);
         assert!(
             matches!(request, SteeringCommand::Publish { expected_revision: 0, text, target, .. } if text == "known undelivered" && target == "next")
         );
+        assert_eq!(restored.snapshot()["queue"][0]["status"], "sending");
+        let mut accepted = restored.outbox.records[0].message.clone();
+        accepted.revision = 1;
+        restored
+            .reply(id, Ok(snapshot_for("room_two", 1, vec![accepted])))
+            .unwrap();
+        assert_eq!(restored.snapshot()["queue"][0]["status"], "queued");
     }
 
     #[test]

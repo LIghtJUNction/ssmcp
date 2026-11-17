@@ -502,13 +502,27 @@ class Harness:
                 f'exec {command} "$@" {extra}\n'
             )
             wrapper.chmod(0o700)
+        # Cached account credentials can automatically select GitHub SSH ACLs.
+        # These login-code fixtures must neither consult that account nor reuse
+        # the invoking developer session's lifecycle or reload handoff state.
+        state = self.directory / f"{label}-state"
+        state.mkdir(mode=0o700)
+        (state / "auth").mkdir(mode=0o700)
+        (state / "sessions").mkdir(mode=0o700)
+        config = state / "config.toml"
+        config.write_text("")
         inherited = {key: value for key, value in os.environ.items()
-                     if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "SSMCP_PLAYWRIGHT_MCP")}
+                     if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "SSMCP_PLAYWRIGHT_MCP",
+                                    "SSMCP_SESSION_GENERATION", "SSMCP_CLIENT_OUTBOX", "SSMCP_OUTPUT_RELOAD")}
         return {
             **inherited,
             "PATH": str(directory.resolve()),
             "ENV": "/dev/null",
             "BASH_ENV": "/dev/null",
+            "SSMCP_AUTH_HOME": str(state / "auth"),
+            "SSMCP_SESSION_HOME": str(state / "sessions"),
+            "SSMCP_CLIENT_CONFIG": str(config),
+            "SSMCP_UI_CONFIG": str(config),
         }
 
     def start_client(self, label="client", *, name="workstation", cwd=None, harness=None,

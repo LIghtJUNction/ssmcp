@@ -210,11 +210,106 @@ const ACTIONS: &[&str] = &[
     "logs.end",
 ];
 
-fn validate_get(arguments: &Value) -> Result<(), String> {
-    if !arguments.as_object().is_some_and(|args| args.is_empty()) {
-        return Err("ssmcp.ui.get takes no arguments".into());
+const MAX_PROJECTION_BYTES: usize = 8 * 1024;
+const MAX_PROJECTION_LIMIT: usize = 4096;
+
+#[derive(Debug)]
+struct GetProjection {
+    path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+fn parse_get(arguments: &Value) -> Result<Option<GetProjection>, String> {
+    let args = arguments
+        .as_object()
+        .ok_or("expected an empty object or a path with optional offset and limit")?;
+    if args.is_empty() {
+        return Ok(None);
     }
-    Ok(())
+    if args
+        .keys()
+        .any(|key| !matches!(key.as_str(), "path" | "offset" | "limit"))
+    {
+        return Err("ui.get accepts only path, offset and limit".into());
+    }
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("ui.get path must be a nonempty JSON Pointer string")?;
+    let mut chars = path.chars();
+    if chars.next() != Some('/') {
+        return Err("ui.get path must be a nonempty JSON Pointer beginning with /".into());
+    }
+    while let Some(ch) = chars.next() {
+        if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
+            return Err("ui.get path must use ~0 for ~ and ~1 for / in object keys".into());
+        }
+    }
+    let number = |name: &str| {
+        args.get(name)
+            .map(|value| {
+                value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| format!("ui.get {name} must be a nonnegative integer"))
+            })
+            .transpose()
+    };
+    let offset = number("offset")?;
+    let limit = number("limit")?;
+    if limit.is_some_and(|limit| !(1..=MAX_PROJECTION_LIMIT).contains(&limit)) {
+        return Err("ui.get limit must be between 1 and 4096".into());
+    }
+    Ok(Some(GetProjection {
+        path: path.into(),
+        offset,
+        limit,
+    }))
+}
+
+fn project_snapshot(snapshot: Value, projection: Option<GetProjection>) -> Result<Value, String> {
+    let Some(projection) = projection else {
+        return Ok(snapshot);
+    };
+    let selected = snapshot
+        .pointer(&projection.path)
+        .ok_or("ui.get path does not exist in the current snapshot")?;
+    let mut response = json!({"schema_version":1,"path":projection.path});
+    let offset = projection.offset.unwrap_or(0);
+    let page = match selected {
+        Value::Array(values) => Some((values.len(), projection.limit.unwrap_or(32))),
+        Value::String(text) => Some((text.chars().count(), projection.limit.unwrap_or(1024))),
+        _ if projection.offset.is_some() || projection.limit.is_some() => {
+            return Err("ui.get offset and limit are only valid for arrays and strings".into());
+        }
+        _ => None,
+    };
+    if let Some((total, limit)) = page {
+        if offset > total {
+            return Err("ui.get offset exceeds the selected array or string length".into());
+        }
+        let end = offset.saturating_add(limit).min(total);
+        response["value"] = match selected {
+            Value::Array(values) => json!(&values[offset..end]),
+            Value::String(text) => json!(text.chars().skip(offset).take(limit).collect::<String>()),
+            _ => unreachable!("only arrays and strings are paged"),
+        };
+        response["total"] = json!(total);
+        if end < total {
+            response["next_offset"] = json!(end);
+        }
+    } else {
+        response["value"] = selected.clone();
+    }
+    let bytes = serde_json::to_vec(&response).map_err(|_| "cannot serialize UI projection")?;
+    if bytes.len() > MAX_PROJECTION_BYTES {
+        return Err(
+            "ui.get projection exceeds 8 KiB; choose a narrower path or a smaller page limit"
+                .into(),
+        );
+    }
+    Ok(response)
 }
 
 fn parse_set(current: &Ui, arguments: Value) -> Result<(Ui, bool), String> {
@@ -383,8 +478,8 @@ pub(crate) async fn call(
         match name {
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
             "ssmcp.ui.get" => {
-                validate_get(&arguments)?;
-                return Ok(get());
+                let projection = parse_get(&arguments)?;
+                return project_snapshot(get(), projection);
             }
             "ssmcp.ui.set" => {
                 let (ui, persist) = parse_set(&render::current_ui(), arguments)?;
@@ -437,10 +532,28 @@ pub(crate) fn tools() -> Vec<Value> {
     vec![
         queue_tool(),
         json!({"name":"ssmcp.ui.filter","description":"Filter the retained visible log history by case-insensitive text and all/commands/errors. Matching blocks keep their output. Does not alter audit events or running commands.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string","maxLength":256,"description":"Plain text, at most 256 UTF-8 bytes; empty clears the text filter."},"level":{"type":"string","enum":["all","commands","errors"]}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
-        json!({"name":"ssmcp.ui.get","description":"Read versioned display configuration, layout and sanitized controller/task/progress/Git state. Works with or without the built-in TUI. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
+        get_tool(),
         json!({"name":"ssmcp.ui.set","description":"Validate and apply a partial display configuration immediately. Colors merge by key; panels replace the ordered list. Set persist:true to save to this client's UI config. Running jobs and terminal contents are retained.","inputSchema":{"type":"object","required":["patch"],"additionalProperties":false,"properties":{"patch":{"type":"object","properties":properties,"additionalProperties":false},"persist":{"type":"boolean","default":false}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
     ]
+}
+
+fn get_tool() -> Value {
+    json!({
+        "name":"ssmcp.ui.get",
+        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
+        "inputSchema":{
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{
+                "path":{"type":"string","minLength":1,"pattern":"^/(?:[^~]|~[01])*$","description":"RFC 6901 JSON Pointer to an existing snapshot value. Use ~0 for ~ and ~1 for / inside object keys. Empty root paths are not allowed; omit all arguments for the full snapshot."},
+                "offset":{"type":"integer","minimum":0,"default":0,"description":"Array item or Unicode code point offset, up to the selected value's total length. Requires path to an array or string."},
+                "limit":{"type":"integer","minimum":1,"maximum":MAX_PROJECTION_LIMIT,"description":"Maximum items or Unicode code points per page. Defaults to 32 for arrays and 1024 for strings. Requires path to an array or string; the serialized response must still fit in 8 KiB."}
+            },
+            "oneOf":[{"maxProperties":0},{"required":["path"]}]
+        },
+        "annotations":{"readOnlyHint":true,"destructiveHint":false}
+    })
 }
 
 fn queue_tool() -> Value {
@@ -487,24 +600,212 @@ mod tests {
     }
 
     #[test]
-    fn get_accepts_only_the_declared_empty_object() {
-        assert!(validate_get(&json!({})).is_ok());
-        for value in [
-            Value::Null,
-            json!([]),
-            json!(""),
-            json!({"extra":"private-fixture"}),
-        ] {
-            let error = validate_get(&value).unwrap_err();
-            assert!(!error.contains("private-fixture"));
-        }
+    fn get_advertises_empty_snapshot_requests_and_bounded_projections() {
+        assert!(parse_get(&json!({})).unwrap().is_none());
         let schema = tools()
             .into_iter()
             .find(|tool| tool["name"] == "ssmcp.ui.get")
             .unwrap();
         assert_eq!(schema["annotations"]["readOnlyHint"], true);
         assert_eq!(schema["inputSchema"]["additionalProperties"], false);
-        assert_eq!(schema["inputSchema"]["properties"], json!({}));
+        assert_eq!(
+            schema["inputSchema"]["oneOf"],
+            json!([{"maxProperties":0},{"required":["path"]}])
+        );
+        let properties = &schema["inputSchema"]["properties"];
+        assert_eq!(properties["path"]["minLength"], 1);
+        assert_eq!(properties["offset"]["minimum"], 0);
+        assert_eq!(properties["limit"]["minimum"], 1);
+        assert_eq!(properties["limit"]["maximum"], MAX_PROJECTION_LIMIT);
+    }
+
+    fn read_projection(snapshot: &Value, arguments: Value) -> Result<Value, String> {
+        project_snapshot(snapshot.clone(), parse_get(&arguments)?)
+    }
+
+    #[test]
+    fn get_projection_excludes_large_unrelated_audit_history() {
+        let snapshot = json!({
+            "schema_version":1,
+            "config":{"theme":"dark"},
+            "display":{
+                "conversation":{"view":"activity","composer":{"text":"draft","cursor":5}},
+                "audit":{"entries":[{"code":"x".repeat(40_000)}]}
+            }
+        });
+        assert!(serde_json::to_vec(&snapshot).unwrap().len() > 32 * 1024);
+        assert_eq!(read_projection(&snapshot, json!({})).unwrap(), snapshot);
+        let projected =
+            read_projection(&snapshot, json!({"path":"/display/conversation"})).unwrap();
+        assert_eq!(
+            projected,
+            json!({
+                "schema_version":1,
+                "path":"/display/conversation",
+                "value":{"view":"activity","composer":{"text":"draft","cursor":5}}
+            })
+        );
+        assert!(serde_json::to_vec(&projected).unwrap().len() < MAX_PROJECTION_BYTES);
+        assert_eq!(
+            read_projection(&snapshot, json!({"path":"/config"})).unwrap()["value"],
+            snapshot["config"]
+        );
+    }
+
+    #[test]
+    fn get_array_pages_report_total_and_only_a_real_next_offset() {
+        let snapshot = json!({"queue":(0..40).collect::<Vec<_>>(),"empty":[]});
+        let first = read_projection(&snapshot, json!({"path":"/queue"})).unwrap();
+        assert_eq!(first["value"], json!((0..32).collect::<Vec<_>>()));
+        assert_eq!(first["total"], 40);
+        assert_eq!(first["next_offset"], 32);
+        let last =
+            read_projection(&snapshot, json!({"path":"/queue","offset":32,"limit":4096})).unwrap();
+        assert_eq!(last["value"], json!((32..40).collect::<Vec<_>>()));
+        assert_eq!(last["total"], 40);
+        assert!(last.get("next_offset").is_none());
+        let exhausted =
+            read_projection(&snapshot, json!({"path":"/queue","offset":40,"limit":1})).unwrap();
+        assert_eq!(exhausted["value"], json!([]));
+        assert_eq!(exhausted["total"], 40);
+        assert!(exhausted.get("next_offset").is_none());
+        assert_eq!(
+            read_projection(&snapshot, json!({"path":"/empty"})).unwrap(),
+            json!({"schema_version":1,"path":"/empty","value":[],"total":0})
+        );
+    }
+
+    #[test]
+    fn get_string_pages_count_unicode_code_points_and_preserve_exact_text() {
+        let snapshot = json!({"text":"A界🦀e\u{301}Z","long":"界".repeat(1100)});
+        let page =
+            read_projection(&snapshot, json!({"path":"/text","offset":1,"limit":3})).unwrap();
+        assert_eq!(
+            page,
+            json!({"schema_version":1,"path":"/text","value":"界🦀e","total":6,"next_offset":4})
+        );
+        let combining =
+            read_projection(&snapshot, json!({"path":"/text","offset":4,"limit":1})).unwrap();
+        assert_eq!(combining["value"], "\u{301}");
+        assert_eq!(combining["next_offset"], 5);
+        let exhausted = read_projection(&snapshot, json!({"path":"/text","offset":6})).unwrap();
+        assert_eq!(exhausted["value"], "");
+        assert_eq!(exhausted["total"], 6);
+        assert!(exhausted.get("next_offset").is_none());
+        let default = read_projection(&snapshot, json!({"path":"/long"})).unwrap();
+        assert_eq!(default["value"], "界".repeat(1024));
+        assert_eq!(default["total"], 1100);
+        assert_eq!(default["next_offset"], 1024);
+    }
+
+    #[test]
+    fn get_rejects_invalid_argument_types_and_pointer_syntax_without_echoing_input() {
+        for arguments in [
+            Value::Null,
+            json!([]),
+            json!(["/config", 0, 32]),
+            json!("private-fixture"),
+            json!({"extra":"private-fixture"}),
+            json!({"offset":0}),
+            json!({"limit":32}),
+            json!({"path":null}),
+            json!({"path":17}),
+            json!({"path":""}),
+            json!({"path":"private-fixture"}),
+            json!({"path":"#/config"}),
+            json!({"path":"/private-fixture~"}),
+            json!({"path":"/~2private-fixture"}),
+            json!({"path":"/config","extra":"private-fixture"}),
+            json!({"path":"/queue","offset":null}),
+            json!({"path":"/queue","offset":-1}),
+            json!({"path":"/queue","offset":1.5}),
+            json!({"path":"/queue","offset":"private-fixture"}),
+            json!({"path":"/queue","limit":null}),
+            json!({"path":"/queue","limit":false}),
+            json!({"path":"/queue","limit":1.5}),
+            json!({"path":"/queue","limit":"private-fixture"}),
+            json!({"path":"/queue","limit":0}),
+            json!({"path":"/queue","limit":4097}),
+        ] {
+            let error = parse_get(&arguments).unwrap_err();
+            assert!(!error.contains("private-fixture"));
+        }
+    }
+
+    #[test]
+    fn get_resolves_pointer_escapes_and_rejects_missing_paths_and_invalid_paging() {
+        let snapshot = json!({
+            "":{"present":true},
+            "a/b":{"~name":7,"~1":true},
+            "object":{"present":true},
+            "number":7,
+            "boolean":false,
+            "nothing":null,
+            "array":["one"],
+            "text":"界"
+        });
+        assert_eq!(
+            read_projection(&snapshot, json!({"path":"/a~1b/~0name"})).unwrap(),
+            json!({"schema_version":1,"path":"/a~1b/~0name","value":7})
+        );
+        assert_eq!(
+            read_projection(&snapshot, json!({"path":"/a~1b/~01"})).unwrap()["value"],
+            true
+        );
+        assert_eq!(
+            read_projection(&snapshot, json!({"path":"/"})).unwrap()["value"],
+            json!({"present":true})
+        );
+        assert_eq!(
+            read_projection(&snapshot, json!({"path":"/nothing"})).unwrap(),
+            json!({"schema_version":1,"path":"/nothing","value":null})
+        );
+        for arguments in [
+            json!({"path":"/missing/private-fixture"}),
+            json!({"path":"/array/01"}),
+            json!({"path":"/array/-"}),
+            json!({"path":"/object","offset":0}),
+            json!({"path":"/object","limit":1}),
+            json!({"path":"/number","offset":0}),
+            json!({"path":"/boolean","limit":1}),
+            json!({"path":"/nothing","offset":0}),
+            json!({"path":"/array","offset":2}),
+            json!({"path":"/text","offset":2}),
+            json!({"path":"/array","offset":u64::MAX}),
+        ] {
+            let error = read_projection(&snapshot, arguments).unwrap_err();
+            assert!(!error.contains("private-fixture"));
+        }
+    }
+
+    #[test]
+    fn get_rejects_oversized_serialized_projections_and_never_truncates_objects() {
+        let snapshot = json!({
+            "object":{"text":"private-fixture".repeat(1000)},
+            "items":[{"text":"x".repeat(5000)},{"text":"y".repeat(5000)}],
+            "unicode":"🦀".repeat(2200),
+            "escaped":"\0".repeat(1400)
+        });
+        for arguments in [
+            json!({"path":"/object"}),
+            json!({"path":"/items"}),
+            json!({"path":"/unicode","limit":2200}),
+            json!({"path":"/escaped","limit":1400}),
+        ] {
+            let error = read_projection(&snapshot, arguments).unwrap_err();
+            assert!(error.contains("8 KiB"));
+            assert!(error.contains("narrower path"));
+            assert!(error.contains("smaller page"));
+            assert!(!error.contains("private-fixture"));
+        }
+        let page = read_projection(&snapshot, json!({"path":"/items","limit":1})).unwrap();
+        assert_eq!(page["value"], json!([snapshot["items"][0]]));
+        assert_eq!(page["total"], 2);
+        assert_eq!(page["next_offset"], 1);
+        let text = read_projection(&snapshot, json!({"path":"/unicode","limit":1000})).unwrap();
+        assert_eq!(text["value"], "🦀".repeat(1000));
+        assert_eq!(text["next_offset"], 1000);
+        assert!(serde_json::to_vec(&text).unwrap().len() <= MAX_PROJECTION_BYTES);
     }
 
     #[test]

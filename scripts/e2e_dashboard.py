@@ -131,13 +131,34 @@ class Frontend:
             if self.process.poll() is not None:
                 break
         if b"\n" not in self.stdout:
+            detail = self.failure_detail()
             self.close()
-            raise AssertionError("PTY client did not return its private connection record")
+            raise AssertionError("PTY client did not return its private connection record\n" + detail)
         line, _, rest = self.stdout.partition(b"\n")
         self.stdout = bytearray(rest)
         self.credentials = json.loads(line)
         harness.sensitive.append(self.credentials["login_code"])
         self.client_id = self.credentials["client_id"]
+
+    def failure_detail(self):
+        """Capture the owned terminal before cleanup; stdout remains private."""
+        try:
+            screen = self.decoder.request(op="snapshot", cells=False)
+            visible = "\n".join(row.rstrip() for row in screen["rows"] if row.strip())
+        except (OSError, AssertionError, KeyError) as error:
+            visible = f"VT snapshot unavailable: {type(error).__name__}"
+        # A startup error can precede the credential parser. Never print stdout,
+        # and redact both known secrets and token-shaped strings on the PTY.
+        tail = self.transcript[-4096:].decode(errors="replace")
+        tail = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", tail)
+        detail = (f"client pid={self.process.pid} returncode={self.process.poll()} "
+                  f"stdout_bytes={len(self.stdout)} pty_bytes={len(self.transcript)}\n"
+                  f"Owned terminal snapshot:\n{visible[-6000:]}\n"
+                  f"Owned terminal tail:\n{tail[-2000:]}")
+        for secret in [self.harness.secret, *self.harness.sensitive]:
+            if secret:
+                detail = detail.replace(secret, "[redacted]")
+        return re.sub(r"\b[0-9a-fA-F]{64}\b", "[redacted-token]", detail)
 
     def pump(self, seconds=0.05):
         deadline = time.monotonic() + seconds
@@ -176,8 +197,8 @@ class Frontend:
             if predicate(snapshot):
                 return snapshot
             if self.process.poll() is not None:
-                raise AssertionError(f"client exited while waiting for {description}")
-        raise AssertionError(f"timed out waiting for {description}")
+                raise AssertionError(f"client exited while waiting for {description}\n{self.failure_detail()}")
+        raise AssertionError(f"timed out waiting for {description}\n{self.failure_detail()}")
 
     def send(self, data):
         if isinstance(data, str):
@@ -277,6 +298,12 @@ class Dashboard(Harness):
         self.client_id = frontend.client_id
         return frontend
 
+    def ui(self, path):
+        projection = self.call("ssmcp.ui.get", {"path": path})
+        if projection.get("schema_version") != 1 or projection.get("path") != path or "value" not in projection:
+            raise AssertionError(f"native UI projection did not return {path}")
+        return projection["value"]
+
     def run_job(self, command, *, timeout=10000):
         return self.call("ssmcp.exec.start", {"command": command, "timeout_ms": timeout})
 
@@ -316,7 +343,7 @@ class Dashboard(Harness):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             frontend.pump(0.05)
-            pane = self.call("ssmcp.ui.get")["display"]["panes"]["audit"]
+            pane = self.ui("/display/panes/audit")
             if (pane["rows"], pane["cols"]) == expected:
                 break
         else:
@@ -379,6 +406,11 @@ class Dashboard(Harness):
         front.pump(0.2)
         self.check(not (self.workspace / "invisible-shell-leak").exists(),
                    "typing into the audit interface never runs commands in a hidden shell")
+        # The Enter in the deliberately typed shell-like line is still an audit
+        # navigation key. Return from the selected detail before following a new
+        # source; new runs must not replace the source a user is inspecting.
+        front.send(b"\x1b[D")
+        front.until(lambda shot: "Enter inspect" in text(shot), "returning to the audit list after Enter")
 
         source = ('const auditMarker = "DASH_CODE_MODE_SOURCE";\n'
                   f'await call({json.dumps(self.client_id)}, "terminal.status", {{}});\n'
@@ -388,7 +420,7 @@ class Dashboard(Harness):
         front.until(lambda s: "DASH_CODE_MODE_SOURCE" in text(s), "real source arriving in the audit list")
         front.send(b"\r")
         front.until(lambda s: "return auditMarker;" in text(s), "Enter opening real code_mode source")
-        selected = self.call("ssmcp.ui.get")["display"]["audit"]["selected"]
+        selected = self.ui("/display/audit/selected")
         self.check(selected["code"] == source and selected["success"] is True,
                    "opened audit entry retains the exact sanitized source and authoritative final result")
         front.send(b"\x1b[D")
@@ -509,8 +541,8 @@ class Dashboard(Harness):
         front.until(lambda s: "DASH_AUDIT_0699" in text(s), "last live audit line")
         front.send(b"\x1b[<64;5;5M")
         front.pump(0.1)
-        display = self.call("ssmcp.ui.get")["display"]
-        self.check(display["log_scrollback"] > 0,
+        scrollback = self.ui("/display/log_scrollback")
+        self.check(scrollback > 0,
                    "the wheel scrolls real log history directly without F6 or a focus switch")
         front.send(b"\x1b[5~")
         paged = front.until(lambda s: "DASH_AUDIT_0699" not in text(s)
@@ -528,7 +560,7 @@ class Dashboard(Harness):
         front.send(b"\x1b[5~x")
         front.until(lambda s: "DASH_AUDIT_0699" not in text(s) and "DASH_AUDIT_" in text(s),
                     "coalesced PageUp and text retaining scroll position")
-        self.check(self.call("ssmcp.ui.get")["display"]["log_scrollback"] > 0,
+        self.check(self.ui("/display/log_scrollback") > 0,
                    "typing after PageUp neither jumps to the live tail nor sends shell input")
         front.send(b"\x1b[F")
         front.resize(4, 80)
