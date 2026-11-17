@@ -1,0 +1,347 @@
+{
+  "schema": "ssmcp.client-main-ui-gates.v1",
+  "status": "passed",
+  "source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+  "source_tree": "c7ccc2bb4d9722f52b314f0c0dc650c624cfb074",
+  "binary_source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+  "test_source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+  "started_at": "2026-11-17T23:14:01.557083+00:00",
+  "installed_prefix": "$INSTALLED_PREFIX",
+  "release_build_report": "release-build.json",
+  "artifacts": {
+    "ssmcp": {
+      "built_or_source_path": "$TARGET/release/ssmcp",
+      "installed_path": "$INSTALLED_PREFIX/usr/bin/ssmcp",
+      "sha256": "53882aa0fc9d8c95a6966c6191771931194858a3df6f586fb0644d92db815b50",
+      "bytes": 8021528,
+      "matches": true
+    },
+    "ssmcpd": {
+      "built_or_source_path": "$TARGET/release/ssmcpd",
+      "installed_path": "$INSTALLED_PREFIX/usr/bin/ssmcpd",
+      "sha256": "4efaf996193c075bb3328963c1e9728333e5a6f1430eb9d1f96896432a56862f",
+      "bytes": 5375864,
+      "matches": true
+    },
+    "code_mode_js": {
+      "built_or_source_path": "$SOURCE/src/code_mode.js",
+      "installed_path": "$INSTALLED_PREFIX/usr/libexec/ssmcp/code-mode.js",
+      "sha256": "57f014501bf0313f966935fbe1a05613aaf75816a569b65ff15346cc9d2a8bdf",
+      "bytes": 37747,
+      "matches": true
+    },
+    "vt_snapshot": {
+      "built_or_source_path": "$TARGET/release/examples/vt_snapshot",
+      "installed_path": "$INSTALLED_PREFIX/usr/bin/examples/vt_snapshot",
+      "sha256": "409e630cd3390d105f7de74200b1cdb97fecbe0cadd9da50ef2ef63b3572e58b",
+      "bytes": 438592,
+      "matches": true
+    }
+  },
+  "fixture": {
+    "source_commit": "73a775d74661fec26767ccac9d4b6102b0c42843",
+    "source_tree": "e732bbbcc1e4e76aadace70e65e9ef95b2000eb7",
+    "binary": "$TARGET/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+    "sha256": "5716476f9fb7f44d82100300d72b25146e61164090b38db0e7d2e4ca048ceffd",
+    "bytes": 176295696,
+    "extracted_from": "$INITIAL_EVIDENCE-gates/fixture.log",
+    "validated_for_source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+    "runtime_equivalence": {
+      "base_commit": "73a775d74661fec26767ccac9d4b6102b0c42843",
+      "current_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+      "changed_paths": [
+        "docs/client-ui.md",
+        "tests/resources.rs"
+      ],
+      "production_inputs_unchanged": true
+    },
+    "prior_metadata": "$INITIAL_EVIDENCE-fixture-binary.json"
+  },
+  "environment": {
+    "inherited_ssmcp_removed": true,
+    "proxy_variables_removed": true,
+    "loopback_no_proxy": true,
+    "models_invoked": false
+  },
+  "results": [
+    {
+      "stage": "preview",
+      "command": [
+        "python3",
+        "scripts/e2e_client_ui.py",
+        "--bin-dir",
+        "$INSTALLED_PREFIX/usr/bin",
+        "--out",
+        "$PRIVATE_EVIDENCE/ui/preview"
+      ],
+      "scope_unit": "ssmcp-main-accept-preview-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 3.622,
+      "log": "$PRIVATE_EVIDENCE/ui/preview.log",
+      "report": "preview-e2e.json",
+      "script_sha256": "43337393a700eddc731581546098411f52c636a11a9603ef96b0e046805b576e",
+      "expected_checks": 38,
+      "actual_checks": 38,
+      "report_passed": true,
+      "report_sha256": "16b879cb92300569b214057ca99b0a0c27659cd2107f0297e48569de0885d138"
+    },
+    {
+      "stage": "composer",
+      "command": [
+        "python3",
+        "scripts/e2e_composer.py",
+        "--bin-dir",
+        "$INSTALLED_PREFIX/usr/bin",
+        "--decoder",
+        "$INSTALLED_PREFIX/usr/bin/examples/vt_snapshot",
+        "--report",
+        "composer-e2e.json"
+      ],
+      "scope_unit": "ssmcp-main-accept-composer-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 12.79,
+      "log": "$PRIVATE_EVIDENCE/ui/composer.log",
+      "report": "composer-e2e.json",
+      "script_sha256": "63286822fce02356337d8be388a36790bbde09c3f1348c53a073056e625161f7",
+      "expected_checks": 88,
+      "actual_checks": 88,
+      "report_passed": true,
+      "report_sha256": "cad7f81d2665dc83ca0320dc0187de23413b7c2c83c35972a5aec709bdf6008d"
+    },
+    {
+      "stage": "dashboard",
+      "command": [
+        "python3",
+        "scripts/e2e_dashboard.py",
+        "--bin-dir",
+        "$INSTALLED_PREFIX/usr/bin",
+        "--decoder",
+        "$INSTALLED_PREFIX/usr/bin/examples/vt_snapshot",
+        "--report",
+        "dashboard-e2e.json"
+      ],
+      "scope_unit": "ssmcp-main-accept-dashboard-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 24.619,
+      "log": "$PRIVATE_EVIDENCE/ui/dashboard.log",
+      "report": "dashboard-e2e.json",
+      "script_sha256": "2854397117622191320ebec782b1cf6c467857f517647da5abf4211e293cd65c",
+      "expected_checks": 84,
+      "actual_checks": 84,
+      "report_passed": true,
+      "report_sha256": "bde89bf5e8fbc3782fffc62a6a05328c05a4d894c03411ea1dc559055d60cca2"
+    },
+    {
+      "stage": "account-relay",
+      "command": [
+        "python3",
+        "scripts/e2e_account_relay.py",
+        "--binary",
+        "$INSTALLED_PREFIX/usr/bin/ssmcp",
+        "--report",
+        "account-relay-e2e.json"
+      ],
+      "scope_unit": "ssmcp-main-accept-account-relay-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 4.472,
+      "log": "$PRIVATE_EVIDENCE/ui/account-relay.log",
+      "report": "account-relay-e2e.json",
+      "script_sha256": "93c84978426608e15783014e7bb457578742f8d982efdb993f96caec90c49adf",
+      "expected_checks": 37,
+      "actual_checks": 37,
+      "report_passed": true,
+      "report_sha256": "68c64100f4ff7a097892d814ec219ddd98934bfb8b5a3f2a2aef02b0ad011568"
+    },
+    {
+      "stage": "relay-composer",
+      "command": [
+        "python3",
+        "scripts/e2e_relay_composer.py",
+        "--bin-dir",
+        "$INSTALLED_PREFIX/usr/bin",
+        "--decoder",
+        "$INSTALLED_PREFIX/usr/bin/examples/vt_snapshot",
+        "--fixture-binary",
+        "$TARGET/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+        "--report",
+        "relay-composer-e2e.json"
+      ],
+      "scope_unit": "ssmcp-main-accept-relay-composer-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 6.076,
+      "log": "$PRIVATE_EVIDENCE/ui/relay-composer.log",
+      "report": "relay-composer-e2e.json",
+      "script_sha256": "b95e8c484becb1247a2b756454bfcc01cd1f902d45ebf9730ce07c5ea38731ea",
+      "expected_checks": 45,
+      "actual_checks": 45,
+      "report_passed": true,
+      "report_sha256": "455becfcab29ef6e0d38242385acbbcefefb820b2a5284675a1bfee2b2969f0d"
+    },
+    {
+      "stage": "observer",
+      "command": [
+        "python3",
+        "scripts/e2e_tty_observer.py",
+        "--binary",
+        "$INSTALLED_PREFIX/usr/bin/ssmcp",
+        "--hold",
+        "0",
+        "--report",
+        "observer-e2e.json"
+      ],
+      "scope_unit": "ssmcp-main-accept-observer-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 12.689,
+      "log": "$PRIVATE_EVIDENCE/ui/observer.log",
+      "report": "observer-e2e.json",
+      "script_sha256": "9fc9de47d7fa7e65a4e612b0c61f00c12b2befbbb2c1ab5790b9492b9796f274",
+      "expected_checks": 7,
+      "actual_checks": 7,
+      "report_passed": true,
+      "report_sha256": "f70025f4a1c72b7d5ae720332dc7417d31b6a8230786fe16ece5103509781a72"
+    },
+    {
+      "stage": "007-routing",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/e2e_007.py",
+        "--binary",
+        "$INSTALLED_PREFIX/usr/bin/ssmcp",
+        "--fixture-binary",
+        "$TARGET/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+        "--routing-only",
+        "--report",
+        "007-routing-e2e.json"
+      ],
+      "scope_unit": "ssmcp-main-accept-007-routing-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 1.116,
+      "log": "$PRIVATE_EVIDENCE/ui/007-routing.log",
+      "report": "007-routing-e2e.json",
+      "script_sha256": "e530cd7f3514beb31e06e0dbd8c5446cdb8ccddf11b938a99654ddc5dfde0fa4",
+      "expected_checks": 20,
+      "actual_checks": 20,
+      "report_passed": true,
+      "report_sha256": "35d6db612e3872dd9f7311b6b46e80488993f6df52c358649bd19fe2f3d61be9"
+    },
+    {
+      "stage": "client-capabilities",
+      "command": [
+        "node",
+        "--test",
+        "--test-reporter=tap",
+        "scripts/test_client_capabilities.mjs"
+      ],
+      "scope_unit": "ssmcp-main-accept-client-capabilities-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.465,
+      "log": "$PRIVATE_EVIDENCE/ui/client-capabilities.log",
+      "report": "capabilities-node.json",
+      "script_sha256": "498e64c4a93d92fcf4e2af70853ea86fba80af75408b91e3b4ac68e21a9cb5c6",
+      "expected_checks": 5,
+      "actual_checks": 5,
+      "report_passed": true,
+      "report_sha256": "feb33b24148bda88fcc1082da18c32bb15397f6d494c5e646f8d2bc5e90b52a3"
+    },
+    {
+      "stage": "benchmark-synthetic",
+      "command": [
+        "python3",
+        "scripts/benchmark_client_memory.py",
+        "--binary",
+        "$INSTALLED_PREFIX/usr/bin/ssmcp",
+        "--providers",
+        "synthetic",
+        "--tools",
+        "500",
+        "--scans",
+        "2",
+        "--commands",
+        "8",
+        "--idle-seconds",
+        "0.5",
+        "--timeout",
+        "90",
+        "--report",
+        "synthetic-benchmark.json"
+      ],
+      "scope_unit": "ssmcp-main-accept-benchmark-synthetic-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 1.869,
+      "log": "$PRIVATE_EVIDENCE/ui/benchmark-synthetic.log",
+      "report": "synthetic-benchmark.json",
+      "script_sha256": "a5a383ad3c6b3454119a61544b3087eabeda159c0a91c84a8dddb5007d207f5e",
+      "expected_checks": null,
+      "interpretation": "One synthetic protocol/workflow compatibility sample; no performance threshold or improvement claim.",
+      "actual_checks": null,
+      "report_passed": true,
+      "report_sha256": "775529cc5590b4c2041e66b36ade99ccc52169d7c36f8b581a952fdc917e8cf1"
+    }
+  ],
+  "current_stage": null,
+  "finished_at": "2026-11-17T23:15:10.555134+00:00",
+  "ui_checks": 299,
+  "total_functional_checks": 324,
+  "source_clean_after_tests": true,
+  "_publication": {
+    "private_paths_normalized": true,
+    "source_object_sha256": "ff4a542445275404f15b4bb730e05b540ea7ee2267530b73bcafaa1fc0946baa",
+    "source_object_digest_algorithm": "SHA-256 of UTF-8 json.dumps(original, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
+    "note": "Nested report_sha256 fields identify the original private files, before publication path normalization."
+  }
+}

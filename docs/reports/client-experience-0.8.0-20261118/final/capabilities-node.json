@@ -1,0 +1,17 @@
+{
+  "schema": "ssmcp.client-capabilities-fixture.v1",
+  "tests": 5,
+  "passed": 5,
+  "failed": 0,
+  "skipped": 0,
+  "expected_tests": 5,
+  "source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+  "installed_runner_sha256": "57f014501bf0313f966935fbe1a05613aaf75816a569b65ff15346cc9d2a8bdf",
+  "status": "passed",
+  "_publication": {
+    "private_paths_normalized": true,
+    "source_object_sha256": "55396c5f5bccaccbb0ee98e52f428805070873c1eda026273d58f13f572deea1",
+    "source_object_digest_algorithm": "SHA-256 of UTF-8 json.dumps(original, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
+    "note": "Nested report_sha256 fields identify the original private files, before publication path normalization."
+  }
+}
