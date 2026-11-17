@@ -190,5 +190,41 @@
       ]
     }
   ],
-  "scope": "Local Linux validation with real loopback HTTP/OAuth and deterministic wire fixtures. Durations include compilation and runner startup."
+  "scope": "Local Linux validation with real loopback HTTP/OAuth and deterministic wire fixtures. Durations include compilation and runner startup.",
+  "post_merge_review": {
+    "merge_revision": "90447db0d6512dae835e12edfceb25438cf7d889",
+    "merge_tree": "66c10e4af86c83026a4345d8f86678b5021783e0",
+    "validated_source_revision": "b3a209d192acdd736eecfd23e901ed9434739962",
+    "checked_at": "2026-11-18T02:35:19.966682+08:00",
+    "source_comparison": {
+      "status": "passed",
+      "paths": [
+        "src/collab.rs",
+        "src/collab/tests.rs",
+        "src/bridge.rs",
+        "src/broker.rs",
+        "src/http.rs",
+        "src/code_mode.js",
+        "src/code_mode.rs",
+        "src/resources.rs",
+        "src/lib.rs",
+        "tests/collaboration.rs",
+        "tests/resources.rs",
+        "tests/two_tools.rs",
+        "scripts/e2e.py"
+      ],
+      "changed_paths": []
+    },
+    "locked_package_versions_and_checksums": {
+      "status": "passed",
+      "package_count": 208
+    },
+    "independent_review": "Relay configuration changes do not modify collaboration or install a global TLS provider; changing relay or a failing pin affects connection establishment, already covered by session-close lifecycle semantics.",
+    "supplemental_test_run": {
+      "status": "cancelled_before_test_execution",
+      "reason": "Waited on the development machine's global rustc serialization lock, held by another project's active compilation. Existing passing validation and unchanged collaboration source remain the acceptance evidence.",
+      "elapsed_ms": 635967,
+      "completed_test_checks": 0
+    }
+  }
 }
