@@ -75,6 +75,7 @@ struct LoginCode {
 }
 
 pub struct Session {
+    pub(crate) collaboration: crate::collab::Hub,
     login: Mutex<Option<LoginCode>>,
     // Resolved provider subject IDs are immutable for this SSH connection.
     allow: Vec<Identity>,
@@ -378,6 +379,7 @@ impl Broker {
         let (sender, _rx) = mpsc::channel(1);
         let id = generate_secret().unwrap();
         let session = Arc::new(Session {
+            collaboration: crate::collab::Hub::default(),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -462,6 +464,7 @@ impl Broker {
             .collect();
         for session in &active {
             session.alive.store(false, Ordering::Release);
+            session.collaboration.close();
             session.disconnect.notify_one();
         }
         // Drain normal wire cleanup and its bounded audit writes before the
@@ -621,6 +624,7 @@ impl Broker {
         let client_id = generate_secret()?;
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
+            collaboration: crate::collab::Hub::default(),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -789,6 +793,7 @@ impl Broker {
         drop(reader);
         drop(writer);
         session.alive.store(false, Ordering::Release);
+        session.collaboration.close();
         let mut sessions = self.sessions.write().await;
         if let Some(clients) = sessions.get_mut(&user) {
             if clients
@@ -1097,6 +1102,7 @@ mod tests {
     fn allowed_session(id: &str, secret: &str, allow: Vec<Identity>) -> Arc<Session> {
         let (sender, _rx) = mpsc::channel(1);
         Arc::new(Session {
+            collaboration: crate::collab::Hub::default(),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
