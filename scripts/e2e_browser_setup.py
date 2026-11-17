@@ -117,7 +117,7 @@ def main() -> None:
                 assert extension["adapter"] == "no_public_adapter_configured"
         assert configured["native_browser"]["uses_system_pointer"] is False
         assert set(configured["isolated_desktop"]["programs"]) == {
-            "Xvfb", "xdotool", "magick", "xprop", "dbus-run-session"
+            "Xvfb", "xdotool", "magick", "xprop", "dbus-run-session", "dbus-daemon"
         }
         checks.append("diagnostics_preserve_native_approval_boundaries")
 
