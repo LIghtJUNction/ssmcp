@@ -1,0 +1,33 @@
+{
+  "status": "passed",
+  "revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+  "checks": [
+    "closed test worker remains stopped before cleanup",
+    "remove deletes the stopped test definition",
+    "bare attach and attach list enumerate identical names",
+    "management session remains connected",
+    "installed and running service binary match the validated release"
+  ],
+  "manager_status": {
+    "name": "ssmcp-manager",
+    "generation": "e2fdcc9f208522a7fe1f1a0bb577c342",
+    "manager_active": true,
+    "manager_state": "running",
+    "connection_state": "connected",
+    "phase": "connected",
+    "version": "0.6.4",
+    "executable_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+    "stop_requested": false,
+    "reconnect_delay_secs": 30
+  },
+  "systemd": {
+    "ActiveState": "active",
+    "SubState": "running",
+    "UnitFileState": "enabled",
+    "MainPID": "125559",
+    "User": "lightjunction"
+  },
+  "binary_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+  "removed_test_session": "ssmcp-live-check-20261117",
+  "shared_service_restarted_during_cleanup": false
+}

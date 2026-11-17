@@ -1,0 +1,83 @@
+{
+  "source_revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+  "version": "0.6.4",
+  "recorded_at": "2026-11-17T16:35:02.115992+00:00",
+  "scope": "Preserved acceptance reports and installed-session image; gateway recheck is recorded separately. Original machine transcripts are not included in this selected evidence archive.",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 14202,
+      "sha256": "510f17e15502f3a3fb543cc46df194c1e90dfe4f89909e2e3d5c118204dc75d5"
+    },
+    {
+      "path": "local-gates.json",
+      "bytes": 983,
+      "sha256": "07fe953fa7396bfede21c97bdf63df4475330f6eef1448534393b163f63b4495"
+    },
+    {
+      "path": "portable-linux.json",
+      "bytes": 2671,
+      "sha256": "bd2fc56d95a8f282199881129160cadc12dbe6747383d050041ccb109c64fc86"
+    },
+    {
+      "path": "session-service.json",
+      "bytes": 3688,
+      "sha256": "fb2d14e16c5228c71e57866183b772c32fd40a846d638e4bec76d62864b5e0c1"
+    },
+    {
+      "path": "release-build.json",
+      "bytes": 267,
+      "sha256": "bcd89763d5eba2203b6832c1d62c810a789e553e8ee88b7909f7dc8f23ed2df0"
+    },
+    {
+      "path": "linux-install.json",
+      "bytes": 2606,
+      "sha256": "456eb47a95b1ac006a63429284b89e6b97d363a56505e2568f614b50eed94ebc"
+    },
+    {
+      "path": "live-atomic-tools.json",
+      "bytes": 5095,
+      "sha256": "4599cef99e6521f2e1862a12140291dc8356b949aacd580fedf7a5eac1f285fb"
+    },
+    {
+      "path": "live-session-lifecycle.json",
+      "bytes": 1150,
+      "sha256": "47ac70b5e77283edfe8cc915cf0976a913cebace9aff5eccb0f4ebef53e0849c"
+    },
+    {
+      "path": "manager-attach-live.json",
+      "bytes": 2514,
+      "sha256": "64402f4a69133ea01343d8732b9bc0cae2dd3b7b8570e1ec1984ef0075a1e7d9"
+    },
+    {
+      "path": "connection-recheck.json",
+      "bytes": 524,
+      "sha256": "a8d822da32f76a2e70442d417f2e908517eed6d5390c219ec04ed980125bff0f"
+    },
+    {
+      "path": "ci/provenance.json",
+      "bytes": 5578,
+      "sha256": "e5c8f2e30d259b43e2950e8122164f847fd0235733539d69d892d75c134aa55c"
+    },
+    {
+      "path": "ci/session-service-ubuntu-24.04/session-service.json",
+      "bytes": 2671,
+      "sha256": "caf14f00a6e2d29b4f613de3b47b3d787a3e9279a2b8d5d6248b7f8891a26cfb"
+    },
+    {
+      "path": "ci/session-service-macos-15/session-service.json",
+      "bytes": 2578,
+      "sha256": "703e028b0a4f7bff402f0341ab365c934635cb82cbe34d54302daaaa9070cd39"
+    },
+    {
+      "path": "ci/session-service-windows-2025/session-service.json",
+      "bytes": 2659,
+      "sha256": "33f4b122f6c95e3c1c75a8979bfc436c5316a31d4dbc68fb9e1031ff86361cc4"
+    },
+    {
+      "path": "manager-attach-live.png",
+      "bytes": 114458,
+      "sha256": "ebd2c1bd1400e7eda54ba95c66465a1c1b42993dfed2adbcf1a5404fd3967971"
+    }
+  ]
+}

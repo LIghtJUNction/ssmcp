@@ -1,0 +1,50 @@
+{
+  "revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+  "status": "passed",
+  "stages": [
+    {
+      "stage": "format",
+      "exit_code": 0,
+      "seconds": 1.27,
+      "summary": []
+    },
+    {
+      "stage": "clippy",
+      "exit_code": 0,
+      "seconds": 15.5,
+      "summary": []
+    },
+    {
+      "stage": "library-tests",
+      "exit_code": 0,
+      "seconds": 46.31,
+      "summary": [
+        "test result: ok. 507 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 15.79s"
+      ]
+    },
+    {
+      "stage": "debug-build",
+      "exit_code": 0,
+      "seconds": 21.61,
+      "summary": []
+    },
+    {
+      "stage": "portable-lifecycle",
+      "exit_code": 0,
+      "seconds": 16.75,
+      "summary": []
+    },
+    {
+      "stage": "ssh-oauth-attach",
+      "exit_code": 0,
+      "seconds": 27.97,
+      "summary": []
+    },
+    {
+      "stage": "release-build",
+      "exit_code": 0,
+      "seconds": 100.22,
+      "summary": []
+    }
+  ]
+}

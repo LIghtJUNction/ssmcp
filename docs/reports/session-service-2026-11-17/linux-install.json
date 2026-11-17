@@ -1,0 +1,113 @@
+{
+  "source_revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+  "version": "0.6.4",
+  "binary_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+  "binary_path": "/home/lightjunction/.cargo/bin/ssmcp",
+  "checks": [
+    {
+      "stage": "install-system-service",
+      "exit_code": 0
+    },
+    {
+      "stage": "enable-and-start",
+      "exit_code": 0
+    },
+    {
+      "stage": "native-unit-verification",
+      "exit_code": 0
+    },
+    {
+      "stage": "installed-version",
+      "exit_code": 0
+    },
+    {
+      "stage": "systemd-state",
+      "exit_code": 0
+    },
+    {
+      "stage": "existing-sessions",
+      "exit_code": 0
+    },
+    {
+      "stage": "existing-manager",
+      "exit_code": 0
+    },
+    {
+      "stage": "remove-old-manager",
+      "exit_code": 0
+    },
+    {
+      "stage": "create-manager",
+      "exit_code": 0
+    },
+    {
+      "stage": "manager-status",
+      "exit_code": 0
+    },
+    {
+      "stage": "manager-status",
+      "exit_code": 0
+    },
+    {
+      "stage": "manager-status",
+      "exit_code": 0
+    },
+    {
+      "stage": "manager-status",
+      "exit_code": 0
+    },
+    {
+      "stage": "manager-status",
+      "exit_code": 0
+    },
+    {
+      "stage": "manager-status",
+      "exit_code": 0
+    },
+    {
+      "stage": "manager-status",
+      "exit_code": 0
+    },
+    {
+      "stage": "bare-attach-list",
+      "exit_code": 0
+    },
+    {
+      "stage": "explicit-attach-list",
+      "exit_code": 0
+    }
+  ],
+  "status": "passed",
+  "previous_version": "ssmcp 0.6.3",
+  "previous_binary_sha256": "703715d8a4a039c6d16df4c6f35d2308083b4a9d6dea25f11af1eba68c603134",
+  "backup_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/session-service-task/backups/ssmcp-703715d8a4a039c6",
+  "systemd": {
+    "Id": "ssmcp.service",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "SubState": "running",
+    "FragmentPath": "/etc/systemd/system/ssmcp.service",
+    "UnitFileState": "enabled",
+    "MainPID": "125559",
+    "NRestarts": "0",
+    "User": "lightjunction"
+  },
+  "running_binary_matches_disk": true,
+  "manager_status": {
+    "name": "ssmcp-manager",
+    "generation": "e2fdcc9f208522a7fe1f1a0bb577c342",
+    "manager_active": true,
+    "manager_state": "running",
+    "connection_state": "connected",
+    "phase": "connected",
+    "attempt": 1,
+    "last_error": null,
+    "reconnect_delay_secs": 30,
+    "stop_requested": false,
+    "version": "0.6.4",
+    "executable_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f"
+  },
+  "saved_sessions": [
+    "ssmcp-manager"
+  ]
+}
