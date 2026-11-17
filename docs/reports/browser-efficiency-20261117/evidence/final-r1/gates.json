@@ -1,0 +1,30 @@
+[
+  {
+    "step": "format",
+    "argv": [
+      "cargo",
+      "fmt",
+      "--all"
+    ],
+    "started_at": "2026-11-17T04:14:04.277775+00:00",
+    "exit": 0,
+    "seconds": 1.91,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r1/format.log"
+  },
+  {
+    "step": "rust-all-targets",
+    "argv": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--all-targets",
+      "--",
+      "--test-threads=4"
+    ],
+    "started_at": "2026-11-17T04:14:06.187875+00:00",
+    "exit": 101,
+    "seconds": 281.104,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r1/rust-all-targets.log"
+  }
+]

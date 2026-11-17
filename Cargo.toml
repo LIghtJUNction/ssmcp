@@ -48,6 +48,7 @@ include = [
     "/scripts/test_tools_search.mjs",
     "/docs/browser-existing-session.md",
     "/docs/reports/browser-existing-session-20261117-inventory.json",
+    "/docs/reports/browser-efficiency-20261117/**",
     "/scripts/e2e_computer_use.py",
     "/scripts/e2e_onboarding.py",
     "/scripts/e2e_session_features.py",

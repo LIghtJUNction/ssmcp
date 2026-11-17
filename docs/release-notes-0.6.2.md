@@ -44,6 +44,8 @@ Playwright 的审计副本在进入终端、事件缓冲和现有日志存储前
 
 ## 验证与历史记录
 
+本轮完整的本地结果、前序失败、浏览器发现样本和产物校验值见[浏览器效率开发验收报告](reports/browser-efficiency-20261117/README.md)。其中 Browser、Daemon/watchdog、Unified E2E 分别通过 51、145、120 项检查；现有用户 Chrome 的扩展连接与正式部署另行验收。
+
 Linux 本机最终 `final-r3` 的 Rust all-targets 测试合计 **555 passed / 0 failed / 21 ignored**，Clippy `-D warnings`、工具检索 13 项、CUA facade 5 项、执行助手 5 项和发布脚本 46 项回归均通过。源码构建的两个二进制都报告 `0.6.2`。跳过项、真实浏览器 E2E 和正式发布流程分别记录；这不是统一 Harness 全部 12 项验收完成的声明。
 
 保留两轮前序失败：`final-r1` 为 466 passed / 1 failed / 7 ignored，原因是新增 `discover` 后旧工具数量断言仍期待 15 项；`final-r2` 为 468 passed / 1 failed / 7 ignored，长输出测试没有先确认任务完成就断言 artifact 完整。后者现对同一任务观察到终结状态，再严格检查退出码、EOF、capture 错误与完整内容；生产命令超时和输出策略未改变。原日志缺少当时的任务状态，不能把旧失败唯一归因于观察期限。另一次 Clippy 检查因连接重建中断，没有完成结果，未计为通过。

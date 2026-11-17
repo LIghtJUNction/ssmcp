@@ -1,0 +1,30 @@
+{
+  "commit": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+  "branch": "feat/browser-existing-session-20261117",
+  "files": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "README.md",
+    "docs/backends.md",
+    "docs/computer-use.md",
+    "docs/browser-existing-session.md",
+    "docs/reports/browser-existing-session-20261117-inventory.json",
+    "docs/release-notes-0.6.2.md",
+    "scripts/e2e_computer_use.py",
+    "scripts/test_tools_search.mjs",
+    "skills/ssmcp/SKILL.md",
+    "src/backend/events.rs",
+    "src/backend/mod.rs",
+    "src/backend/rpc.rs",
+    "src/backend/shell.rs",
+    "src/backend/playwright.rs",
+    "src/browser.rs",
+    "src/browser/discovery.rs",
+    "src/code_mode.js",
+    "src/http.rs",
+    "src/registry.rs",
+    "src/resources.rs",
+    "src/runtime.rs"
+  ],
+  "pushed": true
+}

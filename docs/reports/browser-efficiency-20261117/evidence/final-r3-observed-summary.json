@@ -1,0 +1,146 @@
+{
+  "logs": [
+    {
+      "run": "final-r1",
+      "log": "target/acceptance/browser-efficiency-20261117/final-r1/rust-all-targets.log",
+      "bytes": 245841,
+      "sha256": "988b1b05b8bcaa889de3edd69e81fd061441d878627fbd11f589cb5b493dface",
+      "suite_summaries": [
+        "FAILED. 466 passed; 1 failed; 7 ignored; 0 measured; 0 filtered out; finished in 21.35s"
+      ],
+      "failed_tests": [
+        "browser::tests::tool_names_and_schemas_are_native_and_unique"
+      ],
+      "discovery_and_metadata_tests": [
+        "test backend::events::tests::metadata_only_is_applied_before_terminal_buffer_and_archive_sinks ... ok",
+        "test browser::discovery::tests::executable_candidates_are_presence_only_and_platform_roots_remain_distinct ... ok",
+        "test browser::discovery::tests::invalid_locale_does_not_escape_to_adjacent_messages ... ok",
+        "test browser::discovery::tests::linux_process_inventory_is_uid_scoped_bounded_and_never_returns_arguments ... ok",
+        "test browser::discovery::tests::localized_unicode_metadata_does_not_claim_a_connection_or_read_sensitive_stores ... ok",
+        "test browser::discovery::tests::normal_and_collapsed_process_titles_do_not_turn_children_into_browsers ... ok",
+        "test browser::discovery::tests::profiles_extensions_versions_and_json_budgets_are_bounded ... ok",
+        "test browser::discovery::tests::symlink_manifests_and_locale_directories_are_not_read ... ok"
+      ]
+    },
+    {
+      "run": "final-r2",
+      "log": "target/acceptance/browser-efficiency-20261117/final-r2/rust-all-targets.log",
+      "bytes": 245376,
+      "sha256": "998226fc4cf39b709c4dc341fa1b4b55a2d8de0ffb59870e7512e696c7b25650",
+      "suite_summaries": [
+        "FAILED. 468 passed; 1 failed; 7 ignored; 0 measured; 0 filtered out; finished in 32.03s"
+      ],
+      "failed_tests": [
+        "backend::shell::tests::large_output_keeps_the_full_artifact_and_the_bounded_tail"
+      ],
+      "discovery_and_metadata_tests": [
+        "test backend::events::tests::metadata_only_is_applied_before_terminal_buffer_and_archive_sinks ... ok",
+        "test browser::discovery::tests::candidate_count_reports_only_entries_examined_before_the_result_limit ... ok",
+        "test browser::discovery::tests::executable_candidates_are_presence_only_and_platform_roots_remain_distinct ... ok",
+        "test browser::discovery::tests::hardlinked_manifests_and_locale_messages_are_rejected ... ok",
+        "test browser::discovery::tests::invalid_locale_does_not_escape_to_adjacent_messages ... ok",
+        "test browser::discovery::tests::linux_process_inventory_is_uid_scoped_bounded_and_never_returns_arguments ... ok",
+        "test browser::discovery::tests::localized_unicode_metadata_does_not_claim_a_connection_or_read_sensitive_stores ... ok",
+        "test browser::discovery::tests::normal_and_collapsed_process_titles_do_not_turn_children_into_browsers ... ok",
+        "test browser::discovery::tests::profiles_extensions_versions_and_json_budgets_are_bounded ... ok",
+        "test browser::discovery::tests::symlink_manifests_and_locale_directories_are_not_read ... ok"
+      ]
+    },
+    {
+      "run": "final-r3",
+      "log": "target/acceptance/browser-efficiency-20261117/final-r3/rust-all-targets.log",
+      "bytes": 346635,
+      "sha256": "e1765aba6b48881bdf38c28decd9b120f37f1a8143b6fec92074685a98582c28",
+      "suite_summaries": [
+        "ok. 469 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 16.73s",
+        "ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.34s",
+        "ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.39s",
+        "ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.26s",
+        "ok. 14 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 20.66s",
+        "ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s",
+        "ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s",
+        "ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.22s",
+        "ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s",
+        "ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+        "ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s",
+        "ok. 2 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "failed_tests": [],
+      "discovery_and_metadata_tests": [
+        "test backend::events::tests::metadata_only_is_applied_before_terminal_buffer_and_archive_sinks ... ok",
+        "test browser::discovery::tests::candidate_count_reports_only_entries_examined_before_the_result_limit ... ok",
+        "test browser::discovery::tests::executable_candidates_are_presence_only_and_platform_roots_remain_distinct ... ok",
+        "test browser::discovery::tests::hardlinked_manifests_and_locale_messages_are_rejected ... ok",
+        "test browser::discovery::tests::invalid_locale_does_not_escape_to_adjacent_messages ... ok",
+        "test browser::discovery::tests::linux_process_inventory_is_uid_scoped_bounded_and_never_returns_arguments ... ok",
+        "test browser::discovery::tests::localized_unicode_metadata_does_not_claim_a_connection_or_read_sensitive_stores ... ok",
+        "test browser::discovery::tests::normal_and_collapsed_process_titles_do_not_turn_children_into_browsers ... ok",
+        "test browser::discovery::tests::profiles_extensions_versions_and_json_budgets_are_bounded ... ok",
+        "test browser::discovery::tests::symlink_manifests_and_locale_directories_are_not_read ... ok"
+      ]
+    }
+  ],
+  "scripts": {
+    "event_tests": [
+      "test backend::events::tests::cursors_waiters_and_close ... ok",
+      "test backend::events::tests::metadata_only_is_applied_before_terminal_buffer_and_archive_sinks ... ok",
+      "test backend::rpc::tests::metadata_audit_keeps_native_arguments_results_and_pending_requests_intact ... ok"
+    ],
+    "summaries": {
+      "tool-search.log": {
+        "lines": [
+          "# tests 13",
+          "# pass 13",
+          "# fail 0",
+          "# skipped 0",
+          "# todo 0"
+        ],
+        "sha256": "302e9a5290245271f45401dbb1d226f9d5126bf58c08774f23ecf523130355a2",
+        "bytes": 3042
+      },
+      "cua-facade.log": {
+        "lines": [
+          "# tests 5",
+          "# pass 5",
+          "# fail 0",
+          "# skipped 0",
+          "# todo 0"
+        ],
+        "sha256": "93053f56e7e103f4729151a2c4d3d1f7d43b14d507fe909081402a3c6358733c",
+        "bytes": 1248
+      },
+      "execution-helpers.log": {
+        "lines": [
+          "# tests 5",
+          "# pass 5",
+          "# fail 0",
+          "# skipped 0",
+          "# todo 0"
+        ],
+        "sha256": "66b5b85b88ba7bbc2e23c2b717cad41d99c96dfe2a8ace1d90b5f32a68edd6c3",
+        "bytes": 1334
+      },
+      "release-tests.log": {
+        "lines": [
+          "Ran 46 tests in 0.939s",
+          "OK"
+        ],
+        "sha256": "3d53feba75abe3effd32fae95653cb198652756118bbe9886f53a4f9f13d3c4f",
+        "bytes": 3164
+      },
+      "output-final-state.log": {
+        "lines": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.93s"
+        ],
+        "sha256": "d9891c3212859305865fc16a291485b022f0a48eb069fc71305c8b9c321c191b",
+        "bytes": 104092
+      }
+    }
+  }
+}

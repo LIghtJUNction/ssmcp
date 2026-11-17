@@ -1,0 +1,41 @@
+{
+  "scope": "Historical CI results retained from previously retrieved logs; no new CI query or retry performed while assembling this report.",
+  "runs": [
+    {
+      "version": "0.6.1",
+      "commit": "ff09364bdc3ec85d7debd3675c782bfce5d04045",
+      "run_id": 43926079974,
+      "attempt": 1,
+      "state": "failure",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43926079974/attempts/1",
+      "linux_x64_job": 133506182594,
+      "linux_library": {
+        "passed": 344,
+        "failed": 2,
+        "ignored": 6
+      },
+      "observed_failure": "Native Node compatibility_wait exceeded 3000 ms; the supervisor requested termination and reaped Node. Publish gates were skipped.",
+      "evidence_sha256": "23f15c6b60985c35841625cad92aed4207504387aa5288c22840049a334a4279",
+      "source_artifact_reference": "release-v0.6.1-43926079974-attempt1.json",
+      "source_artifact_included": false
+    },
+    {
+      "version": "0.6.1",
+      "commit": "ff09364bdc3ec85d7debd3675c782bfce5d04045",
+      "run_id": 43926079974,
+      "attempt": 2,
+      "state": "failure",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43926079974/attempts/2",
+      "linux_x64_job": 133511322156,
+      "linux_library": {
+        "passed": 345,
+        "failed": 1,
+        "ignored": 6
+      },
+      "observed_failure": "cancelling_the_request_releases_worker_and_host_future failed on Node compatibility_wait at 3003 ms against a 3000 ms bound; the supervisor performed SIGKILL cleanup.",
+      "evidence_sha256": "f3000ffbe26c26f5c5dcb488c915cee6e3549779c0330d5304a3dbdd82536619",
+      "source_artifact_reference": "ci-attempt2-linux-x64.log",
+      "source_artifact_included": false
+    }
+  ]
+}

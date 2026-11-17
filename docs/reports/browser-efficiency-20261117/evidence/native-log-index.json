@@ -1,0 +1,184 @@
+{
+  "scope": "Original operator-workspace absolute paths and recorded hashes. No original log body is included. The interrupted Clippy log is 102 bytes at source; only its 41-byte path-redacted copy is archived.",
+  "logs": [
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/output-final-state.log",
+      "sha256": "d9891c3212859305865fc16a291485b022f0a48eb069fc71305c8b9c321c191b",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/rust-all-targets.log",
+      "sha256": "e1765aba6b48881bdf38c28decd9b120f37f1a8143b6fec92074685a98582c28",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/clippy.log",
+      "sha256": "e9674b22bf5f120937fc996ae38ce97f1fbf33287a582370877c74ba7f3d9f86",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/tool-search.log",
+      "sha256": "302e9a5290245271f45401dbb1d226f9d5126bf58c08774f23ecf523130355a2",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/cua-facade.log",
+      "sha256": "93053f56e7e103f4729151a2c4d3d1f7d43b14d507fe909081402a3c6358733c",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/execution-helpers.log",
+      "sha256": "66b5b85b88ba7bbc2e23c2b717cad41d99c96dfe2a8ace1d90b5f32a68edd6c3",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/release-tests.log",
+      "sha256": "3d53feba75abe3effd32fae95653cb198652756118bbe9886f53a4f9f13d3c4f",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/build-binaries.log",
+      "sha256": "fce6b314679c565a221431e935531059f00d75f593a5773de3e17685762508e9",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/whitespace.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": null,
+      "hash_basis": "final-r3 gate receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r1/rust-all-targets.log",
+      "sha256": "988b1b05b8bcaa889de3edd69e81fd061441d878627fbd11f589cb5b493dface",
+      "bytes": null,
+      "hash_basis": "actual source log or existing verified summary",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r2/rust-all-targets.log",
+      "sha256": "998226fc4cf39b709c4dc341fa1b4b55a2d8de0ffb59870e7512e696c7b25650",
+      "bytes": null,
+      "hash_basis": "actual source log or existing verified summary",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r2-remaining/clippy.log",
+      "sha256": "b29a6757d028de380e4be5688986e950dcca49a04af2d26dd1aa3862d361c65c",
+      "bytes": 102,
+      "hash_basis": "actual source log or existing verified summary",
+      "included_in_archive": true,
+      "archive_form": "path-redacted copy, not original bytes",
+      "archive_path": "evidence/final-r2-remaining/clippy.log",
+      "archive_bytes": 41,
+      "archive_sha256": "99cd2400d618f046ddfffae50e16d73f0034e85a04e91c29445eff5cdc3cd195"
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-browser/run.log",
+      "sha256": "1e2806093f51df69e17fadfa155dc3668d7b14a2596ffef879340bc09a601043",
+      "bytes": null,
+      "hash_basis": "native E2E process receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-daemon/run.log",
+      "sha256": "c4597961c294dcdc5058f1ee824166fda6c546d8ae7a17edc9a81b76714fed4c",
+      "bytes": null,
+      "hash_basis": "native E2E process receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/run.log",
+      "sha256": "11e084031b940c3b81e900ee240779a375306055095251867000cf1190ee543c",
+      "bytes": null,
+      "hash_basis": "native E2E process receipt",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified/evidence/terminal-daemon.log",
+      "sha256": "ab6ea59c87ff18db09cc7325ae71b1498690407040ee459c242e54088b8757a6",
+      "bytes": 33549,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified/evidence/terminal-sshd.log",
+      "sha256": "e045e722ceb9a9a29a7e09577dc101a90ed813d5be8f758def1db735a223eb12",
+      "bytes": 297,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified/evidence/terminal-unified-primary.log",
+      "sha256": "9382c0951152f501fed01aea7dc79c901c42389046b5d3eab419c36ea1b45668",
+      "bytes": 836,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/long-stdout.log",
+      "sha256": "c980067038b5e63ab9256bdd436002aea8943bb54263efe424046747c56fba86",
+      "bytes": 163920,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-daemon.log",
+      "sha256": "92c97d4409b18a45f1cef9fd6f7fbd8863d3a18cfbd790d639faea6ced744c21",
+      "bytes": 45332,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-sshd.log",
+      "sha256": "5173f33ae786ffe22ff668799477382bff2f95e0c204937054e07e45ab3ec73f",
+      "bytes": 807,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-unified-primary.log",
+      "sha256": "02274f58046c680de284e643fa5e4e37bcc3f2b1f52d4bc234beaf227b7541ca",
+      "bytes": 183110,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-unified-sibling.log",
+      "sha256": "ba1f50edb212c41dec57f840e2bae0b6c7168abd311b926da852a3195b417d88",
+      "bytes": 1079,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    },
+    {
+      "native_absolute_path": "/home/lightjunction/Documents/GITHUB/ssmcp/target/ssmcp-unified-task/work/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-unified-retention.log",
+      "sha256": "02f8848115062e2664a1a5d61b55fe1a6e22101dd331dcacd10d63a7376c332d",
+      "bytes": 760,
+      "hash_basis": "native E2E report evidence index; raw log not independently copied in this package",
+      "included_in_archive": false
+    }
+  ]
+}

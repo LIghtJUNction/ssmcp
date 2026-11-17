@@ -1,0 +1,32 @@
+[
+  {
+    "step": "format",
+    "argv": [
+      "cargo",
+      "fmt",
+      "--all"
+    ],
+    "started_at": "2026-11-17T04:21:01.393548+00:00",
+    "exit": 0,
+    "seconds": 1.8,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r2/format.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "step": "rust-all-targets",
+    "argv": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--all-targets",
+      "--",
+      "--test-threads=4"
+    ],
+    "started_at": "2026-11-17T04:21:03.193832+00:00",
+    "exit": 101,
+    "seconds": 178.73,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r2/rust-all-targets.log",
+    "sha256": "998226fc4cf39b709c4dc341fa1b4b55a2d8de0ffb59870e7512e696c7b25650"
+  }
+]

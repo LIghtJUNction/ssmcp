@@ -1,0 +1,57 @@
+{
+  "suite": "daemon",
+  "revision": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+  "argv": [
+    "/usr/bin/python3",
+    "scripts/e2e_daemon.py",
+    "--bin-dir",
+    "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin",
+    "--report",
+    "target/acceptance/browser-efficiency-20261117/final-r3/e2e-daemon/report.json",
+    "--revision",
+    "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89"
+  ],
+  "exit": 0,
+  "duration_seconds": 32.669,
+  "log": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-daemon/run.log",
+  "log_sha256": "c4597961c294dcdc5058f1ee824166fda6c546d8ae7a17edc9a81b76714fed4c",
+  "binaries": [
+    {
+      "name": "ssmcp",
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcp",
+      "sha256": "672fb50a2a1173437e8ea1702cba8cbea95e7dd506fc9a0c48c7e10f46d28900",
+      "version": "ssmcp 0.6.2"
+    },
+    {
+      "name": "ssmcpd",
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcpd",
+      "sha256": "eba663591eca9c9e3bfce8dc9ecf0f72ccf7603884dc4983262fba76bd8bdc54",
+      "version": "ssmcpd 0.6.2"
+    }
+  ],
+  "report_status": "passed",
+  "checks": 145,
+  "metrics": {
+    "ssh_reconnect_seconds": 2.068,
+    "observed_watchdog_wait_seconds": 1.972,
+    "native_crash_reconnect_seconds": 3.884,
+    "manual_stop_windows": [
+      {
+        "seconds": 2.75,
+        "samples": 21
+      },
+      {
+        "seconds": 2.75,
+        "samples": 21
+      }
+    ],
+    "unavailable_manager_injection": {
+      "changed_environment_keys": [
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS"
+      ],
+      "native_probe_exit_code": 1
+    },
+    "journal_runner_records": 124
+  }
+}

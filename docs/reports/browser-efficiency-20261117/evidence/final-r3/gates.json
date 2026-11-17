@@ -1,0 +1,147 @@
+[
+  {
+    "step": "format",
+    "argv": [
+      "cargo",
+      "fmt",
+      "--all"
+    ],
+    "started_at": "2026-11-17T04:34:44.835775+00:00",
+    "exit": 0,
+    "seconds": 1.013,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/format.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "step": "output-final-state",
+    "argv": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--lib",
+      "large_output_keeps_the_full_artifact_and_the_bounded_tail",
+      "--",
+      "--test-threads=1"
+    ],
+    "started_at": "2026-11-17T04:34:45.849496+00:00",
+    "exit": 0,
+    "seconds": 10.068,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/output-final-state.log",
+    "sha256": "d9891c3212859305865fc16a291485b022f0a48eb069fc71305c8b9c321c191b"
+  },
+  {
+    "step": "rust-all-targets",
+    "argv": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--all-targets",
+      "--",
+      "--test-threads=4"
+    ],
+    "started_at": "2026-11-17T04:34:55.925804+00:00",
+    "exit": 0,
+    "seconds": 62.486,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/rust-all-targets.log",
+    "sha256": "e1765aba6b48881bdf38c28decd9b120f37f1a8143b6fec92074685a98582c28"
+  },
+  {
+    "step": "clippy",
+    "argv": [
+      "cargo",
+      "clippy",
+      "--offline",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "started_at": "2026-11-17T04:35:58.440910+00:00",
+    "exit": 0,
+    "seconds": 16.014,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/clippy.log",
+    "sha256": "e9674b22bf5f120937fc996ae38ce97f1fbf33287a582370877c74ba7f3d9f86"
+  },
+  {
+    "step": "tool-search",
+    "argv": [
+      "/usr/bin/node",
+      "--test",
+      "scripts/test_tools_search.mjs"
+    ],
+    "started_at": "2026-11-17T04:36:14.455340+00:00",
+    "exit": 0,
+    "seconds": 1.718,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/tool-search.log",
+    "sha256": "302e9a5290245271f45401dbb1d226f9d5126bf58c08774f23ecf523130355a2"
+  },
+  {
+    "step": "cua-facade",
+    "argv": [
+      "/usr/bin/node",
+      "--test",
+      "scripts/test_cua_facade.mjs"
+    ],
+    "started_at": "2026-11-17T04:36:16.173474+00:00",
+    "exit": 0,
+    "seconds": 0.255,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/cua-facade.log",
+    "sha256": "93053f56e7e103f4729151a2c4d3d1f7d43b14d507fe909081402a3c6358733c"
+  },
+  {
+    "step": "execution-helpers",
+    "argv": [
+      "/usr/bin/node",
+      "--test",
+      "scripts/test_execution_helpers.mjs"
+    ],
+    "started_at": "2026-11-17T04:36:16.428781+00:00",
+    "exit": 0,
+    "seconds": 0.389,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/execution-helpers.log",
+    "sha256": "66b5b85b88ba7bbc2e23c2b717cad41d99c96dfe2a8ace1d90b5f32a68edd6c3"
+  },
+  {
+    "step": "release-tests",
+    "argv": [
+      "/usr/bin/python3",
+      "scripts/test_release.py"
+    ],
+    "started_at": "2026-11-17T04:36:16.817543+00:00",
+    "exit": 0,
+    "seconds": 1.502,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/release-tests.log",
+    "sha256": "3d53feba75abe3effd32fae95653cb198652756118bbe9886f53a4f9f13d3c4f"
+  },
+  {
+    "step": "build-binaries",
+    "argv": [
+      "cargo",
+      "build",
+      "--offline",
+      "--locked",
+      "--bins"
+    ],
+    "started_at": "2026-11-17T04:36:18.320044+00:00",
+    "exit": 0,
+    "seconds": 1.541,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/build-binaries.log",
+    "sha256": "fce6b314679c565a221431e935531059f00d75f593a5773de3e17685762508e9"
+  },
+  {
+    "step": "whitespace",
+    "argv": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "started_at": "2026-11-17T04:36:19.861648+00:00",
+    "exit": 0,
+    "seconds": 0.094,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/whitespace.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]
