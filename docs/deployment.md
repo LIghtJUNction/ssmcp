@@ -4,7 +4,7 @@
 
 服务器已经部署好时，可直接阅读 [配置、SSH 公钥与登录](configuration.md)：复用 `~/.ssh/config`、添加和轮换公钥、完成 OAuth 登录，以及处理重新打开后的授权状态。
 
-当前实现使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。客户端始终提供 shell 和独立命令，并自动发现 PATH 中的编程 harness。旧客户端可继续使用登录码；`--allow 用户名@github` 需要两端支持，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
+当前实现使用内部 wire v4，对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。客户端始终提供 shell 和独立命令，并自动发现 PATH 中的编程 harness。旧客户端可继续使用登录码；`--allow 用户名@github` 需要两端支持，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
 
 ## 标准账号部署与旧配置迁移
 
@@ -152,7 +152,7 @@ ssmcp.xxxx.yyy {
 
 MCP 请求存在 `Origin` 时，其值必须等于配置生效后的 `public_url` origin；没有 `Origin` 的服务器端 MCP 客户端可正常连接。MCP 客户端需支持 OAuth Authorization Code、S256 PKCE 和动态客户端注册。动态登录码、access token 与 refresh token 都不能放入 URL 或代理日志；登录表单用 POST 提交，访问令牌用 `Authorization` 请求头传递。
 
-原生 JSONL 后端的长调用最多等待 15 分钟。若反向代理或 MCP 客户端自定义了请求超时，应与任务时长相容；实时进度使用短等待的事件工具读取。公网入口使用 JSON 响应，不要求代理提供后台 SSE。
+原生 JSONL 后端的长调用最多等待 15 分钟。若反向代理或 MCP 客户端自定义了请求超时，应与任务时长相容；实时进度使用短等待的事件工具读取。公网入口使用 JSON 响应，不要求代理提供后台 SSE。`collab` 的直接收件请求可等待 30 秒，应为代理与 MCP 客户端的请求超时留出额外余量；消息处理完成后由调用方显式确认。
 
 ## 4. 准备本机工具
 
@@ -188,7 +188,7 @@ ssmcp --name laptop --title "项目开发与测试" --allow octocat@github alice
 
 在 MCP 客户端中添加完整 `/mcp` URL，启用 OAuth 登录。ssmcp 页面显示 MCP 客户端名称、已登记回调来源和资源 URL；点击 GitHub 登录，在 GitHub 完成身份验证后返回 ssmcp。页面显示已验证身份和当前可访问会话数，再由用户点击“允许连接”或“取消”。只完成 GitHub 登录不会自动授权这个 MCP 客户端。[登录步骤](configuration.md#github-allow)
 
-同意后由 MCP 客户端取得并保存 ssmcp 令牌。调用 `tools/list` 确认工具表只有 `list`、`code_mode`，再用 `list({})` 查看允许访问的在线客户端。每个目标客户端都依据接入时解析的 GitHub 稳定用户 ID 检查权限；未获准的客户端不会显示，也不能通过猜测 `client_id` 调用。当前没有获准访问的在线连接时可先完成登录，`list` 返回空列表，之后会显示新接入且允许该身份的连接。
+同意后由 MCP 客户端取得并保存 ssmcp 令牌。调用 `tools/list` 确认工具表包含 `list`、`code_mode` 和 `collab`，再用 `list({})` 查看允许访问的在线客户端。每个目标客户端都依据接入时解析的 GitHub 稳定用户 ID 检查权限；未获准的客户端不会显示，也不能通过猜测 `client_id` 调用。当前没有获准访问的在线连接时可先完成登录，`list` 返回空列表，之后会显示新接入且允许该身份的连接。
 
 省略 `--allow` 时保留原有 `/SSH用户名` 与登录码方式。登录码从签发起有效 1800 秒，成功使用一次即消耗；`login_expires_in` 扣除后端初始化时间。该授权只覆盖同一 SSH 账户下未设置 `--allow` 的连接，签发连接退出后撤销。设置了 `--allow` 的连接无法通过登录码授权访问。[两种授权方式](configuration.md#authorization-modes)
 
@@ -282,7 +282,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 ## 6. 检查与升级
 
-`http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 只有 `list` 和 `code_mode`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
+`http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 包含 `list`、`code_mode` 和 `collab`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
 
 在 `code_mode` 中通过 `await exec.run(clientId, {command:["git","status","--short"],wait_ms:5000})` 验证命令执行；检查 `running` 和 `exit_code`，长任务沿用返回的 `job_id` 等待或读取；`wait_timed_out` 只表示本次等待到期，不会停止命令，不应重新启动同一工作。[独立命令与等待](commands.md)。交互式 Shell 使用 `terminal.write/read`。Harness 链路使用实时目录中确认无模型的状态接口，例如已注册 `pi.rpc` 时传入 `{type:"get_state",arguments:{}}`。先通过 `list({client_id})` 查看 Schema；工具真实调用与原生审批传播分别保留证据，不为开发或测试提交模型任务。Claude Code 前台 Bash 的输出在调用结束时返回，后台增量观察只跟随原生结果明确返回的输出路径。
 
@@ -318,7 +318,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 bubblewrap 需要系统允许创建用户和网络命名空间。Ubuntu 24.04 启用 AppArmor 用户命名空间限制时，安装 `apparmor-profiles`，并加载发行版提供的 `bwrap-userns-restrict` profile；不需要关闭全局 AppArmor。服务单元允许 bubblewrap 配置隔离网络所需的 `AF_NETLINK`。[Ubuntu 用户命名空间说明](https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces)
 
-依赖缺失或隔离环境不可用时，`code_mode` 返回明确错误；`list` 仍可用于发现客户端。代码源码、运行时间、内存、原生调用次数和输出均有上限，详见[后端说明](backends.md#传输与资源边界)。
+依赖缺失或隔离环境不可用时，`code_mode` 返回明确错误；`list` 仍可用于发现客户端，直接 `collab` 调用仍由 Rust 处理。代码源码、运行时间、内存、原生调用次数和输出均有上限，详见[后端说明](backends.md#传输与资源边界)。
 
 ## 参考
 

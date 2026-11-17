@@ -1,6 +1,6 @@
 # 统一客户端、Harness 与代码模式
 
-ssmcp 对外提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过 SSH 编排该客户端的原生工具。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
+ssmcp 对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
 
 <a id="启动参数"></a>
 
@@ -85,7 +85,7 @@ Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST","cursor":"NEXT_CURSOR_FROM_RESULT"}}
 ```
 
-MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有后续页。上述 `list` 工具返回的 `terminal.write`、`claude.Read` 等名称供代码模式内部调用，不能直接作为外部 `tools/call` 的工具名。
+MCP 协议本身的 `tools/list` 返回 `list`、`code_mode` 和 `collab`，没有后续页。`collab` 的 `action` 选择加入、成员发现、发送、收取或确认等协作操作。上述 `list` 工具返回的 `terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
 
 ## 3. 用 code_mode 编排调用
 
@@ -107,6 +107,7 @@ MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有
 | `fs.readText/writeText/editText(clientId, options)` | 工作区内的原生 UTF-8 文件操作；成功写入产生本机 diff 记录 |
 | `skills.list/view/read(clientId, options)` | 索引、摘要视图和原文读取；不会提交模型任务 |
 | `agents.list/resolve/read(clientId, options)` | 查看指令来源、根到目标的优先级和原文 |
+| `collab.join/list/update/send/receive/ack/leave(clientId, options)` | 会话内成员发现与消息交换；收件等待最多 1 秒，长等待使用公开 `collab` 工具 |
 | `context.roots(clientId)` | 查看工作区与额外只读上下文根 |
 | `await reload(clientId)` | 重启已安装的客户端入口，随后用 `list` 获取新连接 ID |
 | `outputs.read/stat(clientId, options)` | 按转储 ID 读取长输出或查看元数据 |
@@ -116,7 +117,7 @@ MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有
 
 代码模式结果的 `structuredContent` 为 `{ "result": ..., "logs": [...] }`。其中 `result` 是显式返回值，`logs` 为字符串数组。`call` 保留原生结果中的 `content`、`structuredContent`、`isError` 等字段；原生工具可以正常返回 `isError: true`，调用方需检查这个字段。连接或转发错误会使对应调用失败，可用 JavaScript `try/catch` 处理。
 
-`fs`、`skills`、`agents`、`exec`、`reload` 和 `outputs` 的便捷原语返回解包后的结构化结果，原生工具返回错误时会抛出异常；`exec.parallel` 把各项失败保留为 `rejected/reason`。直接 `call` 则返回完整 MCP 结果。更多文件、显式上下文根、rsync、端口与托管同步任务示例见[工作区](workspaces.md)、[上下文](context.md)与[会话控制](session-control.md)。
+`fs`、`skills`、`agents`、`collab`、`exec`、`reload` 和 `outputs` 的便捷原语返回解包后的结构化结果，原生工具返回错误时会抛出异常；`exec.parallel` 把各项失败保留为 `rejected/reason`。直接 `call` 则返回完整 MCP 结果。更多文件、显式上下文根、rsync、端口与托管同步任务示例见[工作区](workspaces.md)、[上下文](context.md)与[会话控制](session-control.md)。
 
 以下代码在一次请求中查看多个 Shell 客户端。此后各小节的 JavaScript 块都应作为 `code_mode` 的 `code` 字符串发送。
 
