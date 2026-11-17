@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 rust-version = "1.89"
 description = "Discover native tools and execute workspace commands through an authenticated SSH MCP bridge"
