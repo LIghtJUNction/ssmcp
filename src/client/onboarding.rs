@@ -1,4 +1,5 @@
 //! Interactive first-connection setup. Device authorization never leaves the trusted portal.
+pub(super) mod browser_setup;
 mod dependencies;
 #[cfg(all(test, unix))]
 mod flow_tests;
