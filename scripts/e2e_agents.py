@@ -216,6 +216,7 @@ def pi_call(harness, command, arguments=None):
 
 
 def catalog(harness, mode):
+    harness_names = ("codex", "claude", "pi", "opencode")
     # Connection readiness does not wait on optional providers.
     expected = ({"codex", "claude", "pi", "opencode"} if mode == "all"
                 else ({"claude" if mode == "cc" else mode} if mode != "shell" else set()))
@@ -230,6 +231,10 @@ def catalog(harness, mode):
         return rows
 
     diagnostics = wait_for(discovered, description=f"{mode} asynchronous native discovery")
+    providers = {row["provider"]: row for row in diagnostics}
+    harness.check(len(providers) == len(diagnostics)
+                  and set(providers) == set(harness_names) | {"playwright"},
+                  f"{mode}: four Harnesses and the optional Playwright provider have distinct discovery records")
     status, value, _ = harness.rpc("tools/list", modern=True)
     harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode"],
                   f"{mode}: public MCP catalog contains exactly list and code_mode")
@@ -284,11 +289,15 @@ def catalog(harness, mode):
                   and isinstance(event_page["next_cursor"], int),
                   f"{mode}: command events accept the discovered parameters")
     harness.check(harness.call("terminal.status")["running"], f"{mode}: the shell stays available")
-    counts = {row["provider"]: row["tools"] for row in diagnostics}
+    counts = {name: providers[name]["tools"] for name in harness_names}
     harness.check(counts == {
         name: sum(tool.startswith((f"{name}.", f"ssmcp.{name}.")) for tool in names)
-        for name in ("codex", "claude", "pi", "opencode")
+        for name in harness_names
     }, f"{mode}: harness counts match the complete registered catalog")
+    playwright = providers["playwright"]
+    harness.check(playwright["status"] == "unavailable" and playwright["tools"] == 0
+                  and not any(name.startswith("playwright.") for name in names),
+                  f"{mode}: the absent optional Playwright MCP provider contributes no native tools")
     harness.check({name for name, count in counts.items() if count} == expected,
                   f"{mode}: automatic discovery reports exactly the installed fixture harnesses")
     other_tool = "unknown.fixture" if mode == "all" else ("pi.get_state" if mode != "pi" else "codex.thread_start")
