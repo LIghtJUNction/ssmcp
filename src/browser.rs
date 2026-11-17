@@ -1,5 +1,6 @@
 //! Browser primitives implemented directly with the Chrome DevTools Protocol.
 //! The browser is a system dependency; no model or external MCP process is involved.
+mod discovery;
 use crate::backend::{process::Managed, result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
@@ -12,12 +13,15 @@ use std::{
     path::PathBuf,
     process::Stdio,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
-use tokio::{net::TcpStream, sync::Mutex};
+use tokio::{
+    net::TcpStream,
+    sync::{Mutex, OnceCell, OwnedMutexGuard},
+};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async_with_config,
     tungstenite::{Message, protocol::WebSocketConfig},
@@ -33,17 +37,18 @@ const MAX_PAGES: usize = 64;
 pub struct Browser {
     root: PathBuf,
     http: reqwest::Client,
-    session: Mutex<Option<Session>>,
+    session: Mutex<Option<Arc<Session>>>,
     closed: AtomicBool,
+    next_snapshot: AtomicU64,
 }
 
 struct Session {
     endpoint: Url,
     browser: Cdp,
-    pages: HashMap<String, Page>,
-    owned: Option<OwnedBrowser>,
+    pages: StdMutex<HashMap<String, Arc<PageEntry>>>,
+    owned: StdMutex<Option<OwnedBrowser>>,
     version: Value,
-    snapshot_sequence: u64,
+    closed: AtomicBool,
 }
 
 /// A profile is removed only after its owned process has exited.
@@ -85,6 +90,39 @@ impl Drop for OwnedBrowser {
     }
 }
 
+// Initializing or operating one page must not block an unrelated page.
+struct PageEntry {
+    connection: OnceCell<PageConnection>,
+    closed: AtomicBool,
+}
+// Removing a cancelled first connection must not need an async runtime or
+// leave a placeholder consuming MAX_PAGES. Only the initializer owns this guard.
+struct InitializingPage<'a> {
+    session: &'a Session,
+    id: &'a str,
+    entry: &'a Arc<PageEntry>,
+    armed: bool,
+}
+impl Drop for InitializingPage<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let mut pages = self.session.pages.lock().unwrap_or_else(|e| e.into_inner());
+            if pages
+                .get(self.id)
+                .is_some_and(|entry| Arc::ptr_eq(entry, self.entry))
+            {
+                self.entry.closed.store(true, Ordering::Release);
+                pages.remove(self.id);
+            }
+        }
+    }
+}
+struct PageConnection {
+    // Kept outside the page operation lock so disconnect can drain input and
+    // close sockets even when an operation has been cancelled while awaiting.
+    cdp: Cdp,
+    page: Arc<Mutex<Page>>,
+}
 struct Page {
     cdp: Cdp,
     snapshot: Option<Snapshot>,
@@ -292,6 +330,7 @@ impl Browser {
             http,
             session: Mutex::new(None),
             closed: AtomicBool::new(false),
+            next_snapshot: AtomicU64::new(1),
         })
     }
 
@@ -302,6 +341,13 @@ impl Browser {
             "ref":{"type":"string","minLength":1,"maxLength":80}
         });
         let mut out = vec![
+            tool(
+                "discover",
+                "Read bounded browser process and extension-manifest metadata. Distinguish Google Chrome from Chromium; installed files do not prove enabled extensions, native approval or a usable connection. No browser, MCP server or installer is started.",
+                json!({}),
+                &[],
+                true,
+            ),
             tool(
                 "status",
                 "Inspect native browser availability and the current CDP connection; no browser is started.",
@@ -468,9 +514,17 @@ impl Browser {
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
         self.ensure_open()?;
         match name {
+            "ssmcp.browser.discover" => {
+                let _: Empty = parse(args)?;
+                let observed = tokio::task::spawn_blocking(discovery::inspect)
+                    .await
+                    .map_err(|_| "browser metadata discovery failed".to_owned())?;
+                self.ensure_open()?;
+                Ok(result(observed))
+            }
             "ssmcp.browser.status" => {
                 let _: Empty = parse(args)?;
-                let session = self.session.lock().await;
+                let session = self.session.lock().await.clone();
                 self.ensure_open()?;
                 let state = if let Some(s) = session.as_ref() {
                     let probe = tokio::time::timeout(Duration::from_secs(2), async {
@@ -487,13 +541,16 @@ impl Browser {
                                     .to_owned(),
                             );
                         }
+                        if s.closed.load(Ordering::Acquire) {
+                            return Err("browser disconnected during status".to_owned());
+                        }
                         Ok::<(), String>(())
                     })
                     .await
                     .map_err(|_| "browser debugger status probe timed out".to_owned())
                     .and_then(|v| v);
                     json!({"connected":probe.is_ok(),"endpoint":s.endpoint.as_str(),
-                        "owned":s.owned.is_some(),"browser":s.version,"native":true,"protocol":"cdp",
+                        "owned":s.owned.lock().unwrap_or_else(|e|e.into_inner()).is_some(),"browser":s.version,"native":true,"protocol":"cdp",
                         "reason":probe.err()})
                 } else {
                     json!({"connected":false,"native":true,"protocol":"cdp",
@@ -551,11 +608,11 @@ impl Browser {
                     }
                 }).await.map_err(|_|"system browser launch timed out".to_owned()).and_then(|v|v);
                 match opened {
-                    Ok(mut session) => {
+                    Ok(session) => {
                         let report = json!({"connected":true,"owned":true,"endpoint":session.endpoint.as_str(),
                             "executable":executable,"headless":args.headless,"browser":session.version});
-                        session.owned = Some(owned);
-                        *guard = Some(session);
+                        *session.owned.lock().unwrap_or_else(|e| e.into_inner()) = Some(owned);
+                        *guard = Some(Arc::new(session));
                         Ok(result(report))
                     }
                     Err(error) => {
@@ -574,7 +631,7 @@ impl Browser {
                 }
                 let session = self.attach(endpoint).await?;
                 let report = json!({"connected":true,"owned":false,"endpoint":session.endpoint.as_str(),"browser":session.version});
-                *guard = Some(session);
+                *guard = Some(Arc::new(session));
                 Ok(result(report))
             }
             "ssmcp.browser.disconnect" => {
@@ -599,10 +656,10 @@ impl Browser {
         Ok(Session {
             endpoint,
             browser,
-            pages: HashMap::new(),
-            owned: None,
+            pages: StdMutex::new(HashMap::new()),
+            owned: StdMutex::new(None),
             version: verified,
-            snapshot_sequence: 0,
+            closed: AtomicBool::new(false),
         })
     }
 
@@ -631,14 +688,29 @@ impl Browser {
         serde_json::from_slice(&bytes).map_err(|e| format!("invalid CDP discovery JSON: {e}"))
     }
 
-    async fn targets(&self, session: &mut Session) -> Result<Vec<Value>, String> {
+    async fn targets(&self, session: &Session) -> Result<Vec<Value>, String> {
+        self.ensure_session(session)?;
+        // Only prune entries observed before this HTTP request. A concurrent
+        // open may add a page after the response's target list was captured.
+        let observed = session
+            .pages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let targets = self.get_json(&session.endpoint, "json/list").await?;
+        self.ensure_session(session)?;
         let targets = targets
             .as_array()
             .ok_or("CDP target list is not an array")?;
-        session
-            .pages
-            .retain(|id, _| targets.iter().any(|t| t["id"].as_str() == Some(id)));
+        let mut pages = session.pages.lock().unwrap_or_else(|e| e.into_inner());
+        pages.retain(|id, entry| {
+            let removed = observed.get(id).is_some_and(|old| Arc::ptr_eq(old, entry))
+                && !targets.iter().any(|t| t["id"].as_str() == Some(id));
+            if removed {
+                entry.closed.store(true, Ordering::Release);
+            }
+            !removed
+        });
         Ok(targets
             .iter()
             .filter(|t| t["type"] == "page")
@@ -646,45 +718,110 @@ impl Browser {
             .collect())
     }
 
-    async fn page<'a>(&self, session: &'a mut Session, id: &str) -> Result<&'a mut Page, String> {
+    fn ensure_session(&self, session: &Session) -> Result<(), String> {
+        self.ensure_open()?;
+        if session.closed.load(Ordering::Acquire) {
+            Err("browser session disconnected; select the current session again".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn page(&self, session: &Session, id: &str) -> Result<OwnedMutexGuard<Page>, String> {
         valid_target(id)?;
-        if !session.pages.contains_key(id) {
-            if session.pages.len() >= MAX_PAGES {
+        let entry = {
+            let mut pages = session.pages.lock().unwrap_or_else(|e| e.into_inner());
+            self.ensure_session(session)?;
+            if !pages.contains_key(id) && pages.len() >= MAX_PAGES {
                 return Err("64 active page connections reached; close a tab or reconnect".into());
             }
-            let targets = self.targets(session).await?;
-            let target = targets
-                .iter()
-                .find(|t| t["id"].as_str() == Some(id))
-                .ok_or("target is not an open page; call browser.tabs again")?;
-            let ws = websocket(
-                &session.endpoint,
-                target["webSocketDebuggerUrl"]
-                    .as_str()
-                    .ok_or("page has no CDP WebSocket URL")?,
-            )?;
-            let cdp = Cdp::connect(ws.as_str()).await?;
-            session.pages.insert(
-                id.to_owned(),
-                Page {
-                    cdp,
-                    snapshot: None,
-                },
-            );
+            pages
+                .entry(id.to_owned())
+                .or_insert_with(|| {
+                    Arc::new(PageEntry {
+                        connection: OnceCell::new(),
+                        closed: AtomicBool::new(false),
+                    })
+                })
+                .clone()
+        };
+        let connection = entry
+            .connection
+            .get_or_try_init(|| async {
+                let mut initializing = InitializingPage {
+                    session,
+                    id,
+                    entry: &entry,
+                    armed: true,
+                };
+                self.ensure_session(session)?;
+                if entry.closed.load(Ordering::Acquire) {
+                    return Err("browser target was closed; call browser.tabs again".to_owned());
+                }
+                let targets = self.targets(session).await?;
+                let target = targets
+                    .iter()
+                    .find(|t| t["id"].as_str() == Some(id))
+                    .ok_or("target is not an open page; call browser.tabs again")?;
+                let ws = websocket(
+                    &session.endpoint,
+                    target["webSocketDebuggerUrl"]
+                        .as_str()
+                        .ok_or("page has no CDP WebSocket URL")?,
+                )?;
+                let cdp = Cdp::connect(ws.as_str()).await?;
+                initializing.armed = false;
+                Ok(PageConnection {
+                    cdp: cdp.clone(),
+                    page: Arc::new(Mutex::new(Page {
+                        cdp,
+                        snapshot: None,
+                    })),
+                })
+            })
+            .await;
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) => {
+                // Failed or invalid targets must not consume the connection cap.
+                let mut pages = session.pages.lock().unwrap_or_else(|e| e.into_inner());
+                if pages
+                    .get(id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &entry))
+                {
+                    entry.closed.store(true, Ordering::Release);
+                    pages.remove(id);
+                }
+                return Err(error);
+            }
+        };
+        // Disconnect can race a connection's initialization. Close this late
+        // socket explicitly; it was not necessarily visible to disconnect.
+        if session.closed.load(Ordering::Acquire) || entry.closed.load(Ordering::Acquire) {
+            connection.cdp.close().await;
+            return Err("browser session or target disconnected".into());
         }
-        Ok(session.pages.get_mut(id).unwrap())
+        let page = connection.page.clone().lock_owned().await;
+        // A queued call belongs to the captured session, never its replacement.
+        self.ensure_session(session)?;
+        if entry.closed.load(Ordering::Acquire) {
+            return Err("browser target was closed; call browser.tabs again".into());
+        }
+        Ok(page)
     }
 
     async fn connected(&self, name: &str, args: Value) -> Result<Value, String> {
-        let mut guard = self.session.lock().await;
-        self.ensure_open()?;
-        let session = guard
-            .as_mut()
+        let session = self
+            .session
+            .lock()
+            .await
+            .clone()
             .ok_or("browser is not connected; use browser.launch or browser.connect")?;
+        self.ensure_session(&session)?;
         let value = match name {
             "ssmcp.browser.tabs" => {
                 let _: Empty = parse(args)?;
-                let targets = self.targets(session).await?;
+                let targets = self.targets(&session).await?;
                 json!({"tabs":targets.iter().map(|t|json!({
                     "target_id":t["id"],"title":bounded(t["title"].as_str().unwrap_or(""),512),
                     "url":bounded(t["url"].as_str().unwrap_or(""),4096)
@@ -701,14 +838,14 @@ impl Browser {
                     .as_str()
                     .ok_or("browser returned no target ID")?;
                 let id = id.to_owned();
-                let page = self.page(session, &id).await?;
+                let mut page = self.page(&session, &id).await?;
                 navigate(&mut page.cdp, &args.url).await?;
                 json!({"target_id":id,"url":args.url})
             }
             "ssmcp.browser.navigate" => {
                 let args: Navigate = parse(args)?;
                 valid_url(&args.url)?;
-                let page = self.page(session, &args.target_id).await?;
+                let mut page = self.page(&session, &args.target_id).await?;
                 page.snapshot = None;
                 let navigation = navigate(&mut page.cdp, &args.url).await?;
                 json!({"target_id":args.target_id,"navigation":navigation})
@@ -719,9 +856,8 @@ impl Browser {
                 {
                     return Err("snapshot bounds: max_elements 1..200, max_chars 1..32768".into());
                 }
-                session.snapshot_sequence += 1;
-                let token = format!("s{}", session.snapshot_sequence);
-                let page = self.page(session, &args.target_id).await?;
+                let token = format!("s{}", self.next_snapshot.fetch_add(1, Ordering::Relaxed));
+                let mut page = self.page(&session, &args.target_id).await?;
                 // Release the old remote object before publishing a new set of refs.
                 if let Some(old) = page.snapshot.take() {
                     let _ = page
@@ -765,8 +901,8 @@ impl Browser {
                 {
                     return Err("invalid mouse button or click_count".into());
                 }
-                let page = self.page(session, &args.target_id).await?;
-                let point = ref_action(page, &args.element_ref, CLICK_SCRIPT, vec![]).await?;
+                let mut page = self.page(&session, &args.target_id).await?;
+                let point = ref_action(&mut page, &args.element_ref, CLICK_SCRIPT, vec![]).await?;
                 let x = point["x"].as_f64().ok_or("element has no x coordinate")?;
                 let y = point["y"].as_f64().ok_or("element has no y coordinate")?;
                 let button_code = match args.button.as_str() {
@@ -791,10 +927,14 @@ impl Browser {
                 if args.text.len() > 32768 {
                     return Err("fill text exceeds 32768 UTF-8 bytes".into());
                 }
-                let page = self.page(session, &args.target_id).await?;
-                let prepared =
-                    ref_action(page, &args.element_ref, FILL_SCRIPT, vec![json!(args.text)])
-                        .await?;
+                let mut page = self.page(&session, &args.target_id).await?;
+                let prepared = ref_action(
+                    &mut page,
+                    &args.element_ref,
+                    FILL_SCRIPT,
+                    vec![json!(args.text)],
+                )
+                .await?;
                 if prepared["insert_text"] == true {
                     page.cdp
                         .call("Input.insertText", json!({"text":args.text}))
@@ -806,7 +946,7 @@ impl Browser {
                 let args: Key = parse(args)?;
                 let (code, key, text) = key_spec(&args.key)?;
                 let modifiers = modifier_bits(&args.modifiers)?;
-                let page = self.page(session, &args.target_id).await?;
+                let page = self.page(&session, &args.target_id).await?;
                 let mut down = json!({"type":"keyDown","key":key,"windowsVirtualKeyCode":code,
                     "nativeVirtualKeyCode":code,"modifiers":modifiers});
                 if modifiers & (1 | 2 | 4) == 0
@@ -831,7 +971,7 @@ impl Browser {
                 {
                     return Err("scroll delta exceeds 100000 CSS pixels".into());
                 }
-                let page = self.page(session, &args.target_id).await?;
+                let page = self.page(&session, &args.target_id).await?;
                 let size = page
                     .cdp
                     .value("({width:innerWidth,height:innerHeight})")
@@ -852,7 +992,7 @@ impl Browser {
                 if args.expression.len() > 65536 {
                     return Err("expression exceeds 65536 UTF-8 bytes".into());
                 }
-                let page = self.page(session, &args.target_id).await?;
+                let page = self.page(&session, &args.target_id).await?;
                 let value = page.cdp.value(&args.expression).await?;
                 json!({"target_id":args.target_id,"value":value})
             }
@@ -861,13 +1001,14 @@ impl Browser {
                 if !(320..=2560).contains(&args.max_width) {
                     return Err("max_width must be 320..2560".into());
                 }
-                let page = self.page(session, &args.target_id).await?;
+                let mut page = self.page(&session, &args.target_id).await?;
                 return screenshot(&mut page.cdp, &args.target_id, args.max_width).await;
             }
             "ssmcp.browser.close" => {
                 let args: Target = parse(args)?;
                 valid_target(&args.target_id)?;
-                let targets = self.targets(session).await?;
+                let _page = self.page(&session, &args.target_id).await?;
+                let targets = self.targets(&session).await?;
                 if !targets.iter().any(|t| t["id"] == args.target_id) {
                     return Err("target is not an open page".into());
                 }
@@ -875,7 +1016,15 @@ impl Browser {
                     .browser
                     .call("Target.closeTarget", json!({"targetId":args.target_id}))
                     .await?;
-                session.pages.remove(&args.target_id);
+                if closed["success"] == true
+                    && let Some(entry) = session
+                        .pages
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&args.target_id)
+                {
+                    entry.closed.store(true, Ordering::Release);
+                }
                 json!({"target_id":args.target_id,"closed":closed["success"]})
             }
             _ => return Err(format!("unknown browser tool: {name}")),
@@ -884,21 +1033,37 @@ impl Browser {
     }
 
     async fn disconnect(&self) {
-        let mut guard = self.session.lock().await;
-        if let Some(mut session) = guard.take() {
-            let mut connections: Vec<_> = session
-                .pages
-                .values()
-                .map(|page| page.cdp.clone())
-                .collect();
+        let session = {
+            let mut guard = self.session.lock().await;
+            let session = guard.take();
+            if let Some(session) = &session {
+                session.closed.store(true, Ordering::Release);
+            }
+            session
+        };
+        if let Some(session) = session {
+            let entries =
+                std::mem::take(&mut *session.pages.lock().unwrap_or_else(|e| e.into_inner()));
+            let mut connections = Vec::with_capacity(entries.len() + 1);
+            for entry in entries.values() {
+                entry.closed.store(true, Ordering::Release);
+                if let Some(connection) = entry.connection.get() {
+                    connections.push(connection.cdp.clone());
+                }
+            }
             connections.push(session.browser.clone());
+            // Existing bounded input release and connection drain remain intact.
+            // New calls may attach elsewhere without entering this old session.
             futures_util::future::join_all(connections.iter().map(Cdp::close)).await;
-            session.pages.clear();
-            if let Some(mut owned) = session.owned.take() {
+            let owned = session
+                .owned
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            if let Some(mut owned) = owned {
                 owned.shutdown().await;
             }
         }
-        drop(guard);
     }
 
     pub async fn shutdown(&self) {
@@ -1541,6 +1706,301 @@ const FILL_SCRIPT: &str = r#"
 mod tests {
     use super::*;
 
+    async fn poll_once<F: std::future::Future>(
+        mut future: std::pin::Pin<&mut F>,
+    ) -> std::task::Poll<F::Output> {
+        std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(std::future::Future::poll(future.as_mut(), cx))
+        })
+        .await
+    }
+
+    async fn test_cdp() -> (Cdp, WebSocketStream<TcpStream>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let url = format!("ws://{address}/devtools/page/test");
+        let (client, server) = tokio::join!(Cdp::connect(&url), async {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio_tungstenite::accept_async(stream).await.unwrap()
+        });
+        (client.unwrap(), server)
+    }
+
+    fn test_session(pages: Vec<(&str, Cdp)>) -> Arc<Session> {
+        let browser = pages[0].1.clone();
+        let mut entries = HashMap::new();
+        for (id, cdp) in pages {
+            let connection = OnceCell::new();
+            assert!(
+                connection
+                    .set(PageConnection {
+                        cdp: cdp.clone(),
+                        page: Arc::new(Mutex::new(Page {
+                            cdp,
+                            snapshot: None
+                        })),
+                    })
+                    .is_ok()
+            );
+            entries.insert(
+                id.to_owned(),
+                Arc::new(PageEntry {
+                    connection,
+                    closed: AtomicBool::new(false),
+                }),
+            );
+        }
+        Arc::new(Session {
+            endpoint: endpoint("http://127.0.0.1:9").unwrap(),
+            browser,
+            pages: StdMutex::new(entries),
+            owned: StdMutex::new(None),
+            version: json!({}),
+            closed: AtomicBool::new(false),
+        })
+    }
+
+    async fn test_browser(pages: Vec<(&str, Cdp)>) -> Arc<Browser> {
+        let browser = Arc::new(Browser::new(std::env::current_dir().unwrap()).unwrap());
+        *browser.session.lock().await = Some(test_session(pages));
+        browser
+    }
+
+    async fn test_request(socket: &mut WebSocketStream<TcpStream>) -> Value {
+        serde_json::from_str(&socket.next().await.unwrap().unwrap().into_text().unwrap()).unwrap()
+    }
+
+    async fn test_reply(socket: &mut WebSocketStream<TcpStream>, request: &Value, value: Value) {
+        socket
+            .send(Message::Text(
+                json!({"id":request["id"],"result":value})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn different_pages_progress_while_one_page_preserves_action_order() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (cdp_a, mut socket_a) = test_cdp().await;
+            let (cdp_b, mut socket_b) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp_a), ("b", cdp_b)]).await;
+            let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+            let server_a = tokio::spawn(async move {
+                let first = test_request(&mut socket_a).await;
+                assert_eq!(first["method"], "Runtime.evaluate");
+                observed_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                test_reply(
+                    &mut socket_a,
+                    &first,
+                    json!({"result":{"type":"object","objectId":"snapshot-a"}}),
+                )
+                .await;
+                // A same-page call queued during the first RPC must not run
+                // between the two RPCs that publish one snapshot.
+                let second = test_request(&mut socket_a).await;
+                assert_eq!(second["method"], "Runtime.callFunctionOn");
+                test_reply(
+                    &mut socket_a,
+                    &second,
+                    json!({"result":{"value":{
+                        "snapshot_id":"s1","title":"A","url":"https://example.test/",
+                        "text":"A","elements":[]
+                    }}}),
+                )
+                .await;
+                let third = test_request(&mut socket_a).await;
+                assert_eq!(third["params"]["expression"], "'same-page'");
+                test_reply(
+                    &mut socket_a,
+                    &third,
+                    json!({"result":{"value":"same-page"}}),
+                )
+                .await;
+            });
+            let server_b = tokio::spawn(async move {
+                let request = test_request(&mut socket_b).await;
+                assert_eq!(request["params"]["expression"], "'other-page'");
+                test_reply(
+                    &mut socket_b,
+                    &request,
+                    json!({"result":{"value":"other-page"}}),
+                )
+                .await;
+            });
+            let snapshot = tokio::spawn({
+                let browser = browser.clone();
+                async move {
+                    browser
+                        .perform("ssmcp.browser.snapshot", json!({"target_id":"a"}))
+                        .await
+                }
+            });
+            observed_rx.await.unwrap();
+            let same_page = browser.perform(
+                "ssmcp.browser.evaluate",
+                json!({"target_id":"a","expression":"'same-page'"}),
+            );
+            tokio::pin!(same_page);
+            assert!(poll_once(same_page.as_mut()).await.is_pending());
+            let other = browser
+                .perform(
+                    "ssmcp.browser.evaluate",
+                    json!({"target_id":"b","expression":"'other-page'"}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(other["structuredContent"]["value"], "other-page");
+            // Page B completed while A's native response was still withheld.
+            assert!(!snapshot.is_finished());
+            release_tx.send(()).unwrap();
+            assert_eq!(
+                snapshot.await.unwrap().unwrap()["structuredContent"]["target_id"],
+                "a"
+            );
+            assert_eq!(
+                same_page.await.unwrap()["structuredContent"]["value"],
+                "same-page"
+            );
+            server_a.await.unwrap();
+            server_b.await.unwrap();
+            browser.disconnect().await;
+        })
+        .await
+        .expect("independent pages were serialized or a fixture stalled");
+    }
+
+    #[tokio::test]
+    async fn cancelled_page_initialization_does_not_leak_a_connection_slot() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (cdp, _browser_socket) = test_cdp().await;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut session = test_session(vec![("placeholder", cdp)]);
+            let inner = Arc::get_mut(&mut session).unwrap();
+            inner.endpoint = endpoint(&format!("http://{address}")).unwrap();
+            inner.pages.get_mut().unwrap().clear();
+            let browser = Arc::new(Browser::new(std::env::current_dir().unwrap()).unwrap());
+            *browser.session.lock().await = Some(session.clone());
+            let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut http, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let mut chunk = [0; 1024];
+                    let n = http.read(&mut chunk).await.unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&chunk[..n]);
+                    assert!(request.len() <= 4096);
+                }
+                assert!(String::from_utf8_lossy(&request).contains("/json/list"));
+                observed_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                let _ = http
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]",
+                    )
+                    .await;
+            });
+            let request = tokio::spawn({
+                let browser = browser.clone();
+                async move {
+                    browser
+                        .perform(
+                            "ssmcp.browser.evaluate",
+                            json!({"target_id":"a","expression":"1"}),
+                        )
+                        .await
+                }
+            });
+            observed_rx.await.unwrap();
+            assert_eq!(session.pages.lock().unwrap().len(), 1);
+            request.abort();
+            assert!(request.await.unwrap_err().is_cancelled());
+            assert!(session.pages.lock().unwrap().is_empty());
+            assert!(!session.closed.load(Ordering::Acquire));
+            release_tx.send(()).unwrap();
+            server.await.unwrap();
+            browser.disconnect().await;
+        })
+        .await
+        .expect("cancelled discovery did not release its owned connection slot");
+    }
+
+    #[tokio::test]
+    async fn queued_request_cannot_move_to_a_replacement_session() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (old_cdp, mut old_socket) = test_cdp().await;
+            let (new_cdp, mut new_socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", old_cdp)]).await;
+            let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+            let old_server = tokio::spawn(async move {
+                let request = test_request(&mut old_socket).await;
+                assert_eq!(request["params"]["expression"], "'in-flight'");
+                observed_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                test_reply(&mut old_socket, &request, json!({"result":{"value":"old"}})).await;
+                // Disconnect closes the old socket; it must not send the queued action.
+                let message = old_socket.next().await.unwrap().unwrap();
+                assert!(matches!(message, Message::Close(_)), "{message:?}");
+            });
+            let new_server = tokio::spawn(async move {
+                let request = test_request(&mut new_socket).await;
+                assert_eq!(request["params"]["expression"], "'new-session'");
+                test_reply(&mut new_socket, &request, json!({"result":{"value":"new"}})).await;
+            });
+            let active = tokio::spawn({
+                let browser = browser.clone();
+                async move {
+                    browser
+                        .perform(
+                            "ssmcp.browser.evaluate",
+                            json!({"target_id":"a","expression":"'in-flight'"}),
+                        )
+                        .await
+                }
+            });
+            observed_rx.await.unwrap();
+            let queued = browser.perform(
+                "ssmcp.browser.evaluate",
+                json!({"target_id":"a","expression":"'must-not-run'"}),
+            );
+            tokio::pin!(queued);
+            assert!(poll_once(queued.as_mut()).await.is_pending());
+            let disconnect = browser.disconnect();
+            tokio::pin!(disconnect);
+            assert!(poll_once(disconnect.as_mut()).await.is_pending());
+            assert!(browser.session.lock().await.is_none());
+            // Simulate attach publishing the newly verified connection while
+            // old input/output is still draining. The target ID is reused.
+            *browser.session.lock().await = Some(test_session(vec![("a", new_cdp)]));
+            let new = browser
+                .perform(
+                    "ssmcp.browser.evaluate",
+                    json!({"target_id":"a","expression":"'new-session'"}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(new["structuredContent"]["value"], "new");
+            release_tx.send(()).unwrap();
+            active.await.unwrap().unwrap();
+            assert!(queued.await.unwrap_err().contains("disconnected"));
+            disconnect.await;
+            old_server.await.unwrap();
+            new_server.await.unwrap();
+            browser.disconnect().await;
+        })
+        .await
+        .expect("old-session cleanup blocked a replacement or failed to drain");
+    }
+
     #[test]
     fn endpoints_reject_remote_hosts_redirect_origins_and_credentials() {
         for text in [
@@ -1640,7 +2100,8 @@ mod tests {
             assert!(names.insert(name.to_owned()));
             assert_eq!(tool["inputSchema"]["additionalProperties"], false);
         }
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), 16);
+        assert!(names.contains("ssmcp.browser.discover"));
     }
     #[tokio::test]
     async fn cancelled_input_still_sends_release() {
@@ -1676,21 +2137,28 @@ mod tests {
         let cdp = Cdp::connect(&format!("ws://{address}/devtools/page/test"))
             .await
             .unwrap();
-        let request = tokio::spawn(async move {
-            cdp.input_pair(
-                "Input.dispatchKeyEvent",
-                json!({"type":"keyDown"}),
-                json!({"type":"keyUp"}),
-            )
-            .await
+        let browser = test_browser(vec![("test", cdp)]).await;
+        let request = tokio::spawn({
+            let browser = browser.clone();
+            async move {
+                browser
+                    .perform("ssmcp.browser.key", json!({"target_id":"test","key":"A"}))
+                    .await
+            }
         });
         pressed_rx.await.unwrap();
         request.abort();
         assert!(request.await.unwrap_err().is_cancelled());
+        let disconnect = browser.disconnect();
+        tokio::pin!(disconnect);
+        assert!(poll_once(disconnect.as_mut()).await.is_pending());
         continue_tx.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(3), server)
             .await
             .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), disconnect)
+            .await
             .unwrap();
     }
 
@@ -1770,14 +2238,14 @@ mod tests {
         });
         let cdp = Cdp::connect(&ws_url).await.unwrap();
         let browser = Browser::new(std::env::current_dir().unwrap()).unwrap();
-        *browser.session.lock().await = Some(Session {
+        *browser.session.lock().await = Some(Arc::new(Session {
             endpoint: endpoint(&format!("http://{address}")).unwrap(),
             browser: cdp,
-            pages: HashMap::new(),
-            owned: None,
+            pages: StdMutex::new(HashMap::new()),
+            owned: StdMutex::new(None),
             version: json!({}),
-            snapshot_sequence: 0,
-        });
+            closed: AtomicBool::new(false),
+        }));
         let ready = browser
             .perform("ssmcp.browser.status", json!({}))
             .await

@@ -24,8 +24,9 @@ request discovers current native tools. Each client retains at most four snapsho
 a 15-minute absolute maximum age. Calls still validate the current provider and registration. \
 Restart listing without a cursor if a snapshot expires or is evicted. \
 Do not invent tool names or backend arguments.\n\n\
+Use tools.search(clientId,{query:'browser',limit:20}) in code_mode for a focused lookup. It returns registered names, routing namespaces, short descriptions and nextCursor. Set include_schemas:true for complete native descriptors unchanged. Continue with the same client, query, limit and schema mode; restart if a cursor expires or a resumed page changes. Search retains native catalog snapshot semantics and checks authorization on every page. It reduces model-visible output and manual pagination, not the first native page scan.\n\n\
 New clients always provide a shell and automatically discover installed Codex, Claude Code, \
-Pi and OpenCode tools. ssmcp.harnesses.list reports the registered tool counts.\n\n\
+Pi, OpenCode and Playwright MCP tools. ssmcp.harnesses.list reports status and registered tool counts.\n\n\
 Use code_mode with clients, await call(clientId, toolName, arguments), \
 await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
@@ -40,6 +41,7 @@ Use image(await computer.screenshot(clientId)) or image(await browser.screenshot
 {target_id})) for visible MCP image content, then return only metadata. Do not print image \
 base64. Use screenshot image_to_desktop mapping for scaled desktop coordinates. Browser \
 element refs come from the current snapshot and expire on navigation or replacement.\n\n\
+For the operator's existing Chrome, first call ssmcp.browser.discover for read-only browser and extension metadata, and ssmcp.harnesses.list for provider readiness. Extension files alone do not prove an active connection. Installed Playwright MCP starts in its native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered.\n\n\
 Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
 command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
 incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \
@@ -336,7 +338,7 @@ fn limits() -> Value {
             "sync_defaults":{"dry_run":true,"delete":false},
             "port_scope":"loopback only",
             "code_mode_helpers":[
-                "fs","fs.readText","fs.writeText","fs.editText",
+                "tools.search","fs","fs.readText","fs.writeText","fs.editText",
                 "context.roots","skills.list","skills.read","skills.view",
                 "agents.list","agents.read","agents.resolve",
                 "rsync","sync","jobs","ports","resources","reload","outputs",
@@ -367,16 +369,34 @@ fn limits() -> Value {
             "max_snapshot_bytes_per_client":crate::runtime::MAX_CATALOG_SNAPSHOT_BYTES,
             "snapshot_size_unit":"serialized JSON bytes",
             "native_catalog_timeout_ms":5000,
-            "refresh":"omit the cursor to discover current native tools"
+            "refresh":"omit the cursor to discover current native tools",
+            "search":{
+                "helper":"tools.search",
+                "default_limit":20,
+                "max_limit":50,
+                "max_pages_per_call":32,
+                "max_pages_per_cursor_chain":128,
+                "max_scanned_tools_per_cursor_chain":8192,
+                "max_cursor_bytes":12288,
+                "max_item_json_bytes":98304,
+                "max_result_bytes":131072,
+                "description_code_points":240,
+                "include_schemas":"complete unchanged native descriptor",
+                "namespace":"observed registered-name prefix; not authoritative provider metadata",
+                "pagination":"existing authorized native snapshots; no helper-added cache",
+                "oversized_descriptor":"explicit error; use original tools() without truncating schema"
+            }
         },
         "computer_use":{
             "computer_namespace":"ssmcp.computer.*",
             "omarchy_namespace":"ssmcp.omarchy.*",
             "desktop_platforms":["linux","windows","macos"],
             "browser_namespace":"ssmcp.browser.*",
+            "browser_extension_namespace":"playwright.* when native MCP discovery succeeds",
+            "browser_discovery":"ssmcp.browser.discover reads metadata; installation is not a connection",
             "model_invocation":false,
             "desktop_coordinates":"read coordinate_space: Linux/macOS logical, Windows physical virtual-desktop pixels; use image_to_desktop mapping",
-            "browser_transport":"native Chromium CDP, explicit loopback endpoints only",
+            "browser_transport":"native Chromium CDP at explicit loopback endpoints; optional installed Playwright MCP in --extension mode",
             "image_max_decoded_bytes":400*1024,
             "image_formats":["image/png","image/jpeg"],
             "lifetime":"client connection; owned browser processes stop on disconnect; attached browsers remain running"
