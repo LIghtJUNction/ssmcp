@@ -36,6 +36,8 @@ pub(super) struct Conversation {
     pub(super) view: View,
     pub(super) content_focus: bool,
     selected: usize,
+    list_start: usize,
+    list_count: usize,
     detail: bool,
     detail_scroll: usize,
     target: Option<String>,
@@ -135,6 +137,77 @@ impl State {
         }
     }
 
+    fn chat_block_replacement(&mut self) {
+        self.notice = Some(
+            (if self.conversation.submitting.is_some() {
+                "Waiting for queue confirmation · your current draft is preserved"
+            } else if self.conversation.editing.is_some() {
+                "Finish the current edit before opening another request"
+            } else {
+                "Previous draft is parked · finish this draft or press Esc to restore it"
+            })
+            .into(),
+        );
+        self.conversation.content_focus = false;
+        self.dirty = true;
+    }
+
+    /// Local enqueue has already retained the submitted text in the outbox.
+    /// Free the editor immediately so subsequent input belongs to the next draft.
+    fn chat_enqueued(&mut self, id: String, text: String) {
+        self.conversation.submitting = Some((id, text));
+        self.conversation.composer.take_text();
+        self.conversation.editing = None;
+        if let Some(parked) = self.conversation.parked.take() {
+            self.chat_restore_draft(parked);
+        }
+        self.notice = Some("Sending to queue… · the next draft stays editable".into());
+        self.dirty = true;
+    }
+
+    fn chat_accepted(&mut self, id: String, text: String) {
+        self.conversation.composer.remember(&text);
+        let mut record = format!("\n[USER] #{id}\n");
+        for line in text.lines() {
+            let _ = writeln!(record, "  {}", panel::safe_text(line));
+        }
+        record.push_str("  queued · waiting for the next eligible tool response\n\n");
+        self.log(record.as_bytes());
+        if self
+            .conversation
+            .submitting
+            .as_ref()
+            .is_some_and(|(pending, submitted)| pending == &id && submitted == &text)
+        {
+            self.conversation.submitting = None;
+        }
+        // Even identical text may be a deliberately typed next request.
+        self.notice = Some("Queued · delivered with the next eligible tool response".into());
+        self.dirty = true;
+    }
+
+    fn chat_editable(&mut self, id: String, text: String, target: Option<String>) {
+        let same_edit = self.conversation.editing.as_ref() == Some(&id);
+        if self.conversation.submitting.is_some()
+            || (!same_edit
+                && (self.conversation.editing.is_some() || self.conversation.parked.is_some()))
+        {
+            self.chat_block_replacement();
+            return;
+        }
+        if !same_edit {
+            if !self.conversation.composer.is_empty() {
+                self.conversation.parked = Some(self.chat_saved_draft());
+            }
+            self.conversation.composer.set_text(&text);
+        }
+        self.conversation.target = target;
+        self.conversation.editing = Some(id);
+        self.conversation.content_focus = false;
+        self.notice = Some("Editing · this request is held until you press Enter".into());
+        self.dirty = true;
+    }
+
     fn chat_updates(&mut self) {
         if !self.conversation.restored && !self.preview {
             let (text, cursor) = steering::draft();
@@ -154,67 +227,17 @@ impl State {
         for event in steering::take_events() {
             match event {
                 steering::UiEvent::Accepted { id, text } => {
-                    self.conversation.composer.remember(&text);
-                    let mut record = format!("\n[USER] #{id}\n");
-                    for line in text.lines() {
-                        let _ = writeln!(record, "  {}", panel::safe_text(line));
-                    }
-                    record.push_str("  queued · waiting for the next eligible tool response\n\n");
-                    self.log(record.as_bytes());
-                    let matching =
-                        self.conversation.submitting.as_ref().is_some_and(
-                            |(pending, submitted)| pending == &id && submitted == &text,
-                        );
-                    if matching {
-                        if self.conversation.composer.text() == text {
-                            self.conversation.composer.take_text();
-                            if let Some(parked) = self.conversation.parked.take() {
-                                self.chat_restore_draft(parked);
-                            }
-                        }
-                        self.conversation.submitting = None;
-                        self.conversation.editing = None;
-                    }
-                    self.notice =
-                        Some("Queued · delivered with the next eligible tool response".into());
+                    self.chat_accepted(id, text);
                 }
                 steering::UiEvent::Editable { id, text } => {
-                    if self
-                        .conversation
-                        .editing
-                        .as_ref()
-                        .is_some_and(|editing| editing != &id)
-                    {
-                        self.notice = Some(
-                            "Another request is held for editing · finish the current draft first"
-                                .into(),
-                        );
-                        continue;
-                    }
-                    if self.conversation.editing.as_ref() != Some(&id) {
-                        if !self.conversation.composer.is_empty()
-                            && self.conversation.composer.text() != text
-                        {
-                            self.conversation.parked = Some(self.chat_saved_draft());
-                        }
-                        self.conversation.composer.set_text(&text);
-                    }
                     let data = steering::snapshot();
-                    if let Some(record) = items(&data, "queue")
+                    let target = items(&data, "queue")
                         .iter()
                         .find(|item| message_id(item) == id)
-                    {
-                        self.conversation.target = record
-                            .get("target")
-                            .and_then(Value::as_str)
-                            .filter(|target| *target != "next")
-                            .map(str::to_owned);
-                    }
-                    self.conversation.editing = Some(id);
-                    self.conversation.submitting = None;
-                    self.conversation.content_focus = false;
-                    self.notice =
-                        Some("Editing · this request is held until you press Enter".into());
+                        .and_then(|record| record.get("target").and_then(Value::as_str))
+                        .filter(|target| *target != "next")
+                        .map(str::to_owned);
+                    self.chat_editable(id, text, target);
                 }
                 steering::UiEvent::Failed { id, message } => {
                     if self
@@ -275,6 +298,8 @@ impl State {
         self.conversation.view = view;
         self.conversation.content_focus = view != View::Activity;
         self.conversation.selected = 0;
+        self.conversation.list_start = 0;
+        self.conversation.list_count = 0;
         self.conversation.detail = false;
         self.conversation.detail_scroll = 0;
         self.help = false;
@@ -404,10 +429,7 @@ impl State {
             steering::submit(&text, target)
         };
         match result {
-            Ok(id) => {
-                self.conversation.submitting = Some((id, text));
-                self.notice = Some("Sending to queue…".into());
-            }
+            Ok(id) => self.chat_enqueued(id, text),
             Err(error) => self.notice = Some(error),
         }
     }
@@ -425,11 +447,11 @@ impl State {
     fn chat_open(&mut self, edit: bool) {
         if edit
             && self.conversation.view == View::Queue
-            && (self.conversation.editing.is_some() || self.conversation.submitting.is_some())
+            && (self.conversation.editing.is_some()
+                || self.conversation.submitting.is_some()
+                || self.conversation.parked.is_some())
         {
-            self.notice =
-                Some("Finish the current draft before editing another queued request".into());
-            self.conversation.content_focus = false;
+            self.chat_block_replacement();
             return;
         }
         match self.conversation.view {
@@ -486,6 +508,12 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        if self.help {
+            if matches!(key, Key::Help | Key::Escape) {
+                self.chat_escape();
+            }
+            return;
+        }
         let content = self.conversation.content_focus;
         match key {
             Key::Help => {
@@ -525,13 +553,20 @@ impl State {
                     return;
                 }
                 if !self.conversation.composer.up() {
+                    if self.conversation.editing.is_none() && self.conversation.parked.is_some() {
+                        self.chat_block_replacement();
+                        return;
+                    }
                     let data = self.chat_data();
                     let queued = items(&data, "queue")
                         .into_iter()
                         .rev()
                         .find(|entry| field(entry, "status") == "queued");
-                    if self.conversation.editing.is_none() && !self.preview && queued.is_some() {
-                        if let Err(error) = steering::take_back(message_id(&queued.unwrap())) {
+                    if self.conversation.editing.is_none()
+                        && !self.preview
+                        && let Some(queued) = queued
+                    {
+                        if let Err(error) = steering::take_back(message_id(&queued)) {
                             self.notice = Some(error);
                         }
                     } else if self.conversation.editing.is_none() {
@@ -541,7 +576,11 @@ impl State {
             }
             Key::AuditDown => {
                 if !self.conversation.composer.down() && self.conversation.editing.is_none() {
-                    self.conversation.composer.history_next();
+                    if self.conversation.parked.is_some() {
+                        self.chat_block_replacement();
+                    } else {
+                        self.conversation.composer.history_next();
+                    }
                 }
             }
             Key::Back if content => {
@@ -565,10 +604,10 @@ impl State {
                 self.conversation.composer.end();
             }
             Key::Delete if content && self.conversation.view == View::Queue => {
-                if let Some(message) = self.chat_selected() {
-                    if let Err(error) = steering::cancel(message_id(&message)) {
-                        self.notice = Some(error);
-                    }
+                if let Some(message) = self.chat_selected()
+                    && let Err(error) = steering::cancel(message_id(&message))
+                {
+                    self.notice = Some(error);
                 }
             }
             Key::Delete => {
@@ -593,8 +632,11 @@ impl State {
                     if matches!(self.conversation.view, View::Agents | View::Queue)
                         && !self.conversation.detail
                     {
-                        self.conversation.selected =
-                            usize::from(y.saturating_sub(body_top(self.geometry.rows) + 1)) / 2;
+                        let Some(index) = self.chat_list_hit(y) else {
+                            self.dirty = true;
+                            return;
+                        };
+                        self.conversation.selected = index;
                     }
                     if button == 2 {
                         self.chat_open(false);
@@ -609,6 +651,23 @@ impl State {
     }
 
     fn chat_escape(&mut self) {
+        self.dirty = true;
+        if self.help {
+            self.help = false;
+            self.conversation.content_focus = false;
+            self.notice = None;
+            return;
+        }
+        if !self.conversation.content_focus
+            && !self.conversation.detail
+            && self.conversation.editing.is_none()
+            && self.conversation.submitting.is_none()
+            && let Some(parked) = self.conversation.parked.take()
+        {
+            self.chat_restore_draft(parked);
+            self.notice = Some("Previous draft restored · recipient and cursor preserved".into());
+            return;
+        }
         self.help = false;
         if self.conversation.detail {
             self.conversation.detail = false;
@@ -620,6 +679,20 @@ impl State {
     }
 
     fn chat_character(&mut self, character: char) {
+        if self.help {
+            if character == '\u{1b}' {
+                self.chat_escape();
+            } else if !character.is_control() {
+                self.help = false;
+                self.conversation.content_focus = false;
+                self.notice = None;
+                if !self.conversation.composer.insert(&character.to_string()) {
+                    self.notice = Some("Draft limit reached · 16 KiB".into());
+                }
+                self.dirty = true;
+            }
+            return;
+        }
         match character {
             'r' | 'R'
                 if self.conversation.content_focus && self.conversation.view == View::Queue =>
@@ -629,16 +702,17 @@ impl State {
                         field(&message, "status"),
                         "uncertain" | "retarget-required" | "offline"
                     );
+                    let same_retarget = recoverable
+                        && self.conversation.editing.as_deref() == Some(message_id(&message));
                     if self.conversation.submitting.is_some()
+                        || (self.conversation.parked.is_some() && !same_retarget)
                         || self
                             .conversation
                             .editing
                             .as_ref()
                             .is_some_and(|editing| !recoverable || editing != message_id(&message))
                     {
-                        self.notice =
-                            Some("Finish the current draft before starting another request".into());
-                        self.conversation.content_focus = false;
+                        self.chat_block_replacement();
                         return;
                     }
                     if recoverable && !self.preview {
@@ -653,8 +727,14 @@ impl State {
                         self.conversation.editing = None;
                         self.conversation.target = None;
                         self.conversation.content_focus = false;
-                        self.notice =
-                            Some("Copied to a new draft · Enter sends a new request".into());
+                        self.notice = Some(
+                            (if self.conversation.parked.is_some() {
+                                "Copied to a new draft · Enter sends · Esc restores previous draft"
+                            } else {
+                                "Copied to a new draft · Enter sends a new request"
+                            })
+                            .into(),
+                        );
                     }
                 }
             }
@@ -677,7 +757,9 @@ impl State {
             }
             '\r' if self.conversation.content_focus => self.chat_open(true),
             '\r' => {
-                if self.conversation.composer.text().ends_with('\\') {
+                if self.conversation.composer.text()[..self.conversation.composer.cursor()]
+                    .ends_with('\\')
+                {
                     self.conversation.composer.backspace();
                     self.conversation.composer.insert("\n");
                 } else {
@@ -727,6 +809,10 @@ impl State {
         }
         if output == b"\x1b[201~" {
             if let Some(paste) = self.conversation.paste.take() {
+                if !paste.is_empty() && self.help {
+                    self.help = false;
+                    self.conversation.content_focus = false;
+                }
                 if self.conversation.paste_overflow
                     || !self
                         .conversation
@@ -799,6 +885,8 @@ impl State {
     }
 
     fn chat_list_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
+        self.conversation.list_start = 0;
+        self.conversation.list_count = 0;
         let width = self.geometry.left;
         let queue = self.conversation.view == View::Queue;
         let entries = if queue {
@@ -873,6 +961,12 @@ impl State {
         }
         let capacity = usize::from(height.saturating_sub(1) / 2).max(1);
         let start = self.conversation.selected.saturating_sub(capacity - 1);
+        self.conversation.list_start = start;
+        self.conversation.list_count = if height > 1 {
+            entries.len().saturating_sub(start).min(capacity)
+        } else {
+            0
+        };
         for (index, entry) in entries.iter().enumerate().skip(start).take(capacity) {
             let marker = if index == self.conversation.selected {
                 "›"
@@ -915,6 +1009,15 @@ impl State {
         rows
     }
 
+    fn chat_list_hit(&self, row: u16) -> Option<usize> {
+        let relative = row.checked_sub(body_top(self.geometry.rows) + 1)?;
+        if relative >= body_rows(self.geometry.rows).saturating_sub(1) {
+            return None;
+        }
+        let index = usize::from(relative / 2);
+        (index < self.conversation.list_count).then_some(self.conversation.list_start + index)
+    }
+
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.chat_updates();
         let g = self.geometry;
@@ -944,6 +1047,7 @@ impl State {
                 "  Up         Recall queued text or input history",
                 "  Ctrl+J     New line · pasted text stays in the draft",
                 "  Tab        Switch input / content focus",
+                "  Esc        Restore a parked draft when input is focused",
                 "  Ctrl+O     Source audit · Enter/→ open · ← back",
                 "  F2         Activity / audit / agents / queue",
                 "  Wheel      Scroll directly · PgUp/PgDn also work",
@@ -1080,8 +1184,13 @@ impl State {
                     _ => {
                         let mut ui = self.ui.clone();
                         ui.panels = vec![*kind];
-                        let mut section =
-                            panel::render_configured(&self.panel, rect.width, g.rows, now, &ui);
+                        let mut section = panel::render_configured(
+                            &self.panel,
+                            rect.width.saturating_sub(1),
+                            g.rows,
+                            now,
+                            &ui,
+                        );
                         if section.first().is_some_and(|row| row.text == "Ready") {
                             section.clear();
                         }
@@ -1090,7 +1199,7 @@ impl State {
                         }
                         section
                             .into_iter()
-                            .map(|row| (row.text, row.tone))
+                            .map(|row| (format!(" {}", row.text), row.tone))
                             .collect()
                     }
                 };
@@ -1145,6 +1254,227 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
+    }
+
+    #[test]
+    fn mouse_selects_visible_items_after_a_list_has_scrolled() {
+        let data = json!({
+            "agents":(0..24).map(|index| json!({"agent_id":format!("agent_{index}"),"name":format!("Agent {index}"),"role":"worker","status":"working"})).collect::<Vec<_>>(),
+            "queue":(0..24).map(|index| json!({"id":format!("request_{index}"),"text":format!("Request {index}"),"status":"queued"})).collect::<Vec<_>>()
+        });
+        for view in [View::Agents, View::Queue] {
+            let mut state = preview(18, 120);
+            state.conversation.view = view;
+            state.conversation.content_focus = true;
+            state.conversation.selected = 15;
+            let rows = state.chat_list_rows(&data, body_rows(state.geometry.rows));
+            let start = state.conversation.list_start;
+            assert!(start > 0);
+            assert_eq!(state.conversation.list_count, 5);
+            assert!(!rows[1].contains("Agent 0  ·"));
+            let first = body_top(state.geometry.rows) + 1;
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 1,
+                y: first,
+                release: false,
+            });
+            assert_eq!(state.conversation.selected, start);
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 1,
+                y: first + 3,
+                release: false,
+            });
+            assert_eq!(
+                state.conversation.selected,
+                start + 1,
+                "subtitle selects its visible item"
+            );
+            state.chat_key(Key::Mouse {
+                button: 2,
+                x: 1,
+                y: body_top(state.geometry.rows),
+                release: false,
+            });
+            assert_eq!(
+                state.conversation.selected,
+                start + 1,
+                "list header is not an entry"
+            );
+            assert!(!state.conversation.detail);
+            state.chat_key(Key::Mouse {
+                button: 2,
+                x: 1,
+                y: prompt_top(state.geometry.rows),
+                release: false,
+            });
+            assert_eq!(
+                state.conversation.selected,
+                start + 1,
+                "prompt border is not an entry"
+            );
+        }
+    }
+
+    #[test]
+    fn continuation_only_removes_a_backslash_immediately_before_the_cursor() {
+        let mut state = preview(36, 120);
+        state.chat_restore_draft(steering::SavedDraft {
+            text: "界x\\".into(),
+            cursor: "界".len(),
+            target: None,
+        });
+        input(&mut state, b"\r");
+        assert_eq!(state.conversation.composer.text(), "界x\\");
+        assert_eq!(state.conversation.composer.cursor(), "界".len());
+        state.chat_restore_draft(steering::SavedDraft {
+            text: "界\\tail".into(),
+            cursor: "界\\".len(),
+            target: None,
+        });
+        input(&mut state, b"\r");
+        assert_eq!(state.conversation.composer.text(), "界\ntail");
+        assert_eq!(state.conversation.composer.cursor(), "界\n".len());
+        state.conversation.composer.set_text("last\\");
+        input(&mut state, b"\r");
+        assert_eq!(state.conversation.composer.text(), "last\n");
+    }
+
+    #[test]
+    fn help_blocks_hidden_queue_actions_and_printable_input_returns_to_the_editor() {
+        let mut state = preview(36, 120);
+        state.conversation.view = View::Queue;
+        state.conversation.content_focus = true;
+        state.conversation.composer.set_text("draft A");
+        state.chat_key(Key::Help);
+        state.chat_key(Key::Delete);
+        state.chat_character('\r');
+        state.chat_key(Key::Open);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: 2,
+            release: false,
+        });
+        assert!(state.help);
+        assert!(!state.conversation.detail);
+        assert!(
+            state.notice.is_none(),
+            "hidden cancel/takeback must not be attempted"
+        );
+        assert_eq!(state.conversation.composer.text(), "draft A");
+        assert!(state.conversation.parked.is_none());
+        state.chat_character('R');
+        assert!(!state.help);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "draft AR");
+        assert!(
+            state.conversation.parked.is_none(),
+            "R must type rather than copy the hidden queue entry"
+        );
+    }
+
+    #[test]
+    fn a_parked_draft_survives_all_second_replacement_paths_and_escape_restores_it() {
+        let mut state = preview(36, 120);
+        let original = steering::SavedDraft {
+            text: "继续review".into(),
+            cursor: "继续re".len(),
+            target: Some("example-reviewer".into()),
+        };
+        state.chat_restore_draft(original.clone());
+        state.conversation.view = View::Queue;
+        state.conversation.content_focus = true;
+        input(&mut state, b"R");
+        let copied = state.chat_saved_draft();
+        assert_eq!(state.conversation.parked.as_ref(), Some(&original));
+        input(&mut state, b"\tR");
+        assert_eq!(state.chat_saved_draft(), copied);
+        input(&mut state, b"\t\r");
+        assert_eq!(state.chat_saved_draft(), copied);
+        state.conversation.composer.remember("unrelated history");
+        input(&mut state, b"\x1b[A\x1b[B");
+        assert_eq!(state.chat_saved_draft(), copied);
+        state.chat_editable(
+            "another_request".into(),
+            "external request".into(),
+            Some("example-builder".into()),
+        );
+        assert_eq!(state.chat_saved_draft(), copied);
+        assert_eq!(state.conversation.parked.as_ref(), Some(&original));
+        assert!(state.conversation.editing.is_none());
+        state.chat_key(Key::Help);
+        state.chat_key(Key::Escape);
+        assert_eq!(
+            state.chat_saved_draft(),
+            copied,
+            "closing help must not abandon the copied draft"
+        );
+        state.chat_key(Key::Escape);
+        assert_eq!(state.chat_saved_draft(), original);
+        assert!(state.conversation.parked.is_none());
+    }
+
+    #[test]
+    fn same_request_retarget_keeps_revisions_in_the_editor_and_the_parked_draft() {
+        let mut state = preview(36, 120);
+        state.conversation.composer.set_text("original draft A");
+        let original = state.chat_saved_draft();
+        state.chat_editable(
+            "request_b".into(),
+            "old B".into(),
+            Some("example-builder".into()),
+        );
+        state.conversation.composer.set_text("revised B");
+        state.conversation.composer.left();
+        let cursor = state.conversation.composer.cursor();
+        state.chat_editable("request_b".into(), "old B".into(), None);
+        assert_eq!(state.conversation.composer.text(), "revised B");
+        assert_eq!(state.conversation.composer.cursor(), cursor);
+        assert!(state.conversation.target.is_none());
+        assert_eq!(state.conversation.parked.as_ref(), Some(&original));
+        assert_eq!(state.conversation.editing.as_deref(), Some("request_b"));
+    }
+
+    #[test]
+    fn successful_local_enqueue_keeps_different_and_identical_following_drafts() {
+        for next in ["next", "first"] {
+            let mut state = preview(36, 120);
+            state.conversation.composer.set_text("first");
+            state.chat_enqueued("request_one".into(), "first".into());
+            assert!(state.conversation.composer.is_empty());
+            input(&mut state, next.as_bytes());
+            assert_eq!(state.conversation.composer.text(), next);
+            state.chat_accepted("request_one".into(), "first".into());
+            assert_eq!(
+                state.conversation.composer.text(),
+                next,
+                "a later ACK cannot erase a new draft"
+            );
+            assert!(state.conversation.submitting.is_none());
+        }
+    }
+
+    #[test]
+    fn local_enqueue_restores_the_parked_recipient_and_cursor_before_acknowledgement() {
+        let mut state = preview(36, 120);
+        let parked = steering::SavedDraft {
+            text: "原稿 A".into(),
+            cursor: "原".len(),
+            target: Some("example-reviewer".into()),
+        };
+        state.conversation.parked = Some(parked.clone());
+        state.conversation.editing = Some("request_b".into());
+        state.conversation.composer.set_text("edited B");
+        state.chat_enqueued("request_b".into(), "edited B".into());
+        assert_eq!(state.chat_saved_draft(), parked);
+        assert!(state.conversation.editing.is_none());
+        assert!(state.conversation.parked.is_none());
+        input(&mut state, b"next");
+        let following = state.chat_saved_draft();
+        state.chat_accepted("request_b".into(), "edited B".into());
+        assert_eq!(state.chat_saved_draft(), following);
     }
 
     #[test]
@@ -1267,7 +1597,9 @@ mod tests {
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("Queue · 1 pending"));
         assert!(!screen.contains("Agents · 2"));
-        input(&mut state, b"/filter cargo\r");
+        // The READY fixture also mentions `/filter cargo`; use the full command
+        // so this assertion tests block association rather than that second match.
+        input(&mut state, b"/filter cargo test --lib\r");
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("cargo test --lib"));
         assert!(screen.contains("exit=0"));

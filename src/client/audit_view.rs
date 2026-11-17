@@ -173,42 +173,42 @@ impl AuditView {
                     .map(|text| bounded(text, 4096));
             }
             "call-started" | "call-finished" => {
-                if let Some(request_id) = value.get("request_id").and_then(Value::as_u64) {
-                    if entry.calls.len() < MAX_CALLS || entry.calls.contains_key(&request_id) {
-                        let call = entry.calls.entry(request_id).or_insert_with(|| Call {
-                            tool: String::new(),
-                            finished: false,
-                            success: None,
-                            error: None,
-                            duration_ms: 0,
-                            exit_code: None,
-                            job_id: None,
-                            state: None,
-                        });
-                        if let Some(tool) = value.get("tool").and_then(Value::as_str) {
-                            call.tool = bounded(tool, 512);
-                        }
-                        if phase == "call-finished" {
-                            call.finished = true;
-                            call.success = value.get("success").and_then(Value::as_bool);
-                            call.error = value
-                                .get("error")
-                                .and_then(Value::as_str)
-                                .map(|text| bounded(text, 2048));
-                            call.duration_ms = value
-                                .get("duration_ms")
-                                .and_then(Value::as_u64)
-                                .unwrap_or(0);
-                            call.exit_code = value.get("exit_code").and_then(Value::as_i64);
-                            call.job_id = value
-                                .get("job_id")
-                                .and_then(Value::as_str)
-                                .map(|text| bounded(text, 256));
-                            call.state = value
-                                .get("state")
-                                .and_then(Value::as_str)
-                                .map(|text| bounded(text, 64));
-                        }
+                if let Some(request_id) = value.get("request_id").and_then(Value::as_u64)
+                    && (entry.calls.len() < MAX_CALLS || entry.calls.contains_key(&request_id))
+                {
+                    let call = entry.calls.entry(request_id).or_insert_with(|| Call {
+                        tool: String::new(),
+                        finished: false,
+                        success: None,
+                        error: None,
+                        duration_ms: 0,
+                        exit_code: None,
+                        job_id: None,
+                        state: None,
+                    });
+                    if let Some(tool) = value.get("tool").and_then(Value::as_str) {
+                        call.tool = bounded(tool, 512);
+                    }
+                    if phase == "call-finished" {
+                        call.finished = true;
+                        call.success = value.get("success").and_then(Value::as_bool);
+                        call.error = value
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .map(|text| bounded(text, 2048));
+                        call.duration_ms = value
+                            .get("duration_ms")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        call.exit_code = value.get("exit_code").and_then(Value::as_i64);
+                        call.job_id = value
+                            .get("job_id")
+                            .and_then(Value::as_str)
+                            .map(|text| bounded(text, 256));
+                        call.state = value
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .map(|text| bounded(text, 64));
                     }
                 }
             }

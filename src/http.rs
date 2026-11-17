@@ -1025,7 +1025,7 @@ fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
         return response;
     }
     let mut text = String::from(
-        "USER REQUIREMENTS — sent from the client's local composer\nThese are new user messages accompanying this tool response. They are separate from the tool's execution output.\n",
+        "USER REQUIREMENTS — submitted through the client request queue\nThese requests accompany this tool response; they are separate from tool execution output.\n",
     );
     for message in &messages {
         text.push_str(&format!(

@@ -413,11 +413,13 @@ impl Manager {
             error: None,
         });
         let index = self.outbox.records.len() - 1;
-        if self.connected && self.supported && self.ready {
-            if let Err(error) = self.mutate(index, MutationKind::Publish, false) {
-                self.outbox.records.pop();
-                return Err(error);
-            }
+        if self.connected
+            && self.supported
+            && self.ready
+            && let Err(error) = self.mutate(index, MutationKind::Publish, false)
+        {
+            self.outbox.records.pop();
+            return Err(error);
         }
         Ok(id)
     }
@@ -454,11 +456,13 @@ impl Manager {
         record.message.state = SteeringState::Queued;
         record.message.updated_at_ms = now_ms();
         record.error = None;
-        if self.connected && self.supported && self.ready {
-            if let Err(error) = self.mutate(index, MutationKind::Publish, false) {
-                self.outbox.records[index] = original;
-                return Err(error);
-            }
+        if self.connected
+            && self.supported
+            && self.ready
+            && let Err(error) = self.mutate(index, MutationKind::Publish, false)
+        {
+            self.outbox.records[index] = original;
+            return Err(error);
         }
         Ok(())
     }
@@ -671,18 +675,17 @@ impl Manager {
         self.sender = None;
         self.agents.clear();
         for request in self.requests.values() {
-            if let Some(id) = command_message(&request.command) {
-                if let Some(record) = self
+            if let Some(id) = command_message(&request.command)
+                && let Some(record) = self
                     .outbox
                     .records
                     .iter_mut()
                     .find(|record| record.message.id == id)
-                {
-                    if request.sent && !record.terminal() {
-                        record.uncertain = true;
-                    }
-                    record.pending = None;
+            {
+                if request.sent && !record.terminal() {
+                    record.uncertain = true;
                 }
+                record.pending = None;
             }
         }
         self.requests.clear();
@@ -693,17 +696,16 @@ impl Manager {
             return false;
         };
         request.sent = true;
-        if let Some(message_id) = command_message(&request.command) {
-            if let Some(record) = self
+        if let Some(message_id) = command_message(&request.command)
+            && let Some(record) = self
                 .outbox
                 .records
                 .iter_mut()
                 .find(|record| record.message.id == message_id)
-            {
-                record.ever_sent = true;
-                if matches!(request.command, SteeringCommand::Publish { .. }) {
-                    record.safe_to_publish = false;
-                }
+        {
+            record.ever_sent = true;
+            if matches!(request.command, SteeringCommand::Publish { .. }) {
+                record.safe_to_publish = false;
             }
         }
         true
@@ -1217,10 +1219,10 @@ pub(super) fn restore_handoff() -> Result<(), String> {
             return Ok(());
         }
         manager.restored = true;
-        if let Some(path) = std::env::var_os(HANDOFF_ENV) {
-            if let Some(outbox) = read_handoff(Path::new(&path))? {
-                manager.outbox = outbox;
-            }
+        if let Some(path) = std::env::var_os(HANDOFF_ENV)
+            && let Some(outbox) = read_handoff(Path::new(&path))?
+        {
+            manager.outbox = outbox;
         }
         Ok(())
     })

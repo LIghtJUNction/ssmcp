@@ -1940,12 +1940,11 @@ async fn connect(
                         } else {
                             backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
                         };
-                        if response.is_ok() {
-                            if let Err(error) = reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend).await {
+                        if response.is_ok()
+                            && let Err(error) = reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend).await {
                                 steering::abort_reload(&error.to_string());
                                 response = Err(error.to_string());
                             }
-                        }
                         let accepted = response.is_ok();
                         if let Some(call) = &mut code_call { call.finish(&response); }
                         let sent = timeout(Duration::from_secs(10), async {
