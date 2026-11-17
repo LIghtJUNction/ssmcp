@@ -572,6 +572,56 @@ const bootstrap = `(() => {
     run: executeCommand,
     parallel: parallelCommands,
   });
+  // Explicit RTK argv: the same execution/approval path as exec, never a shell
+  // rewrite, implicit installation or retry without filtering. The output is
+  // RTK's output; its recall/tee hints remain intact for recovery.
+  const rtkCommand = (args, running) => {
+    const allowed = ['command', 'cwd', 'env', 'stdin', 'timeout_ms'];
+    if (running) allowed.push('wait_ms', 'max_bytes');
+    if (!args || typeof args !== 'object' || isArray(args)
+        || keys(args).some(key => !allowed.includes(key))) {
+      throw new Failure('rtk.' + (running ? 'run' : 'start')
+        + ' accepts ' + allowed.join(', '));
+    }
+    const command = args.command;
+    if (!isArray(command) || !command.length || command.length > 255
+        || command.some(arg => typeof arg !== 'string' || arg.includes(String.fromCharCode(0)))
+        || !command[0]) {
+      throw new Failure('rtk command must contain 1..=255 literal argv strings, without the rtk prefix');
+    }
+    return {...args, command:['rtk', ...command]};
+  };
+  const rtkStatus = async (id, args = {}) => {
+    if (!args || typeof args !== 'object' || isArray(args)
+        || keys(args).some(key => !['cwd', 'env'].includes(key))) {
+      throw new Failure('rtk.status accepts cwd and env');
+    }
+    let probe;
+    try {
+      probe = await executeCommand(id, {
+        ...args, command:['rtk', '--version'], timeout_ms:5000, wait_ms:5000, max_bytes:1024,
+      });
+    } catch (error) {
+      // Only a native spawn failure proves RTK cannot run. Authorization and
+      // connection failures must stay errors, with any launched job_id intact.
+      if (!error?.job_id && error?.message?.startsWith('could not start command:')) {
+        return {available:false, version:null, error:error.message};
+      }
+      throw error;
+    }
+    const version = typeof probe.stdout === 'string'
+      ? probe.stdout.trim().split(String.fromCharCode(10))[0] : '';
+    return {
+      ...probe,
+      available:probe.running === true ? null : probe.exit_code === 0 && /^rtk\\s+/.test(version),
+      version:/^rtk\\s+/.test(version) ? version : null,
+    };
+  };
+  const rtk = freeze({
+    status: rtkStatus,
+    start: (id, args) => execution('start', id, rtkCommand(args, false)),
+    run: (id, args) => executeCommand(id, rtkCommand(args, true)),
+  });
   const terminal = freeze(Object.fromEntries(
     ['open','list','select','close','read','write','status','resize']
       .map(name => [name, (id, args = {}) => workspaceResult(id, 'terminal.' + name, args)])
@@ -614,6 +664,7 @@ const bootstrap = `(() => {
     skills: { value: skills, enumerable: true },
     agents: { value: agents, enumerable: true },
     exec: { value: exec, enumerable: true },
+    rtk: { value: rtk, enumerable: true },
     terminal: { value: terminal, enumerable: true },
     rsync: { value: rsync, enumerable: true },
     sync: { value: rsync, enumerable: true },
