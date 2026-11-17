@@ -9,7 +9,7 @@ use ssmcp::{
 };
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -30,6 +30,8 @@ struct Client {
     access_token: String,
     calls: Arc<AtomicUsize>,
     reload_commits: Arc<AtomicUsize>,
+    code_contexts: Arc<Mutex<Vec<wire::CodeContext>>>,
+    code_completions: Arc<Mutex<Vec<wire::CodeCompletion>>>,
     task: JoinHandle<()>,
     attachment: JoinHandle<ssmcp::Result<()>>,
 }
@@ -115,10 +117,23 @@ impl Server {
         let recorded_calls = calls.clone();
         let reload_commits = Arc::new(AtomicUsize::new(0));
         let recorded_commits = reload_commits.clone();
+        let code_contexts = Arc::new(Mutex::new(Vec::new()));
+        let recorded_contexts = code_contexts.clone();
+        let code_completions = Arc::new(Mutex::new(Vec::new()));
+        let recorded_completions = code_completions.clone();
         let task = tokio::spawn(async move {
             while let Some(frame) = wire::read_frame(&mut reader).await.unwrap() {
                 let (id, operation) = match frame {
-                    Frame::Call { id, operation, .. } => (id, operation),
+                    Frame::Call { id, operation, code_context, .. } => {
+                        if let Some(context) = code_context {
+                            recorded_contexts.lock().unwrap().push(context);
+                        }
+                        (id, operation)
+                    },
+                    Frame::CodeModeFinished { completion } => {
+                        recorded_completions.lock().unwrap().push(completion);
+                        continue;
+                    },
                     Frame::ReloadCommit { .. } => {
                         // Negative scenarios retain the connection so a later
                         // barrier call can prove whether a commit was sent.
@@ -222,6 +237,8 @@ impl Server {
             access_token,
             calls,
             reload_commits,
+            code_contexts,
+            code_completions,
             task,
             attachment,
         });
@@ -396,6 +413,58 @@ async fn session_title_is_visible_in_inventory_and_selected_client_discovery() {
     let selected = server.call("list", json!({"client_id":id})).await;
     assert_eq!(selected["client"]["title"], "Work on shell backend");
     assert_eq!(selected["client"]["name"], "same-display-name");
+}
+
+#[tokio::test]
+#[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
+async fn code_mode_http_forwards_full_source_only_to_called_clients_and_reports_run_outcome() {
+    let _scenario = CODE_MODE_SCENARIO.lock().await;
+    let mut server = Server::start().await;
+    server.attach(Mode::Shell).await;
+    let target = server.attach(Mode::Shell).await;
+    let body = format!("// Unicode source ✓, original indentation and newlines\n  const first = await call({0}, 'fixture.echo', {{value:'first'}});\n  const second = await call({0}, 'fixture.echo', {{value:'second'}});\n  return [first.structuredContent.arguments, second.structuredContent.arguments];\n", json!(target));
+    let code = format!("//{}\n{body}", " ".repeat(wire::MAX_CODE_BYTES - body.len() - 3));
+    assert_eq!(code.len(), wire::MAX_CODE_BYTES);
+    let execution = server.call("code_mode", json!({"code":code})).await;
+    assert_eq!(execution["result"], json!([{"value":"first"},{"value":"second"}]));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while server.clients[1].code_completions.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }).await.expect("target did not receive run completion");
+    let contexts = server.clients[1].code_contexts.lock().unwrap().clone();
+    assert_eq!(contexts.len(), 2);
+    assert!(contexts.iter().all(|context| context.code == code));
+    assert_eq!(contexts[0].run_id, contexts[1].run_id);
+    assert_eq!(contexts[0].run_id.len(), 32);
+    assert!(contexts[0].timestamp_ms > 0);
+    let completed = server.clients[1].code_completions.lock().unwrap()[0].clone();
+    assert_eq!(completed.run_id, contexts[0].run_id);
+    assert_eq!(completed.status, "completed");
+    assert!(completed.success);
+    assert!(server.clients[0].code_contexts.lock().unwrap().is_empty());
+    assert!(server.clients[0].code_completions.lock().unwrap().is_empty());
+    assert_eq!(server.clients[0].calls.load(Ordering::Acquire), 0);
+
+    let failed_source = format!("await call({}, 'fixture.echo', {{value:'before-error'}});\nthrow new Error('failed after native call');\n", json!(target));
+    let (status, response) = server.rpc("tools/call", json!({"name":"code_mode","arguments":{"code":failed_source}}), true, 0).await;
+    assert_eq!(status, 200);
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while server.clients[1].code_completions.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }).await.expect("target did not receive failed run completion");
+    let contexts = server.clients[1].code_contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 3);
+    assert_eq!(contexts[2].code, failed_source);
+    let completed = server.clients[1].code_completions.lock().unwrap()[1].clone();
+    assert_eq!(completed.run_id, contexts[2].run_id);
+    assert!(!completed.success);
+    assert_eq!(completed.status, "failed");
+    assert!(completed.error.as_deref().unwrap().contains("failed after native call"));
+    assert!(server.clients[0].code_contexts.lock().unwrap().is_empty());
+    assert!(server.clients[0].code_completions.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

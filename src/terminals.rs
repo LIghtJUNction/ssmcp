@@ -288,23 +288,23 @@ impl Terminals {
         vec![
             tool(
                 "terminal.open",
-                "Create an independent interactive shell with its own process, cwd, input, output cursor and display. Continues while another terminal is selected; ends when closed or the client disconnects.",
+                "Create an independent interactive shell with its own process, cwd, input, output cursor and virtual terminal state. Access it through terminal.read/write or an interactive frontend. Continues while unselected; ends when closed or the client disconnects.",
                 json!({"name":{"type":"string","minLength":1,"maxLength":128},
                     "cwd":{"type":"string","description":"Existing directory inside this client's workspace; defaults to the workspace root."},
-                    "select":{"type":"boolean","default":false,"description":"Show this terminal and route local keyboard input to it."}}),
+                    "select":{"type":"boolean","default":false,"description":"Mark this terminal as selected for interactive frontends. The built-in dashboard remains an audit interface and keeps keyboard input for navigation."}}),
                 &[],
                 false,
             ),
             tool(
                 "terminal.list",
-                "List independent terminal sessions and the one displayed locally. Legacy calls without terminal_id always target main.",
+                "List independent terminal sessions and the selected terminal's identity for interactive frontends. The audit dashboard does not display their shell output. Calls without terminal_id always target main.",
                 json!({}),
                 &[],
                 true,
             ),
             tool(
                 "terminal.select",
-                "Display one terminal and route local keyboard input to it. Other terminals keep running and retain independent output.",
+                "Mark one terminal as selected for interactive frontends. The audit dashboard keeps keyboard input for navigation; use terminal.write with an explicit terminal_id for shell input. Other terminals keep running and retain independent output.",
                 id.clone(),
                 &["terminal_id"],
                 false,

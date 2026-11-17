@@ -1,5 +1,6 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod account;
+mod audit_view;
 mod git_status;
 pub(crate) mod input;
 pub(crate) mod interface;
@@ -19,8 +20,9 @@ use crate::{
     platform::{interrupt_signal, terminate_signal},
     runtime::Runtime,
     wire::{
-        ClientMetadata, Frame, LEGACY_VERSION, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT,
-        Mode, VERSION, canonical_github_principal, read_frame, validate_title, write_frame,
+        CONTROLLER_VERSION, ClientMetadata, Frame, LEGACY_VERSION, MAX_ALLOWED_PRINCIPALS,
+        MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, canonical_github_principal, read_frame,
+        validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -153,7 +155,8 @@ Install the persistent session manager with `ssmcp service install`; choose
 New sessions use the running manager. Legacy --daemon also supports per-session
 systemd --user, launchd and Task Scheduler when the manager is not installed.
 Bare `ssmcp attach` lists sessions. Ctrl-] detaches without stopping the session;
-Ctrl-C inside interactive attach is sent to the selected terminal.
+the dashboard provides audit navigation. Use `ssmcp -i` for interactive input,
+or disable the dashboard when attaching to a saved session.
 --session-control explicitly grants this OS user's saved-session management.
 New remote-created sessions inherit connection settings and stay in the current
 workspace; children do not inherit this management grant.
@@ -1387,7 +1390,7 @@ impl std::fmt::Display for UnsupportedWireProtocol {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
+            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION}, {CONTROLLER_VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
         )
     }
 }
@@ -1499,14 +1502,27 @@ async fn register_ssh(
                 stop_registration(&mut ssh, &mut stderr_pump).await?;
                 // Only the first parsed response to this Hello may negotiate.
                 // Text on stderr, EOF, timeouts, and later Reject frames cannot.
-                if message == UNSUPPORTED_WIRE_PROTOCOL {
-                    if *protocol == VERSION {
-                        *protocol = LEGACY_VERSION;
+                if message == UNSUPPORTED_WIRE_PROTOCOL
+                    || message
+                        == "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)"
+                {
+                    if matches!(*protocol, VERSION | CONTROLLER_VERSION) {
+                        let rejected = *protocol;
+                        *protocol = if rejected == VERSION {
+                            CONTROLLER_VERSION
+                        } else {
+                            LEGACY_VERSION
+                        };
+                        let limitation = if *protocol == CONTROLLER_VERSION {
+                            "Raw code audit requires a version 6 gateway."
+                        } else {
+                            "Task titles stay local; per-call controller attribution is unavailable."
+                        };
                         render::status(
                             "ssh",
                             "Warning",
                             &format!(
-                                "Gateway rejected wire protocol {VERSION}; retrying once with version {LEGACY_VERSION}. Task titles stay local; per-call controller attribution is unavailable."
+                                "Gateway rejected wire protocol {rejected}; retrying with version {protocol}. {limitation}"
                             ),
                         );
                         continue;
@@ -1801,7 +1817,7 @@ async fn connect(
                 }
             },
             frame = incoming.frames.recv() => match frame {
-                Some(Ok(Some(Frame::Call {id,operation,controller}))) => {
+                Some(Ok(Some(Frame::Call {id,operation,controller,code_context}))) => {
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
                             Ok(Ok(was_tool)) => {
@@ -1811,6 +1827,10 @@ async fn connect(
                             Err(error) => break 'connected Err(error.into()),
                         }
                     }
+                    let mut code_call = match backend.begin_code_call(&operation, id, controller.as_ref(), code_context) {
+                        Ok(call) => call,
+                        Err(error) => break Err(error.into()),
+                    };
                     if reload::is_reload(&operation) {
                         let _controller = render::controller_started(id, controller.as_ref());
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
@@ -1820,6 +1840,7 @@ async fn connect(
                             backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
                         };
                         let accepted = response.is_ok();
+                        if let Some(call) = &mut code_call { call.finish(&response); }
                         let sent = timeout(Duration::from_secs(10), async {
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer, &Frame::Reply { id, result: response }).await
@@ -1837,6 +1858,7 @@ async fn connect(
                                 loop {
                                     match incoming.frames.recv().await {
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
+                                        Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
                                         Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
                                             let mut writer = writer.lock().await;
                                             write_frame(&mut *writer, &Frame::Reply { id: next_id, result: Err("client reload is already pending; call list after reconnection".into()) }).await?;
@@ -1868,6 +1890,7 @@ async fn connect(
                             .then(|| render::controller_started(id, controller.as_ref()));
                         let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
                         let mut result = backend.perform(operation).await;
+                        if let Some(call) = &mut code_call { call.finish(&result); }
                         // A large native response must not corrupt/disconnect the SSH stream.
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
                             result = Err("native call finished but its result exceeds the 4 MiB bridge frame limit; do not blindly repeat a mutating call, inspect native state or request a smaller output page".into());
@@ -1879,6 +1902,9 @@ async fn connect(
                         }).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut,"SSH write timed out"))??;
                         Ok(was_tool)
                     });
+                }
+                Some(Ok(Some(Frame::CodeModeFinished { completion }))) => {
+                    if let Err(error) = backend.code_mode_finished(completion) { break Err(error.into()); }
                 }
                 Some(Ok(None)) | None => break Ok(()),
                 Some(Ok(Some(Frame::Reject {message}))) => break Err(relay::failure(message)),

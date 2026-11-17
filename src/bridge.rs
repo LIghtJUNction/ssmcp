@@ -304,6 +304,7 @@ struct Access {
     broker: Weak<Broker>,
     user: String,
     token: String,
+    audit_run: Option<crate::code_mode::AuditRun>,
 }
 
 impl Access {
@@ -321,17 +322,40 @@ impl Access {
         broker.client(&self.user, &authorization, id).await
     }
 
+    async fn native(
+        &self,
+        session: &Session,
+        authorization: &Authorization,
+        operation: Operation,
+    ) -> Result<Value, String> {
+        let call = session.call_with_authorization(operation, None, authorization);
+        let result = if let Some(run) = &self.audit_run {
+            crate::code_mode::AUDIT_RUN.scope(run.clone(), call).await
+        } else {
+            call.await
+        };
+        // A managed transfer or port can dispatch its first native call after
+        // the JavaScript run has returned. Retain that run's source and outcome,
+        // while its background operations keep their own lifecycle.
+        if let Some(completion) = self.audit_run.as_ref().and_then(|run| run.completed())
+            && let Ok(current) = self.session(session.client_id()).await
+        {
+            let _ = current.report_code_mode(completion);
+        }
+        result
+    }
+
     async fn call(&self, id: &str, name: &str, arguments: Value) -> Result<Value, String> {
         let (broker, authorization) = self.authorized().await?;
         let session = broker.client(&self.user, &authorization, id).await?;
-        let value = session
-            .call_with_authorization(
+        let value = self
+            .native(
+                &session,
+                &authorization,
                 Operation::CallTool {
                     name: name.into(),
                     arguments,
                 },
-                None,
-                &authorization,
             )
             .await?;
         self.session(id).await?;
@@ -344,16 +368,15 @@ impl Access {
             .client(&self.user, &authorization, &listener.client_id)
             .await?;
         let value = unpack(
-            session
-                .call_with_authorization(
-                    Operation::CallTool {
-                        name: "ssmcp.net.accept".into(),
-                        arguments: json!({"id":listener.id,"wait_ms":500}),
-                    },
-                    None,
-                    &authorization,
-                )
-                .await?,
+            self.native(
+                &session,
+                &authorization,
+                Operation::CallTool {
+                    name: "ssmcp.net.accept".into(),
+                    arguments: json!({"id":listener.id,"wait_ms":500}),
+                },
+            )
+            .await?,
         )?;
         let remote = match value.get("stream").filter(|v| v.is_object()) {
             None => None,
@@ -395,16 +418,15 @@ impl Access {
         let session = broker.client(&self.user, &authorization, client_id).await?;
         // Retain the authenticated session solely for cleanup even after authorization expires.
         let value = unpack(
-            session
-                .call_with_authorization(
-                    Operation::CallTool {
-                        name: name.into(),
-                        arguments: args,
-                    },
-                    None,
-                    &authorization,
-                )
-                .await?,
+            self.native(
+                &session,
+                &authorization,
+                Operation::CallTool {
+                    name: name.into(),
+                    arguments: args,
+                },
+            )
+            .await?,
         )?;
         let id = value["id"]
             .as_str()
@@ -618,6 +640,7 @@ pub async fn dispatch(
         broker: Arc::downgrade(&broker),
         user,
         token,
+        audit_run: crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok(),
     };
     let (_, authorization) = access.authorized().await?;
     let owner = owner(&access.user, &authorization)?;

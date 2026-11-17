@@ -68,8 +68,16 @@ Inspect written, remaining_bytes and timed_out before retrying only the unwritte
 Cancellation and execution deadlines interrupt blocked input without blocking other jobs.\n\n\
 Use terminal.open/list/select/close for independent interactive shells. read/write/status/resize \
 accept terminal_id; omitting it always targets main. Up to 16 terminals keep separate cwd, \
-state, output cursors and display buffers. F7 cycles the local view and keyboard target; F6 \
-still selects the audit pane. Background terminals keep running. Close extra terminals when done.\n\n\
+state, output cursors and display buffers. The local dashboard displays logs and code_mode \
+source audit; use ssmcp -i for direct interactive terminal control. Background terminals keep \
+running. Close extra terminals when done.\n\n\
+Use ui.get(clientId) to read visual configuration and display state, ui.set(clientId,{patch,persist}) \
+to change appearance, ui.filter(clientId,{text,level}) to filter displayed logs, and \
+ui.action(clientId,{action}) for one navigation or configuration action. Discover their \
+ssmcp.ui.* schemas for supported values. A custom frontend can read ssmcp.audit.events for \
+source lifecycle events and ssmcp.exec.events for command output/results. Full code_mode source \
+requires v6 client/server support and is delivered only to actual authorized target clients; \
+the client applies its existing audit redaction before display and storage.\n\n\
 Use the code_mode controller parameter with name and/or model to identify the caller. Each \
 request preserves its own declaration; the client displays active and last controllers. Models \
 are caller-reported, while MCP clientInfo supplies only the application name. Missing models \
@@ -420,7 +428,10 @@ fn limits() -> Value {
             "stdin_pipe_write_max_bytes":32768,
             "lifetime":"client connection; survives code_mode completion"
         },
-        "terminals":{"max_per_client":crate::terminals::MAX_TERMINALS,"default_id":"main","local_switch_key":"F7"},
+        "terminals":{"max_per_client":crate::terminals::MAX_TERMINALS,"default_id":"main","interactive_frontend":"ssmcp -i"},
+        "client_ui":{"layouts":["split","audit","logs"],"source_wire_version":6,
+            "audit_max_runs":128,"audit_max_bytes":2097152,"audit_source_max_bytes":65536,
+            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action"]},
         "wire":{
             "version":wire::VERSION,
             "max_frame_bytes":wire::MAX_FRAME,

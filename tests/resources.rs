@@ -107,9 +107,12 @@ impl Server {
         let native_gate = Arc::new(Notify::new());
         let recorded_native_gate = native_gate.clone();
         let task = tokio::spawn(async move {
-            while let Some(Frame::Call { id, operation, .. }) =
-                wire::read_frame(&mut reader).await.unwrap()
-            {
+            while let Some(frame) = wire::read_frame(&mut reader).await.unwrap() {
+                let (id, operation) = match frame {
+                    Frame::Call { id, operation, .. } => (id, operation),
+                    Frame::CodeModeFinished { .. } => continue,
+                    _ => panic!("unexpected fixture frame"),
+                };
                 let result = match operation {
                     Operation::ListTools { cursor: None } => Ok(json!({
                         "tools":[{

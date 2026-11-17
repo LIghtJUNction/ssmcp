@@ -4,7 +4,9 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
+/// Version 5 supports controller attribution but not code-mode audit metadata.
+pub const CONTROLLER_VERSION: u32 = 5;
 /// Version 4 clients remain usable, but cannot receive controller metadata.
 pub const LEGACY_VERSION: u32 = 4;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -15,6 +17,59 @@ pub const MAX_INFLIGHT: usize = 16;
 pub const MAX_CLIENTS_PER_USER: usize = 128;
 pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 pub const MAX_TITLE_BYTES: usize = 512;
+pub const MAX_CODE_BYTES: usize = 64 * 1024;
+
+/// Immutable source of the orchestration that dispatched this native operation.
+/// This is display metadata, never a tool argument or an authorization grant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodeContext {
+    pub run_id: String,
+    pub code: String,
+    pub timestamp_ms: u64,
+}
+
+impl CodeContext {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_run_id(&self.run_id)?;
+        if self.code.trim().is_empty() || self.code.len() > MAX_CODE_BYTES {
+            return Err("code audit source must contain 1..=65536 UTF-8 bytes".into());
+        }
+        Ok(())
+    }
+}
+
+/// Run completion is distinct from any individual native call or command job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodeCompletion {
+    pub run_id: String,
+    pub success: bool,
+    pub status: String,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl CodeCompletion {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_run_id(&self.run_id)?;
+        if !matches!(self.status.as_str(), "completed" | "failed" | "timeout")
+            || self.success != (self.status == "completed")
+            || self.error.as_ref().is_some_and(|error| error.len() > 4096)
+        {
+            return Err("invalid code audit completion".into());
+        }
+        Ok(())
+    }
+}
+
+fn validate_run_id(run_id: &str) -> Result<(), String> {
+    if run_id.len() != 32 || !run_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("invalid code audit run ID".into());
+    }
+    Ok(())
+}
 
 /// Metadata and requested access policy supplied by the authenticated local client.
 /// These fields never select or replace the server-authenticated account.
@@ -310,6 +365,12 @@ pub enum Frame {
         /// overwriting another caller's identity during concurrent execution.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         controller: Option<Controller>,
+        /// Omitted entirely for version 4/5 peers with strict frame decoders.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code_context: Option<CodeContext>,
+    },
+    CodeModeFinished {
+        completion: CodeCompletion,
     },
     Reply {
         id: u64,
@@ -408,6 +469,7 @@ mod tests {
             id: 7,
             operation: Operation::Status {},
             controller: None,
+            code_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
         assert_eq!(
@@ -426,6 +488,7 @@ mod tests {
                 model: Some("model-a".into()),
                 source: ControllerSource::CallerReported,
             }),
+            code_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
         assert_eq!(value["controller"]["source"], "caller-reported");
@@ -445,6 +508,72 @@ mod tests {
             io::ErrorKind::InvalidData
         );
         assert!(read_frame(&mut &b""[..]).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn code_source_metadata_is_bounded_exact_and_separate_from_tool_arguments() {
+        let code = format!("//{}\n", "x".repeat(MAX_CODE_BYTES - 3));
+        let context = CodeContext {
+            run_id: "a".repeat(32),
+            code: code.clone(),
+            timestamp_ms: 42,
+        };
+        assert!(context.validate().is_ok());
+        let frame = Frame::Call {
+            id: 1,
+            operation: Operation::CallTool {
+                name: "tool.run".into(),
+                arguments: serde_json::json!({"value":3}),
+            },
+            controller: None,
+            code_context: Some(context.clone()),
+        };
+        let value = serde_json::to_value(frame).unwrap();
+        assert_eq!(value["code_context"]["code"], code);
+        assert_eq!(
+            value["operation"]["arguments"],
+            serde_json::json!({"value":3})
+        );
+        let Frame::Call {
+            code_context: Some(decoded),
+            ..
+        } = serde_json::from_value(value).unwrap()
+        else {
+            panic!("missing code context");
+        };
+        assert_eq!(decoded, context);
+        assert!(
+            CodeContext {
+                code: "x".repeat(MAX_CODE_BYTES + 1),
+                ..context.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            CodeContext {
+                run_id: "bad".into(),
+                ..context
+            }
+            .validate()
+            .is_err()
+        );
+        let completion = CodeCompletion {
+            run_id: "a".repeat(32),
+            success: false,
+            status: "timeout".into(),
+            duration_ms: 30_000,
+            error: None,
+        };
+        assert!(completion.validate().is_ok());
+        assert!(
+            CodeCompletion {
+                success: true,
+                ..completion
+            }
+            .validate()
+            .is_err()
+        );
     }
     #[tokio::test]
     async fn frames_round_trip() {

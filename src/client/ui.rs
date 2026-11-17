@@ -62,24 +62,52 @@ impl Theme {
         let palette = match self {
             Self::Minimal => ["31", "32", "33", "34", "36", "35", "90", "39", "49", "1;39"],
             Self::CodexDark => [
-                "38;2;242;139;130", "38;2;129;201;149", "38;2;253;214;99",
-                "38;2;138;180;248", "38;2;138;180;248", "38;2;197;138;249",
-                "38;2;154;160;166", "38;2;232;234;237", "48;2;16;18;20", "1;38;2;232;234;237",
+                "38;2;242;139;130",
+                "38;2;129;201;149",
+                "38;2;253;214;99",
+                "38;2;138;180;248",
+                "38;2;138;180;248",
+                "38;2;197;138;249",
+                "38;2;154;160;166",
+                "38;2;232;234;237",
+                "48;2;16;18;20",
+                "1;38;2;232;234;237",
             ],
             Self::Nord => [
-                "38;2;191;97;106", "38;2;163;190;140", "38;2;235;203;139",
-                "38;2;129;161;193", "38;2;136;192;208", "38;2;180;142;173",
-                "38;2;166;174;190", "38;2;236;239;244", "48;2;46;52;64", "1;38;2;236;239;244",
+                "38;2;191;97;106",
+                "38;2;163;190;140",
+                "38;2;235;203;139",
+                "38;2;129;161;193",
+                "38;2;136;192;208",
+                "38;2;180;142;173",
+                "38;2;166;174;190",
+                "38;2;236;239;244",
+                "48;2;46;52;64",
+                "1;38;2;236;239;244",
             ],
             Self::Solarized => [
-                "38;2;220;50;47", "38;2;133;153;0", "38;2;181;137;0",
-                "38;2;38;139;210", "38;2;42;161;152", "38;2;211;54;130",
-                "38;2;131;148;150", "38;2;147;161;161", "48;2;0;43;54", "1;38;2;238;232;213",
+                "38;2;220;50;47",
+                "38;2;133;153;0",
+                "38;2;181;137;0",
+                "38;2;38;139;210",
+                "38;2;42;161;152",
+                "38;2;211;54;130",
+                "38;2;131;148;150",
+                "38;2;147;161;161",
+                "48;2;0;43;54",
+                "1;38;2;238;232;213",
             ],
             Self::Light => [
-                "38;2;179;38;30", "38;2;19;115;51", "38;2;146;89;0",
-                "38;2;25;103;210", "38;2;25;103;210", "38;2;132;48;206",
-                "38;2;95;99;104", "38;2;32;33;36", "48;2;255;255;255", "1;38;2;32;33;36",
+                "38;2;179;38;30",
+                "38;2;19;115;51",
+                "38;2;146;89;0",
+                "38;2;25;103;210",
+                "38;2;25;103;210",
+                "38;2;132;48;206",
+                "38;2;95;99;104",
+                "38;2;32;33;36",
+                "48;2;255;255;255",
+                "1;38;2;32;33;36",
             ],
         };
         palette[index]
@@ -91,7 +119,7 @@ impl Theme {
 pub(crate) enum Layout {
     #[default]
     Split,
-    Shell,
+    Audit,
     Logs,
 }
 
@@ -99,15 +127,15 @@ impl Layout {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Split => "split",
-            Self::Shell => "shell",
+            Self::Audit => "audit",
             Self::Logs => "logs",
         }
     }
 
     pub(crate) fn next(self) -> Self {
         match self {
-            Self::Split => Self::Shell,
-            Self::Shell => Self::Logs,
+            Self::Split => Self::Audit,
+            Self::Audit => Self::Logs,
             Self::Logs => Self::Split,
         }
     }
@@ -157,9 +185,16 @@ fn color_code(value: &str, background: bool) -> Option<String> {
             return None;
         }
         let rgb = u32::from_str_radix(hex, 16).ok()?;
-        return Some(format!("{base};2;{};{};{}", (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255));
+        return Some(format!(
+            "{base};2;{};{};{}",
+            (rgb >> 16) & 255,
+            (rgb >> 8) & 255,
+            rgb & 255
+        ));
     }
-    let (bright, name) = value.strip_prefix("bright-").map_or((false, value), |name| (true, name));
+    let (bright, name) = value
+        .strip_prefix("bright-")
+        .map_or((false, value), |name| (true, name));
     let index = match name {
         "black" => 0,
         "red" => 1,
@@ -179,7 +214,7 @@ fn color_code(value: &str, background: bool) -> Option<String> {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Ui {
     pub color: bool,
-    /// On a real terminal, isolate logs and the interactive shell with a task sidebar.
+    /// On a real terminal, show logs, source audit and the configured sidebar.
     pub dashboard: bool,
     pub log_format: LogFormat,
     pub theme: Theme,
@@ -207,10 +242,16 @@ impl Default for Ui {
             theme: Theme::default(),
             colors: Colors::default(),
             layout: Layout::default(),
-            log_height_percent: 30,
+            log_height_percent: 60,
             sidebar: true,
             sidebar_width: 30,
-            panels: vec![Panel::Controller, Panel::Tasks, Panel::Progress, Panel::Git, Panel::History],
+            panels: vec![
+                Panel::Controller,
+                Panel::Tasks,
+                Panel::Progress,
+                Panel::Git,
+                Panel::History,
+            ],
             hide_empty: true,
             timestamps: false,
             show_request_id: true,
@@ -230,7 +271,8 @@ struct Document {
 impl Ui {
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
         // Parser diagnostics can echo accidentally pasted credentials.
-        let doc: Document = toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
+        let doc: Document =
+            toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
         doc.ui.validate()?;
         Ok(doc.ui)
     }
@@ -248,17 +290,28 @@ impl Ui {
         if !(20..=60).contains(&self.sidebar_width) {
             return Err("ui.sidebar_width must be in 20..=60".into());
         }
-        if self.panels.iter().enumerate().any(|(index, panel)| self.panels[..index].contains(panel)) {
+        if self
+            .panels
+            .iter()
+            .enumerate()
+            .any(|(index, panel)| self.panels[..index].contains(panel))
+        {
             return Err("ui.panels must not contain duplicates".into());
         }
         for (name, value) in [
-            ("background", &self.colors.background), ("foreground", &self.colors.foreground),
-            ("muted", &self.colors.muted), ("accent", &self.colors.accent),
-            ("success", &self.colors.success), ("warning", &self.colors.warning),
-            ("error", &self.colors.error), ("heading", &self.colors.heading),
+            ("background", &self.colors.background),
+            ("foreground", &self.colors.foreground),
+            ("muted", &self.colors.muted),
+            ("accent", &self.colors.accent),
+            ("success", &self.colors.success),
+            ("warning", &self.colors.warning),
+            ("error", &self.colors.error),
+            ("heading", &self.colors.heading),
         ] {
             if !value.is_empty() && color_code(value, name == "background").is_none() {
-                return Err(format!("ui.colors.{name} must be #RRGGBB, an ANSI color name, or default"));
+                return Err(format!(
+                    "ui.colors.{name} must be #RRGGBB, an ANSI color name, or default"
+                ));
             }
         }
         Ok(())
@@ -296,7 +349,8 @@ impl Ui {
 
     pub(crate) fn to_toml(&self) -> Result<String, String> {
         self.validate()?;
-        toml::to_string_pretty(&Document { ui: self.clone() }).map_err(|_| "cannot serialize UI configuration".into())
+        toml::to_string_pretty(&Document { ui: self.clone() })
+            .map_err(|_| "cannot serialize UI configuration".into())
     }
 
     /// Merge a partial UI object. Colors merge by key; panels replace the list.
@@ -315,20 +369,25 @@ impl Ui {
         if !patch.is_object() {
             return Err("UI patch must be an object".into());
         }
-        let mut value = serde_json::to_value(self).map_err(|_| "cannot serialize UI configuration")?;
+        let mut value =
+            serde_json::to_value(self).map_err(|_| "cannot serialize UI configuration")?;
         merge(&mut value, patch);
-        let updated: Self = serde_json::from_value(value).map_err(|_| "invalid UI configuration patch")?;
+        let updated: Self =
+            serde_json::from_value(value).map_err(|_| "invalid UI configuration patch")?;
         updated.validate()?;
         Ok(updated)
     }
 
     pub(crate) fn config_path(explicit: Option<&Path>) -> Option<PathBuf> {
-        explicit.map(Path::to_path_buf)
+        explicit
+            .map(Path::to_path_buf)
             .or_else(|| std::env::var_os("SSMCP_UI_CONFIG").map(PathBuf::from))
             .or_else(|| {
-                std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+                std::env::var_os("XDG_CONFIG_HOME")
+                    .map(PathBuf::from)
                     .or_else(|| {
-                        std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+                        std::env::var_os("HOME")
+                            .or_else(|| std::env::var_os("USERPROFILE"))
                             .map(|p| PathBuf::from(p).join(".config"))
                     })
                     .map(|p| p.join("ssmcp/config.toml"))
@@ -337,7 +396,9 @@ impl Ui {
 
     pub(crate) fn load(explicit: Option<&Path>) -> Result<Self, String> {
         let required = explicit.is_some() || std::env::var_os("SSMCP_UI_CONFIG").is_some();
-        let Some(path) = Self::config_path(explicit) else { return Ok(Self::default()); };
+        let Some(path) = Self::config_path(explicit) else {
+            return Ok(Self::default());
+        };
         match std::fs::read_to_string(&path) {
             Ok(text) => Self::parse(&text),
             Err(e) if !required && e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -361,10 +422,14 @@ mod tests {
         assert_eq!(u.log_format, LogFormat::PrettyVerbose);
         assert_eq!(u.theme, Theme::Nord);
         assert_eq!(u.max_inline_output, 5);
-        assert_eq!(u.log_height_percent, 30);
+        assert_eq!(u.log_height_percent, 60);
         for bad in [
-            "[ui]\nmax_inline_output=0", "[ui]\nactivity_interval_secs=301", "[ui]\ntheme='unknown'",
-            "[ui]\nlog_format='xml'", "[ui]\ncolour=true", "malformed secret=abc",
+            "[ui]\nmax_inline_output=0",
+            "[ui]\nactivity_interval_secs=301",
+            "[ui]\ntheme='unknown'",
+            "[ui]\nlog_format='xml'",
+            "[ui]\ncolour=true",
+            "malformed secret=abc",
         ] {
             let error = Ui::parse(bad).unwrap_err();
             assert!(!error.contains("abc"));
@@ -382,10 +447,10 @@ mod tests {
     #[test]
     fn custom_colors_and_layout_roundtrip_without_raw_escape_sequences() {
         let u = Ui::parse(
-            "[ui]\nlayout='shell'\nsidebar_width=24\npanels=['git','tasks']\n\
+            "[ui]\nlayout='audit'\nsidebar_width=24\npanels=['git','tasks']\n\
              [ui.colors]\nbackground='#101216'\nforeground='#EAEEF3'\naccent='#8ab4f8'\nwarning='bright-yellow'",
         ).unwrap();
-        assert_eq!(u.layout, Layout::Shell);
+        assert_eq!(u.layout, Layout::Audit);
         assert_eq!(u.panels, vec![Panel::Git, Panel::Tasks]);
         assert_eq!(u.color("cyan"), "38;2;138;180;248");
         assert_eq!(u.color("foreground"), "38;2;234;238;243");
@@ -393,7 +458,9 @@ mod tests {
         assert_eq!(u.color("yellow"), "93");
         assert_eq!(u.color("red"), u.theme.color("red"));
         assert_eq!(Ui::parse(&u.to_toml().unwrap()).unwrap(), u);
-        let terminal = Ui::default().merge_json(json!({"colors":{"background":"default","foreground":"default"}})).unwrap();
+        let terminal = Ui::default()
+            .merge_json(json!({"colors":{"background":"default","foreground":"default"}}))
+            .unwrap();
         assert_eq!(terminal.background(), "49");
         assert_eq!(terminal.color("foreground"), "39");
         assert_eq!(Ui::default().background(), "48;2;16;18;20");
@@ -401,20 +468,31 @@ mod tests {
 
     #[test]
     fn partial_patch_preserves_other_colors_and_rejects_invalid_data() {
-        let old = Ui::default().merge_json(json!({"colors":{"accent":"#123456"}})).unwrap();
-        let new = old.merge_json(json!({"colors":{"background":"black"},"sidebar":false})).unwrap();
+        let old = Ui::default()
+            .merge_json(json!({"colors":{"accent":"#123456"}}))
+            .unwrap();
+        let new = old
+            .merge_json(json!({"colors":{"background":"black"},"sidebar":false}))
+            .unwrap();
         assert_eq!(new.colors.accent, "#123456");
         assert_eq!(new.background(), "40");
         assert!(!new.sidebar);
         assert!(old.sidebar);
         for patch in [
-            json!([]), json!({"colors":{"accent":"\u{1b}[2Jabc"}}),
-            json!({"colors":{"accent":"#12345"}}), json!({"colors":{"accent":"#12GG34"}}),
-            json!({"colors":{"accent":null}}), json!({"colors":{"unknown":"abc"}}),
-            json!({"log_height_percent":9}), json!({"log_height_percent":81}),
-            json!({"sidebar_width":19}), json!({"sidebar_width":61}),
-            json!({"layout":"abc"}), json!({"panels":["git","git"]}),
-            json!({"panels":["abc"]}), json!({"unknown":"abc"}),
+            json!([]),
+            json!({"colors":{"accent":"\u{1b}[2Jabc"}}),
+            json!({"colors":{"accent":"#12345"}}),
+            json!({"colors":{"accent":"#12GG34"}}),
+            json!({"colors":{"accent":null}}),
+            json!({"colors":{"unknown":"abc"}}),
+            json!({"log_height_percent":9}),
+            json!({"log_height_percent":81}),
+            json!({"sidebar_width":19}),
+            json!({"sidebar_width":61}),
+            json!({"layout":"abc"}),
+            json!({"panels":["git","git"]}),
+            json!({"panels":["abc"]}),
+            json!({"unknown":"abc"}),
         ] {
             let error = old.merge_json(patch).unwrap_err();
             assert!(!error.contains("abc"));

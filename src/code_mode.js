@@ -434,6 +434,10 @@ const bootstrap = `(() => {
   };
   const file = (name, id, args) => workspaceResult(id, 'ssmcp.fs.' + name, args);
   const reload = id => workspaceResult(id, 'ssmcp.client.reload');
+  const ui = freeze(Object.fromEntries(
+    ['get', 'set', 'action', 'filter'].map(name =>
+      [name, (id, args = {}) => workspaceResult(id, 'ssmcp.ui.' + name, args)])
+  ));
   const sessions = freeze(Object.fromEntries(
     ['list', 'status', 'create', 'restart', 'close'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.session.' + name, args)])
@@ -607,6 +611,7 @@ const bootstrap = `(() => {
     cua: { value: cua, enumerable: true },
     omarchy: { value: omarchy, enumerable: true },
     reload: { value: reload, enumerable: true },
+    ui: { value: ui, enumerable: true },
     sessions: { value: sessions, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
