@@ -1,24 +1,26 @@
 # 客户端账号、会话与临时接入
 
-在 A 设备登录一次 GitHub，随后运行 `ssmcp` 就能以自己的身份接入服务器，无须重复填写自己的 `--allow`。已登录的 A 可以列出可控会话、进入远程终端，也可以生成一条命令，让 B 临时成为自己的被控端。
+在 A 的项目目录运行 `ssmcp username@server`，客户端会自动完成所需的 GitHub 登录、用户名绑定和 HTTPS / WSS 连接。随后可以列出可控会话、进入远程终端，或生成一条命令，让 B 临时成为自己的被控端。
 
-以下命令对应 0.7.0 源码实现。本次变更未部署公网服务；使用前须升级 ssmcpd，并在服务器实际放置新版本的目标平台客户端二进制，才能使用默认引导命令。示例域名 `https://ssmcp.example.com` 应替换为你的服务器。
+客户端和服务端均需支持具名账号入口；使用前升级实际运行的 ssmcpd。默认邀请引导命令还要求服务器准备目标平台的客户端二进制。示例域名 `ssmcp.example.com` 应替换为你的服务器。
 
-## 1. 登录并接入自己的设备
+## 1. 选择用户名并连接
 
 在 A 上安装客户端后运行：
 
 ~~~sh
-ssmcp login --server https://ssmcp.example.com
-ssmcp whoami
-
 # 在需要开放的项目目录中运行，保持这个终端打开。
-ssmcp --name device-a
+ssmcp alice@ssmcp.example.com --name device-a
+
+# 没有本机浏览器时，使用打印的链接和确认码。
+ssmcp alice@ssmcp.example.com --no-browser
 ~~~
 
-`login` 打开浏览器，使用 GitHub 登录并确认终端显示的配对信息。没有图形浏览器时用 `--no-browser`，在另一台设备打开打印的链接即可。`whoami --json` 返回已验证身份、服务器和有效期，不输出登录令牌。
+首次连接自动打开浏览器。使用 GitHub 登录、核对终端配对信息，并确认注册或登录请求后，客户端继续连接。已有有效凭据时直接复用；旧账号尚未绑定用户名时，将本次选择的名字绑定到已认证账号。`whoami --json` 返回 GitHub 身份、服务器用户名和有效期，不输出令牌。
 
-客户端记住最后登录的服务器；后续命令也可以用 `--server URL` 显式选择。不同服务器各自保存凭据，不会把一个服务器的令牌交给另一个服务器。账户连接通过 HTTPS / WSS 建立；A、B 都不需要 SSH 密钥或入站监听端口。服务端在注册时绑定已经验证的 GitHub 数字 ID。[客户端账号实现](../src/client/account.rs) · [服务端授权](../src/device.rs)
+用户名大小写不敏感并保存为小写，长度为 3–32，首字符为 ASCII 字母，末字符为字母或数字，中间可用字母、数字、`_` 和 `-`。保留名不能注册；已占名字只允许其绑定的 GitHub 账号登录，每个 GitHub 账号在同一服务器绑定一个名字。GitHub 的数字 ID 始终用来识别账户。详见[用户名与服务器管理](named-accounts.md)。
+
+客户端记住最后授权的服务器；后续命令也可以用 `--server URL` 显式选择。不同服务器各自保存凭据，不会把一个服务器的令牌交给另一个服务器。账户连接通过 HTTPS / WSS 建立；A、B 都不需要 SSH 密钥或入站监听端口。服务端在注册时绑定已经验证的 GitHub 数字 ID。[客户端账号实现](../src/client/account.rs) · [服务端授权](../src/device.rs)
 
 启动本机被控会话和查看账号下的远端会话是两个动作。前台 `ssmcp` 负责开放当前设备；在另一个终端执行下一节的列表和交互命令。
 
@@ -106,18 +108,18 @@ ssmcp --no-watchdog
 
 ## 5. 凭据与原有 SSH 用法
 
-客户端登录默认有效 30 天，到期后重新运行 `ssmcp login`。Linux / macOS 默认在 `$XDG_CONFIG_HOME/ssmcp/auth` 或 `~/.config/ssmcp/auth` 保存凭据；Windows 使用 `%LOCALAPPDATA%\ssmcp\auth`。`SSMCP_AUTH_HOME` 可指定独立的绝对目录。Unix 目录与文件权限分别为 0700 和 0600；Windows 使用当前用户的私有访问权限。
+客户端凭据默认有效 30 天。使用具名账号的前台连接时，过期或被撤销的凭据会触发新的 GitHub 授权；同一运行进程最多自动重新授权一次，以免失败时循环打开浏览器。403 封禁、网络故障及服务端错误不会触发重新登录，也不会删除凭据。后台会话不会打开浏览器；在终端重新运行 `ssmcp alice@server` 授权后，再用 `ssmcp sessions restart NAME` 恢复。Linux / macOS 默认在 `$XDG_CONFIG_HOME/ssmcp/auth` 或 `~/.config/ssmcp/auth` 保存凭据；Windows 使用 `%LOCALAPPDATA%\ssmcp\auth`。`SSMCP_AUTH_HOME` 可指定独立的绝对目录。Unix 目录与文件权限分别为 0700 和 0600；Windows 使用当前用户的私有访问权限。
 
 服务器保存令牌摘要，并按已验证的 GitHub 数字 ID 判断身份。CLI 长期登录令牌不写入邀请命令。邀请本身允许一次受限接入，应只交给需要控制的设备操作者。
 
 已有 SSH 别名、公钥和本地后台会话继续可用：
 
 ~~~sh
-ssmcp --name workstation my-ssmcp
+ssmcp --ssh --name workstation my-ssmcp
 ssmcp --identity ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
 
 # 显式共享给指定 GitHub 用户时继续使用 SSH --allow。
-ssmcp --allow alice@github,bob@github my-ssmcp
+ssmcp --ssh --allow alice@github,bob@github my-ssmcp
 
 ssmcp sessions list
 ssmcp sessions status workstation
@@ -165,5 +167,9 @@ client_download_dir = "/var/lib/ssmcpd/clients"
 | 临时会话结束后没有恢复 | 检查到期、注销或手动停止；这些操作会结束恢复权限 |
 | 想查看本机后台服务 | 使用 `ssmcp sessions list`，账号列表使用 `ssmcp list` |
 | 非交互脚本需要列表 | 使用 `ssmcp list --json`；`-i` 需要真实终端 |
+| 名字无效或命中保留词 | 按上述 3–32 字符规则换一个名字 |
+| 名字已被占用 | 使用原绑定 GitHub 账号登录，或选择未注册名字 |
+| 当前账号已绑定其他名字 | 使用原名字连接；需要切换 GitHub 账号时先 `ssmcp logout` |
+| 账号已封禁 | 联系该服务器的管理员；反复登录不会解除封禁 |
 
-验收入口：`cargo test --lib client::account::tests`、`cargo test --lib device::tests`、`python3 scripts/e2e_account_interactive.py --bin-dir target/debug`。测试运行范围和本次结果见[客户端账号验收记录](validation-client-accounts.md)。
+验收入口：`cargo test --lib client::account::named_tests`、`cargo test --lib client::named_entry_tests`、`cargo test --lib client::account::tests`、`cargo test --lib device::tests`、`python3 scripts/e2e_account_interactive.py --bin-dir target/debug`。测试运行范围和本次结果见[客户端账号验收记录](validation-client-accounts.md)。
