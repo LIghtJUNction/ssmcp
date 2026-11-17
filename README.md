@@ -33,6 +33,17 @@ ssmcp alice@relay.example.com
 
 本项目由 Astra Pro 在网页版 Chat 模式下使用 ssmcp 插件开发。
 
+## 007 轻量值守模式
+
+Linux 上可以保留一个独立的唤醒连接，需要工作时再启动完整会话：
+
+```sh
+ssmcp 007 install --cwd "$HOME/Documents/GITHUB" --client "$(command -v ssmcp)"
+ssmcp 007 status
+```
+
+007 不加载终端和工具目录，空闲时只维持认证连接并回应服务器保活。断网后自动重连；正式会话使用独立 systemd 单位。普通客户端升级不替换 007 保存的恢复程序，启动失败时仍可唤醒已知可用版本。[使用说明与恢复流程](docs/007.md)。
+
 ## 快速开始
 
 先[安装新版客户端](#安装与升级)，并使用已启用 GitHub OAuth、账号门户和客户端 API 的新版服务器。将示例域名换成你的服务地址：

@@ -13,6 +13,8 @@ pub(crate) mod render;
 pub(crate) mod terminal;
 mod trust;
 pub(crate) mod ui;
+#[cfg(target_os = "linux")]
+mod zero;
 
 use crate::{
     backend::Backend,
@@ -60,6 +62,7 @@ Usage: ssmcp username@server [options]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [NAME|list] [--read-only]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
+       ssmcp 007 <install|run|start|stop|status|uninstall|sessions> [options]
 
   --server URL         Relay for this command; overrides config and last login
   --username NAME      Named account on the selected server
@@ -1165,6 +1168,12 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "007") {
+        #[cfg(target_os = "linux")]
+        return zero::dispatch(args.into_iter().skip(1).collect()).await;
+        #[cfg(not(target_os = "linux"))]
+        return Err("007 recovery mode currently requires Linux and systemd".into());
+    }
     config::normalize_args(&mut args)?;
     if config::dispatch(&args)? || trust::dispatch(&args)? {
         return Ok(());
