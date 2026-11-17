@@ -347,7 +347,7 @@ impl Desktop {
 
 impl Drop for Desktop {
     fn drop(&mut self) {
-        let mut processes: Vec<_> = self.apps.drain(..).collect();
+        let mut processes = std::mem::take(&mut self.apps);
         processes.extend(self.manager.take());
         processes.extend(self.server.take());
         if processes.is_empty() {
