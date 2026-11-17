@@ -1,4 +1,5 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
+use crate::catalog::{self, ToolDescriptor};
 use crate::rsync::Rsync;
 use crate::{
     backend::{self, Backend, events::EventLog},
@@ -173,7 +174,7 @@ impl Drop for CodeCall {
 
 struct CatalogSnapshot {
     fingerprint: String,
-    tools: Arc<Vec<Value>>,
+    tools: Arc<Vec<ToolDescriptor>>,
     bytes: usize,
     created: Instant,
     accessed: Instant,
@@ -194,17 +195,18 @@ struct Catalog {
 }
 
 impl Catalog {
-    fn first(&self, tools: Vec<Value>) -> Result<Value, String> {
+    fn first(&self, tools: Vec<ToolDescriptor>) -> Result<Value, String> {
         self.first_at(tools, Instant::now())
     }
 
-    fn first_at(&self, tools: Vec<Value>, now: Instant) -> Result<Value, String> {
-        let page = backend::page(&tools, None)?;
+    fn first_at(&self, tools: Vec<ToolDescriptor>, now: Instant) -> Result<Value, String> {
+        let fingerprint = catalog::fingerprint(&tools);
+        let page = catalog::page(&tools, None, &fingerprint)?;
         let Some(cursor) = page["nextCursor"].as_str() else {
             return Ok(page);
         };
         let fingerprint = cursor.split_once(':').unwrap().0.to_owned();
-        let bytes = serde_json::to_vec(&tools).map_err(|e| e.to_string())?.len();
+        let bytes = catalog::encoded_len(&tools);
         if bytes > MAX_CATALOG_SNAPSHOT_BYTES {
             return Err("tool catalog exceeds the 64 MiB pagination snapshot limit".into());
         }
@@ -255,11 +257,7 @@ impl Catalog {
         // read must not expire at its creation time, while malformed cursors
         // must not pin cache entries. The absolute age and byte/count limits
         // still bound retained snapshots, independently of current call routing.
-        let page = backend::page_with_fingerprint(
-            snapshots[index].tools.as_ref(),
-            Some(cursor),
-            fingerprint,
-        )?;
+        let page = catalog::page(snapshots[index].tools.as_ref(), Some(cursor), fingerprint)?;
         let mut snapshot = snapshots.remove(index).unwrap();
         snapshot.accessed = now;
         snapshots.push_back(snapshot);
@@ -391,7 +389,7 @@ impl Runtime {
             // Continuations retain an immutable view of the one registry. Calls
             // still validate the current provider and registration generation.
             Operation::ListTools { cursor: None } => {
-                return self.catalog.first(self.registry.catalog()?);
+                return self.catalog.first(self.registry.snapshot()?);
             }
             Operation::ListTools {
                 cursor: Some(cursor),
@@ -692,9 +690,9 @@ mod tests {
         assert!(audit.begin(&operation, 6, None, None).unwrap().is_none());
     }
 
-    fn tools(generation: usize) -> Vec<Value> {
+    fn tools(generation: usize) -> Vec<ToolDescriptor> {
         (0..150)
-            .map(|n| json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":generation}))
+            .map(|n| ToolDescriptor::from_value(json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":generation})).unwrap())
             .collect()
     }
 
@@ -757,7 +755,7 @@ mod tests {
         let catalog = Catalog::default();
         let created = Instant::now();
         let definitions: Vec<_> = (0..1342)
-            .map(|n| json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":1}))
+            .map(|n| ToolDescriptor::from_value(json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":1})).unwrap())
             .collect();
         let mut page = catalog.first_at(definitions, created).unwrap();
         let mut seen = page["tools"].as_array().unwrap().len();

@@ -4,7 +4,7 @@ pub(crate) mod input;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Value, json, value::RawValue};
 use std::{
     collections::{BTreeMap, VecDeque},
     ffi::OsString,
@@ -32,7 +32,7 @@ static CAPTURE: OnceLock<Mutex<Option<Weak<Capture>>>> = OnceLock::new();
 struct Ring {
     next: u64,
     bytes: usize,
-    events: VecDeque<(u64, Value, usize)>,
+    events: VecDeque<(u64, Box<RawValue>, usize)>,
 }
 
 struct Lease {
@@ -75,7 +75,11 @@ impl Capture {
         let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
         let cursor = ring.next;
         event["sequence"] = json!(cursor);
-        bytes = event.to_string().len();
+        let encoded = event.to_string();
+        drop(event);
+        bytes = encoded.len();
+        // Keep replay payloads compact; expand only the requested page.
+        let event = RawValue::from_string(encoded).expect("serialized attach event is valid JSON");
         while ring.bytes + bytes > HISTORY_BYTES || ring.events.len() >= 4096 {
             let Some((_, _, old)) = ring.events.pop_front() else {
                 break;
@@ -161,7 +165,7 @@ impl Capture {
                         if events.len() >= 128 || bytes + size > PAGE_BYTES {
                             break;
                         }
-                        events.push(event.clone());
+                        events.push(serde_json::from_str::<Value>(event.get())?);
                         bytes += size;
                         next = sequence + 1;
                     }
@@ -838,6 +842,41 @@ mod tests {
         );
         assert!(capture.read(101).await.is_err());
     }
+    #[tokio::test]
+    async fn compact_replay_preserves_nested_events_and_page_cursors() {
+        let capture = Capture::new().unwrap();
+        let mut expected = Vec::new();
+        for index in 0..130 {
+            let mut event = json!({
+                "kind":"event",
+                "label":"nested",
+                "sequence":999,
+                "value":{
+                    "index":index,
+                    "items":[null,true,{"text":"quote\" slash\\ newline\n 界"}],
+                    "minimum":i64::MIN,
+                    "maximum":u64::MAX,
+                    "decimal":1.25,
+                    "empty":{}
+                }
+            });
+            capture.push(event.clone());
+            event["sequence"] = json!(index);
+            expected.push(event);
+        }
+        let first = capture.read(0).await.unwrap();
+        assert_eq!(first["events"], json!(&expected[..128]));
+        assert_eq!(first["start_cursor"], 0);
+        assert_eq!(first["next_cursor"], 128);
+        assert_eq!(first["truncated"], false);
+
+        let second = capture.read(128).await.unwrap();
+        assert_eq!(second["events"], json!(&expected[128..]));
+        assert_eq!(second["next_cursor"], 130);
+        assert_eq!(second["truncated"], false);
+        assert!(capture.read(131).await.is_err());
+    }
+
     #[test]
     fn input_owner_is_exclusive_observers_do_not_take_it_and_detach_releases_it() {
         let capture = Capture::new().unwrap();

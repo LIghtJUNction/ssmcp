@@ -355,7 +355,7 @@ impl State {
                 self.logs = vt100::Parser::new(
                     nonzero(self.geometry.log_rows),
                     nonzero(self.geometry.left),
-                    512,
+                    SCROLLBACK_ROWS,
                 );
                 self.log_query.clear();
                 self.log_level = 0;

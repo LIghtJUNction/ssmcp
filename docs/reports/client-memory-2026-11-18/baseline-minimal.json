@@ -1,0 +1,615 @@
+{
+  "schema": "ssmcp.client-memory.v1",
+  "binary": "/home/lightjunction/.cargo/bin/ssmcp",
+  "providers": "minimal",
+  "binary_file": {
+    "sha256": "f685725b975ad4cc46f1eb28833b1a74c876e87dda18f3ce898fbc5195191cca",
+    "bytes": 10384520,
+    "mtime_ns": 1794935129754886212,
+    "ctime_ns": 1794935129754913278,
+    "device": 68,
+    "inode": 180092569
+  },
+  "binary_unchanged_during_run": true,
+  "platform": {
+    "system": "Linux",
+    "release": "7.3.4-arch1-1",
+    "machine": "x86_64"
+  },
+  "memory_details_capture": "end_of_phase",
+  "tty": true,
+  "measurement": "client process RSS + swap; child runtimes excluded",
+  "units": "KiB",
+  "sample_interval_ms": 50,
+  "settings": {
+    "providers": "minimal",
+    "tools": 1500,
+    "description_bytes": 2300,
+    "scans": 4,
+    "catalog_metrics": true,
+    "commands": 40,
+    "forget_jobs": false,
+    "command_bytes": 512,
+    "idle_seconds": 4.0,
+    "discovery_timeout": 120,
+    "timeout": 240,
+    "sample_ms": 50,
+    "max_footprint_mib": null,
+    "no_tty": false
+  },
+  "elapsed_seconds": 9.389,
+  "client_exit_code": 0,
+  "workload": {
+    "ok": true,
+    "catalog_scans": [
+      {
+        "tools": 100,
+        "pages": 2,
+        "compact_json_bytes": 49777,
+        "search_matches": 0,
+        "sha256": "f8018dfd1d8b067bd0912126601eee227a7a416dc21e6ee8609b66c528ab67b2",
+        "probe": null
+      },
+      {
+        "tools": 100,
+        "pages": 2,
+        "compact_json_bytes": 49777,
+        "search_matches": 0,
+        "sha256": "f8018dfd1d8b067bd0912126601eee227a7a416dc21e6ee8609b66c528ab67b2",
+        "probe": null
+      },
+      {
+        "tools": 100,
+        "pages": 2,
+        "compact_json_bytes": 49777,
+        "search_matches": 0,
+        "sha256": "f8018dfd1d8b067bd0912126601eee227a7a416dc21e6ee8609b66c528ab67b2",
+        "probe": null
+      },
+      {
+        "tools": 100,
+        "pages": 2,
+        "compact_json_bytes": 49777,
+        "search_matches": 0,
+        "sha256": "f8018dfd1d8b067bd0912126601eee227a7a416dc21e6ee8609b66c528ab67b2",
+        "probe": null
+      }
+    ],
+    "post_idle_catalog": {
+      "tools": 100,
+      "pages": 2,
+      "compact_json_bytes": 49777,
+      "search_matches": 0,
+      "sha256": "f8018dfd1d8b067bd0912126601eee227a7a416dc21e6ee8609b66c528ab67b2",
+      "probe": null
+    },
+    "post_idle_harnesses": [
+      {
+        "provider": "codex",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      },
+      {
+        "provider": "claude",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      },
+      {
+        "provider": "pi",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      },
+      {
+        "provider": "opencode",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      },
+      {
+        "provider": "playwright",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      }
+    ],
+    "commands_verified": 40,
+    "command_output_bytes": 21040,
+    "harnesses": [
+      {
+        "provider": "codex",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      },
+      {
+        "provider": "claude",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      },
+      {
+        "provider": "pi",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      },
+      {
+        "provider": "opencode",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      },
+      {
+        "provider": "playwright",
+        "status": "unavailable",
+        "tools": 0,
+        "version": null
+      }
+    ]
+  },
+  "catalog_payload_estimates": {
+    "tools": 100,
+    "compact_json_utf8_bytes": 49768,
+    "routed_name_utf8_bytes": 1871,
+    "raw_deflate_per_tool_bytes": {
+      "level_1": 37820,
+      "level_6": 29099
+    },
+    "serialization": "UTF-8 JSON with sorted keys, compact separators, and unescaped Unicode",
+    "method": "Independent zlib raw-deflate stream per tool; payload estimate, excluding allocator overhead",
+    "computed_after_client_exit": true
+  },
+  "phases": {
+    "startup": {
+      "samples": 2,
+      "rss_kib": {
+        "median": 4118.0,
+        "max": 7524,
+        "last": 7524
+      },
+      "swap_kib": {
+        "median": 0.0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 4118.0,
+        "max": 7524,
+        "last": 7524
+      },
+      "pss_kib": {
+        "median": 1600.0,
+        "max": 3050,
+        "last": 3050
+      },
+      "resident_high_water_kib": {
+        "median": 3946.0,
+        "max": 7524,
+        "last": 7524
+      }
+    },
+    "discovery": {
+      "samples": 11,
+      "rss_kib": {
+        "median": 8384,
+        "max": 8428,
+        "last": 8428
+      },
+      "swap_kib": {
+        "median": 0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 8384,
+        "max": 8428,
+        "last": 8428
+      },
+      "pss_kib": {
+        "median": 3745,
+        "max": 3783,
+        "last": 3783
+      },
+      "resident_high_water_kib": {
+        "median": 8384,
+        "max": 8428,
+        "last": 8428
+      }
+    },
+    "idle": {
+      "samples": 80,
+      "rss_kib": {
+        "median": 10960.0,
+        "max": 10960,
+        "last": 10960
+      },
+      "swap_kib": {
+        "median": 0.0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 10960.0,
+        "max": 10960,
+        "last": 10960
+      },
+      "pss_kib": {
+        "median": 5897.0,
+        "max": 5902,
+        "last": 5889
+      },
+      "resident_high_water_kib": {
+        "median": 10960.0,
+        "max": 10960,
+        "last": 10960
+      }
+    },
+    "catalog_scan_and_search": {
+      "samples": 1,
+      "rss_kib": {
+        "median": 11860,
+        "max": 11860,
+        "last": 11860
+      },
+      "swap_kib": {
+        "median": 0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 11860,
+        "max": 11860,
+        "last": 11860
+      },
+      "pss_kib": {
+        "median": 6789,
+        "max": 6789,
+        "last": 6789
+      },
+      "resident_high_water_kib": {
+        "median": 11860,
+        "max": 11860,
+        "last": 11860
+      }
+    },
+    "commands_and_logs": {
+      "samples": 11,
+      "rss_kib": {
+        "median": 11872,
+        "max": 11872,
+        "last": 11872
+      },
+      "swap_kib": {
+        "median": 0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 11872,
+        "max": 11872,
+        "last": 11872
+      },
+      "pss_kib": {
+        "median": 6801,
+        "max": 6801,
+        "last": 6777
+      },
+      "resident_high_water_kib": {
+        "median": 11872,
+        "max": 11872,
+        "last": 11872
+      }
+    },
+    "after_workload_idle": {
+      "samples": 80,
+      "rss_kib": {
+        "median": 11872.0,
+        "max": 11872,
+        "last": 11872
+      },
+      "swap_kib": {
+        "median": 0.0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 11872.0,
+        "max": 11872,
+        "last": 11872
+      },
+      "pss_kib": {
+        "median": 6735.0,
+        "max": 6777,
+        "last": 6693
+      },
+      "resident_high_water_kib": {
+        "median": 11872.0,
+        "max": 11872,
+        "last": 11872
+      }
+    },
+    "post_idle_verification": {
+      "samples": 1,
+      "rss_kib": {
+        "median": 12448,
+        "max": 12448,
+        "last": 12448
+      },
+      "swap_kib": {
+        "median": 0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 12448,
+        "max": 12448,
+        "last": 12448
+      },
+      "pss_kib": {
+        "median": 7268,
+        "max": 7268,
+        "last": 7268
+      },
+      "resident_high_water_kib": {
+        "median": 12448,
+        "max": 12448,
+        "last": 12448
+      }
+    },
+    "complete": {
+      "samples": 3,
+      "rss_kib": {
+        "median": 12488,
+        "max": 12488,
+        "last": 12488
+      },
+      "swap_kib": {
+        "median": 0,
+        "max": 0,
+        "last": 0
+      },
+      "rss_swap_kib": {
+        "median": 12488,
+        "max": 12488,
+        "last": 12488
+      },
+      "pss_kib": {
+        "median": 7309,
+        "max": 7309,
+        "last": 7309
+      },
+      "resident_high_water_kib": {
+        "median": 12488,
+        "max": 12488,
+        "last": 12488
+      }
+    }
+  },
+  "budget_mib": null,
+  "memory_details": {
+    "after_workload_idle": {
+      "rollup": {
+        "rss_kib": 11872,
+        "swap_kib": 0,
+        "rss_swap_kib": 11872,
+        "pss_kib": 6693,
+        "swap_pss_kib": 0,
+        "resident_high_water_kib": 11872
+      },
+      "top_mappings": [
+        {
+          "mapping": "/home/lightjunction/.cargo/bin/ssmcp",
+          "Rss_kib": 5704,
+          "Pss_kib": 3280,
+          "Shared_Clean_kib": 2864,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "[heap]",
+          "Rss_kib": 2360,
+          "Pss_kib": 2360,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 2360,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 1264,
+          "Pss_kib": 3,
+          "Shared_Clean_kib": 1264,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/home/lightjunction/.cargo/bin/ssmcp",
+          "Rss_kib": 832,
+          "Pss_kib": 563,
+          "Shared_Clean_kib": 300,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/etc/ld.so.cache",
+          "Rss_kib": 316,
+          "Pss_kib": 5,
+          "Shared_Clean_kib": 316,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 228,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 228,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/ld-linux-x86-64.so.2",
+          "Rss_kib": 200,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 200,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/home/lightjunction/.cargo/bin/ssmcp",
+          "Rss_kib": 192,
+          "Pss_kib": 192,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 192,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "[stack]",
+          "Rss_kib": 164,
+          "Pss_kib": 164,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 164,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 144,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 144,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libm.so.6",
+          "Rss_kib": 64,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 64,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libm.so.6",
+          "Rss_kib": 64,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 64,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        }
+      ]
+    },
+    "idle": {
+      "rollup": {
+        "rss_kib": 10960,
+        "swap_kib": 0,
+        "rss_swap_kib": 10960,
+        "pss_kib": 5889,
+        "swap_pss_kib": 0,
+        "resident_high_water_kib": 10960
+      },
+      "top_mappings": [
+        {
+          "mapping": "/home/lightjunction/.cargo/bin/ssmcp",
+          "Rss_kib": 5692,
+          "Pss_kib": 3372,
+          "Shared_Clean_kib": 2720,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "[heap]",
+          "Rss_kib": 1460,
+          "Pss_kib": 1460,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 1460,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 1264,
+          "Pss_kib": 3,
+          "Shared_Clean_kib": 1264,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/home/lightjunction/.cargo/bin/ssmcp",
+          "Rss_kib": 832,
+          "Pss_kib": 563,
+          "Shared_Clean_kib": 300,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/etc/ld.so.cache",
+          "Rss_kib": 316,
+          "Pss_kib": 8,
+          "Shared_Clean_kib": 316,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 228,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 228,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/ld-linux-x86-64.so.2",
+          "Rss_kib": 200,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 200,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/home/lightjunction/.cargo/bin/ssmcp",
+          "Rss_kib": 192,
+          "Pss_kib": 192,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 192,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "[stack]",
+          "Rss_kib": 164,
+          "Pss_kib": 164,
+          "Shared_Clean_kib": 0,
+          "Private_Dirty_kib": 164,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libc.so.6",
+          "Rss_kib": 144,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 144,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libm.so.6",
+          "Rss_kib": 64,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 64,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        },
+        {
+          "mapping": "/usr/lib/libm.so.6",
+          "Rss_kib": 64,
+          "Pss_kib": 0,
+          "Shared_Clean_kib": 64,
+          "Private_Dirty_kib": 0,
+          "Swap_kib": 0
+        }
+      ]
+    }
+  },
+  "sampled_peak_rss_kib": 12488,
+  "sampled_peak_rss_swap_kib": 12488,
+  "kernel_peak_rss_kib": 12488,
+  "steady_and_workload_max_rss_swap_kib": 12488,
+  "passed": true
+}

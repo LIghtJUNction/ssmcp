@@ -66,6 +66,31 @@ async fn sequential_calls_reuse_slots_and_parallel_calls_stay_separate() {
     assert!(pool.state.lock().unwrap().active.is_empty());
 }
 #[tokio::test]
+async fn closed_interactive_terminals_release_stream_counters_and_reuse_the_slot() {
+    let pool = fixture(1);
+    let cwd = std::env::current_dir().unwrap();
+    for index in 0..64 {
+        let id = format!("pty-{index}");
+        pool.terminal_begin(&id, &cwd).await.unwrap();
+        pool.terminal_output(&id, b"output");
+        assert!(
+            pool.state
+                .lock()
+                .unwrap()
+                .streamed
+                .contains_key(&format!("terminal:{id}"))
+        );
+        pool.terminal_closed(&id);
+        pool.terminal_closed(&id);
+        pool.terminal_output(&id, b"late output");
+    }
+    let state = pool.state.lock().unwrap();
+    assert!(state.active.is_empty());
+    assert!(state.streamed.is_empty());
+    assert_eq!(state.slots.len(), 1);
+}
+
+#[tokio::test]
 async fn failed_view_prevents_command_start_and_releases_slot() {
     let pool = fixture(1);
     let slot = pool.state.lock().unwrap().slots[0].clone();

@@ -463,6 +463,7 @@ impl Pool {
         let slot = {
             let mut state = self.state.lock().unwrap();
             let id = state.active.remove(&key);
+            state.streamed.remove(&key);
             id.and_then(|id| state.slots.iter().find(|slot| slot.id == id).cloned())
         };
         if let Some(slot) = slot {

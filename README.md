@@ -218,6 +218,8 @@ return await exec.run(client.id, {
 
 命令使用 argv 数组，结果带任务 ID、退出码、stdout/stderr 和输出游标。日志使用 `python3 -c · 83 lines` 这类脚本标签，并分别显示实际输出和结束状态；源码可在审计区展开。运行中的任务用同一 ID 继续 `wait` 或 `read`。`exec.parallel` 按实际运行的命令限制并发，单次等待到期不会释放占用名额。[命令接口](docs/commands.md) · [多终端与后台输入](docs/terminal-control.md) · [自定义 UI](docs/client-ui.md#构建自己的界面)
 
+运行中的 stdout/stderr 各保留 64 KiB 内存尾部；流成功结束后释放重复尾部，小输出保留一份，较大输出通过已有归档按游标读取。归档仍受保留期与容量限制，缺失或缩短时返回错误；捕获失败会保留尾部并标明错误。客户端还通过共享压缩工具目录、紧凑事件存储和 128 行本地可见滚动历史减少常驻内存；原始命令与事件归档继续按各自策略保留。[内存占用、实测数据与验证边界](docs/client-memory.md)
+
 ## 多个 agent 协作
 
 多个 agent 可以加入同一在线客户端连接，分别取得 `agent_id` 与私密 `token`。`collab.list` 返回当前有效成员，`send` 支持定向 JSON 消息和广播；`receive` 可重读未确认消息，处理后用 `ack` 释放邮箱容量。
@@ -282,6 +284,7 @@ cargo test --locked
 | 默认中转服务器与可信公钥 | [服务器与信任](docs/client-server.md) |
 | 成员发现、私信、广播与消息确认 | [Agent 协作](docs/agent-collaboration.md) |
 | 执行任务、事件与长输出 | [命令接口](docs/commands.md) · [日志](docs/logging.md) |
+| 客户端内存占用、优化边界与复现数据 | [客户端内存报告](docs/client-memory.md) |
 | RTK 命令与输出压缩 | [RTK](docs/rtk.md) |
 | 多终端、后台输入和控制者显示 | [终端控制](docs/terminal-control.md) |
 | 复用终端窗口查看命令与输出 | [命令观察窗口](docs/terminal-observers.md) |
