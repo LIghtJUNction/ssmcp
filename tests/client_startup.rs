@@ -158,6 +158,7 @@ impl Fixture {
             std::process::id()
         ));
         std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("config.toml"), "").unwrap();
         for (name, source) in [("ssh", SSH), ("native", NATIVE)] {
             let file = path.join(name);
             std::fs::write(&file, source).unwrap();
@@ -183,11 +184,16 @@ impl Fixture {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
         std::fs::write(self.0.join("native-request"), "shell-started").unwrap();
         command
-            .args(["--no-watchdog", "--shell", "/bin/sh"])
+            .args(["--ssh", "--no-watchdog", "--shell", "/bin/sh"])
             .args(extra_args)
             .arg("alice@fixture")
             // Exercise automatic discovery without observing real installed harnesses.
             .env("PATH", &self.0)
+            // Explicit SSH must not borrow the developer's saved account or
+            // configured relay while exercising this local transport fixture.
+            .env("SSMCP_AUTH_HOME", self.0.join("auth"))
+            .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
+            .env_remove("SSMCP_UI_CONFIG")
             .env("SSMCP_STARTUP_DIR", &self.0)
             .env("SSMCP_STARTUP_SCENARIO", scenario)
             .env("SSMCP_STARTUP_PHASE", phase)

@@ -41,7 +41,9 @@ Configuration:
   Portal: --portal-state-dir PATH overrides [portal] state_dir (private persistent directory).
   --portal-only runs the account HTTP portal without binding an SSH attachment socket.
   --gateway-socket PATH overrides [portal] gateway_socket (private gateway management socket).
-  Management: [portal] admin_github_ids, admin_github_users, owner_mappings.
+  Management: [portal] admin_usernames = ["your-ssmcp-username"] after registering that name.
+  Relay bandwidth: [portal] default_rate_limit_bps = 8388608 (8 MiB/s in each direction per user).
+  Legacy configuration: admin_github_ids, admin_github_users, owner_mappings.
   Admin IDs are immutable GitHub numeric ID strings; username entries resolve once at startup.
   Audit: [portal] audit_dir, audit_retention_days (default 7), audit_max_events (default 20000).
   The gateway requires audit_dir when gateway_socket is configured. Portal-only is a socket client.
@@ -99,6 +101,8 @@ struct PortalConfig {
     gateway_socket: Option<PathBuf>,
     admin_github_ids: Vec<String>,
     admin_github_users: Vec<String>,
+    admin_usernames: Vec<String>,
+    default_rate_limit_bps: u64,
     owner_mappings: HashMap<String, String>,
     audit_dir: Option<PathBuf>,
     audit_retention_days: u32,
@@ -113,6 +117,8 @@ impl Default for PortalConfig {
             gateway_socket: None,
             admin_github_ids: Vec::new(),
             admin_github_users: Vec::new(),
+            admin_usernames: Vec::new(),
+            default_rate_limit_bps: ssmcp::user_policy::DEFAULT_RATE_LIMIT_BPS,
             owner_mappings: HashMap::new(),
             audit_dir: None,
             audit_retention_days: audit.retention_days,
@@ -416,6 +422,12 @@ fn absolute_path(path: &Path, label: &str) -> ssmcp::Result<()> {
 
 fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
     let portal = &config.portal;
+    if !ssmcp::user_policy::valid_rate(portal.default_rate_limit_bps) {
+        return Err("portal.default_rate_limit_bps must be in 1..=1073741824 bytes per second".into());
+    }
+    if !portal.admin_usernames.is_empty() && portal.state_dir.is_none() {
+        return Err("portal.admin_usernames requires portal.state_dir and registered usernames".into());
+    }
     AuditConfig {
         retention_days: portal.audit_retention_days,
         max_events: portal.audit_max_events,
@@ -449,6 +461,7 @@ fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
         None => {
             if !portal.admin_github_ids.is_empty()
                 || !portal.admin_github_users.is_empty()
+                || !portal.admin_usernames.is_empty()
                 || !portal.owner_mappings.is_empty()
                 || portal.audit_dir.is_some()
             {
@@ -662,12 +675,15 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         }
     }
 
+    broker.configure_user_policies(config.portal.default_rate_limit_bps).await?;
+
     // A portal-only process never opens audit storage or binds either gateway socket.
     let mut audit = None;
     let management_server = if !config.portal_only
         && let Some(socket) = &config.portal.gateway_socket
     {
         let mut admins = config.portal.admin_github_ids;
+        admins.extend(broker.portal.resolve_admin_usernames(&config.portal.admin_usernames).await?);
         if !config.portal.admin_github_users.is_empty() {
             let principals = config
                 .portal

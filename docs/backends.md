@@ -9,7 +9,7 @@ ssmcp 对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。`list` 
 先在 Linux、macOS 或 Windows 进入需要工作的本机目录，再启动一个客户端。它始终提供交互式 shell，并自动发现 `PATH` 中可用的 Codex、Claude Code、Pi、OpenCode 原生接口。把 `octocat@github` 换成允许访问这条连接的 GitHub 用户名；安装方式和平台范围见[版本与安装](releases.md)。
 
 ```sh
-ssmcp --allow octocat@github --name dev --title "检查当前项目并修复构建" user@host
+ssmcp --ssh --allow octocat@github --name dev --title "检查当前项目并修复构建" user@host
 ```
 
 | 参数 | 作用 |
@@ -26,14 +26,14 @@ ssmcp --allow octocat@github --name dev --title "检查当前项目并修复构�
 
 ### 从旧的后端选择参数迁移
 
-删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，保留 SSH、身份、名称和日志选项。客户端已移除这些选择入口；例如旧的 `ssmcp -t codex --name dev my-server` 改为 `ssmcp --name dev my-server`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。
+删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，保留 SSH、身份、名称和日志选项。客户端已移除这些选择入口；例如旧的 `ssmcp -t codex --name dev my-server` 改为 `ssmcp --ssh --name dev my-server`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。
 
 ```sh
 # 不连接 SSH，先检查这台电脑实际发现了什么。
 ssmcp --list-tools
 
 # 同一连接提供 shell 和成功初始化的原生适配器。
-ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
+ssmcp --ssh --name dev --title "继续项目开发" --allow octocat@github my-server
 ```
 
 | 来源 | 本机原生入口或实现 | 可调用范围 |

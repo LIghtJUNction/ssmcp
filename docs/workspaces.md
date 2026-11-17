@@ -16,12 +16,12 @@ ssmcp 通过已经认证的客户端连接，在两个工作区之间传文件�
 
 ```sh
 cd /path/to/project
-ssmcp --name development --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
+ssmcp --ssh --name development --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
 ```
 
 ```sh
 cd /path/to/workspace
-ssmcp --name workspace --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
+ssmcp --ssh --name workspace --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
 ```
 
 先调用 `list`，核对两个客户端的 `hostname` 和 `cwd`。下文示例放入 `code_mode.code`，其中 `developmentId` 和 `workspaceId` 应替换为实际发现的 ID。客户端重连会更换 ID，应重新发现。不同客户端可以运行任意 `-t` 后端，工作区能力与后端类型无关。
@@ -136,6 +136,9 @@ return await ports.close(mappingId);
 | `ssmcp://clients` | 当前可访问的在线客户端 |
 | `ssmcp://clients/{id}/info` | 指定客户端的实时信息 |
 | `ssmcp://clients/{id}/tools` | 该客户端的工具 schema 和分页信息 |
+| `ssmcp://clients/{id}/agents` | 项目指令全文和来源 |
+| `ssmcp://clients/{id}/skills` | 项目技能摘要与全文 readUri |
+| `ssmcp://clients/{id}/skills/view` | 项目叠加显式全局根的实时技能视图 |
 
 不方便直接调用 MCP 资源方法的宿主，可以从 `code_mode` 读取同一资源：
 

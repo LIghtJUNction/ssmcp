@@ -54,3 +54,7 @@ pub mod device;
 pub mod client_downloads;
 
 mod ssh_public_key;
+
+#[cfg(target_os = "linux")]
+pub mod user_policy;
+pub(crate) mod username;

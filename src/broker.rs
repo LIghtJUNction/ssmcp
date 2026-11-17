@@ -305,6 +305,8 @@ pub struct Broker {
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
     management: Option<crate::management::State>,
+    pub(crate) user_policies: crate::user_policy::UserPolicies,
+    pub(crate) user_policy_updates: tokio::sync::Mutex<()>,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
 }
 
@@ -333,6 +335,8 @@ impl Broker {
             bridges: Arc::new(crate::bridge::Bridges::default()),
             portal: crate::portal::Portal::default(),
             management: None,
+            user_policies: crate::user_policy::UserPolicies::default(),
+            user_policy_updates: tokio::sync::Mutex::new(()),
             sessions: RwLock::new(HashMap::new()),
         })
     }
@@ -341,7 +345,36 @@ impl Broker {
         if !valid_username(user) {
             return None;
         }
-        self.oauth.authenticate(user, access_token)
+        let authorization = self.oauth.authenticate(user, access_token)?;
+        self.authorized_account(&authorization)
+            .then_some(authorization)
+    }
+
+    fn authorized_account(&self, authorization: &Authorization) -> bool {
+        match authorization {
+            Authorization::Identity(identity) => !self.user_policies.is_banned(&identity.subject),
+            Authorization::Legacy { anchor, .. } => anchor.upgrade().is_some_and(|session| {
+                session
+                    .owner_subject
+                    .as_deref()
+                    .is_none_or(|id| !self.user_policies.is_banned(id))
+            }),
+        }
+    }
+
+    /// Restore durable account restrictions before accepting any connection.
+    pub async fn configure_user_policies(&self, default_rate: u64) -> crate::Result<()> {
+        self.user_policies.set_default(default_rate)?;
+        let accounts = match self.portal.storage(|store| store.summaries()).await {
+            Ok(accounts) => accounts,
+            Err(crate::portal::Problem::Disabled) => return Ok(()),
+            Err(_) => return Err("could not load account restrictions; refusing to start".into()),
+        };
+        for account in accounts {
+            self.user_policies
+                .set(&account.subject, account.banned, account.rate_limit_bps);
+        }
+        Ok(())
     }
 
     pub async fn online_session(&self, user: &str) -> Option<Arc<Session>> {
@@ -435,6 +468,9 @@ impl Broker {
         authorization: &Authorization,
     ) -> Result<Vec<Arc<Session>>, String> {
         let sessions = self.sessions.read().await;
+        if !self.authorized_account(authorization) {
+            return Err("account is banned".into());
+        }
         validate_authorization(&sessions, user, authorization)?;
         let mut result: Vec<_> = accessible_sessions(&sessions, user, authorization)
             .cloned()
@@ -450,6 +486,9 @@ impl Broker {
         id: &str,
     ) -> Result<Arc<Session>, String> {
         let sessions = self.sessions.read().await;
+        if !self.authorized_account(authorization) {
+            return Err("account is banned".into());
+        }
         validate_authorization(&sessions, user, authorization)?;
         accessible_sessions(&sessions, user, authorization)
             .find(|session| session.client_id() == id)
@@ -572,6 +611,24 @@ impl Broker {
                 &mut writer,
                 &Frame::Reject {
                     message: "ssmcp authorization expired or revoked".into(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        let owner = user.strip_prefix("gh-").map(str::to_owned).or_else(|| {
+            self.management
+                .as_ref()
+                .and_then(|state| state.policy.owner_subject(&user))
+        });
+        if owner
+            .as_deref()
+            .is_some_and(|id| self.user_policies.is_banned(id))
+        {
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reject {
+                    message: "account is banned".into(),
                 },
             )
             .await?;
@@ -701,8 +758,23 @@ impl Broker {
                 ("mode", mode.name().into()),
             ],
         );
+        let owner_policy = session
+            .owner_subject
+            .as_deref()
+            .map(|id| self.user_policies.get(id));
+        let legacy_bandwidth = registration
+            .is_none()
+            .then(|| owner_policy.clone())
+            .flatten();
         let result: crate::Result<()> = tokio::select! {
+            biased;
             _ = session.disconnect.notified() => Ok(()),
+            _ = async {
+                match &owner_policy {
+                    Some(policy) => policy.wait_banned().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => Ok(()),
             _ = async {
                 match &registration {
                     Some(registration) => registration.wait_revoked(&self).await,
@@ -739,7 +811,12 @@ impl Broker {
                             let reload = crate::client::reload::is_reload(&call.operation);
                             pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation), reload));
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
-                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::Call { id:next_id, operation:call.operation, controller:call.controller, code_context:call.code_context })).await??;
+                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, code_context:call.code_context };
+                            if let Some(budget) = &legacy_bandwidth {
+                                budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
+                                    .map_err(|_| "account is banned")?;
+                            }
+                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                             if let Some(run_id) = run_id && !delivered_runs.contains(&run_id) {
                                 if delivered_runs.len() >= 256 { delivered_runs.pop_front(); }
                                 delivered_runs.push_back(run_id);
@@ -750,7 +827,12 @@ impl Broker {
                             // client. Do not send a source-less run to that client.
                             if let Some(index) = delivered_runs.iter().position(|id| *id == completion.run_id) {
                                 delivered_runs.remove(index);
-                                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::CodeModeFinished { completion })).await??;
+                                let frame = Frame::CodeModeFinished { completion };
+                                if let Some(budget) = &legacy_bandwidth {
+                                    budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
+                                        .map_err(|_| "account is banned")?;
+                                }
+                                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                             }
                         }
                         _ = expiry.tick() => {
@@ -760,10 +842,19 @@ impl Broker {
                         }
                     }
                 };
+                if let (Some(budget), Some(frame)) = (&legacy_bandwidth, &received) {
+                    budget.charge(false, serde_json::to_vec(frame)?.len() + 1).await
+                        .map_err(|_| "account is banned")?;
+                }
                 match received {
                     Some(Frame::Steering { id, command }) => {
                         let result = session.steering_command(command);
-                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::SteeringReply { id, result })).await??;
+                        let frame = Frame::SteeringReply { id, result };
+                        if let Some(budget) = &legacy_bandwidth {
+                            budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
+                                .map_err(|_| "account is banned")?;
+                        }
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                     }
                     Some(Frame::Reply {id, result}) => {
                         if let Some((reply, _, reload)) = pending.remove(&id) {

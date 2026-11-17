@@ -44,6 +44,7 @@ struct Entry {
 }
 struct Grant {
     client_name: String,
+    requested_username: Option<String>,
     expires: Instant,
     decision: Decision,
     last_poll: Option<Instant>,
@@ -57,6 +58,7 @@ enum Decision {
     Pending,
     Authorized(String),
     Denied,
+    Failed(Problem),
 }
 #[derive(Clone)]
 pub(super) struct ReturnTo {
@@ -64,6 +66,26 @@ pub(super) struct ReturnTo {
     code: String,
 }
 impl ReturnTo {
+    /// Persist a terminal OAuth failure for the CLI without changing an already
+    /// approved or denied grant from another browser attempt.
+    pub(super) async fn fail(&self, portal: &Portal, problem: Problem) -> Result<(), Problem> {
+        let grant = {
+            let mut state = portal.setup.lock().map_err(|_| Problem::Storage)?;
+            state.prune();
+            state
+                .grants
+                .get(&self.device)
+                .filter(|entry| entry.user_code == self.code)
+                .map(|entry| entry.grant.clone())
+        };
+        if let Some(grant) = grant {
+            let mut grant = grant.lock().await;
+            if grant.client_login && matches!(grant.decision, Decision::Pending) {
+                grant.decision = Decision::Failed(problem);
+            }
+        }
+        Ok(())
+    }
     /// The callback target is an allowlisted local path bound to the original
     /// device grant, never a URL supplied by a browser or OAuth query parameter.
     pub(super) fn location(&self, portal: &Portal) -> Result<String, Problem> {
@@ -132,6 +154,7 @@ impl SetupState {
                 expires,
                 grant: Arc::new(AsyncMutex::new(Grant {
                     client_name,
+                    requested_username: None,
                     expires,
                     decision: Decision::Pending,
                     last_poll: None,
@@ -184,6 +207,7 @@ impl Grant {
     fn owner(&self) -> Result<String, ApiError> {
         self.alive()?;
         match &self.decision {
+            Decision::Failed(problem) => Err((*problem).into()),
             Decision::Authorized(owner) => Ok(owner.clone()),
             Decision::Pending => Err(ApiError::new(
                 StatusCode::UNAUTHORIZED,
@@ -200,6 +224,7 @@ impl Grant {
     fn decide(&mut self, owner: &str, allow: bool) -> Result<(), ApiError> {
         self.alive()?;
         match &self.decision {
+            Decision::Failed(problem) => Err((*problem).into()),
             Decision::Pending => {
                 self.decision = if allow {
                     Decision::Authorized(owner.into())
@@ -292,6 +317,26 @@ impl From<Problem> for ApiError {
                 StatusCode::FORBIDDEN,
                 "access_denied",
                 "The browser origin, session or CSRF token did not match.",
+            ),
+            Problem::UsernameInvalid => Self::new(
+                StatusCode::BAD_REQUEST,
+                "username_invalid",
+                "Username must use 3-32 ASCII letters, digits, '_' or '-', start with a letter, end with a letter or digit, and not be reserved.",
+            ),
+            Problem::UsernameTaken => Self::new(
+                StatusCode::CONFLICT,
+                "username_taken",
+                "This username belongs to another GitHub account. Choose another name or sign in with its owner.",
+            ),
+            Problem::UsernameBound => Self::new(
+                StatusCode::CONFLICT,
+                "username_bound",
+                "This GitHub account already has a username. Connect using its registered name.",
+            ),
+            Problem::Banned => Self::new(
+                StatusCode::FORBIDDEN,
+                "account_banned",
+                "This account has been banned by the server administrator.",
             ),
             Problem::Busy => Self::rate(60),
             Problem::Limit => Self::new(
@@ -418,6 +463,10 @@ pub(super) fn routes() -> Router<Arc<Broker>> {
             "/api/client/login/poll",
             post(client_poll).fallback(method_not_allowed),
         )
+        .route(
+            "/api/client/login/cancel",
+            post(cancel).fallback(method_not_allowed),
+        )
         .route("/setup", get(page))
         .route("/setup/authorize", post(authorize))
         .route("/api/setup/start", post(start).fallback(method_not_allowed))
@@ -496,6 +545,7 @@ async fn poll(
     }
     grant.last_poll = Some(now);
     match &grant.decision {
+        Decision::Failed(problem) => Err((*problem).into()),
         Decision::Pending => Ok(Json(json!({"status":"pending"}))),
         Decision::Denied => Ok(Json(json!({"status":"denied"}))),
         Decision::Authorized(owner) => {
@@ -726,15 +776,19 @@ async fn page_inner(
         state.charge("page", 600)?;
         state.by_code(&values["code"])?
     };
-    let (name, decision, client_login) = {
+    let (name, decision, client_login, requested_username) = {
         let grant = grant.lock().await;
         grant.alive()?;
         (
             grant.client_name.clone(),
             grant.decision.clone(),
             grant.client_login,
+            grant.requested_username.clone(),
         )
     };
+    if let Decision::Failed(problem) = &decision {
+        return Err((*problem).into());
+    }
     if matches!(decision, Decision::Denied) {
         return Ok(Html(if client_login {
             client_completed_page(false)
@@ -767,12 +821,27 @@ async fn page_inner(
         return Ok(response);
     }
     let subject = subject.expect("subject checked");
-    let account = broker
+    let account = match broker
         .portal
         .storage(move |store| store.account(&subject))
-        .await?;
+        .await
+    {
+        Ok(account) => account,
+        Err(problem) => {
+            if problem == Problem::Banned {
+                return_to.fail(&broker.portal, problem).await?;
+            }
+            return Err(problem.into());
+        }
+    };
     Ok(Html(if client_login {
-        client_consent_page(&name, &values["code"], &csrf, &account)
+        client_consent_page(
+            &name,
+            &values["code"],
+            &csrf,
+            &account,
+            requested_username.as_deref(),
+        )
     } else {
         consent_page(&name, &values["code"], &csrf, &account)
     })
@@ -797,14 +866,30 @@ async fn authorize_inner(broker: &Broker, request: Request) -> Result<Response, 
         state.charge("authorize", 600)?;
         state.by_code(&form["code"])?
     };
-    // Verify the signed-in identity still has a durable account. A code alone is
-    // never authority: both the authenticated session and origin+CSRF are needed.
-    let owner = subject.clone();
-    broker
+    // The grant lock keeps approval invisible until the durable claim succeeds.
+    // A verified identity is required even when this request only denies access.
+    let mut grant = grant.lock().await;
+    let previous = grant.decision.clone();
+    grant.decide(&subject, allow)?;
+    let username = grant.requested_username.clone().filter(|_| allow);
+    let result = broker
         .portal
-        .storage(move |store| store.account(&owner))
-        .await?;
-    grant.lock().await.decide(&subject, allow)?;
+        .storage(move |store| match username {
+            Some(username) => store.claim_handle(&subject, &username),
+            None => store.account(&subject),
+        })
+        .await;
+    if let Err(problem) = result {
+        // Conflicts and bans are terminal: the terminal must not wait for the
+        // ten-minute expiry after the browser has already rejected this login.
+        grant.decision = match problem {
+            Problem::UsernameTaken | Problem::UsernameBound | Problem::Banned => {
+                Decision::Failed(problem)
+            }
+            _ => previous,
+        };
+        return Err(problem.into());
+    }
     Ok(Redirect::to(&format!("/setup?code={}", form["code"])).into_response())
 }
 
@@ -816,6 +901,8 @@ mod tests;
 #[serde(deny_unknown_fields)]
 struct ClientStart {
     name: String,
+    #[serde(default)]
+    username: Option<String>,
 }
 
 async fn client_start(
@@ -830,6 +917,22 @@ async fn client_start(
             "name must contain 1..80 UTF-8 bytes without control characters.",
         ));
     }
+    let username = input
+        .username
+        .as_deref()
+        .map(super::store::normalize_handle)
+        .transpose()?;
+    // A taken name can still be used by its owner; the GitHub-authenticated
+    // confirmation performs the authoritative atomic check and claim.
+    let username_available = match username.clone() {
+        Some(name) => Some(
+            broker
+                .portal
+                .storage(move |store| store.handle_available(&name))
+                .await?,
+        ),
+        None => None,
+    };
     let (device_code, user_code, grant) = {
         let mut state = lock(&broker.portal)?;
         state.charge("start", 60)?;
@@ -839,10 +942,15 @@ async fn client_start(
             .ok_or_else(ApiError::unavailable)?;
         (device_code, user_code, grant)
     };
-    grant.lock().await.client_login = true;
+    {
+        let mut grant = grant.lock().await;
+        grant.client_login = true;
+        grant.requested_username = username.clone();
+    }
     let base = broker.public_url.trim_end_matches('/');
     Ok(Json(
         json!({"device_code":device_code,"user_code":user_code,
+        "username":username,"username_available":username_available,
         "verification_uri":format!("{base}/setup"),
         "verification_uri_complete":format!("{base}/setup?code={user_code}"),
         "expires_in":TTL.as_secs(),"interval":POLL_INTERVAL.as_secs()}),
@@ -869,6 +977,12 @@ async fn client_poll(
     if grant.alive().is_err() || grant.login_issued {
         return Ok(Json(json!({"status":"expired"})));
     }
+    // Terminal decisions take precedence over polling throttles.
+    match &grant.decision {
+        Decision::Failed(problem) => return Err((*problem).into()),
+        Decision::Denied => return Ok(Json(json!({"status":"denied"}))),
+        _ => {}
+    }
     let now = Instant::now();
     if grant
         .last_poll
@@ -878,11 +992,35 @@ async fn client_poll(
     }
     grant.last_poll = Some(now);
     let subject = match &grant.decision {
+        Decision::Failed(problem) => return Err((*problem).into()),
         Decision::Pending => return Ok(Json(json!({"status":"pending"}))),
         Decision::Denied => return Ok(Json(json!({"status":"denied"}))),
         Decision::Authorized(subject) => subject.clone(),
     };
-    let identity = broker.portal.identity_for_subject(subject.clone()).await?;
+    // Serialize credential issuance with a ban so revocation cannot finish
+    // before this request writes a late credential that survives an unban.
+    let _policy_update = broker.user_policy_updates.lock().await;
+    let owner = subject.clone();
+    let account = match broker
+        .portal
+        .storage(move |store| store.account(&owner))
+        .await
+    {
+        Ok(account) => account,
+        Err(problem) => {
+            if problem == Problem::Banned {
+                grant.decision = Decision::Failed(problem);
+            }
+            return Err(problem.into());
+        }
+    };
+    let identity = crate::identity::Identity {
+        provider: "github".into(),
+        subject: account.subject,
+        login: account.github_login,
+    };
+    let mut public_identity = crate::device::identity_json(&identity);
+    public_identity["username"] = json!(account.handle);
     broker
         .portal
         .record_audit(
@@ -899,16 +1037,28 @@ async fn client_poll(
         .await?;
     grant.login_issued = true;
     Ok(Json(json!({"status":"authorized","access_token":token,
-        "identity":crate::device::identity_json(&identity),"expires_in":expires})))
+        "identity":public_identity,"expires_in":expires})))
 }
-fn client_consent_page(name: &str, code: &str, csrf: &str, account: &Account) -> String {
+fn client_consent_page(
+    name: &str,
+    code: &str,
+    csrf: &str,
+    account: &Account,
+    requested_username: Option<&str>,
+) -> String {
+    let username = requested_username.or(account.handle.as_deref());
+    let username_note = username.map(|name| format!(
+        "<p>服务器用户名：<strong>{}</strong></p><p>允许后，此名称将绑定当前 GitHub 账户。</p>",
+        escape(name),
+    )).unwrap_or_default();
     view::page(
         "登录 ssmcp 客户端",
         &format!(
-            "<section class=card><p class=eyebrow>SSMCP · CLIENT LOGIN</p><h1>登录客户端</h1>        <p>设备：<strong>{}</strong></p><p>请核对终端中的代码：</p><pre>{}</pre>        <p>GitHub 账户：<strong>{}</strong></p>        <p>允许后，此客户端可以连接和控制你已授权的会话，并为其他设备生成临时接入命令。登录有效期为 30 天，可随时通过 ssmcp logout 撤销。</p>        <form method=post action=\"/setup/authorize\"><input type=hidden name=csrf value=\"{}\">        <input type=hidden name=code value=\"{}\">        <button class=button type=submit name=decision value=allow>允许登录</button>        <button class=secondary type=submit name=decision value=deny>拒绝</button></form></section>",
+            "<section class=card><p class=eyebrow>SSMCP · CLIENT LOGIN</p><h1>登录客户端</h1>        <p>设备：<strong>{}</strong></p><p>请核对终端中的代码：</p><pre>{}</pre>        <p>GitHub 账户：<strong>{}</strong></p>{}        <p>允许后，此客户端可以连接和控制你已授权的会话，并为其他设备生成临时接入命令。登录有效期为 30 天，可随时通过 ssmcp logout 撤销。</p>        <form method=post action=\"/setup/authorize\"><input type=hidden name=csrf value=\"{}\">        <input type=hidden name=code value=\"{}\">        <button class=button type=submit name=decision value=allow>允许登录</button>        <button class=secondary type=submit name=decision value=deny>拒绝</button></form></section>",
             escape(name),
             escape(code),
             escape(&account.github_login),
+            username_note,
             escape(csrf),
             escape(code)
         ),

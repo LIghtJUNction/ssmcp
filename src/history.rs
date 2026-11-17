@@ -62,6 +62,7 @@ pub enum AuditAction {
     SessionDisconnectRequested,
     ToolCall,
     AdminViewed,
+    UserPolicyChanged,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
