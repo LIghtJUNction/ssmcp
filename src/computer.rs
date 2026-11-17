@@ -1,4 +1,5 @@
 //! Computer-use desktop primitives with native Linux, Windows and macOS adapters.
+mod isolated;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(windows)]
@@ -42,6 +43,8 @@ pub struct Computer {
     serial: Mutex<()>,
     closed: AtomicBool,
     releases: Arc<ReleaseTasks>,
+    environment: Option<isolated::Environment>,
+    isolated: Mutex<Option<isolated::Desktop>>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq)]
@@ -234,6 +237,8 @@ impl Computer {
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            environment: None,
+            isolated: Mutex::new(None),
         })
     }
 
@@ -241,7 +246,35 @@ impl Computer {
         let coordinate = json!({"type":"integer","minimum":-100000,"maximum":100000});
         let point = json!({"type":"object","properties":{"x":coordinate,"y":coordinate},"required":["x","y"],"additionalProperties":false});
         let button = json!({"type":"string","enum":["left","middle","right"],"default":"left"});
-        vec![
+        let mut tools = vec![
+            tool(
+                "desktop_start",
+                "Start a private Linux desktop on demand. Subsequent computer operations target it by default and leave the host mouse and focus untouched. No host applications are moved.",
+                json!({"width":{"type":"integer","minimum":320,"maximum":3840,"default":1280},"height":{"type":"integer","minimum":240,"maximum":2160,"default":800}}),
+                &[],
+                false,
+            ),
+            tool(
+                "desktop_status",
+                "Inspect the owned private desktop and required helpers without starting a display or sending input.",
+                json!({}),
+                &[],
+                true,
+            ),
+            tool(
+                "desktop_stop",
+                "Stop only this connection's private desktop and its owned applications. Host input remains opt-in after stopping.",
+                json!({}),
+                &[],
+                false,
+            ),
+            tool(
+                "app_launch",
+                "Launch an argv application in the active private desktop with a separate display, runtime directory and D-Bus session. Use browser tools for existing browser sessions.",
+                json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":128}}),
+                &["command"],
+                false,
+            ),
             tool(
                 "status",
                 "Inspect native desktop capabilities and missing system helpers; no screenshot or input is produced.",
@@ -319,10 +352,30 @@ impl Computer {
                 &["direction"],
                 false,
             ),
-        ]
+        ];
+        for descriptor in &mut tools {
+            let name = descriptor["name"].as_str().unwrap_or("");
+            if !matches!(
+                name,
+                "ssmcp.computer.desktop_start"
+                    | "ssmcp.computer.desktop_status"
+                    | "ssmcp.computer.desktop_stop"
+                    | "ssmcp.computer.app_launch"
+            ) {
+                descriptor["inputSchema"]["properties"]["desktop"] = json!({
+                    "type":"string", "enum":["isolated","host"],
+                    "description":"Defaults to the active private desktop. Host input requires an explicit host selection; it can move the user's mouse and focus."
+                });
+            }
+        }
+        tools
     }
 
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
+        isolated::dispatch(self, name, args).await
+    }
+
+    async fn perform_local(&self, name: &str, args: Value) -> Result<Value, String> {
         let _lock = self.serial.lock().await;
         if self.closed.load(Ordering::Acquire) {
             return Err("computer connection is closed".into());
@@ -411,6 +464,14 @@ impl Computer {
 
     pub async fn shutdown(&self) -> Result<(), String> {
         self.closed.store(true, Ordering::Release);
+        if let Some(mut desktop) = self.isolated.lock().await.take() {
+            desktop.shutdown().await;
+        }
+        self.shutdown_local().await
+    }
+
+    async fn shutdown_local(&self) -> Result<(), String> {
+        self.closed.store(true, Ordering::Release);
         tokio::time::timeout(RELEASE_WAIT_TIMEOUT, async {
             let _lock = self.serial.lock().await;
             self.releases.wait(RELEASE_WAIT_TIMEOUT).await
@@ -429,7 +490,21 @@ impl Computer {
         input: Option<&[u8]>,
         limit: usize,
     ) -> Result<Vec<u8>, String> {
-        run_helper(&self.root, program, args, input, limit, TIMEOUT).await
+        run_helper_in(
+            &self.root,
+            program,
+            args,
+            input,
+            limit,
+            TIMEOUT,
+            self.environment.as_ref(),
+        )
+        .await
+    }
+    fn release_guard(&self, program: &str, args: Vec<String>) -> Result<ReleaseGuard, String> {
+        let mut guard = ReleaseGuard::new(program, args, &self.releases)?;
+        guard.environment = self.environment.clone();
+        Ok(guard)
     }
     async fn text(&self, program: &str, args: &[&str]) -> Result<String, String> {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -551,11 +626,25 @@ impl Computer {
             }
             Session::X11 => {
                 let props = self.text("xprop", &["-root", "_NET_CLIENT_LIST"]).await?;
-                let ids: Vec<_> = props
-                    .split([' ', ',', '\n'])
-                    .filter(|p| p.starts_with("0x"))
-                    .take(101)
-                    .collect();
+                let fallback;
+                let ids: Vec<_> = if self.environment.is_some() && !props.contains("0x") {
+                    // Xvfb can run without a window manager or EWMH root properties.
+                    fallback = self
+                        .text("xdotool", &["search", "--onlyvisible", "--name", "."])
+                        .await
+                        .unwrap_or_default();
+                    fallback
+                        .split_whitespace()
+                        .filter(|p| valid_window_id(p))
+                        .take(101)
+                        .collect()
+                } else {
+                    props
+                        .split([' ', ',', '\n'])
+                        .filter(|p| p.starts_with("0x"))
+                        .take(101)
+                        .collect()
+                };
                 let mut windows = Vec::new();
                 for id in ids.iter().take(100) {
                     if !valid_window_id(id) {
@@ -637,8 +726,12 @@ impl Computer {
                 })??;
             }
             Session::X11 => {
-                self.text("xdotool", &["windowactivate", "--sync", id])
-                    .await?;
+                let action = if self.environment.is_some() {
+                    "windowfocus"
+                } else {
+                    "windowactivate"
+                };
+                self.text("xdotool", &[action, "--sync", id]).await?;
             }
             _ => return Err("Window focus requires Hyprland or X11".into()),
         }
@@ -714,7 +807,7 @@ impl Computer {
         } else {
             return Err("No desktop input session is available".into());
         };
-        let mut guard = ReleaseGuard::new(program, release.clone(), &self.releases)?;
+        let mut guard = self.release_guard(program, release.clone())?;
         let outcome = self.run(program, &args, None, TEXT_LIMIT).await;
         if outcome.is_ok() || self.run(program, &release, None, TEXT_LIMIT).await.is_ok() {
             guard.disarm();
@@ -756,7 +849,7 @@ impl Computer {
             return Err("Dragging requires Hyprland or X11".into());
         };
         self.move_pointer(v.path[0]).await?;
-        let mut guard = ReleaseGuard::new(program, up.clone(), &self.releases)?;
+        let mut guard = self.release_guard(program, up.clone())?;
         let outcome = async {
             self.run(program, &down, None, TEXT_LIMIT).await?;
             for p in &v.path[1..] {
@@ -802,11 +895,8 @@ impl Computer {
                 let mut chord = v.modifiers.clone();
                 chord.push(v.key);
                 let chord = chord.join("+");
-                let mut guard = ReleaseGuard::new(
-                    "xdotool",
-                    vec!["keyup".into(), chord.clone()],
-                    &self.releases,
-                )?;
+                let mut guard =
+                    self.release_guard("xdotool", vec!["keyup".into(), chord.clone()])?;
                 let outcome = self
                     .text("xdotool", &["key", "--clearmodifiers", &chord])
                     .await;
@@ -1145,6 +1235,7 @@ fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Err("JPEG dimensions are missing".into())
 }
 
+#[cfg(any(test, target_os = "macos"))]
 async fn run_helper(
     root: &std::path::Path,
     program: &str,
@@ -1153,8 +1244,23 @@ async fn run_helper(
     limit: usize,
     deadline: Duration,
 ) -> Result<Vec<u8>, String> {
+    run_helper_in(root, program, args, input, limit, deadline, None).await
+}
+
+async fn run_helper_in(
+    root: &std::path::Path,
+    program: &str,
+    args: &[String],
+    input: Option<&[u8]>,
+    limit: usize,
+    deadline: Duration,
+    environment: Option<&isolated::Environment>,
+) -> Result<Vec<u8>, String> {
     let executable = crate::program::executable(program)?;
     let mut command = tokio::process::Command::new(executable);
+    if let Some(environment) = environment {
+        environment.apply(command.as_std_mut());
+    }
     command
         .args(args)
         .current_dir(root)
@@ -1229,7 +1335,13 @@ struct ReleaseState {
 }
 
 impl ReleaseTasks {
-    fn start(self: &Arc<Self>, program: PathBuf, args: Vec<String>, deadline: Duration) {
+    fn start(
+        self: &Arc<Self>,
+        program: PathBuf,
+        args: Vec<String>,
+        deadline: Duration,
+        environment: Option<isolated::Environment>,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         // Keep the tracker alive even if a failed shutdown drops the Computer.
         // A task is complete only after its owned helper has actually been reaped.
@@ -1237,7 +1349,7 @@ impl ReleaseTasks {
         match std::thread::Builder::new()
             .name("ssmcp-input-release".into())
             .spawn(move || {
-                let result = release_helper(program, args, deadline);
+                let result = release_helper(program, args, deadline, environment);
                 drop(keepalive);
                 result
             }) {
@@ -1282,8 +1394,17 @@ impl ReleaseTasks {
     }
 }
 
-fn release_helper(program: PathBuf, args: Vec<String>, deadline: Duration) -> Result<(), String> {
-    let mut child = std::process::Command::new(program)
+fn release_helper(
+    program: PathBuf,
+    args: Vec<String>,
+    deadline: Duration,
+    environment: Option<isolated::Environment>,
+) -> Result<(), String> {
+    let mut command = std::process::Command::new(program);
+    if let Some(environment) = environment {
+        environment.apply(&mut command);
+    }
+    let mut child = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1333,6 +1454,7 @@ struct ReleaseGuard {
     armed: bool,
     releases: Arc<ReleaseTasks>,
     deadline: Duration,
+    environment: Option<isolated::Environment>,
 }
 impl ReleaseGuard {
     fn new(program: &str, args: Vec<String>, releases: &Arc<ReleaseTasks>) -> Result<Self, String> {
@@ -1342,6 +1464,7 @@ impl ReleaseGuard {
             armed: true,
             releases: releases.clone(),
             deadline: RELEASE_HELPER_TIMEOUT,
+            environment: None,
         })
     }
     fn disarm(&mut self) {
@@ -1351,8 +1474,12 @@ impl ReleaseGuard {
 impl Drop for ReleaseGuard {
     fn drop(&mut self) {
         if self.armed {
-            self.releases
-                .start(self.executable.clone(), self.args.clone(), self.deadline);
+            self.releases.start(
+                self.executable.clone(),
+                self.args.clone(),
+                self.deadline,
+                self.environment.clone(),
+            );
         }
     }
 }
@@ -1499,6 +1626,8 @@ mod tests {
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            environment: None,
+            isolated: Mutex::new(None),
         };
         assert!(
             computer
@@ -1616,6 +1745,7 @@ if events.read_text().count("keyup\n") == 1:
                 ],
                 armed: true,
                 releases: computer.releases.clone(),
+                environment: computer.environment.clone(),
                 deadline: Duration::from_secs(10),
             }
         }
@@ -1766,10 +1896,15 @@ if root.exists():
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            environment: None,
+            isolated: Mutex::new(None),
         };
         let start = std::time::Instant::now();
         let outcome = computer
-            .perform("ssmcp.computer.focus", json!({"window_id":"0x123"}))
+            .perform(
+                "ssmcp.computer.focus",
+                json!({"window_id":"0x123","desktop":"host"}),
+            )
             .await;
         match case.as_str() {
             "immediate" | "delayed" => {

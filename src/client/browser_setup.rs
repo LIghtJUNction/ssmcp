@@ -298,17 +298,23 @@ fn extension_summary(observed: &Value) -> Value {
 }
 
 fn isolated_desktop() -> Value {
-    let tools: serde_json::Map<String, Value> =
-        ["Xvfb", "xdotool", "magick", "xprop", "dbus-run-session"]
-            .into_iter()
-            .map(|name| {
-                let path = crate::program::executable(name).ok();
-                (
-                    name.to_owned(),
-                    json!({"installed":path.is_some(),"path":path}),
-                )
-            })
-            .collect();
+    let tools: serde_json::Map<String, Value> = [
+        "Xvfb",
+        "xdotool",
+        "magick",
+        "xprop",
+        "dbus-run-session",
+        "dbus-daemon",
+    ]
+    .into_iter()
+    .map(|name| {
+        let path = crate::program::executable(name).ok();
+        (
+            name.to_owned(),
+            json!({"installed":path.is_some(),"path":path}),
+        )
+    })
+    .collect();
     let ready = cfg!(target_os = "linux") && tools.values().all(|v| v["installed"] == true);
     json!({"supported":cfg!(target_os = "linux"),"ready":ready,"programs":tools})
 }
