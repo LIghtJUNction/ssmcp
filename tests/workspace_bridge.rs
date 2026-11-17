@@ -1,4 +1,6 @@
 //! Real system rsync and loopback TCP through authenticated HTTP code_mode calls.
+#![cfg(target_os = "linux")]
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use ssmcp::{
