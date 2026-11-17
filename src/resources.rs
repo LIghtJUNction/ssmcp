@@ -24,6 +24,12 @@ request discovers current native tools. Each client retains at most four snapsho
 a 15-minute absolute maximum age. Calls still validate the current provider and registration. \
 Restart listing without a cursor if a snapshot expires or is evicted. \
 Do not invent tool names or backend arguments.\n\n\
+For multiple agents sharing one client, call the direct collab tool with action join and client_id. \
+Save its agent_id and private token, discover peers with list, send JSON payloads to an agent_id or '*' \
+and receive with wait_ms up to 30000. Receive is non-destructive; ack through next_cursor only after \
+processing the returned messages. Direct waits do not occupy code_mode workers. The collab.* helpers \
+inside code_mode accept clientId first and limit receive waits to 1000ms. Read ssmcp://collaboration \
+for identity binding, retry deduplication, queue bounds and the connection lifetime.\n\n\
 Use tools.search(clientId,{query:'browser',limit:20}) in code_mode for a focused lookup. It returns registered names, routing namespaces, short descriptions and nextCursor. Set include_schemas:true for complete native descriptors unchanged. Continue with the same client, query, limit and schema mode; restart if a cursor expires or a resumed page changes. Search retains native catalog snapshot semantics and checks authorization on every page. It reduces model-visible output and manual pagination, not the first native page scan.\n\n\
 New clients always provide a shell and automatically discover installed Codex, Claude Code, \
 Pi, OpenCode and Playwright MCP tools. ssmcp.harnesses.list reports status and registered tool counts.\n\n\
@@ -217,6 +223,12 @@ pub async fn list(
             "application/json",
         ),
         descriptor(
+            "ssmcp://collaboration".into(),
+            "Session agent collaboration".into(),
+            "Discover peers, exchange private or broadcast messages, acknowledge delivery and manage participant leases.",
+            "text/markdown",
+        ),
+        descriptor(
             "ssmcp://skill".into(),
             "ssmcp skill".into(),
             "The project-provided usage skill, embedded in this server build.",
@@ -332,6 +344,7 @@ fn limits() -> Value {
             "execution_location":"ssmcp server isolated process",
             "caller_workspace_access":"requires an explicit connected bridge"
         },
+        "collaboration":crate::collab::limits(),
         "managed_workspaces":{
             "max_active_syncs":crate::bridge::MAX_ACTIVE_SYNCS,
             "max_active_ports":crate::bridge::MAX_ACTIVE_PORTS,
@@ -342,6 +355,7 @@ fn limits() -> Value {
                 "tools.search","fs","fs.readText","fs.writeText","fs.editText",
                 "context.roots","skills.list","skills.read","skills.view",
                 "agents.list","agents.read","agents.resolve",
+                "collab.join","collab.list","collab.update","collab.send","collab.receive","collab.ack","collab.leave",
                 "rsync","sync","jobs","ports","resources","reload","outputs",
                 "cua","cua.browser","terminal.open","terminal.list","terminal.select","terminal.close",
                 "terminal.read","terminal.write","terminal.status","terminal.resize",
@@ -449,7 +463,7 @@ fn limits() -> Value {
             "observation":"fresh snapshot per read"
         },
         "backends":["shell","codex","cc","pi","opencode"],
-        "public_tools":["list","code_mode"]
+        "public_tools":["list","code_mode","collab"]
     })
 }
 
@@ -703,6 +717,11 @@ pub async fn read(
     match base {
         "ssmcp://guide" => content(uri, "text/markdown", GUIDE.into()),
         "ssmcp://limits" => json_content(uri, limits()),
+        "ssmcp://collaboration" => content(
+            uri,
+            "text/markdown",
+            include_str!("../docs/agent-collaboration.md").into(),
+        ),
         "ssmcp://skill" => content(
             uri,
             "text/markdown",
@@ -762,6 +781,7 @@ mod tests {
         for uri in [
             "ssmcp://guide",
             "ssmcp://limits",
+            "ssmcp://collaboration",
             "ssmcp://skill",
             "ssmcp://clients",
         ] {
@@ -902,6 +922,9 @@ mod tests {
             .is_err()
         );
         assert_eq!(limits()["resources"]["subscribe"], false);
-        assert_eq!(limits()["public_tools"], json!(["list", "code_mode"]));
+        assert_eq!(
+            limits()["public_tools"],
+            json!(["list", "code_mode", "collab"])
+        );
     }
 }

@@ -566,7 +566,7 @@ async fn two_public_tools_cover_every_backend_with_native_discovery_and_javascri
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["list", "code_mode"]);
+        assert_eq!(names, ["list", "code_mode", "collab"]);
     }
     let inventory = server.call("list", json!({})).await;
     let clients = inventory["clients"].as_array().unwrap();
