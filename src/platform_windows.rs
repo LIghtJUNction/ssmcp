@@ -11,7 +11,7 @@ use std::{
     path::Path,
 };
 use windows_sys::Win32::{
-    Foundation::{ERROR_ALREADY_EXISTS, LocalFree},
+    Foundation::{ERROR_ALREADY_EXISTS, ERROR_LOCK_VIOLATION, LocalFree},
     Security::{
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
         Authorization::{
@@ -283,7 +283,14 @@ pub(crate) fn lock(file: &File, nonblocking: bool) -> io::Result<()> {
             0
         };
     if unsafe { LockFileEx(file.as_raw_handle(), flags, 0, 1, 0, &mut overlap) } == 0 {
-        Err(io::Error::last_os_error())
+        let error = io::Error::last_os_error();
+        // Match flock's nonblocking contention contract. Other errors must
+        // remain errors: a permissions/I/O failure is not proof of a held lease.
+        if nonblocking && error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+            Err(io::Error::new(io::ErrorKind::WouldBlock, error))
+        } else {
+            Err(error)
+        }
     } else {
         Ok(())
     }

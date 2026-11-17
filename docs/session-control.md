@@ -1,5 +1,7 @@
 # 客户端会话、重连与输出管理
 
+需要持久系统服务、原子新建/重启/关闭，以及 `ssmcp attach [NAME]`，请先阅读[常驻服务与 attach](session-service.md)。本页保留旧 native 后台模式、重连及输出转储的完整说明。
+
 本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具仍是 `list` 和 `code_mode`；`reload`、`outputs` 是 `code_mode` 内的 JavaScript 原语，`ssmcp sessions` 是在客户端机器运行的本地管理命令。
 
 ## 用标题说明本次任务
@@ -99,7 +101,7 @@ ssmcp sessions status workstation --json
 
 ### 平台、状态与版本
 
-后台功能使用已存在的用户管理器，不自动安装服务管理器、不启用系统启动或用户登录触发，也不配置 Linux linger。用户注销后的存活范围取决于现有管理器和登录会话。
+本节表格描述旧 native 后台模式：没有运行常驻管理服务时，`--daemon` 仍使用已存在的用户管理器，不自动启用系统启动、登录触发或 Linux linger。已安装常驻 `ssmcp` 服务时，新会话由它托管并按保存的运行意图恢复；两种管理类型在状态中明确区分。持久定义与平台 scope 见[平台服务说明](client-service-platforms.md)。
 
 | 平台 | 原生后台管理 | 启用 watchdog 后的进程崩溃恢复 |
 | --- | --- | --- |

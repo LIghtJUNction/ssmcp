@@ -1,7 +1,16 @@
-//! Explicit, per-user native background sessions. No process detaches itself.
+//! Saved per-user sessions, supervised by one persistent service or a legacy
+//! native session definition. No client process detaches itself.
 //!
 //! The native manager owns process lifetime; the client owns reconnect policy
 //! and connection-scoped tools/tasks. A saved session is not a persistent task.
+pub mod attach;
+pub mod control;
+pub mod install;
+pub(crate) mod ipc;
+pub mod service;
+#[cfg(windows)]
+pub mod windows_service;
+
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -38,6 +47,8 @@ pub struct SessionSpec {
 #[serde(deny_unknown_fields)]
 struct Manifest {
     format: u32,
+    #[serde(default)]
+    supervised: bool,
     spec: SessionSpec,
     executable_sha256: String,
     version: String,
@@ -55,6 +66,8 @@ struct Observation {
     error: Option<Value>,
     pid: u32,
     observed_at: u64,
+    #[serde(default)]
+    generation: Option<String>,
 }
 
 #[derive(Default)]
@@ -64,6 +77,17 @@ struct NativeStatus {
     pid: Option<u32>,
     exit_code: Option<i64>,
     started_at: Option<u64>,
+    generation: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunGeneration {
+    generation: String,
+    started_at: u64,
+    supervisor_pid: u32,
+    #[serde(default)]
+    service_epoch: String,
 }
 
 /// Held for the entire service process. The file lock prevents duplicate runners
@@ -72,6 +96,8 @@ pub struct Runner {
     manifest: Manifest,
     directory: PathBuf,
     _run_lock: File,
+    generation: Option<String>,
+    owner: Option<service::OwnerLease>,
 }
 
 impl Runner {
@@ -79,6 +105,21 @@ impl Runner {
         let root = session_root(false)?;
         let (directory, manifest) = load(&root, name)?;
         let lock = lock(&directory.join("run.lock"), true)?;
+        let (generation, owner) = if manifest.supervised {
+            let active: RunGeneration = read_json(&directory.join("generation.json"))?;
+            let inherited = std::env::var("SSMCP_SESSION_GENERATION")
+                .map_err(|_| "supervised session must be started by its service")?;
+            if inherited != active.generation
+                || inherited.len() != 32
+                || !inherited.bytes().all(|c| c.is_ascii_hexdigit())
+            {
+                return Err("session generation does not match its supervisor".into());
+            }
+            let owner = service::OwnerLease::start(root, active.service_epoch)?;
+            (Some(inherited), Some(owner))
+        } else {
+            (None, None)
+        };
         let image = executable(&directory);
         if checksum(&image)? != manifest.executable_sha256
             || checksum(&std::env::current_exe()?)? != manifest.executable_sha256
@@ -93,6 +134,8 @@ impl Runner {
             manifest,
             directory,
             _run_lock: lock,
+            generation,
+            owner,
         };
         if !runner.stop_requested() {
             runner.record("starting", 0, None, None, None)?;
@@ -100,11 +143,18 @@ impl Runner {
         Ok(runner)
     }
 
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
+
     pub fn spec(&self) -> &SessionSpec {
         &self.manifest.spec
     }
 
     pub fn stop_requested(&self) -> bool {
+        if self.owner.as_ref().is_some_and(service::OwnerLease::lost) {
+            return true;
+        }
         // Any unexpected filesystem error fails closed. A missing marker alone
         // means that an explicit start is still desired.
         match fs::symlink_metadata(self.directory.join("stop.requested")) {
@@ -168,6 +218,7 @@ impl Runner {
             }),
             pid: std::process::id(),
             observed_at: now,
+            generation: self.generation.clone(),
         };
         write_json(&self.directory.join("state.json"), &observation)?;
         append_log(&self.directory, &observation)?;
@@ -177,19 +228,37 @@ impl Runner {
 
 /// Create a new immutable session definition and ask the native user manager to
 /// start it. This does not claim that SSH or the broker handshake succeeded.
-pub async fn start(mut spec: SessionSpec) -> Result<Value> {
+pub async fn start(spec: SessionSpec) -> Result<Value> {
     validate_spec(&spec)?;
+    if service::available().await {
+        return service::request(json!({"op":"create","spec":spec})).await;
+    }
+    let root = session_root(true)?;
+    let _guard = lock(&root.join("manage.lock"), true)?;
+    native_available().await?;
+    let (directory, manifest) = prepare(&root, spec, false)?;
+    if let Err(error) = native_start(&directory, &manifest).await {
+        write_management_state(&directory, "disconnected", Some(&error.to_string()))?;
+        return Err(error);
+    }
+    status_from(&directory, &manifest).await
+}
+
+// Callers hold manage.lock until the definition is committed and start requested.
+fn prepare(root: &Path, mut spec: SessionSpec, supervised: bool) -> Result<(PathBuf, Manifest)> {
+    validate_spec(&spec)?;
+    crate::client::validate_session_spec(&spec)?;
     spec.cwd = spec.cwd.canonicalize()?;
     if !spec.cwd.is_dir() {
         return Err("session working directory is not a directory".into());
     }
-    let root = session_root(true)?;
-    let _guard = lock(&root.join("manage.lock"), true)?;
-    let directory = session_directory(&root, &spec.name);
+    let directory = session_directory(root, &spec.name);
     if directory.try_exists()? {
-        return Err("session already exists; use sessions start/restart, or remove it before changing its configuration".into());
+        return Err(
+            "session already exists; use start/restart or remove before changing its configuration"
+                .into(),
+        );
     }
-    native_available().await?;
     let temporary = root.join(format!(".prepare-{}", random_suffix()?));
     platform::private_directory(&temporary)?;
     let prepared = (|| -> Result<Manifest> {
@@ -209,10 +278,11 @@ pub async fn start(mut spec: SessionSpec) -> Result<Value> {
                 environment.insert(key.into(), value);
             }
         }
-        environment.insert("SSMCP_SESSION_HOME".into(), path_text(&root)?.into());
+        environment.insert("SSMCP_SESSION_HOME".into(), path_text(root)?.into());
         let manifest = Manifest {
             format: FORMAT,
-            manager_id: manager_id(&root, &spec.name),
+            supervised,
+            manager_id: manager_id(root, &spec.name),
             spec,
             executable_sha256,
             version: env!("CARGO_PKG_VERSION").into(),
@@ -230,12 +300,7 @@ pub async fn start(mut spec: SessionSpec) -> Result<Value> {
         }
     };
     fs::rename(&temporary, &directory)?;
-    if let Err(error) = native_start(&directory, &manifest).await {
-        // Keep the exact definition and failed lifecycle for status/retry.
-        write_management_state(&directory, "disconnected", Some(&error.to_string()))?;
-        return Err(error);
-    }
-    status_from(&directory, &manifest).await
+    Ok((directory, manifest))
 }
 
 pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
@@ -265,9 +330,9 @@ pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
         }
         return Ok(());
     }
-    let name = args
-        .get(1)
-        .ok_or("usage: ssmcp sessions status|start|stop|restart|logs|remove|auth NAME [--json]")?;
+    let name = args.get(1).ok_or(
+        "usage: ssmcp sessions status|start|close|stop|restart|logs|remove|auth NAME [--json]",
+    )?;
     validate_name(name)?;
     if operation == "logs" {
         let lines = match &args[2..] {
@@ -320,11 +385,11 @@ pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
     let value = match operation {
         "status" => status(name).await?,
         "start" => start_saved(name).await?,
-        "stop" => stop(name).await?,
+        "stop" | "close" => stop(name).await?,
         "restart" => restart(name).await?,
         "remove" => remove(name).await?,
         "auth" => auth(name).await?,
-        _ => return Err("unknown sessions command; expected list, status, start, stop, restart, logs, remove, or auth".into()),
+        _ => return Err("unknown sessions command; expected list, status, start, close, stop, restart, logs, remove, or auth".into()),
     };
     if json_output || matches!(operation, "status" | "auth") {
         println!("{}", serde_json::to_string_pretty(&value)?);
@@ -346,7 +411,7 @@ pub async fn list() -> Result<Vec<Value>> {
         }
         Err(error) => return Err(error),
     };
-    let mut values = Vec::new();
+    let mut definitions = Vec::new();
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -356,12 +421,55 @@ pub async fn list() -> Result<Vec<Value>> {
         {
             continue;
         }
-        if values.len() >= 1024 {
+        if definitions.len() >= 1024 {
             return Err("too many saved sessions to enumerate safely".into());
         }
         let manifest: Manifest = read_json(&entry.path().join("manifest.json"))?;
         let (directory, manifest) = load(&root, &manifest.spec.name)?;
-        values.push(status_from(&directory, &manifest).await?);
+        definitions.push((directory, manifest));
+    }
+    // One authenticated snapshot avoids one bounded IPC round trip per saved
+    // session, including when the supervisor is unavailable.
+    let supervised = if definitions.iter().any(|(_, manifest)| manifest.supervised) {
+        Some(service::request(json!({"op":"list"})).await)
+    } else {
+        None
+    };
+    let mut values = Vec::new();
+    for (directory, manifest) in definitions {
+        if manifest.supervised {
+            let managed = supervised
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .and_then(Value::as_array)
+                .and_then(|entries| {
+                    entries
+                        .iter()
+                        .find(|entry| entry["name"] == manifest.spec.name)
+                });
+            if let Some(value) = managed {
+                values.push(value.clone());
+            } else {
+                let error = supervised
+                    .as_ref()
+                    .and_then(|result| result.as_ref().err())
+                    .map_or_else(
+                        || "supervisor did not return this saved session".into(),
+                        ToString::to_string,
+                    );
+                values.push(status_observed(
+                    &directory,
+                    &manifest,
+                    NativeStatus {
+                        state: "unavailable".into(),
+                        ..Default::default()
+                    },
+                    Some(error),
+                )?);
+            }
+        } else {
+            values.push(status_from(&directory, &manifest).await?);
+        }
     }
     values.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     Ok(values)
@@ -375,8 +483,18 @@ pub async fn status(name: &str) -> Result<Value> {
 
 pub async fn start_saved(name: &str) -> Result<Value> {
     let root = session_root(false)?;
+    if load(&root, name)?.1.supervised {
+        return service::request(json!({"op":"start","name":name})).await;
+    }
     let _guard = lock(&root.join("manage.lock"), true)?;
     let (directory, manifest) = load(&root, name)?;
+    // The definition may have been replaced while this caller acquired the
+    // management lock. Route the definition loaded under that lock, releasing
+    // it before IPC so the supervisor can perform its serialized operation.
+    if manifest.supervised {
+        drop(_guard);
+        return service::request(json!({"op":"start","name":name})).await;
+    }
     if native_status(&manifest).await?.active {
         return Err("session is already running".into());
     }
@@ -392,16 +510,36 @@ pub async fn start_saved(name: &str) -> Result<Value> {
 
 pub async fn stop(name: &str) -> Result<Value> {
     let root = session_root(false)?;
+    if load(&root, name)?.1.supervised {
+        return service::request(json!({"op":"close","name":name})).await;
+    }
     let _guard = lock(&root.join("manage.lock"), true)?;
     let (directory, manifest) = load(&root, name)?;
+    // The definition may have been replaced while this caller acquired the
+    // management lock. Route the definition loaded under that lock, releasing
+    // it before IPC so the supervisor can perform its serialized operation.
+    if manifest.supervised {
+        drop(_guard);
+        return service::request(json!({"op":"close","name":name})).await;
+    }
     stop_loaded(&directory, &manifest).await?;
     status_from(&directory, &manifest).await
 }
 
 pub async fn restart(name: &str) -> Result<Value> {
     let root = session_root(false)?;
+    if load(&root, name)?.1.supervised {
+        return service::request(json!({"op":"restart","name":name})).await;
+    }
     let _guard = lock(&root.join("manage.lock"), true)?;
     let (directory, manifest) = load(&root, name)?;
+    // The definition may have been replaced while this caller acquired the
+    // management lock. Route the definition loaded under that lock, releasing
+    // it before IPC so the supervisor can perform its serialized operation.
+    if manifest.supervised {
+        drop(_guard);
+        return service::request(json!({"op":"restart","name":name})).await;
+    }
     stop_loaded(&directory, &manifest).await?;
     verify_snapshot(&directory, &manifest)?;
     remove_file(&directory.join("stop.requested"))?;
@@ -412,8 +550,18 @@ pub async fn restart(name: &str) -> Result<Value> {
 
 pub async fn remove(name: &str) -> Result<Value> {
     let root = session_root(false)?;
+    if load(&root, name)?.1.supervised {
+        return service::request(json!({"op":"remove","name":name})).await;
+    }
     let _guard = lock(&root.join("manage.lock"), true)?;
     let (directory, manifest) = load(&root, name)?;
+    // The definition may have been replaced while this caller acquired the
+    // management lock. Route the definition loaded under that lock, releasing
+    // it before IPC so the supervisor can perform its serialized operation.
+    if manifest.supervised {
+        drop(_guard);
+        return service::request(json!({"op":"remove","name":name})).await;
+    }
     stop_loaded(&directory, &manifest).await?;
     native_remove(&manifest).await?;
     // Opening the lock verifies no late runner remains. Close before removing it
@@ -431,6 +579,12 @@ pub async fn logs(name: &str, count: usize) -> Result<Value> {
     let root = session_root(false)?;
     let (directory, manifest) = load(&root, name)?;
     let limit = count.clamp(1, 1000);
+    if manifest.supervised {
+        return Ok(json!({"source":"lifecycle","fallback":false,
+            "coverage":"lifecycle_only","events":lifecycle_logs(&directory,limit)?,
+            "limit":limit,"truncated":false,
+            "warning":"Lifecycle observations only; attach to the running session for live tool and terminal output."}));
+    }
     #[cfg(target_os = "linux")]
     {
         let unit = format!("{}.service", manifest.manager_id);
@@ -596,6 +750,20 @@ async fn stop_loaded(directory: &Path, manifest: &Manifest) -> Result<()> {
 }
 
 async fn status_from(directory: &Path, manifest: &Manifest) -> Result<Value> {
+    if manifest.supervised {
+        return match service::request(json!({"op":"status","name":manifest.spec.name})).await {
+            Ok(status) => Ok(status),
+            Err(error) => status_observed(
+                directory,
+                manifest,
+                NativeStatus {
+                    state: "unavailable".into(),
+                    ..Default::default()
+                },
+                Some(error.to_string()),
+            ),
+        };
+    }
     let (native, manager_error) = match native_status(manifest).await {
         Ok(status) => (status, None),
         Err(error) => (
@@ -606,6 +774,15 @@ async fn status_from(directory: &Path, manifest: &Manifest) -> Result<Value> {
             Some(error.to_string()),
         ),
     };
+    status_observed(directory, manifest, native, manager_error)
+}
+
+fn status_observed(
+    directory: &Path,
+    manifest: &Manifest,
+    native: NativeStatus,
+    manager_error: Option<String>,
+) -> Result<Value> {
     let state = match read_json::<Observation>(&directory.join("state.json")) {
         Ok(state) => state,
         Err(error)
@@ -618,10 +795,13 @@ async fn status_from(directory: &Path, manifest: &Manifest) -> Result<Value> {
         Err(error) => return Err(error),
     };
     let stopped = directory.join("stop.requested").try_exists()?;
-    let observation_matches = native.pid.is_none_or(|pid| pid == state.pid)
-        && native
-            .started_at
-            .is_none_or(|started| state.observed_at >= started);
+    let observation_matches = (if manifest.supervised {
+        native.generation.is_some() && native.generation == state.generation
+    } else {
+        native.pid.is_none_or(|pid| pid == state.pid)
+    }) && native
+        .started_at
+        .is_none_or(|started| state.observed_at >= started);
     // Activating/queued/auto-restart is still owned by the manager, but is not
     // evidence that the previous connection survived a crash. Unix managers
     // also identify the current main process; it must match this observation.
@@ -640,7 +820,9 @@ async fn status_from(directory: &Path, manifest: &Manifest) -> Result<Value> {
         "unknown"
     };
     Ok(json!({
-        "name":manifest.spec.name, "cwd":manifest.spec.cwd, "manager":manager_name(),
+        "name":manifest.spec.name, "cwd":manifest.spec.cwd,
+        "manager":if manifest.supervised { "ssmcp-service" } else { manager_name() },
+        "supervised":manifest.supervised, "generation":native.generation,
         "manager_id":manifest.manager_id, "manager_state":native.state, "manager_active":native.active,
         "manager_pid":native.pid, "manager_exit_code":native.exit_code, "manager_error":manager_error,
         "connection_state":connection_state, "connection":if connected { state.connection } else { None },
@@ -648,9 +830,10 @@ async fn status_from(directory: &Path, manifest: &Manifest) -> Result<Value> {
         "phase_observed_at":state.observed_at, "attempt":state.attempt,
         "retry_after_secs":state.retry_after_secs, "last_error":state.error, "stop_requested":stopped,
         "watchdog":manifest.spec.watchdog, "reconnect_delay_secs":manifest.spec.reconnect_delay_secs,
-        "native_crash_restart_delay_secs":if manifest.spec.watchdog { Some(native_restart_delay(manifest)) } else { None },
-        "native_crash_restart_limit":if cfg!(windows) && manifest.spec.watchdog { Some(255) } else { None },
-        "automatic_login_start":false, "scope":if cfg!(windows) || cfg!(target_os="macos") { "current_logged_in_user" } else { "current_user_manager" },
+        "native_crash_restart_delay_secs":if manifest.spec.watchdog { Some(if manifest.supervised { manifest.spec.reconnect_delay_secs } else { native_restart_delay(manifest) }) } else { None },
+        "native_crash_restart_limit":if !manifest.supervised && cfg!(windows) && manifest.spec.watchdog { Some(255) } else { None },
+        "automatic_login_start":if manifest.supervised { None } else { Some(false) },
+        "scope":if manifest.supervised { "current_user_service" } else if cfg!(windows) || cfg!(target_os="macos") { "current_logged_in_user" } else { "current_user_manager" },
         "version":manifest.version, "executable_sha256":manifest.executable_sha256,
         "created_at":manifest.created_at, "state_directory":directory,
         "logs_path":directory.join("lifecycle.jsonl"),
@@ -1302,6 +1485,7 @@ async fn native_status(manifest: &Manifest) -> Result<NativeStatus> {
                 .get("ExecMainStatus")
                 .and_then(|v| v.parse().ok()),
             started_at: None,
+            generation: None,
         })
     }
     #[cfg(target_os = "macos")]
@@ -1339,6 +1523,7 @@ async fn native_status(manifest: &Manifest) -> Result<NativeStatus> {
             pid,
             exit_code: property("last exit code = ").and_then(|v| v.parse().ok()),
             started_at: None,
+            generation: None,
         })
     }
     #[cfg(windows)]
@@ -1362,6 +1547,7 @@ async fn native_status(manifest: &Manifest) -> Result<NativeStatus> {
             pid: None,
             exit_code: output["exit_code"].as_i64(),
             started_at: output["started_at"].as_u64(),
+            generation: None,
         })
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -1527,6 +1713,7 @@ mod tests {
         let spec = spec();
         Manifest {
             format: FORMAT,
+            supervised: false,
             manager_id: manager_id(root, &spec.name),
             spec,
             executable_sha256: "fixture".into(),
@@ -1604,6 +1791,8 @@ mod tests {
             manifest: manifest(&directory),
             _run_lock: lock(&directory.join("run.lock"), true).unwrap(),
             directory: directory.clone(),
+            generation: None,
+            owner: None,
         };
         runner
             .record(
@@ -1650,6 +1839,8 @@ mod tests {
             manifest: manifest(&directory),
             _run_lock: lock(&directory.join("run.lock"), true).unwrap(),
             directory: directory.clone(),
+            generation: None,
+            owner: None,
         };
         runner
             .record(

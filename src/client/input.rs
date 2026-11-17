@@ -147,7 +147,7 @@ async fn resize(terminals: &Terminals, rows: u16, cols: u16) -> Result<(), Strin
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum InputEvent {
+pub(crate) enum InputEvent {
     Text(String),
     NextTerminal,
 }
@@ -155,14 +155,14 @@ enum InputEvent {
 /// Preserve ordering around F7 even when one stdin read contains input for two
 /// terminals. Paste markers stay in the stream for the existing F6 handler.
 #[derive(Default)]
-struct SessionKeys {
+pub(crate) struct SessionKeys {
     pending: Vec<u8>,
     since: Option<Instant>,
     pasting: bool,
 }
 
 impl SessionKeys {
-    fn feed(&mut self, text: &str, now: Instant, flush: bool) -> Vec<InputEvent> {
+    pub(crate) fn feed(&mut self, text: &str, now: Instant, flush: bool) -> Vec<InputEvent> {
         const NEXT: &[u8] = b"\x1b[18~";
         const PASTE_START: &[u8] = b"\x1b[200~";
         const PASTE_END: &[u8] = b"\x1b[201~";

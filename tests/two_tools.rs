@@ -1,5 +1,7 @@
 //! Exercise the public HTTP boundary with bounded, deterministic wire clients.
 //! Native adapter protocols are covered by the backend-specific test suites.
+#![cfg(target_os = "linux")]
+
 use serde_json::{Value, json};
 use ssmcp::{
     broker::Broker,

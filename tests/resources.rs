@@ -1,4 +1,6 @@
 //! Resource discovery, schema pagination and authorization at the public HTTP boundary.
+#![cfg(target_os = "linux")]
+
 use serde_json::{Value, json};
 use ssmcp::{
     broker::Broker,
