@@ -369,8 +369,15 @@ def release(tag, root=None):
             subprocess.run(["gh", "release", "create", tag, "--repo", repository, "--verify-tag",
                             "--draft", "--title", tag, "--notes-file", str(notes)], cwd=root, check=True)
         metadata = find_release(repository, tag, root)
+        # Creation can precede listing visibility; retry reads, never creation.
+        for delay in (1, 2, 4, 8):
+            if metadata is not None:
+                break
+            time.sleep(delay)
+            metadata = find_release(repository, tag, root)
         if metadata is None:
-            raise RuntimeError(f"created draft for {tag} is not visible in the authenticated releases list")
+            raise RuntimeError(f"created draft for {tag} is not visible in the authenticated releases list; "
+                               "draft retained: retry this tag's release job to resume")
     # Keep the resolved identity throughout upload and verification; a draft is
     # intentionally not available through /releases/tags/<tag> yet.
     endpoint = f"repos/{repository}/releases/{metadata['id']}"
