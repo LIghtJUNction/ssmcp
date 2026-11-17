@@ -501,7 +501,10 @@ impl Options {
         let mut args = vec![OsString::from("--name"), OsString::from(&metadata.name)];
         for (flag, value) in [("-i", &self.identity), ("-F", &self.config)] {
             if let Some(value) = value {
-                args.extend([OsString::from(flag), std::path::absolute(value)?.into_os_string()]);
+                args.extend([
+                    OsString::from(flag),
+                    std::path::absolute(value)?.into_os_string(),
+                ]);
             }
         }
         if let Some(port) = self.port {
@@ -619,7 +622,10 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
         || !spec.cwd.is_absolute()
         || !spec.cwd.is_dir()
     {
-        return Err("saved session arguments do not match its name, working directory or reconnect policy".into());
+        return Err(
+            "saved session arguments do not match its name, working directory or reconnect policy"
+                .into(),
+        );
     }
     Ok(())
 }
@@ -644,6 +650,9 @@ pub(crate) fn child_session_spec(
     if reconnect_delay_secs.is_some() && !options.watchdog {
         return Err("reconnect_delay_secs requires watchdog=true".into());
     }
+    if !options.watchdog {
+        options.reconnect_delay_secs = 5;
+    }
     if !(1..=3600).contains(&options.reconnect_delay_secs) {
         return Err("reconnect delay must be 1–3600 seconds".into());
     }
@@ -661,7 +670,11 @@ fn session_control(
     if !options.session_control {
         return Ok(None);
     }
-    let template = options.destination.as_ref().map(|_| options.session_spec()).transpose()?;
+    let template = options
+        .destination
+        .as_ref()
+        .map(|_| options.session_spec())
+        .transpose()?;
     Ok(Some(crate::session::control::Control::new(
         std::env::current_dir()?,
         template,
@@ -670,13 +683,22 @@ fn session_control(
 }
 
 async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
-    if args.first().is_some_and(|arg| arg == "--help" || arg == "-h") {
-        println!("Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help for SSH options.");
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--help" || arg == "-h")
+    {
+        println!(
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help for SSH options."
+        );
         return Ok(());
     }
     let mut args = args.into_iter();
-    let name = args.next().and_then(|value| value.into_string().ok())
-        .ok_or("usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST")?;
+    let name = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or(
+            "usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST",
+        )?;
     let mut cwd = std::env::current_dir()?;
     let mut json_output = false;
     let mut connection = vec![OsString::from("--name"), OsString::from(&name)];
@@ -692,7 +714,9 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
             _ => connection.push(arg),
         }
     }
-    let Some(options) = Options::parse(connection)? else { return Ok(()); };
+    let Some(options) = Options::parse(connection)? else {
+        return Ok(());
+    };
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
     validate_session_spec(&spec)?;
@@ -701,15 +725,33 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         println!("Created session {name}. Attach: ssmcp attach {name}");
-        println!("Process: {} · Connection: {}", result["manager_state"].as_str().unwrap_or("starting"), result["connection_state"].as_str().unwrap_or("unknown"));
+        println!(
+            "Process: {} · Connection: {}",
+            result["manager_state"].as_str().unwrap_or("starting"),
+            result["connection_state"].as_str().unwrap_or("unknown")
+        );
     }
     Ok(())
 }
 
 fn connection_option_takes_value(option: &str) -> bool {
-    matches!(option, "--name" | "--title" | "--allow" | "--context-root" | "--portal"
-        | "--reconnect-delay" | "--log-format" | "--ui-config" | "--theme"
-        | "--max-inline-output" | "-i" | "-p" | "-F" | "--shell")
+    matches!(
+        option,
+        "--name"
+            | "--title"
+            | "--allow"
+            | "--context-root"
+            | "--portal"
+            | "--reconnect-delay"
+            | "--log-format"
+            | "--ui-config"
+            | "--theme"
+            | "--max-inline-output"
+            | "-i"
+            | "-p"
+            | "-F"
+            | "--shell"
+    )
 }
 
 fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
@@ -930,7 +972,15 @@ pub async fn run() -> crate::Result<()> {
             runner.record("starting", attempt, None, None, None)?;
         }
         let mut registered = false;
-        let result = match connect(&options, &ui, service.as_ref(), attachment.as_ref(), attempt, &mut registered).await
+        let result = match connect(
+            &options,
+            &ui,
+            service.as_ref(),
+            attachment.as_ref(),
+            attempt,
+            &mut registered,
+        )
+        .await
         {
             Ok(ConnectionExit::Reload { restart, output }) => {
                 // The ACK and broker receipt were sent before connect cleaned
@@ -1173,7 +1223,10 @@ async fn connect(
             return Err(error.into());
         }
     };
-    let _attachment_runtime = match attachment.map(|handle| handle.bind_runtime(backend.clone())).transpose() {
+    let _attachment_runtime = match attachment
+        .map(|handle| handle.bind_runtime(backend.clone()))
+        .transpose()
+    {
         Ok(binding) => binding,
         Err(error) => {
             let _ = ssh.start_kill();
@@ -1429,17 +1482,38 @@ mod tests {
 
     #[test]
     fn session_children_inherit_access_without_management_authority() {
-        let parent = Options::parse([
-            "--name", "manager", "--session-control", "--watchdog", "--allow", "octocat@github",
-            "-F", "relative-ssh-config", "work-server",
-        ].map(OsString::from)).unwrap().unwrap();
+        let parent = Options::parse(
+            [
+                "--name",
+                "manager",
+                "--session-control",
+                "--watchdog",
+                "--reconnect-delay",
+                "20",
+                "--allow",
+                "octocat@github",
+                "-F",
+                "relative-ssh-config",
+                "work-server",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
         let template = parent.session_spec().unwrap();
         assert!(template.args.iter().any(|arg| arg == "--session-control"));
         let child = child_session_spec(
-            &template, "worker".into(), std::env::current_dir().unwrap(),
-            Some("--help".into()), Some(true), Some(2),
-        ).unwrap();
-        let parsed = Options::parse(child.args.iter().map(OsString::from)).unwrap().unwrap();
+            &template,
+            "worker".into(),
+            std::env::current_dir().unwrap(),
+            Some("--help".into()),
+            Some(true),
+            Some(2),
+        )
+        .unwrap();
+        let parsed = Options::parse(child.args.iter().map(OsString::from))
+            .unwrap()
+            .unwrap();
         assert_eq!(parsed.allow, parent.allow);
         assert_eq!(parsed.destination, parent.destination);
         assert_eq!(parsed.title.as_deref(), Some("--help"));
@@ -1449,15 +1523,35 @@ mod tests {
         assert!(!parsed.daemon);
         assert_eq!(parsed.reconnect_delay_secs, 2);
         validate_session_spec(&child).unwrap();
-        assert!(child_session_spec(
-            &template, "worker".into(), std::env::current_dir().unwrap(),
-            None, Some(false), Some(2),
-        ).is_err());
+        let without_watchdog = child_session_spec(
+            &template,
+            "manual".into(),
+            std::env::current_dir().unwrap(),
+            None,
+            Some(false),
+            None,
+        )
+        .unwrap();
+        assert!(!without_watchdog.watchdog);
+        assert_eq!(without_watchdog.reconnect_delay_secs, 5);
+        assert!(
+            child_session_spec(
+                &template,
+                "worker".into(),
+                std::env::current_dir().unwrap(),
+                None,
+                Some(false),
+                Some(2),
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn service_runner_rejects_recursive_and_mismatched_manifests() {
-        let parent = Options::parse(["--name", "worker", "work-server"].map(OsString::from)).unwrap().unwrap();
+        let parent = Options::parse(["--name", "worker", "work-server"].map(OsString::from))
+            .unwrap()
+            .unwrap();
         let mut spec = parent.session_spec().unwrap();
         validate_session_spec(&spec).unwrap();
         spec.args.insert(0, "--daemon".into());

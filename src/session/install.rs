@@ -519,6 +519,40 @@ fn systemctl_args(options: &Options, operation: &str) -> Vec<String> {
     args
 }
 
+#[cfg(target_os = "linux")]
+async fn systemd_registration(options: &Options, required: bool) -> Result<bool> {
+    let mut query = systemctl_args(options, "show");
+    query.extend([
+        UNIT.into(),
+        "--property=LoadState,ActiveState,FragmentPath".into(),
+    ]);
+    let result = native("systemctl", &query, true).await?;
+    let output = String::from_utf8_lossy(&result.stdout);
+    let field = |name: &str| {
+        output
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .find_map(|(key, value)| (key == name).then_some(value))
+    };
+    if field("LoadState") == Some("not-found") {
+        return if required {
+            Err("ssmcp service is not installed".into())
+        } else {
+            Ok(false)
+        };
+    }
+    let fragment = field("FragmentPath").filter(|value| !value.is_empty()).ok_or(
+        "cannot inspect the native service registration; check the selected systemd manager before installing or controlling it"
+    )?;
+    // A unit in /usr/lib or another search directory can own this name even
+    // when our target definition path is absent. Never shadow such a unit.
+    verify_owned_definition(Path::new(fragment))?;
+    Ok(matches!(
+        field("ActiveState"),
+        Some("active" | "activating" | "reloading" | "deactivating")
+    ))
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn manage_unix(options: &Options) -> Result<Value> {
     if options.password_stdin {
@@ -583,10 +617,19 @@ async fn manage_unix(options: &Options) -> Result<Value> {
         if options.dry_run {
             return Ok(plan);
         }
+        #[cfg(target_os = "linux")]
+        let was_running = systemd_registration(options, false).await?;
         write_definition(&definition_path, &definition, options.system)?;
         #[cfg(target_os = "linux")]
-        for command in commands {
-            native("systemctl", &command, false).await?;
+        {
+            for command in commands {
+                native("systemctl", &command, false).await?;
+            }
+            if was_running {
+                let mut restart = systemctl_args(options, "restart");
+                restart.push(UNIT.into());
+                native("systemctl", &restart, false).await?;
+            }
         }
         #[cfg(target_os = "macos")]
         {
@@ -610,6 +653,9 @@ async fn manage_unix(options: &Options) -> Result<Value> {
     }
     #[cfg(target_os = "linux")]
     {
+        if options.operation != "status" {
+            systemd_registration(options, true).await?;
+        }
         if options.operation == "uninstall" {
             verify_owned_definition(&definition_path)?;
             let mut disable = systemctl_args(options, "disable");

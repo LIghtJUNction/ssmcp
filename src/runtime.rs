@@ -172,7 +172,10 @@ impl Runtime {
         registry.replace(Provider::Output, OutputStore::tools())?;
         registry.replace(Provider::Reload, vec![crate::client::reload::tool()])?;
         if sessions.is_some() {
-            registry.replace(Provider::Sessions, crate::session::control::Control::tools())?;
+            registry.replace(
+                Provider::Sessions,
+                crate::session::control::Control::tools(),
+            )?;
         }
         registry.replace(Provider::Audit,vec![json!({
             "name":"ssmcp.audit.events",
@@ -305,7 +308,10 @@ impl Runtime {
                 .map(backend::result),
             Provider::Reload => Err("reload requires an acknowledged foreground connection".into()),
             Provider::Sessions => match &self.sessions {
-                Some(control) => control.perform(&tool.native_name, arguments).await.map(backend::result),
+                Some(control) => control
+                    .perform(&tool.native_name, arguments)
+                    .await
+                    .map(backend::result),
                 None => Err("session management was not granted with --session-control".into()),
             },
             Provider::Audit => self.audit.read(arguments).await.map(backend::result),

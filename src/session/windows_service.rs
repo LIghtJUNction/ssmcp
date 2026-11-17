@@ -92,8 +92,7 @@ unsafe extern "system" fn service_main(_count: u32, _args: *mut *mut u16) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        report(SERVICE_RUNNING, false);
-        runtime.block_on(super::service::run_with_shutdown(stop))
+        runtime.block_on(run_supervisor(stop))
     })
     .unwrap_or_else(|_| Err("client service supervisor panicked".into()));
     let failed = result.is_err();
@@ -101,6 +100,30 @@ unsafe extern "system" fn service_main(_count: u32, _args: *mut *mut u16) {
         *RUN_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(error.to_string());
     }
     report(SERVICE_STOPPED, failed);
+}
+
+async fn run_supervisor(stop: Arc<AtomicBool>) -> Result<()> {
+    let supervisor = super::service::run_with_shutdown(stop);
+    tokio::pin!(supervisor);
+    let readiness = async {
+        loop {
+            if super::service::available().await {
+                return;
+            }
+            report(SERVICE_START_PENDING, false);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    };
+    tokio::pin!(readiness);
+    tokio::select! {
+        biased;
+        result = &mut supervisor => result,
+        _ = &mut readiness => {
+            // SCM running means the supervisor can actually accept requests.
+            report(SERVICE_RUNNING, false);
+            supervisor.await
+        }
+    }
 }
 
 unsafe extern "system" fn control_handler(
@@ -130,7 +153,9 @@ fn report(mut state: u32, failed: bool) {
     if handle.is_null() {
         return;
     }
-    if state == SERVICE_RUNNING && STOP.get().is_some_and(|stop| stop.load(Ordering::Acquire)) {
+    if matches!(state, SERVICE_RUNNING | SERVICE_START_PENDING)
+        && STOP.get().is_some_and(|stop| stop.load(Ordering::Acquire))
+    {
         state = SERVICE_STOP_PENDING;
     }
     STATE.store(state, Ordering::Release);

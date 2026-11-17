@@ -855,7 +855,10 @@ mod tests {
         assert_eq!(output["result"]["listed"]["name"], "ssmcp.session.list");
         assert_eq!(output["result"]["listed"]["id"], "manager");
         assert_eq!(output["result"]["created"]["arguments"]["cwd"], "project");
-        assert_eq!(output["result"]["restarted"]["arguments"]["expected_generation"], "old-generation");
+        assert_eq!(
+            output["result"]["restarted"]["arguments"]["expected_generation"],
+            "old-generation"
+        );
         assert_eq!(output["result"]["closed"]["name"], "ssmcp.session.close");
         assert_eq!(output["result"]["frozen"], true);
     }

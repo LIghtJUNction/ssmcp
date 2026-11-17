@@ -122,9 +122,12 @@ impl Control {
                 if input.expected_generation.as_ref().is_some_and(|v| {
                     v.is_empty() || v.len() > 128 || v.chars().any(char::is_control)
                 }) {
-                    return Err("expected_generation must be 1–128 bytes without control characters".into());
+                    return Err(
+                        "expected_generation must be 1–128 bytes without control characters".into(),
+                    );
                 }
-                let mut request = json!({"op":tool.trim_start_matches("ssmcp.session."),"name":input.name});
+                let mut request =
+                    json!({"op":tool.trim_start_matches("ssmcp.session."),"name":input.name});
                 if let Some(generation) = input.expected_generation {
                     request["expected_generation"] = generation.into();
                 }
@@ -132,7 +135,15 @@ impl Control {
             }
             _ => return Err("unknown session control operation".into()),
         };
-        super::service::request(request).await.map_err(|e| e.to_string())
+        let value = super::service::request(request)
+            .await
+            .map_err(|e| e.to_string())?;
+        // MCP structuredContent is an object; preserve lists inside a named field.
+        Ok(if tool == "ssmcp.session.list" {
+            json!({"sessions": value})
+        } else {
+            value
+        })
     }
 }
 
@@ -142,12 +153,20 @@ fn resolve_cwd(root: &Path, value: Option<&str>) -> Result<PathBuf, String> {
         return Err("session cwd must be a nonempty path without control characters".into());
     }
     let path = Path::new(value);
-    if path.components().any(|part| matches!(part, Component::ParentDir)) {
+    if path
+        .components()
+        .any(|part| matches!(part, Component::ParentDir))
+    {
         return Err("session cwd must not contain parent traversal".into());
     }
-    let resolved = root.join(path).canonicalize().map_err(|e| format!("session cwd: {e}"))?;
+    let resolved = root
+        .join(path)
+        .canonicalize()
+        .map_err(|e| format!("session cwd: {e}"))?;
     if !resolved.starts_with(root) || !resolved.is_dir() {
-        return Err("session cwd must be an existing directory inside this connection's workspace".into());
+        return Err(
+            "session cwd must be an existing directory inside this connection's workspace".into(),
+        );
     }
     Ok(resolved)
 }
@@ -158,7 +177,13 @@ mod tests {
 
     #[test]
     fn creation_schema_cannot_change_identity_or_grant_control() {
-        for extra in ["args", "allow", "destination", "identity", "session_control"] {
+        for extra in [
+            "args",
+            "allow",
+            "destination",
+            "identity",
+            "session_control",
+        ] {
             let mut value = json!({"name":"worker"});
             value[extra] = json!("unexpected");
             assert!(serde_json::from_value::<Create>(value).is_err(), "{extra}");
@@ -167,14 +192,21 @@ mod tests {
 
     #[test]
     fn create_cwd_is_confined_and_rejects_escape_symlinks() {
-        let parent = std::env::temp_dir().join(format!("ssmcp-control-{}-{}", std::process::id(), super::super::random_suffix().unwrap()));
+        let parent = std::env::temp_dir().join(format!(
+            "ssmcp-control-{}-{}",
+            std::process::id(),
+            super::super::random_suffix().unwrap()
+        ));
         let root = parent.join("project");
         let outside = parent.join("outside");
         std::fs::create_dir_all(root.join("child")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         let root = root.canonicalize().unwrap();
         assert_eq!(resolve_cwd(&root, None).unwrap(), root);
-        assert_eq!(resolve_cwd(&root, Some("child")).unwrap(), root.join("child"));
+        assert_eq!(
+            resolve_cwd(&root, Some("child")).unwrap(),
+            root.join("child")
+        );
         assert!(resolve_cwd(&root, Some("../outside")).is_err());
         assert!(resolve_cwd(&root, outside.to_str()).is_err());
         #[cfg(unix)]
@@ -187,9 +219,17 @@ mod tests {
 
     #[tokio::test]
     async fn self_restart_and_close_fail_before_service_contact() {
-        let control = Control::new(std::env::current_dir().unwrap(), None, Some("manager".into())).unwrap();
+        let control = Control::new(
+            std::env::current_dir().unwrap(),
+            None,
+            Some("manager".into()),
+        )
+        .unwrap();
         for tool in ["ssmcp.session.restart", "ssmcp.session.close"] {
-            let error = control.perform(tool, json!({"name":"manager"})).await.unwrap_err();
+            let error = control
+                .perform(tool, json!({"name":"manager"}))
+                .await
+                .unwrap_err();
             assert!(error.contains("different management connection"));
         }
     }

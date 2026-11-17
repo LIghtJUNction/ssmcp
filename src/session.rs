@@ -86,6 +86,8 @@ struct RunGeneration {
     generation: String,
     started_at: u64,
     supervisor_pid: u32,
+    #[serde(default)]
+    service_epoch: String,
 }
 
 /// Held for the entire service process. The file lock prevents duplicate runners
@@ -95,6 +97,7 @@ pub struct Runner {
     directory: PathBuf,
     _run_lock: File,
     generation: Option<String>,
+    owner: Option<service::OwnerLease>,
 }
 
 impl Runner {
@@ -102,7 +105,7 @@ impl Runner {
         let root = session_root(false)?;
         let (directory, manifest) = load(&root, name)?;
         let lock = lock(&directory.join("run.lock"), true)?;
-        let generation = if manifest.supervised {
+        let (generation, owner) = if manifest.supervised {
             let active: RunGeneration = read_json(&directory.join("generation.json"))?;
             let inherited = std::env::var("SSMCP_SESSION_GENERATION")
                 .map_err(|_| "supervised session must be started by its service")?;
@@ -112,9 +115,10 @@ impl Runner {
             {
                 return Err("session generation does not match its supervisor".into());
             }
-            Some(inherited)
+            let owner = service::OwnerLease::start(root, active.service_epoch)?;
+            (Some(inherited), Some(owner))
         } else {
-            None
+            (None, None)
         };
         let image = executable(&directory);
         if checksum(&image)? != manifest.executable_sha256
@@ -131,6 +135,7 @@ impl Runner {
             directory,
             _run_lock: lock,
             generation,
+            owner,
         };
         if !runner.stop_requested() {
             runner.record("starting", 0, None, None, None)?;
@@ -147,6 +152,9 @@ impl Runner {
     }
 
     pub fn stop_requested(&self) -> bool {
+        if self.owner.as_ref().is_some_and(service::OwnerLease::lost) {
+            return true;
+        }
         // Any unexpected filesystem error fails closed. A missing marker alone
         // means that an explicit start is still desired.
         match fs::symlink_metadata(self.directory.join("stop.requested")) {
@@ -480,6 +488,13 @@ pub async fn start_saved(name: &str) -> Result<Value> {
     }
     let _guard = lock(&root.join("manage.lock"), true)?;
     let (directory, manifest) = load(&root, name)?;
+    // The definition may have been replaced while this caller acquired the
+    // management lock. Route the definition loaded under that lock, releasing
+    // it before IPC so the supervisor can perform its serialized operation.
+    if manifest.supervised {
+        drop(_guard);
+        return service::request(json!({"op":"start","name":name})).await;
+    }
     if native_status(&manifest).await?.active {
         return Err("session is already running".into());
     }
@@ -500,6 +515,13 @@ pub async fn stop(name: &str) -> Result<Value> {
     }
     let _guard = lock(&root.join("manage.lock"), true)?;
     let (directory, manifest) = load(&root, name)?;
+    // The definition may have been replaced while this caller acquired the
+    // management lock. Route the definition loaded under that lock, releasing
+    // it before IPC so the supervisor can perform its serialized operation.
+    if manifest.supervised {
+        drop(_guard);
+        return service::request(json!({"op":"close","name":name})).await;
+    }
     stop_loaded(&directory, &manifest).await?;
     status_from(&directory, &manifest).await
 }
@@ -511,6 +533,13 @@ pub async fn restart(name: &str) -> Result<Value> {
     }
     let _guard = lock(&root.join("manage.lock"), true)?;
     let (directory, manifest) = load(&root, name)?;
+    // The definition may have been replaced while this caller acquired the
+    // management lock. Route the definition loaded under that lock, releasing
+    // it before IPC so the supervisor can perform its serialized operation.
+    if manifest.supervised {
+        drop(_guard);
+        return service::request(json!({"op":"restart","name":name})).await;
+    }
     stop_loaded(&directory, &manifest).await?;
     verify_snapshot(&directory, &manifest)?;
     remove_file(&directory.join("stop.requested"))?;
@@ -526,6 +555,13 @@ pub async fn remove(name: &str) -> Result<Value> {
     }
     let _guard = lock(&root.join("manage.lock"), true)?;
     let (directory, manifest) = load(&root, name)?;
+    // The definition may have been replaced while this caller acquired the
+    // management lock. Route the definition loaded under that lock, releasing
+    // it before IPC so the supervisor can perform its serialized operation.
+    if manifest.supervised {
+        drop(_guard);
+        return service::request(json!({"op":"remove","name":name})).await;
+    }
     stop_loaded(&directory, &manifest).await?;
     native_remove(&manifest).await?;
     // Opening the lock verifies no late runner remains. Close before removing it
@@ -1756,6 +1792,7 @@ mod tests {
             _run_lock: lock(&directory.join("run.lock"), true).unwrap(),
             directory: directory.clone(),
             generation: None,
+            owner: None,
         };
         runner
             .record(
@@ -1803,6 +1840,7 @@ mod tests {
             _run_lock: lock(&directory.join("run.lock"), true).unwrap(),
             directory: directory.clone(),
             generation: None,
+            owner: None,
         };
         runner
             .record(

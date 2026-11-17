@@ -56,6 +56,45 @@ stops its owned background jobs and closes native provider connections.
 Operator-managed external Pi and OpenCode services are not terminated. Login-code grants issued by that
 connection are revoked. GitHub identity grants remain subject to their own
 lifetimes and each currently connected client's allow policy.
+.SH PERSISTENT CLIENT SERVICE
+The client service is ssmcp.service; it is separate from the remote ssmcpd gateway.
+Install a system unit with an explicit non-root owner, then enable and start it:
+.PP
+.nf
+sudo /path/to/ssmcp service install --system --user alice
+sudo systemctl enable --now ssmcp
+ssmcp sessions create dev --watchdog --allow alice@github my-ssmcp
+ssmcp attach
+ssmcp attach dev
+.fi
+.PP
+Without a name, attach is exactly attach list. Attach never creates a missing
+session. Ctrl-] detaches without stopping its worker. Ctrl-C is forwarded to
+the selected terminal. Use attach --read-only NAME for another observer;
+only one interactive frontend owns input and terminal sizing.
+.PP
+sessions restart NAME confirms the old owned execution tree stopped before
+starting a fresh generation. sessions close NAME (alias stop) persists stopped
+intent and retains configuration. sessions start NAME explicitly restores it.
+sessions remove NAME stops and deletes the saved definition.
+.PP
+service install defaults to the current user's persistent manager. Linux
+system scope requires --system --user USER; macOS provides launchd agent and
+daemon scopes; Windows provides an interactive user task and a native SCM
+service entrypoint with an explicit non-LocalSystem account.
+Use service install --dry-run --json to review definitions. service status,
+start, stop, restart and uninstall accept --system for system scope.
+.PP
+A connection started with --session-control exposes ssmcp.session.list, status,
+create, restart and close through code_mode. Remote-created sessions inherit
+that connection's SSH policy and remain inside its workspace; children do not
+inherit management authority. This grant can manage the same user's saved
+service sessions. Use a separate management connection to restart or close
+the current control session.
+.PP
+Saved sessions pin their executable snapshot. Restart preserves that version;
+remove and recreate to upgrade a saved worker. Explicit service stop preserves
+running intent for restoration; closed sessions stay stopped.
 .SH FIRST CONNECTION
 An interactive first connection failure opens the GitHub authorization page on
 the target ssmcp portal. Compare the browser pairing code with the terminal,

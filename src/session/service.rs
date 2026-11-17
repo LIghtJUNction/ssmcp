@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
     process::Command,
@@ -31,6 +31,99 @@ const CAPACITY: usize = 32;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(35);
 const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 const TICK: Duration = Duration::from_millis(250);
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceEpoch {
+    epoch: String,
+}
+
+/// Cooperative owner-loss detection complements Linux guardians/Windows Jobs.
+/// In particular, macOS launchd does not own a worker's separate process group.
+pub(super) struct OwnerLease {
+    stop: Arc<AtomicBool>,
+    lost: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl OwnerLease {
+    pub(super) fn start(root: PathBuf, epoch: String) -> Result<Self> {
+        if !owner_active(&root, &epoch)? {
+            return Err("session supervisor lease is no longer current".into());
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let lost = Arc::new(AtomicBool::new(false));
+        let cancelled = stop.clone();
+        let owner_lost = lost.clone();
+        let thread = std::thread::Builder::new()
+            .name("ssmcp-session-owner".into())
+            .spawn(move || {
+                loop {
+                    std::thread::park_timeout(TICK);
+                    if cancelled.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !owner_active(&root, &epoch).unwrap_or(false) {
+                        owner_lost.store(true, Ordering::Release);
+                        // Signal only this live process, never a PID read from disk.
+                        // Once initialized, the client's existing TERM handler
+                        // shuts down Runtime and every owned child before exiting.
+                        #[cfg(unix)]
+                        if !cancelled.load(Ordering::Acquire) {
+                            unsafe {
+                                libc::kill(libc::getpid(), libc::SIGTERM);
+                            }
+                        }
+                        return;
+                    }
+                }
+            })?;
+        Ok(Self {
+            stop,
+            lost,
+            thread: Some(thread),
+        })
+    }
+
+    pub(super) fn lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for OwnerLease {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
+fn owner_active(root: &Path, expected: &str) -> Result<bool> {
+    if expected.len() != 32 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(false);
+    }
+    let actual: ServiceEpoch = super::read_json(&root.join("service-epoch.json"))?;
+    if actual.epoch != expected {
+        return Ok(false);
+    }
+    let file = super::private_open(&root.join("service.lock"), true, false, false)?;
+    match crate::platform::lock_file(&file, true) {
+        Ok(()) => Ok(false), // Acquiring it proves the supervisor no longer holds it.
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn runner_active(directory: &Path) -> Result<bool> {
+    let file = super::private_open(&directory.join("run.lock"), true, true, false)?;
+    match crate::platform::lock_file(&file, true) {
+        Ok(()) => Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -119,17 +212,21 @@ struct Outcome {
 
 struct Supervisor {
     root: PathBuf,
+    epoch: String,
     workers: BTreeMap<String, Worker>,
     retries: BTreeMap<String, Instant>,
+    recoveries: BTreeMap<String, Instant>,
     outcomes: BTreeMap<String, Outcome>,
 }
 
 impl Supervisor {
-    fn new(root: PathBuf) -> Self {
+    fn new(root: PathBuf, epoch: String) -> Self {
         Self {
             root,
+            epoch,
             workers: BTreeMap::new(),
             retries: BTreeMap::new(),
+            recoveries: BTreeMap::new(),
             outcomes: BTreeMap::new(),
         }
     }
@@ -193,6 +290,7 @@ impl Supervisor {
             generation: super::random_suffix()?,
             started_at: super::now(),
             supervisor_pid: std::process::id(),
+            service_epoch: self.epoch.clone(),
         };
         super::write_json(&directory.join("generation.json"), &generation)?;
         let mut command = Command::new(super::executable(directory));
@@ -210,6 +308,7 @@ impl Supervisor {
         self.workers
             .insert(name.clone(), Worker::spawn(&mut command, generation)?);
         self.retries.remove(name);
+        self.recoveries.remove(name);
         self.outcomes.remove(name);
         Ok(())
     }
@@ -276,6 +375,7 @@ impl Supervisor {
 
     async fn stop_worker(&mut self, name: &str, directory: &Path) -> Result<()> {
         self.retries.remove(name);
+        self.recoveries.remove(name);
         if let Some(worker) = self.workers.get_mut(name) {
             worker.stop();
             // Keep the handle in the map across await: cancellation or service
@@ -315,9 +415,13 @@ impl Supervisor {
             }
         } else {
             let retrying = self.retries.contains_key(name);
+            let previous_runner = runner_active(directory)?;
+            let closing = !desired_running(directory)?;
             let outcome = self.outcomes.get(name);
             NativeStatus {
-                state: if retrying {
+                state: if previous_runner {
+                    if closing { "stopping" } else { "recovering" }
+                } else if retrying {
                     "retrying"
                 } else if outcome.is_some_and(|v| v.failed) {
                     "failed"
@@ -325,7 +429,7 @@ impl Supervisor {
                     "inactive"
                 }
                 .into(),
-                active: retrying,
+                active: previous_runner || retrying,
                 pid: None,
                 exit_code: outcome.and_then(|v| v.exit_code),
                 started_at: generation.as_ref().map(|v| v.started_at),
@@ -464,8 +568,10 @@ impl Supervisor {
             if !desired_running(&directory).unwrap_or(false) {
                 continue;
             }
+            self.recoveries
+                .insert(manifest.spec.name.clone(), Instant::now() + STOP_TIMEOUT);
             let result = super::lock(&self.root.join("manage.lock"), true)
-                .and_then(|_guard| self.start_worker(&directory, &manifest));
+                .and_then(|_guard| self.restore_worker(&directory, &manifest));
             if let Err(error) = result {
                 self.failed_start(&directory, &manifest, &error.to_string());
             }
@@ -473,7 +579,25 @@ impl Supervisor {
         Ok(())
     }
 
+    fn restore_worker(&mut self, directory: &Path, manifest: &Manifest) -> Result<()> {
+        let name = &manifest.spec.name;
+        if self
+            .recoveries
+            .get(name)
+            .is_some_and(|deadline| *deadline > Instant::now())
+            && runner_active(directory)?
+        {
+            // A replaced owner has just invalidated its old epoch. Allow the
+            // runner's <=250ms monitor and bounded graceful cleanup to finish,
+            // including when the session's crash watchdog is disabled.
+            self.retries.insert(name.clone(), Instant::now() + TICK);
+            return Ok(());
+        }
+        self.start_worker(directory, manifest)
+    }
+
     fn failed_start(&mut self, directory: &Path, manifest: &Manifest, error: &str) {
+        self.recoveries.remove(&manifest.spec.name);
         self.outcomes.insert(
             manifest.spec.name.clone(),
             Outcome {
@@ -521,7 +645,7 @@ impl Supervisor {
                 continue;
             }
             let result = super::lock(&self.root.join("manage.lock"), true)
-                .and_then(|_guard| self.start_worker(&directory, &manifest));
+                .and_then(|_guard| self.restore_worker(&directory, &manifest));
             if let Err(error) = result {
                 self.failed_start(&directory, &manifest, &error.to_string());
             }
@@ -530,6 +654,7 @@ impl Supervisor {
 
     async fn shutdown(&mut self) -> Result<()> {
         self.retries.clear();
+        self.recoveries.clear();
         for worker in self.workers.values_mut() {
             worker.stop();
         }
@@ -670,7 +795,23 @@ async fn shutdown_signal(stop: Arc<AtomicBool>) {
             std::future::pending::<()>().await;
         }
     };
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let native = async {
+        let interrupted = async {
+            if tokio::signal::ctrl_c().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        };
+        let broken = async {
+            if let Ok(mut signal) = tokio::signal::windows::ctrl_break() {
+                signal.recv().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::select! { _ = interrupted => {}, _ = broken => {} }
+    };
+    #[cfg(not(any(unix, windows)))]
     let native = async {
         if tokio::signal::ctrl_c().await.is_err() {
             std::future::pending::<()>().await;
@@ -691,8 +832,15 @@ pub async fn run_with_shutdown(stop: Arc<AtomicBool>) -> Result<()> {
     }
     let root = super::session_root(true)?;
     let _guard = super::lock(&root.join("service.lock"), true)?;
+    let epoch = super::random_suffix()?;
+    super::write_json(
+        &root.join("service-epoch.json"),
+        &ServiceEpoch {
+            epoch: epoch.clone(),
+        },
+    )?;
     let server = ipc::Server::bind(&root, ENDPOINT).await?;
-    let mut supervisor = Supervisor::new(root);
+    let mut supervisor = Supervisor::new(root, epoch);
     let shutdown = shutdown_signal(stop);
     tokio::pin!(shutdown);
     tokio::select! {
@@ -807,6 +955,7 @@ mod tests {
                 generation: super::super::random_suffix().unwrap(),
                 started_at: super::super::now(),
                 supervisor_pid: std::process::id(),
+                service_epoch: supervisor.epoch.clone(),
             };
             super::super::write_json(&directory.join("generation.json"), &active).unwrap();
             let generation = active.generation.clone();
@@ -827,6 +976,96 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn owner_lease_requires_both_matching_epoch_and_held_lock() {
+        let root = Directory::new();
+        let epoch = "a".repeat(32);
+        let guard = super::super::lock(&root.0.join("service.lock"), true).unwrap();
+        super::super::write_json(
+            &root.0.join("service-epoch.json"),
+            &ServiceEpoch {
+                epoch: epoch.clone(),
+            },
+        )
+        .unwrap();
+        assert!(owner_active(&root.0, &epoch).unwrap());
+        super::super::write_json(
+            &root.0.join("service-epoch.json"),
+            &ServiceEpoch {
+                epoch: "b".repeat(32),
+            },
+        )
+        .unwrap();
+        assert!(
+            !owner_active(&root.0, &epoch).unwrap(),
+            "a replacement service cannot inherit the old lease"
+        );
+        super::super::write_json(
+            &root.0.join("service-epoch.json"),
+            &ServiceEpoch {
+                epoch: epoch.clone(),
+            },
+        )
+        .unwrap();
+        drop(guard);
+        assert!(
+            !owner_active(&root.0, &epoch).unwrap(),
+            "a stale epoch file cannot keep an orphan running"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_waits_for_previous_runner_even_without_watchdog() {
+        let root = Directory::new();
+        let directory = root.saved("recover", true);
+        let guard = super::super::lock(&directory.join("run.lock"), true).unwrap();
+        let mut supervisor = Supervisor::new(root.0.clone(), "a".repeat(32));
+        supervisor.restore().await.unwrap();
+        assert!(supervisor.retries.contains_key("recover"));
+        assert!(supervisor.recoveries.contains_key("recover"));
+        assert!(
+            supervisor.outcomes.is_empty(),
+            "old owner cleanup is not a failed start"
+        );
+        drop(guard);
+        supervisor.retries.insert("recover".into(), Instant::now());
+        supervisor.tick().await;
+        // The fixture deliberately lacks its executable. Seeing this failure
+        // proves restore attempted launch only after the prior lease released.
+        assert!(supervisor.outcomes["recover"].failed);
+        assert!(supervisor.recoveries.is_empty());
+        assert!(
+            supervisor.retries.is_empty(),
+            "watchdog=false still prevents subsequent crash loops"
+        );
+    }
+
+    #[tokio::test]
+    async fn previous_runner_lock_prevents_a_false_stopped_status() {
+        let root = Directory::new();
+        let directory = root.saved("previous", true);
+        let guard = super::super::lock(&directory.join("run.lock"), true).unwrap();
+        let mut supervisor = Supervisor::new(root.0.clone(), "a".repeat(32));
+        assert!(
+            supervisor
+                .dispatch(Request::Close {
+                    name: "previous".into(),
+                    expected_generation: None
+                })
+                .await
+                .is_err()
+        );
+        let (_, manifest) = supervisor.load("previous").unwrap();
+        let pending = supervisor.status(&directory, &manifest).unwrap();
+        assert_eq!(pending["manager_state"], "stopping");
+        assert_eq!(pending["manager_active"], true);
+        assert_eq!(pending["auth_available"], false);
+        drop(guard);
+        let stopped = supervisor.status(&directory, &manifest).unwrap();
+        assert_eq!(stopped["manager_state"], "inactive");
+        assert_eq!(stopped["manager_active"], false);
     }
 
     #[test]
@@ -903,7 +1142,7 @@ mod tests {
         let (_, mut manifest) = super::super::load(&root.0, "retry").unwrap();
         manifest.spec.watchdog = true;
         super::super::write_json(&directory.join("manifest.json"), &manifest).unwrap();
-        let mut supervisor = Supervisor::new(root.0.clone());
+        let mut supervisor = Supervisor::new(root.0.clone(), "a".repeat(32));
         supervisor
             .finished("retry", false, Ok(Ok(ExitStatus::from_raw(17 << 8))))
             .unwrap();
@@ -945,7 +1184,7 @@ mod tests {
         super::super::write_json(&closed.join("stop.requested"), &json!({"requested_at":1}))
             .unwrap();
         root.saved("wanted", true);
-        let mut supervisor = Supervisor::new(root.0.clone());
+        let mut supervisor = Supervisor::new(root.0.clone(), "a".repeat(32));
         // All fixtures lack executable snapshots. Only the wanted supervised
         // definition may even attempt a start, so only it records a failure.
         supervisor.restore().await.unwrap();
@@ -966,11 +1205,11 @@ mod tests {
     fn closed_intent_and_generation_survive_owner_restart() {
         let root = Directory::new();
         let directory = &root.0;
-        let supervisor = Supervisor::new(directory.clone());
-        assert!(desired_running(&directory).unwrap());
+        let supervisor = Supervisor::new(directory.clone(), "a".repeat(32));
+        assert!(desired_running(directory).unwrap());
         assert!(
             supervisor
-                .check_generation(&directory, Some("missing"))
+                .check_generation(directory, Some("missing"))
                 .is_err()
         );
         let first = "a".repeat(32);
@@ -980,40 +1219,38 @@ mod tests {
                 generation: first.clone(),
                 started_at: 1,
                 supervisor_pid: 123,
+                service_epoch: "a".repeat(32),
             },
         )
         .unwrap();
-        assert!(
-            supervisor
-                .check_generation(&directory, Some(&first))
-                .is_ok()
-        );
+        assert!(supervisor.check_generation(directory, Some(&first)).is_ok());
         super::super::write_json(
             &directory.join("stop.requested"),
             &json!({"requested_at":2}),
         )
         .unwrap();
         drop(supervisor);
-        let next = Supervisor::new(directory.clone());
-        assert!(!desired_running(&directory).unwrap());
+        let next = Supervisor::new(directory.clone(), "a".repeat(32));
+        assert!(!desired_running(directory).unwrap());
         super::super::write_json(
             &directory.join("generation.json"),
             &RunGeneration {
                 generation: "b".repeat(32),
                 started_at: 3,
                 supervisor_pid: 456,
+                service_epoch: "a".repeat(32),
             },
         )
         .unwrap();
-        assert!(next.check_generation(&directory, Some(&first)).is_err());
-        assert!(!desired_running(&directory).unwrap());
+        assert!(next.check_generation(directory, Some(&first)).is_err());
+        assert!(!desired_running(directory).unwrap());
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn stale_close_is_rejected_before_mutation_and_close_waits_for_owned_tree() {
         let root = Directory::new();
-        let mut supervisor = Supervisor::new(root.0.clone());
+        let mut supervisor = Supervisor::new(root.0.clone(), "a".repeat(32));
         let (directory, generation) = root.worker(&mut supervisor, "owned");
         let mut unrelated = Command::new("/bin/sleep")
             .arg("60")
@@ -1021,15 +1258,15 @@ mod tests {
             .spawn()
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !directory.join("descendant.pid").exists() {
+        let descendant: i32 = loop {
+            if let Ok(text) = fs::read_to_string(directory.join("descendant.pid"))
+                && let Ok(pid) = text.trim().parse()
+            {
+                break pid;
+            }
             assert!(Instant::now() < deadline, "worker did not start");
             tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let descendant: i32 = fs::read_to_string(directory.join("descendant.pid"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        };
         assert!(
             supervisor
                 .dispatch(Request::Close {
@@ -1072,7 +1309,7 @@ mod tests {
     #[tokio::test]
     async fn service_shutdown_preserves_running_intent_and_never_schedules_watchdog() {
         let root = Directory::new();
-        let mut supervisor = Supervisor::new(root.0.clone());
+        let mut supervisor = Supervisor::new(root.0.clone(), "a".repeat(32));
         let (directory, _) = root.worker(&mut supervisor, "restore-me");
         supervisor.shutdown().await.unwrap();
         assert!(desired_running(&directory).unwrap());
