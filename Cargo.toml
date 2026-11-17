@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 rust-version = "1.89"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -29,6 +29,8 @@ include = [
     "/scripts/e2e_service_portable.py",
     "/docs/terminal-control.md",
     "/docs/terminal-observers.md",
+    "/docs/validation-terminal-observers.md",
+    "/docs/reports/tty-observer-*",
     "/scripts/e2e_tty_observer.py",
     "/docs/validation-terminal-control.md",
     "/docs/reports/terminal-control-2026-11-16/**",

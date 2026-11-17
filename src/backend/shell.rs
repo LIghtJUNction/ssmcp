@@ -570,19 +570,27 @@ impl Shell {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut output_mode = "pipes";
-        let mut pty_reader: Option<Box<dyn AsyncRead + Unpin + Send>> = None;
-        #[cfg(unix)]
-        if let Some(lease) = &observation {
-            let (reader, stdout, stderr) = crate::observer::pty::Output::open(lease)
-                .map_err(|error| format!("could not open command PTY: {error}"))?;
-            command
-                .stdout(stdout)
-                .stderr(stderr)
-                .env("TERM", "xterm-256color");
-            pty_reader = Some(Box::new(reader));
-            output_mode = "pty";
-        }
+        let pty_reader: Option<Box<dyn AsyncRead + Unpin + Send>> = {
+            #[cfg(unix)]
+            {
+                if let Some(lease) = &observation {
+                    let (reader, stdout, stderr) = crate::observer::pty::Output::open(lease)
+                        .map_err(|error| format!("could not open command PTY: {error}"))?;
+                    command
+                        .stdout(stdout)
+                        .stderr(stderr)
+                        .env("TERM", "xterm-256color");
+                    Some(Box::new(reader))
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        };
+        let output_mode = if pty_reader.is_some() { "pty" } else { "pipes" };
         if let Some(env) = args.env {
             command.envs(env);
         }

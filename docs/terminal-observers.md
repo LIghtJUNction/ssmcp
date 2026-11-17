@@ -93,3 +93,6 @@ It verifies PTY detection, literal arguments, combined output, exit codes, seque
 reuse, parallel windows, piped stdin, cancellation, window reopening and interactive shell
 observation. It does not connect to a relay or invoke a model. The default launcher runs
 the real viewer and records output; `--terminal` opens the requested desktop terminal.
+
+Recorded Linux results and inspected screenshots are available in the
+[verification record](validation-terminal-observers.md).
