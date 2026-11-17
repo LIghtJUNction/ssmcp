@@ -183,7 +183,7 @@ impl Fixture {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
         std::fs::write(self.0.join("native-request"), "shell-started").unwrap();
         command
-            .args(["--shell", "/bin/sh"])
+            .args(["--no-watchdog", "--shell", "/bin/sh"])
             .args(extra_args)
             .arg("alice@fixture")
             // Exercise automatic discovery without observing real installed harnesses.

@@ -198,6 +198,7 @@ impl Fixture {
             std::fs::copy(executable, &entry).unwrap();
         }
         let mut arguments: Vec<String> = [
+            "--no-watchdog",
             "--shell",
             "/bin/sh",
             "--name",
