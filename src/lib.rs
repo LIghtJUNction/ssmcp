@@ -9,9 +9,13 @@ pub mod code_mode;
 pub mod computer;
 pub mod context;
 #[cfg(target_os = "linux")]
+pub mod history;
+#[cfg(target_os = "linux")]
 pub mod http;
 #[cfg(target_os = "linux")]
 pub mod identity;
+#[cfg(target_os = "linux")]
+pub mod management;
 #[cfg(target_os = "linux")]
 pub mod oauth;
 pub mod omarchy;

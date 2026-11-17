@@ -276,7 +276,7 @@ impl ApiError {
 impl From<Problem> for ApiError {
     fn from(problem: Problem) -> Self {
         match problem {
-            Problem::Invalid => Self::invalid(
+            Problem::Invalid | Problem::ManagementInvalid => Self::invalid(
                 "The request or SSH public key is invalid. Only a single Ed25519 public key is accepted.",
             ),
             Problem::Unauthorized => Self::new(
@@ -284,7 +284,7 @@ impl From<Problem> for ApiError {
                 "authorization_required",
                 "Sign in with GitHub to approve this computer.",
             ),
-            Problem::Csrf => Self::new(
+            Problem::Csrf | Problem::Forbidden => Self::new(
                 StatusCode::FORBIDDEN,
                 "access_denied",
                 "The browser origin, session or CSRF token did not match.",
@@ -300,8 +300,12 @@ impl From<Problem> for ApiError {
                 "key_already_registered",
                 "This setup request already registered another public key.",
             ),
-            Problem::NotFound => Self::expired(),
-            Problem::Storage | Problem::Disabled => Self::unavailable(),
+            Problem::NotFound | Problem::SessionNotFound => Self::expired(),
+            Problem::Storage
+            | Problem::Disabled
+            | Problem::ManagementDisabled
+            | Problem::ManagementUnavailable
+            | Problem::AuditUnavailable => Self::unavailable(),
         }
     }
 }
@@ -528,19 +532,59 @@ async fn register(
     // The per-grant async mutex serializes registration with cancel/consent.
     // The store closure rechecks the owner's keys atomically with persistence.
     let already_saved = grant.registration_saved;
-    let account=broker.portal.storage(move|store|{
-        let account=store.account(&owner)?;
-        if let Some(existing)=account.keys.iter().find(|stored|stored.fingerprint==key.fingerprint){
-            if existing.public_key!=key.public_key{return Err(Problem::Invalid)}
-            return Ok(account);
-        }
-        if already_saved { return Err(Problem::NotFound); }
-        store.add(&owner,key)?;
-        store.account(&owner)
-    }).await.map_err(|problem| if problem==Problem::NotFound {
-        ApiError::new(StatusCode::CONFLICT,"key_registration_revoked","This grant already saved its key, which has since been removed. Start a new setup request to register it again.")
-    } else {problem.into()})?;
-    grant.registration_saved = true;
+    let identity = broker.portal.identity_for_subject(owner.clone()).await?;
+    if !already_saved {
+        broker
+            .portal
+            .record_audit(
+                Some(&identity),
+                crate::history::AuditAction::KeyAdded,
+                crate::history::AuditOutcome::Pending,
+            )
+            .await?;
+    }
+    let result = broker
+        .portal
+        .storage(move |store| {
+            let account = store.account(&owner)?;
+            if let Some(existing) = account
+                .keys
+                .iter()
+                .find(|stored| stored.fingerprint == key.fingerprint)
+            {
+                if existing.public_key != key.public_key {
+                    return Err(Problem::Invalid);
+                }
+                return Ok(account);
+            }
+            if already_saved {
+                return Err(Problem::NotFound);
+            }
+            store.add(&owner, key)?;
+            store.account(&owner)
+        })
+        .await;
+    if result.is_ok() {
+        // Preserve idempotency even if the completion audit cannot be written.
+        grant.registration_saved = true;
+    }
+    if !already_saved {
+        broker
+            .portal
+            .record_audit(
+                Some(&identity),
+                crate::history::AuditAction::KeyAdded,
+                match &result {
+                    Ok(_) => crate::history::AuditOutcome::Success,
+                    Err(Problem::Storage | Problem::Busy) => crate::history::AuditOutcome::Error,
+                    Err(_) => crate::history::AuditOutcome::Denied,
+                },
+            )
+            .await?;
+    }
+    let account = result.map_err(|problem| if problem == Problem::NotFound {
+        ApiError::new(StatusCode::CONFLICT, "key_registration_revoked", "This grant already saved its key, which has since been removed. Start a new setup request to register it again.")
+    } else { problem.into() })?;
     Ok(Json(
         json!({"status":"saved","account":public_account(account)}),
     ))

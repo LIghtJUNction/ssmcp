@@ -7,7 +7,7 @@ const GITHUB_ICON: &str = r#"<svg width="18" height="18" viewBox="0 0 24 24" fil
 
 const KEY_ICON: &str = r#"<svg class="empty-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m11.5 11.5 9 9M17 17l3-3m-6 0 3-3"/><circle cx="7" cy="7" r=".6" fill="currentColor" stroke="none"/></svg>"#;
 
-fn escape(s: &str) -> String {
+pub(super) fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -44,7 +44,12 @@ pub(super) fn page(title: &str, body: &str) -> String {
     )
 }
 
-fn account_panel(account: Option<&Account>, csrf: &str, enabled: bool) -> String {
+fn account_panel(
+    account: Option<&Account>,
+    csrf: &str,
+    enabled: bool,
+    management_enabled: bool,
+) -> String {
     let (status_class, status) = if account.is_some() {
         ("status signed-in", "已登录")
     } else if enabled {
@@ -76,6 +81,9 @@ fn account_panel(account: Option<&Account>, csrf: &str, enabled: bool) -> String
         html.push_str(
             r#"<h2 id="account-title">账户门户尚未启用。</h2><p class="account-description">已有 SSH 账户仍可连接。首次接入，请联系管理员登记公钥。</p><small class="account-note">管理员需配置 GitHub 登录与账户存储。</small>"#,
         );
+    }
+    if account.is_some() && management_enabled {
+        html.push_str(r#"<div class="account-shortcuts"><a class="text-link" href="/account/sessions">我的会话 ↗</a><a class="text-link" href="/account/history">历史记录 ↗</a></div>"#);
     }
     html.push_str("</div></section>");
     html
@@ -168,12 +176,17 @@ const GUIDE: &str = r#"<section class="guide" id="guide" aria-labelledby="guide-
 <details class="guide-help"><summary>已添加插件，接下来怎么用？</summary><div><p>回到 ChatGPT，调用 <code>list</code> 查看在线客户端，再使用 <code>code_mode</code> 调用工具。列表为空时，检查本机进程是否运行，以及 <code>--allow</code> 是否包含当前 GitHub 用户。</p><p>首页登录与插件授权是两个独立步骤。授权时请核对 MCP 客户端与回调来源。插件可调用获准客户端的工具，包括执行命令和修改文件，请按需设置允许名单。</p></div></details>
 </section>"#;
 
-pub(super) fn home(account: Option<&Account>, csrf: Option<&str>, enabled: bool) -> String {
+pub(super) fn home(
+    account: Option<&Account>,
+    csrf: Option<&str>,
+    enabled: bool,
+    management_enabled: bool,
+) -> String {
     let csrf = escape(csrf.unwrap_or(""));
     let mut body = String::from(
         r#"<section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">LOCAL TOOLS. OPEN POSSIBILITIES.</p><h1 id="hero-title">本机工具，<br><span>连接你的 AI。</span></h1><p class="hero-description">通过 SSH，把终端接入 ChatGPT。<br>工具在本机执行，访问权限由你掌控。</p><div class="protocol" aria-label="本机通过 SSH 和 MCP 连接 ChatGPT"><span>YOUR MACHINE</span><span class="arrow" aria-hidden="true">→</span><span>SSH / MCP</span><span class="arrow" aria-hidden="true">→</span><span>ChatGPT</span></div></div>"#,
     );
-    body.push_str(&account_panel(account, &csrf, enabled));
+    body.push_str(&account_panel(account, &csrf, enabled, management_enabled));
     body.push_str(
         r#"</section><div class="workspace-header"><p class="eyebrow">WORKSPACE / 接入配置</p><p>你的密钥，你的工具，你的工作方式。</p></div><div class="workspace-grid">"#,
     );

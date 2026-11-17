@@ -24,3 +24,12 @@ client_registration_ttl = 31536000
 # Optional browser portal; reuse auth.github above and the SAME callback.
 # [portal]
 # state_dir = "/var/lib/ssmcpd/portal"
+# For a separate portal service, omit state_dir here and use --portal-only
+# with --portal-state-dir in that service. See docs/portal-console.md.
+# gateway_socket = "/run/ssmcpd/management.sock"
+# audit_dir = "/var/lib/ssmcpd/audit"
+# admin_github_ids = []
+# admin_github_users = []
+# audit_retention_days = 7
+# audit_max_events = 20000
+# owner_mappings = { legacy_ssh_user = "123456" }

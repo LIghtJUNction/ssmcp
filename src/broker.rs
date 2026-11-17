@@ -1,4 +1,5 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
+mod management;
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
     wire::{self, ClientInfo, Controller, Frame, Operation},
@@ -18,7 +19,7 @@ use subtle::ConstantTimeEq;
 use tokio::{
     io::BufReader,
     net::UnixStream,
-    sync::{RwLock, Semaphore, mpsc, oneshot},
+    sync::{Notify, RwLock, Semaphore, mpsc, oneshot},
     time::{Instant, timeout},
 };
 
@@ -82,6 +83,13 @@ pub struct Session {
     sender: mpsc::Sender<Call>,
     slots: Semaphore,
     alive: AtomicBool,
+    ssh_user: String,
+    owner_subject: Option<String>,
+    connected_at: u64,
+    audit: Option<Arc<crate::history::AuditLog>>,
+    disconnect: Notify,
+    closed: AtomicBool,
+    closed_notify: Notify,
 }
 
 impl Session {
@@ -110,6 +118,40 @@ impl Session {
         operation: Operation,
         controller: Option<Controller>,
     ) -> CallResult {
+        self.call_with_actor(operation, controller, None, true)
+            .await
+    }
+
+    /// The caller has already revalidated its OAuth grant and session ACL.
+    /// Audit attribution never uses controller metadata or the access allowlist.
+    pub(crate) async fn call_with_authorization(
+        &self,
+        operation: Operation,
+        controller: Option<Controller>,
+        authorization: &Authorization,
+    ) -> CallResult {
+        let actor = match authorization {
+            Authorization::Identity(identity) if crate::management::valid_identity(identity) => {
+                Some(identity.subject.as_str())
+            }
+            _ => None,
+        };
+        self.call_with_actor(operation, controller, actor, true)
+            .await
+    }
+
+    /// Internal handle teardown must proceed even if audit storage is unavailable.
+    pub(crate) async fn call_cleanup(&self, operation: Operation) -> CallResult {
+        self.call_with_actor(operation, None, None, false).await
+    }
+
+    async fn call_with_actor(
+        &self,
+        operation: Operation,
+        controller: Option<Controller>,
+        actor_subject: Option<&str>,
+        audit_required: bool,
+    ) -> CallResult {
         operation.validate()?;
         if let Some(controller) = &controller {
             controller.validate()?;
@@ -125,20 +167,68 @@ impl Session {
             .try_acquire()
             .map_err(|_| "client busy; retry later")?;
         let duration = request_timeout(&operation);
+        let audit_tool = match &operation {
+            Operation::CallTool { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        if audit_tool.is_some()
+            && self
+                .audit_call(
+                    audit_tool.as_deref(),
+                    actor_subject,
+                    crate::history::AuditOutcome::Pending,
+                )
+                .await
+                .is_err()
+            && audit_required
+        {
+            return Err("audit intent could not be saved; tool was not dispatched".into());
+        }
         let (reply, response) = oneshot::channel();
-        self.sender
+        if self
+            .sender
             .try_send(Call {
                 operation,
                 controller,
                 reply,
             })
-            .map_err(|_| "client disconnected or busy")?;
+            .is_err()
+        {
+            if audit_tool.is_some() {
+                let _ = self
+                    .audit_call(
+                        audit_tool.as_deref(),
+                        actor_subject,
+                        crate::history::AuditOutcome::Error,
+                    )
+                    .await;
+            }
+            return Err("client disconnected or busy; tool was not dispatched".into());
+        }
         let started = std::time::Instant::now();
         let result = match timeout(duration, response).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("client disconnected".into()),
             Err(_) => Err("client request timed out; its outcome may be unknown".into()),
         };
+        if audit_tool.is_some() {
+            let outcome = if result
+                .as_ref()
+                .is_ok_and(|value| value.get("isError").and_then(Value::as_bool) != Some(true))
+            {
+                crate::history::AuditOutcome::Success
+            } else {
+                crate::history::AuditOutcome::Error
+            };
+            if self
+                .audit_call(audit_tool.as_deref(), actor_subject, outcome)
+                .await
+                .is_err()
+                && audit_required
+            {
+                return Err("tool may have executed; audit completion could not be saved; inspect its state before retrying".into());
+            }
+        }
         let timed_out = result.as_ref().is_err_and(|e| e.contains("timed out"));
         crate::observability::log(
             if result.is_err() { "warn" } else { "debug" },
@@ -172,6 +262,7 @@ pub struct Broker {
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
+    management: Option<crate::management::State>,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
 }
 
@@ -199,6 +290,7 @@ impl Broker {
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
             portal: crate::portal::Portal::default(),
+            management: None,
             sessions: RwLock::new(HashMap::new()),
         })
     }
@@ -270,6 +362,16 @@ impl Broker {
             sender,
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
+            ssh_user: user.into(),
+            owner_subject: self
+                .management
+                .as_ref()
+                .and_then(|state| state.policy.owner_subject(user)),
+            connected_at: crate::management::now(),
+            audit: self.management.as_ref().map(|state| state.audit.clone()),
+            disconnect: Notify::new(),
+            closed: AtomicBool::new(false),
+            closed_notify: Notify::new(),
         });
         self.sessions
             .write()
@@ -311,13 +413,35 @@ impl Broker {
 
     pub async fn disconnect_all(&self) {
         self.bridges.shutdown().await;
-        let mut sessions = self.sessions.write().await;
-        for clients in sessions.values() {
-            for session in clients.values() {
-                session.alive.store(false, Ordering::Release);
-            }
+        let active: Vec<_> = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .flat_map(|clients| clients.values())
+            .cloned()
+            .collect();
+        for session in &active {
+            session.alive.store(false, Ordering::Release);
+            session.disconnect.notify_one();
         }
-        sessions.clear();
+        // Drain normal wire cleanup and its bounded audit writes before the
+        // server aborts connection tasks. Never hold the registry lock here.
+        let _ = timeout(Duration::from_secs(5), async {
+            for session in &active {
+                loop {
+                    let notified = session.closed_notify.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+                    if session.closed.load(Ordering::Acquire) || session.sender.is_closed() {
+                        break;
+                    }
+                    notified.await;
+                }
+            }
+        })
+        .await;
+        self.sessions.write().await.clear();
     }
 
     pub async fn attach(self: Arc<Self>, stream: UnixStream) -> crate::Result<()> {
@@ -405,6 +529,16 @@ impl Broker {
             sender,
             slots: Semaphore::new(wire::MAX_INFLIGHT),
             alive: AtomicBool::new(true),
+            ssh_user: user.clone(),
+            owner_subject: self
+                .management
+                .as_ref()
+                .and_then(|state| state.policy.owner_subject(&user)),
+            connected_at: crate::management::now(),
+            audit: self.management.as_ref().map(|state| state.audit.clone()),
+            disconnect: Notify::new(),
+            closed: AtomicBool::new(false),
+            closed_notify: Notify::new(),
         });
         {
             let mut sessions = self.sessions.write().await;
@@ -453,7 +587,10 @@ impl Broker {
                 ("mode", mode.name().into()),
             ],
         );
-        let result: crate::Result<()> = async {
+        let result: crate::Result<()> = tokio::select! {
+            _ = session.disconnect.notified() => Ok(()),
+            result = async {
+            session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone() }).await?;
             let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant, bool)> = HashMap::new();
             let mut next_id = 0u64;
@@ -498,7 +635,11 @@ impl Broker {
                 }
             }
             Ok(())
-        }.await;
+        } => result,
+        };
+        // Drop both wire halves before reporting the disconnect complete.
+        drop(reader);
+        drop(writer);
         session.alive.store(false, Ordering::Release);
         let mut sessions = self.sessions.write().await;
         if let Some(clients) = sessions.get_mut(&user) {
@@ -512,6 +653,7 @@ impl Broker {
                 sessions.remove(&user);
             }
         }
+        drop(sessions);
         crate::observability::log(
             "info",
             "session",
@@ -522,6 +664,18 @@ impl Broker {
                 ("session_id", client_id.clone()),
             ],
         );
+        let _ = session
+            .audit_record(session.audit_event(
+                crate::history::AuditAction::SessionDisconnected,
+                if result.is_ok() {
+                    crate::history::AuditOutcome::Success
+                } else {
+                    crate::history::AuditOutcome::Error
+                },
+            ))
+            .await;
+        session.closed.store(true, Ordering::Release);
+        session.closed_notify.notify_waiters();
         result
     }
 }
@@ -812,6 +966,13 @@ mod tests {
             sender,
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
+            ssh_user: "test".into(),
+            owner_subject: None,
+            connected_at: crate::management::now(),
+            audit: None,
+            disconnect: Notify::new(),
+            closed: AtomicBool::new(false),
+            closed_notify: Notify::new(),
         })
     }
 

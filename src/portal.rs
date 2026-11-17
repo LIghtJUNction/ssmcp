@@ -1,12 +1,19 @@
 //! Browser account portal, sharing the MCP gateway's verified GitHub identity provider.
 //! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
+mod dashboard;
+mod dashboard_view;
 mod setup;
 mod store;
 #[cfg(test)]
 mod tests;
 mod view;
 
-use crate::{broker::Broker, identity::Identity};
+use crate::{
+    broker::Broker,
+    history::{AuditAction, AuditOutcome},
+    identity::Identity,
+    management::ManagementClient,
+};
 use axum::{
     Router,
     body::to_bytes,
@@ -24,7 +31,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -42,6 +49,7 @@ pub struct Portal {
     browser: Mutex<BrowserState>,
     setup: Mutex<setup::SetupState>,
     store: Option<Arc<Mutex<Store>>>,
+    management: Option<ManagementClient>,
 }
 
 #[derive(Default)]
@@ -120,18 +128,27 @@ enum Problem {
     Duplicate,
     NotFound,
     Disabled,
+    Forbidden,
+    ManagementDisabled,
+    ManagementUnavailable,
+    AuditUnavailable,
+    SessionNotFound,
+    ManagementInvalid,
 }
 impl Problem {
     fn status(self) -> StatusCode {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::Csrf => StatusCode::FORBIDDEN,
+            Self::Csrf | Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,
-            Self::Storage => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Storage
+            | Self::ManagementDisabled
+            | Self::ManagementUnavailable
+            | Self::AuditUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Limit | Self::Duplicate => StatusCode::CONFLICT,
-            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::NotFound | Self::SessionNotFound => StatusCode::NOT_FOUND,
             Self::Disabled => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Invalid => StatusCode::BAD_REQUEST,
+            Self::Invalid | Self::ManagementInvalid => StatusCode::BAD_REQUEST,
         }
     }
     fn message(self) -> &'static str {
@@ -145,6 +162,14 @@ impl Problem {
             Self::Duplicate => "你的账户中已存在这把公钥。",
             Self::NotFound => "你的账户中没有这把公钥。",
             Self::Disabled => "账户功能尚未启用，请联系管理员配置 GitHub 登录与账户存储。",
+            Self::Forbidden => "你的账户无权查看或操作这项资源。",
+            Self::ManagementDisabled => "会话管理尚未配置，请联系管理员设置网关管理连接。",
+            Self::ManagementUnavailable => "暂时无法连接会话网关，请稍后重试。没有读取到实时状态。",
+            Self::AuditUnavailable => {
+                "审计记录暂时无法保存，本次操作未确认完成。请在网关恢复后重新核对账户状态。"
+            }
+            Self::SessionNotFound => "该会话已断开或不属于你的账户，请刷新列表后重试。",
+            Self::ManagementInvalid => "管理请求参数无效，请返回会话列表后重试。",
         }
     }
 }
@@ -209,8 +234,74 @@ impl Portal {
             browser: Mutex::default(),
             setup: Mutex::default(),
             store: Some(Arc::new(Mutex::new(Store::open(path)?))),
+            management: None,
         })
     }
+    /// The private socket carries only requests authenticated by this portal's sessions.
+    pub fn configure_management(&mut self, socket: PathBuf) {
+        self.management = Some(ManagementClient::new(socket));
+    }
+
+    async fn identity_for_subject(&self, subject: String) -> Result<Identity, Problem> {
+        self.storage(move |store| store.account(&subject))
+            .await
+            .map(|account| Identity {
+                provider: "github".into(),
+                subject: account.subject,
+                login: account.github_login,
+            })
+    }
+
+    fn charge_management(&self, subject: &str) -> Result<(), Problem> {
+        let mut state = self.browser.lock().map_err(|_| Problem::Storage)?;
+        state.charge(format!("management:{subject}"), 120)?;
+        state.charge("management:global".into(), 600)
+    }
+
+    async fn identity_for_audit(&self, headers: &HeaderMap) -> Option<Identity> {
+        let subject = self.session(headers).ok()?.2?;
+        self.storage(move |store| store.account(&subject))
+            .await
+            .ok()
+            .map(|account| Identity {
+                provider: "github".into(),
+                subject: account.subject,
+                login: account.github_login,
+            })
+    }
+
+    async fn record_audit(
+        &self,
+        identity: Option<&Identity>,
+        action: AuditAction,
+        outcome: AuditOutcome,
+    ) -> Result<(), Problem> {
+        let Some(client) = &self.management else {
+            return Ok(());
+        };
+        {
+            let mut state = self.browser.lock().map_err(|_| Problem::Storage)?;
+            match identity {
+                Some(identity) => state.charge(format!("audit:{}", identity.subject), 120)?,
+                None => state.charge("audit:anonymous".into(), 30)?,
+            }
+            state.charge("audit:global".into(), 600)?;
+        }
+        let result = match identity {
+            Some(identity) => client.record_audit(identity, action, outcome).await,
+            None => {
+                // Invalid/anonymous requests never get a claimed actor from form data.
+                let action = if action == AuditAction::Login {
+                    AuditAction::Login
+                } else {
+                    AuditAction::AccessDenied
+                };
+                client.record_anonymous_audit(action, outcome).await
+            }
+        };
+        result.map_err(|_| Problem::AuditUnavailable)
+    }
+
     fn enabled(&self, broker: &Broker) -> bool {
         self.store.is_some() && broker.identities.enabled("github")
     }
@@ -277,6 +368,7 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/account/keys", post(add_key))
         .route("/account/keys/delete", post(delete_key))
         .merge(setup::routes())
+        .merge(dashboard::routes())
         .layer(middleware::map_response(security_headers))
 }
 
@@ -300,7 +392,7 @@ async fn security_headers(mut response: Response) -> Response {
 
 async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<Response, Problem> {
     if !broker.portal.enabled(&broker) {
-        return Ok(Html(view::home(None, None, false)).into_response());
+        return Ok(Html(view::home(None, None, false, false)).into_response());
     }
     let mut new_cookie = None;
     let (_, csrf, subject) = match broker.portal.session(&headers) {
@@ -328,7 +420,13 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         Some(subject) => Some(broker.portal.storage(move |s| s.account(&subject)).await?),
         None => None,
     };
-    let mut response = Html(view::home(account.as_ref(), Some(&csrf), true)).into_response();
+    let mut response = Html(view::home(
+        account.as_ref(),
+        Some(&csrf),
+        true,
+        broker.portal.management.is_some(),
+    ))
+    .into_response();
     if let Some(raw) = new_cookie {
         set_cookie(&mut response, &raw, LOGIN_TTL.as_secs());
     }
@@ -376,7 +474,101 @@ fn only(form: &HashMap<String, String>, fields: &[&str]) -> Result<(), Problem> 
     Ok(())
 }
 
+fn audit_outcome(result: &Result<Response, Problem>) -> AuditOutcome {
+    match result {
+        Ok(_) => AuditOutcome::Success,
+        Err(
+            Problem::Storage
+            | Problem::Busy
+            | Problem::Disabled
+            | Problem::ManagementDisabled
+            | Problem::ManagementUnavailable
+            | Problem::AuditUnavailable,
+        ) => AuditOutcome::Error,
+        Err(_) => AuditOutcome::Denied,
+    }
+}
+
+fn completed_outcome(result: &Result<Response, Problem>) -> Option<AuditOutcome> {
+    // Do not turn rate limits or a failed audit write into another audit request.
+    (!matches!(result, Err(Problem::Busy | Problem::AuditUnavailable)))
+        .then(|| audit_outcome(result))
+}
+
+async fn record_result(
+    portal: &Portal,
+    identity: Option<&Identity>,
+    action: AuditAction,
+    outcome: Option<AuditOutcome>,
+) -> Result<(), Problem> {
+    if let Some(outcome) = outcome {
+        portal.record_audit(identity, action, outcome).await?;
+    }
+    Ok(())
+}
+
 async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Result<Response, Problem> {
+    let identity = broker.portal.identity_for_audit(request.headers()).await;
+    let result = login_inner(State(broker.clone()), request).await;
+    // A redirect starts OAuth; a successful login is recorded only after identity verification.
+    if result.is_err() {
+        record_result(
+            &broker.portal,
+            identity.as_ref(),
+            AuditAction::Login,
+            completed_outcome(&result),
+        )
+        .await?;
+    }
+    result
+}
+
+async fn logout(State(broker): State<Arc<Broker>>, request: Request) -> Result<Response, Problem> {
+    let identity = broker.portal.identity_for_audit(request.headers()).await;
+    let result = logout_inner(State(broker.clone()), request).await;
+    record_result(
+        &broker.portal,
+        identity.as_ref(),
+        AuditAction::Logout,
+        completed_outcome(&result),
+    )
+    .await?;
+    result
+}
+
+async fn add_key(State(broker): State<Arc<Broker>>, request: Request) -> Result<Response, Problem> {
+    let identity = broker.portal.identity_for_audit(request.headers()).await;
+    let result = add_key_inner(State(broker.clone()), request).await;
+    record_result(
+        &broker.portal,
+        identity.as_ref(),
+        AuditAction::KeyAdded,
+        completed_outcome(&result),
+    )
+    .await?;
+    result
+}
+
+async fn delete_key(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
+    let identity = broker.portal.identity_for_audit(request.headers()).await;
+    let result = delete_key_inner(State(broker.clone()), request).await;
+    record_result(
+        &broker.portal,
+        identity.as_ref(),
+        AuditAction::KeyRemoved,
+        completed_outcome(&result),
+    )
+    .await?;
+    result
+}
+
+async fn login_inner(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
     if !broker.portal.enabled(&broker) {
         return Err(Problem::Disabled);
     }
@@ -427,11 +619,29 @@ pub(crate) fn is_callback(query: Option<&str>) -> bool {
     })
 }
 pub(crate) async fn callback(broker: Arc<Broker>, query: &str, headers: HeaderMap) -> Response {
-    let response = match finish_callback(&broker, query, &headers).await {
+    let result = finish_callback(&broker, query, &headers).await;
+    if let Err(error) = &result
+        && *error != Problem::AuditUnavailable
+        && *error != Problem::Busy
+    {
+        let identity = broker.portal.identity_for_audit(&headers).await;
+        if let Err(error) = broker
+            .portal
+            .record_audit(
+                identity.as_ref(),
+                AuditAction::Login,
+                audit_outcome(&result),
+            )
+            .await
+        {
+            return security_headers(error.into_response()).await;
+        }
+    }
+    security_headers(match result {
         Ok(response) => response,
         Err(error) => error.into_response(),
-    };
-    security_headers(response).await
+    })
+    .await
 }
 async fn finish_callback(
     broker: &Broker,
@@ -483,33 +693,78 @@ async fn finish_identity(
     previous: DigestKey,
     identity: Identity,
 ) -> Result<Response, Problem> {
+    {
+        let mut browser = portal.browser.lock().map_err(|_| Problem::Storage)?;
+        browser.prune();
+        if !browser.sessions.contains_key(&previous) {
+            return Err(Problem::Unauthorized);
+        }
+    }
+    let audit_identity = identity.clone();
+    portal
+        .record_audit(
+            Some(&audit_identity),
+            AuditAction::Login,
+            AuditOutcome::Pending,
+        )
+        .await?;
     let account = portal.storage(move |s| s.login(&identity)).await?;
     let raw = random()?;
     let csrf = random()?;
-    let mut browser = portal.browser.lock().map_err(|_| Problem::Storage)?;
-    browser.prune();
-    // A logout/expired session during the upstream exchange must not recreate a login.
-    if browser.sessions.remove(&previous).is_none() {
-        return Err(Problem::Unauthorized);
+    {
+        let mut browser = portal.browser.lock().map_err(|_| Problem::Storage)?;
+        browser.prune();
+        // A logout/expired session during the upstream exchange must not recreate a login.
+        if browser.sessions.remove(&previous).is_none() {
+            return Err(Problem::Unauthorized);
+        }
+        browser.pending.retain(|_, p| p.browser != previous);
+        browser.sessions.insert(
+            digest(&raw),
+            Session {
+                subject: Some(account.subject),
+                csrf,
+                expires: Instant::now() + SESSION_TTL,
+            },
+        );
     }
-    browser.pending.retain(|_, p| p.browser != previous);
-    browser.sessions.insert(
-        digest(&raw),
-        Session {
-            subject: Some(account.subject),
-            csrf,
-            expires: Instant::now() + SESSION_TTL,
-        },
-    );
+    if let Err(error) = portal
+        .record_audit(
+            Some(&audit_identity),
+            AuditAction::Login,
+            AuditOutcome::Success,
+        )
+        .await
+    {
+        // No unaudited authenticated browser session survives a failed audit write.
+        portal
+            .browser
+            .lock()
+            .map_err(|_| Problem::Storage)?
+            .sessions
+            .remove(&digest(&raw));
+        return Err(error);
+    }
     let mut response = Redirect::to("/#account").into_response();
     set_cookie(&mut response, &raw, SESSION_TTL.as_secs());
     Ok(response)
 }
 
-async fn logout(State(broker): State<Arc<Broker>>, request: Request) -> Result<Response, Problem> {
+async fn logout_inner(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
     let (headers, form) = form(request).await?;
     only(&form, &["csrf"])?;
-    let (key, _) = broker.portal.verify(&headers, &form, &broker.public_url)?;
+    let (key, subject) = broker.portal.verify(&headers, &form, &broker.public_url)?;
+    let identity = broker
+        .portal
+        .identity_for_subject(subject.ok_or(Problem::Unauthorized)?)
+        .await?;
+    broker
+        .portal
+        .record_audit(Some(&identity), AuditAction::Logout, AuditOutcome::Pending)
+        .await?;
     let mut browser = broker.portal.browser.lock().map_err(|_| Problem::Storage)?;
     browser.sessions.remove(&key);
     browser.pending.retain(|_, p| p.browser != key);
@@ -532,15 +787,27 @@ async fn key_action(
         .charge(format!("keys:{subject}"), 20)?;
     Ok(subject)
 }
-async fn add_key(State(broker): State<Arc<Broker>>, request: Request) -> Result<Response, Problem> {
+async fn add_key_inner(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
     let (headers, form) = form(request).await?;
     only(&form, &["csrf", "label", "public_key"])?;
     let owner = key_action(&broker, &headers, &form).await?;
     let key = parse_key(&form["public_key"], &form["label"])?;
+    let identity = broker.portal.identity_for_subject(owner.clone()).await?;
+    broker
+        .portal
+        .record_audit(
+            Some(&identity),
+            AuditAction::KeyAdded,
+            AuditOutcome::Pending,
+        )
+        .await?;
     broker.portal.storage(move |s| s.add(&owner, key)).await?;
     Ok(Redirect::to("/#keys").into_response())
 }
-async fn delete_key(
+async fn delete_key_inner(
     State(broker): State<Arc<Broker>>,
     request: Request,
 ) -> Result<Response, Problem> {
@@ -551,6 +818,15 @@ async fn delete_key(
     if fingerprint.len() != 50 || !fingerprint.starts_with("SHA256:") {
         return Err(Problem::Invalid);
     }
+    let identity = broker.portal.identity_for_subject(owner.clone()).await?;
+    broker
+        .portal
+        .record_audit(
+            Some(&identity),
+            AuditAction::KeyRemoved,
+            AuditOutcome::Pending,
+        )
+        .await?;
     broker
         .portal
         .storage(move |s| s.remove(&owner, &fingerprint))

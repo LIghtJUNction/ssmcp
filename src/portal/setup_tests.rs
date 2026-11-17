@@ -48,6 +48,9 @@ impl Drop for Fixture {
 }
 impl Fixture {
     async fn new() -> Self {
+        Self::with_offline_management(false).await
+    }
+    async fn with_offline_management(offline: bool) -> Self {
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_url = format!("http://{}", upstream.local_addr().unwrap());
         let mock=Router::new()
@@ -81,6 +84,11 @@ impl Fixture {
             })
             .await
             .unwrap();
+        if offline {
+            broker
+                .portal
+                .configure_management(temporary.0.join("unavailable-management.sock"));
+        }
         let broker = Arc::new(broker);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -172,6 +180,43 @@ impl Fixture {
             .unwrap();
         (response.status(), response.json().await.unwrap())
     }
+}
+
+#[tokio::test]
+async fn setup_registration_cannot_bypass_unavailable_audit() {
+    let fixture = Fixture::with_offline_management(true).await;
+    let issued = fixture.start("audit-bound setup").await;
+    let secret = issued["device_code"].as_str().unwrap();
+    let code = issued["user_code"].as_str().unwrap();
+    let (cookie, csrf) = fixture.session("123");
+    assert_eq!(
+        fixture
+            .consent(&cookie, &csrf, code, "allow")
+            .await
+            .status(),
+        303
+    );
+    let (status, _) = fixture.register(secret, &public_key(1)).await;
+    assert_eq!(status, 503);
+    assert!(
+        fixture
+            .broker
+            .portal
+            .storage(|store| Ok(store.account("123")?.keys.is_empty()))
+            .await
+            .unwrap()
+    );
+    // A repeated request must not convert a failed audit into a saved key.
+    let (status, _) = fixture.register(secret, &public_key(1)).await;
+    assert_eq!(status, 503);
+    assert!(
+        fixture
+            .broker
+            .portal
+            .storage(|store| Ok(store.account("123")?.keys.is_empty()))
+            .await
+            .unwrap()
+    );
 }
 
 #[test]
