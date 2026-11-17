@@ -982,6 +982,61 @@ async fn skill_views_preserve_scope_and_pagination_and_content_reads_are_exact()
 }
 
 #[tokio::test]
+async fn default_skill_views_require_effective_scope_and_never_fall_back_on_old_clients() {
+    let mut server = Server::start().await;
+    let id = server.attach(Mode::Shell).await;
+    for modern in [false, true] {
+        for (query, expected) in [
+            ("", json!({"scope":"effective"})),
+            ("?cursor=next", json!({"scope":"effective","cursor":"next"})),
+            ("?root=workspace", json!({"root":"workspace"})),
+            (
+                "?root=context-1&cursor=next",
+                json!({"root":"context-1","cursor":"next"}),
+            ),
+            ("?scope=root", json!({"scope":"root"})),
+            ("?scope=effective", json!({"scope":"effective"})),
+        ] {
+            let uri = format!("ssmcp://clients/{id}/skills/view{query}");
+            let before = server.clients[0].calls.load(Ordering::Acquire);
+            let (_, body) = server
+                .rpc("resources/read", json!({"uri":uri}), modern, 0)
+                .await;
+            assert!(body.get("result").is_some(), "{body}");
+            assert_eq!(server.clients[0].calls.load(Ordering::Acquire), before + 1);
+            assert_eq!(
+                server.clients[0].native_calls.lock().unwrap().last(),
+                Some(&("ssmcp.skills.view".to_owned(), expected)),
+            );
+        }
+        for old_reply in [
+            Err("invalid context arguments: unknown field scope".into()),
+            Ok(json!({"isError":true,"content":[
+                {"type":"text","text":"invalid context arguments: unknown field scope"}
+            ]})),
+        ] {
+            *server.clients[0].native_reply.lock().unwrap() = Some(old_reply);
+            let before = server.clients[0].calls.load(Ordering::Acquire);
+            let (_, body) = server
+                .rpc(
+                    "resources/read",
+                    json!({"uri":format!("ssmcp://clients/{id}/skills/view")}),
+                    modern,
+                    0,
+                )
+                .await;
+            assert_eq!(body["error"]["code"], -32603, "{body}");
+            assert!(body.get("result").is_none());
+            assert_eq!(server.clients[0].calls.load(Ordering::Acquire), before + 1);
+            assert_eq!(
+                server.clients[0].native_calls.lock().unwrap().last(),
+                Some(&("ssmcp.skills.view".to_owned(), json!({"scope":"effective"}))),
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn resources_read_live_project_files_and_explicit_global_overlay_without_restart() {
     use std::{
         fs,
