@@ -27,6 +27,7 @@ the later release executable.
 | Real viewer with recording launcher | 7 acceptance groups passed | [Recording report](reports/tty-observer-recording-20261118.json) |
 | Real Kitty windows | 7 acceptance groups passed | [Kitty report](reports/tty-observer-kitty-20261118.json) |
 | Real ztty windows | 7 acceptance groups passed | [ztty report](reports/tty-observer-ztty-20261118.json) |
+| Fixed 0.7.4 release with recording launcher | 7 acceptance groups passed | [Release report](reports/tty-observer-release-e2e-20261118.json) |
 
 The 50 Rust tests above are unique tests from four local invocations, not a claim that
 the entire repository suite was run. The observer tests cover bounded replay storage,
@@ -77,6 +78,25 @@ for the library and client binary passed. The first Clippy run identified two
 collapsible conditions; both were rewritten without changing their predicates.
 The [command history](reports/tty-observer-validation-20261118.json) records that failed
 lint attempt and the successful follow-up, alongside the unchanged unique-test count.
+
+## Fixed release artifact
+
+The optimized 0.7.4 executable was built from the clean source commit
+`05f72fc2bbed776502b3a19c3a6b118f7c7646db` using
+`cargo build --locked --release --bin ssmcp -j1`. Its SHA-256 is
+`8271d106f45af1c23cef9873f675e210741ecd4ecda83d7ea5c2f67d29e5a0c5`, and its size is
+11,012,544 bytes. The [provenance record](reports/tty-observer-release-20261118.json)
+identifies the fixed local copy, source commit and build command.
+
+The fixed copy passed its version and `--help` checks, followed by all seven groups
+of the [recording-launcher E2E](reports/tty-observer-release-e2e-20261118.json).
+This additional run validates the release executable itself. The Kitty and ztty
+screenshots remain evidence from the earlier GUI runs described above.
+
+The final evidence commit adds only these records and this documentation. It does
+not rebuild or change the tested implementation, so the binary's source remains
+`05f72fc2bbed776502b3a19c3a6b118f7c7646db` even when the branch includes that later
+documentation commit.
 
 ## Behavioral boundaries
 
