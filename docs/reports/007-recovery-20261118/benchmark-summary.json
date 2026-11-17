@@ -1,0 +1,53 @@
+{
+  "schema": "ssmcp.007.benchmark.v1",
+  "measured_at_utc": "2026-11-17T21:42:55.981169+00:00",
+  "pid": 1073481,
+  "process_start_ticks": 4315719,
+  "scope": "requested PID only; observed child PIDs are reported separately",
+  "elapsed_seconds": 300.000768,
+  "sample_interval_seconds": 1.0,
+  "sample_count": 277,
+  "clock_ticks_per_second": 100,
+  "cpu_seconds": 0.01,
+  "cpu_percent_one_core": 0.003333,
+  "rss_kib": {
+    "min": 3116,
+    "mean": 4196.823,
+    "max": 5896
+  },
+  "pss_kib": {
+    "min": 311,
+    "mean": 1419.993,
+    "max": 3082
+  },
+  "threads": {
+    "min": 1,
+    "mean": 1,
+    "max": 1
+  },
+  "file_descriptors": {
+    "min": 11,
+    "mean": 11,
+    "max": 11
+  },
+  "observed_child_pids": [],
+  "network": {
+    "available": true,
+    "scope": "TCP payload counters, including TLS and WebSocket framing; excluding IP/TCP/link headers and pure ACKs",
+    "source": "ss -tinpeH state established",
+    "initial_socket_count": 1,
+    "final_socket_count": 1,
+    "created_socket_count": 0,
+    "disappeared_socket_count": 0,
+    "closed_socket_tail_unobserved": false,
+    "errors": [],
+    "delta": {
+      "bytes_sent": 336,
+      "bytes_received": 288,
+      "bytes_retrans": 0
+    },
+    "payload_bytes_per_second": 2.08
+  },
+  "post_sample_process_high_water_rss_kib": 8076,
+  "high_water_scope": "Process lifetime, including live acceptance management before this idle sample."
+}
