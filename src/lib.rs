@@ -22,6 +22,7 @@ pub mod management;
 pub(crate) mod memory;
 #[cfg(target_os = "linux")]
 pub mod oauth;
+pub(crate) mod observer;
 pub mod omarchy;
 pub mod output;
 pub mod platform;

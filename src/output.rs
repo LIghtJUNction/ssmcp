@@ -139,9 +139,21 @@ pub struct OutputStore {
     directory: PathBuf,
     directory_fd: Directory,
     policy: Policy,
+    observer: std::sync::Mutex<Option<std::sync::Weak<crate::observer::Pool>>>,
 }
 
 impl OutputStore {
+    pub(crate) fn set_observer(&self, observer: &Arc<crate::observer::Pool>) {
+        *self.observer.lock().unwrap() = Some(Arc::downgrade(observer));
+    }
+    pub(crate) fn observer(&self) -> Option<Arc<crate::observer::Pool>> {
+        self.observer
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
     /// Compatibility accessor for a single foreground connection.
     pub fn global() -> Result<Arc<Self>, String> {
         static STORE: OnceLock<Result<Arc<OutputStore>, String>> = OnceLock::new();
@@ -238,6 +250,7 @@ impl OutputStore {
             directory,
             directory_fd,
             policy,
+            observer: std::sync::Mutex::new(None),
         };
         if let Some(token) = reload
             && let Some(owner) = store

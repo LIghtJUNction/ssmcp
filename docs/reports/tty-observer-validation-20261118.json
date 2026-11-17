@@ -1,0 +1,103 @@
+{
+  "observed_at_utc": "2026-11-17T20:23:12.847487+00:00",
+  "platform": "Linux x86_64",
+  "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
+  "gui_evidence_source_commit": "d3fa813f7fcdd1c38d27b834de74a9be21775b9f",
+  "gui_test_binary_sha256": "ea0d128515b069668479eebdd7be3349aa1ede3b4ddde3879f6f97356d752537",
+  "unique_rust_test_counts": {
+    "observer": 10,
+    "shell_regressions": 17,
+    "client_regressions": 22,
+    "tty_option": 1,
+    "total": 50
+  },
+  "gui_and_recording_e2e_groups": {
+    "recording": 7,
+    "kitty": 7,
+    "ztty": 7
+  },
+  "final_followup_commands": [
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all"
+      ],
+      "exit_code": 0,
+      "seconds": 1.35
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "observer::tests::native_command_detection_covers_direct_and_rpc_paths",
+        "-j1"
+      ],
+      "exit_code": 0,
+      "seconds": 232.34
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "observer::tests::managed_pty_preserves_argv_color_exit_and_pipe_stdin",
+        "-j1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.91
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--lib",
+        "--bin",
+        "ssmcp",
+        "-j1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 101,
+      "seconds": 54.82
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all"
+      ],
+      "exit_code": 0,
+      "seconds": 1.44
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--lib",
+        "--bin",
+        "ssmcp",
+        "-j1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 41.7
+    }
+  ],
+  "clippy_resolution": "Collapsed equivalent if conditions in observer reopen and pre-existing portal/store handle validation; final strict Clippy passed.",
+  "screenshots_visually_inspected": [
+    "tty-observer-kitty-20261118.png",
+    "tty-observer-ztty-20261118.png"
+  ],
+  "runtime_scope": "Linux only; native providers covered by protocol fixtures; no external models invoked",
+  "whole_repository_suite_run": false,
+  "release_binary_tested_by_these_gui_reports": false
+}

@@ -171,6 +171,7 @@ impl Claude {
 
     fn watch_background(&self, result: &Value) {
         for path in background_paths(result) {
+            self.peer.events().map_background(&path);
             let mut watchers = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
             if self.closed.load(Ordering::Acquire) {
                 return;
@@ -196,6 +197,8 @@ impl Claude {
                         "path":watched_path,"error":error.to_string()
                     });
                     peer.events().push(event);
+                } else {
+                    peer.events().push(json!({"type":"background_output_closed","backend":"cc","path":watched_path}));
                 }
             });
             watchers.insert(path, task);
@@ -276,7 +279,7 @@ fn control_tools() -> Vec<Value> {
     ]
 }
 
-fn background_paths(result: &Value) -> Vec<PathBuf> {
+pub(crate) fn background_paths(result: &Value) -> Vec<PathBuf> {
     let mut paths = HashSet::new();
     let mut add = |payload: &Value| {
         if let Some(path) = payload["backgroundOutputPath"].as_str() {
