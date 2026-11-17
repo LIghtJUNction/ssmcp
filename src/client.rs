@@ -53,8 +53,9 @@ Usage: ssmcp [options] [user@]host
   --no-setup           Disable automatic interactive connection repair
   --daemon             Start a quiet, user-owned native background service
   --session-control    Grant this connection local saved-session management tools
-  --watchdog           Retry disconnected/failed connections until explicitly stopped
-  --reconnect-delay N  Seconds between retries, 1..=3600 (default 5; needs --watchdog)
+  --no-watchdog        Disable automatic reconnects (enabled by default)
+  --watchdog           Enable automatic reconnects explicitly (compatibility flag)
+  --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
   --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (at most 32 distinct users; case-insensitive)
@@ -259,6 +260,20 @@ impl Options {
         args: impl IntoIterator<Item = OsString>,
         default_destination: Option<&str>,
     ) -> Result<Option<Self>, String> {
+        Self::parse_with_policy(args, default_destination, true)
+    }
+
+    // Older saved manifests omitted --no-watchdog. Their recorded policy remains
+    // authoritative as the parsing default; explicit flags must still match it.
+    fn parse_saved(spec: &crate::session::SessionSpec) -> Result<Option<Self>, String> {
+        Self::parse_with_policy(spec.args.iter().map(OsString::from), None, spec.watchdog)
+    }
+
+    fn parse_with_policy(
+        args: impl IntoIterator<Item = OsString>,
+        default_destination: Option<&str>,
+        default_watchdog: bool,
+    ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter();
         let mut destination = None;
         let mut name = None;
@@ -268,7 +283,8 @@ impl Options {
         let mut list_tools = false;
         let mut daemon = false;
         let mut session_control = false;
-        let mut watchdog = false;
+        let mut watchdog = default_watchdog;
+        let mut explicit_watchdog = None;
         let mut reconnect_delay_secs = None;
         let mut log_format = None;
         let mut ui_config = None;
@@ -357,7 +373,14 @@ impl Options {
                 }
                 Some("--daemon") => daemon = true,
                 Some("--session-control") => session_control = true,
-                Some("--watchdog") => watchdog = true,
+                Some("--watchdog" | "--no-watchdog") => {
+                    let enabled = arg == "--watchdog";
+                    if explicit_watchdog.is_some_and(|previous| previous != enabled) {
+                        return Err("--watchdog and --no-watchdog cannot be combined".into());
+                    }
+                    explicit_watchdog = Some(enabled);
+                    watchdog = enabled;
+                }
                 Some("--reconnect-delay") => {
                     reconnect_delay_secs = Some(
                         args.next()
@@ -429,11 +452,19 @@ impl Options {
         if list_tools && destination.is_some() {
             return Err("--list-tools is local and does not take an SSH destination".into());
         }
-        if list_tools && (daemon || watchdog || reconnect_delay_secs.is_some()) {
-            return Err("--list-tools cannot be combined with --daemon or --watchdog".into());
+        if list_tools
+            && (daemon || explicit_watchdog == Some(true) || reconnect_delay_secs.is_some())
+        {
+            return Err(
+                "--list-tools cannot be combined with --daemon, --watchdog or --reconnect-delay"
+                    .into(),
+            );
+        }
+        if list_tools {
+            watchdog = false;
         }
         if reconnect_delay_secs.is_some() && !watchdog {
-            return Err("--reconnect-delay requires --watchdog".into());
+            return Err("--reconnect-delay cannot be combined with --no-watchdog".into());
         }
         if list_tools && !allow.is_empty() {
             return Err(
@@ -534,6 +565,8 @@ impl Options {
                 OsString::from("--reconnect-delay"),
                 OsString::from(self.reconnect_delay_secs.to_string()),
             ]);
+        } else {
+            args.push(OsString::from("--no-watchdog"));
         }
         if self.session_control {
             args.push(OsString::from("--session-control"));
@@ -614,8 +647,8 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
             args.next();
         }
     }
-    let options = Options::parse(spec.args.iter().map(OsString::from))?
-        .ok_or("saved session must contain connection options")?;
+    let options =
+        Options::parse_saved(spec)?.ok_or("saved session must contain connection options")?;
     if options.daemon
         || options.list_tools
         || options.name.as_deref() != Some(spec.name.as_str())
@@ -641,8 +674,8 @@ pub(crate) fn child_session_spec(
     watchdog: Option<bool>,
     reconnect_delay_secs: Option<u64>,
 ) -> crate::Result<crate::session::SessionSpec> {
-    let mut options = Options::parse(template.args.iter().map(OsString::from))?
-        .ok_or("invalid management connection template")?;
+    let mut options =
+        Options::parse_saved(template)?.ok_or("invalid management connection template")?;
     options.name = Some(name);
     options.title = title.or(options.title);
     options.daemon = false;
@@ -844,7 +877,9 @@ pub async fn run() -> crate::Result<()> {
     } else {
         None
     };
-    let parsed = if setup_requested {
+    let parsed = if let Some(runner) = &service {
+        Options::parse_saved(runner.spec())?
+    } else if setup_requested {
         Options::parse_with_default(args, Some("ssmcp.lmm.best"))?
     } else {
         Options::parse(args)?
@@ -1722,7 +1757,7 @@ mod tests {
         let normal = Options::parse(["host"].map(OsString::from))
             .unwrap()
             .unwrap();
-        assert!(!normal.daemon && !normal.watchdog);
+        assert!(!normal.daemon && normal.watchdog);
         let retry = Options::parse(["--watchdog", "host"].map(OsString::from))
             .unwrap()
             .unwrap();
@@ -1744,10 +1779,64 @@ mod tests {
                 .is_err()
             );
         }
-        assert!(Options::parse(["--reconnect-delay", "5", "host"].map(OsString::from)).is_err());
+        let custom = Options::parse(["--reconnect-delay", "5", "host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert!(custom.watchdog);
+        for args in [
+            vec!["--no-watchdog", "--reconnect-delay", "5", "host"],
+            vec!["--watchdog", "--no-watchdog", "host"],
+            vec!["--no-watchdog", "--watchdog", "host"],
+        ] {
+            assert!(Options::parse(args.into_iter().map(OsString::from)).is_err());
+        }
+        let disabled = Options::parse(["--no-watchdog", "host"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert!(!disabled.watchdog);
+        let saved = disabled.session_spec().unwrap();
+        assert!(saved.args.iter().any(|arg| arg == "--no-watchdog"));
+        validate_session_spec(&saved).unwrap();
+        assert!(
+            !Options::parse(saved.args.iter().map(OsString::from))
+                .unwrap()
+                .unwrap()
+                .watchdog
+        );
+        for args in [vec!["--list-tools"], vec!["--list-tools", "--no-watchdog"]] {
+            let discovery = Options::parse(args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            assert!(discovery.list_tools && !discovery.watchdog);
+        }
         for flag in ["--daemon", "--watchdog"] {
             assert!(Options::parse([flag, "--list-tools"].map(OsString::from)).is_err());
         }
+    }
+
+    #[test]
+    fn legacy_saved_sessions_preserve_disabled_watchdog() {
+        let options =
+            Options::parse(["--name", "legacy", "--no-watchdog", "host"].map(OsString::from))
+                .unwrap()
+                .unwrap();
+        let mut legacy = options.session_spec().unwrap();
+        legacy.args.retain(|arg| arg != "--no-watchdog");
+        validate_session_spec(&legacy).unwrap();
+        assert!(!Options::parse_saved(&legacy).unwrap().unwrap().watchdog);
+        let child = child_session_spec(
+            &legacy,
+            "child".into(),
+            std::env::current_dir().unwrap(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!child.watchdog);
+        assert!(child.args.iter().any(|arg| arg == "--no-watchdog"));
+        legacy.args.insert(0, "--watchdog".into());
+        assert!(validate_session_spec(&legacy).is_err());
     }
 
     #[test]
