@@ -1,6 +1,9 @@
 //! OpenCode v2 HTTP API, discovered from an owned or explicitly attached native server.
 use super::{events::EventLog, process::Managed, result};
-use crate::output::{Capture, INLINE_BYTES, OutputStore};
+use crate::{
+    catalog::ToolDescriptor,
+    output::{Capture, INLINE_BYTES, OutputStore},
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Method, Response, Url};
@@ -47,7 +50,25 @@ struct Operation {
 struct NativeCatalog {
     document: Value,
     operations: BTreeMap<String, Operation>,
-    tools: Vec<Value>,
+    tools: Vec<ToolDescriptor>,
+}
+
+impl NativeCatalog {
+    fn reuse_unchanged(&mut self, previous: &Self) -> Result<(), String> {
+        let old = previous
+            .tools
+            .iter()
+            .map(|tool| Ok((tool.header()?.0, tool)))
+            .collect::<Result<BTreeMap<_, _>, String>>()?;
+        for tool in &mut self.tools {
+            if let Some(previous) = old.get(&tool.header()?.0)
+                && ToolDescriptor::eq(previous, tool)
+            {
+                *tool = ToolDescriptor::clone(previous);
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct OpenCode {
@@ -276,12 +297,28 @@ impl OpenCode {
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
+        self.compact_tools()
+            .await?
+            .iter()
+            .map(ToolDescriptor::value)
+            .collect()
+    }
+
+    pub(crate) async fn compact_tools(&self) -> Result<Vec<ToolDescriptor>, String> {
         let _refresh = self.refresh.lock().await;
         self.ensure_running().await?;
-        // A successful current native schema request, not installation alone,
-        // determines which tools are available. Replace routes and schemas together.
-        let next = Arc::new(fetch_catalog(&self.client, &self.base, &self.password).await?);
-        let changed = self.snapshot.read().unwrap().document != next.document;
+        // A successful current native schema request determines availability.
+        // Publish routes and descriptors atomically, sharing unchanged payloads
+        // with the registry and any readers of the previous snapshot.
+        let mut next = fetch_catalog(&self.client, &self.base, &self.password).await?;
+        let previous = self.snapshot.read().unwrap().clone();
+        let changed = previous.document != next.document;
+        let next = if changed {
+            next.reuse_unchanged(&previous)?;
+            Arc::new(next)
+        } else {
+            previous
+        };
         let mut tools = next.tools.clone();
         *self.snapshot.write().unwrap() = next;
         if changed {
@@ -289,7 +326,7 @@ impl OpenCode {
                 json!({"type":"ssmcp.catalog_changed","backend":"opencode","tools":tools.len()}),
             );
         }
-        tools.extend(extra_tools());
+        tools.extend(crate::catalog::compact(extra_tools())?);
         Ok(tools)
     }
 
@@ -1011,7 +1048,7 @@ fn dereference<'a>(value: &'a Value, document: &'a Value) -> Result<&'a Value, S
     Err("cyclic OpenAPI parameter reference".into())
 }
 
-fn catalog(document: &Value) -> Result<(BTreeMap<String, Operation>, Vec<Value>), String> {
+fn catalog(document: &Value) -> Result<(BTreeMap<String, Operation>, Vec<ToolDescriptor>), String> {
     let paths = document
         .get("paths")
         .and_then(Value::as_object)
@@ -1158,7 +1195,7 @@ fn catalog(document: &Value) -> Result<(BTreeMap<String, Operation>, Vec<Value>)
                 .or_else(|| definition.get("summary"))
                 .and_then(Value::as_str)
                 .unwrap_or(id);
-            tools.push(json!({"name":name,"description":format!("{} {}. {}", method.as_str(), path, description),"inputSchema":schema}));
+            tools.push(ToolDescriptor::from_value(json!({"name":name,"description":format!("{} {}. {}", method.as_str(), path, description),"inputSchema":schema}))?);
             operations.insert(
                 name,
                 Operation {
@@ -1836,10 +1873,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn compact_refresh_reuses_unchanged_tools_across_reordering() {
+        fn snapshot(values: Vec<Value>) -> NativeCatalog {
+            NativeCatalog {
+                document: json!({}),
+                operations: BTreeMap::new(),
+                tools: crate::catalog::compact(values).unwrap(),
+            }
+        }
+        let stable = json!({"name":"opencode.stable","inputSchema":{"type":"object"},
+            "outputSchema":{"type":"string"},"_native":{"preserve":[1,null,true]}});
+        let changed = json!({"name":"opencode.changed","inputSchema":{"type":"object"},
+            "description":"first"});
+        let old = snapshot(vec![
+            stable.clone(),
+            changed.clone(),
+            json!({"name":"opencode.removed","inputSchema":{"type":"object"}}),
+        ]);
+        let mut next = snapshot(vec![
+            json!({"name":"opencode.added","inputSchema":{"type":"object"}}),
+            json!({"name":"opencode.changed","inputSchema":{"type":"object"},
+                "description":"second"}),
+            stable.clone(),
+        ]);
+        next.reuse_unchanged(&old).unwrap();
+        assert!(next.tools[2].shares_storage(&old.tools[0]));
+        assert!(!next.tools[1].shares_storage(&old.tools[1]));
+        assert!(
+            old.tools
+                .iter()
+                .all(|tool| !next.tools[0].shares_storage(tool))
+        );
+        assert_eq!(next.tools[2].value().unwrap(), stable);
+        assert_eq!(old.tools[1].value().unwrap(), changed);
+        assert_eq!(next.tools[1].value().unwrap()["description"], "second");
+    }
+
+    #[test]
     fn schema_refs_are_transitive_and_exclude_unrelated_components() {
         let document = json!({"paths":{"/api/thing/{id}":{"post":{"operationId":"thing.create","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/A"}}}}}}},"components":{"schemas":{"A":{"type":"object","properties":{"child":{"$ref":"#/components/schemas/B"}}},"B":{"type":"string"},"Unused":{"type":"number"}}}});
         let (_, tools) = catalog(&document).unwrap();
-        let input = &tools[0]["inputSchema"];
+        let first = tools[0].value().unwrap();
+        let input = &first["inputSchema"];
         assert_eq!(input["properties"]["body"]["$ref"], "#/$defs/A");
         assert_eq!(
             input["$defs"]["A"]["properties"]["child"]["$ref"],
@@ -2299,6 +2374,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = private_url(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let documents = [
+            first.clone(),
             first,
             second.clone(),
             json!({"error":"temporarily unavailable"}),
@@ -2312,7 +2388,7 @@ mod tests {
                     String::from_utf8_lossy(&request[..count]).starts_with("GET /openapi.json ")
                 );
                 let bytes = serde_json::to_vec(&document).unwrap();
-                let status = if index == 2 {
+                let status = if index == 3 {
                     "503 Service Unavailable"
                 } else {
                     "200 OK"
@@ -2331,6 +2407,12 @@ mod tests {
         *backend.process.lock().await = Some(Managed::spawn(&mut command).unwrap());
         let tools = backend.tools().await.unwrap();
         assert!(tools.iter().any(|tool| tool["name"] == "opencode.old.read"));
+        let previous = backend.snapshot.read().unwrap().clone();
+        let unchanged = backend.compact_tools().await.unwrap();
+        assert!(Arc::ptr_eq(&previous, &backend.snapshot.read().unwrap()));
+        for (listed, retained) in unchanged.iter().zip(&previous.tools) {
+            assert!(listed.shares_storage(retained));
+        }
         let tools = backend.tools().await.unwrap();
         assert!(!tools.iter().any(|tool| tool["name"] == "opencode.old.read"));
         let discovered = tools

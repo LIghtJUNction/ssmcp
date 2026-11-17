@@ -2031,6 +2031,7 @@ async fn connect(
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer,&Frame::Reply {id,result}).await
                         }).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut,"SSH write timed out"))??;
+                        crate::memory::release_unused_heap();
                         Ok(was_tool)
                     });
                 }

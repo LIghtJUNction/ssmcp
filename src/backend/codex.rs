@@ -4,7 +4,7 @@ use super::{
     result,
     rpc::{Dialect, Peer},
 };
-use crate::output::OutputStore;
+use crate::{catalog::ToolDescriptor, output::OutputStore};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -12,7 +12,8 @@ use std::{
     ffi::{OsStr, OsString},
     fmt::Write,
     fs,
-    path::{Path, PathBuf},
+    io::{BufReader, Read},
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -33,9 +34,32 @@ struct McpRoute {
 
 #[derive(Default)]
 struct McpCatalog {
-    tools: Vec<Value>,
+    tools: Vec<ToolDescriptor>,
     routes: BTreeMap<String, McpRoute>,
     omitted: Vec<Value>,
+}
+
+impl McpCatalog {
+    fn reuse_unchanged(&mut self, previous: &Self) {
+        // Both maps and descriptor vectors follow the same routing-name order.
+        // Reuse payloads before publication so a healthy refresh keeps sharing
+        // storage with the registry and any active pagination snapshots.
+        let mut old = previous.routes.keys().zip(&previous.tools).peekable();
+        for (name, descriptor) in self.routes.keys().zip(&mut self.tools) {
+            while old
+                .peek()
+                .is_some_and(|(old_name, _)| old_name.as_str() < name.as_str())
+            {
+                old.next();
+            }
+            if let Some((old_name, old_descriptor)) = old.peek()
+                && old_name.as_str() == name.as_str()
+                && ToolDescriptor::eq(old_descriptor, descriptor)
+            {
+                *descriptor = ToolDescriptor::clone(old_descriptor);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -50,9 +74,9 @@ struct McpState {
 
 pub struct Codex {
     peer: Arc<Peer>,
-    tools: Vec<Value>,
+    tools: Vec<ToolDescriptor>,
     methods: Methods,
-    schemas: BTreeMap<String, Value>,
+    schemas: SchemaStore,
     // A snapshot lock never crosses network I/O. Healthy refreshes retain the
     // last complete snapshot; failure/cancellation revokes it atomically.
     mcp: std::sync::Mutex<McpState>,
@@ -103,11 +127,15 @@ impl Codex {
             )
             .into());
         }
-        let schemas = load_schemas(&directory.0)?;
-        let request_schema = schemas
-            .get("ClientRequest.json")
-            .ok_or("Codex generated no ClientRequest.json")?;
-        let (tools, methods) = catalog(request_schema)?;
+        let schemas = load_schemas(directory)?;
+        if !schemas.files.contains_key("ClientRequest.json") {
+            return Err("Codex generated no ClientRequest.json".into());
+        }
+        let (tools, methods) = catalog(&schemas.read("ClientRequest.json")?)?;
+        let tools = tools
+            .into_iter()
+            .map(ToolDescriptor::from_value)
+            .collect::<Result<Vec<_>, _>>()?;
         let mcp_supported = [
             "thread/start",
             "mcpServerStatus/list",
@@ -165,16 +193,28 @@ impl Codex {
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
-        self.catalog_tools(true).await
+        self.catalog_tools(true)
+            .await?
+            .iter()
+            .map(ToolDescriptor::value)
+            .collect()
     }
 
     /// Cheap liveness checks run every broker discovery tick; a healthy native
     /// catalog is polled at most once per interval, independently of user calls.
     pub async fn background_tools(&self) -> Result<Vec<Value>, String> {
+        self.background_catalog()
+            .await?
+            .iter()
+            .map(ToolDescriptor::value)
+            .collect()
+    }
+
+    pub(crate) async fn background_catalog(&self) -> Result<Vec<ToolDescriptor>, String> {
         self.catalog_tools(false).await
     }
 
-    async fn catalog_tools(&self, force_refresh: bool) -> Result<Vec<Value>, String> {
+    async fn catalog_tools(&self, force_refresh: bool) -> Result<Vec<ToolDescriptor>, String> {
         if !self.connected().await {
             self.invalidate_mcp("Codex native process disconnected")
                 .await;
@@ -299,7 +339,8 @@ impl Codex {
                 state.refreshed = Some(Instant::now());
                 state.generation += 1;
                 match discovered {
-                    Ok(catalog) => {
+                    Ok(mut catalog) => {
+                        catalog.reuse_unchanged(&state.catalog);
                         state.catalog = catalog;
                         state.error = None;
                         Ok(())
@@ -374,15 +415,10 @@ impl Codex {
             "ssmcp.codex.schema" => {
                 if let Some(name) = args.get("name") {
                     let name = name.as_str().ok_or("schema name must be a string")?;
-                    Ok(result(
-                        self.schemas
-                            .get(name)
-                            .cloned()
-                            .ok_or("unknown schema; omit name to list schemas")?,
-                    ))
+                    Ok(result(self.schemas.read(name)?))
                 } else {
                     Ok(result(
-                        json!({"schemas":self.schemas.keys().collect::<Vec<_>>()}),
+                        json!({"schemas":self.schemas.files.keys().collect::<Vec<_>>()}),
                     ))
                 }
             }
@@ -476,6 +512,7 @@ impl Drop for Codex {
 
 async fn discover_mcp_tools(codex: &Codex) -> Result<McpCatalog, String> {
     let mut catalog = McpCatalog::default();
+    let mut descriptors = BTreeMap::new();
     let mut cursor: Option<String> = None;
     let mut cursors = BTreeSet::new();
     let mut servers_seen = BTreeSet::new();
@@ -490,7 +527,7 @@ async fn discover_mcp_tools(codex: &Codex) -> Result<McpCatalog, String> {
             .and_then(Value::as_array)
             .ok_or("Codex MCP discovery returned no data array")?;
         for server in servers {
-            if catalog.tools.len() + catalog.omitted.len() >= MAX_MCP_TOOLS {
+            if descriptors.len() + catalog.omitted.len() >= MAX_MCP_TOOLS {
                 return Err("Codex MCP tool catalog exceeds 4096 entries".into());
             }
             let server_name = server
@@ -506,7 +543,7 @@ async fn discover_mcp_tools(codex: &Codex) -> Result<McpCatalog, String> {
                 continue;
             };
             for (key, spec) in tools {
-                if catalog.tools.len() + catalog.omitted.len() >= MAX_MCP_TOOLS {
+                if descriptors.len() + catalog.omitted.len() >= MAX_MCP_TOOLS {
                     return Err("Codex MCP tool catalog exceeds 4096 entries".into());
                 }
                 let native_name = spec
@@ -523,6 +560,7 @@ async fn discover_mcp_tools(codex: &Codex) -> Result<McpCatalog, String> {
                 // Keep the complete native Tool. Only its bridge routing name
                 // changes; never synthesize schemas, annotations or approvals.
                 definition["name"] = json!(name);
+                descriptors.insert(name.clone(), ToolDescriptor::from_value(definition)?);
                 if catalog
                     .routes
                     .insert(
@@ -536,14 +574,11 @@ async fn discover_mcp_tools(codex: &Codex) -> Result<McpCatalog, String> {
                 {
                     return Err("Codex MCP routing name collision".into());
                 }
-                catalog.tools.push(definition);
             }
         }
         match page.get("nextCursor") {
             None | Some(Value::Null) => {
-                catalog
-                    .tools
-                    .sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+                catalog.tools = descriptors.into_values().collect();
                 return Ok(catalog);
             }
             Some(Value::String(next)) if !next.is_empty() => {
@@ -711,8 +746,42 @@ impl Drop for SchemaDirectory {
     }
 }
 
-fn load_schemas(root: &Path) -> crate::Result<BTreeMap<String, Value>> {
-    let mut schemas = BTreeMap::new();
+// Generated bundles contain many overlapping response schemas. Keep the private
+// files for this provider's lifetime instead of retaining every parsed JSON tree.
+struct SchemaStore {
+    directory: SchemaDirectory,
+    files: BTreeMap<String, u64>,
+}
+
+impl SchemaStore {
+    fn read(&self, name: &str) -> Result<Value, String> {
+        // Resolve only an indexed name: callers cannot traverse outside the
+        // generated bundle or select an unvalidated file.
+        let length = *self
+            .files
+            .get(name)
+            .ok_or("unknown schema; omit name to list schemas")?;
+        let path = self.directory.0.join(name);
+        let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if !metadata.is_file() || metadata.len() != length {
+            return Err("generated Codex schema file changed; refresh the provider".into());
+        }
+        let mut bytes = Vec::new();
+        fs::File::open(&path)
+            .map_err(|e| e.to_string())?
+            .take(length + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 != length {
+            return Err("generated Codex schema file changed; refresh the provider".into());
+        }
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+    }
+}
+
+fn load_schemas(directory: SchemaDirectory) -> crate::Result<SchemaStore> {
+    let root = &directory.0;
+    let mut files = BTreeMap::new();
     let mut directories = vec![root.to_path_buf()];
     let mut total = 0;
     while let Some(directory) = directories.pop() {
@@ -724,7 +793,7 @@ fn load_schemas(root: &Path) -> crate::Result<BTreeMap<String, Value>> {
             } else if kind.is_file() && entry.path().extension().is_some_and(|x| x == "json") {
                 let length = entry.metadata()?.len();
                 total += length;
-                if total > 32 * 1024 * 1024 || schemas.len() >= 2048 {
+                if total > 32 * 1024 * 1024 || files.len() >= 2048 {
                     return Err("Codex schema bundle exceeds limits".into());
                 }
                 let name = entry
@@ -732,16 +801,110 @@ fn load_schemas(root: &Path) -> crate::Result<BTreeMap<String, Value>> {
                     .strip_prefix(root)?
                     .to_string_lossy()
                     .replace('\\', "/");
-                schemas.insert(name, serde_json::from_slice(&fs::read(entry.path())?)?);
+                // Preserve startup validation without allocating response trees
+                // that no caller has asked to read.
+                let reader = BufReader::new(fs::File::open(entry.path())?.take(length + 1));
+                serde_json::from_reader::<_, serde::de::IgnoredAny>(reader)?;
+                files.insert(name, length);
             }
         }
     }
-    Ok(schemas)
+    Ok(SchemaStore { directory, files })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_refresh_reuses_only_unchanged_tool_storage() {
+        fn fixture(entries: &[(&str, u64)]) -> McpCatalog {
+            McpCatalog {
+                tools: entries
+                    .iter()
+                    .map(|(name, version)| {
+                        ToolDescriptor::from_value(
+                            json!({"name":name,"inputSchema":{"type":"object"},"version":version}),
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+                routes: entries
+                    .iter()
+                    .map(|(name, _)| {
+                        (
+                            (*name).into(),
+                            McpRoute {
+                                server: "native".into(),
+                                tool: (*name).into(),
+                            },
+                        )
+                    })
+                    .collect(),
+                omitted: Vec::new(),
+            }
+        }
+
+        let previous = fixture(&[("a", 1), ("b", 1), ("c", 1), ("e", 1)]);
+        let mut refreshed = fixture(&[("a", 1), ("c", 2), ("d", 1), ("e", 1)]);
+        refreshed.routes.get_mut("a").unwrap().server = "refreshed".into();
+        let changed = refreshed.tools[1].clone();
+        let added = refreshed.tools[2].clone();
+        assert!(!previous.tools[0].shares_storage(&refreshed.tools[0]));
+        refreshed.reuse_unchanged(&previous);
+        assert!(previous.tools[0].shares_storage(&refreshed.tools[0]));
+        assert!(previous.tools[3].shares_storage(&refreshed.tools[3]));
+        assert!(refreshed.tools[1].shares_storage(&changed));
+        assert!(refreshed.tools[2].shares_storage(&added));
+        assert_eq!(refreshed.routes["a"].server, "refreshed");
+        assert!(!refreshed.routes.contains_key("b"));
+    }
+
+    #[test]
+    fn generated_schemas_remain_readable_until_the_provider_drops() {
+        let directory = SchemaDirectory::new().unwrap();
+        let root = directory.0.clone();
+        fs::create_dir(root.join("v2")).unwrap();
+        let schema = json!({"type":"object","properties":{"value":{"type":"integer"}}});
+        fs::write(root.join("v2/Response.json"), schema.to_string()).unwrap();
+
+        let schemas = load_schemas(directory).unwrap();
+        assert_eq!(
+            schemas.files.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["v2/Response.json"]
+        );
+        assert_eq!(schemas.read("v2/Response.json").unwrap(), schema);
+        assert!(schemas.read("../Response.json").is_err());
+        assert!(schemas.read("v2/Unknown.json").is_err());
+
+        fs::write(root.join("v2/Response.json"), "{}").unwrap();
+        assert!(
+            schemas
+                .read("v2/Response.json")
+                .unwrap_err()
+                .contains("changed")
+        );
+        drop(schemas);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn generated_schema_index_rejects_invalid_and_oversized_files() {
+        let invalid = SchemaDirectory::new().unwrap();
+        let invalid_root = invalid.0.clone();
+        fs::write(invalid_root.join("broken.json"), "{").unwrap();
+        assert!(load_schemas(invalid).is_err());
+        assert!(!invalid_root.exists());
+
+        let oversized = SchemaDirectory::new().unwrap();
+        let oversized_root = oversized.0.clone();
+        fs::File::create(oversized_root.join("large.json"))
+            .unwrap()
+            .set_len(32 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(load_schemas(oversized).is_err());
+        assert!(!oversized_root.exists());
+    }
 
     #[test]
     fn mcp_routing_names_keep_components_distinct_and_are_bounded() {
