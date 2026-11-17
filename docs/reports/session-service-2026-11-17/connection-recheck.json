@@ -1,0 +1,11 @@
+{
+  "recorded_at": "2026-11-17T16:32:32.121286+00:00",
+  "operation": "ssmcp.list",
+  "result": {
+    "error_code": "UNAVAILABLE",
+    "message": "McpServerError: Connection failed.",
+    "endpoint": "https://ssmcp.lmm.best/mcp"
+  },
+  "interpretation": "Gateway connection could not be established during archival recheck; current systemd/client state could not be read. Earlier successful native acceptance records are preserved without modification.",
+  "last_successful_atomic_observation": "2026-11-17T05:58:08.531Z"
+}

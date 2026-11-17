@@ -1,0 +1,165 @@
+{
+  "status": "passed",
+  "revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+  "version": "0.6.4",
+  "environment": "Installed systemd supervisor and live authenticated MCP gateway",
+  "manager": "ssmcp-manager",
+  "test_session": "ssmcp-live-check-20261117",
+  "native_tools": [
+    "ssmcp.session.list",
+    "ssmcp.session.status",
+    "ssmcp.session.create",
+    "ssmcp.session.restart",
+    "ssmcp.session.close"
+  ],
+  "checks": [
+    {
+      "name": "session list exposes the connected management session",
+      "passed": true
+    },
+    {
+      "name": "atomic create starts a connected 0.6.4 worker",
+      "passed": true
+    },
+    {
+      "name": "atomic restart replaces the generation",
+      "passed": true
+    },
+    {
+      "name": "restarted worker reconnects with a new client id",
+      "passed": true
+    },
+    {
+      "name": "stale generation close is rejected",
+      "passed": true,
+      "observed_error": "ssmcp service: stale session generation; refresh status before controlling this session"
+    },
+    {
+      "name": "stale rejection leaves the replacement running",
+      "passed": true
+    },
+    {
+      "name": "atomic close confirms the worker stopped",
+      "passed": true
+    },
+    {
+      "name": "atomic close persists stopped intent",
+      "passed": true
+    },
+    {
+      "name": "both test connections are absent after close",
+      "passed": true
+    },
+    {
+      "name": "management connection remains available",
+      "passed": true
+    }
+  ],
+  "operations": [
+    {
+      "operation": "ssmcp.session.create",
+      "isError": false,
+      "result": {
+        "name": "ssmcp-live-check-20261117",
+        "generation": "6a027e3c41860deed0848aa7e2534a22",
+        "manager_active": true,
+        "manager_state": "running",
+        "connection_state": "unknown",
+        "phase": "starting",
+        "version": "0.6.4",
+        "executable_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+        "stop_requested": false,
+        "attempt": 0,
+        "last_error": null,
+        "watchdog": true,
+        "reconnect_delay_secs": 30
+      }
+    },
+    {
+      "operation": "ssmcp.session.status",
+      "isError": false,
+      "result": {
+        "name": "ssmcp-live-check-20261117",
+        "generation": "6a027e3c41860deed0848aa7e2534a22",
+        "manager_active": true,
+        "manager_state": "running",
+        "connection_state": "connected",
+        "phase": "connected",
+        "version": "0.6.4",
+        "executable_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+        "stop_requested": false,
+        "attempt": 1,
+        "last_error": null,
+        "watchdog": true,
+        "reconnect_delay_secs": 30
+      }
+    },
+    {
+      "operation": "ssmcp.session.restart",
+      "expected_generation": "6a027e3c41860deed0848aa7e2534a22",
+      "isError": false,
+      "result": {
+        "name": "ssmcp-live-check-20261117",
+        "generation": "57c8d679574b3498aff78058a1afa762",
+        "manager_active": true,
+        "manager_state": "running",
+        "connection_state": "unknown",
+        "phase": "starting",
+        "version": "0.6.4",
+        "executable_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+        "stop_requested": false,
+        "attempt": 0,
+        "last_error": null,
+        "watchdog": true,
+        "reconnect_delay_secs": 30
+      }
+    },
+    {
+      "operation": "ssmcp.session.close",
+      "expected_generation": "6a027e3c41860deed0848aa7e2534a22",
+      "expected_rejection": true,
+      "isError": true,
+      "error_code": "INVALID_ARGUMENT",
+      "message": "ssmcp service: stale session generation; refresh status before controlling this session"
+    },
+    {
+      "operation": "ssmcp.session.status",
+      "after_stale_rejection": true,
+      "result": {
+        "name": "ssmcp-live-check-20261117",
+        "generation": "57c8d679574b3498aff78058a1afa762",
+        "manager_active": true,
+        "manager_state": "running",
+        "connection_state": "connected",
+        "phase": "connected",
+        "version": "0.6.4",
+        "executable_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+        "stop_requested": false,
+        "attempt": 1,
+        "last_error": null,
+        "watchdog": true,
+        "reconnect_delay_secs": 30
+      }
+    },
+    {
+      "operation": "ssmcp.session.close",
+      "expected_generation": "57c8d679574b3498aff78058a1afa762",
+      "result": {
+        "name": "ssmcp-live-check-20261117",
+        "generation": "57c8d679574b3498aff78058a1afa762",
+        "manager_active": false,
+        "manager_state": "inactive",
+        "connection_state": "disconnected",
+        "phase": "stopped",
+        "version": "0.6.4",
+        "executable_sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+        "stop_requested": true,
+        "attempt": 0,
+        "last_error": null,
+        "watchdog": true,
+        "reconnect_delay_secs": 30
+      }
+    }
+  ],
+  "observed_at": "2026-11-17T05:58:08.531Z"
+}

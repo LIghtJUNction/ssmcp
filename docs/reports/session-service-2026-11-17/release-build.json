@@ -1,0 +1,8 @@
+{
+  "revision": "868e92f5d2b39237a2bed62f45f9a666cd4f0192",
+  "status": "passed",
+  "version": "ssmcp 0.6.4",
+  "sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f",
+  "size": 9890864,
+  "build": "cargo build --locked --release --bin ssmcp"
+}

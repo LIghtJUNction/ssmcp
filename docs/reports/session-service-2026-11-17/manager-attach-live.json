@@ -1,0 +1,85 @@
+{
+  "schema": "ssmcp.installed-readonly-attach.v1",
+  "target": "ssmcp-manager",
+  "command": [
+    "/home/lightjunction/.cargo/bin/ssmcp",
+    "attach",
+    "--read-only",
+    "ssmcp-manager"
+  ],
+  "installed_binary": {
+    "version": "ssmcp 0.6.4",
+    "sha256": "5351b98f827922d376572905140bba3afc2edbf649c339c6a0316c09eb546b4f"
+  },
+  "before": {
+    "name": "ssmcp-manager",
+    "supervised": true,
+    "manager_active": true,
+    "manager_pid": 125750,
+    "connection_state": "connected",
+    "generation": "e2fdcc9f208522a7fe1f1a0bb577c342",
+    "client_id": "db3937ac8c71eaa50fb8fced9c1806f0a6fd0b8a2ae52cbf280e2dda4226986f"
+  },
+  "checks": {
+    "live_frame_from_readonly_attach": true,
+    "backend_dimensions_unchanged_while_attached": true,
+    "ctrl_right_bracket_exit_zero": true,
+    "physical_tty_mode_restored": true,
+    "only_local_detach_key_sent": true,
+    "frontend_exited_and_owned_pty_closed": true,
+    "generation_unchanged": true,
+    "client_id_unchanged": true,
+    "manager_pid_unchanged": true,
+    "manager_still_connected": true,
+    "backend_dimensions_unchanged_after_detach": true
+  },
+  "success": true,
+  "terminal_sizes_before": [
+    {
+      "device": "/dev/pts/8",
+      "rows": 24,
+      "cols": 80
+    }
+  ],
+  "terminal_sizes_while_attached": [
+    {
+      "device": "/dev/pts/8",
+      "rows": 24,
+      "cols": 80
+    }
+  ],
+  "local_keys_sent": [
+    "Ctrl-]"
+  ],
+  "after": {
+    "name": "ssmcp-manager",
+    "supervised": true,
+    "manager_active": true,
+    "manager_pid": 125750,
+    "connection_state": "connected",
+    "generation": "e2fdcc9f208522a7fe1f1a0bb577c342",
+    "client_id": "db3937ac8c71eaa50fb8fced9c1806f0a6fd0b8a2ae52cbf280e2dda4226986f"
+  },
+  "terminal_sizes_after": [
+    {
+      "device": "/dev/pts/8",
+      "rows": 24,
+      "cols": 80
+    }
+  ],
+  "artifacts": {
+    "png": "manager-attach-live.png",
+    "transcript": "manager-attach-live.ansi",
+    "frame": "manager-attach-frame.json",
+    "transcript_sha256": "03bde40ba4b5b53cd3e3ae66f19f736f1a74017320df62ad183b1a30bfb5d6b7",
+    "png_sha256": "ebd2c1bd1400e7eda54ba95c66465a1c1b42993dfed2adbcf1a5404fd3967971"
+  },
+  "duration_ms": 2259,
+  "artifact_directory": "/home/lightjunction/Documents/GITHUB/ssmcp/target/session-service-task/acceptance/final-0.6.4",
+  "privacy_review": {
+    "visible_frame_reviewed": true,
+    "session_list_output_visible": false,
+    "other_saved_session_details_visible": false,
+    "original_transcript_contains_session_list_event": false
+  }
+}
