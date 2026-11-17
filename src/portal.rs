@@ -132,21 +132,29 @@ pub(crate) enum Problem {
     AuditUnavailable,
     SessionNotFound,
     ManagementInvalid,
+    UsernameInvalid,
+    UsernameTaken,
+    UsernameBound,
+    Banned,
 }
 impl Problem {
     pub(crate) fn status(self) -> StatusCode {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::Csrf | Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Csrf | Self::Forbidden | Self::Banned => StatusCode::FORBIDDEN,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,
             Self::Storage
             | Self::ManagementDisabled
             | Self::ManagementUnavailable
             | Self::AuditUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Limit | Self::Duplicate => StatusCode::CONFLICT,
+            Self::Limit | Self::Duplicate | Self::UsernameTaken | Self::UsernameBound => {
+                StatusCode::CONFLICT
+            }
             Self::NotFound | Self::SessionNotFound => StatusCode::NOT_FOUND,
             Self::Disabled => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Invalid | Self::ManagementInvalid => StatusCode::BAD_REQUEST,
+            Self::Invalid | Self::ManagementInvalid | Self::UsernameInvalid => {
+                StatusCode::BAD_REQUEST
+            }
         }
     }
     fn message(self) -> &'static str {
@@ -170,6 +178,14 @@ impl Problem {
             }
             Self::SessionNotFound => "该会话已断开或不属于你的账户，请刷新列表后重试。",
             Self::ManagementInvalid => "管理请求参数无效，请返回会话列表后重试。",
+            Self::UsernameInvalid => {
+                "用户名须为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾，且不能使用保留名称。"
+            }
+            Self::UsernameTaken => {
+                "该用户名已绑定其他 GitHub 账户，请换一个名称，或使用原绑定账户登录。"
+            }
+            Self::UsernameBound => "此 GitHub 账户已有用户名，请使用已绑定的名称连接。",
+            Self::Banned => "此账户已被服务器管理员封禁。",
         }
     }
 }
@@ -243,6 +259,36 @@ impl Portal {
     /// The private socket carries only requests authenticated by this portal's sessions.
     pub fn configure_management(&mut self, socket: PathBuf) {
         self.management = Some(ManagementClient::new(socket));
+    }
+
+    /// Resolve names from existing local registrations, never from a future claimant.
+    pub async fn resolve_admin_usernames(&self, names: &[String]) -> crate::Result<Vec<String>> {
+        let mut subjects = Vec::with_capacity(names.len());
+        for name in names {
+            let handle = crate::username::normalize(name)?;
+            let account = self.storage(move |store| store.account_by_handle(&handle))
+                .await
+                .map_err(|_| "could not read registered administrator usernames")?
+                .ok_or("administrator username is not registered; register it before configuring admin_users")?;
+            if account.banned {
+                return Err("a banned account cannot be configured as an administrator".into());
+            }
+            subjects.push(account.subject);
+        }
+        Ok(subjects)
+    }
+
+    /// Invalidate browser sessions after a durable ban; account guards also cover races.
+    pub(crate) fn revoke_browser_sessions(&self, subject: &str) -> Result<(), Problem> {
+        let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+        browser
+            .sessions
+            .retain(|_, session| session.subject.as_deref() != Some(subject));
+        let active: HashSet<_> = browser.sessions.keys().copied().collect();
+        browser
+            .pending
+            .retain(|_, pending| active.contains(&pending.browser));
+        Ok(())
     }
 
     pub(crate) async fn identity_for_subject(&self, subject: String) -> Result<Identity, Problem> {
@@ -407,7 +453,7 @@ async fn security_headers(mut response: Response) -> Response {
 
 async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<Response, Problem> {
     if !broker.portal.enabled(&broker) {
-        return Ok(Html(view::home(None, None, false, false)).into_response());
+        return Ok(Html(view::home(None, None, false, false, &broker.public_url)).into_response());
     }
     let mut new_cookie = None;
     let (_, csrf, subject) = match broker.portal.session(&headers) {
@@ -440,6 +486,7 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         Some(&csrf),
         true,
         broker.portal.management.is_some(),
+        &broker.public_url,
     ))
     .into_response();
     if let Some(raw) = new_cookie {
@@ -693,7 +740,24 @@ async fn finish_callback(
         .exchange("github", code, &pending.verifier)
         .await
         .map_err(|_| Problem::Unauthorized)?;
-    let mut response = finish_identity(&broker.portal, browser_key, identity).await?;
+    // Rotate the browser session under the same lock as account revocation.
+    let result = {
+        let _policy_update = broker.user_policy_updates.lock().await;
+        finish_identity(&broker.portal, browser_key, identity).await
+    };
+    let mut response = match result {
+        Ok(response) => response,
+        Err(problem) => {
+            // Release the policy lock before taking the grant lock: polling
+            // holds the grant lock while serializing credential issuance.
+            if problem == Problem::Banned
+                && let Some(return_to) = &pending.return_to
+            {
+                return_to.fail(&broker.portal, problem).await?;
+            }
+            return Err(problem);
+        }
+    };
     if let Some(return_to) = pending.return_to {
         let location = return_to.location(&broker.portal)?;
         response.headers_mut().insert(

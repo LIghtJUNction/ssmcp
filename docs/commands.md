@@ -1,13 +1,12 @@
 # 客户端命令与独立任务
 
-## 登录、设备列表与临时控制
+## 连接、设备列表与临时控制
 
-先在 A 登录 GitHub，再启动自己的被控会话。随后在另一个终端查看账号下的设备，或生成命令交给 B：
+在 A 的项目目录运行 `ssmcp username@server`；首次连接自动引导 GitHub 授权和用户名绑定，授权完成后继续连接。随后在另一个终端查看设备或邀请 B：
 
 ~~~sh
-ssmcp login --server https://ssmcp.example.com
-ssmcp whoami
-ssmcp --name device-a
+ssmcp alice@ssmcp.example.com --name device-a
+# 无浏览器：ssmcp alice@ssmcp.example.com --no-browser
 
 # 在 A 的另一个终端：
 ssmcp list
@@ -17,14 +16,17 @@ ssmcp invite
 
 | 命令 | 用途 |
 | --- | --- |
-| `ssmcp login` / `whoami` / `logout` | 登录、确认身份、撤销这次客户端登录 |
+| `ssmcp username@server` | 自动登录或注册并连接自己的设备 |
+| `ssmcp whoami` / `logout` | 确认身份、撤销这次客户端授权 |
 | `ssmcp list` / `ls` / `sessions list --remote` | 当前账号在所选服务器可控的在线会话 |
 | `ssmcp -i` / `list -i` | 选择会话并进入远端终端，Ctrl-] 离开 |
 | `ssmcp invite` | 生成 B 可直接执行的临时接入命令；默认从服务器下载客户端 |
 | `ssmcp invite --shell powershell` | 生成给 Windows PowerShell 的命令 |
 | `ssmcp sessions list` / `attach NAME` | 当前设备保存的本地后台会话 |
 
-邀请默认 10 分钟内兑换一次，B 会话默认可用 1 小时；`--ttl`、`--session-ttl` 可调整。已安装兼容客户端的 B 可用 `--no-bootstrap`。看门狗默认开启，`--no-watchdog` 可禁用，显式停止或授权到期后不会继续恢复。[完整账号流程与服务器配置](client-accounts.md)
+用户名不区分大小写，采用 3–32 个 ASCII 字母、数字、`_` 或 `-`，首字符为字母、末字符为字母或数字。凭据按服务器隔离，后续可直接运行 `ssmcp`；更换名字或服务器用完整目标。被占名字、账号已绑定其他名字会明确报错。[用户名与服务器管理](named-accounts.md)
+
+邀请默认 10 分钟内兑换一次，B 会话默认可用 1 小时；`--ttl`、`--session-ttl` 可调整。已安装兼容客户端的 B 可用 `--no-bootstrap`。看门狗默认开启，`--no-watchdog` 可禁用，显式停止或临时授权到期后不会继续恢复。具名账号的前台连接会在凭据过期后请求新的 GitHub 授权；后台会话等待你在终端重新授权后手动重启。[完整账号流程与服务器配置](client-accounts.md)
 
 ## 独立命令接口
 

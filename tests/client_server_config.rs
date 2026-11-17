@@ -181,7 +181,8 @@ fn server_configuration_is_editable_and_precedence_is_consistent() {
     assert!(String::from_utf8_lossy(&denied.stderr).contains("not signed in"));
     let connection = home.command(&["--no-watchdog", "--name", "config-check"]);
     assert!(!connection.status.success());
-    assert!(String::from_utf8_lossy(&connection.stderr).contains("not logged in"));
+    assert!(String::from_utf8_lossy(&connection.stderr).contains("choose a username to connect"));
+    assert!(String::from_utf8_lossy(&connection.stderr).contains("username@edited.example"));
     home.success(&["config", "unset", "server"]);
     assert_eq!(
         home.success(&["config", "get", "server"]).trim(),
@@ -226,7 +227,7 @@ fn invite_override_uses_selected_origin_for_api_script_and_join() {
 }
 
 #[test]
-fn configured_default_is_used_by_invite_login_and_join() {
+fn configured_default_is_used_by_invite_login_named_connection_and_join() {
     let home = Home::new();
     let server = Server::once(
         "200 OK",
@@ -248,6 +249,16 @@ fn configured_default_is_used_by_invite_login_and_join() {
     let output = home.command(&["login", "--no-browser"]);
     assert!(!output.status.success());
     assert!(login.request().starts_with("POST /api/client/login/start "));
+
+    let named = Server::once("400 Bad Request", json!({"error": "stop_test"}));
+    home.success(&["config", "set", "server", &named.origin]);
+    let output = home.command(&["--username", "Alice", "--no-browser", "--no-watchdog"]);
+    assert!(!output.status.success());
+    let request = named.request();
+    assert!(request.starts_with("POST /api/client/login/start "));
+    assert!(request.contains("\"username\":\"alice\""));
+    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    assert!(!request.contains(&"e".repeat(64)));
 
     let join = Server::once("410 Gone", json!({"error": "expired"}));
     home.success(&["config", "set", "server", &join.origin]);

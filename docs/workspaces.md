@@ -16,12 +16,12 @@ ssmcp 通过已经认证的客户端连接，在两个工作区之间传文件�
 
 ```sh
 cd /path/to/project
-ssmcp --name development --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
+ssmcp --ssh --name development --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
 ```
 
 ```sh
 cd /path/to/workspace
-ssmcp --name workspace --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
+ssmcp --ssh --name workspace --allow YOUR_GITHUB_LOGIN@github user@ssmcp.example
 ```
 
 先调用 `list`，核对两个客户端的 `hostname` 和 `cwd`。下文示例放入 `code_mode.code`，其中 `developmentId` 和 `workspaceId` 应替换为实际发现的 ID。客户端重连会更换 ID，应重新发现。不同客户端可以运行任意 `-t` 后端，工作区能力与后端类型无关。

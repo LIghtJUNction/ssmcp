@@ -48,6 +48,12 @@ client_registration_ttl = 31536000
 # See docs/portal-console.md and docs/client-accounts.md.
 # gateway_socket = "/run/ssmcpd/management.sock"
 # audit_dir = "/var/lib/ssmcpd/audit"
+# Register this ssmcp username first, then grant administration locally.
+# Unknown or banned usernames prevent startup.
+# admin_usernames = ["maintainer"]
+# Per-account bytes/second in EACH direction, shared across connections.
+# default_rate_limit_bps = 8388608
+# Legacy GitHub ID/login administrator configuration remains supported:
 # admin_github_ids = []
 # admin_github_users = []
 # audit_retention_days = 7
