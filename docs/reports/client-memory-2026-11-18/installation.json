@@ -1,0 +1,13 @@
+{
+  "installed_at_utc": "2026-11-17T21:12:39.942335+00:00",
+  "path": "/home/lightjunction/.cargo/bin/ssmcp",
+  "backup": "/home/lightjunction/Backups/ssmcp/client-memory-2026-11-18/ssmcp-before-8271d106f45a",
+  "previous_sha256": "8271d106f45af1c23cef9873f675e210741ecd4ecda83d7ea5c2f67d29e5a0c5",
+  "installed_sha256": "2f40a5c2d61586171d3243f8fd453c48af403255ab4238b6ed731cd1f7818436",
+  "bytes": 7034096,
+  "source_commit": "d1f1071dc47f746d057225a2f240cbf640172a46",
+  "version": "ssmcp 0.7.4",
+  "help_exit_code": 0,
+  "atomic_replace": true,
+  "existing_clients_restarted": false
+}

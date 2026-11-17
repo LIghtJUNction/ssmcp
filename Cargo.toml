@@ -22,6 +22,9 @@ include = [
     "/docs/session-control.md",
     "/docs/agent-collaboration.md",
     "/docs/client-service-platforms.md",
+    "/docs/client-memory.md",
+    "/docs/reports/client-memory-2026-11-18/**",
+    "/scripts/benchmark_client_memory.py",
     "/docs/session-service.md",
     "/docs/design/session-service.md",
     "/scripts/e2e_session_service.py",
@@ -117,11 +120,12 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 base64 = "0.22"
 getrandom = "0.3"
 libc = "0.2"
+miniz_oxide = "0.9.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 sha2 = "0.10"
 subtle = "2.6"
@@ -146,7 +150,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
 [profile.release]
-lto = "thin"
+opt-level = "z"
+lto = "fat"
 codegen-units = 1
 strip = true
 

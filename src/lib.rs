@@ -3,6 +3,7 @@ pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod broker;
 pub mod browser;
+pub(crate) mod catalog;
 pub mod client;
 #[cfg(target_os = "linux")]
 pub mod code_mode;
@@ -18,6 +19,7 @@ pub mod http;
 pub mod identity;
 #[cfg(target_os = "linux")]
 pub mod management;
+pub(crate) mod memory;
 #[cfg(target_os = "linux")]
 pub mod oauth;
 pub(crate) mod observer;
