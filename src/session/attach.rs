@@ -520,6 +520,7 @@ async fn attached(
 ) -> Result<()> {
     use crate::client::{render, terminal, ui::Ui};
     let ui = Ui::load(None)?;
+    crate::client::interface::initialize_path(None);
     render::configure(ui.clone());
     let display = terminal::Session::start(&ui)?;
     let mut terminal_ids = Vec::new();
@@ -631,6 +632,10 @@ async fn attached(
                 _ = tick.tick() => {
                     apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed("",Instant::now(),false),read_only,backend_generation).await?;
                     let queued = terminal::take_keyboard();
+                    if let Some((rows,cols)) = crate::client::interface::apply_pending()? {
+                        geometry=Some((rows,cols));
+                        if !read_only && let Some(generation)=backend_generation { ipc::request(&directory,ENDPOINT,json!({"op":"resize","lease":lease,"backend_generation":generation,"rows":rows,"cols":cols})).await?; }
+                    }
                     if !read_only && !queued.is_empty() && let Some(generation)=backend_generation { send_input(&directory,lease,generation,terminal_ids.get(selected).map(String::as_str).unwrap_or("main"),queued).await?; }
                     for (id,bytes) in terminal::take_session_replies() {
                         if !read_only && let Some(generation)=backend_generation { send_input(&directory,lease,generation,&id,String::from_utf8_lossy(&bytes).into_owned()).await?; }

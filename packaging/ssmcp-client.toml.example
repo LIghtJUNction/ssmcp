@@ -1,14 +1,37 @@
+# Save as ~/.config/ssmcp/config.toml or select with --ui-config FILE.
 [ui]
 color = true
-# On a real terminal, isolate logs/Shell and show tasks plus Git in a sidebar.
 dashboard = true
 log_format = "pretty"
+# Built-in palettes: minimal, codex-dark, nord, solarized, light.
+# minimal follows your terminal's colors; others include background/foreground.
 theme = "codex-dark"
-timestamps = true
+
+# split shares the workspace; shell or logs gives that pane all available rows.
+layout = "split"
+log_height_percent = 30 # 10..80; the shell keeps the remaining height.
+sidebar = true
+sidebar_width = 30 # 20..60 columns; hides when the terminal is too narrow.
+# Omit, reorder, or remove panels. [] hides all sidebar content.
+panels = ["controller", "tasks", "progress", "git", "history"]
+hide_empty = true
+
+timestamps = false
 show_request_id = true
 show_raw_json = false
 max_inline_output = 12
-
-# Quiet-task cadence for the line transcript; the dashboard stays live.
-# 0 disables periodic transcript status only.
+# Quiet-task cadence for the line transcript; 0 disables periodic status only.
 activity_interval_secs = 5
+
+[ui.colors]
+# Omitted colors (or "") inherit the selected theme. "default" follows the
+# terminal's own colors. Values accept #RRGGBB or ANSI names (black, red, green,
+# yellow, blue, magenta, cyan, white; bright- variants).
+# background = "#101216"
+# foreground = "#E8EAED"
+# muted = "#9AA0A6"
+# accent = "#8AB4F8"
+# success = "#81C995"
+# warning = "#FDD663"
+# error = "#F28B82"
+# heading = "#E8EAED"

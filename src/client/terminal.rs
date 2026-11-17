@@ -3,7 +3,7 @@
 use super::{
     panel::{self, PanelLayout, PanelSnapshot, PanelTone},
     render::LogFormat,
-    ui::Ui,
+    ui::{Layout, Ui},
 };
 use std::{
     collections::BTreeMap,
@@ -186,7 +186,7 @@ pub(crate) fn close_session(id: &str) {
 pub(super) fn set_panel(snapshot: PanelSnapshot) {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.panel = snapshot;
+        if !state.preview { state.panel = snapshot; }
         state.dirty = true;
     }
 }
@@ -204,6 +204,80 @@ pub(crate) fn physical_resize(rows: u16, cols: u16) -> (u16, u16) {
         return (state.geometry.pty_rows, state.geometry.left);
     }
     (rows, cols)
+}
+
+/// Apply visual settings without restarting the connection or losing VT history.
+pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
+    let shared = shared()?;
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.ui = ui.clone();
+    state.ui.color &= std::env::var_os("NO_COLOR").is_none();
+    let (rows, cols) = (state.geometry.rows, state.geometry.cols);
+    state.resize(rows, cols);
+    state.keyboard.logs = ui.layout == Layout::Logs;
+    state.notice = None;
+    state.dirty = true;
+    Some((state.geometry.pty_rows, state.geometry.left))
+}
+
+pub(crate) fn take_actions() -> Vec<&'static str> {
+    let Some(shared) = shared() else { return Vec::new(); };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    std::mem::take(&mut state.actions)
+}
+
+pub(crate) fn notice(message: &str) {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.notice = Some(panel::safe_text(message).chars().take(240).collect());
+        state.dirty = true;
+    }
+}
+
+pub(crate) fn clear_logs() {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.logs = vt100::Parser::new(nonzero(state.geometry.log_rows), nonzero(state.geometry.left), 512);
+        state.previous_cr = false;
+        state.dirty = true;
+    }
+}
+
+pub(crate) fn snapshot() -> serde_json::Value {
+    let Some(shared) = shared() else { return serde_json::json!({"active": false}); };
+    let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    let g = state.geometry;
+    serde_json::json!({
+        "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
+        "panes":{"logs":{"row":0,"col":0,"rows":g.log_rows,"cols":g.left},
+            "shell":{"row":g.pty_top,"col":0,"rows":g.pty_rows,"cols":g.left,"visible":state.ui.layout != Layout::Logs}},
+        "focus":if state.help {"help"} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"shell"},
+        "active_terminal":state.active_session,
+        "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
+        "help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
+    })
+}
+
+/// A fixture rendered through the production compositor; no commands execute.
+fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
+    let mut state = State::new(rows, cols, ui);
+    state.preview = true;
+    state.log(b"SSMCP / APPEARANCE PREVIEW\n\nThis view uses example data. No device is connected.\n\n[READY] terminal and task interfaces\n[RESULT] theme loaded from local configuration\n");
+    state.pty.process(b"\x1b[2;3H$ ssmcp\r\n\r\n  Your shell has room to work.\r\n\r\n  Press F1 to explore appearance and keyboard controls.\r\n  Edit a TOML file, then press F5 to reload it.\r\n\r\n  Preview only: keyboard text is never executed.\r\n  Press q or Ctrl-] to leave.\r\n");
+    state.panel.tasks.push(panel::TaskView { id:"example".into(), description:"Example task · custom frontend".into(), cwd:Some("~/project".into()), started:Instant::now() });
+    state.panel.progress.push(panel::ProgressView { source:"Example".into(), message:Some("Preparing workspace".into()), value:Some(3.0), total:Some(4.0), updated:Instant::now() });
+    state
+}
+
+pub(crate) fn preview_bytes(ui: &Ui, rows: u16, cols: u16) -> Vec<u8> {
+    preview_state(rows, cols, ui).frame(Instant::now()).diff(None)
+}
+
+pub(crate) fn seed_preview() {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        *state = preview_state(state.geometry.rows, state.geometry.cols, &state.ui);
+    }
 }
 
 /// Used by live PTY creation before its first prompt is generated.
@@ -277,24 +351,18 @@ struct Geometry {
 }
 
 impl Geometry {
-    fn new(rows: u16, cols: u16) -> Self {
+    fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let rows = rows.clamp(1, 1000);
         let cols = cols.clamp(1, 1000);
-        let layout = PanelLayout::new(cols, rows, true);
+        let layout = PanelLayout::configured(cols, rows, ui.sidebar && !ui.panels.is_empty(), ui.sidebar_width);
         let available = if rows >= 3 { rows - 1 } else { rows };
-        let pty_rows = if rows >= 18 {
-            ((available - 1) / 3).max(8)
-        } else if rows >= 5 {
-            ((available - 1) / 2).max(1)
-        } else {
-            available
+        let log_rows = match ui.layout {
+            Layout::Logs => available,
+            Layout::Split if rows >= 5 => ((available - 1) * ui.log_height_percent / 100).clamp(1, available - 2),
+            _ => 0,
         };
-        let log_rows = if rows >= 5 {
-            available - pty_rows - 1
-        } else {
-            0
-        };
-        let pty_top = if log_rows > 0 { log_rows + 1 } else { 0 };
+        let pty_top = if ui.layout == Layout::Split && log_rows > 0 { log_rows + 1 } else { 0 };
+        let pty_rows = available.saturating_sub(pty_top).max(1);
         Self {
             rows,
             cols,
@@ -308,15 +376,32 @@ impl Geometry {
 
 #[derive(Clone, Copy)]
 enum Key {
+    Help,
+    Layout,
+    Sidebar,
+    Theme,
+    Reload,
+    Save,
     Toggle,
     Up,
     Down,
     Home,
     End,
+    Escape,
     PasteStart,
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1bOP", Key::Help),
+    (b"\x1b[11~", Key::Help),
+    (b"\x1bOQ", Key::Layout),
+    (b"\x1b[12~", Key::Layout),
+    (b"\x1bOR", Key::Sidebar),
+    (b"\x1b[13~", Key::Sidebar),
+    (b"\x1bOS", Key::Theme),
+    (b"\x1b[14~", Key::Theme),
+    (b"\x1b[15~", Key::Reload),
+    (b"\x1b[19~", Key::Save),
     (b"\x1b[17~", Key::Toggle),
     (b"\x1b[5~", Key::Up),
     (b"\x1b[6~", Key::Down),
@@ -344,10 +429,11 @@ impl Keyboard {
             return matches!(key, Key::PasteEnd);
         }
         match key {
+            Key::Help | Key::Layout | Key::Sidebar | Key::Theme | Key::Reload | Key::Save => true,
             Key::Toggle => allow_logs,
             Key::Up | Key::Down | Key::Home | Key::End => self.logs,
             Key::PasteStart => true,
-            Key::PasteEnd => false,
+            Key::PasteEnd | Key::Escape => false,
         }
     }
     fn feed(
@@ -356,13 +442,15 @@ impl Keyboard {
         now: Instant,
         flush: bool,
         allow_logs: bool,
+        force_logs: bool,
     ) -> (Vec<u8>, Vec<Key>) {
+        self.logs |= force_logs;
         let mut output = Vec::new();
         let mut actions = Vec::new();
         for &byte in bytes {
             if self.pending.is_empty() && byte != 0x1b {
                 if !self.pasting {
-                    self.logs = false;
+                    self.logs = force_logs;
                 }
                 output.push(byte);
                 continue;
@@ -373,11 +461,11 @@ impl Keyboard {
             }) {
                 match key {
                     Key::Toggle => {
-                        self.logs = !self.logs;
+                        self.logs = force_logs || !self.logs;
                         actions.push(*key);
                     }
                     Key::PasteStart => {
-                        self.logs = false;
+                        self.logs = force_logs;
                         self.pasting = true;
                         output.extend_from_slice(sequence);
                     }
@@ -395,7 +483,7 @@ impl Keyboard {
                 self.since.get_or_insert(now);
             } else {
                 if !self.pasting {
-                    self.logs = false;
+                    self.logs = force_logs;
                 }
                 output.append(&mut self.pending);
                 self.since = None;
@@ -407,11 +495,12 @@ impl Keyboard {
             })
         {
             if self.logs && self.pending == b"\x1b" {
-                self.logs = false;
+                self.logs = force_logs;
                 self.pending.clear();
+                actions.push(Key::Escape);
             } else {
                 if !self.pasting {
-                    self.logs = false;
+                    self.logs = force_logs;
                 }
                 output.append(&mut self.pending);
             }
@@ -497,15 +586,18 @@ struct State {
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
     session_titles: BTreeMap<String, String>,
     panel: PanelSnapshot,
-    theme: super::ui::Theme,
-    color: bool,
+    ui: Ui,
+    help: bool,
+    preview: bool,
+    notice: Option<String>,
+    actions: Vec<&'static str>,
     previous_cr: bool,
     dirty: bool,
     keyboard: Keyboard,
 }
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
-        let geometry = Geometry::new(rows, cols);
+        let geometry = Geometry::new(rows, cols, ui);
         Self {
             logs: vt100::Parser::new(nonzero(geometry.log_rows), nonzero(geometry.left), 512),
             pty: vt100::Parser::new_with_callbacks(
@@ -519,11 +611,14 @@ impl State {
             session_titles: BTreeMap::from([("main".into(), "main".into())]),
             geometry,
             panel: PanelSnapshot::default(),
-            theme: ui.theme,
-            color: ui.color,
+            ui: ui.clone(),
+            help: false,
+            preview: false,
+            notice: None,
+            actions: Vec::new(),
             previous_cr: false,
             dirty: true,
-            keyboard: Keyboard::default(),
+            keyboard: Keyboard { logs: ui.layout == Layout::Logs, ..Keyboard::default() },
         }
     }
     fn register_session(&mut self, id: &str, title: &str) {
@@ -560,7 +655,7 @@ impl State {
             std::mem::replace(&mut self.active_session, id.into()),
             previous,
         );
-        self.keyboard.logs = false;
+        self.keyboard.logs = self.ui.layout == Layout::Logs;
         self.logs.screen_mut().set_scrollback(0);
         self.dirty = true;
     }
@@ -623,7 +718,7 @@ impl State {
         self.dirty = true;
     }
     fn resize(&mut self, rows: u16, cols: u16) {
-        let geometry = Geometry::new(rows, cols);
+        let geometry = Geometry::new(rows, cols, &self.ui);
         if self.geometry != geometry {
             self.logs
                 .set_size(nonzero(geometry.log_rows), nonzero(geometry.left));
@@ -642,10 +737,35 @@ impl State {
     }
     fn keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
         let old_focus = self.keyboard.logs;
+        let showing_help = self.help;
         let (output, actions) = self
             .keyboard
-            .feed(bytes, now, flush, self.geometry.log_rows > 0);
+            .feed(bytes, now, flush, self.geometry.log_rows > 0, self.ui.layout == Layout::Logs);
+        let mut layout_changed = false;
         for action in actions {
+            if matches!(action, Key::Escape) && showing_help {
+                self.help = false;
+                self.keyboard.logs = old_focus;
+                self.dirty = true;
+                continue;
+            }
+            if matches!(action, Key::Help) {
+                self.help = !self.help;
+                self.dirty = true;
+                continue;
+            }
+            let ui_action = match action {
+                Key::Layout => Some("layout.next"), Key::Sidebar => Some("sidebar.toggle"),
+                Key::Theme => Some("theme.next"), Key::Reload => Some("reload"), Key::Save => Some("save"),
+                _ => None,
+            };
+            if let Some(action) = ui_action {
+                // Display actions are applied after this input read. Never send
+                // coalesced text to a shell that may have just become hidden.
+                layout_changed |= matches!(action, "layout.next" | "reload");
+                if self.actions.len() < 64 { self.actions.push(action); }
+                continue;
+            }
             let screen = self.logs.screen_mut();
             let current = screen.scrollback();
             let page = usize::from(self.geometry.log_rows).saturating_sub(1).max(1);
@@ -654,7 +774,7 @@ impl State {
                 Key::Down => current.saturating_sub(page),
                 Key::Home => screen.scrollback_len(),
                 Key::End => 0,
-                Key::Toggle | Key::PasteStart | Key::PasteEnd => current,
+                _ => current,
             };
             screen.set_scrollback(position);
             self.dirty = true;
@@ -666,32 +786,27 @@ impl State {
         if old_focus != self.keyboard.logs {
             self.dirty = true;
         }
-        output
+        if showing_help && output == b"\x1b" { self.help = false; self.dirty = true; }
+        if showing_help || self.help || self.ui.layout == Layout::Logs || layout_changed { Vec::new() } else { output }
     }
     fn frame(&self, now: Instant) -> Frame {
         let g = self.geometry;
-        let layout = PanelLayout::new(g.cols, g.rows, true);
+        let layout = PanelLayout::configured(g.cols, g.rows, self.ui.sidebar && !self.ui.panels.is_empty(), self.ui.sidebar_width);
         let sidebar = layout.sidebar.map(|rect| {
             let height = rect.height.saturating_sub(u16::from(g.rows >= 3));
-            (rect, panel::render(&self.panel, rect.width, height, now))
+            (rect, panel::render_configured(&self.panel, rect.width, height, now, &self.ui))
         });
         let mut rows = Vec::with_capacity(usize::from(g.rows));
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
-                let hint = if g.log_rows == 0 {
-                    format!(
-                        " Shell · {} · F7 Next · compact view ",
-                        self.session_label()
-                    )
-                } else if self.keyboard.logs {
-                    format!(
-                        " Logs · PgUp/PgDn · Home/End · F6/Esc Shell · F7 Next · history {}/{} ",
-                        self.logs.screen().scrollback(),
-                        self.logs.screen().scrollback_len()
-                    )
+                let hint = if let Some(notice) = &self.notice {
+                    format!(" {notice} · F1 Help ")
+                } else if self.keyboard.logs || self.ui.layout == Layout::Logs {
+                    format!(" Logs · PgUp/PgDn · Home/End · F2 View · F1 Help · history {}/{} ", self.logs.screen().scrollback(), self.logs.screen().scrollback_len())
+                } else if g.cols < 100 {
+                    format!(" Shell · {} · F1 Help · F2 View · F6 Logs · F7 Next ", self.session_label())
                 } else {
-                    " Shell · F6 Logs · F7 Next terminal · keyboard input goes to this shell "
-                        .into()
+                    " Shell · F1 Help · F2 View · F3 Sidebar · F4 Theme · F5 Reload · F6 Logs · F7 Next · F8 Save ".into()
                 };
                 let text = fit(&hint, g.cols);
                 let padded = format!(
@@ -709,7 +824,7 @@ impl State {
                 continue;
             }
             let mut line = if row < g.log_rows {
-                screen_row(self.logs.screen(), row, g.left, self.color)
+                screen_row(self.logs.screen(), row, g.left, &self.ui)
             } else if row == g.log_rows && g.log_rows > 0 {
                 let title = format!(
                     " Shell · {} · F7 Next · {}×{} ",
@@ -725,7 +840,7 @@ impl State {
                     self.pty.screen(),
                     row.saturating_sub(g.pty_top),
                     g.left,
-                    self.color,
+                    &self.ui,
                 )
             };
             if let Some((rect, panel)) = &sidebar {
@@ -740,33 +855,56 @@ impl State {
             }
             rows.push(line);
         }
+        if self.help {
+            let lines = [
+                "SSMCP  /  Help & appearance".to_string(),
+                String::new(),
+                format!("Theme  {}     View  {}", self.ui.theme.name(), self.ui.layout.name()),
+                format!("Logs  {}%     Sidebar  {} · {} columns", self.ui.log_height_percent, if self.ui.sidebar { "shown" } else { "hidden" }, self.ui.sidebar_width),
+                String::new(),
+                "F1 / Esc   Close this view".into(),
+                "F2         Switch split / shell / logs".into(),
+                "F3         Show or hide the sidebar".into(),
+                "F4         Cycle color themes".into(),
+                "F5         Reload your configuration".into(),
+                "F6         Focus logs; PgUp / PgDn scroll".into(),
+                "F7         Select the next terminal".into(),
+                "F8         Save the current appearance".into(),
+                String::new(),
+                "Edit colors, panel order and sizes in your TOML file.".into(),
+                "ssmcp ui show     ssmcp ui check     ssmcp ui preview".into(),
+                String::new(),
+                self.notice.clone().unwrap_or_else(|| "Appearance changes keep running tasks and shell output.".into()),
+            ];
+            for (row, line) in rows.iter_mut().enumerate() {
+                let content = lines.get(row.saturating_sub(1)).filter(|_| row > 0).map(String::as_str).unwrap_or("");
+                let text = fit(&format!("  {content}"), g.cols);
+                let padded = format!("{text}{}", " ".repeat(usize::from(g.cols).saturating_sub(text.width())));
+                *line = self.tone(if row == 1 { PanelTone::Heading } else { PanelTone::Normal }, &padded);
+            }
+        }
         let screen = self.pty.screen();
         let (row, col) = screen.cursor_position();
         Frame {
             geometry: g,
             rows,
             cursor: (g.pty_top + row.min(g.pty_rows - 1), col.min(g.left - 1)),
-            hidden: screen.hide_cursor() || self.keyboard.logs,
+            hidden: screen.hide_cursor() || self.keyboard.logs || self.help || self.ui.layout == Layout::Logs,
             application_cursor: screen.application_cursor(),
             application_keypad: screen.application_keypad(),
             bracketed_paste: screen.bracketed_paste(),
         }
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
-        if !self.color {
-            return text.into();
-        }
-        let code = match tone {
-            PanelTone::Normal => "0",
-            PanelTone::Muted => self.theme.color("gray"),
-            PanelTone::Heading => "1",
-            PanelTone::Accent => self.theme.color("cyan"),
-            PanelTone::Success => self.theme.color("green"),
-            PanelTone::Warning => self.theme.color("yellow"),
-            PanelTone::Error => self.theme.color("red"),
+        if !self.ui.color { return text.into(); }
+        let semantic = match tone {
+            PanelTone::Normal => "foreground", PanelTone::Muted => "muted",
+            PanelTone::Heading => "heading", PanelTone::Accent => "accent",
+            PanelTone::Success => "success", PanelTone::Warning => "warning", PanelTone::Error => "error",
         };
-        format!("\x1b[{code}m{text}\x1b[0m")
+        format!("\x1b[{};{}m{text}\x1b[0m", self.ui.background(), self.ui.color(semantic))
     }
+
 }
 
 fn fit(text: &str, columns: u16) -> String {
@@ -833,8 +971,9 @@ impl Style {
 
 // Serialize cells ourselves. rows_formatted may include cursor/erase sequences
 // relative to its own screen; forwarding those would escape the pane.
-fn screen_row(screen: &vt100::Screen, row: u16, width: u16, color: bool) -> String {
+fn screen_row(screen: &vt100::Screen, row: u16, width: u16, ui: &Ui) -> String {
     let mut text = String::from("\x1b[0m");
+    if ui.color { let _ = write!(text, "\x1b[{};{}m", ui.background(), ui.color("foreground")); }
     let mut style = Style::default();
     let mut col = 0;
     while col < width {
@@ -843,9 +982,13 @@ fn screen_row(screen: &vt100::Screen, row: u16, width: u16, color: bool) -> Stri
             col += 1;
             continue;
         };
-        let next_style = Style::of(cell, color);
+        let next_style = Style::of(cell, ui.color);
         if next_style != style {
             next_style.append(&mut text);
+            if ui.color {
+                if next_style.fg == vt100::Color::Default { let _ = write!(text, "\x1b[{}m", ui.color("foreground")); }
+                if next_style.bg == vt100::Color::Default { let _ = write!(text, "\x1b[{}m", ui.background()); }
+            }
             style = next_style;
         }
         if cell.is_wide_continuation()
