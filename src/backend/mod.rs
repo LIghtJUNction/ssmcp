@@ -37,14 +37,15 @@ enum Driver {
     Playwright(Arc<playwright::Playwright>),
 }
 impl Driver {
-    async fn tools(&self) -> Result<Vec<Value>, String> {
-        match self {
-            Self::Codex(d) => d.background_tools().await,
+    async fn tools(&self) -> Result<Vec<crate::catalog::ToolDescriptor>, String> {
+        let tools = match self {
+            Self::Codex(d) => return d.background_catalog().await,
             Self::Claude(d) => d.tools().await,
             Self::Pi(d) => d.tools().await,
             Self::OpenCode(d) => d.tools().await,
             Self::Playwright(d) => d.tools().await,
-        }
+        }?;
+        crate::catalog::compact(tools)
     }
     async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         match self {
@@ -248,7 +249,7 @@ impl Backend {
             let published = {
                 let mut drivers = self.drivers.lock().unwrap();
                 drivers.insert(provider, driver.clone());
-                let published = self.registry.replace(provider, catalog);
+                let published = self.registry.replace_catalog(provider, catalog);
                 if published.is_err() { drivers.remove(&provider); }
                 published
             };
@@ -300,7 +301,14 @@ impl Backend {
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         match operation {
-            Operation::ListTools { cursor } => page(self.registry.catalog()?, cursor.as_deref()),
+            Operation::ListTools { cursor } => {
+                let tools = self.registry.snapshot()?;
+                crate::catalog::page(
+                    &tools,
+                    cursor.as_deref(),
+                    &crate::catalog::fingerprint(&tools),
+                )
+            }
             Operation::CallTool { name, arguments } => {
                 let tool = self.registry.lookup(&name)?;
                 self.dispatch(&tool, arguments).await
