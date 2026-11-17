@@ -32,7 +32,7 @@ ssmcp setup
 - 开启一个会话
 ···bash
 ssmcp name@ssmcp.lmm.best --allow name@github
-# name换成账号名
+name换成账号名
 ···
 
 - 连接
