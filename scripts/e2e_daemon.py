@@ -303,6 +303,8 @@ class Daemon(Harness):
                      "--shell", "/bin/sh"]
         if watchdog:
             arguments += ["--watchdog", "--reconnect-delay", str(self.delay)]
+        else:
+            arguments += ["--no-watchdog"]
         arguments.append(f"{self.user}@ssmcp-e2e")
         self.managed.add(name)
         _, output, _ = self.command(arguments, executable=executable, environment=environment)
