@@ -18,11 +18,6 @@ pub(crate) struct ToolDescriptor(Arc<Descriptor>);
 impl ToolDescriptor {
     pub(crate) fn from_value(value: Value) -> Result<Self, String> {
         let raw = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
-        let name = value.get("name").and_then(Value::as_str).map(str::to_owned);
-        let input_object = value.get("inputSchema").is_some_and(Value::is_object);
-        // Drop the expanded tree before allocating its long-lived compressed
-        // representation, so temporary JSON nodes do not pin adjacent heap pages.
-        drop(value);
         let original_len = raw.len();
         // Tiny schemas are cheaper to retain directly. Larger descriptions contain
         // repeated JSON keys and prose; decode only the requested page or route.
@@ -33,12 +28,15 @@ impl ToolDescriptor {
             None
         };
         let is_compressed = compressed.is_some();
+        // Keep the source tree alive while allocating the compact bytes. Moving
+        // its fields out first scatters persistent objects across temporary JSON
+        // allocation holes; the installed-provider benchmark catches that growth.
         Ok(Self(Arc::new(Descriptor {
             bytes: compressed.unwrap_or(raw).into_boxed_slice(),
             original_len,
             compressed: is_compressed,
-            name,
-            input_object,
+            name: value.get("name").and_then(Value::as_str).map(str::to_owned),
+            input_object: value.get("inputSchema").is_some_and(Value::is_object),
         })))
     }
 
