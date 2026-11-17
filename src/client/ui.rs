@@ -266,6 +266,7 @@ impl Default for Ui {
 #[serde(default, deny_unknown_fields)]
 struct Document {
     ui: Ui,
+    client: super::config::ClientSettings,
 }
 
 impl Ui {
@@ -273,6 +274,7 @@ impl Ui {
         // Parser diagnostics can echo accidentally pasted credentials.
         let doc: Document =
             toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
+        doc.client.validate().map_err(|error| error.to_string())?;
         doc.ui.validate()?;
         Ok(doc.ui)
     }
@@ -349,7 +351,9 @@ impl Ui {
 
     pub(crate) fn to_toml(&self) -> Result<String, String> {
         self.validate()?;
-        toml::to_string_pretty(&Document { ui: self.clone() })
+        #[derive(Serialize)]
+        struct UiDocument<'a> { ui: &'a Ui }
+        toml::to_string_pretty(&UiDocument { ui: self })
             .map_err(|_| "cannot serialize UI configuration".into())
     }
 
@@ -382,21 +386,19 @@ impl Ui {
         explicit
             .map(Path::to_path_buf)
             .or_else(|| std::env::var_os("SSMCP_UI_CONFIG").map(PathBuf::from))
-            .or_else(|| {
-                std::env::var_os("XDG_CONFIG_HOME")
-                    .map(PathBuf::from)
-                    .or_else(|| {
-                        std::env::var_os("HOME")
-                            .or_else(|| std::env::var_os("USERPROFILE"))
-                            .map(|p| PathBuf::from(p).join(".config"))
-                    })
-                    .map(|p| p.join("ssmcp/config.toml"))
-            })
+            .or_else(|| super::config::config_path().ok())
     }
 
     pub(crate) fn load(explicit: Option<&Path>) -> Result<Self, String> {
-        let required = explicit.is_some() || std::env::var_os("SSMCP_UI_CONFIG").is_some();
-        let Some(path) = Self::config_path(explicit) else {
+        let env_path = std::env::var_os("SSMCP_UI_CONFIG").map(PathBuf::from);
+        let required = explicit.is_some()
+            || env_path.is_some()
+            || std::env::var_os("SSMCP_CLIENT_CONFIG").is_some();
+        let path = explicit
+            .map(Path::to_path_buf)
+            .or(env_path)
+            .or_else(|| super::config::config_path().ok());
+        let Some(path) = path else {
             return Ok(Self::default());
         };
         match std::fs::read_to_string(&path) {

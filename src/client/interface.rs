@@ -37,13 +37,29 @@ pub(crate) fn get() -> Value {
     })
 }
 
+fn document_with_ui(ui: &Ui, existing: Option<&str>) -> Result<String, String> {
+    let mut document = if let Some(text) = existing {
+        Ui::parse(text)?;
+        toml::from_str::<toml::Table>(text).map_err(|_| "invalid client configuration")?
+    } else {
+        toml::Table::new()
+    };
+    ui.validate()?;
+    document.insert("ui".into(), toml::Value::try_from(ui).map_err(|_| "cannot serialize UI configuration")?);
+    toml::to_string_pretty(&document).map_err(|_| "cannot serialize client configuration".into())
+}
+
 fn save(ui: &Ui) -> Result<(), String> {
     let path = config_path().ok_or("UI configuration path is unavailable; use --ui-config FILE")?;
     // A display command must not replace an unrelated or malformed document.
-    if path.exists() { Ui::load(Some(&path))?; }
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err("cannot read UI configuration".into()),
+    };
     let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent).map_err(|_| "cannot create UI configuration directory")?;
-    let data = ui.to_toml()?;
+    let data = document_with_ui(ui, existing.as_deref())?;
     let temporary = parent.join(format!(".ssmcp-ui-{}.tmp", std::process::id()));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -240,6 +256,15 @@ pub(crate) fn tools() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_appearance_preserves_the_configured_relay() {
+        let existing = "[client]\nserver='https://relay.example.com'\n[ui]\ntheme='nord'\n";
+        let text = document_with_ui(&Ui::default(), Some(existing)).unwrap();
+        let doc: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(doc["client"]["server"].as_str(), Some("https://relay.example.com"));
+        assert_eq!(Ui::parse(&text).unwrap(), Ui::default());
+    }
 
     #[test]
     fn get_accepts_only_the_declared_empty_object() {

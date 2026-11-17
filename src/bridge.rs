@@ -645,6 +645,25 @@ pub async fn dispatch(
     let (_, authorization) = access.authorized().await?;
     let owner = owner(&access.user, &authorization)?;
     match name.as_str() {
+        name if name.starts_with("collab.") => {
+            let mut args = arguments
+                .as_object()
+                .cloned()
+                .ok_or("collab arguments must be an object")?;
+            let client_id = args
+                .remove("client_id")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .ok_or("collab requires client_id from list")?;
+            valid_client(&client_id)?;
+            let session = access.session(&client_id).await?;
+            let result = session
+                .collaboration
+                .dispatch(&owner, &name["collab.".len()..], Value::Object(args))
+                .await?;
+            // Waiting never grants authority beyond the current token and ACL.
+            access.session(&client_id).await?;
+            Ok(result)
+        }
         "resources.list" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]

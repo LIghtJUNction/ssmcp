@@ -9,21 +9,22 @@
 [![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-x86__64%20%C2%B7%20ARM64-64748b?style=flat)](docs/releases.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat)](LICENSE)
 
-ssmcp 把本机 Shell 与已安装工具连接到可信服务器。MCP 的 `list` 找到有权操作的在线设备，`code_mode` 调用它们的原生能力；项目、模型配置和工具执行留在设备上。客户端支持 GitHub 登录后的 HTTPS / WSS 接入，也保留已有 SSH 配置。[工作原理](docs/backends.md)
+ssmcp 把本机 Shell 与已安装工具连接到可信服务器。MCP 的 `list` 找到有权操作的在线设备，`code_mode` 调用它们的原生能力，`collab` 让同一会话的多个 agent 相互发现、发送消息；项目、模型配置和工具执行留在设备上。客户端支持 GitHub 登录后的 HTTPS / WSS 接入，也保留已有 SSH 配置。[工作原理](docs/backends.md)
 
 ## 快速开始
 
 先[安装新版客户端](#安装与升级)，并使用已启用 GitHub OAuth、账号门户和客户端 API 的新版服务器。将示例域名换成你的服务地址：
 
 ~~~sh
-ssmcp login --server https://ssmcp.example.com
+ssmcp config set server https://ssmcp.example.com
+ssmcp login
 ssmcp whoami
 
 # 在项目目录启动自己的被控会话，保持终端打开。
 ssmcp --name device-a
 ~~~
 
-登录后自动使用自己的 GitHub 身份，无须每次填写自己的 `--allow`。新接入路径不需要 SSH、公钥或设备入站端口；看门狗默认启用，掉线后自动重连，`--no-watchdog` 可关闭。
+登录后自动使用自己的 GitHub 身份，无须每次填写自己的 `--allow`。新接入路径不需要 SSH 密钥或设备入站端口；看门狗默认启用，掉线后自动重连，`--no-watchdog` 可关闭。
 
 在 A 的另一个终端查看或进入可控会话：
 
@@ -33,6 +34,42 @@ ssmcp -i
 ~~~
 
 `-i` 列出设备供选择，随后进入它的终端。Ctrl-C 交给远端 Shell；Ctrl-] 离开控制界面，远端会话继续运行。本地后台服务仍用 `ssmcp sessions list` 管理。
+
+## 设置默认中转服务器
+
+保存默认地址后，后续登录、邀请和连接都可以省略 `--server`：
+
+~~~sh
+ssmcp config set server https://relay.example.com
+ssmcp config get server
+ssmcp config path
+
+# 只让这一次邀请使用另一台已登录的服务器。
+ssmcp invite --server https://other.example.com
+~~~
+
+也可以编辑 `ssmcp config path` 输出的文件，默认是 `~/.config/ssmcp/config.toml`，添加或修改：
+
+~~~toml
+[client]
+server = "https://relay.example.com"
+~~~
+
+地址优先级为 **`--server` → `[client].server` → 最后登录的服务器 → `https://ssmcp.lmm.best`**。命令设置会保留已有 UI 配置与注释。`ssmcp config unset server` 移除配置覆盖，`SSMCP_CLIENT_CONFIG` 可指定另一份绝对路径配置文件。切换服务器后，先在该服务器执行 `ssmcp login`；各服务器的账号令牌分别保存。[配置路径与完整说明](docs/client-server.md#设置默认服务器)
+
+## 固定可信服务器的公钥
+
+把管理员通过可信渠道提供的 **HTTPS 入口公钥**登记到本机：
+
+~~~sh
+ssmcp trust add --server https://relay.example.com --public-key ./server-public.pem
+ssmcp trust path
+ssmcp trust list
+~~~
+
+公钥记录保存在配置文件同目录的 **`trusted-servers.toml`**，默认是 `~/.config/ssmcp/trusted-servers.toml`，也可直接编辑其中的 `public_keys` 或 `pins`。这里使用 TLS 证书的 SPKI 公钥；由 Nginx、Caddy 或 CDN 提供 HTTPS 时，登记该入口的公钥。首次公钥应通过已核验的管理员渠道取得。
+
+登记后，HTTPS API 与 WSS 会话在正常证书链、域名和有效期校验之外，还要求公钥匹配；不匹配时停止连接。这能抵御使用另一把密钥伪装服务器的连接。证书沿用原公钥续签时无需更新，换钥需先核验并登记新公钥。[信任文件格式、指纹与轮换](docs/client-server.md#信任公钥写到哪里)
 
 ## 临时控制 B 设备
 
@@ -45,7 +82,9 @@ ssmcp invite
 ssmcp invite --shell powershell
 ~~~
 
-默认命令只从你的服务器下载临时客户端，前台接入，并在退出后清理。B 无须安装 SSH 或登录 GitHub。邀请默认 **10 分钟内兑换一次**，兑换后的会话默认 **1 小时**有效；用 `--ttl` 与 `--session-ttl` 调整。A 再运行 `ssmcp list` 或 `ssmcp -i` 即可控制 B。B 按 Ctrl-C 结束会话，A 的 `logout` 会撤销该次登录派生的邀请与设备授权。
+未固定服务器公钥时，默认命令只从所选服务器下载临时客户端，前台接入，并在退出后清理。B 无须安装 SSH 或登录 GitHub。邀请默认 **10 分钟内兑换一次**，兑换后的会话默认 **1 小时**有效；用 `--ttl` 与 `--session-ttl` 调整。A 再运行 `ssmcp list` 或 `ssmcp -i` 即可控制 B。B 按 Ctrl-C 结束会话，A 的 `logout` 会撤销该次登录派生的邀请与设备授权。
+
+**已固定公钥的服务器会自动使用预安装客户端流程**：B 先从可信来源安装新版 ssmcp，邀请命令把 A 的可信指纹写入 B，再执行接入。这样在传送邀请令牌前就完成公钥校验。两种流程均支持 `invite --server URL` 选择服务器。
 
 服务端须配置 `client_download_dir` 并准备 B 对应平台的客户端；缺少文件时返回明确的 503。B 已安装兼容版本时可使用 `ssmcp invite --no-bootstrap`。完整流程、期限、账号存储和服务器下载配置见[客户端账号与临时接入](docs/client-accounts.md)。
 
@@ -55,7 +94,7 @@ ssmcp invite --shell powershell
 
 设备操作者决定开放哪个工作目录和系统用户权限；服务器按已验证的 GitHub 数字 ID 与会话规则检查每次调用。临时设备凭据不能查看或控制 A 的其他设备。中转服务器会处理连接和原生工具调用，应使用你信任的服务器。[授权实现](src/device.rs) · [会话访问检查](src/broker.rs)
 
-[客户端账号教程](docs/client-accounts.md) · [账号门户与审计](docs/portal-console.md) · [配置与 SSH](docs/configuration.md) · [服务器部署](docs/deployment.md) · [命令接口](docs/commands.md)
+[默认服务器与公钥](docs/client-server.md) · [客户端账号教程](docs/client-accounts.md) · [账号门户与审计](docs/portal-console.md) · [配置与 SSH](docs/configuration.md) · [服务器部署](docs/deployment.md) · [命令接口](docs/commands.md)
 
 ## 使用已有 SSH 配置
 
@@ -209,13 +248,14 @@ Omarchy 新增 `ssmcp.omarchy.*` 的 21 个系统原语，覆盖主题、背景�
 
 用户要求操作现有 Chrome 时，先用 `ssmcp.browser.discover` 检查只读元数据，再用 `ssmcp.harnesses.list` 与 `tools.search` 确认可调用的原生能力。扩展安装不等于已连接；缺少 Playwright MCP server 时只报告不可用，发现阶段不下载依赖，也不会改用隔离 Chromium 会话。已有 CDP 端点可显式附着，详见[复用现有 Chrome](docs/browser-existing-session.md)。
 
-## 两个工具就够了
+## MCP 接口
 
 | MCP 工具 | 用法 |
 | --- | --- |
 | `list({})` | 列出当前授权可访问的在线客户端：ID、名字、任务标题（若设置）、类型、主机和启动目录 |
 | `list({client_id})` | 读取指定客户端的原生工具名称与参数 schema；用 `nextCursor` 分页 |
 | `code_mode({code, timeout_ms, controller})` | 用 JavaScript 调用原生工具，返回结果和日志 |
+| `collab({action, client_id, ...})` | 管理会话内 agent 身份、成员发现、私信、广播与收件确认 |
 
 例如，对名为 `terminal` 的客户端查询 Git 状态。将下面源码放入 `code_mode` 的 `code` 参数：
 
@@ -267,6 +307,24 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 调用 Harness 或 MCP 工具时，先用 `await tools.search(client.id,{query:'所需能力',limit:20})` 定位工具，再用 `include_schemas:true` 获取完整原生 Schema。`list({client_id})` 和 `await tools(client.id,cursor)` 继续提供完整目录分页。检索减少返回给模型的无关描述，不减少首次扫描的底层分页；`tools.search` 需要服务端更新。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批状态；大结果使用 artifact 保存原生 MCP JSON，独立命令分别保存 stdout/stderr，PTY 保存会话合并流，OpenCode HTTP 正文使用 `body_artifact` 与 `body_format`。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
 
 代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过客户端连接将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
+
+## 多个 agent 协作
+
+同一在线客户端可以容纳多个 agent。每个 agent 通过 `collab.join` 获得独立 `agent_id` 和私密 `token`，用 `collab.list` 发现同伴；`send` 支持定向 JSON 消息和 `to: "*"` 广播，`receive` 读取自己的邮箱，处理完后 `ack` 释放容量。`update` 更新状态并续租，`leave` 主动退出。
+
+```javascript
+const clientId = "CLIENT_ID_FROM_LIST";
+const joined = await collab.join(clientId, {
+  name: "implementation",
+  role: "developer",
+  capabilities: ["rust", "tests"]
+});
+return { client_id: clientId, ...joined };
+```
+
+保存返回的 `client_id`、`agent_id` 和 `token`，后续请求显式传入；JavaScript 变量不会跨 `code_mode` 请求保留。长时间等消息时直接调用公开 `collab` 工具：`action: "receive"` 最长等待 30 秒，不占用 JavaScript 执行槽。代码模式中的 `collab.receive` 最长等 1 秒。
+
+成员租约为 15 分钟，成功的成员调用续租。私信只进入目标邮箱；广播面向发送时的其他成员。消息在确认前可以重读，发送重试可用 `idempotency_key` 去重；邮箱满时明确返回背压错误。客户端连接断开后，其协作成员和内存消息结束。[完整接口、收件示例与恢复语义](docs/agent-collaboration.md)
 
 ## 会话标题、重载与长输出
 
@@ -408,6 +466,7 @@ python3 scripts/e2e_agents.py --bin-dir target/debug
 | 下载平台包、创建版本 tag、检查自动发布 | [发布与安装](docs/releases.md) |
 | 安装服务端、配置 systemd / SSH / HTTPS | [Linux 部署](docs/deployment.md) |
 | 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
+| 让多个 agent 发现同伴、私信和广播 | [会话内 Agent 协作](docs/agent-collaboration.md) |
 | 设置标题、管理后台会话与重连、重载及读取长输出 | [会话与输出管理](docs/session-control.md) |
 | 两端同步文件、映射端口、读取动态资源 | [工作区教程](docs/workspaces.md) |
 | 为 AI 提供可复用使用指南 | [ssmcp skill](skills/ssmcp/SKILL.md) |

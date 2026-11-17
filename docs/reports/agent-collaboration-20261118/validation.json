@@ -1,0 +1,194 @@
+{
+  "schema": "ssmcp.collaboration.validation.v1",
+  "validated_revision": "b3a209d192acdd736eecfd23e901ed9434739962",
+  "validated_tree": "a1f76d92dde320e74c2edacb4fb6dc3990ea5c04",
+  "checked_at": "2026-11-18T02:19:01.227011+08:00",
+  "environment": {
+    "system": "Linux",
+    "architecture": "x86_64",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "node": "v26.13.1"
+  },
+  "checks": [
+    {
+      "name": "http-unit",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "http::tests"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 0.356,
+      "summary": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 572 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "resources-unit",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "resources::tests"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 7.557,
+      "summary": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 584 filtered out; finished in 0.02s"
+      ]
+    },
+    {
+      "name": "broker-unit",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "broker::tests"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 0.225,
+      "summary": [
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 576 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "name": "protocol-regression",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "resources",
+        "--test",
+        "two_tools",
+        "--",
+        "--include-ignored"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 22.679,
+      "summary": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.47s"
+      ]
+    },
+    {
+      "name": "javascript",
+      "command": [
+        "node",
+        "--test",
+        "scripts/test_tools_search.mjs",
+        "scripts/test_execution_helpers.mjs",
+        "scripts/test_cua_facade.mjs"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 3.332,
+      "summary": [
+        "ℹ tests 23",
+        "ℹ pass 23",
+        "ℹ fail 0",
+        "ℹ skipped 0"
+      ]
+    },
+    {
+      "name": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 1.121,
+      "summary": []
+    },
+    {
+      "name": "core",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "collab"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 13.891,
+      "summary": [
+        "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 569 filtered out; finished in 0.12s"
+      ]
+    },
+    {
+      "name": "http-collaboration",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "collaboration"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 10.569,
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s"
+      ]
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--lib",
+        "--tests",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 118.039,
+      "summary": [
+        "Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 57s"
+      ]
+    }
+  ],
+  "behaviors": [
+    {
+      "claim": "Participants discover each other; private mailboxes require room, owner and participant credentials",
+      "evidence": [
+        "src/collab/tests.rs",
+        "tests/collaboration.rs"
+      ]
+    },
+    {
+      "claim": "Five direct HTTP receivers can wait while another agent sends",
+      "evidence": [
+        "tests/collaboration.rs::five_waiting_agents_do_not_block_a_sender"
+      ]
+    },
+    {
+      "claim": "Broadcast admission is atomic and queued bytes and serialized replies are bounded",
+      "evidence": [
+        "src/collab/tests.rs::full_inbox_rejects_broadcast_without_partial_delivery",
+        "src/collab/tests.rs::payload_inbox_bytes_and_receive_bytes_are_bounded"
+      ]
+    },
+    {
+      "claim": "Receive is replayable until acknowledgement; retry keys deduplicate accepted sends",
+      "evidence": [
+        "src/collab/tests.rs",
+        "tests/collaboration.rs"
+      ]
+    },
+    {
+      "claim": "Connection shutdown wakes receivers and denies old access",
+      "evidence": [
+        "tests/collaboration.rs::disconnect_all_ends_waiting_receivers_and_revokes_old_room_access"
+      ]
+    }
+  ],
+  "scope": "Local Linux validation with real loopback HTTP/OAuth and deterministic wire fixtures. Durations include compilation and runner startup."
+}

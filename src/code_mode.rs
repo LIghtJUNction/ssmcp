@@ -1016,6 +1016,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn collaboration_helpers_bind_room_and_keep_long_waits_outside_code_mode() {
+        let _guard = TESTS.lock().await;
+        let output = run_code(r#"
+            const joined = await collab.join('room',{name:'writer',client_id:'cannot-override'});
+            const messages = await collab.receive('room',{agent_id:'a',token:'private',after:7,wait_ms:1000});
+            const sent = await collab.send('room',{agent_id:'a',token:'private',to:'b',payload:{file:'src/lib.rs'},idempotency_key:'handoff-1'});
+            const acked = await collab.ack('room',{agent_id:'a',token:'private',through:8});
+            let rejected = '';
+            try { await collab.receive('room',{agent_id:'a',token:'private',wait_ms:30000}); }
+            catch (error) { rejected = error.message; }
+            return {joined,messages,sent,acked,rejected,frozen:Object.isFrozen(collab)};
+        "#).await.unwrap();
+        let result = &output["result"];
+        assert_eq!(result["joined"]["name"], "collab.join");
+        assert_eq!(result["joined"]["arguments"]["client_id"], "room");
+        assert_eq!(result["messages"]["name"], "collab.receive");
+        assert_eq!(result["messages"]["arguments"]["after"], 7);
+        assert_eq!(result["sent"]["arguments"]["payload"]["file"], "src/lib.rs");
+        assert_eq!(result["sent"]["arguments"]["idempotency_key"], "handoff-1");
+        assert_eq!(result["acked"]["arguments"]["through"], 8);
+        assert!(
+            result["rejected"]
+                .as_str()
+                .unwrap()
+                .contains("direct collab tool")
+        );
+        assert_eq!(result["frozen"], true);
+    }
+
+    #[tokio::test]
     async fn session_helpers_use_selected_client_and_preserve_generation_guard() {
         let _guard = TESTS.lock().await;
         let output = run_code(r#"
