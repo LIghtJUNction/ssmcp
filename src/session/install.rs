@@ -376,8 +376,7 @@ fn systemd_definition(
         String::new()
     };
     Ok(format!(
-        "# {MARKER}\n[Unit]\nDescription=ssmcp client session manager\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=exec\n{owner}WorkingDirectory={}\nExecStart={} service run\nEnvironment={}\nEnvironment={}\nEnvironment={}\nRestart=on-failure\nRestartSec=5s\nKillMode=control-group\nTimeoutStopSec=20s\nUMask=0077\nStandardInput=null\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy={}\n",
-        systemd_quote(home, false)?,
+        "# {MARKER}\n[Unit]\nDescription=ssmcp client session manager\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=exec\n{owner}WorkingDirectory=~\nExecStart={} service run\nEnvironment={}\nEnvironment={}\nEnvironment={}\nRestart=on-failure\nRestartSec=5s\nKillMode=control-group\nTimeoutStopSec=20s\nUMask=0077\nStandardInput=null\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy={}\n",
         systemd_quote(executable, true)?,
         systemd_quote(&format!("HOME={home}"), false)?,
         systemd_quote(&format!("SSMCP_SESSION_HOME={state}"), false)?,
@@ -1026,6 +1025,7 @@ mod tests {
         )
         .unwrap();
         assert!(text.contains("User=alice\n"));
+        assert!(text.contains("WorkingDirectory=~\n"));
         assert!(text.contains("ExecStart=\"/opt/my app/$$bin%%/ssmcp\" service run"));
         assert!(text.contains("SSMCP_SESSION_HOME=/home/alice/state%%1"));
         assert!(text.contains("PATH=/opt/bin:$HOME/bin"));

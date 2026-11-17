@@ -38,7 +38,7 @@ const HELP: &str = r#"ssmcp — expose a local shell and every installed coding 
 
 Usage: ssmcp [options] [user@]host
        ssmcp setup [options] [user@]host
-       ssmcp sessions <list|status|start|stop|restart|logs|auth|remove> [NAME]
+       ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [NAME|list] [--read-only]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]

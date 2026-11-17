@@ -17,7 +17,7 @@ ssmcp service status --system --json
 
 标准命令是 `systemctl`。系统服务单元名为 `ssmcp.service`，与远端网关的 `ssmcpd.service` 分开。只安装用户 scope 时使用 `ssmcp service install`，随后使用 `systemctl --user enable --now ssmcp`。两种 scope 共用同一用户的状态目录时，管理器锁会拒绝重复实例；选择其中一种常驻方式。
 
-安装先生成持久定义，启用、启动和停止仍使用原生服务管理器。`ssmcp service install --dry-run --json` 可查看计划；使用 system scope 时，dry-run 同样支持 `--system --user USER`。macOS、Windows 的完整命令及运行身份要求见[平台服务说明](client-service-platforms.md)。
+`service install` 会写入持久定义，并通过原生服务管理器启用、启动它；上面的 `enable --now` 可重复执行。`ssmcp service install --dry-run --json` 可查看计划；使用 system scope 时，dry-run 同样支持 `--system --user USER`。macOS、Windows 的完整命令及运行身份要求见[平台服务说明](client-service-platforms.md)。
 
 ## 创建和管理
 

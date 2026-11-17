@@ -274,6 +274,26 @@ class Portable:
                            "systemd definition has observable startup and failure recovery")
                 self.check(definition["Service"].get("User") == (account if is_system else None),
                            "systemd definition preserves the requested account scope")
+                verifier = shutil.which("systemd-analyze")
+                if verifier is None:
+                    raise RuntimeError("systemd-analyze is required to validate generated Linux units")
+                unit = self.root / ("fixture-system.service" if is_system else "fixture-user.service")
+                unit.write_text(plan["definition"], encoding="utf-8")
+                verified = subprocess.run(
+                    [verifier, "verify", "--man=no", str(unit)],
+                    cwd=self.root, env=self.environment, stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=20,
+                )
+                if verified.returncode != 0:
+                    raise AssertionError(
+                        "systemd-analyze rejected the generated "
+                        + ("system" if is_system else "user")
+                        + " unit: " + self.redact(verified.stderr[-3000:])
+                    )
+                self.check(True, "systemd accepts the generated "
+                           + ("system" if is_system else "user") + " unit definition")
+
         else:
             self.check(user.get("manager") == "task-scheduler"
                        and "$d.Triggers.Create(9)" in user["definition"]

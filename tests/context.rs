@@ -1,8 +1,9 @@
 use serde_json::{Value, json};
 use ssmcp::context::Context;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::{
     fs,
-    os::unix::fs::symlink,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -230,24 +231,12 @@ async fn unsupported_or_malformed_yaml_has_diagnostics_and_raw_read_remains_avai
 }
 
 #[tokio::test]
-async fn discovery_is_bounded_and_never_follows_directory_or_skill_symlinks() {
+async fn discovery_is_bounded_and_rejects_invalid_roots_and_limits() {
     let f = Fixture::new();
     f.write(
         "skills/real/SKILL.md",
         "---\nname: real\ndescription: safe\n---\n",
     );
-    fs::write(
-        f.extra.join("SKILL.md"),
-        "---\nname: secret\ndescription: OUTSIDE_SECRET\n---\n",
-    )
-    .unwrap();
-    symlink(&f.extra, f.root.join("skills/linked")).unwrap();
-    fs::create_dir_all(f.root.join("skills/link-file")).unwrap();
-    symlink(
-        f.extra.join("SKILL.md"),
-        f.root.join("skills/link-file/SKILL.md"),
-    )
-    .unwrap();
     let index = f
         .call(
             "ssmcp.skills.list",
@@ -255,8 +244,6 @@ async fn discovery_is_bounded_and_never_follows_directory_or_skill_symlinks() {
         )
         .await;
     assert_eq!(index["total"], 1);
-    assert!(codes(&index).contains(&"symlink_skipped"));
-    assert!(!index.to_string().contains("OUTSIDE_SECRET"));
     let shallow = f
         .call(
             "ssmcp.skills.list",
@@ -287,15 +274,7 @@ async fn discovery_is_bounded_and_never_follows_directory_or_skill_symlinks() {
                 .is_err()
         );
     }
-    assert!(
-        f.context
-            .perform(
-                "ssmcp.skills.read",
-                json!({"path":"skills/link-file/SKILL.md"})
-            )
-            .await
-            .is_err()
-    );
+
     for args in [
         json!({"max_nodes":4097}),
         json!({"max_depth":9}),
@@ -306,6 +285,46 @@ async fn discovery_is_bounded_and_never_follows_directory_or_skill_symlinks() {
     ] {
         assert!(f.context.perform("ssmcp.skills.list", args).await.is_err());
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn discovery_never_follows_directory_or_skill_symlinks() {
+    let f = Fixture::new();
+    f.write(
+        "skills/real/SKILL.md",
+        "---\nname: real\ndescription: safe\n---\n",
+    );
+    fs::write(
+        f.extra.join("SKILL.md"),
+        "---\nname: secret\ndescription: OUTSIDE_SECRET\n---\n",
+    )
+    .unwrap();
+    symlink(&f.extra, f.root.join("skills/linked")).unwrap();
+    fs::create_dir_all(f.root.join("skills/link-file")).unwrap();
+    symlink(
+        f.extra.join("SKILL.md"),
+        f.root.join("skills/link-file/SKILL.md"),
+    )
+    .unwrap();
+    let index = f
+        .call(
+            "ssmcp.skills.list",
+            json!({"paths":["skills","skills/real"]}),
+        )
+        .await;
+    assert_eq!(index["total"], 1);
+    assert!(codes(&index).contains(&"symlink_skipped"));
+    assert!(!index.to_string().contains("OUTSIDE_SECRET"));
+    assert!(
+        f.context
+            .perform(
+                "ssmcp.skills.read",
+                json!({"path":"skills/link-file/SKILL.md"})
+            )
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -362,13 +381,16 @@ async fn agents_resolve_orders_scopes_preserves_exact_text_and_requires_explicit
     let roots = f.call("ssmcp.context.roots", json!({})).await;
     assert_eq!(roots["roots"][1]["path"], f.extra.to_str().unwrap());
     assert_eq!(roots["roots"][1]["read_only"], true);
-    symlink(&f.extra, f.root.join("outside")).unwrap();
-    assert!(
-        f.context
-            .perform("ssmcp.agents.resolve", json!({"path":"outside/new.rs"}))
-            .await
-            .is_err()
-    );
+    #[cfg(unix)]
+    {
+        symlink(&f.extra, f.root.join("outside")).unwrap();
+        assert!(
+            f.context
+                .perform("ssmcp.agents.resolve", json!({"path":"outside/new.rs"}))
+                .await
+                .is_err()
+        );
+    }
     for (name, path) in [
         ("ssmcp.agents.read", "secret.txt"),
         ("ssmcp.skills.read", "AGENTS.md"),
