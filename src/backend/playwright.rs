@@ -1,6 +1,7 @@
 //! Forward the installed Playwright MCP server's native extension tools.
 //! Discovery never launches a browser, installs packages, or approves a connection.
 use super::rpc::{Dialect, Peer};
+use crate::catalog::ToolDescriptor;
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
@@ -165,31 +166,41 @@ impl Playwright {
     }
 
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
-        let mut tools = control_tools();
+        self.compact_tools()
+            .await?
+            .iter()
+            .map(ToolDescriptor::value)
+            .collect()
+    }
+
+    pub(crate) async fn compact_tools(&self) -> Result<Vec<ToolDescriptor>, String> {
+        // Keep native page order and fields while releasing expanded pages as
+        // discovery advances. The registry owns the retained shared snapshot.
+        let mut tools = crate::catalog::compact(control_tools())?;
         let mut names = HashSet::new();
         let mut cursors = HashSet::new();
         let mut params = json!({});
         for _ in 0..MAX_PAGES {
-            let page = self.peer.request_discovery("tools/list", params).await?;
+            let mut page = self.peer.request_discovery("tools/list", params).await?;
             let entries = page["tools"]
-                .as_array()
+                .as_array_mut()
                 .ok_or("Playwright tools/list returned no tools array")?;
-            for entry in entries {
+            for mut entry in std::mem::take(entries) {
                 let name = entry["name"]
                     .as_str()
                     .filter(|s| !s.is_empty())
-                    .ok_or("Playwright returned a tool without a name")?;
-                if !names.insert(name.to_owned()) {
+                    .ok_or("Playwright returned a tool without a name")?
+                    .to_owned();
+                if !names.insert(name.clone()) {
                     return Err(format!("Playwright returned duplicate tool name {name:?}"));
                 }
                 if names.len() > MAX_TOOLS {
                     return Err("Playwright exceeded the native tool limit".into());
                 }
-                let mut entry = entry.clone();
                 // Only add the routing namespace. Keep descriptions, $defs,
                 // annotations, outputSchema and future native fields intact.
                 entry["name"] = json!(format!("playwright.{name}"));
-                tools.push(entry);
+                tools.push(ToolDescriptor::from_value(entry)?);
             }
             match page.get("nextCursor") {
                 None | Some(Value::Null) => return Ok(tools),
@@ -275,7 +286,16 @@ for line in sys.stdin:
             .await
             .unwrap();
         let bridge = Playwright::initialize(peer).await.unwrap();
+        let compact = bridge.compact_tools().await.unwrap();
         let tools = bridge.tools().await.unwrap();
+        assert_eq!(
+            compact
+                .iter()
+                .map(ToolDescriptor::value)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            tools
+        );
         assert_eq!(tools.len(), 5);
         let first = tools
             .iter()

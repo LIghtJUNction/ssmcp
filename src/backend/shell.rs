@@ -25,6 +25,7 @@ use tokio::{
 const MAX_JOBS: usize = 32;
 const MAX_RETAINED: usize = 128;
 const MAX_OUTPUT: usize = 64 * 1024;
+const COMPLETED_INLINE_BYTES: usize = 4 * 1024;
 const MAX_COMMAND_ARGS: usize = 256;
 const MAX_WAIT: u64 = 60_000;
 const MAX_TIMEOUT: u64 = 900_000;
@@ -42,6 +43,7 @@ struct Output {
     start: u64,
     end: u64,
     eof: bool,
+    read_from_capture: bool,
     capture: Capture,
 }
 impl Output {
@@ -51,6 +53,7 @@ impl Output {
             start: 0,
             end: 0,
             eof: false,
+            read_from_capture: false,
             capture: store.capture(scope),
         }
     }
@@ -71,6 +74,11 @@ impl Output {
         if cursor > self.end {
             return Err("output cursor is ahead of the stream".into());
         }
+        if self.read_from_capture {
+            let data = self.capture.read_range(cursor, limit)?;
+            let next = cursor + data.len() as u64;
+            return Ok((data, next, false));
+        }
         let next = cursor.max(self.start);
         let offset = (next - self.start) as usize;
         let data: Vec<u8> = self
@@ -87,7 +95,18 @@ impl Output {
         if let Some(error) = error {
             self.capture.fail(error);
         }
-        let _ = self.capture.finish();
+        // Successful completed jobs can read their full capture directly. Keep
+        // tiny output inline; larger output uses the existing artifact store.
+        // A failed archive keeps the live tail and its explicit error metadata.
+        if self.capture.error().is_none() && self.capture.bytes() > COMPLETED_INLINE_BYTES as u64 {
+            let _ = self.capture.spill();
+        }
+        let archived = self.capture.finish().is_ok() && self.capture.bytes() == self.end;
+        if archived {
+            self.read_from_capture = true;
+            self.start = 0;
+            self.bytes = VecDeque::new();
+        }
         self.eof = true;
     }
 }
@@ -263,7 +282,7 @@ impl Shell {
             ),
             tool(
                 "ssmcp.exec.read",
-                "Read incremental stdout/stderr and an atomic status snapshot. Each stream has its own byte cursor; base64 preserves exact bytes. Large output is retained in artifacts accessible through outputs.read.",
+                "Read incremental stdout/stderr and an atomic status snapshot. Each stream has its own byte cursor; base64 preserves exact bytes. Live streams use bounded tails; completed streams read full saved output until artifact retention expires. Artifacts are also accessible through outputs.read.",
                 json!({"job_id":{"type":"string"},"stdout_cursor":{"type":"integer","minimum":0,"default":0},
                     "stderr_cursor":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1,"maximum":32768,"default":16384},
                     "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_WAIT,"default":0}}),
@@ -336,16 +355,22 @@ impl Shell {
                 }
                 let job = self.job(&args.job_id)?;
                 wait_output(&job, args.stdout_cursor, args.stderr_cursor, args.wait_ms).await?;
-                let state = job.state();
-                let (out, on, ot) = state.stdout.read(args.stdout_cursor, args.max_bytes)?;
-                let (err, en, et) = state.stderr.read(args.stderr_cursor, args.max_bytes)?;
-                Ok(
-                    json!({"job_id":job.id,"snapshot":job.snapshot_locked(&state),"running":state.running,
-                    "exit_code":state.exit_code,"stdout":String::from_utf8_lossy(&out),"stderr":String::from_utf8_lossy(&err),
-                    "stdout_base64":STANDARD.encode(&out),"stderr_base64":STANDARD.encode(&err),
-                    "stdout_cursor":on,"stderr_cursor":en,"stdout_truncated":ot,"stderr_truncated":et,
-                    "stdout_eof":state.stdout.eof && on==state.stdout.end,"stderr_eof":state.stderr.eof && en==state.stderr.end}),
-                )
+                // Archive reads can touch disk. Keep their atomic output/status
+                // snapshot on a blocking worker without holding a guard across await.
+                tokio::task::spawn_blocking(move || -> Result<Value, String> {
+                    let state = job.state();
+                    let (out, on, ot) = state.stdout.read(args.stdout_cursor, args.max_bytes)?;
+                    let (err, en, et) = state.stderr.read(args.stderr_cursor, args.max_bytes)?;
+                    Ok(
+                        json!({"job_id":job.id,"snapshot":job.snapshot_locked(&state),"running":state.running,
+                        "exit_code":state.exit_code,"stdout":String::from_utf8_lossy(&out),"stderr":String::from_utf8_lossy(&err),
+                        "stdout_base64":STANDARD.encode(&out),"stderr_base64":STANDARD.encode(&err),
+                        "stdout_cursor":on,"stderr_cursor":en,"stdout_truncated":ot,"stderr_truncated":et,
+                        "stdout_eof":state.stdout.eof && on==state.stdout.end,"stderr_eof":state.stderr.eof && en==state.stderr.end}),
+                    )
+                })
+                .await
+                .map_err(|error| format!("could not read command output: {error}"))?
             }
             "ssmcp.exec.cancel" => {
                 let args: Id = parse(args)?;
@@ -951,6 +976,24 @@ mod tests {
     use serde_json::json;
     use std::io::Write;
 
+    struct OutputDirectory(PathBuf);
+
+    impl Drop for OutputDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn isolated_output() -> (OutputDirectory, Arc<OutputStore>) {
+        let mut random = [0u8; 16];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let directory =
+            OutputDirectory(std::env::temp_dir().join(format!("ssmcp-shell-output-{suffix}")));
+        let store = OutputStore::at_for_test(directory.0.clone()).unwrap();
+        (directory, store)
+    }
+
     fn completed_job(store: &Arc<OutputStore>) -> Arc<Job> {
         let id = format!("test-{}", NEXT_JOB.fetch_add(1, Ordering::Relaxed));
         let (cancel, _) = watch::channel(false);
@@ -1012,6 +1055,161 @@ mod tests {
         assert_eq!(registry.jobs.len(), MAX_RETAINED);
         assert!(jobs.iter().all(|job| registry.jobs.contains_key(&job.id)));
         assert_eq!(shell.slots.available_permits(), MAX_JOBS);
+    }
+
+    fn remove_capture_artifact(output: &Output) {
+        if let Some(artifact) = output.capture.metadata() {
+            let path = PathBuf::from(artifact.path);
+            let _ = std::fs::remove_file(path.with_extension("meta.json"));
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_completed_output_is_bounded_and_reads_exact_archive_ranges() {
+        let (_directory, store) = isolated_output();
+        let shell = Shell::with_workspace(std::env::current_dir().unwrap(), store).unwrap();
+        let payload: Vec<u8> = (0..MAX_OUTPUT + 137).map(|i| (i % 251) as u8).collect();
+        let reversed: Vec<u8> = payload.iter().rev().copied().collect();
+        let mut jobs = Vec::new();
+        for _ in 0..MAX_RETAINED {
+            let job = completed_job(&shell.output);
+            {
+                let mut state = job.state();
+                state.stdout = Output::new(&shell.output, format!("job:{}:stdout", job.id));
+                state.stderr = Output::new(&shell.output, format!("job:{}:stderr", job.id));
+                state.stdout.append(&payload);
+                assert_eq!(state.stdout.bytes.len(), MAX_OUTPUT);
+                state.stdout.finish(None);
+                state.stderr.append(&reversed);
+                state.stderr.finish(None);
+                for output in [&state.stdout, &state.stderr] {
+                    assert_eq!(output.bytes.capacity(), 0);
+                    assert!(output.capture.inline_bytes().is_empty());
+                    assert!(output.read_from_capture);
+                    assert_eq!(output.metadata()["start_cursor"], 0);
+                    assert_eq!(output.metadata()["truncated"], false);
+                    assert!(output.capture.metadata().unwrap().complete);
+                }
+            }
+            shell.registry().jobs.insert(job.id.clone(), job.clone());
+            jobs.push(job);
+        }
+        assert_eq!(shell.registry().jobs.len(), MAX_RETAINED);
+
+        let id = &jobs[0].id;
+        let mut cursor = 0;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        loop {
+            let page = shell
+                .call(
+                    "ssmcp.exec.read",
+                    json!({
+                        "job_id":id,"stdout_cursor":cursor,"stderr_cursor":cursor,"max_bytes":32768
+                    }),
+                )
+                .await
+                .unwrap();
+            stdout.extend(
+                STANDARD
+                    .decode(page["stdout_base64"].as_str().unwrap())
+                    .unwrap(),
+            );
+            stderr.extend(
+                STANDARD
+                    .decode(page["stderr_base64"].as_str().unwrap())
+                    .unwrap(),
+            );
+            assert_eq!(page["stdout_truncated"], false);
+            assert_eq!(page["stderr_truncated"], false);
+            assert_eq!(page["stdout_cursor"], page["stderr_cursor"]);
+            cursor = page["stdout_cursor"].as_u64().unwrap();
+            if page["stdout_eof"] == true {
+                assert_eq!(page["stderr_eof"], true);
+                break;
+            }
+            assert!(cursor < payload.len() as u64);
+        }
+        assert_eq!(stdout, payload);
+        assert_eq!(stderr, reversed);
+        for (offset, limit) in [(17, 29), (payload.len() - 11, 127), (payload.len(), 127)] {
+            let page = shell
+                .call(
+                    "ssmcp.exec.read",
+                    json!({
+                        "job_id":id,"stdout_cursor":offset,"stderr_cursor":offset,"max_bytes":limit
+                    }),
+                )
+                .await
+                .unwrap();
+            let end = payload.len().min(offset + limit);
+            assert_eq!(
+                STANDARD
+                    .decode(page["stdout_base64"].as_str().unwrap())
+                    .unwrap(),
+                payload[offset..end]
+            );
+            assert_eq!(page["stdout_cursor"], end);
+            assert_eq!(page["stdout_eof"], end == payload.len());
+        }
+        for job in &jobs {
+            let state = job.state();
+            remove_capture_artifact(&state.stdout);
+            remove_capture_artifact(&state.stderr);
+        }
+        shell.shutdown().await;
+    }
+
+    #[test]
+    fn completed_small_output_keeps_only_one_inline_copy() {
+        let (_directory, store) = isolated_output();
+        let mut output = Output::new(&store, "small-completed-fixture".into());
+        let data = vec![b'x'; COMPLETED_INLINE_BYTES];
+        output.append(&data);
+        output.finish(None);
+        assert_eq!(output.bytes.capacity(), 0);
+        assert_eq!(output.capture.inline_bytes(), data);
+        assert!(!output.capture.is_spilled());
+        assert_eq!(
+            output.read(0, 32768).unwrap(),
+            (data, COMPLETED_INLINE_BYTES as u64, false)
+        );
+    }
+
+    #[test]
+    fn failed_archive_preserves_the_tail_and_unavailable_archives_are_errors() {
+        let (_directory, store) = isolated_output();
+        let data = vec![b'x'; MAX_OUTPUT + 137];
+        let mut failed = Output::new(&store, "failed-completed-fixture".into());
+        failed.append(&data);
+        failed.finish(Some("fixture capture failure".into()));
+        assert!(!failed.read_from_capture);
+        assert_eq!(failed.bytes.len(), MAX_OUTPUT);
+        assert_eq!(failed.read(0, 127).unwrap(), (vec![b'x'; 127], 264, true));
+        assert_eq!(failed.metadata()["error"], "fixture capture failure");
+        assert!(!failed.capture.metadata().unwrap().complete);
+        remove_capture_artifact(&failed);
+
+        let mut archived = Output::new(&store, "unavailable-completed-fixture".into());
+        archived.append(&data);
+        archived.finish(None);
+        let path = PathBuf::from(archived.capture.metadata().unwrap().path);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(7)
+            .unwrap();
+        assert!(archived.read(0, 127).unwrap_err().contains("shorter"));
+        remove_capture_artifact(&archived);
+        assert!(archived.read(0, 127).unwrap_err().contains("unavailable"));
+        assert!(
+            archived
+                .read(data.len() as u64, 127)
+                .unwrap_err()
+                .contains("unavailable")
+        );
     }
 
     #[tokio::test]
@@ -1755,7 +1953,7 @@ with socket.create_connection(("127.0.0.1", {port}), timeout=5) as gate:
     }
 
     #[tokio::test]
-    async fn large_output_keeps_the_full_artifact_and_the_bounded_tail() {
+    async fn large_output_keeps_the_full_artifact_after_releasing_the_live_tail() {
         let shell = Shell::new();
         let id = py(&shell, "import sys; sys.stdout.buffer.write(b'x'*100000)").await;
         // wait_ms is an observation window, not a guarantee of command completion.
@@ -1786,7 +1984,11 @@ with socket.create_connection(("127.0.0.1", {port}), timeout=5) as gate:
             .call("ssmcp.exec.read", json!({"job_id":id}))
             .await
             .unwrap();
-        assert_eq!(page["stdout_truncated"], true);
+        assert_eq!(page["stdout_truncated"], false);
+        assert_eq!(page["stdout_cursor"], 16384);
+        assert_eq!(page["stdout_eof"], false);
+        assert_eq!(page["stdout"], "x".repeat(16384));
+        assert_eq!(shell.job(&id).unwrap().state().stdout.bytes.capacity(), 0);
         let artifact = &page["snapshot"]["stdout"]["artifact"];
         assert_eq!(artifact["bytes"], 100000);
         assert_eq!(artifact["complete"], true, "snapshot: {}", page["snapshot"]);

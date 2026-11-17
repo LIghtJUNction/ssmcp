@@ -124,7 +124,7 @@ return await exec.read(clientId, jobId, {
 
 下次沿用返回的 `stdout_cursor`、`stderr_cursor`。`stdout_base64` / `stderr_base64` 保留精确字节，文本字段便于阅读；UTF-8 字符可能横跨字节页，要求精确还原时拼接 base64 解码后的字节再解码文本。未来游标会报错，避免悄悄跳过尚未产生的内容。
 
-每个流在内存保留最近 64 KiB。游标落后于保留范围时，`stdout_truncated` 或 `stderr_truncated` 为 true，并从可读尾部继续返回。输出超过 32 KiB 或 500 行后同时保存转储文件；从 `snapshot.stdout.artifact` 或 `snapshot.stderr.artifact` 取得 ID，用 `outputs.read` 读取已捕获的完整前缀：
+运行中的每个流在内存保留最近 64 KiB。此时游标落后于保留范围，`stdout_truncated` 或 `stderr_truncated` 为 true，并从可读尾部继续返回。流成功结束且捕获完整后会释放重复尾部；后续 `exec.read` 按游标读取完整 capture，小输出可保留一份内存捕获，较大输出从归档读取。归档缺失或缩短会返回错误，捕获失败仍保留尾部和错误信息。输出超过 32 KiB 或 500 行后保存转储文件；从 `snapshot.stdout.artifact` 或 `snapshot.stderr.artifact` 取得 ID，也可用 `outputs.read` 读取已捕获的完整前缀：
 
 ```javascript
 return await outputs.read(clientId, {
