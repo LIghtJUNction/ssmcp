@@ -2,14 +2,15 @@
 
 在 A 设备登录一次 GitHub，随后运行 `ssmcp` 就能以自己的身份接入服务器，无须重复填写自己的 `--allow`。已登录的 A 可以列出可控会话、进入远程终端，也可以生成一条命令，让 B 临时成为自己的被控端。
 
-以下命令对应 0.7.0 源码实现。本次变更未部署公网服务；使用前须升级 ssmcpd，并在服务器实际放置新版本的目标平台客户端二进制，才能使用默认引导命令。示例域名 `https://ssmcp.example.com` 应替换为你的服务器。
+使用这些命令前，安装包含账号与服务器配置命令的新版客户端，并确认服务器已提供客户端账号 API。下载引导流程还要求服务器准备目标平台的客户端二进制。示例域名 `https://ssmcp.example.com` 应替换为你的服务器。
 
 ## 1. 登录并接入自己的设备
 
 在 A 上安装客户端后运行：
 
 ~~~sh
-ssmcp login --server https://ssmcp.example.com
+ssmcp config set server https://ssmcp.example.com
+ssmcp login
 ssmcp whoami
 
 # 在需要开放的项目目录中运行，保持这个终端打开。
@@ -18,7 +19,7 @@ ssmcp --name device-a
 
 `login` 打开浏览器，使用 GitHub 登录并确认终端显示的配对信息。没有图形浏览器时用 `--no-browser`，在另一台设备打开打印的链接即可。`whoami --json` 返回已验证身份、服务器和有效期，不输出登录令牌。
 
-客户端记住最后登录的服务器；后续命令也可以用 `--server URL` 显式选择。不同服务器各自保存凭据，不会把一个服务器的令牌交给另一个服务器。账户连接通过 HTTPS / WSS 建立；A、B 都不需要 SSH 密钥或入站监听端口。服务端在注册时绑定已经验证的 GitHub 数字 ID。[客户端账号实现](../src/client/account.rs) · [服务端授权](../src/device.rs)
+默认地址按 `--server`、配置文件的 `[client].server`、最后登录的服务器、内置地址依次选择。`ssmcp config set server URL` 保存默认地址，`ssmcp config get server` 显示生效值，`ssmcp config path` 定位可编辑文件。不同服务器各自保存凭据，不会把一个服务器的令牌交给另一个服务器。[配置与优先级](client-server.md#设置默认服务器)账户连接通过 HTTPS / WSS 建立；A、B 都不需要 SSH 密钥或入站监听端口。服务端在注册时绑定已经验证的 GitHub 数字 ID。[客户端账号实现](../src/client/account.rs) · [服务端授权](../src/device.rs)
 
 启动本机被控会话和查看账号下的远端会话是两个动作。前台 `ssmcp` 负责开放当前设备；在另一个终端执行下一节的列表和交互命令。
 
@@ -56,11 +57,14 @@ ssmcp -i --client SESSION_ID --terminal pty-0001
 ssmcp invite
 ~~~
 
-把输出的完整单行命令复制到 B 的终端。默认命令从所选服务器下载对应平台的临时客户端，然后前台运行 `join`。B 只需要能访问这台服务器；无需安装 SSH、注册 GitHub 账号或取得 A 的长期令牌。下载文件放在私有临时目录，结束后清理，不修改 B 的 PATH 或注册后台服务。
+把输出的完整单行命令复制到 B 的终端。未固定服务器公钥时，默认命令从所选服务器下载对应平台的临时客户端，然后前台运行 `join`。B 只需要能访问这台服务器；无需安装 SSH、注册 GitHub 账号或取得 A 的长期令牌。下载文件放在私有临时目录，结束后清理，不修改 B 的 PATH 或注册后台服务。
 
 默认邀请可在 **10 分钟**内使用一次。B 兑换成功后，临时会话可用 **1 小时**，同时受 A 本次登录的剩余有效期约束。A 在另一终端运行 `ssmcp list` 或 `ssmcp -i` 即可控制 B。
 
 ~~~sh
+# 指定另一台已登录的服务器；生成命令中的下载和接入地址一起切换。
+ssmcp invite --server https://other.example.com
+
 # 15 分钟内兑换；B 兑换后最多使用 2 小时。
 ssmcp invite --ttl 900 --session-ttl 7200
 
@@ -75,6 +79,8 @@ ssmcp invite --json
 ~~~
 
 `--ttl` 接受 30–3600 秒，`--session-ttl` 接受 60–86400 秒。POSIX 引导命令需要系统 Shell 和 curl 或 wget；Windows 使用 PowerShell / .NET。服务器管理员须准备相应平台的客户端，配置方法见下文。
+
+**对已登记可信公钥的服务器，`invite` 自动生成预安装客户端命令。** B 应先从可信来源安装新版 ssmcp；输出命令把 A 的公钥指纹保存到 B 的 `trusted-servers.toml`，成功后再执行 `join`。该流程适用于 POSIX Shell 和 PowerShell，避免在公钥校验生效前下载执行安装脚本。公开信任记录会留在 B，临时设备令牌仍只驻留进程。[信任文件与邀请](client-server.md#公钥固定后的临时邀请)
 
 手工使用已安装客户端时，命令形式为：
 
@@ -160,6 +166,9 @@ client_download_dir = "/var/lib/ssmcpd/clients"
 | --- | --- |
 | 登录接口 404 | 服务端尚未提供客户端账号 API，更新实际运行的 ssmcpd 和代理路由 |
 | B 引导下载返回 503 | 配置 `client_download_dir`，放入 B 对应平台的二进制 |
+| 已设置默认服务器但仍提示未登录 | 运行 `ssmcp config get server`，然后在该服务器执行 `ssmcp login` |
+| 公钥不匹配，HTTPS / WSS 连接失败 | 通过可信管理员渠道核对 HTTPS 入口是否换钥，再更新 `trusted-servers.toml` |
+| 固定公钥后邀请不再下载安装程序 | B 先安装新版 ssmcp，随后执行生成的信任登记与接入命令 |
 | A 列表为空 | 核对 `whoami` 的账号与服务器，确认 B 的前台进程仍在线 |
 | 邀请已使用或过期 | 在 A 重新执行 `invite`，复制新命令 |
 | 临时会话结束后没有恢复 | 检查到期、注销或手动停止；这些操作会结束恢复权限 |
