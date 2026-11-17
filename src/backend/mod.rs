@@ -207,7 +207,7 @@ impl Backend {
             }
             let mut driver = self.drivers.lock().unwrap().get(&provider).cloned();
             if driver.is_none() {
-                detected_version = Some(if provider == Provider::Playwright { probe_command(playwright::command(&program).await?).await? } else { probe_version(&program).await? });
+                detected_version = Some(if provider == Provider::Playwright { playwright::probe(&program).await? } else { probe_version(&program).await? });
                 let output = self.output.clone();
                 let future = async {
                     match provider {

@@ -15,6 +15,58 @@ use tokio::process::Command;
 
 const MAX_PAGES: usize = 128;
 const MAX_TOOLS: usize = 4096;
+pub const MANAGED_VERSION: &str = "0.0.85";
+pub const EXTENSION_MINIMUM: &str = "0.5.0";
+const EXTENSION_ARGS: &[&str] = &["--extension", "--background", "--no-tab-group"];
+
+/// A versioned user installation is shared by CLI setup and provider discovery.
+pub fn managed_directory() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        home.map(|p| p.join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.map(|p| p.join(".local/share")))
+    }
+    .filter(|p| p.is_absolute())
+    .ok_or("An absolute user data directory is required for browser setup")?;
+    Ok(base
+        .join("ssmcp/browser")
+        .join(format!("playwright-{MANAGED_VERSION}")))
+}
+
+pub fn managed_entry() -> Result<PathBuf, String> {
+    Ok(managed_directory()?.join("node_modules/@playwright/mcp/cli.js"))
+}
+
+pub fn version_at_least(value: &str, minimum: (u32, u32, u32)) -> bool {
+    value.split_whitespace().any(|part| {
+        let mut pieces = part.trim_start_matches('v').split('.');
+        let version = (|| {
+            Some((
+                pieces.next()?.parse::<u32>().ok()?,
+                pieces.next()?.parse::<u32>().ok()?,
+                pieces.next()?.parse::<u32>().ok()?,
+            ))
+        })();
+        pieces.next().is_none() && version.is_some_and(|version| version >= minimum)
+    })
+}
+
+pub async fn probe(path: &Path) -> Result<String, String> {
+    let version = super::probe_command(command(path).await?).await?;
+    if !version_at_least(&version, (0, 0, 85)) {
+        return Err(format!(
+            "Playwright MCP {version} cannot provide the required background mode; run ssmcp setup browser --install (requires >= {MANAGED_VERSION})"
+        ));
+    }
+    Ok(version)
+}
 
 pub struct Playwright {
     peer: Arc<Peer>,
@@ -35,8 +87,13 @@ pub fn installed() -> Result<PathBuf, String> {
         }
         return path.canonicalize().map_err(|e| e.to_string());
     }
+    if let Ok(path) = managed_entry()
+        && path.is_file()
+    {
+        return path.canonicalize().map_err(|e| e.to_string());
+    }
     crate::program::executable("playwright-mcp").map_err(|_| {
-        "Playwright MCP server is not installed in PATH; the Chrome extension alone is not a callable server. Set SSMCP_PLAYWRIGHT_MCP to an already-installed CLI entry; discovery never downloads packages".into()
+        "Playwright MCP server is not installed. Run ssmcp setup browser --install, or set SSMCP_PLAYWRIGHT_MCP to an installed CLI entry; discovery never downloads packages".into()
     })
 }
 
@@ -115,7 +172,7 @@ impl Playwright {
         let mut command = command(path).await?;
         // This is the provider's native existing-browser mode. Do not silently
         // substitute a fresh profile or scrape another extension's credentials.
-        command.arg("--extension");
+        command.args(EXTENSION_ARGS);
         let peer = Peer::spawn_with_output_and_audit(
             command,
             "playwright",
@@ -232,6 +289,9 @@ impl Playwright {
     pub fn diagnostics(&self) -> Value {
         json!({"scope":"native Playwright MCP tools", "browser_mode":"existing_browser_extension",
             "browser_connection":"on_demand_with_native_extension_approval",
+            "background":true,"system_pointer":false,"automatic_tab_group":false,
+            "minimum_extension_version":EXTENSION_MINIMUM,
+            "pairing":"Browser approval may open a foreground connection page; background page actions start after pairing.",
             "serverInfo":self.server.get("serverInfo"),"protocolVersion":self.server["protocolVersion"],
             "browser_control":"not_checked_by_discovery"})
     }
@@ -252,6 +312,58 @@ fn control_tools() -> Vec<Value> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_mode_requires_a_supported_release() {
+        for version in ["0.0.85", "Version 0.0.86", "v0.1.0", "1.0.0"] {
+            assert!(version_at_least(version, (0, 0, 85)), "{version}");
+        }
+        for version in ["Version 0.0.84", "0.0.85-beta", "unknown", "85", "0.0.85.1"] {
+            assert!(!version_at_least(version, (0, 0, 85)), "{version}");
+        }
+    }
+
+    #[tokio::test]
+    async fn extension_provider_launches_with_background_input_and_no_tab_regrouping() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmcp-playwright-background-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let entry = root.join("cli.js");
+        std::fs::write(&entry, r#"
+const readline = require('node:readline');
+if (process.argv.includes('--version')) { console.log('Version 0.0.85'); process.exit(0); }
+for (const flag of ['--extension', '--background', '--no-tab-group']) {
+  if (!process.argv.includes(flag)) process.exit(42);
+}
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const r = JSON.parse(line);
+  if (r.id === undefined) return;
+  const result = r.method === 'initialize'
+    ? { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'background-fixture', version: '0.0.85' } }
+    : { tools: [] };
+  console.log(JSON.stringify({ jsonrpc: '2.0', id: r.id, result }));
+});
+"#).unwrap();
+        assert!(probe(&entry).await.unwrap().contains("0.0.85"));
+        let store = crate::output::OutputStore::new_connection().unwrap();
+        let provider = Playwright::start_with_output(&entry, store).await.unwrap();
+        assert_eq!(provider.diagnostics()["background"], true);
+        provider.shutdown().await;
+        std::fs::write(&entry, "console.log('Version 0.0.84');").unwrap();
+        assert!(
+            probe(&entry)
+                .await
+                .unwrap_err()
+                .contains("ssmcp setup browser --install")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     const SERVER: &str = r#"
 import sys,json

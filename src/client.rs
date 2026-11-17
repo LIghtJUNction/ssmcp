@@ -50,6 +50,7 @@ Usage: ssmcp login [--server URL] [--no-browser]
        ssmcp [options] [--server URL]
        ssmcp [options] [user@]host
        ssmcp setup [options] [user@]host
+       ssmcp setup browser [--check | --install] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [NAME|list] [--read-only]
@@ -89,6 +90,7 @@ one code_mode. Tools keep their native schemas and permission/approval behavior.
 
 Examples:
   ssmcp login
+  ssmcp setup browser --install
   ssmcp whoami
   ssmcp --name laptop
   ssmcp list
@@ -131,6 +133,9 @@ GitHub authorization, checks account keys and offers to create/register a local
 Ed25519 key. Enter confirms a default computer name. Setup backs up and verifies
 SSH configuration. Existing working connections do not run setup. Use --no-setup
 to retain manual provisioning; services never open browsers or prompt.
+ssmcp setup browser checks Node.js, npm, browser extensions and the native MCP
+bridge. --install prepares a private Playwright provider for background page
+actions; the browser keeps its own first-connection approval and tab ownership.
 --allow requires a server that supports GitHub authorization and cannot be
 combined with --list-tools.
 Live input, output and native tool events appear on stderr as readable blocks.
@@ -1067,6 +1072,9 @@ pub async fn run() -> crate::Result<()> {
         return crate::session::manage(args.into_iter().skip(1).collect()).await;
     }
     let setup_requested = args.first().is_some_and(|arg| arg == "setup");
+    if setup_requested && args.get(1).is_some_and(|arg| arg == "browser") {
+        return onboarding::browser_setup::run(args.into_iter().skip(2).collect()).await;
+    }
     if setup_requested {
         args.remove(0);
     }
@@ -1120,6 +1128,11 @@ pub async fn run() -> crate::Result<()> {
         if !onboarding::verify_after_setup(&options).await? {
             return Ok(());
         }
+        render::status(
+            "setup",
+            "Browser",
+            "Run ssmcp setup browser --install to prepare background browser control; --check --json inspects the environment.",
+        );
     } else if options.daemon && !options.no_setup && onboarding::interactive() {
         match onboarding::probe(&options).await {
             Ok(true) => {}
