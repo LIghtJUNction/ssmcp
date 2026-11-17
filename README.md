@@ -9,7 +9,7 @@
 [![Platforms](https://img.shields.io/badge/Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-x86__64%20%C2%B7%20ARM64-64748b?style=flat)](docs/releases.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat)](LICENSE)
 
-ssmcp 把本机 Shell 与已安装工具连接到可信服务器。MCP 的 `list` 找到有权操作的在线设备，`code_mode` 调用它们的原生能力；项目、模型配置和工具执行留在设备上。客户端支持 GitHub 登录后的 HTTPS / WSS 接入，也保留已有 SSH 配置。[工作原理](docs/backends.md)
+ssmcp 把本机 Shell 与已安装工具连接到可信服务器。MCP 的 `list` 找到有权操作的在线设备，`code_mode` 调用它们的原生能力，`collab` 让同一会话的多个 agent 相互发现、发送消息；项目、模型配置和工具执行留在设备上。客户端支持 GitHub 登录后的 HTTPS / WSS 接入，也保留已有 SSH 配置。[工作原理](docs/backends.md)
 
 ## 快速开始
 
@@ -248,13 +248,14 @@ Omarchy 新增 `ssmcp.omarchy.*` 的 21 个系统原语，覆盖主题、背景�
 
 用户要求操作现有 Chrome 时，先用 `ssmcp.browser.discover` 检查只读元数据，再用 `ssmcp.harnesses.list` 与 `tools.search` 确认可调用的原生能力。扩展安装不等于已连接；缺少 Playwright MCP server 时只报告不可用，发现阶段不下载依赖，也不会改用隔离 Chromium 会话。已有 CDP 端点可显式附着，详见[复用现有 Chrome](docs/browser-existing-session.md)。
 
-## 两个工具就够了
+## MCP 接口
 
 | MCP 工具 | 用法 |
 | --- | --- |
 | `list({})` | 列出当前授权可访问的在线客户端：ID、名字、任务标题（若设置）、类型、主机和启动目录 |
 | `list({client_id})` | 读取指定客户端的原生工具名称与参数 schema；用 `nextCursor` 分页 |
 | `code_mode({code, timeout_ms, controller})` | 用 JavaScript 调用原生工具，返回结果和日志 |
+| `collab({action, client_id, ...})` | 管理会话内 agent 身份、成员发现、私信、广播与收件确认 |
 
 例如，对名为 `terminal` 的客户端查询 Git 状态。将下面源码放入 `code_mode` 的 `code` 参数：
 
@@ -306,6 +307,24 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 调用 Harness 或 MCP 工具时，先用 `await tools.search(client.id,{query:'所需能力',limit:20})` 定位工具，再用 `include_schemas:true` 获取完整原生 Schema。`list({client_id})` 和 `await tools(client.id,cursor)` 继续提供完整目录分页。检索减少返回给模型的无关描述，不减少首次扫描的底层分页；`tools.search` 需要服务端更新。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批状态；大结果使用 artifact 保存原生 MCP JSON，独立命令分别保存 stdout/stderr，PTY 保存会话合并流，OpenCode HTTP 正文使用 `body_artifact` 与 `body_format`。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
 
 代码由服务器的系统 Node.js 在 bubblewrap 隔离环境中执行，通过客户端连接将原生调用交给本机后端。每次编排独立运行；源码、内存、调用次数、输出和时长都有上限。代码超时后，已经发给后端的操作可能继续，重试前先检查执行状态。[资源与生命周期](docs/backends.md#传输与资源边界)
+
+## 多个 agent 协作
+
+同一在线客户端可以容纳多个 agent。每个 agent 通过 `collab.join` 获得独立 `agent_id` 和私密 `token`，用 `collab.list` 发现同伴；`send` 支持定向 JSON 消息和 `to: "*"` 广播，`receive` 读取自己的邮箱，处理完后 `ack` 释放容量。`update` 更新状态并续租，`leave` 主动退出。
+
+```javascript
+const clientId = "CLIENT_ID_FROM_LIST";
+const joined = await collab.join(clientId, {
+  name: "implementation",
+  role: "developer",
+  capabilities: ["rust", "tests"]
+});
+return { client_id: clientId, ...joined };
+```
+
+保存返回的 `client_id`、`agent_id` 和 `token`，后续请求显式传入；JavaScript 变量不会跨 `code_mode` 请求保留。长时间等消息时直接调用公开 `collab` 工具：`action: "receive"` 最长等待 30 秒，不占用 JavaScript 执行槽。代码模式中的 `collab.receive` 最长等 1 秒。
+
+成员租约为 15 分钟，成功的成员调用续租。私信只进入目标邮箱；广播面向发送时的其他成员。消息在确认前可以重读，发送重试可用 `idempotency_key` 去重；邮箱满时明确返回背压错误。客户端连接断开后，其协作成员和内存消息结束。[完整接口、收件示例与恢复语义](docs/agent-collaboration.md)
 
 ## 会话标题、重载与长输出
 
@@ -447,6 +466,7 @@ python3 scripts/e2e_agents.py --bin-dir target/debug
 | 下载平台包、创建版本 tag、检查自动发布 | [发布与安装](docs/releases.md) |
 | 安装服务端、配置 systemd / SSH / HTTPS | [Linux 部署](docs/deployment.md) |
 | 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
+| 让多个 agent 发现同伴、私信和广播 | [会话内 Agent 协作](docs/agent-collaboration.md) |
 | 设置标题、管理后台会话与重连、重载及读取长输出 | [会话与输出管理](docs/session-control.md) |
 | 两端同步文件、映射端口、读取动态资源 | [工作区教程](docs/workspaces.md) |
 | 为 AI 提供可复用使用指南 | [ssmcp skill](skills/ssmcp/SKILL.md) |
