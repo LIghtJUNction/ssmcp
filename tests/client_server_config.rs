@@ -227,7 +227,7 @@ fn invite_override_uses_selected_origin_for_api_script_and_join() {
 }
 
 #[test]
-fn configured_default_is_used_by_invite_login_and_join() {
+fn configured_default_is_used_by_invite_login_named_connection_and_join() {
     let home = Home::new();
     let server = Server::once(
         "200 OK",
@@ -257,6 +257,7 @@ fn configured_default_is_used_by_invite_login_and_join() {
     let request = named.request();
     assert!(request.starts_with("POST /api/client/login/start "));
     assert!(request.contains("\"username\":\"alice\""));
+    assert!(!request.to_ascii_lowercase().contains("authorization:"));
     assert!(!request.contains(&"e".repeat(64)));
 
     let join = Server::once("410 Gone", json!({"error": "expired"}));

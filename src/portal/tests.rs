@@ -387,7 +387,9 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .text()
         .await
         .unwrap();
-    assert!(html.contains("alice") && html.contains("gh-123"));
+    assert!(html.contains("<h2 id=\"account-title\">alice</h2>"));
+    assert!(html.contains("尚未选择 · 在终端命令中填写"));
+    assert!(html.contains("ssmcp myname@ssmcp.test"));
     assert!(!html.contains("bob key"));
     let csrf = html
         .split("name=\"csrf\" value=\"")
