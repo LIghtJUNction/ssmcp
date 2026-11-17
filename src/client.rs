@@ -94,7 +94,7 @@ Usage: ssmcp username@server [options]
   --verbose            Alias for --log-format pretty-verbose
   --raw, --raw-events   Alias for --log-format jsonl
   --ui-config FILE     Local [ui] TOML; default ~/.config/ssmcp/config.toml
-  --theme NAME         minimal, codex-dark, nord, solarized, or light
+  --theme NAME         dark, codex-dark, nord, solarized, light, or minimal
   --timestamps         Show UTC timestamps on event headings
   --max-inline-output N  Maximum lines per buffered output block (default 12)
   --list-tools         Discover native and workspace tools as JSON, then exit without SSH
