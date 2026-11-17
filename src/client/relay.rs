@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::{io, path::Path, process::Stdio, time::Duration};
 use tokio::{io::BufReader, process::Command, sync::mpsc, time::timeout};
 use tokio_tungstenite::{
-    connect_async_with_config,
+    Connector, connect_async_tls_with_config,
     tungstenite::{
         self, Message,
         client::IntoClientRequest,
@@ -86,7 +86,12 @@ pub(super) async fn run() -> crate::Result<()> {
         .max_frame_size(Some(MAX_FRAME));
     let connected = timeout(
         Duration::from_secs(30),
-        connect_async_with_config(request, Some(configuration), true),
+        connect_async_tls_with_config(
+            request,
+            Some(configuration),
+            true,
+            super::trust::tls_config(&server)?.map(Connector::Rustls),
+        ),
     )
     .await
     .map_err(|_| "relay connection timed out")?;
