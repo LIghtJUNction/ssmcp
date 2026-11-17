@@ -1,12 +1,12 @@
 //! Foreground SSH client. Connection details are emitted once as JSON on stdout.
 mod git_status;
-mod input;
+pub(crate) mod input;
 mod onboarding;
 mod panel;
 pub(crate) mod reload;
 pub(crate) mod render;
 pub(crate) mod terminal;
-mod ui;
+pub(crate) mod ui;
 
 use crate::{
     backend::Backend,
@@ -39,6 +39,9 @@ const HELP: &str = r#"ssmcp — expose a local shell and every installed coding 
 Usage: ssmcp [options] [user@]host
        ssmcp setup [options] [user@]host
        ssmcp sessions <list|status|start|stop|restart|logs|auth|remove> [NAME]
+       ssmcp sessions create NAME [options] [user@]host
+       ssmcp attach [NAME|list] [--read-only]
+       ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
 
   -i identity          SSH private key file
   -p port              SSH port
@@ -47,6 +50,7 @@ Usage: ssmcp [options] [user@]host
   --portal URL         HTTPS account portal for first-connection setup
   --no-setup           Disable automatic interactive connection repair
   --daemon             Start a quiet, user-owned native background service
+  --session-control    Grant this connection local saved-session management tools
   --watchdog           Retry disconnected/failed connections until explicitly stopped
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5; needs --watchdog)
   --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
@@ -77,6 +81,11 @@ Examples:
   ssmcp --daemon --watchdog --name workstation --allow octocat@github my-server
   ssmcp sessions status workstation
   ssmcp sessions stop workstation
+  ssmcp service install --system --user alice
+  sudo systemctl enable --now ssmcp
+  ssmcp sessions create workstation --watchdog --allow octocat@github my-server
+  ssmcp attach workstation
+  ssmcp sessions close workstation
 
 Redirected stdout (or jsonl mode) emits one connection JSON object.
 Interactive stdout shows the MCP URL and OAuth login instructions.
@@ -103,8 +112,15 @@ adds --context-root. These extra roots expose context documents, not file writes
 Keep this process running; Ctrl-C disconnects and stops local harnesses and jobs.
 Without --allow, disconnecting revokes this connection's OAuth grants and
 reconnecting needs a new OAuth login. An MCP app restart can reuse valid tokens.
-Background services use systemd --user on Linux, launchd on macOS, and a current-
-user Scheduled Task on Windows. They do not enable startup at boot or login.
+Install the persistent session manager with `ssmcp service install`; choose
+--system with an explicit non-root owner for boot startup, or a per-user service.
+New sessions use the running manager. Legacy --daemon also supports per-session
+systemd --user, launchd and Task Scheduler when the manager is not installed.
+Bare `ssmcp attach` lists sessions. Ctrl-] detaches without stopping the session;
+Ctrl-C inside interactive attach is sent to the selected terminal.
+--session-control explicitly grants this OS user's saved-session management.
+New remote-created sessions inherit SSH access settings and stay in the current
+workspace; children do not inherit this management grant.
 Use sessions auth NAME to read private OAuth connection details explicitly.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
@@ -215,6 +231,7 @@ struct Options {
     context_roots: Vec<PathBuf>,
     list_tools: bool,
     daemon: bool,
+    session_control: bool,
     watchdog: bool,
     reconnect_delay_secs: u64,
     log_format: Option<render::LogFormat>,
@@ -248,6 +265,7 @@ impl Options {
         let mut context_roots = Vec::new();
         let mut list_tools = false;
         let mut daemon = false;
+        let mut session_control = false;
         let mut watchdog = false;
         let mut reconnect_delay_secs = None;
         let mut log_format = None;
@@ -336,6 +354,7 @@ impl Options {
                     )
                 }
                 Some("--daemon") => daemon = true,
+                Some("--session-control") => session_control = true,
                 Some("--watchdog") => watchdog = true,
                 Some("--reconnect-delay") => {
                     reconnect_delay_secs = Some(
@@ -436,6 +455,7 @@ impl Options {
             context_roots,
             list_tools,
             daemon,
+            session_control,
             watchdog,
             reconnect_delay_secs: reconnect_delay_secs.unwrap_or(5),
             log_format,
@@ -481,7 +501,7 @@ impl Options {
         let mut args = vec![OsString::from("--name"), OsString::from(&metadata.name)];
         for (flag, value) in [("-i", &self.identity), ("-F", &self.config)] {
             if let Some(value) = value {
-                args.extend([OsString::from(flag), value.clone()]);
+                args.extend([OsString::from(flag), std::path::absolute(value)?.into_os_string()]);
             }
         }
         if let Some(port) = self.port {
@@ -509,6 +529,9 @@ impl Options {
                 OsString::from("--reconnect-delay"),
                 OsString::from(self.reconnect_delay_secs.to_string()),
             ]);
+        }
+        if self.session_control {
+            args.push(OsString::from("--session-control"));
         }
         args.push(OsString::from(
             self.destination.as_ref().ok_or("missing SSH destination")?,
@@ -575,6 +598,120 @@ impl Options {
     }
 }
 
+/// Validate a persistent worker before the supervisor accepts its definition.
+pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate::Result<()> {
+    let mut args = spec.args.iter();
+    while let Some(arg) = args.next() {
+        if matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V") {
+            return Err("saved sessions cannot contain help or version actions".into());
+        }
+        if connection_option_takes_value(arg) {
+            args.next();
+        }
+    }
+    let options = Options::parse(spec.args.iter().map(OsString::from))?
+        .ok_or("saved session must contain connection options")?;
+    if options.daemon
+        || options.list_tools
+        || options.name.as_deref() != Some(spec.name.as_str())
+        || options.watchdog != spec.watchdog
+        || options.reconnect_delay_secs != spec.reconnect_delay_secs
+        || !spec.cwd.is_absolute()
+        || !spec.cwd.is_dir()
+    {
+        return Err("saved session arguments do not match its name, working directory or reconnect policy".into());
+    }
+    Ok(())
+}
+
+/// Child sessions inherit connection identity, but not host-management authority.
+pub(crate) fn child_session_spec(
+    template: &crate::session::SessionSpec,
+    name: String,
+    cwd: PathBuf,
+    title: Option<String>,
+    watchdog: Option<bool>,
+    reconnect_delay_secs: Option<u64>,
+) -> crate::Result<crate::session::SessionSpec> {
+    let mut options = Options::parse(template.args.iter().map(OsString::from))?
+        .ok_or("invalid management connection template")?;
+    options.name = Some(name);
+    options.title = title.or(options.title);
+    options.daemon = false;
+    options.session_control = false;
+    options.watchdog = watchdog.unwrap_or(template.watchdog);
+    options.reconnect_delay_secs = reconnect_delay_secs.unwrap_or(template.reconnect_delay_secs);
+    if reconnect_delay_secs.is_some() && !options.watchdog {
+        return Err("reconnect_delay_secs requires watchdog=true".into());
+    }
+    if !(1..=3600).contains(&options.reconnect_delay_secs) {
+        return Err("reconnect delay must be 1–3600 seconds".into());
+    }
+    let mut spec = options.session_spec()?;
+    spec.cwd = cwd;
+    crate::wire::validate_title(options.title.as_deref())?;
+    validate_session_spec(&spec)?;
+    Ok(spec)
+}
+
+fn session_control(
+    options: &Options,
+    current_session: Option<&crate::session::Runner>,
+) -> crate::Result<Option<crate::session::control::Control>> {
+    if !options.session_control {
+        return Ok(None);
+    }
+    let template = options.destination.as_ref().map(|_| options.session_spec()).transpose()?;
+    Ok(Some(crate::session::control::Control::new(
+        std::env::current_dir()?,
+        template,
+        current_session.map(|runner| runner.spec().name.clone()),
+    )?))
+}
+
+async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
+    if args.first().is_some_and(|arg| arg == "--help" || arg == "-h") {
+        println!("Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help for SSH options.");
+        return Ok(());
+    }
+    let mut args = args.into_iter();
+    let name = args.next().and_then(|value| value.into_string().ok())
+        .ok_or("usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST")?;
+    let mut cwd = std::env::current_dir()?;
+    let mut json_output = false;
+    let mut connection = vec![OsString::from("--name"), OsString::from(&name)];
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--cwd") => cwd = PathBuf::from(args.next().ok_or("--cwd requires a directory")?).canonicalize()?,
+            Some("--json") => json_output = true,
+            Some("--name" | "--daemon" | "--list-tools") => return Err("sessions create takes its name before the connection options and starts a managed background session".into()),
+            Some(flag) if connection_option_takes_value(flag) => {
+                let value = args.next().ok_or_else(|| format!("{flag} requires a value"))?;
+                connection.extend([arg, value]);
+            }
+            _ => connection.push(arg),
+        }
+    }
+    let Some(options) = Options::parse(connection)? else { return Ok(()); };
+    let mut spec = options.session_spec()?;
+    spec.cwd = cwd;
+    validate_session_spec(&spec)?;
+    let result = crate::session::service::request(json!({"op":"create","spec":spec})).await?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("Created session {name}. Attach: ssmcp attach {name}");
+        println!("Process: {} · Connection: {}", result["manager_state"].as_str().unwrap_or("starting"), result["connection_state"].as_str().unwrap_or("unknown"));
+    }
+    Ok(())
+}
+
+fn connection_option_takes_value(option: &str) -> bool {
+    matches!(option, "--name" | "--title" | "--allow" | "--context-root" | "--portal"
+        | "--reconnect-delay" | "--log-format" | "--ui-config" | "--theme"
+        | "--max-inline-output" | "-i" | "-p" | "-F" | "--shell")
+}
+
 fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
     for entry in value.split(',') {
         let principal = canonical_github_principal(entry.trim())
@@ -629,6 +766,17 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "service") {
+        return crate::session::install::manage(args.into_iter().skip(1).collect()).await;
+    }
+    if args.first().is_some_and(|arg| arg == "attach") {
+        return crate::session::attach::manage(args.into_iter().skip(1).collect()).await;
+    }
+    if args.first().is_some_and(|arg| arg == "sessions")
+        && args.get(1).is_some_and(|arg| arg == "create")
+    {
+        return create_saved_session(args.into_iter().skip(2).collect()).await;
+    }
     if args.first().is_some_and(|arg| arg == "sessions") {
         return crate::session::manage(args.into_iter().skip(1).collect()).await;
     }
@@ -732,18 +880,25 @@ pub async fn run() -> crate::Result<()> {
         ui.show_raw_json = false;
     }
     render::configure(ui.clone());
+    let mut attachment = if let Some(runner) = &service {
+        Some(crate::session::attach::serve(runner.directory().to_path_buf(), None).await?)
+    } else {
+        None
+    };
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
     if options.list_tools {
+        let management = session_control(&options, service.as_ref())?;
         let backend = tokio::select! {
             result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
-        let backend = match Runtime::with_context_roots(
+        let backend = match Runtime::with_session_control(
             backend.clone(),
             std::env::current_dir()?,
             options.context_roots.clone(),
+            management,
         ) {
             Ok(runtime) => runtime,
             Err(error) => {
@@ -775,7 +930,7 @@ pub async fn run() -> crate::Result<()> {
             runner.record("starting", attempt, None, None, None)?;
         }
         let mut registered = false;
-        let result = match connect(&options, &ui, service.as_ref(), attempt, &mut registered).await
+        let result = match connect(&options, &ui, service.as_ref(), attachment.as_ref(), attempt, &mut registered).await
         {
             Ok(ConnectionExit::Reload { restart, output }) => {
                 // The ACK and broker receipt were sent before connect cleaned
@@ -797,6 +952,9 @@ pub async fn run() -> crate::Result<()> {
                 }
                 // Windows waits for its replacement rather than exec'ing.
                 // Release the old service lease before the new runner opens it.
+                if let Some(handle) = attachment.take() {
+                    handle.shutdown().await;
+                }
                 drop(service.take());
                 return restart.execute(output);
             }
@@ -885,9 +1043,11 @@ async fn connect(
     options: &Options,
     ui: &ui::Ui,
     service: Option<&crate::session::Runner>,
+    attachment: Option<&crate::session::attach::Handle>,
     attempt: u64,
     registered: &mut bool,
 ) -> crate::Result<ConnectionExit> {
+    let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
     let restart = reload::Restart::capture()?;
@@ -998,10 +1158,11 @@ async fn connect(
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
     };
-    let backend = match Runtime::with_context_roots(
+    let backend = match Runtime::with_session_control(
         backend.clone(),
         PathBuf::from(&metadata.cwd),
         options.context_roots.clone(),
+        management,
     ) {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -1010,6 +1171,16 @@ async fn connect(
             incoming.stop().await;
             let _ = ssh.wait().await;
             return Err(error.into());
+        }
+    };
+    let _attachment_runtime = match attachment.map(|handle| handle.bind_runtime(backend.clone())).transpose() {
+        Ok(binding) => binding,
+        Err(error) => {
+            let _ = ssh.start_kill();
+            backend.shutdown().await;
+            incoming.stop().await;
+            let _ = ssh.wait().await;
+            return Err(error);
         }
     };
     // Core tools are ready immediately; optional providers continue discovery independently.
@@ -1254,6 +1425,46 @@ mod tests {
         .unwrap();
         assert_eq!(explicit.destination.as_deref(), Some("user@example.test"));
         assert!(Options::parse(["--name", "dev"].map(OsString::from)).is_err());
+    }
+
+    #[test]
+    fn session_children_inherit_access_without_management_authority() {
+        let parent = Options::parse([
+            "--name", "manager", "--session-control", "--watchdog", "--allow", "octocat@github",
+            "-F", "relative-ssh-config", "work-server",
+        ].map(OsString::from)).unwrap().unwrap();
+        let template = parent.session_spec().unwrap();
+        assert!(template.args.iter().any(|arg| arg == "--session-control"));
+        let child = child_session_spec(
+            &template, "worker".into(), std::env::current_dir().unwrap(),
+            Some("--help".into()), Some(true), Some(2),
+        ).unwrap();
+        let parsed = Options::parse(child.args.iter().map(OsString::from)).unwrap().unwrap();
+        assert_eq!(parsed.allow, parent.allow);
+        assert_eq!(parsed.destination, parent.destination);
+        assert_eq!(parsed.title.as_deref(), Some("--help"));
+        assert_eq!(parsed.name.as_deref(), Some("worker"));
+        assert!(PathBuf::from(parsed.config.unwrap()).is_absolute());
+        assert!(!parsed.session_control);
+        assert!(!parsed.daemon);
+        assert_eq!(parsed.reconnect_delay_secs, 2);
+        validate_session_spec(&child).unwrap();
+        assert!(child_session_spec(
+            &template, "worker".into(), std::env::current_dir().unwrap(),
+            None, Some(false), Some(2),
+        ).is_err());
+    }
+
+    #[test]
+    fn service_runner_rejects_recursive_and_mismatched_manifests() {
+        let parent = Options::parse(["--name", "worker", "work-server"].map(OsString::from)).unwrap().unwrap();
+        let mut spec = parent.session_spec().unwrap();
+        validate_session_spec(&spec).unwrap();
+        spec.args.insert(0, "--daemon".into());
+        assert!(validate_session_spec(&spec).is_err());
+        spec.args.remove(0);
+        spec.name = "different".into();
+        assert!(validate_session_spec(&spec).is_err());
     }
 
     #[test]

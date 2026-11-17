@@ -843,6 +843,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_helpers_use_selected_client_and_preserve_generation_guard() {
+        let _guard = TESTS.lock().await;
+        let output = run_code(r#"
+            const listed = await sessions.list('manager');
+            const created = await sessions.create('manager',{name:'worker',cwd:'project'});
+            const restarted = await sessions.restart('manager',{name:'worker',expected_generation:'old-generation'});
+            const closed = await sessions.close('manager',{name:'worker'});
+            return {listed,created,restarted,closed,frozen:Object.isFrozen(sessions)};
+        "#).await.unwrap();
+        assert_eq!(output["result"]["listed"]["name"], "ssmcp.session.list");
+        assert_eq!(output["result"]["listed"]["id"], "manager");
+        assert_eq!(output["result"]["created"]["arguments"]["cwd"], "project");
+        assert_eq!(output["result"]["restarted"]["arguments"]["expected_generation"], "old-generation");
+        assert_eq!(output["result"]["closed"]["name"], "ssmcp.session.close");
+        assert_eq!(output["result"]["frozen"], true);
+    }
+
+    #[tokio::test]
     async fn execution_helpers_bound_parallelism_and_keep_every_command_result() {
         let _guard = TESTS.lock().await;
         let active = Arc::new(AtomicUsize::new(0));

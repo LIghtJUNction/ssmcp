@@ -18,6 +18,12 @@ include = [
     "/docs/workspaces.md",
     "/docs/context.md",
     "/docs/session-control.md",
+    "/docs/client-service-platforms.md",
+    "/docs/session-service.md",
+    "/docs/design/session-service.md",
+    "/scripts/e2e_session_service.py",
+    "/scripts/e2e_attach_service.py",
+    "/scripts/e2e_service_portable.py",
     "/docs/terminal-control.md",
     "/docs/validation-terminal-control.md",
     "/docs/reports/terminal-control-2026-11-16/**",
@@ -107,7 +113,7 @@ cap-std = "4.0.3"
 cap-fs-ext = "4.0.3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Graphics_Gdi", "Win32_Graphics_GdiPlus", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_StationsAndDesktops", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Memory"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Graphics_Gdi", "Win32_Graphics_GdiPlus", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_StationsAndDesktops", "Win32_System_Com", "Win32_System_Services", "Win32_System_Com_StructuredStorage", "Win32_System_Memory"] }
 
 [profile.release]
 lto = "thin"

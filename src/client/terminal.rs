@@ -39,13 +39,13 @@ fn shared() -> Option<Arc<Shared>> {
         .cloned()
 }
 
-pub(super) struct Session {
+pub(crate) struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Session {
-    pub(super) fn start(ui: &Ui) -> io::Result<Option<Self>> {
+    pub(crate) fn start(ui: &Ui) -> io::Result<Option<Self>> {
         if !ui.dashboard
             || ui.log_format == LogFormat::Jsonl
             || !io::stdin().is_terminal()
@@ -193,7 +193,7 @@ pub(super) fn set_panel(snapshot: PanelSnapshot) {
 
 /// The caller measures the outer terminal, then applies only the returned PTY
 /// viewport to the child. Both Unix SIGWINCH and Windows resize use this path.
-pub(super) fn physical_resize(rows: u16, cols: u16) -> (u16, u16) {
+pub(crate) fn physical_resize(rows: u16, cols: u16) -> (u16, u16) {
     let rows = rows.clamp(1, 1000);
     let cols = cols.clamp(1, 1000);
     if let Some(shared) = shared()
@@ -220,7 +220,7 @@ pub(crate) fn pane_size(rows: u16, cols: u16) -> (u16, u16) {
 /// Replies describe the virtual PTY, never absolute physical-screen positions.
 /// Input owns the write side and drains this bounded queue without holding it
 /// across await or renderer locks.
-pub(super) fn take_session_replies() -> Vec<(String, Vec<u8>)> {
+pub(crate) fn take_session_replies() -> Vec<(String, Vec<u8>)> {
     let Some(shared) = shared() else {
         return Vec::new();
     };
@@ -230,7 +230,7 @@ pub(super) fn take_session_replies() -> Vec<(String, Vec<u8>)> {
 
 /// F6 selects the scrollable audit pane. All other shell input, including
 /// fragmented escape sequences and bracketed-paste payloads, stays native.
-pub(super) fn keyboard(text: &str) -> String {
+pub(crate) fn keyboard(text: &str) -> String {
     let Some(shared) = shared() else {
         return text.into();
     };
@@ -243,7 +243,7 @@ pub(super) fn keyboard(text: &str) -> String {
 
 /// Called by the input pump so a lone Escape never waits indefinitely for a
 /// possible shortcut suffix. Escape in log focus returns to the shell.
-pub(super) fn take_keyboard() -> String {
+pub(crate) fn take_keyboard() -> String {
     let Some(shared) = shared() else {
         return String::new();
     };
@@ -252,7 +252,7 @@ pub(super) fn take_keyboard() -> String {
 }
 
 #[cfg(windows)]
-pub(super) fn application_cursor() -> bool {
+pub(crate) fn application_cursor() -> bool {
     let Some(shared) = shared() else {
         return false;
     };
