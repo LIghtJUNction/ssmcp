@@ -1,4 +1,6 @@
 //! Computer-use desktop primitives with native Linux, Windows and macOS adapters.
+#[cfg(target_os = "linux")]
+mod isolated;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(windows)]
@@ -42,6 +44,114 @@ pub struct Computer {
     serial: Mutex<()>,
     closed: AtomicBool,
     releases: Arc<ReleaseTasks>,
+    display: Option<DisplayEnvironment>,
+    #[cfg(target_os = "linux")]
+    isolated: Mutex<Option<IsolatedComputer>>,
+}
+
+#[cfg(target_os = "linux")]
+struct IsolatedComputer {
+    desktop: isolated::Desktop,
+    computer: Box<Computer>,
+}
+
+/// Environment belongs to one command, including its eventual input-release
+/// helper. The host process's display and the user's session never change.
+#[derive(Clone)]
+struct DisplayEnvironment {
+    display: String,
+    authority: PathBuf,
+    runtime: PathBuf,
+    window_manager: bool,
+}
+
+impl DisplayEnvironment {
+    fn apply(&self, command: &mut std::process::Command) {
+        for name in [
+            "WAYLAND_DISPLAY",
+            "WAYLAND_SOCKET",
+            "HYPRLAND_INSTANCE_SIGNATURE",
+            "SWAYSOCK",
+            "SESSION_MANAGER",
+            "DBUS_SESSION_BUS_PID",
+        ] {
+            command.env_remove(name);
+        }
+        command
+            .env("DISPLAY", &self.display)
+            .env("XAUTHORITY", &self.authority)
+            .env("XDG_RUNTIME_DIR", &self.runtime)
+            .env("XDG_SESSION_TYPE", "x11")
+            .env("GDK_BACKEND", "x11")
+            .env("QT_QPA_PLATFORM", "xcb")
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                format!("unix:path={}/bus", self.runtime.display()),
+            );
+        if let Some(directory) = self.runtime.parent() {
+            for (key, folder) in [
+                ("XDG_CONFIG_HOME", "config"),
+                ("XDG_CACHE_HOME", "cache"),
+                ("XDG_DATA_HOME", "data"),
+                ("XDG_STATE_HOME", "state"),
+            ] {
+                command.env(key, directory.join(folder));
+            }
+        }
+    }
+}
+
+fn desktop_selection(args: &mut Value) -> Result<Option<String>, String> {
+    let map = args
+        .as_object_mut()
+        .ok_or("computer arguments must be an object")?;
+    match map.remove("desktop") {
+        None => Ok(None),
+        Some(Value::String(value)) if matches!(value.as_str(), "isolated" | "shared") => {
+            Ok(Some(value))
+        }
+        _ => Err("desktop must be isolated or shared".into()),
+    }
+}
+
+fn is_desktop_input(name: &str) -> bool {
+    matches!(
+        name,
+        "ssmcp.computer.focus"
+            | "ssmcp.computer.move"
+            | "ssmcp.computer.click"
+            | "ssmcp.computer.drag"
+            | "ssmcp.computer.key"
+            | "ssmcp.computer.type"
+            | "ssmcp.computer.scroll"
+    )
+}
+
+fn with_desktop(mut value: Value, isolated: bool) -> Value {
+    if let Some(info) = value
+        .get_mut("structuredContent")
+        .and_then(Value::as_object_mut)
+    {
+        info.insert(
+            "desktop".into(),
+            json!(if isolated { "isolated" } else { "shared" }),
+        );
+        info.insert(
+            "input_scope".into(),
+            json!(if isolated {
+                "private_virtual_display"
+            } else {
+                "user_desktop"
+            }),
+        );
+        let text = Value::Object(info.clone()).to_string();
+        if let Some(content) = value.get_mut("content").and_then(Value::as_array_mut)
+            && let Some(item) = content.iter_mut().find(|item| item["type"] == "text")
+        {
+            item["text"] = json!(text);
+        }
+    }
+    value
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq)]
@@ -234,6 +344,9 @@ impl Computer {
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            display: None,
+            #[cfg(target_os = "linux")]
+            isolated: Mutex::new(None),
         })
     }
 
@@ -241,7 +354,7 @@ impl Computer {
         let coordinate = json!({"type":"integer","minimum":-100000,"maximum":100000});
         let point = json!({"type":"object","properties":{"x":coordinate,"y":coordinate},"required":["x","y"],"additionalProperties":false});
         let button = json!({"type":"string","enum":["left","middle","right"],"default":"left"});
-        vec![
+        let mut tools = vec![
             tool(
                 "status",
                 "Inspect native desktop capabilities and missing system helpers; no screenshot or input is produced.",
@@ -319,15 +432,68 @@ impl Computer {
                 &["direction"],
                 false,
             ),
-        ]
+        ];
+        for descriptor in &mut tools {
+            descriptor["inputSchema"]["properties"]["desktop"] = json!({
+                "type":"string","enum":["isolated","shared"],
+                "description":"Use the active isolated session by default. Without one, reads inspect the shared desktop; input requires an explicit shared selection."
+            });
+        }
+        tools.extend([
+            tool("session_start", "Start a private Linux Xvfb desktop for mouse and keyboard automation without controlling the user's pointer. Requires Xvfb, xauth and xdotool; Openbox is optional. Existing isolated sessions are reused.",
+                json!({"width":{"type":"integer","minimum":320,"maximum":3840,"default":1280},"height":{"type":"integer","minimum":240,"maximum":2160,"default":800}}), &[], false),
+            tool("session_stop", "Stop the private desktop and every application launched in it. Shared desktop input still requires desktop: shared; it is never selected as a fallback.", json!({}), &[], false),
+            tool("launch", "Launch an argv command in the active isolated Linux desktop. No shell expansion. Use a dedicated application profile or a new-instance option for apps that reuse existing processes.",
+                json!({"command":{"type":"array","items":{"type":"string","maxLength":16384},"minItems":1,"maxItems":128},"cwd":{"type":"string","maxLength":4096}}), &["command"], false),
+        ]);
+        tools
     }
 
-    pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
+    pub async fn perform(&self, name: &str, mut args: Value) -> Result<Value, String> {
         let _lock = self.serial.lock().await;
         if self.closed.load(Ordering::Acquire) {
             return Err("computer connection is closed".into());
         }
+        if matches!(
+            name,
+            "ssmcp.computer.session_start"
+                | "ssmcp.computer.session_stop"
+                | "ssmcp.computer.launch"
+        ) {
+            #[cfg(target_os = "linux")]
+            return self.session_operation(name, args).await;
+            #[cfg(not(target_os = "linux"))]
+            return Err("Isolated desktop sessions currently require Linux with Xvfb. Shared desktop input is available with desktop: shared.".into());
+        }
+        let selection = desktop_selection(&mut args)?;
+        #[cfg(target_os = "linux")]
+        if selection.as_deref() != Some("shared") {
+            let mut active = self.isolated.lock().await;
+            if let Some(active) = active.as_mut() {
+                active.desktop.ensure_running()?;
+                active.computer.releases.wait(RELEASE_WAIT_TIMEOUT).await?;
+                return active
+                    .computer
+                    .perform_native(name, args)
+                    .await
+                    .map(|value| with_desktop(value, true));
+            }
+        }
+        if selection.as_deref() == Some("isolated") {
+            return Err("No isolated desktop is active. Call computer.session_start before using desktop: isolated.".into());
+        }
+        if is_desktop_input(name) && selection.as_deref() != Some("shared") {
+            return Err("Desktop input requires an isolated session. Call computer.session_start, or explicitly select desktop: shared to control the user's mouse and keyboard.".into());
+        }
+        // Shared cleanup cannot prevent stopping an independent display. Each
+        // display waits for its own release tasks before issuing more input.
         self.releases.wait(RELEASE_WAIT_TIMEOUT).await?;
+        self.perform_native(name, args)
+            .await
+            .map(|value| with_desktop(value, false))
+    }
+
+    async fn perform_native(&self, name: &str, args: Value) -> Result<Value, String> {
         let operation = async {
             match std::env::consts::OS {
                 #[cfg(windows)]
@@ -411,9 +577,15 @@ impl Computer {
 
     pub async fn shutdown(&self) -> Result<(), String> {
         self.closed.store(true, Ordering::Release);
-        tokio::time::timeout(RELEASE_WAIT_TIMEOUT, async {
+        tokio::time::timeout(Duration::from_secs(15), async {
             let _lock = self.serial.lock().await;
-            self.releases.wait(RELEASE_WAIT_TIMEOUT).await
+            let released = self.releases.wait(RELEASE_WAIT_TIMEOUT).await;
+            #[cfg(target_os = "linux")]
+            if let Some(mut active) = self.isolated.lock().await.take() {
+                let _ = active.computer.releases.wait(RELEASE_WAIT_TIMEOUT).await;
+                active.desktop.shutdown().await;
+            }
+            released
         })
         .await
         .map_err(|_| {
@@ -429,7 +601,16 @@ impl Computer {
         input: Option<&[u8]>,
         limit: usize,
     ) -> Result<Vec<u8>, String> {
-        run_helper(&self.root, program, args, input, limit, TIMEOUT).await
+        run_helper_in(
+            &self.root,
+            program,
+            args,
+            input,
+            limit,
+            TIMEOUT,
+            self.display.as_ref(),
+        )
+        .await
     }
     async fn text(&self, program: &str, args: &[&str]) -> Result<String, String> {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -443,7 +624,8 @@ impl Computer {
 
     async fn status(&self) -> Value {
         let names = [
-            "hyprctl", "grim", "wtype", "ydotool", "xdotool", "magick", "xprop",
+            "hyprctl", "grim", "wtype", "ydotool", "xdotool", "magick", "xprop", "Xvfb", "xauth",
+            "openbox",
         ];
         let mut helpers = serde_json::Map::new();
         for name in names {
@@ -461,10 +643,13 @@ impl Computer {
             Session::X11 => "x11",
             Session::Unavailable => "unavailable",
         };
+        let isolation = json!({"supported":cfg!(target_os="linux"),"active":self.display.is_some(),
+            "helpers_ready":cfg!(target_os="linux") && ["Xvfb","xauth","xdotool"].iter().all(|name| helpers[*name]["installed"] == true),
+            "start":"computer.session_start","shared_input":"requires explicit desktop: shared"});
         if self.session == Session::Unavailable {
             return json!({"platform":std::env::consts::OS,"session":session,"available":false,
                 "reason":"Native desktop control currently supports Linux Hyprland/Wayland and X11 sessions; a graphical session is required.",
-                "helpers":helpers});
+                "helpers":helpers,"isolated_desktop":isolation});
         }
         let installed = |name: &str| helpers[name]["installed"] == true;
         let geometry = self.monitors().await;
@@ -488,7 +673,7 @@ impl Computer {
             installed("grim")
         };
         json!({"platform":std::env::consts::OS,"session":session,"coordinate_space":"desktop_logical",
-        "helpers":helpers,"capabilities":{
+        "helpers":helpers,"isolated_desktop":isolation,"capabilities":{
             "monitors":capability(geometry.is_ok(),if x11 {"xdotool"}else{"hyprctl"},geometry_reason),
             "screenshot":capability(image && geometry.is_ok(),if x11 {"ImageMagick"}else{"grim"},Some("Install the screenshot helper and use a supported compositor with available monitor geometry.")),
             "windows":capability(if x11 {installed("xprop")&&installed("xdotool")}else{self.session==Session::Hyprland&&geometry.is_ok()},if x11 {"X11"}else{"Hyprland"},Some("Window enumeration and focus require Hyprland or X11.")),
@@ -551,11 +736,30 @@ impl Computer {
             }
             Session::X11 => {
                 let props = self.text("xprop", &["-root", "_NET_CLIENT_LIST"]).await?;
-                let ids: Vec<_> = props
+                let mut ids: Vec<String> = props
                     .split([' ', ',', '\n'])
                     .filter(|p| p.starts_with("0x"))
                     .take(101)
+                    .map(str::to_owned)
                     .collect();
+                if ids.is_empty() && self.display.is_some() {
+                    // A private Xvfb display needs no window manager. xdotool
+                    // can enumerate its mapped named windows directly.
+                    let found = match self
+                        .text("xdotool", &["search", "--onlyvisible", "--name", "."])
+                        .await
+                    {
+                        Ok(value) => value,
+                        Err(error) if error.contains("exit status: 1") => String::new(),
+                        Err(error) => return Err(error),
+                    };
+                    ids = found
+                        .lines()
+                        .filter(|id| valid_window_id(id))
+                        .take(101)
+                        .map(str::to_owned)
+                        .collect();
+                }
                 let mut windows = Vec::new();
                 for id in ids.iter().take(100) {
                     if !valid_window_id(id) {
@@ -637,8 +841,20 @@ impl Computer {
                 })??;
             }
             Session::X11 => {
-                self.text("xdotool", &["windowactivate", "--sync", id])
-                    .await?;
+                if self
+                    .display
+                    .as_ref()
+                    .is_some_and(|display| !display.window_manager)
+                {
+                    // Without a WM, input focus alone leaves overlapping windows
+                    // stacked in their old order and a later click can hit the
+                    // wrong application. Raise and focus the observed window.
+                    self.text("xdotool", &["windowraise", id, "windowfocus", "--sync", id])
+                        .await?;
+                } else {
+                    self.text("xdotool", &["windowactivate", "--sync", id])
+                        .await?;
+                }
             }
             _ => return Err("Window focus requires Hyprland or X11".into()),
         }
@@ -714,7 +930,12 @@ impl Computer {
         } else {
             return Err("No desktop input session is available".into());
         };
-        let mut guard = ReleaseGuard::new(program, release.clone(), &self.releases)?;
+        let mut guard = ReleaseGuard::new(
+            program,
+            release.clone(),
+            &self.releases,
+            self.display.as_ref(),
+        )?;
         let outcome = self.run(program, &args, None, TEXT_LIMIT).await;
         if outcome.is_ok() || self.run(program, &release, None, TEXT_LIMIT).await.is_ok() {
             guard.disarm();
@@ -756,7 +977,8 @@ impl Computer {
             return Err("Dragging requires Hyprland or X11".into());
         };
         self.move_pointer(v.path[0]).await?;
-        let mut guard = ReleaseGuard::new(program, up.clone(), &self.releases)?;
+        let mut guard =
+            ReleaseGuard::new(program, up.clone(), &self.releases, self.display.as_ref())?;
         let outcome = async {
             self.run(program, &down, None, TEXT_LIMIT).await?;
             for p in &v.path[1..] {
@@ -806,6 +1028,7 @@ impl Computer {
                     "xdotool",
                     vec!["keyup".into(), chord.clone()],
                     &self.releases,
+                    self.display.as_ref(),
                 )?;
                 let outcome = self
                     .text("xdotool", &["key", "--clearmodifiers", &chord])
@@ -1145,6 +1368,7 @@ fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Err("JPEG dimensions are missing".into())
 }
 
+#[cfg(unix)]
 async fn run_helper(
     root: &std::path::Path,
     program: &str,
@@ -1153,8 +1377,23 @@ async fn run_helper(
     limit: usize,
     deadline: Duration,
 ) -> Result<Vec<u8>, String> {
+    run_helper_in(root, program, args, input, limit, deadline, None).await
+}
+
+async fn run_helper_in(
+    root: &std::path::Path,
+    program: &str,
+    args: &[String],
+    input: Option<&[u8]>,
+    limit: usize,
+    deadline: Duration,
+    display: Option<&DisplayEnvironment>,
+) -> Result<Vec<u8>, String> {
     let executable = crate::program::executable(program)?;
     let mut command = tokio::process::Command::new(executable);
+    if let Some(display) = display {
+        display.apply(command.as_std_mut());
+    }
     command
         .args(args)
         .current_dir(root)
@@ -1229,7 +1468,13 @@ struct ReleaseState {
 }
 
 impl ReleaseTasks {
-    fn start(self: &Arc<Self>, program: PathBuf, args: Vec<String>, deadline: Duration) {
+    fn start(
+        self: &Arc<Self>,
+        program: PathBuf,
+        args: Vec<String>,
+        deadline: Duration,
+        display: Option<DisplayEnvironment>,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         // Keep the tracker alive even if a failed shutdown drops the Computer.
         // A task is complete only after its owned helper has actually been reaped.
@@ -1237,7 +1482,7 @@ impl ReleaseTasks {
         match std::thread::Builder::new()
             .name("ssmcp-input-release".into())
             .spawn(move || {
-                let result = release_helper(program, args, deadline);
+                let result = release_helper(program, args, deadline, display);
                 drop(keepalive);
                 result
             }) {
@@ -1282,8 +1527,17 @@ impl ReleaseTasks {
     }
 }
 
-fn release_helper(program: PathBuf, args: Vec<String>, deadline: Duration) -> Result<(), String> {
-    let mut child = std::process::Command::new(program)
+fn release_helper(
+    program: PathBuf,
+    args: Vec<String>,
+    deadline: Duration,
+    display: Option<DisplayEnvironment>,
+) -> Result<(), String> {
+    let mut command = std::process::Command::new(program);
+    if let Some(display) = display {
+        display.apply(&mut command);
+    }
+    let mut child = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1333,15 +1587,22 @@ struct ReleaseGuard {
     armed: bool,
     releases: Arc<ReleaseTasks>,
     deadline: Duration,
+    display: Option<DisplayEnvironment>,
 }
 impl ReleaseGuard {
-    fn new(program: &str, args: Vec<String>, releases: &Arc<ReleaseTasks>) -> Result<Self, String> {
+    fn new(
+        program: &str,
+        args: Vec<String>,
+        releases: &Arc<ReleaseTasks>,
+        display: Option<&DisplayEnvironment>,
+    ) -> Result<Self, String> {
         Ok(Self {
             executable: crate::program::executable(program)?,
             args,
             armed: true,
             releases: releases.clone(),
             deadline: RELEASE_HELPER_TIMEOUT,
+            display: display.cloned(),
         })
     }
     fn disarm(&mut self) {
@@ -1351,8 +1612,12 @@ impl ReleaseGuard {
 impl Drop for ReleaseGuard {
     fn drop(&mut self) {
         if self.armed {
-            self.releases
-                .start(self.executable.clone(), self.args.clone(), self.deadline);
+            self.releases.start(
+                self.executable.clone(),
+                self.args.clone(),
+                self.deadline,
+                self.display.clone(),
+            );
         }
     }
 }
@@ -1499,6 +1764,9 @@ mod tests {
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            display: None,
+            #[cfg(target_os = "linux")]
+            isolated: Mutex::new(None),
         };
         assert!(
             computer
@@ -1617,6 +1885,7 @@ if events.read_text().count("keyup\n") == 1:
                 armed: true,
                 releases: computer.releases.clone(),
                 deadline: Duration::from_secs(10),
+                display: None,
             }
         }
 
@@ -1766,10 +2035,16 @@ if root.exists():
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            display: None,
+            #[cfg(target_os = "linux")]
+            isolated: Mutex::new(None),
         };
         let start = std::time::Instant::now();
         let outcome = computer
-            .perform("ssmcp.computer.focus", json!({"window_id":"0x123"}))
+            .perform(
+                "ssmcp.computer.focus",
+                json!({"window_id":"0x123","desktop":"shared"}),
+            )
             .await;
         match case.as_str() {
             "immediate" | "delayed" => {

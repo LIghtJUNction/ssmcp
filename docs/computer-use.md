@@ -4,12 +4,16 @@ computer-use 是 ssmcp 客户端内置的控制能力。它提供 Linux、Window
 
 当前名称统一为 `computer-use`，专用客户端与用户服务名称为 `ssmcp-computer-use`。已有调用继续使用 `ssmcp.computer.*` 和 `ssmcp.browser.*`；Omarchy 新增 `ssmcp.omarchy.*`。名称调整不改变客户端 ID 的路由规则。实现入口见 [电脑适配器](../src/computer.rs)、[浏览器适配器](../src/browser.rs)和 [Omarchy 适配器](../src/omarchy.rs)。
 
+## 默认使用后台与独立会话
+
+浏览器先运行 `ssmcp setup browser --install` 配置 Playwright MCP；配对后的扩展动作默认保持后台。原生 CDP 浏览器默认无头启动，新标签默认后台打开。Linux 原生应用先通过 `computer.session_start` 创建独立桌面，再用 `computer.launch` 启动应用；之后的截图和输入使用私有显示。直接控制用户当前桌面时，输入参数必须显式包含 `desktop: "shared"`。[完整用法与失败处理](background-control.md)
+
 ## 运行条件与平台范围
 
 | 平台或会话 | 原生实现 | 运行条件 |
 | --- | --- | --- |
 | Linux · Hyprland | 显示器、窗口、聚焦、截图和鼠标键盘输入；兼容旧 dispatcher 与新版 Lua dispatcher | 当前图形会话中的 `hyprctl`、`grim`、`wtype`、`ydotool` 及可访问的 `ydotoold` |
-| Linux · X11 | 同组桌面操作 | `xdotool`、`xprop`、ImageMagick；窗口聚焦还依赖窗口管理器 |
+| Linux · X11 | 桌面操作；支持独立 Xvfb 会话 | `xdotool`、`xprop`、ImageMagick；独立会话还需 Xvfb 与 xauth，Openbox 可选 |
 | Linux · 其他 Wayland | 按实际会话协议和已安装工具报告可用操作 | 以 `computer.status.capabilities` 的逐项诊断为准 |
 | Windows | Win32 显示器与窗口 API、`SetForegroundWindow`、`SendInput`、GDI/GDI+ 截图 | 当前已登录且解锁的交互桌面；受 Windows 前台窗口策略和输入权限限制 |
 | macOS | Quartz 显示器、窗口与输入事件；Accessibility 聚焦；系统 `screencapture` 和 `sips` 截图 | 当前图形会话；对应的辅助功能、事件发送和屏幕录制权限 |
@@ -125,7 +129,10 @@ return shot.structuredContent;
 
 | 方法 | 主要参数 | 返回或效果 |
 | --- | --- | --- |
-| `computer.status` | 无 | 平台、会话、逐项能力、依赖与权限诊断 |
+| `computer.status` | 可选 `desktop` | 平台、会话、逐项能力、依赖与权限诊断 |
+| `computer.session_start` | 可选 `width,height` | 创建或复用私有 Linux Xvfb 桌面 |
+| `computer.launch` | `command:[...]`；可选 `cwd` | 在私有桌面启动应用，保持用户显示独立 |
+| `computer.session_stop` | 无 | 停止拥有的应用、显示并清理临时文件 |
 | `computer.monitors` | 无 | 显示器位置、尺寸、像素信息与坐标空间 |
 | `computer.windows` | 无 | 最多 100 个窗口的 `window_id`、标题和几何信息 |
 | `computer.focus` | `window_id` | 请求聚焦当前窗口目录中的目标，读取实际焦点确认 |
@@ -136,6 +143,8 @@ return shot.structuredContent;
 | `computer.key` | `key`；可选 `modifiers` | 命名按键或快捷键；修饰键为 `ctrl/alt/shift/super` |
 | `computer.type` | `text` | 输入原样 Unicode 文字，最多 16 KiB UTF-8 字节 |
 | `computer.scroll` | `direction`；可选 `steps,x,y` | 四方向滚轮，步数 1–100 |
+
+原生输入默认要求已有隔离会话；显式 `desktop: "shared"` 使用当前用户桌面。只读调用无隔离会话时仍可观察共享桌面；返回的 `desktop` 与 `input_scope` 标识实际目标。
 
 常用按键名包括 `Return`、`Tab`、`Escape`、`BackSpace` 和方向键。macOS 的 `super` 对应 Command，Windows 对应 Windows 键；macOS 字母键按 ANSI 物理键位映射，文字内容使用 `computer.type`。不要用快捷键接口代替任意 Unicode 文本输入。
 
@@ -151,11 +160,11 @@ Hyprland、Windows 和 macOS 的聚焦实现只发送一次焦点请求，随后
 
 已有 CDP 端点可用 `browser.connect` 显式附着；`discover` 本身不会连接、启动或重启浏览器。页面操作按标签页串行，不同标签页可并发读取；同一页面的导航、快照、点击与填表仍按依赖顺序等待。快照能回答的问题优先返回有界文本和元素引用，只有需要视觉判断时再请求截图。
 
-需要独立测试会话时，`browser.launch` 使用独立临时 profile 和本机随机调试端口，默认显示窗口；`headless:true` 适合后台验证。`executable` 可指定系统浏览器路径，启动保留 Chromium 沙箱。它直接使用 [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)。
+需要独立测试会话时，`browser.launch` 使用独立临时 profile 和本机随机调试端口，默认 `headless:true`；显式 `headless:false` 才显示窗口。新标签默认 `background:true`。`executable` 可指定系统浏览器路径，启动保留 Chromium 沙箱。它直接使用 [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)。
 
 ```javascript
 const id = "CLIENT_ID_FROM_LIST";
-const started = await browser.launch(id, { headless: false });
+const started = await browser.launch(id, {});
 if (started.isError) throw new Error(JSON.stringify(started));
 const opened = await browser.open(id, { url: "https://example.com" });
 if (opened.isError) throw new Error(JSON.stringify(opened));
@@ -181,11 +190,13 @@ return await browser.fill("CLIENT_ID_FROM_LIST", {
 | 方法 | 主要参数 | 返回或效果 |
 | --- | --- | --- |
 | `call(id,'ssmcp.browser.discover',{})` | 无 | 只读浏览器与扩展元数据；不证明连接可用 |
-| `browser.status` | 无 | 连接、所有权和版本 |
+| `browser.status` | 无 | 连接、所有权、版本与后台默认值 |
+| `browser.act` | `target_id,actions`；可选 `snapshot,max_elements,max_chars` | 连续执行最多 16 个动作，默认返回新快照；失败保留已完成步骤 |
+| `browser.wait` | `target_id`；`selector`/`text` 至少一个；可选 `state,timeout_ms` | 等待目标内容状态，最多 10 秒 |
 | `browser.launch` | 可选 `executable,headless,width,height` | 启动当前连接拥有的浏览器 |
 | `browser.connect` | `endpoint` | 附着已开启调试的本机浏览器 |
 | `browser.tabs` | 无 | 标签页的 `target_id`、URL、标题 |
-| `browser.open` | `url` | 打开标签页并返回 `target_id` |
+| `browser.open` | `url`；可选 `background`，默认 true | 打开标签页并返回 `target_id` |
 | `browser.navigate` | `target_id,url` | 导航并等待对应文档 |
 | `browser.snapshot` | `target_id`；可选 `max_elements,max_chars` | 有界页面文本与元素引用 |
 | `browser.click` | `target_id,ref`；可选 `button,click_count` | CDP 鼠标点击 |

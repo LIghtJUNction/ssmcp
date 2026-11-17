@@ -229,11 +229,11 @@ const bootstrap = `(() => {
     }
   };
   const browser = freeze(Object.fromEntries(
-    ['discover','status','launch','connect','tabs','open','navigate','snapshot','click','fill','key','scroll','evaluate','screenshot','close','disconnect']
+    ['discover','status','launch','connect','tabs','open','navigate','snapshot','click','fill','key','scroll','act','wait','evaluate','screenshot','close','disconnect']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.browser.' + name, args)])
   ));
   const computer = freeze(Object.fromEntries(
-    ['status','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
+    ['status','session_start','session_stop','launch','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.computer.' + name, args)])
   ));
   // CUA reuses native desktop and browser calls, preserving complete MCP results.
