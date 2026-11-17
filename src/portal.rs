@@ -864,4 +864,4 @@ fn parse_key(raw: &str, label: &str) -> Result<PublicKey, Problem> {
 }
 
 #[cfg(test)]
-use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
