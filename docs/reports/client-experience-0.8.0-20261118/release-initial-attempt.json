@@ -1,0 +1,56 @@
+{
+  "schema": "ssmcp.release-initial-attempt.v1",
+  "record_type": "diagnostic_summary",
+  "source_record": "release-initial-raw.json",
+  "source_bundle_sha256": "29d24a9c8188901f949eeecf0f351e14d58f8973022120251806b8dc2305368d",
+  "source_commit": "0efb04bfbd7f7b0f616f03a6123608cbffc3643e",
+  "profile": "release",
+  "layout": "uninstalled Cargo release build output",
+  "status": "failed",
+  "binaries": {
+    "ssmcp": {
+      "sha256": "732c1b4873d31887390ba06b3d2bc890dc231a1f440526df728eb12164b2d1ae",
+      "bytes": 11980032,
+      "version": "ssmcp 0.8.0"
+    },
+    "ssmcpd": {
+      "sha256": "711aebe278162c7f5633c863dcbda8bceb17c925eb3531b51ba349bfab420e87",
+      "bytes": 8384592,
+      "version": "ssmcpd 0.8.0"
+    },
+    "vt_snapshot": {
+      "sha256": "ec6372dc5a077b457944be0b64b5bcb5fdf411c099454e02a58cf9f38d61364b",
+      "bytes": 563688
+    }
+  },
+  "results": [
+    {
+      "suite": "preview",
+      "exit_code": 0,
+      "seconds": 3.49,
+      "checks": 38
+    },
+    {
+      "suite": "composer",
+      "exit_code": 1,
+      "seconds": 1.02,
+      "checks": 18
+    }
+  ],
+  "diagnostic_summary": {
+    "error": "code_mode runner is missing; run make install-server or set SSMCP_CODE_MODE_RUNNER to its installed absolute path",
+    "reason": "The bare Cargo release directory did not contain the installed code-mode.js runner layout. The composer stopped after 18 successful checks; it did not pass.",
+    "subsequent_action": "Use make install with an isolated PREFIX and rerun the actual installed release binaries.",
+    "subsequent_evidence": "release-installed-gates.json"
+  },
+  "publication": {
+    "derived_summary": true,
+    "full_log_published": false,
+    "omitted": [
+      "daemon diagnostic logs",
+      "user identifiers",
+      "session identifiers",
+      "temporary report paths"
+    ]
+  }
+}
