@@ -104,6 +104,8 @@ ssmcp trust list
 
 ## 定制客户端
 
+本节描述 0.8.0 候选功能；通用安装命令获取已发布版本。候选源码、验证结果与安装状态见[集成候选报告](docs/reports/client-experience-0.8.0-20261118/integrated/README.md)。从当前源码预览可运行 `cargo run --locked --bin ssmcp -- ui preview`。
+
 0.8.0 客户端默认使用 `dark` 主题和 `chat` 布局：连续事件流展示调用、输出和结果，底部输入框用于追加用户要求。运行期间可以继续输入，待交付要求保留在队列中，支持取回编辑；下一次符合目标的 `code_mode` 响应携带这些要求时，界面标记为已交付。已交付表示附加到了响应，不代表模型已经阅读或执行。
 
 `/help` 查看操作，`/audit` 浏览原始编排源码，`/agents` 选择真实登记成员，`/queue` 管理待交付要求。Tab 切换输入和浏览焦点，F2 切换事件流、审计、成员和队列，F3 收起侧栏。`/reload` 重新启动客户端，F5 只重载显示配置。终端输入继续通过 `terminal.*` 或 `ssmcp -i` 使用。
@@ -272,9 +274,9 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-协议与 Harness 测试使用确定性 fixture。[0.8.0 集成验证](docs/reports/client-experience-0.8.0-20261118/README.md)记录完整 Rust 回归、真实 PTY、账号队列、重载及观察窗口的结果与复现范围；[首轮客户端交互验证](docs/reports/client-experience-20261118/README.md)保留此前证据与渲染截图；[历史权限验收](docs/validation.md)保留早期 SSH 与 OAuth 记录。发布与平台构建见[发布流程](docs/releases.md)。提交改动时，请附上对应验证结果；界面修改同时附上渲染截图。
+协议与 Harness 测试使用确定性 fixture。[0.8.0 集成候选验证](docs/reports/client-experience-0.8.0-20261118/integrated/README.md)记录合入内存优化后的 Rust 回归、真实 PTY、账号队列、重载及观察窗口结果；[此前集成验证](docs/reports/client-experience-0.8.0-20261118/README.md)与[首轮客户端交互验证](docs/reports/client-experience-20261118/README.md)保留对应源码的证据和截图；[历史权限验收](docs/validation.md)保留早期 SSH 与 OAuth 记录。发布与平台构建见[发布流程](docs/releases.md)。提交改动时，请附上对应验证结果；界面修改同时附上渲染截图。
 
-优化构建、安装包内容和隔离网关试运行分别记录在 [0.8.0 候选包报告](docs/reports/client-experience-0.8.0-20261118/ROLLOUT.md)中；候选包验证与正式发布、生产切换的状态分别列明。
+优化构建、安装包内容和隔离网关试运行记录在[当前集成候选报告](docs/reports/client-experience-0.8.0-20261118/integrated/README.md)中；[首次候选包报告](docs/reports/client-experience-0.8.0-20261118/ROLLOUT.md)作为历史记录保留。各报告分别列明候选验证、正式发布与生产切换的状态。
 
 ## 文档
 
