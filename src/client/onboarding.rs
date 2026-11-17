@@ -121,8 +121,27 @@ impl Api {
     }
     async fn request(&self, route: &str, body: Value) -> Result<ApiReply, String> {
         let url = self.base.join(route).map_err(|e| e.to_string())?;
-        let mut response = self.client.post(url).json(&body).send().await
-            .map_err(|_| "Portal request failed or exceeded its 12-second deadline. Authentication is never sent through a download mirror.")?;
+        let mut response = self
+            .client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| {
+                use std::error::Error;
+                let mut details = error.to_string();
+                let mut source = error.source();
+                while let Some(cause) = source {
+                    details.push_str(": ");
+                    details.push_str(&cause.to_string());
+                    source = cause.source();
+                }
+                format!(
+                    "Portal request to {} failed: {}. Check --portal and network connectivity.",
+                    self.base,
+                    safe_line(&details)
+                )
+            })?;
         let status = response.status();
         let retry_after = response
             .headers()
@@ -233,6 +252,17 @@ struct Target {
     port: u16,
     portal: Url,
     config: PathBuf,
+}
+
+fn inferred_portal_host<'a>(requested: &'a str, resolved: &'a str) -> &'a str {
+    // A DNS destination is also the HTTPS identity. SSH HostName may replace
+    // it with an address for routing, which must not replace TLS SNI.
+    let requested = requested.trim_matches(['[', ']']);
+    if requested.contains('.') && requested.parse::<IpAddr>().is_err() {
+        requested
+    } else {
+        resolved
+    }
 }
 
 async fn bounded_output(
@@ -373,10 +403,11 @@ impl Target {
                     .into(),
             );
         }
-        let inferred = if host.contains(':') {
-            format!("https://[{host}]")
+        let portal_host = inferred_portal_host(raw_host, &host);
+        let inferred = if portal_host.contains(':') {
+            format!("https://[{portal_host}]")
         } else {
-            format!("https://{host}")
+            format!("https://{portal_host}")
         };
         let portal = portal_url(options.portal.as_deref().unwrap_or(&inferred))?;
         let config = options
@@ -1041,6 +1072,20 @@ pub(super) async fn verify_after_setup(options: &Options) -> Result<bool, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portal_keeps_dns_identity_when_ssh_routes_to_an_ip() {
+        assert_eq!(
+            inferred_portal_host("relay.example.com", "192.0.2.10"),
+            "relay.example.com"
+        );
+        assert_eq!(
+            inferred_portal_host("relay", "gateway.example.com"),
+            "gateway.example.com"
+        );
+        assert_eq!(inferred_portal_host("127.0.0.1", "127.0.0.1"), "127.0.0.1");
+        assert_eq!(inferred_portal_host("[::1]", "::1"), "::1");
+    }
 
     #[test]
     fn portal_labels_respect_utf8_byte_limits_without_splitting_characters() {
