@@ -117,6 +117,25 @@ ssmcp sessions stop workstation
 
 `--watchdog` 默认每 5 秒重试连接；`--reconnect-delay SECONDS` 可指定 1–3600 秒的整数值，必须同时启用 watchdog。`--daemon` 本身不启用重试或开机/登录自启。管理器已经运行不代表 Broker 已连通，以 `connection_state` 和 MCP `list` 为准。手动 stop 后不会自动复活；后台会话使用保存的二进制副本，升级需 remove 后重新创建。连接断开仍会清理它拥有的任务。[会话管理、平台差异与升级](docs/session-control.md#后台运行与延时重连)
 
+## 常驻服务与具名会话
+
+Linux 可以安装持久的客户端服务，再用标准 systemctl 启用并启动。安装时明确指定普通用户，服务及其工作会话使用该用户的项目和 SSH 配置：
+
+```sh
+sudo "$(command -v ssmcp)" service install --system --user "$(id -un)"
+sudo systemctl enable --now ssmcp
+
+ssmcp sessions create dev --watchdog --allow octocat@github my-ssmcp
+ssmcp attach
+ssmcp attach dev
+ssmcp sessions restart dev
+ssmcp sessions close dev
+```
+
+裸 `ssmcp attach` 等于 `ssmcp attach list`；Ctrl-] 分离后会话继续运行。close 保存停止意图，服务重启后不会自动复活；start 可以显式恢复保留的配置。需要远程管理时，为专用管理连接设置 `--session-control`，即可发现 `ssmcp.session.list/status/create/restart/close` 原子能力。子会话继承原连接的 SSH 授权，工作目录限制在已授权工作区内。
+
+macOS 提供 launchd 用户/系统 scope，Windows 提供用户登录任务与 SCM 服务入口。具体安装方式、桌面访问范围和验证边界见[常驻服务与 attach](docs/session-service.md)及[平台服务说明](docs/client-service-platforms.md)。
+
 ## SSH 连接，OAuth 授权
 
 SSH 用公钥确认本机可以接入服务器。`--allow` 决定哪些 GitHub 用户可以使用这条连接的后端；浏览器登录确认操作者身份，之后由用户单独同意当前 MCP 客户端连接。服务端在客户端接入时将用户名解析为 GitHub 稳定用户 ID，每次发现和调用都核对目标客户端的允许列表。[身份验证](src/identity.rs) · [授权实现](src/oauth.rs)

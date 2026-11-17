@@ -136,6 +136,7 @@ pub struct Runtime {
     audit: Arc<EventLog>,
     next_call: AtomicU64,
     catalog: Catalog,
+    sessions: Option<crate::session::control::Control>,
 }
 impl Runtime {
     pub fn new(backend: Arc<Backend>, root: PathBuf) -> Result<Arc<Self>, String> {
@@ -145,6 +146,14 @@ impl Runtime {
         backend: Arc<Backend>,
         root: PathBuf,
         context_roots: Vec<PathBuf>,
+    ) -> Result<Arc<Self>, String> {
+        Self::with_session_control(backend, root, context_roots, None)
+    }
+    pub fn with_session_control(
+        backend: Arc<Backend>,
+        root: PathBuf,
+        context_roots: Vec<PathBuf>,
+        sessions: Option<crate::session::control::Control>,
     ) -> Result<Arc<Self>, String> {
         let output = backend.output();
         let registry = backend.registry.clone();
@@ -162,6 +171,12 @@ impl Runtime {
         registry.replace(Provider::Rsync, Rsync::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
         registry.replace(Provider::Reload, vec![crate::client::reload::tool()])?;
+        if sessions.is_some() {
+            registry.replace(
+                Provider::Sessions,
+                crate::session::control::Control::tools(),
+            )?;
+        }
         registry.replace(Provider::Audit,vec![json!({
             "name":"ssmcp.audit.events",
             "description":"Read observed tool and skill events for this connection. File operations performed by external harnesses have unknown audit coverage unless their native protocol reports them.",
@@ -181,6 +196,7 @@ impl Runtime {
             output,
             next_call: AtomicU64::new(1),
             catalog: Catalog::default(),
+            sessions,
         }))
     }
     pub fn output(&self) -> Arc<OutputStore> {
@@ -255,7 +271,11 @@ impl Runtime {
         }
         let control = matches!(
             tool.provider,
-            Provider::Browser | Provider::Computer | Provider::Omarchy | Provider::Playwright
+            Provider::Browser
+                | Provider::Computer
+                | Provider::Omarchy
+                | Provider::Sessions
+                | Provider::Playwright
         );
         if control {
             self.audit
@@ -291,6 +311,13 @@ impl Runtime {
                 .await
                 .map(backend::result),
             Provider::Reload => Err("reload requires an acknowledged foreground connection".into()),
+            Provider::Sessions => match &self.sessions {
+                Some(control) => control
+                    .perform(&tool.native_name, arguments)
+                    .await
+                    .map(backend::result),
+                None => Err("session management was not granted with --session-control".into()),
+            },
             Provider::Audit => self.audit.read(arguments).await.map(backend::result),
             _ => {
                 let dispatch = self.backend.dispatch(&tool, arguments);

@@ -654,7 +654,7 @@ mod tests {
                             return Err("native failure".into());
                         }
                         Ok(
-                            json!({"content":[],"isError":name == "native_error","structuredContent":{"id":client_id,"arguments":arguments},"_meta":{"native":true}}),
+                            json!({"content":[],"isError":name == "native_error","structuredContent":{"id":client_id,"name":name,"arguments":arguments},"_meta":{"native":true}}),
                         )
                     }
                     HostRequest::Tools { client_id, cursor } => Ok(
@@ -915,6 +915,27 @@ mod tests {
         assert_eq!(output["result"]["alias"], true);
         assert_eq!(output["result"]["frozen"], true);
         assert!(run_code("return await rsync([]);").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn session_helpers_use_selected_client_and_preserve_generation_guard() {
+        let _guard = TESTS.lock().await;
+        let output = run_code(r#"
+            const listed = await sessions.list('manager');
+            const created = await sessions.create('manager',{name:'worker',cwd:'project'});
+            const restarted = await sessions.restart('manager',{name:'worker',expected_generation:'old-generation'});
+            const closed = await sessions.close('manager',{name:'worker'});
+            return {listed,created,restarted,closed,frozen:Object.isFrozen(sessions)};
+        "#).await.unwrap();
+        assert_eq!(output["result"]["listed"]["name"], "ssmcp.session.list");
+        assert_eq!(output["result"]["listed"]["id"], "manager");
+        assert_eq!(output["result"]["created"]["arguments"]["cwd"], "project");
+        assert_eq!(
+            output["result"]["restarted"]["arguments"]["expected_generation"],
+            "old-generation"
+        );
+        assert_eq!(output["result"]["closed"]["name"], "ssmcp.session.close");
+        assert_eq!(output["result"]["frozen"], true);
     }
 
     #[tokio::test]

@@ -144,6 +144,7 @@ fn color_enabled(tty: bool, no_color: bool) -> bool {
 
 pub(crate) fn event(label: &str, value: &Value) {
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    crate::session::attach::record_event(label, value);
     let dashboard = super::terminal::active();
     let width = terminal_width();
     let mut bytes = Vec::new();
@@ -191,6 +192,7 @@ pub(crate) fn controller_finished(id: u64) {
 
 pub(crate) fn finish(label: &str) {
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    crate::session::attach::record_finish(label);
     let mut bytes = Vec::new();
     {
         let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
@@ -2055,6 +2057,7 @@ pub(crate) fn connection(output: &Value) -> io::Result<()> {
 
 pub(crate) fn terminal_output_for(terminal_id: &str, bytes: &[u8]) {
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    crate::session::attach::record_terminal(terminal_id, bytes);
     let tty = io::stderr().is_terminal();
     let mut rendered = Vec::new();
     let raw;

@@ -1,5 +1,7 @@
 //! Adversarial OAuth tests against the public HTTP routes and a real Unix attach.
 //! No browser, external callback, installed coding agent, or model is contacted.
+#![cfg(target_os = "linux")]
+
 use reqwest::{Client, Response, StatusCode, Url, header};
 use serde_json::{Value, json};
 use ssmcp::{
