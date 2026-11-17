@@ -641,6 +641,10 @@ async fn native_view(
         }
         if let Some(scope) = query.get("scope") {
             arguments["scope"] = json!(scope);
+        } else if kind == "skills/view" && !query.contains_key("root") {
+            // Declare the requested semantics so older clients fail explicitly
+            // instead of returning their single-root default as an effective view.
+            arguments["scope"] = json!("effective");
         }
     } else if kind == "agents" {
         arguments["path"] = json!(query.get("path").map(String::as_str).unwrap_or("."));

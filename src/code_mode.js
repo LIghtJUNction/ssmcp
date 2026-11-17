@@ -472,7 +472,13 @@ const bootstrap = `(() => {
   const skills = freeze({
     list: (id, args) => workspaceResult(id, 'ssmcp.skills.list', args),
     read: (id, args) => workspaceResult(id, 'ssmcp.skills.read', args),
-    view: (id, args) => workspaceResult(id, 'ssmcp.skills.view', args),
+    view: (id, args = {}) => {
+      if (args && typeof args === 'object' && !isArray(args)
+          && args.root === undefined && args.scope === undefined) {
+        args = {...args, scope:'effective'};
+      }
+      return workspaceResult(id, 'ssmcp.skills.view', args);
+    },
   });
   const agents = freeze({
     list: (id, args) => workspaceResult(id, 'ssmcp.agents.list', args),

@@ -228,6 +228,8 @@ return await resources.read(
 
 技能分页使用返回的 nextUri，保留 root、scope 与扫描配置。扫描数据变化后旧游标失效，应从第一页重新读。Markdown 页附元数据与全文入口，存在下一页时附续页链接；扫描达到上限时提示不完整。
 
+首次启用本轮资源能力时，需要更新服务端和对应客户端。默认技能视图从两个入口显式请求 scope: effective；旧客户端拒绝该参数时返回错误，不自动退回单根视图。
+
 “最新”指每次 resources/read 返回当次磁盘读取结果。当前 JSON 传输不提供订阅通知；宿主已缓存或已放入对话的旧内容，需要再次读取才能更新。无需重启服务或重新连接客户端。
 
 全局范围沿用启动时配置的 --context-root。例如以用户主目录作为全局根，可读取其中约定技能目录；自定义技能集合可在 code_mode 中用 paths 选择。资源入口采用默认发现路径。服务自带的 ssmcp://skill 是随服务版本发布的使用指南，项目自己的实时全文通过上述客户端资源获取。
@@ -254,4 +256,4 @@ return await resources.read(
 
 技能索引采用 [Agent Skills 的渐进读取方式](https://agentskills.io/specification)：先看名称与描述，再按需读取完整文档。指令文件组织参考 [AGENTS.md](https://agents.md/) 的目录层级用法；本实现的根范围与文件优先顺序见上文。
 
-本轮测试、原生协议覆盖和实际运行状态见 [验收记录](validation-context-primitives.md)。
+基础上下文原语的验证见 [上下文原语验收记录](validation-context-primitives.md)。本轮资源读取、有效技能视图、RTK 与实际运行状态见 [项目上下文与 RTK 验收记录](validation-live-context-rtk.md)。
