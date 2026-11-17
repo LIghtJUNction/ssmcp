@@ -19,7 +19,7 @@ MCP 资源与 code_mode 共用客户端的技能索引和指令文件解析。�
 | fs.writeText(id, options) | 原子写入 UTF-8 文本，支持旧内容 SHA-256 前置条件 |
 | fs.editText(id, options) | 精确替换一个字面匹配，保留其余内容 |
 
-这些 helper 调用同一组原生能力：ssmcp.context.roots、ssmcp.skills.*、ssmcp.agents.*、ssmcp.fs.read_text/write_text/edit_text。Shell、Codex、Claude Code、Pi 和 OpenCode 客户端均提供这些能力。MCP 顶层工具仍为 list 与 code_mode。
+这些 helper 调用同一组原生能力：ssmcp.context.roots、ssmcp.skills.*、ssmcp.agents.*、ssmcp.fs.read_text/write_text/edit_text。Shell、Codex、Claude Code、Pi 和 OpenCode 客户端均提供这些能力。文件与上下文能力通过 list 和 code_mode 发现与调用；agent 协作另有独立 collab 工具。
 
 ## 生成技能摘要视图
 
