@@ -551,7 +551,7 @@ async fn broker_commits_only_successful_replies_to_explicit_reload_requests() {
 
 #[tokio::test]
 #[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
-async fn two_public_tools_cover_every_backend_with_native_discovery_and_javascript_dispatch() {
+async fn public_tools_cover_every_backend_with_native_discovery_and_javascript_dispatch() {
     let _scenario = CODE_MODE_SCENARIO.lock().await;
     let mut server = Server::start().await;
     for mode in [Mode::Shell, Mode::Codex, Mode::Cc, Mode::Pi, Mode::Opencode] {

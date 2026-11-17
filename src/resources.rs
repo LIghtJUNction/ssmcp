@@ -809,7 +809,7 @@ mod tests {
                 .iter()
                 .map(|page| page["resources"].as_array().unwrap().len())
                 .collect::<Vec<_>>(),
-            [32, 32, 32, 13]
+            [32, 32, 32, 14]
         );
         let all: Vec<_> = pages
             .iter()
@@ -817,7 +817,7 @@ mod tests {
             .map(|r| r["uri"].as_str().unwrap())
             .collect();
         let unique: std::collections::HashSet<_> = all.iter().collect();
-        assert_eq!(all.len(), 109);
+        assert_eq!(all.len(), 110);
         assert_eq!(all.len(), unique.len());
         broker.test_register("alice", &"a".repeat(64)).await;
         assert!(matches!(
