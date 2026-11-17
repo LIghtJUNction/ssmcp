@@ -558,19 +558,47 @@ class Dashboard(Harness):
         paged = front.until(lambda s: "DASH_AUDIT_0699" not in text(s)
                             and "DASH_AUDIT_" in text(s), "direct PageUp history")
         self.check(paged["hide_cursor"], "PageUp reveals prior output while the audit interface retains input ownership")
+
+        def audit_numbers(snapshot):
+            return [int(n) for n in re.findall(r"DASH_AUDIT_(\d{4})", text(snapshot))]
+
+        retained_rows = self.ui("/display/log_history")
+        paged_offset = self.ui("/display/log_scrollback")
+        # These numbered records each occupy one display row. Home must move
+        # exactly the remaining retained distance, not to an evicted old ID.
+        expected_oldest = audit_numbers(paged)[0] - (retained_rows - paged_offset)
         front.send(b"\x1b[H")
-        oldest = front.until(lambda s: any(int(n) < 300 for n in re.findall(r"DASH_AUDIT_(\d{4})", text(s))),
+        oldest = front.until(lambda s: audit_numbers(s)
+                             and audit_numbers(s)[0] == expected_oldest
+                             and self.ui("/display/log_scrollback") == retained_rows,
                              "Home at the retained history boundary")
-        self.check("DASH_AUDIT_0699" not in text(oldest), "Home moves to retained audit history without rewriting raw output")
+        oldest_numbers = audit_numbers(oldest)
+        front.send(b"\x1b[H")
+        front.pump(0.1)
+        repeated_home = front.snapshot()
+        repeated_offset = self.ui("/display/log_scrollback")
+        self.check(retained_rows == 128 and paged_offset < retained_rows
+                   and repeated_offset == retained_rows
+                   and audit_numbers(repeated_home) == oldest_numbers
+                   and 699 not in oldest_numbers,
+                   "Home reaches the exact 128-row retained boundary and repeated Home cannot pass it")
         front.send(b"\x1b[F")
-        front.until(lambda s: "DASH_AUDIT_0699" in text(s), "End at the live tail")
+        front.until(lambda s: "DASH_AUDIT_0699" in text(s)
+                    and self.ui("/display/log_scrollback") == 0, "End at the live tail")
+        self.metrics["log_history_boundary"] = {
+            "retained_rows": retained_rows, "paged_offset": paged_offset,
+            "expected_oldest_record": expected_oldest,
+            "observed_oldest_record": oldest_numbers[0],
+            "repeated_home_offset": repeated_offset, "end_offset": 0,
+        }
         front.send("/")
         front.until(lambda s: "Enter Apply" in s["rows"][-1], "filter input before Escape")
         front.send(b"\x1b")
         # Both session and display decoders delay an ambiguous Escape prefix.
         # Observe its completed state change before sending the next sequence.
         front.until(lambda s: "Wheel" in s["rows"][-1] and s["hide_cursor"], "Escape retaining audit navigation")
-        self.check(True, "End restores live logs and Escape never focuses a hidden shell")
+        self.check(self.ui("/display/log_scrollback") == 0,
+                   "End restores live logs and Escape never focuses a hidden shell")
         front.send(b"\x1b[5~x")
         front.until(lambda s: "DASH_AUDIT_0699" not in text(s) and "DASH_AUDIT_" in text(s),
                     "coalesced PageUp and text retaining scroll position")
