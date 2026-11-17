@@ -541,7 +541,10 @@ async fn local_composer_delivers_at_response_boundary_and_exact_targets_require_
         ),
         (
             "ssmcp.resources.list",
-            format!("return await resources.forClient({}).list();", json!(target)),
+            format!(
+                "return await resources.forClient({}).list();",
+                json!(target)
+            ),
         ),
         (
             "ssmcp.resources.templates",
