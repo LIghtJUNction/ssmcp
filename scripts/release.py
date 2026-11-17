@@ -225,6 +225,7 @@ def package(target, root=None):
             shutil.copy2(root / "src/code_mode.js", stage / "code-mode.js")
             shutil.copy2(root / "docs/deployment.md", stage / "docs/deployment.md")
             shutil.copytree(root / "packaging", stage / "packaging")
+            shutil.copy2(root / "scripts/setup_server.py", stage / "setup-server")
         write_archive(stage, archive, epoch)
     checksum = digest(archive)
     (output / (archive.name + ".sha256")).write_text(f"{checksum}  {archive.name}\n", encoding="utf-8")

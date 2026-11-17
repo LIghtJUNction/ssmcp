@@ -1030,8 +1030,16 @@ mod tests {
             "old owner cleanup is not a failed start"
         );
         drop(guard);
-        supervisor.retries.insert("recover".into(), Instant::now());
-        supervisor.tick().await;
+        // Another test may fork while the lease is open. Its close-on-exec
+        // descriptor can briefly keep the old owner's flock alive.
+        for _ in 0..100 {
+            supervisor.retries.insert("recover".into(), Instant::now());
+            supervisor.tick().await;
+            if supervisor.outcomes.contains_key("recover") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         // The fixture deliberately lacks its executable. Seeing this failure
         // proves restore attempted launch only after the prior lease released.
         assert!(supervisor.outcomes["recover"].failed);

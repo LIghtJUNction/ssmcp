@@ -6,6 +6,22 @@
 
 当前实现使用内部 wire v4，对外只提供 `list`、`code_mode` 两个 MCP 工具。客户端始终提供 shell 和独立命令，并自动发现 PATH 中的编程 harness。旧客户端可继续使用登录码；`--allow 用户名@github` 需要两端支持，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
 
+## 标准账号部署与旧配置迁移
+
+`ssmcp login`、设备邀请、SSH 会话和 MCP 必须由同一个 `ssmcpd` 进程处理。新部署使用单进程 Nginx 模板；旧的独立 Portal 部署可通过同一个设置命令迁移。该命令默认仅检查，`--apply` 才写入配置并重载服务。
+
+安装下文的依赖与服务、填写私有 TOML 中的 GitHub OAuth 和公网域名，并准备 TLS 证书后执行（`PREFIX=/usr` 的安装将路径改为 `/usr/libexec/ssmcp/setup-server`）：
+
+```sh
+sudo /usr/local/libexec/ssmcp/setup-server \
+  --config /etc/ssmcpd/ssmcpd.toml \
+  --nginx-site /etc/nginx/conf.d/ssmcp.conf --apply
+```
+
+使用真实的 Nginx 站点路径。新站点默认读取 `/etc/letsencrypt/live/公网域名/` 中的证书；已有站点保留证书、日志和其他配置，自动把标准双进程模板的 Portal upstream 合并到网关。自定义 upstream 会被拒绝，须先使用单网关模板。自定义账号目录通过 `--state-dir` 指定，已有 `portal.state_dir` 不会被覆盖。
+
+命令启用同进程账号存储、停止并取消启用独立 Portal，检查 Nginx、网关健康、账号登录 API 和未授权访问拒绝。失败时恢复配置并重启原服务；重复运行不会重启已正常配置的网关。账号数据保留，私有回滚文件保存在 `/var/lib/ssmcp-rollouts/`。该命令不安装系统依赖、不申请 TLS 证书，也不接收命令行 OAuth 密钥。
+
 ## 1. 安装程序与服务账户
 
 服务端运行于 Linux；客户端支持 Linux、macOS 和 Windows 的 x86_64 / ARM64。Linux 客户端需要 5.3 或更新内核以使用 pidfd，预编译 GNU 包以 glibc 2.35 为基线；具体归档与安装方法见[发布与平台支持](releases.md)。源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
@@ -367,10 +383,12 @@ sudo systemctl enable --now ssmcp-portal-ssh.timer
 
 同步周期为 15 秒，加上执行和调度时间；失败会在该 service 的 journal 中报错，应监控 timer/service。首次登记和删除公钥并非立即生效；删除不会断开已有连接，需在本机退出。同步失败期间，OpenSSH 保留上次成功同步的公钥，管理员应检查并完成撤销。账户状态文件不得手工删掉或回滚到旧密钥快照，以免重新授权已撤销的密钥。
 
-网页登录使用 Secure/HttpOnly/SameSite cookie，独立随机 CSRF token、精确 Origin 检查、一次性浏览器绑定 OAuth state 和 PKCE；登录后轮换会话。公钥操作仅从服务器会话取得账户 ID，不接收账户或路径参数。仅接受标准 Ed25519 的固定长度 wire blob，拒绝私钥、证书、授权选项、多行、控制字符和重复公钥；页面转义所有显示字段，不接收私钥。全局登录频率和会话容量有界，公网仍应配置代理限流。
+网页登录使用 Secure/HttpOnly/SameSite cookie，独立随机 CSRF token、精确 Origin 检查、一次性浏览器绑定 OAuth state 和 PKCE；登录后轮换会话。公钥操作仅从服务器会话取得账户 ID，不接收账户或路径参数。由系统 OpenSSH 校验公钥，支持安全密钥等本机 OpenSSH 可识别的类型，拒绝私钥、授权选项、多行、控制字符和重复公钥；页面转义所有显示字段，不接收私钥。全局登录频率和会话容量有界，公网仍应配置代理限流。
 
 
-### 让账户页面与 MCP 连接独立运行
+### 旧版仅 SSH 门户的双进程部署
+
+以下仅为旧部署参考，不支持账号 CLI 与设备邀请。新部署和升级请使用文首的标准单进程设置命令。
 
 已有 MCP 客户端在线时，可以单独运行账户页面。两个进程使用同一套已安装程序和 GitHub OAuth 配置；更新或重启账户页面不会清空 MCP 网关的连接及授权。
 

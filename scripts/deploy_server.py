@@ -92,6 +92,19 @@ def package_version_matches(value, expected):
         re.escape(expected)+r'(?:\.r[0-9]+\.g[0-9a-f]+)?-[0-9]+(?:\.[0-9]+)*',value) is not None
 
 
+def isolated_configuration(text, state, runtime):
+    config = tomllib.loads(text)
+    for field, destination in [('state_dir', state/'portal'),
+                               ('audit_dir', state/'audit'),
+                               ('gateway_socket', runtime/'management.sock')]:
+        if config.get('portal', {}).get(field):
+            text, count = re.subn(r'(?m)^(\s*'+field+r'\s*=\s*).+$',
+                lambda match: match[1]+json.dumps(str(destination)), text)
+            if count != 1:
+                raise ValueError('cannot isolate staging '+field)
+    return text
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--phase',choices=['stage','apply'],required=True)
@@ -103,7 +116,7 @@ def main():
     parser.add_argument('--report',type=Path,required=True)
     parser.add_argument('--config',type=Path,default=Path('/etc/ssmcpd/ssmcpd.toml'))
     parser.add_argument('--proxy-config',type=Path,help='Optional replacement for the existing Nginx site')
-    parser.add_argument('--proxy-target',type=Path,default=Path('/etc/nginx/conf.d/ssmcp.lmm.best.conf'))
+    parser.add_argument('--proxy-target',type=Path,default=Path('/etc/nginx/conf.d/ssmcp.conf'))
     args=parser.parse_args()
     if not re.fullmatch(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)',args.expected_version):
         parser.error('expected-version must be a stable major.minor.patch version without a v prefix')
@@ -169,6 +182,13 @@ def main():
             # A staged portal uses a fresh store, never the production account data.
             if config.get('portal',{}).get('state_dir'):
                 command += ['--portal-state-dir',str(state/'portal')]
+            if config.get('portal', {}).get('gateway_socket') or config.get('portal', {}).get('audit_dir'):
+                stage_config = stage_root/'stage-config.toml'
+                stage_config.write_text(isolated_configuration(args.config.read_text(), state, Path('/run')/state_name))
+                account = pwd.getpwnam('ssmcpd')
+                os.chown(stage_config, account.pw_uid, account.pw_gid)
+                stage_config.chmod(0o600)
+                command[command.index('--config')+1] = str(stage_config)
             owned=False
             try:
                 check('stage_unit_unused',run(['systemctl','show',stage_unit,'-p','LoadState','--value'])=='not-found')

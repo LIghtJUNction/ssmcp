@@ -76,6 +76,8 @@ jobs:
         run: |
           shellcheck scripts/install.sh
           python3 scripts/test_release.py
+          python3 scripts/test_setup_server.py
+          python3 scripts/test_portal_ssh.py
           python3 scripts/test_installer_download_bounds.py
       - run: cargo clippy --locked --all-targets -- -D warnings
       - name: Render terminal transcript fixture

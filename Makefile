@@ -45,7 +45,8 @@ install:
 	install -m 0644 packaging/sshd-ssmcp.conf packaging/Caddyfile packaging/nginx-ssmcp.conf.example packaging/ssmcp-client.toml.example packaging/ssmcpd.env packaging/ssmcpd.toml.example $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
 
 # Installs the unit and a first-time config; account creation and activation are explicit.
-install-server: install
+install-server: install install-portal
+	install -m 0755 scripts/setup_server.py $(DESTDIR)$(PREFIX)/libexec/ssmcp/setup-server
 	install -d $(DESTDIR)$(SYSTEMD_DIR) $(DESTDIR)$(SYSCONFDIR)/ssmcpd
 	sed 's|/usr/local/bin/|$(PREFIX)/bin/|g; s|/etc/ssmcpd/|$(SYSCONFDIR)/ssmcpd/|g' packaging/ssmcpd.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcpd.service
 	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcpd.service
