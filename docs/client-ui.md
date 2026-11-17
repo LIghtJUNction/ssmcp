@@ -39,7 +39,7 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 默认目标为 `Next caller`，即下一次实际访问本客户端、且仍有授权的 `code_mode` 调用方；也可以通过 `/agents` 选择明确的成员 ID。要求只附加到符合目标的响应，不广播给全部成员。
 
-自定义界面刷新 `ssmcp.ui.*` 或查询工具目录时，默认不领取这些要求，避免界面轮询抢先消耗队列。显式通过 `collab.bind` 绑定成员的编排仍可领取符合目标的要求。
+自定义界面刷新 `ssmcp.ui.*`、查询工具目录，或调用 `capabilities(clientId)` 与 `resources.forClient(clientId)` 的 `list/templates/read` 时，默认不领取这些要求，避免界面轮询抢先消耗队列。后两者对应 `ssmcp.client.capabilities` 和 `ssmcp.resources.list/templates/read` 四个观测原语，原生调用仍记录源码审计。显式通过 `collab.bind` 绑定成员的编排仍可领取符合目标的要求。
 
 `/queue` 打开队列。内容区中 ↑/↓ 选择记录，Enter 请求取回尚未交付的要求，→ 只读查看详情，← 返回列表，Delete 取消可撤回的待交付项。取回获得服务器确认后，文字进入输入框，修改后按 Enter 重新提交同一条要求。输入框与内容区通过 Tab 或 Shift-Tab 切换。
 
@@ -475,6 +475,7 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.queue", {
 
 | 前端需要的数据或动作 | 接口 |
 | --- | --- |
+| 客户端版本、能力与资源目录 | `capabilities(clientId)`、`resources.forClient(clientId)` |
 | 配置、面板活动与当前显示状态 | `ssmcp.ui.get` |
 | 调整和筛选内置界面 | `ssmcp.ui.set`、`ssmcp.ui.action`、`ssmcp.ui.filter` |
 | 用户要求、草稿和交付队列 | `ssmcp.ui.queue` |
@@ -501,7 +502,7 @@ const [conversation, panes, requests] = await Promise.all([
 return { conversation, panes, requests };
 ```
 
-这些 UI 原子读取默认不领取 `Next caller` 要求。独立读取 `ssmcp.audit.events`、`exec.events`、终端或输出归档属于工作类调用，会使本次编排具备领取要求的资格；需要由 agent 采集这些事件时，应同时处理响应中的 `user_messages`，定向接收时先绑定身份。
+这些 UI 原子读取，以及能力清单和客户端资源查询，默认不领取 `Next caller` 要求。独立读取 `ssmcp.audit.events`、`exec.events`、终端或输出归档属于工作类调用，会使本次编排具备领取要求的资格；需要由 agent 采集这些事件时，应同时处理响应中的 `user_messages`，定向接收时先绑定身份。
 
 采集事件的调用分别保存每个流返回的 `next_cursor`，后续沿用各自游标，避免重复展示历史内容。检查 `truncated` 和归档状态，以便在缓存不足时读取归档。终端字节使用终端解析器绘制；命令 stdout/stderr 可按游标分开读取。调用结果还应检查原生 `isError`、任务 `running` 与 `exit_code`，让界面显示实际执行状态。
 

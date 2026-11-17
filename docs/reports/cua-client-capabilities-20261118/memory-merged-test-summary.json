@@ -1,0 +1,35 @@
+{
+  "source_commit": "397a14a5ef18b6444226298284e66ab784af9443",
+  "client_version": "0.7.4",
+  "rust_summaries": [
+    {
+      "passed": 672,
+      "failed": 0,
+      "ignored": 8
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "node_summary": [
+    "ℹ tests 23",
+    "ℹ pass 23",
+    "ℹ fail 0",
+    "ℹ cancelled 0",
+    "ℹ skipped 0",
+    "ℹ todo 0"
+  ],
+  "source_logs": [
+    "target/cua-validation/memory-merged-rust.log",
+    "target/cua-validation/memory-merged-node.log"
+  ],
+  "release_build": "optimized build succeeded; opt-level=z, fat LTO",
+  "release_cli_smoke": true
+}

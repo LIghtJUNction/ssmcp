@@ -215,7 +215,15 @@ impl Server {
                         Ok(response)
                     }
                     Operation::CallTool { name, arguments }
-                        if matches!(name.as_str(), "ssmcp.ui.get" | "ssmcp.ui.queue") =>
+                        if matches!(
+                            name.as_str(),
+                            "ssmcp.ui.get"
+                                | "ssmcp.ui.queue"
+                                | "ssmcp.client.capabilities"
+                                | "ssmcp.resources.list"
+                                | "ssmcp.resources.templates"
+                                | "ssmcp.resources.read"
+                        ) =>
                     {
                         Ok(ssmcp::backend::result(
                             json!({"tool":name,"arguments":arguments}),
@@ -523,6 +531,54 @@ async fn local_composer_delivers_at_response_boundary_and_exact_targets_require_
         observation,
         "observational UI calls must still retain their source audit"
     );
+    let client_observations = [
+        (
+            "ssmcp.client.capabilities",
+            format!(
+                "const manifest = await capabilities({}); return manifest.structuredContent;",
+                json!(target)
+            ),
+        ),
+        (
+            "ssmcp.resources.list",
+            format!("return await resources.forClient({}).list();", json!(target)),
+        ),
+        (
+            "ssmcp.resources.templates",
+            format!(
+                "return await resources.forClient({}).templates();",
+                json!(target)
+            ),
+        ),
+        (
+            "ssmcp.resources.read",
+            format!(
+                "return await resources.forClient({}).read('ssmcp-client://guide');",
+                json!(target)
+            ),
+        ),
+    ];
+    for (tool, code) in &client_observations {
+        let before = server.clients[1].code_contexts.lock().unwrap().len();
+        let result = server.call("code_mode", json!({"code":code})).await;
+        assert_eq!(result["result"]["tool"], *tool);
+        assert!(
+            result.get("user_messages").is_none(),
+            "unbound client query {tool} must not claim the next caller's requirement"
+        );
+        let snapshot = server
+            .steer(1, wire::SteeringCommand::Snapshot {})
+            .await
+            .unwrap();
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].state, wire::SteeringState::Queued);
+        let contexts = server.clients[1].code_contexts.lock().unwrap();
+        assert_eq!(contexts.len(), before + 1);
+        assert_eq!(
+            contexts[before].code, *code,
+            "observational client query {tool} must still retain its complete source audit"
+        );
+    }
     let source = format!(
         "return await call({}, 'fixture.echo', {{value:'unaltered'}});",
         json!(target)
@@ -654,6 +710,31 @@ async fn local_composer_delivers_at_response_boundary_and_exact_targets_require_
         .call("code_mode", json!({"code":bound_observation}))
         .await;
     assert_eq!(result["user_messages"][0]["message_id"], "bound_ui");
+    assert_eq!(result["user_messages"][0]["agent_id"], agent_id);
+
+    server
+        .steer(
+            1,
+            publish(
+                "bound_resource",
+                "The bound agent may inspect and collect.",
+                "next",
+            ),
+        )
+        .await
+        .unwrap();
+    let bound_resource = format!(
+        "await collab.bind({},{{agent_id:{},token:{}}}); {}",
+        json!(target),
+        json!(agent_id),
+        json!(token),
+        client_observations[3].1
+    );
+    let result = server
+        .call("code_mode", json!({"code":bound_resource}))
+        .await;
+    assert_eq!(result["result"]["tool"], "ssmcp.resources.read");
+    assert_eq!(result["user_messages"][0]["message_id"], "bound_resource");
     assert_eq!(result["user_messages"][0]["agent_id"], agent_id);
 
     server

@@ -1,0 +1,78 @@
+{
+  "status": "passed",
+  "checks": [
+    "effective sshd config permits public keys only",
+    "Xvfb allocated a private display",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "the product launch path owns the isolated headed browser",
+    "private Chromium has one original foreground tab",
+    "original tab starts visible",
+    "browser.open defaults to a background tab",
+    "background fill/click/wait_for complete in the real page",
+    "background click is a trusted browser input event",
+    "background scroll moves the target viewport",
+    "background input reaches only the requested target",
+    "original foreground tab remains visible",
+    "Chrome UI still selects the original foreground tab",
+    "input target has page-local focus emulation for trusted input",
+    "browser actions preserve independent cursor coordinates and keyboard focus",
+    "ssmcp.browser.screenshot returns a visible MCP image (modern=True)",
+    "image is bounded valid JPEG bytes",
+    "image payload is absent from structured metadata and text",
+    "screenshot contains the green marker produced by the trusted click on the background target",
+    "background screenshot preserves cursor, focus and foreground tab",
+    "owned browser shutdown preserves independent input focus and cursor"
+  ],
+  "metrics": {
+    "browser_ownership": "product_launch",
+    "browser": {
+      "jsVersion": "15.7.112.43",
+      "product": "Chrome/157.0.8103.78",
+      "protocolVersion": "1.3",
+      "revision": "@4b3d0dabb8250b6f152d2d85d79e7706e309d087",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
+    },
+    "target_mode": "new_background_target",
+    "target_before_input": {
+      "focus": false,
+      "visibility": "hidden"
+    },
+    "input_before": {
+      "focus": "14680096",
+      "x": 17,
+      "y": 19
+    },
+    "input_after": {
+      "focus": "14680096",
+      "x": 17,
+      "y": 19
+    },
+    "original_tab_unchanged": true,
+    "chrome_foreground_title_unchanged": true,
+    "page_local_focus_emulation": true,
+    "display_scope": "private Xvfb; no desktop input sent to user display",
+    "screenshot_target_pixel": [
+      1,
+      161,
+      97
+    ],
+    "owned_browser_stopped_on_disconnect": true
+  },
+  "duration_seconds": 10.567
+}

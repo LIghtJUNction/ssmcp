@@ -290,6 +290,7 @@ impl Default for Ui {
 struct Document {
     ui: Ui,
     client: super::config::ClientSettings,
+    browser: super::config::BrowserSettings,
 }
 
 impl Ui {
@@ -298,6 +299,7 @@ impl Ui {
         let doc: Document =
             toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
         doc.client.validate().map_err(|error| error.to_string())?;
+        doc.browser.validate().map_err(|error| error.to_string())?;
         doc.ui.validate()?;
         Ok(doc.ui)
     }
@@ -528,5 +530,44 @@ mod tests {
         let reset = old.merge_json(json!({"colors":{"accent":""}})).unwrap();
         assert_eq!(reset.color("accent"), reset.theme.color("accent"));
         assert_eq!(old.colors.accent, "#123456");
+    }
+    #[test]
+    fn combined_ui_client_and_browser_config_loads_for_startup() {
+        let entry = std::env::temp_dir().join("ssmcp-ui-browser-fixture.js");
+        let entry = serde_json::to_string(entry.to_str().unwrap()).unwrap();
+        let text = format!(
+            "[ui]\ncolor = false\ntheme = 'nord'\n[client]\nserver = 'https://relay.example'\n[browser]\nplaywright_mcp = {entry}\nbackground = true\n"
+        );
+        let ui = Ui::parse(&text).unwrap();
+        assert_eq!(ui.theme, Theme::Nord);
+        assert!(!ui.color);
+
+        let mut random = [0u8; 8];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let path = std::env::temp_dir().join(format!("ssmcp-ui-browser-{suffix}.toml"));
+        std::fs::write(&path, &text).unwrap();
+        let loaded = Ui::load(Some(&path));
+        std::fs::remove_file(path).unwrap();
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.theme, Theme::Nord);
+        assert!(!loaded.color);
+    }
+
+    #[test]
+    fn browser_settings_keep_their_validation_in_ui_configuration() {
+        assert!(
+            !Ui::parse("[browser]\nbackground = false\n")
+                .unwrap()
+                .timestamps
+        );
+        for text in [
+            "[browser]\nplaywright_mcp = 'relative/cli.js'\n",
+            "[browser]\nbackground = 'secret-value'\n",
+            "[browser]\nplaywrigt_mcp = '/tmp/secret-value'\n",
+        ] {
+            let error = Ui::parse(text).unwrap_err();
+            assert!(!error.contains("secret-value"), "{error}");
+        }
     }
 }
