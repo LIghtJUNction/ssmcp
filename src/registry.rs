@@ -3,7 +3,7 @@ use crate::catalog::{self, ToolDescriptor};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map::Entry},
     sync::{Arc, RwLock},
 };
 
@@ -169,10 +169,9 @@ impl Registry {
             .count();
         if old_count == entries.len()
             && entries.iter().all(|(id, next)| {
-                state
-                    .tools
-                    .get(id)
-                    .is_some_and(|old| old.descriptor == next.descriptor)
+                state.tools.get(id).is_some_and(|old| {
+                    old.native_name == next.native_name && old.descriptor == next.descriptor
+                })
             })
         {
             return Ok(state.generation);
@@ -184,10 +183,28 @@ impl Registry {
         }
         state.generation += 1;
         let generation = state.generation;
-        state.tools.retain(|_, tool| tool.provider != provider);
+        state
+            .tools
+            .retain(|id, tool| tool.provider != provider || entries.contains_key(id));
         for (id, mut entry) in entries {
             entry.generation = generation;
-            state.tools.insert(id, entry);
+            match state.tools.entry(id) {
+                Entry::Occupied(mut current) => {
+                    let previous = current.get_mut();
+                    if previous.native_name == entry.native_name
+                        && previous.descriptor == entry.descriptor
+                    {
+                        // Keep the existing allocations, but revoke handles from
+                        // the old provider generation even for unchanged tools.
+                        previous.generation = generation;
+                    } else {
+                        *previous = entry;
+                    }
+                }
+                Entry::Vacant(current) => {
+                    current.insert(entry);
+                }
+            }
         }
         Ok(generation)
     }
@@ -393,6 +410,77 @@ mod tests {
         registry.close();
         assert!(registry.lookup("ssmcp.exec.start").is_err());
     }
+    #[test]
+    fn partial_catalog_updates_reuse_allocations_and_revoke_old_handles() {
+        let registry = Registry::new();
+        registry
+            .replace(Provider::Exec, vec![tool("ssmcp.exec.start")])
+            .unwrap();
+        let other = registry.lookup("ssmcp.exec.start").unwrap();
+        let before = registry
+            .replace(
+                Provider::Codex,
+                vec![
+                    tool("codex.keep"),
+                    tool("codex.change"),
+                    tool("codex.remove"),
+                ],
+            )
+            .unwrap();
+        let old = registry.lookup("codex.keep").unwrap();
+        let removed = registry.lookup("codex.remove").unwrap();
+        let (key_pointer, native_pointer, descriptor) = {
+            let state = registry.state.read().unwrap();
+            let (key, stored) = state.tools.get_key_value("codex.keep").unwrap();
+            (
+                key.as_ptr(),
+                stored.native_name.as_ptr(),
+                stored.descriptor.clone(),
+            )
+        };
+
+        let mut changed = tool("codex.change");
+        changed["inputSchema"]["additionalProperties"] = false.into();
+        let generation = registry
+            .replace(
+                Provider::Codex,
+                vec![
+                    tool("codex.keep"),
+                    changed.clone(),
+                    tool("codex.new1"),
+                    tool("codex.new2"),
+                ],
+            )
+            .unwrap();
+        assert!(generation > before);
+        {
+            let state = registry.state.read().unwrap();
+            let (key, stored) = state.tools.get_key_value("codex.keep").unwrap();
+            assert_eq!(key.as_ptr(), key_pointer);
+            assert_eq!(stored.native_name.as_ptr(), native_pointer);
+            assert!(stored.descriptor.shares_storage(&descriptor));
+            assert!(
+                state
+                    .tools
+                    .values()
+                    .filter(|tool| tool.provider == Provider::Codex)
+                    .all(|tool| tool.generation == generation)
+            );
+        }
+        assert!(registry.validate(&old).is_err());
+        assert!(registry.validate(&removed).is_err());
+        assert!(registry.lookup("codex.remove").is_err());
+        assert!(
+            registry
+                .validate(&registry.lookup("codex.keep").unwrap())
+                .is_ok()
+        );
+        assert_eq!(registry.lookup("codex.change").unwrap().descriptor, changed);
+        assert!(registry.lookup("codex.new1").is_ok());
+        assert!(registry.lookup("codex.new2").is_ok());
+        assert!(registry.validate(&other).is_ok());
+    }
+
     #[test]
     fn names_are_injective_and_missing_schemas_are_not_invented() {
         assert_ne!(component("a.b"), component("a_b"));
