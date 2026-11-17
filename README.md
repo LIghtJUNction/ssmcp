@@ -286,9 +286,19 @@ return await outputs.read(clientId, { id: artifactId, offset: 0, max_bytes: 1638
 
 转储默认保留 24 小时，已结束文件总量上限为 512 MiB，单文件上限为 256 MiB；超限或写入失败会明确标记不完整。输出 ID、任务与审计归属于原连接，另一连接不能因使用同一系统账户而读取它们。清理跳过活动文件，运行期间每 60 秒执行。`outputs.stat` 检查元数据，`outputs.cleanup` 可立即执行相同清理策略。带标题连接和重载原语需先升级两端。[完整接口、兼容性与输出范围](docs/session-control.md)
 
-## 技能摘要、AGENTS.md 与文本原语
+## 项目上下文：MCP 资源与 code_mode
 
-通过 code_mode 原生生成技能摘要、读取适用于目标路径的指令文件，并直接处理 UTF-8 文本：
+MCP 资源直接提供项目 AGENTS.md 内容、技能摘要、技能全文和项目叠加全局的技能视图。每次读取都检查客户端当前文件，编辑、添加或删除后重新读取即可生效。
+
+| 资源路径（位于 ssmcp://clients/{id} 下） | 内容 |
+| --- | --- |
+| /agents | 当前目录适用的指令全文与来源 |
+| /skills | 项目技能摘要，含全文 readUri |
+| /skills?scope=effective | 项目覆盖同名全局技能后的有效摘要 |
+| /skills/view | 可直接阅读的有效技能视图 |
+| /skills/read?root=...&path=... | 指定技能的完整原文 |
+
+宿主可直接调用标准 resources/read。code_mode 保留等价原语，并支持 UTF-8 文本读写：
 
 ~~~js
 return await skills.view(clientId);
@@ -306,9 +316,23 @@ return await fs.readText(clientId, {path: "README.md"});
 
 成功读写产生文件审计事件；提交成功的可比较文本记录真实增删行数，小 Diff 保留全文，大 Diff 复用输出存储。缺失、可读文本和未知快照分别处理，敏感路径、二进制或不可读内容不会产生伪造的 Diff。技能的发现、读取与实际调用分开记录；读取 `SKILL.md` 不证明模型使用了技能。Harness 外部文件副作用保持 unknown，终端和 JSONL 日志使用脱敏副本。[审计范围与事件](docs/backends.md#文件与技能审计)
 
-默认以客户端启动目录为根；全局技能或上层规则可通过重复的 --context-root PATH 加入只读上下文视图。context.roots(clientId) 返回可选择的根 ID。普通文件写入范围独立于这些只读配置。
+默认以客户端启动目录为项目根；全局技能或上层规则通过重复的 --context-root PATH 加入只读上下文视图。skills.view 默认合并这些已授予根，同名项目技能优先，结果标明来源和被覆盖条目。context.roots(clientId) 返回可选择的根 ID。资源不发送订阅通知，宿主通过重新读取获取当前内容。
 
 [完整接口与示例](docs/context.md) · [上下文能力验收记录](docs/validation-context-primitives.md)
+
+## RTK 命令输出压缩
+
+code_mode 的 rtk 原语调用设备上已有的 RTK，并沿用独立命令任务、超时和输出读取能力：
+
+~~~js
+return await rtk.run(clientId, {
+  command: ["git", "status"],
+  cwd: ".",
+  wait_ms: 5000
+});
+~~~
+
+rtk.status(clientId) 返回安装可用性和版本；rtk.start 启动后台任务，随后使用 exec.read/wait/cancel。command 是不含 rtk 前缀的参数数组，参数按原样传递，结果保留退出码和 RTK 的原文恢复提示。命令输出压缩取决于 RTK 对相应子命令的支持。[完整用法](docs/rtk.md)
 
 ## 文件同步、端口映射和动态资源
 
