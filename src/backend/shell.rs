@@ -132,6 +132,9 @@ struct Job {
     input_mode: InputMode,
     stdin: AsyncMutex<Option<ChildStdin>>,
     input_stopped: watch::Sender<bool>,
+    observation: Mutex<Option<crate::observer::Lease>>,
+    output_mode: &'static str,
+    tty_slot: Option<usize>,
 }
 impl Job {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -143,6 +146,7 @@ impl Job {
             "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
             "duration_ms":state.finished.unwrap_or_else(Instant::now).duration_since(self.started).as_millis() as u64,
+            "output_mode":self.output_mode,"tty_slot":self.tty_slot,
             "stdin":self.input_snapshot(state),
             "stdout":state.stdout.metadata(),"stderr":state.stderr.metadata()})
     }
@@ -183,6 +187,7 @@ pub struct Shell {
     registry: Mutex<Registry>,
     slots: Arc<Semaphore>,
     events: Arc<EventLog>,
+    observer: Option<Arc<crate::observer::Pool>>,
 }
 impl Shell {
     pub fn new() -> Arc<Self> {
@@ -206,6 +211,7 @@ impl Shell {
         let events = EventLog::with_output("shell", output.clone());
         Ok(Arc::new(Self {
             root,
+            observer: output.observer(),
             output,
             namespace,
             registry: Mutex::new(Registry::default()),
@@ -225,7 +231,7 @@ impl Shell {
         vec![
             tool(
                 "ssmcp.exec.start",
-                "Start an independent argv command immediately and return job_id. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked.",
+                "Start an independent argv command immediately and return job_id. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. With --tty on Unix, output_mode is pty and stdout contains the combined terminal stream; stdin remains null or pipe.",
                 json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":MAX_COMMAND_ARGS},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
@@ -300,7 +306,7 @@ impl Shell {
     }
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         match name {
-            "ssmcp.exec.start" => self.start(args),
+            "ssmcp.exec.start" => self.start(args).await,
             "ssmcp.exec.write" => self.write_input(args).await,
             "ssmcp.exec.list" => {
                 empty(args)?;
@@ -473,7 +479,7 @@ impl Shell {
         Ok(result)
     }
 
-    fn start(&self, args: Value) -> Result<Value, String> {
+    async fn start(&self, args: Value) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Start {
@@ -529,6 +535,16 @@ impl Shell {
         let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
             format!("at most {MAX_JOBS} commands may run at once; wait or cancel an existing job")
         })?;
+        let id = format!(
+            "{}-{:x}",
+            self.namespace,
+            NEXT_JOB.fetch_add(1, Ordering::Relaxed)
+        );
+        let observation = match &self.observer {
+            Some(pool) => Some(pool.begin(id.clone(), &json!(args.command), &cwd).await?),
+            None => None,
+        };
+        let tty_slot = observation.as_ref().map(crate::observer::Lease::slot_id);
         let mut registry = self.registry();
         if registry.closed {
             return Err("shell command manager is closed".into());
@@ -554,27 +570,54 @@ impl Shell {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let pty_reader: Option<Box<dyn AsyncRead + Unpin + Send>> = {
+            #[cfg(unix)]
+            {
+                if let Some(lease) = &observation {
+                    let (reader, stdout, stderr) = crate::observer::pty::Output::open(lease)
+                        .map_err(|error| format!("could not open command PTY: {error}"))?;
+                    command
+                        .stdout(stdout)
+                        .stderr(stderr)
+                        .env("TERM", "xterm-256color");
+                    Some(Box::new(reader))
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        };
+        let output_mode = if pty_reader.is_some() { "pty" } else { "pipes" };
         if let Some(env) = args.env {
             command.envs(env);
         }
         let mut process =
             Managed::spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
         let pid = process.child.id().ok_or("command has no process ID")?;
-        let stdout = process
-            .child
-            .stdout
-            .take()
-            .ok_or("command stdout unavailable")?;
-        let stderr = process
-            .child
-            .stderr
-            .take()
-            .ok_or("command stderr unavailable")?;
-        let id = format!(
-            "{}-{:x}",
-            self.namespace,
-            NEXT_JOB.fetch_add(1, Ordering::Relaxed)
-        );
+        let stdout: Box<dyn AsyncRead + Unpin + Send> = match pty_reader {
+            Some(reader) => reader,
+            None => Box::new(
+                process
+                    .child
+                    .stdout
+                    .take()
+                    .ok_or("command stdout unavailable")?,
+            ),
+        };
+        let stderr: Box<dyn AsyncRead + Unpin + Send> = if output_mode == "pty" {
+            Box::new(tokio::io::empty())
+        } else {
+            Box::new(
+                process
+                    .child
+                    .stderr
+                    .take()
+                    .ok_or("command stderr unavailable")?,
+            )
+        };
         let (cancel, cancel_rx) = watch::channel(false);
         let (input_stopped, _) = watch::channel(args.stdin != InputMode::Pipe);
         let job = Arc::new(Job {
@@ -601,6 +644,9 @@ impl Shell {
             input_mode: args.stdin,
             stdin: AsyncMutex::new(process.child.stdin.take()),
             input_stopped,
+            observation: Mutex::new(observation),
+            output_mode,
+            tty_slot,
         });
         // A failed spawn must leave the retained history untouched.
         if let Some(id) = &evicted {
@@ -646,6 +692,21 @@ impl Shell {
                 state.error = outcome.3;
                 state.exit_signal = outcome.4;
                 state.finished = Some(Instant::now());
+            }
+            if let Some(lease) = worker.observation.lock().unwrap().take() {
+                let state = worker.state();
+                let status = if state.cancelled {
+                    "cancelled".into()
+                } else if state.timed_out {
+                    "timed out".into()
+                } else if let Some(error) = &state.error {
+                    format!("failed: {error}")
+                } else if let Some(code) = state.exit_code {
+                    format!("exit {code}")
+                } else {
+                    format!("signal {}", state.exit_signal.unwrap_or(0))
+                };
+                lease.finish(&status);
             }
             // Release the running slot before publishing completion to waiters.
             drop(permit);
@@ -752,6 +813,9 @@ async fn capture<R: AsyncRead + Unpin>(
                 break;
             }
             Ok(count) => {
+                if let Some(lease) = job.observation.lock().unwrap().as_ref() {
+                    lease.append(&buffer[..count]);
+                }
                 let (offset, notice) = {
                     let mut state = job.state();
                     let output = if stream == "stdout" {
@@ -919,6 +983,9 @@ mod tests {
             input_mode: InputMode::Null,
             stdin: AsyncMutex::new(None),
             input_stopped,
+            observation: Mutex::new(None),
+            output_mode: "pipes",
+            tty_slot: None,
         })
     }
 

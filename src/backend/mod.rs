@@ -77,6 +77,7 @@ impl Driver {
 
 pub struct Backend {
     terminal: Arc<Terminals>,
+    observer: Option<Arc<crate::observer::Pool>>,
     shell: Arc<shell::Shell>,
     pub(crate) registry: Arc<Registry>,
     output: Arc<OutputStore>,
@@ -96,11 +97,36 @@ impl Backend {
         )
         .await
     }
+    pub async fn start_with_tty(shell_path: &Path, tty: Option<&str>) -> crate::Result<Arc<Self>> {
+        let observer = match tty {
+            Some(terminal) => Some(crate::observer::Pool::new(terminal).await?),
+            None => None,
+        };
+        Self::with_observer(
+            shell_path,
+            std::env::current_dir()?,
+            OutputStore::new_connection()?,
+            observer,
+        )
+        .await
+    }
+
     pub async fn with_output(
         shell_path: &Path,
         root: PathBuf,
         output: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
+        Self::with_observer(shell_path, root, output, None).await
+    }
+    async fn with_observer(
+        shell_path: &Path,
+        root: PathBuf,
+        output: Arc<OutputStore>,
+        observer: Option<Arc<crate::observer::Pool>>,
+    ) -> crate::Result<Arc<Self>> {
+        if let Some(observer) = &observer {
+            output.set_observer(observer);
+        }
         let terminal = Terminals::new(shell_path, root.clone(), output.clone())?;
         let shell = shell::Shell::with_workspace(root, output.clone())?;
         let registry = Registry::new();
@@ -117,6 +143,7 @@ impl Backend {
         })])?;
         let backend = Arc::new(Self {
             terminal,
+            observer,
             shell,
             registry,
             output,
@@ -345,7 +372,18 @@ impl Backend {
                     .cloned()
                     .ok_or("provider is no longer connected; refresh tools")?;
                 self.registry.validate(tool)?;
-                driver.call(&tool.native_name, arguments).await
+                let observation = match &self.observer {
+                    Some(pool) => {
+                        pool.native_begin(provider.label(), &tool.native_name, &arguments)
+                            .await?
+                    }
+                    None => None,
+                };
+                let result = driver.call(&tool.native_name, arguments).await;
+                if let (Some(pool), Some(lease)) = (&self.observer, observation) {
+                    pool.native_finish(lease, &result);
+                }
+                result
             }
             _ => Err("provider belongs to the workspace runtime".into()),
         }
@@ -370,6 +408,9 @@ impl Backend {
             self.shell.shutdown(),
             futures_util::future::join_all(futures)
         );
+        if let Some(observer) = &self.observer {
+            observer.shutdown();
+        }
     }
 }
 impl Drop for Backend {
