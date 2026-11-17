@@ -30,7 +30,7 @@ static ACTIVITY_TICKER: OnceLock<()> = OnceLock::new();
 // the compositor locks or writes the physical terminal.
 static EMISSION: Mutex<()> = Mutex::new(());
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum LogFormat {
     Pretty,
@@ -82,6 +82,7 @@ pub(crate) fn configure(ui: Ui) {
                         let mut renderer = display.lock().unwrap_or_else(|e| e.into_inner());
                         renderer.width = width;
                         renderer.dashboard_active = dashboard && !renderer.raw;
+                        let _ = renderer.flush_diagnostics_due(&mut bytes, now);
                         if renderer.dashboard_active {
                             Some(renderer.panel_snapshot(now))
                         } else {
@@ -100,6 +101,25 @@ pub(crate) fn configure(ui: Ui) {
             );
         }
     });
+}
+
+pub(crate) fn current_ui() -> Ui {
+    display()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .ui
+        .clone()
+}
+
+pub(crate) fn apply_ui(ui: Ui) {
+    configure(ui);
+}
+
+/// Observational data for alternate frontends. Original request payloads and
+/// terminal input are absent; execution output has its own cursor-based interfaces.
+pub(crate) fn snapshot() -> Value {
+    let renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+    renderer.snapshot(Instant::now())
 }
 
 fn display() -> &'static Mutex<Renderer> {
@@ -234,7 +254,7 @@ struct Lines {
     old: usize,
     new: usize,
     hunk: bool,
-    tone: &'static str,
+    tone: String,
     summarize_json: bool,
     folded_bytes: usize,
 }
@@ -260,6 +280,29 @@ struct Renderer {
     discovery_success: HashMap<String, Value>,
     controllers: HashMap<String, ControllerView>,
     last_controller: Option<ControllerView>,
+    diagnostics: HashMap<String, Diagnostic>,
+}
+
+struct Diagnostic {
+    pending: String,
+    key: String,
+    occurrences: u64,
+    unreported: u64,
+    updated: Instant,
+    reported: Instant,
+}
+
+impl Diagnostic {
+    fn new(now: Instant) -> Self {
+        Self {
+            pending: String::new(),
+            key: String::new(),
+            occurrences: 0,
+            unreported: 0,
+            updated: now,
+            reported: now,
+        }
+    }
 }
 
 struct Request {
@@ -292,6 +335,7 @@ impl Renderer {
             discovery_success: HashMap::new(),
             controllers: HashMap::new(),
             last_controller: None,
+            diagnostics: HashMap::new(),
         }
     }
 
@@ -302,6 +346,7 @@ impl Renderer {
         if self.raw {
             writeln!(out, "{value}")?;
         } else if !controller_event
+            && !self.backend_diagnostic(out, label, value)?
             && !self.activity(out, label, value)?
             && !self.rpc(out, label, value)?
         {
@@ -312,7 +357,7 @@ impl Renderer {
             painted(
                 out,
                 self.color,
-                self.ui.theme.color("gray"),
+                &self.ui.color("gray"),
                 &format!(
                     "[RAW] {}\n",
                     serde_json::to_string_pretty(&debug_metadata(value)).unwrap_or_default()
@@ -320,6 +365,145 @@ impl Renderer {
             )?;
         }
         out.flush()
+    }
+
+    fn snapshot(&self, now: Instant) -> Value {
+        let panel = self.panel_snapshot(now);
+        let controller = |value: &ControllerView| {
+            json!({
+                "request_id":value.request_id,
+                "identity":value.identity,
+                "elapsed_ms":now.saturating_duration_since(value.started).as_millis().min(u128::from(u64::MAX)) as u64
+            })
+        };
+        let git = panel.git.as_ref().map(|git| {
+            json!({
+                "state":match git.status {
+                    super::git_status::GitState::Checking => "checking",
+                    super::git_status::GitState::Ready => "ready",
+                    super::git_status::GitState::NotRepository => "not-repository",
+                    super::git_status::GitState::Unavailable => "unavailable",
+                    super::git_status::GitState::Error => "error",
+                },
+                "branch":git.branch,"head":git.head,"upstream":git.upstream,
+                "ahead":git.ahead,"behind":git.behind,"detached":git.detached,"unborn":git.unborn,
+                "staged":git.staged,"unstaged":git.unstaged,"untracked":git.untracked,"conflicts":git.conflicts,
+                "stale":git.stale,
+                "changed_files":git.changed_files.iter().map(|entry|json!({"status":entry.status,"path":entry.path})).collect::<Vec<_>>(),
+                "history":git.history.commits.iter().map(|commit|json!({"hash":commit.full_hash,"subject":commit.subject,"committed_at_unix":commit.committed_at_unix})).collect::<Vec<_>>(),
+                "history_stale":git.history.stale,"error":git.last_error
+            })
+        });
+        crate::audit::event(json!({
+            "schema_version":1,
+            "controllers":panel.controllers.iter().map(controller).collect::<Vec<_>>(),
+            "last_controller":panel.last_controller.as_ref().map(controller),
+            "tasks":self.activities.snapshot().iter().map(|task|json!({
+                "id":task.id,"display_id":short_id(&task.id),"description":task.description,"cwd":task.cwd.as_deref().map(|cwd|self.path_label(cwd)),
+                "elapsed_ms":now.saturating_duration_since(task.started).as_millis().min(u128::from(u64::MAX)) as u64
+            })).collect::<Vec<_>>(),
+            "progress":panel.progress.iter().map(|progress|json!({
+                "source":progress.source,"message":progress.message,"value":progress.value,"total":progress.total,
+                "age_ms":now.saturating_duration_since(progress.updated).as_millis().min(u128::from(u64::MAX)) as u64
+            })).collect::<Vec<_>>(),
+            "git":git,
+            "diagnostics":self.diagnostics.iter().filter(|(_, item)|item.occurrences > 0).map(|(source,item)|json!({
+                "source":source,"occurrences":item.occurrences,"folded":item.occurrences.saturating_sub(1),
+                "message":diagnostic_summary(&item.key),
+                "age_ms":now.saturating_duration_since(item.updated).as_millis().min(u128::from(u64::MAX)) as u64
+            })).collect::<Vec<_>>()
+        }))
+    }
+
+    fn backend_diagnostic(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<bool> {
+        if self.verbose || !matches!(value["type"].as_str(), Some("stderr" | "ssmcp.stderr")) {
+            return Ok(false);
+        }
+        let Some(text) = value["text"].as_str() else { return Ok(false); };
+        let now = Instant::now();
+        if self.diagnostics.len() >= 64 && !self.diagnostics.contains_key(label)
+            && let Some(oldest) = self.diagnostics.iter().min_by_key(|(_,item)|item.updated).map(|(source,_)|source.clone())
+        {
+            self.finish_diagnostic(out, &oldest)?;
+            self.diagnostics.remove(&oldest);
+        }
+        let mut diagnostic = self.diagnostics.remove(label).unwrap_or_else(|| Diagnostic::new(now));
+        diagnostic.pending.push_str(text);
+        while let Some(end) = diagnostic.pending.find(['\n', '\r']) {
+            let line = diagnostic.pending[..end].to_owned();
+            diagnostic.pending.drain(..=end);
+            self.diagnostic_line(out, label, &mut diagnostic, &line, now)?;
+        }
+        if diagnostic.pending.len() > 64 * 1024 {
+            let line = std::mem::take(&mut diagnostic.pending);
+            self.diagnostic_line(out, label, &mut diagnostic, &line, now)?;
+        }
+        diagnostic.updated = now;
+        self.diagnostics.insert(label.into(), diagnostic);
+        Ok(true)
+    }
+
+    fn diagnostic_line(&mut self, out: &mut impl Write, label: &str, diagnostic: &mut Diagnostic, text: &str, now: Instant) -> io::Result<()> {
+        let text = clean(text);
+        if text.trim().is_empty() { return Ok(()); }
+        let normalized = diagnostic_key(&text);
+        if normalized == diagnostic.key && diagnostic.occurrences > 0 {
+            diagnostic.occurrences = diagnostic.occurrences.saturating_add(1);
+            diagnostic.unreported = diagnostic.unreported.saturating_add(1);
+            diagnostic.updated = now;
+            return Ok(());
+        }
+        self.report_diagnostic_repeats(out, label, diagnostic, now)?;
+        diagnostic.key = normalized;
+        diagnostic.occurrences = 1;
+        diagnostic.updated = now;
+        diagnostic.reported = now;
+        if diagnostic.key.contains("AuthRequired") || diagnostic.key.contains("auth_required") {
+            self.block(out, label, "Warning", &diagnostic_summary(&diagnostic.key))
+        } else {
+            self.block(out, label, "stderr", &text)
+        }
+    }
+
+    fn report_diagnostic_repeats(&mut self, out: &mut impl Write, label: &str, diagnostic: &mut Diagnostic, now: Instant) -> io::Result<bool> {
+        if diagnostic.unreported == 0 { return Ok(false); }
+        self.summary(out, label, "Warning", &format!(
+            "same diagnostic ×{} · {} repeats folded · --verbose for full text",
+            diagnostic.occurrences, diagnostic.unreported
+        ))?;
+        diagnostic.unreported = 0;
+        diagnostic.reported = now;
+        Ok(true)
+    }
+
+    fn flush_diagnostics_due(&mut self, out: &mut impl Write, now: Instant) -> io::Result<()> {
+        if self.raw || self.verbose { return Ok(()); }
+        let labels = self.diagnostics.iter().filter(|(_, diagnostic)|
+            (diagnostic.unreported > 0 && now.saturating_duration_since(diagnostic.reported) >= Duration::from_secs(30))
+                || (!diagnostic.pending.is_empty() && now.saturating_duration_since(diagnostic.updated) >= Duration::from_secs(1))
+        ).map(|(label,_)|label.clone()).collect::<Vec<_>>();
+        for label in labels {
+            if let Some(mut diagnostic) = self.diagnostics.remove(&label) {
+                if !diagnostic.pending.is_empty() && now.saturating_duration_since(diagnostic.updated) >= Duration::from_secs(1) {
+                    let pending = std::mem::take(&mut diagnostic.pending);
+                    self.diagnostic_line(out, &label, &mut diagnostic, &pending, now)?;
+                }
+                self.report_diagnostic_repeats(out, &label, &mut diagnostic, now)?;
+                self.diagnostics.insert(label, diagnostic);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_diagnostic(&mut self, out: &mut impl Write, label: &str) -> io::Result<()> {
+        if let Some(mut diagnostic) = self.diagnostics.remove(label) {
+            let now = Instant::now();
+            let pending = std::mem::take(&mut diagnostic.pending);
+            self.diagnostic_line(out, label, &mut diagnostic, &pending, now)?;
+            self.report_diagnostic_repeats(out, label, &mut diagnostic, now)?;
+            self.diagnostics.insert(label.into(), diagnostic);
+        }
+        Ok(())
     }
 
     fn panel_snapshot(&self, now: Instant) -> PanelSnapshot {
@@ -594,7 +778,7 @@ impl Renderer {
                     painted(
                         out,
                         self.color,
-                        self.ui.theme.color("gray"),
+                        &self.ui.color("gray"),
                         &format!("       cwd {}\n", clean(&self.path_label(cwd))),
                     )?;
                 }
@@ -694,7 +878,7 @@ impl Renderer {
                     painted(
                         out,
                         self.color,
-                        self.ui.theme.color("gray"),
+                        &self.ui.color("gray"),
                         &format!("       cwd {}\n", clean(&self.path_label(cwd))),
                     )?;
                 }
@@ -966,7 +1150,7 @@ impl Renderer {
             painted(
                 out,
                 self.color,
-                self.ui.theme.color("gray"),
+                &self.ui.color("gray"),
                 &format!("       {}\n", clean(path)),
             )?;
         }
@@ -974,7 +1158,7 @@ impl Renderer {
             painted(
                 out,
                 self.color,
-                self.ui.theme.color("gray"),
+                &self.ui.color("gray"),
                 &format!("       artifact {} · outputs.read\n", clean(id)),
             )?;
         }
@@ -1212,6 +1396,7 @@ impl Renderer {
     }
 
     fn finish_group(&mut self, out: &mut impl Write, label: &str) -> io::Result<()> {
+        self.finish_diagnostic(out, label)?;
         let prefix = format!("{label}\0");
         let keys: Vec<_> = self
             .streams
@@ -1234,7 +1419,7 @@ impl Renderer {
             painted(
                 out,
                 self.color,
-                self.ui.theme.color("gray"),
+                &self.ui.color("gray"),
                 &format!(
                     "{:02}:{:02}:{:02}.{:03}Z ",
                     sec / 3600,
@@ -1266,7 +1451,7 @@ impl Renderer {
         painted(
             out,
             self.color,
-            self.ui.theme.color(color),
+            &self.ui.color(color),
             &format!("[{tag}] "),
         )
     }
@@ -1321,11 +1506,11 @@ impl Renderer {
         };
         let head = shown - tail;
         let tone = if title == "stderr-error" {
-            self.ui.theme.color("red")
+            self.ui.color("red")
         } else if title == "stderr" {
-            self.ui.theme.color("yellow")
+            self.ui.color("yellow")
         } else {
-            "0"
+            "0".into()
         };
         self.streams.entry(label.into()).or_default().tone = tone;
         for (i, line) in lines.iter().enumerate() {
@@ -1415,7 +1600,7 @@ impl Renderer {
             .width
             .saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str()))
             .max(2);
-        painted(out, self.color, self.ui.theme.color("gray"), &prefix)?;
+        painted(out, self.color, &self.ui.color("gray"), &prefix)?;
         let mut column = 0;
         let mut fragment = String::new();
         for c in clean(text).chars() {
@@ -1432,7 +1617,7 @@ impl Renderer {
                     painted(out, self.color, "0", &fragment)?;
                     fragment.clear();
                     writeln!(out)?;
-                    painted(out, self.color, self.ui.theme.color("gray"), &continuation)?;
+                    painted(out, self.color, &self.ui.color("gray"), &continuation)?;
                     column = 0;
                     if c == '\n' {
                         continue;
@@ -1581,9 +1766,9 @@ impl Renderer {
             }
             let lines = self.streams.entry(key.clone()).or_default();
             lines.tone = if stream == "stderr" {
-                self.ui.theme.color("yellow")
+                self.ui.color("yellow")
             } else {
-                "0"
+                "0".into()
             };
             lines.summarize_json = !self.verbose;
             return self.command_text(out, &key, &String::from_utf8_lossy(&bytes));
@@ -1818,11 +2003,12 @@ impl Renderer {
                     self.width,
                     lines,
                     "JSON output · large record folded; inspect original output",
+                    &self.ui,
                 )?;
             } else if lines.emitted > 0 {
                 render_live(out, self.color, self.width, lines, line, true)?;
             } else {
-                render_line(out, self.color, self.width, lines, line)?;
+                render_line(out, self.color, self.width, lines, line, &self.ui)?;
             }
         }
         // JSON can span many chunks. Keep the display buffer bounded without
@@ -1838,7 +2024,7 @@ impl Renderer {
             if lines.emitted > 0 {
                 render_live(out, self.color, self.width, lines, &line, true)?;
             } else {
-                render_line(out, self.color, self.width, lines, &line)?;
+                render_line(out, self.color, self.width, lines, &line, &self.ui)?;
             }
         }
         Ok(())
@@ -1853,17 +2039,51 @@ impl Renderer {
                     self.width,
                     &mut lines,
                     "JSON output · large record folded; inspect original output",
+                    &self.ui,
                 )?;
             } else if !lines.pending.is_empty() {
                 let line = std::mem::take(&mut lines.pending);
                 if lines.emitted > 0 {
                     render_live(out, self.color, self.width, &mut lines, &line, true)?;
                 } else {
-                    render_line(out, self.color, self.width, &mut lines, &line)?;
+                    render_line(out, self.color, self.width, &mut lines, &line, &self.ui)?;
                 }
             }
         }
         out.flush()
+    }
+}
+
+/// Most backend loggers prefix ISO-8601 timestamps. Ignore only that prefix;
+/// changing server names, error details, and all other text remain distinct.
+fn diagnostic_key(text: &str) -> String {
+    let text = text.trim();
+    let bytes = text.as_bytes();
+    let timestamp = bytes.len() >= 20
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'T'
+        && bytes[13] == b':'
+        && bytes[16] == b':';
+    if timestamp && let Some((_, rest)) = text.split_once(char::is_whitespace) {
+        rest.trim_start().into()
+    } else {
+        text.into()
+    }
+}
+
+fn diagnostic_summary(text: &str) -> String {
+    if text.contains("AuthRequired") || text.contains("auth_required") {
+        let origin = text.find("https://").or_else(|| text.find("http://")).and_then(|start| {
+            let candidate = text[start..].split(['"', '\\', ' ', ')', '}']).next()?;
+            let url = reqwest::Url::parse(candidate).ok()?;
+            Some(url.origin().ascii_serialization())
+        });
+        let server = origin.map(|origin| format!(" ({origin})")).unwrap_or_default();
+        format!("Backend MCP authentication required{server}.\nSign in to that MCP server in this backend, or disable its connector.\nOriginal diagnostics: --verbose or --raw-events.")
+    } else {
+        activity::single_line(text, 240)
     }
 }
 
@@ -2014,7 +2234,7 @@ pub(crate) fn connection(output: &Value) -> io::Result<()> {
             painted(
                 out,
                 renderer.color,
-                renderer.ui.theme.color("blue"),
+                &renderer.ui.color("blue"),
                 concat!("  ssmcp  ", env!("CARGO_PKG_VERSION"), "\n"),
             )?;
             if let Some(title) = output["title"].as_str() {
@@ -2042,7 +2262,7 @@ pub(crate) fn connection(output: &Value) -> io::Result<()> {
             painted(
                 out,
                 renderer.color,
-                renderer.ui.theme.color("gray"),
+                &renderer.ui.color("gray"),
                 "\n  Commands run here. Parallel jobs keep separate output.\n  Ctrl-C disconnects and stops owned processes.\n\n",
             )?;
         }
@@ -2131,7 +2351,7 @@ fn render_live(
         if lines.tone.is_empty() {
             "0"
         } else {
-            lines.tone
+            &lines.tone
         },
         &fragment,
     )
@@ -2151,6 +2371,7 @@ fn render_line(
     width: usize,
     lines: &mut Lines,
     line: &str,
+    ui: &Ui,
 ) -> io::Result<()> {
     let outline = if lines.summarize_json && json_record(line) {
         serde_json::from_str::<Value>(line)
@@ -2178,7 +2399,7 @@ fn render_line(
         || line.starts_with("index ")
     {
         lines.hunk = false;
-        "1"
+        "1".to_owned()
     } else if line.starts_with("@@ ") {
         let mut fields = line.split_whitespace().skip(1);
         lines.old = fields
@@ -2190,40 +2411,40 @@ fn render_line(
             .and_then(|s| s.trim_start_matches('+').split(',').next()?.parse().ok())
             .unwrap_or(0);
         lines.hunk = true;
-        "36"
+        ui.color("cyan")
     } else if lines.hunk && line.starts_with('+') {
         prefix = format!("      {:>5} │ ", lines.new);
         lines.new += 1;
-        "32"
+        ui.color("green")
     } else if lines.hunk && line.starts_with('-') {
         prefix = format!("{:>5}       │ ", lines.old);
         lines.old += 1;
-        "31"
+        ui.color("red")
     } else if lines.hunk && line.starts_with(' ') {
         prefix = format!("{:>5} {:>5} │ ", lines.old, lines.new);
         lines.old += 1;
         lines.new += 1;
-        "90"
+        ui.color("gray")
     } else if failure {
         prefix = "[ERR ] ".into();
-        "31;1"
+        ui.color("red")
     } else if progress {
         prefix = "[PROG] ".into();
-        "33;1"
+        ui.color("yellow")
     } else if outline.is_none() && (lower.starts_with("warning") || lower.contains("retrying")) {
         prefix = "[WARN] ".into();
-        "33;1"
+        ui.color("yellow")
     } else {
         if lines.tone.is_empty() {
-            "0"
+            ui.color("foreground")
         } else {
-            lines.tone
+            lines.tone.clone()
         }
     };
     // Keep diff/source columns intact. Prose wraps without dropping characters.
     let text = format!("{prefix}{line}");
     if lines.hunk || code == "1" {
-        return painted(out, color, code, &format!("{text}\n"));
+        return painted(out, color, &code, &format!("{text}\n"));
     }
     let mut column = 0;
     let mut wrapped = String::new();
@@ -2236,7 +2457,7 @@ fn render_line(
         wrapped.push(c);
         column += cells;
     }
-    painted(out, color, code, &format!("  {wrapped}\n"))
+    painted(out, color, &code, &format!("  {wrapped}\n"))
 }
 
 fn clean(text: &str) -> String {
@@ -2395,6 +2616,85 @@ mod tests {
     }
 
     #[test]
+    fn repeated_backend_auth_errors_fold_across_chunks_and_timestamps() {
+        let mut renderer = Renderer::new(false, false, 120);
+        let mut out = Vec::new();
+        for second in 0..8 {
+            let line = format!("2026-11-17T17:26:{second:02}.123456Z ERROR rmcp::transport::worker: Worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError {{ www_authenticate_header: resource_metadata=\\\"https://api.x.com/.well-known/oauth-protected-resource\\\" }})\n");
+            let mid = line.len() / 2;
+            for chunk in [&line[..mid], &line[mid..]] {
+                renderer.event(&mut out, "codex", &json!({"type":"stderr","text":chunk})).unwrap();
+            }
+        }
+        renderer.finish_group(&mut out, "codex").unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.matches("Backend MCP authentication required").count(), 1, "{text}");
+        assert!(text.contains("https://api.x.com"), "{text}");
+        assert!(text.contains("same diagnostic ×8") && text.contains("7 repeats folded"), "{text}");
+        assert!(!text.contains("Worker quit") && !text.contains('\x1b'), "{text}");
+        let snapshot = renderer.snapshot(Instant::now());
+        assert_eq!(snapshot["schema_version"], 1);
+        assert_eq!(snapshot["diagnostics"][0]["occurrences"], 8);
+    }
+
+    #[test]
+    fn diagnostic_folding_preserves_distinct_failures_and_source_boundaries() {
+        let mut renderer = Renderer::new(false, false, 120);
+        let mut out = Vec::new();
+        for (source, text) in [
+            ("codex", "2026-11-17T17:26:00Z error: server one unavailable\n"),
+            ("codex", "2026-11-17T17:26:01Z error: server one unavailable\n"),
+            ("claude", "2026-11-17T17:26:01Z error: server one unavailable\n"),
+            ("codex", "2026-11-17T17:26:02Z error: server two unavailable\n"),
+        ] {
+            renderer.event(&mut out, source, &json!({"type":"stderr","text":text})).unwrap();
+        }
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.matches("server one unavailable").count(), 2, "{text}");
+        assert_eq!(text.matches("server two unavailable").count(), 1, "{text}");
+        assert!(text.contains("same diagnostic ×2"), "{text}");
+        assert!(text.contains("claude"), "{text}");
+    }
+
+    #[test]
+    fn repeated_backend_diagnostics_remain_complete_in_jsonl_and_verbose() {
+        let events = [
+            json!({"type":"stderr","text":"2026-11-17T17:26:00Z error: sample\n"}),
+            json!({"type":"stderr","text":"2026-11-17T17:26:01Z error: sample\n"}),
+        ];
+        let raw = render(&events, true, false);
+        let decoded = raw.lines().map(|line|serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        assert_eq!(decoded, events);
+        let mut renderer = Renderer::new(false, false, 120);
+        renderer.verbose = true;
+        let mut out = Vec::new();
+        for event in &events { renderer.event(&mut out, "codex", event).unwrap(); }
+        assert!(renderer.diagnostics.is_empty());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("17:26:00Z") && text.contains("17:26:01Z"));
+        assert!(!text.contains("repeats folded"));
+    }
+
+    #[test]
+    fn diagnostic_repeat_notice_has_bounded_cadence_and_snapshot_redacts_secrets() {
+        let mut renderer = Renderer::new(false, false, 140);
+        let mut out = Vec::new();
+        for _ in 0..3 {
+            renderer.event(&mut out,"codex",&json!({"type":"stderr","text":"warning: password=fixture-secret\n"})).unwrap();
+        }
+        let reported = renderer.diagnostics["codex"].reported;
+        let before = out.len();
+        renderer.flush_diagnostics_due(&mut out, reported + Duration::from_secs(29)).unwrap();
+        assert_eq!(out.len(), before);
+        renderer.flush_diagnostics_due(&mut out, reported + Duration::from_secs(30)).unwrap();
+        assert!(out.len() > before);
+        let after = out.len();
+        renderer.flush_diagnostics_due(&mut out, reported + Duration::from_secs(60)).unwrap();
+        assert_eq!(out.len(), after);
+        assert!(!renderer.snapshot(Instant::now()).to_string().contains("fixture-secret"));
+    }
+
+    #[test]
     fn tty_and_no_color_policy() {
         assert!(color_enabled(true, false));
         assert!(!color_enabled(true, true));
@@ -2463,9 +2763,9 @@ mod tests {
         let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,2 +2,2 @@\n-old\n+new\n same\n";
         let whole = render(&[json!({"delta":diff})], false, true);
         assert!(whole.contains("\x1b[1mdiff --git"));
-        assert!(whole.contains("\x1b[36m@@"));
-        assert!(whole.contains("\x1b[31m    2       │ -old"));
-        assert!(whole.contains("\x1b[32m          2 │ +new"));
+        assert!(whole.contains(&format!("\x1b[{}m@@", Ui::default().color("cyan"))));
+        assert!(whole.contains(&format!("\x1b[{}m    2       │ -old", Ui::default().color("red"))));
+        assert!(whole.contains(&format!("\x1b[{}m          2 │ +new", Ui::default().color("green"))));
         assert!(whole.contains("    3     3 │  same"));
         for split in 1..diff.len() {
             let chunks = [
@@ -2505,8 +2805,8 @@ mod tests {
             "cmd=sh -c",
             "cwd=/project",
             "timeout=1.000s",
-            "\x1b[34;1m",
-            "\x1b[32;1m",
+            &format!("\x1b[{}m", Ui::default().color("blue")),
+            &format!("\x1b[{}m", Ui::default().color("green")),
         ] {
             assert!(
                 text.contains(expected) || clean(&text).contains(expected),
@@ -2538,7 +2838,7 @@ mod tests {
     fn rpc_protocol_errors_keep_codes_while_raw_logs_omit_arbitrary_messages() {
         let event = json!({"id":"r3","error":{"code":-32601,"message":"unsupported method"}});
         let text = render(std::slice::from_ref(&event), false, true);
-        assert!(text.contains("\x1b[31;1m"));
+        assert!(text.contains(&format!("\x1b[{}m", Ui::default().color("red"))));
         assert!(text.contains("-32601"));
         assert!(!text.contains("unsupported method"));
         assert_eq!(
@@ -2626,8 +2926,8 @@ mod tests {
             })
         };
         let whole = render(&[delta(diff)], false, true);
-        assert!(whole.contains("\x1b[31m    2       │ -old"));
-        assert!(whole.contains("\x1b[32m          2 │ +new"));
+        assert!(whole.contains(&format!("\x1b[{}m    2       │ -old", Ui::default().color("red"))));
+        assert!(whole.contains(&format!("\x1b[{}m          2 │ +new", Ui::default().color("green"))));
         for split in 1..diff.len() {
             assert_eq!(
                 render(&[delta(&diff[..split]), delta(&diff[split..])], false, true),
@@ -2729,7 +3029,7 @@ mod tests {
             false,
             true,
         );
-        for expected in ["[PROG]", "[WARN]", "[ERR ]", "\x1b[31;1m"] {
+        for expected in ["[PROG]", "[WARN]", "[ERR ]", &format!("\x1b[{}m", Ui::default().color("red"))] {
             assert!(text.contains(expected), "{text}");
         }
         assert_eq!(clean("a\rb\r\nc"), "a\nb\nc");
@@ -2782,7 +3082,7 @@ mod tests {
         r.event(&mut out, "codex", &json!({"id":"t","error":"failed"}))
             .unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("38;5;167"));
+        assert!(text.contains(super::super::ui::Theme::Nord.color("red")));
         assert!(clean(&text).contains("Z ["));
         let mut r = Renderer::new(true, true, 100);
         r.ui.timestamps = true;
@@ -2790,6 +3090,20 @@ mod tests {
         let event = json!({"type":"ssmcp.status","level":"Error","message":"x\ny"});
         r.event(&mut out, "codex", &event).unwrap();
         assert_eq!(out, format!("{event}\n").as_bytes());
+    }
+
+    #[test]
+    fn custom_palette_applies_to_diagnostic_bodies_and_status_headings() {
+        let mut renderer = Renderer::new(false, true, 120);
+        renderer.ui.colors.error = "#123456".into();
+        renderer.ui.colors.warning = "#987654".into();
+        let mut out = Vec::new();
+        renderer.event(&mut out, "codex", &json!({"type":"stderr","text":"fatal: unavailable\n"})).unwrap();
+        renderer.event(&mut out, "client", &json!({"type":"ssmcp.status","level":"Error","message":"failed"})).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("\x1b[38;2;18;52;86m  [ERR ] fatal"), "{text}");
+        assert!(text.contains("\x1b[38;2;18;52;86m[ERR ]"), "{text}");
+        assert!(text.contains("\x1b[38;2;152;118;84m[STDERR]"), "{text}");
     }
 
     #[test]

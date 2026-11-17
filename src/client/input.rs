@@ -102,6 +102,7 @@ async fn forward_keys(terminals: &Terminals, events: Vec<InputEvent>) -> Result<
         match event {
             InputEvent::Text(text) => {
                 let text = super::terminal::keyboard(&text);
+                apply_display_changes(terminals).await?;
                 forward_local(terminals, &text).await;
             }
             InputEvent::NextTerminal => terminals.cycle()?,
@@ -121,6 +122,7 @@ async fn forward_human(
 async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Result<(), String> {
     forward_keys(terminals, keys.feed("", Instant::now(), true)).await?;
     let keyboard = super::terminal::take_keyboard();
+    apply_display_changes(terminals).await?;
     if !keyboard.is_empty() {
         forward_local(terminals, &keyboard).await;
     }
@@ -133,6 +135,13 @@ async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Resul
         if let Err(error) = forward(&terminal, text).await {
             crate::client::render::status("input", "Warning", &format!("terminal {id}: {error}"));
         }
+    }
+    Ok(())
+}
+
+async fn apply_display_changes(terminals: &Terminals) -> Result<(), String> {
+    if let Some((rows, cols)) = super::interface::apply_pending()? {
+        terminals.resize_all(rows, cols).await?;
     }
     Ok(())
 }

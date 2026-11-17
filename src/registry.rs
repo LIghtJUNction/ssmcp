@@ -10,6 +10,7 @@ use std::{
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     Terminal,
+    Ui,
     Exec,
     Browser,
     Computer,
@@ -32,6 +33,7 @@ impl Provider {
     pub fn label(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
+            Self::Ui => "ui",
             Self::Exec => "exec",
             Self::Browser => "browser",
             Self::Computer => "computer",
@@ -230,6 +232,7 @@ fn prepare(
         };
         let allowed = match provider {
             Provider::Terminal => id.starts_with("terminal."),
+            Provider::Ui => id.starts_with("ssmcp.ui."),
             Provider::Exec => id.starts_with("ssmcp.exec."),
             Provider::Browser => id.starts_with("ssmcp.browser."),
             Provider::Computer => id.starts_with("ssmcp.computer."),

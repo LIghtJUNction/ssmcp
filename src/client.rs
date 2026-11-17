@@ -2,6 +2,7 @@
 mod account;
 mod git_status;
 pub(crate) mod input;
+pub(crate) mod interface;
 mod onboarding;
 mod panel;
 #[cfg(test)]
@@ -11,6 +12,7 @@ pub(crate) mod reload;
 pub(crate) mod render;
 pub(crate) mod terminal;
 pub(crate) mod ui;
+mod ui_command;
 
 use crate::{
     backend::Backend,
@@ -54,6 +56,7 @@ Usage: ssmcp login [--server URL] [--no-browser]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [NAME|list] [--read-only]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
+       ssmcp ui <show|check|init|preview> [--ui-config FILE]
 
   --server URL         HTTPS server (default: the account used by ssmcp login)
   -i, --interactive    Select an authorized account session and open its terminal
@@ -78,7 +81,7 @@ Usage: ssmcp login [--server URL] [--no-browser]
   --verbose            Alias for --log-format pretty-verbose
   --raw, --raw-events   Alias for --log-format jsonl
   --ui-config FILE     Local [ui] TOML; default ~/.config/ssmcp/config.toml
-  --theme NAME         minimal, codex-dark, nord, or solarized
+  --theme NAME         minimal, codex-dark, nord, solarized, or light
   --timestamps         Show UTC timestamps on event headings
   --max-inline-output N  Maximum lines per buffered output block (default 12)
   --list-tools         Discover native and workspace tools as JSON, then exit without SSH
@@ -1040,6 +1043,9 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "ui") {
+        return ui_command::run(args.into_iter().skip(1).collect()).await;
+    }
     if account::dispatch(&args).await? {
         return Ok(());
     }
@@ -1173,6 +1179,7 @@ pub async fn run() -> crate::Result<()> {
         ui.log_format = render::LogFormat::Jsonl;
         ui.show_raw_json = false;
     }
+    interface::initialize_path(options.ui_config.as_deref());
     render::configure(ui.clone());
     let mut attachment = if let Some(runner) = &service {
         Some(crate::session::attach::serve(runner.directory().to_path_buf(), None).await?)
