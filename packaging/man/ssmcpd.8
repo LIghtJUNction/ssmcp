@@ -264,3 +264,15 @@ Set oauth.client_registry in TOML, SSMCP_CLIENT_REGISTRY, or
 to select another private file. Save failures reject registration with HTTP 503.
 Corrupt files, unsafe permissions, issuer mismatch and lock conflicts fail startup.
 Access tokens, refresh tokens and pending authorization remain process-local.
+
+.SH ACCOUNT ADMINISTRATION
+Clients connect with ssmcp username@server and complete GitHub authorization automatically.
+The portal.admin_usernames array grants administrator access to already registered
+ssmcp usernames. Unknown or banned usernames prevent startup. Administrators can
+view users and connections, disconnect sessions, ban or unban users and set relay
+bandwidth at /account/admin. Banning revokes existing credentials and connections.
+.PP
+portal.default_rate_limit_bps defaults to 8388608 bytes per second in each direction
+per account. Connections share that account budget. Per-user overrides are durable
+and take effect on existing connections. Valid rates are 1 through 1073741824.
+The budget counts application messages; TLS overhead and other host traffic are excluded.

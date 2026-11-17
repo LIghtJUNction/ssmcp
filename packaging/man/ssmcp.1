@@ -1,9 +1,10 @@
-.TH SSMCP 1 "2026-11-17" "ssmcp 0.7.0" "User Commands"
+.TH SSMCP 1 "2026-11-18" "ssmcp" "User Commands"
 .SH NAME
 ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .SH SYNOPSIS
-.B ssmcp login
-.RB [ \-\-server " https://origin" ]
+.B ssmcp
+.I username@server
+.RB [ options ]
 .RB [ \-\-no-browser ]
 .PP
 .B ssmcp
@@ -43,7 +44,7 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .RB [ \-\-no-watchdog ]
 .RB [ \-\-reconnect-delay " seconds" ]
 .PP
-.B ssmcp
+.B ssmcp \-\-ssh
 .RB [ \-\-name " name" ]
 .RB [ \-\-title " title" ]
 .RB [ \-\-allow " username@github[,username@github...]" ]
@@ -75,7 +76,7 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .RB [ \-\-cwd " dir" ]
 .RB [ \-\-json ]
 .RI [ "connection options" ]
-.RI [ "[user@]host" ]
+.RI [ "username@server" ]
 .PP
 .B ssmcp attach
 .RI [ list ]
@@ -100,12 +101,14 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .PP
 .B ssmcp service run
 .SH DESCRIPTION
-ssmcp provides a local shell, managed command jobs and file tools. After
-ssmcp login, running ssmcp without an SSH destination connects to the saved
-HTTPS server over WebSocket and grants the signed-in GitHub account access.
-No SSH key or repeated \-\-allow option is needed for this account connection.
+ssmcp provides a local shell, managed command jobs and file tools.
+Run ssmcp username@server to connect over HTTPS and WSS. The first connection
+opens GitHub authorization, binds the chosen server-local username after browser
+confirmation, and continues connecting. Later connections reuse the credential
+for that server. Bare ssmcp reuses the last authorized account.
+No separate login command, SSH key or repeated \-\-allow is required.
 .PP
-An explicit SSH destination uses OpenSSH public-key authentication. An existing
+The \-\-ssh switch or explicit SSH options select legacy OpenSSH public-key authentication. An existing
 client login can supply the user's verified GitHub identity for the SSH allow
 policy; explicit \-\-allow remains available for sharing with other users.
 Without a client login or \-\-allow, SSH connections return the account's
@@ -138,10 +141,21 @@ connection are revoked. GitHub identity grants remain subject to their own
 lifetimes and each currently connected client's allow policy.
 .SH CLIENT ACCOUNTS AND TEMPORARY ACCESS
 .TP
-.B ssmcp login
-Open the server's GitHub authorization flow and save a private credential on this
-device. Use \-\-no-browser to print the authorization URL for manual opening.
-The selected server becomes the default for subsequent account commands.
+.B ssmcp username@server
+Validate the username, automatically obtain GitHub authorization when needed,
+and connect this device. Use \-\-no-browser to print the authorization link and
+confirmation code for another device. The authorized server becomes the default.
+Names are case-insensitive and stored in lowercase. Use 3 through 32 ASCII
+letters, digits, underscores or hyphens; start with a letter and end with a
+letter or digit. Reserved names and the gh- prefix cannot be registered.
+One GitHub account binds one name per server. An occupied name can be used
+only by its registered owner.
+.PP
+Credentials are isolated by HTTPS origin. Expired or revoked credentials restart
+authorization in named foreground sessions. Bans, network failures and server
+errors preserve the credential and do not restart login. Background sessions
+report that authorization is required; authorize in a terminal, then restart
+the saved session. The legacy login subcommand remains available for older scripts.
 .TP
 .B ssmcp whoami
 Verify and display the current GitHub identity and server. \-\-json includes
@@ -196,7 +210,7 @@ Install a system unit with an explicit non-root owner, then enable and start it:
 .nf
 sudo /path/to/ssmcp service install --system --user alice
 sudo systemctl enable --now ssmcp
-ssmcp sessions create dev --allow alice@github my-ssmcp
+ssmcp sessions create dev --ssh --allow alice@github my-ssmcp
 ssmcp attach
 ssmcp attach dev
 .fi
@@ -276,10 +290,23 @@ commands or change access policy. When omitted, no title field is sent.
 A nonempty title requires a server that supports this metadata field.
 .TP
 .BI \-\-server " https://origin"
-Select the HTTPS server for account login, session listing, interactive control,
-invitations or a direct account connection. Without an explicit value, account
-commands use the saved default server. An SSH destination and \-\-server
-cannot be combined. \-\-portal remains the separate SSH setup origin.
+Select the HTTPS server for account operations and connections. Account commands
+use the last authorized server by default. A username@server destination and
+this option must select the same origin. SSH destinations cannot be combined
+with this option.
+.TP
+.BI \-\-username " name"
+Choose a server-local account name when using \-\-server. Equivalent to the
+username part of username@server. Saved background sessions keep this public
+name and origin, never the bearer token.
+.TP
+.B \-\-no-browser
+Print the GitHub authorization URL and confirmation code without launching a
+browser. Open the link on another device and approve the matching request.
+.TP
+.B \-\-ssh
+Explicitly select the legacy SSH transport for a Host alias or user@host.
+The \-F, \-\-identity, valued \-i and \-p options also select SSH.
 .TP
 .BI \-F " file"
 Use a separate OpenSSH client configuration file.
@@ -498,10 +525,11 @@ Both MCP authorization modes complete Authorization Code with S256 PKCE and
 use ssmcp-issued access tokens as Bearer credentials. GitHub tokens are used to read the verified
 identity and are not retained. Repository and email scopes are not requested.
 .PP
-The destination may be a Host alias from ~/.ssh/config. OpenSSH resolves its
-HostName, User, Port, IdentityFile, IdentityAgent and ProxyJump settings. An
-explicit user@host overrides the configured User. Use \-F for a separate
-configuration. Local ssh-agent authentication works without agent forwarding;
+With \-\-ssh or explicit SSH options, the destination may be a Host alias
+from ~/.ssh/config. OpenSSH resolves HostName, User, Port, IdentityFile,
+IdentityAgent and ProxyJump. An explicit SSH user@host overrides the configured
+User; without SSH options, username@server selects HTTPS. Use \-F for a
+separate SSH configuration. Local ssh-agent authentication works without agent forwarding;
 ssmcp disables forwarding, connection multiplexing and remote TTY allocation.
 .PP
 Public keys are managed by the server's OpenSSH authorized_keys policy. A key
@@ -739,7 +767,8 @@ output thresholds.
 
 .SH EXAMPLES
 .nf
-ssmcp login --server https://ssmcp.example.com
+ssmcp alice@ssmcp.example.com --name laptop
+ssmcp alice@ssmcp.example.com --no-browser
 ssmcp whoami
 ssmcp --name laptop
 ssmcp list
@@ -747,12 +776,12 @@ ssmcp -i --client CLIENT_ID
 ssmcp invite --shell sh
 ssmcp invite --shell powershell
 ssmcp --no-watchdog --name one-attempt
-ssmcp --name build-shell user@host
-ssmcp --name build-shell my-server
-ssmcp --name build-shell --title "Fix the client build" my-server
-ssmcp --allow octocat@github --name build-shell my-server
-ssmcp --allow alice@github,bob@github --allow carol@github my-server
-ssmcp --name review --title "Review project" user@host
+ssmcp --ssh --name build-shell user@host
+ssmcp --ssh --name build-shell my-server
+ssmcp --ssh --name build-shell --title "Fix the client build" my-server
+ssmcp --ssh --allow octocat@github --name build-shell my-server
+ssmcp --ssh --allow alice@github,bob@github --allow carol@github my-server
+ssmcp --ssh --name review --title "Review project" user@host
 ssmcp --list-tools
 .fi
 .PP
