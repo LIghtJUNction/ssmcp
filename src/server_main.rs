@@ -45,8 +45,10 @@ Configuration:
   Admin IDs are immutable GitHub numeric ID strings; username entries resolve once at startup.
   Audit: [portal] audit_dir, audit_retention_days (default 7), audit_max_events (default 20000).
   The gateway requires audit_dir when gateway_socket is configured. Portal-only is a socket client.
-  Server settings: [server] listen, public_url, socket.
-  Environment: SSMCP_LISTEN, SSMCP_PUBLIC_URL, SSMCP_SOCKET.
+  Server settings: [server] listen, public_url, socket, client_download_dir.
+  --client-download-dir PATH serves native binaries for temporary device commands.
+  Files: ssmcp-TARGET (Windows: ssmcp-TARGET.exe), from the matching release.
+  Environment: SSMCP_LISTEN, SSMCP_PUBLIC_URL, SSMCP_SOCKET, SSMCP_CLIENT_DOWNLOAD_DIR.
   GitHub: [auth.github] client_id, client_secret (private file mode 0600).
   Callback: PUBLIC_URL/oauth/callback/github. Identity MCP endpoint: PUBLIC_URL/mcp.
 
@@ -74,6 +76,7 @@ struct Config {
     oauth: OAuthConfig,
     github: Option<GitHubConfig>,
     client_registry: Option<PathBuf>,
+    client_download_dir: Option<PathBuf>,
     portal: PortalConfig,
     portal_only: bool,
 }
@@ -124,6 +127,7 @@ struct ServerConfig {
     listen: Option<SocketAddr>,
     public_url: Option<String>,
     socket: Option<PathBuf>,
+    client_download_dir: Option<PathBuf>,
 }
 
 #[derive(Default, Deserialize)]
@@ -218,6 +222,7 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
         }
     }
     config.client_registry = file.oauth.client_registry;
+    config.client_download_dir = file.server.client_download_dir;
     config.portal = file.portal;
     config.github = file.auth.github;
     Ok(())
@@ -260,6 +265,7 @@ fn run() -> ssmcp::Result<()> {
         oauth: OAuthConfig::default(),
         github: None,
         client_registry: None,
+        client_download_dir: None,
         portal: PortalConfig::default(),
         portal_only,
     };
@@ -285,6 +291,11 @@ fn run() -> ssmcp::Result<()> {
             config.client_registry = std::env::var_os("STATE_DIRECTORY")
                 .map(|path| PathBuf::from(path).join("oauth-clients.toml"));
         }
+        if !options.contains_key("--client-download-dir")
+            && let Some(value) = std::env::var_os("SSMCP_CLIENT_DOWNLOAD_DIR")
+        {
+            config.client_download_dir = Some(value.into());
+        }
         // Environment retains compatibility with installations predating TOML.
         if !options.contains_key("--listen")
             && let Ok(value) = std::env::var("SSMCP_LISTEN")
@@ -307,6 +318,9 @@ fn run() -> ssmcp::Result<()> {
         match arg {
             "--config" if mode == "serve" => {}
             "--client-registry" if mode == "serve" => config.client_registry = Some(value.into()),
+            "--client-download-dir" if mode == "serve" => {
+                config.client_download_dir = Some(value.into())
+            }
             "--socket" => config.socket = value.into(),
             "--listen" if mode == "serve" => config.listen = value.parse()?,
             "--public-url" if mode == "serve" => config.public_url = normalize_origin(value)?,
@@ -621,6 +635,8 @@ async fn bind_socket(path: &Path) -> ssmcp::Result<(UnixListener, SocketFile)> {
 
 async fn serve(config: Config) -> ssmcp::Result<()> {
     use std::future::IntoFuture;
+    let downloads =
+        ssmcp::client_downloads::router(&config.public_url, config.client_download_dir.as_deref())?;
     let mut broker = Broker::with_identity_config(config.public_url, config.oauth, config.github)?;
     if let Some(path) = config.client_registry {
         broker.oauth.enable_client_registry(&path)?;
@@ -699,7 +715,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     };
     tokio::pin!(management_loop);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
-    let server = axum::serve(tcp, http::router(broker.clone()))
+    let server = axum::serve(tcp, http::router(broker.clone()).merge(downloads))
         .with_graceful_shutdown(async {
             let _ = stop_rx.await;
         })
@@ -783,6 +799,7 @@ mod tests {
             oauth: OAuthConfig::default(),
             github: None,
             client_registry: None,
+            client_download_dir: None,
             portal: PortalConfig::default(),
             portal_only: false,
         }
@@ -922,6 +939,7 @@ client_secret = "example-test-secret"
             oauth: OAuthConfig::default(),
             github: None,
             client_registry: None,
+            client_download_dir: None,
             portal: PortalConfig::default(),
             portal_only: false,
         };

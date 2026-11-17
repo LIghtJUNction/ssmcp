@@ -3,7 +3,7 @@
 use crate::Result;
 use std::{collections::VecDeque, time::Duration};
 
-pub(super) enum Event {
+pub(crate) enum Event {
     Text(String),
     Resize(u16, u16),
     Detach,
@@ -15,14 +15,14 @@ enum Raw {
     End,
 }
 
-pub(super) struct Keyboard {
+pub(crate) struct Keyboard {
     platform: platform::Keyboard,
     decoder: Decoder,
     events: VecDeque<Event>,
 }
 
 impl Keyboard {
-    pub(super) fn open() -> Result<Self> {
+    pub(crate) fn open() -> Result<Self> {
         let platform = platform::Keyboard::open()?;
         let mut events = VecDeque::new();
         if let Some((rows, cols)) = platform.size() {
@@ -35,7 +35,7 @@ impl Keyboard {
         })
     }
 
-    pub(super) async fn next(&mut self) -> Result<Event> {
+    pub(crate) async fn next(&mut self) -> Result<Event> {
         loop {
             if let Some(event) = self.events.pop_front() {
                 return Ok(event);

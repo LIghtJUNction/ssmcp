@@ -60,7 +60,10 @@ impl Fixture {
                     assert_eq!(fields["code_verifier"].len(),43);
                     Json(json!({"access_token":"test-setup-upstream-token","token_type":"bearer"}))
                 }))
-            .route("/user",get(||async{Json(json!({"id":123,"login":"alice","type":"User"}))}));
+            .route("/user",get(||async{Json(json!({"id":123,"login":"alice","type":"User"}))}))
+            .route("/users/alice",get(||async{Json(json!({"id":123,"login":"alice","type":"User"}))}))
+            // Simulate a renamed/reassigned login: bob no longer maps to subject 456.
+            .route("/users/bob",get(||async{Json(json!({"id":999,"login":"bob","type":"User"}))}));
         let upstream = tokio::spawn(async move { axum::serve(upstream, mock).await.unwrap() });
         let temporary = Temporary::new();
         let mut broker = Broker::new("https://ssmcp.test".into());
@@ -274,6 +277,8 @@ fn comparison_code_alone_cannot_authorize_and_decisions_are_owner_bound() {
         last_poll: None,
         registered_fingerprint: None,
         registration_saved: false,
+        client_login: false,
+        login_issued: false,
     };
     assert_eq!(grant.owner().unwrap_err().code, "authorization_required");
     grant.decide("123", true).unwrap();
@@ -734,4 +739,149 @@ async fn setup_apis_reject_cross_origin_unknown_duplicate_and_oversized_input() 
         .await
         .unwrap();
     assert_eq!(fake_secret.status(), 400);
+}
+
+#[tokio::test]
+async fn client_login_is_purpose_bound_browser_consented_and_single_use() {
+    let fixture = Fixture::new().await;
+    let response = fixture
+        .client
+        .post(format!("{}/api/client/login/start", fixture.base))
+        .json(&json!({"name":"laptop-a"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let start: Value = response.json().await.unwrap();
+    let secret = start["device_code"].as_str().unwrap();
+    let code = start["user_code"].as_str().unwrap();
+    assert!(
+        !start["verification_uri_complete"]
+            .as_str()
+            .unwrap()
+            .contains(secret)
+    );
+    let old_poll = fixture.poll(secret).await;
+    assert_eq!(old_poll.0, 400);
+    assert_eq!(fixture.register(secret, &public_key(9)).await.0, 400);
+    let poll = || {
+        fixture
+            .client
+            .post(format!("{}/api/client/login/poll", fixture.base))
+            .json(&json!({"device_code":secret}))
+            .send()
+    };
+    let pending: Value = poll().await.unwrap().json().await.unwrap();
+    assert_eq!(pending["status"], "pending");
+    let (cookie, csrf) = fixture.session("123");
+    let page = fixture
+        .client
+        .get(format!("{}/setup?code={code}", fixture.base))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("允许登录"));
+    assert!(!page.contains("允许连接并登记公钥"));
+    assert_eq!(
+        fixture
+            .consent(&cookie, &csrf, code, "allow")
+            .await
+            .status(),
+        303
+    );
+    let completed = fixture
+        .client
+        .get(format!("{}/setup?code={code}", fixture.base))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(completed.contains("客户端会保存"));
+    assert!(!completed.contains("客户端会检查已有 SSH"));
+    fixture.reset_poll(secret).await;
+    let (a, b) = tokio::join!(poll(), poll());
+    let a: Value = a.unwrap().json().await.unwrap();
+    let b: Value = b.unwrap().json().await.unwrap();
+    assert_eq!(
+        [&a, &b]
+            .iter()
+            .filter(|v| v["status"] == "authorized")
+            .count(),
+        1
+    );
+    let grant = if a["status"] == "authorized" { a } else { b };
+    assert_eq!(grant["identity"]["subject"], "123");
+    assert_eq!(grant["identity"]["principal"], "alice@github");
+    let token = grant["access_token"].as_str().unwrap();
+    assert_eq!(
+        fixture
+            .client
+            .get(format!("{}/api/client/whoami", fixture.base))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let legacy = fixture.start("ssh-only").await;
+    let invalid = fixture
+        .client
+        .post(format!("{}/api/client/login/poll", fixture.base))
+        .json(&json!({"device_code":legacy["device_code"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), 400);
+}
+
+#[tokio::test]
+async fn ssh_identity_verification_rejects_reassigned_or_missing_github_names() {
+    let fixture = Fixture::new().await;
+    let alice = fixture
+        .broker
+        .portal
+        .client_storage(|store| store.login("123".into()))
+        .await
+        .unwrap()
+        .0;
+    let bob = fixture
+        .broker
+        .portal
+        .client_storage(|store| store.login("456".into()))
+        .await
+        .unwrap()
+        .0;
+    let query = |token: &str, verify: bool| {
+        fixture
+            .client
+            .get(format!(
+                "{}/api/client/whoami?verify_github={verify}",
+                fixture.base
+            ))
+            .bearer_auth(token)
+            .send()
+    };
+    assert_eq!(query(&alice, true).await.unwrap().status(), 200);
+    // Normal HTTPS identity remains tied to subject 456; only an implicit SSH
+    // username ACL needs to look up the current public GitHub username mapping.
+    assert_eq!(query(&bob, false).await.unwrap().status(), 200);
+    let response = query(&bob, true).await.unwrap();
+    assert_eq!(response.status(), 409);
+    let error: Value = response.json().await.unwrap();
+    assert_eq!(error["error"], "github_identity_unverified");
+    fixture
+        .broker
+        .portal
+        .storage(|store| store.login(&identity("123", "missing-user")))
+        .await
+        .unwrap();
+    assert_eq!(query(&alice, true).await.unwrap().status(), 409);
 }

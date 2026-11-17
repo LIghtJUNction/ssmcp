@@ -19,7 +19,7 @@ const MAX_DATABASE: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct PublicKey {
+pub(crate) struct PublicKey {
     pub fingerprint: String,
     pub label: String,
     pub public_key: String,
@@ -27,7 +27,7 @@ pub(super) struct PublicKey {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Account {
+pub(crate) struct Account {
     pub subject: String,
     pub username: String,
     pub github_login: String,
@@ -36,7 +36,7 @@ pub(super) struct Account {
 
 /// Account directory data deliberately excludes public keys and their fingerprints.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct AccountSummary {
+pub(crate) struct AccountSummary {
     pub subject: String,
     pub username: String,
     pub github_login: String,
@@ -49,7 +49,7 @@ struct Database {
     accounts: BTreeMap<String, Account>,
 }
 
-pub(super) struct Store {
+pub(crate) struct Store {
     directory: File,
     _lock: File,
     database: Database,
@@ -276,7 +276,7 @@ impl Store {
     }
 }
 
-pub(super) fn stable_username(subject: &str) -> Option<String> {
+pub(crate) fn stable_username(subject: &str) -> Option<String> {
     let id = subject.parse::<u64>().ok()?;
     (id > 0 && id.to_string() == subject).then(|| format!("gh-{id}"))
 }
