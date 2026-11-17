@@ -220,10 +220,8 @@ impl Pool {
                             && view.launched.elapsed() > HEARTBEAT
                             && !view.seen.is_some_and(|seen| seen.elapsed() < HEARTBEAT)
                     };
-                    if reopen {
-                        if let Err(error) = pool.launch(&slot) {
-                            eprintln!("ssmcp: command observer could not reopen: {error}");
-                        }
+                    if reopen && let Err(error) = pool.launch(&slot) {
+                        eprintln!("ssmcp: command observer could not reopen: {error}");
                     }
                 }
             }
@@ -767,25 +765,35 @@ fn display_command(command: &Value) -> String {
         .unwrap_or_else(|| visible(command.as_str().unwrap_or("command")))
 }
 fn native_command<'a>(name: &str, args: &'a Value) -> Option<&'a Value> {
-    let lower = name.to_ascii_lowercase();
+    let identity = [
+        Some(name),
+        args["method"].as_str(),
+        args["type"].as_str(),
+        args["operation_id"].as_str(),
+        args["url_path"].as_str(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase();
     if !["bash", "shell", "exec", "command", "powershell", "run"]
         .iter()
-        .any(|part| lower.contains(part))
-        && args["method"] != "command/exec"
+        .any(|part| identity.contains(part))
     {
         return None;
     }
-    ["command", "cmd", "script", "code"]
-        .iter()
-        .find_map(|key| args.get(*key))
-        .or_else(|| {
-            args.get("params").and_then(|params| {
-                ["command", "cmd", "script"]
-                    .iter()
-                    .find_map(|key| params.get(*key))
-            })
-        })
-        .filter(|command| command.is_string() || command.is_array())
+    let command = |object: &'a Value| {
+        ["command", "cmd", "script"]
+            .iter()
+            .find_map(|key| object.get(*key))
+            .filter(|value| value.is_string() || value.is_array())
+    };
+    command(args).or_else(|| {
+        ["params", "args", "body", "arguments"]
+            .iter()
+            .find_map(|key| args.get(*key).and_then(command))
+    })
 }
 pub(crate) async fn viewer(directory: &Path, slot: usize) -> crate::Result<()> {
     let mut cursor = 0;

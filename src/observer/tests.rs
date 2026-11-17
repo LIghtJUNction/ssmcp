@@ -127,6 +127,18 @@ fn native_command_detection_covers_direct_and_rpc_paths() {
             json!({"method":"command/exec","params":{"command":["printf","hello"]}}),
         ),
         ("pi.bash", json!({"command":"printf hello"})),
+        (
+            "pi.rpc",
+            json!({"type":"bash","args":{"command":"printf hello"}}),
+        ),
+        (
+            "opencode.api",
+            json!({"operation_id":"session.shell","body":{"command":"printf hello"}}),
+        ),
+        (
+            "opencode.api",
+            json!({"method":"POST","url_path":"/session/fixture/shell","body":{"command":"printf hello"}}),
+        ),
     ] {
         assert!(native_command(tool, &args).is_some(), "{tool}");
     }
