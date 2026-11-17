@@ -564,10 +564,11 @@ class Dashboard(Harness):
         self.check("DASH_AUDIT_0699" not in text(oldest), "Home moves to retained audit history without rewriting raw output")
         front.send(b"\x1b[F")
         front.until(lambda s: "DASH_AUDIT_0699" in text(s), "End at the live tail")
+        front.send("/")
+        front.until(lambda s: "Enter Apply" in s["rows"][-1], "filter input before Escape")
         front.send(b"\x1b")
-        # Escape is an intentionally ambiguous key prefix for 80 ms. The
-        # footer predicate is already true; settle it before the next sequence.
-        front.pump(0.12)
+        # Both session and display decoders delay an ambiguous Escape prefix.
+        # Observe its completed state change before sending the next sequence.
         front.until(lambda s: "Wheel" in s["rows"][-1] and s["hide_cursor"], "Escape retaining audit navigation")
         self.check(True, "End restores live logs and Escape never focuses a hidden shell")
         front.send(b"\x1b[5~x")
