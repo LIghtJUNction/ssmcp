@@ -7,14 +7,11 @@ mod ssh_config;
 
 use super::{Options, render};
 use crate::backend::process::Managed;
-use base64::{
-    Engine,
-    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
-};
+#[cfg(test)]
+use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     ffi::OsString,
     io::{self, IsTerminal, Write},
@@ -503,25 +500,7 @@ fn yes(value: &str) -> bool {
 }
 
 fn parse_public_key(raw: &str) -> Result<(String, String), String> {
-    if raw.len() > 4096 || raw.contains('\0') || raw.trim().lines().count() != 1 {
-        return Err("Expected one Ed25519 public key line.".into());
-    }
-    let mut fields = raw.split_whitespace();
-    if fields.next() != Some("ssh-ed25519") {
-        return Err("Setup requires an ssh-ed25519 public key.".into());
-    }
-    let encoded = fields.next().ok_or("Public key is missing its data")?;
-    let bytes = STANDARD
-        .decode(encoded)
-        .map_err(|_| "Invalid public key base64")?;
-    if bytes.len() != 51 || &bytes[..19] != b"\0\0\0\x0bssh-ed25519\0\0\0\x20" {
-        return Err("Invalid Ed25519 public key structure.".into());
-    }
-    let fingerprint = format!("SHA256:{}", STANDARD_NO_PAD.encode(Sha256::digest(&bytes)));
-    Ok((
-        format!("ssh-ed25519 {}", STANDARD.encode(bytes)),
-        fingerprint,
-    ))
+    crate::ssh_public_key::parse(raw)
 }
 
 fn public_file(path: &Path) -> PathBuf {
@@ -531,18 +510,66 @@ fn public_file(path: &Path) -> PathBuf {
 }
 
 fn read_public(identity: &Path) -> Result<(String, String), String> {
-    let private =
-        std::fs::metadata(identity).map_err(|_| "Private key file is not present locally.")?;
-    if !private.is_file() {
-        return Err("Private key is not a regular file.".into());
-    }
-    let path = public_file(identity);
+    let path = if identity.extension().is_some_and(|ext| ext == "pub") {
+        identity.to_path_buf()
+    } else {
+        public_file(identity)
+    };
     let meta = std::fs::metadata(&path).map_err(|_| "Public key file is not present locally.")?;
-    if !meta.is_file() || meta.len() > 4096 {
+    if !meta.is_file() || meta.len() > crate::ssh_public_key::MAX_PUBLIC_KEY as u64 {
         return Err("Public key file exceeds its size limit.".into());
     }
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     parse_public_key(&text)
+}
+
+fn custom_key(value: &str, home: &Path) -> Result<(PathBuf, String, String), String> {
+    let path = value
+        .strip_prefix("~/")
+        .map_or_else(|| PathBuf::from(value), |tail| home.join(tail));
+    if path.is_file() {
+        let (public, fingerprint) = read_public(&path)?;
+        let private = path.with_extension("");
+        let identity = if path.extension().is_some_and(|ext| ext == "pub") && private.is_file() {
+            private
+        } else {
+            path
+        };
+        return Ok((identity, public, fingerprint));
+    }
+    let (public, fingerprint) = parse_public_key(value)?;
+    // A public-only IdentityFile lets OpenSSH select a matching ssh-agent key.
+    let directory = home.join(".ssh/ssmcp");
+    ssh_config::ensure_private_directory(&directory)?;
+    let filename = fingerprint.replace([':', '/', '+'], "_");
+    let path = directory.join(format!("selected_{filename}.pub"));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => writeln!(file, "{public}").map_err(|e| e.to_string())?,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            if std::fs::symlink_metadata(&path)
+                .map_err(|e| e.to_string())?
+                .file_type()
+                .is_symlink()
+                || std::fs::read_to_string(&path)
+                    .map_err(|e| e.to_string())?
+                    .trim()
+                    != public
+            {
+                return Err(
+                    "Selected public key path already exists with different contents.".into(),
+                );
+            }
+        }
+        Err(error) => return Err(error.to_string()),
+    }
+    Ok((path, public, fingerprint))
 }
 
 fn managed_key(home: &Path, target: &Target) -> PathBuf {
@@ -716,7 +743,17 @@ async fn complete<C: Console>(
     }
     if options.identity.is_none() {
         candidates.push(managed.clone());
-        candidates.push(ssh_dir.join("id_ed25519"));
+        let mut public_files: Vec<_> = std::fs::read_dir(&ssh_dir)
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "pub"))
+            .collect();
+        public_files.sort();
+        for public in public_files {
+            let private = public.with_extension("");
+            candidates.push(if private.is_file() { private } else { public });
+        }
     }
     let mut available = Vec::new();
     for path in candidates {
@@ -724,7 +761,7 @@ async fn complete<C: Console>(
             Ok(pair) => pair,
             Err(error) if options.identity.is_some() => {
                 return Err(format!(
-                    "Cannot use the explicitly selected -i identity {}: {}. Fix this path and its Ed25519 .pub file, or omit -i to choose a setup key.",
+                    "Cannot use the explicitly selected -i identity {}: {}. Fix this path and its .pub file, or omit -i to choose a setup key.",
                     safe_line(&path.display().to_string()),
                     safe_line(&error),
                 ));
@@ -751,25 +788,44 @@ async fn complete<C: Console>(
         console.say(&format!("已找到账号登记过的本机密钥：{fingerprint}"));
         path
     } else {
-        let (path, public, fingerprint) = if let Some(existing) = available.first().cloned() {
-            console.say(&format!("找到本机 Ed25519 公钥：{}", existing.2));
-            if !yes(&console
-                .line("是否将这把公钥登记到当前 GitHub 身份对应的 ssmcp 账户？[yes/NO] ")
-                .await?)
-            {
+        let (path, public, fingerprint) = loop {
+            let prompt = if let Some(existing) = available.first() {
+                console.say(&format!(
+                    "找到本机 SSH 公钥：{}（{}）",
+                    existing.2,
+                    safe_line(&existing.0.display().to_string())
+                ));
+                "登记此公钥请输入 yes；也可输入其他公钥文件路径、粘贴单行公钥，或输入 generate 创建专用密钥。[NO] "
+            } else {
+                "输入公钥文件路径或粘贴单行公钥；输入 yes 或 generate 创建专用密钥，私钥不设口令并仅保留在本机。[NO] "
+            };
+            let answer = console.line(prompt).await?;
+            let answer = answer.trim();
+            if answer.is_empty() || matches!(answer.to_ascii_lowercase().as_str(), "no" | "n") {
                 return Err("Public key registration was declined.".into());
             }
-            existing
-        } else {
-            if !yes(&console.line("是否创建 ssmcp 专用 Ed25519 密钥并提交公钥？密钥不设口令以便后台重连，私钥仅保留在本机。[yes/NO] ").await?) {
-                return Err("Key creation was declined; no key or SSH config was changed.".into());
+            if yes(answer)
+                && let Some(existing) = available.first()
+            {
+                break existing.clone();
             }
-            ssh_config::ensure_private_directory(
-                managed.parent().ok_or("Missing managed key directory")?,
-            )?;
-            generate_key(&programs, &managed).await?;
-            let (public, fingerprint) = read_public(&managed)?;
-            (managed, public, fingerprint)
+            if yes(answer) || answer.eq_ignore_ascii_case("generate") {
+                ssh_config::ensure_private_directory(
+                    managed.parent().ok_or("Missing managed key directory")?,
+                )?;
+                generate_key(&programs, &managed).await?;
+                let (public, fingerprint) = read_public(&managed)?;
+                break (managed.clone(), public, fingerprint);
+            }
+            match custom_key(answer, home) {
+                Ok(key) => {
+                    console.say(&format!("所选公钥：{}", key.2));
+                    if yes(&console.line("是否登记这把公钥？[yes/NO] ").await?) {
+                        break key;
+                    }
+                }
+                Err(error) => console.say(&safe_line(&error)),
+            }
         };
         let label = protocol_label(&options.name.clone().unwrap_or_else(|| {
             crate::platform::hostname().unwrap_or_else(|_| "computer-use".into())

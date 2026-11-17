@@ -121,7 +121,7 @@ fn keys_panel(account: Option<&Account>, csrf: &str, enabled: bool) -> String {
         html.push_str(&format!(
             r#"<form class="key-form" method="post" action="/account/keys"><input type="hidden" name="csrf" value="{csrf}">
 <label for="key-label">备注 <span class="muted">/ 可选</span><input id="key-label" name="label" maxlength="80" placeholder="例如：工作笔记本" autocomplete="off"></label>
-<label for="public-key">SSH 公钥<textarea id="public-key" name="public_key" maxlength="1024" required rows="3" spellcheck="false" autocapitalize="none" autocomplete="off" placeholder="ssh-ed25519 AAAA…" aria-describedby="key-help"></textarea></label>
+<label for="public-key">SSH 公钥<textarea id="public-key" name="public_key" maxlength="16384" required rows="3" spellcheck="false" autocapitalize="none" autocomplete="off" placeholder="ssh-ed25519 AAAA…" aria-describedby="key-help"></textarea></label>
 <small class="help-note" id="key-help">仅接受单行 Ed25519 公钥。上传 .pub 内容，私钥留在本机。</small><button type="submit">添加公钥 <span class="arrow" aria-hidden="true">+</span></button></form>
 <small class="help-note">每个账户最多 20 把。启用 SSH 同步后，变更通常在 15 秒内生效；同步失败时请联系管理员。</small>"#
         ));
@@ -136,7 +136,7 @@ fn keys_panel(account: Option<&Account>, csrf: &str, enabled: bool) -> String {
         ));
     }
     html.push_str(
-        r#"<details><summary>在哪里找到我的公钥？</summary><p>在本机终端查看已有的公钥：</p><pre class="command"><code>cat ~/.ssh/id_ed25519.pub</code></pre><p>没有密钥时，创建一把 Ed25519 密钥：</p><pre class="command"><code>ssh-keygen -t ed25519</code></pre><p>只提交 <code>.pub</code> 文件中的单行 <code>ssh-ed25519</code> 公钥。私钥保留在本机，不要上传。</p></details></section>"#,
+        r#"<details><summary>在哪里找到我的公钥？</summary><p>在本机终端查看已有的公钥：</p><pre class="command"><code>cat ~/.ssh/id_ed25519.pub</code></pre><p>没有密钥时，创建一把 Ed25519 密钥：</p><pre class="command"><code>ssh-keygen -t ed25519</code></pre><p>只提交 <code>.pub</code> 文件中的单行 SSH 公钥（包括硬件安全密钥），由 OpenSSH 验证。私钥保留在本机，不要上传。</p></details></section>"#,
     );
     html
 }

@@ -23,10 +23,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use base64::{
-    Engine,
-    engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -154,7 +151,9 @@ impl Problem {
     }
     fn message(self) -> &'static str {
         match self {
-            Self::Invalid => "输入无效。仅接受单行 ssh-ed25519 公钥，不接受私钥、授权选项或证书。",
+            Self::Invalid => {
+                "输入无效。仅接受 OpenSSH 支持的单行 SSH 公钥，不接受私钥或 authorized_keys 授权选项。"
+            }
             Self::Unauthorized => "登录已失效，请回到首页重新登录。",
             Self::Csrf => "页面验证未通过，请回到首页刷新后重试。",
             Self::Busy => "操作过于频繁或服务繁忙，请稍后重试。",
@@ -850,36 +849,19 @@ async fn delete_key_inner(
     Ok(Redirect::to("/#keys").into_response())
 }
 
-/// Accept a single RFC 4253 Ed25519 blob, not authorized_keys options or certificates.
+/// Validate a single public-key line through the installed OpenSSH implementation.
 fn parse_key(raw: &str, label: &str) -> Result<PublicKey, Problem> {
-    if raw.len() > 1024 {
+    if label.len() > 80 || label.chars().any(char::is_control) {
         return Err(Problem::Invalid);
     }
-    let raw = raw.trim_ascii();
-    if raw.is_empty()
-        || raw.chars().any(char::is_control)
-        || label.len() > 80
-        || label.chars().any(char::is_control)
-    {
-        return Err(Problem::Invalid);
-    }
-    let mut fields = raw.split_ascii_whitespace();
-    if fields.next() != Some("ssh-ed25519") {
-        return Err(Problem::Invalid);
-    }
-    let encoded = fields.next().ok_or(Problem::Invalid)?;
-    let bytes = STANDARD.decode(encoded).map_err(|_| Problem::Invalid)?;
-    // string("ssh-ed25519") + string(32-byte public key); no trailing data.
-    if bytes.len() != 51
-        || &bytes[..19] != b"\0\0\0\x0bssh-ed25519\0\0\0\x20"
-        || bytes[19..].iter().all(|b| *b == 0)
-        || STANDARD.encode(&bytes) != encoded
-    {
-        return Err(Problem::Invalid);
-    }
+    let (public_key, fingerprint) =
+        crate::ssh_public_key::parse(raw).map_err(|_| Problem::Invalid)?;
     Ok(PublicKey {
-        fingerprint: format!("SHA256:{}", STANDARD_NO_PAD.encode(Sha256::digest(&bytes))),
+        fingerprint,
         label: label.trim().to_owned(),
-        public_key: format!("ssh-ed25519 {}", STANDARD.encode(bytes)),
+        public_key,
     })
 }
+
+#[cfg(test)]
+use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
