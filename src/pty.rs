@@ -64,6 +64,8 @@ pub struct Terminal {
     closed: AtomicBool,
     live: bool,
     display_id: String,
+    observer: Option<std::sync::Weak<crate::observer::Pool>>,
+    observer_cwd: std::path::PathBuf,
 }
 
 impl Terminal {
@@ -193,6 +195,10 @@ impl Terminal {
             closed: AtomicBool::new(false),
             live,
             display_id: display_id.into(),
+            observer: output_store.observer().map(|pool| Arc::downgrade(&pool)),
+            observer_cwd: cwd
+                .map(Path::to_path_buf)
+                .unwrap_or(std::env::current_dir()?),
         });
         let weak = Arc::downgrade(&terminal);
         let reader = tokio::spawn(async move {
@@ -214,6 +220,13 @@ impl Terminal {
                 match result {
                     Ok(n) if n > 0 => {
                         terminal.output.lock().unwrap().push(&data[..n]);
+                        if let Some(pool) = terminal
+                            .observer
+                            .as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                        {
+                            pool.terminal_output(&terminal.display_id, &data[..n]);
+                        }
                         if terminal.live {
                             crate::client::render::terminal_output_for(
                                 &terminal.display_id,
@@ -222,6 +235,13 @@ impl Terminal {
                         }
                     }
                     result => {
+                        if let Some(pool) = terminal
+                            .observer
+                            .as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                        {
+                            pool.terminal_closed(&terminal.display_id);
+                        }
                         // Linux PTYs report EIO when the last slave closes.
                         let mut output = terminal.output.lock().unwrap();
                         output.eof = true;
@@ -256,6 +276,10 @@ impl Terminal {
             Operation::Write { data } => {
                 if !self.running().await {
                     return Err("terminal has exited".into());
+                }
+                if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+                    pool.terminal_begin(&self.display_id, &self.observer_cwd)
+                        .await?;
                 }
                 timeout(Duration::from_secs(5), self.write(data.as_bytes()))
                     .await
@@ -426,6 +450,9 @@ impl Terminal {
     }
 
     pub async fn shutdown(&self) {
+        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+            pool.terminal_closed(&self.display_id);
+        }
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }

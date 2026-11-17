@@ -1,0 +1,25 @@
+{
+  "source_head": "05f72fc2bbed776502b3a19c3a6b118f7c7646db",
+  "version": "ssmcp 0.7.4",
+  "path": "/home/lightjunction/Documents/GITHUB/ssmcp/.local/tty-observer-transfer/ssmcp-0.7.4-05f72fc2bbed",
+  "sha256": "8271d106f45af1c23cef9873f675e210741ecd4ecda83d7ea5c2f67d29e5a0c5",
+  "bytes": 11012544,
+  "build_command": [
+    "cargo",
+    "build",
+    "--locked",
+    "--release",
+    "--bin",
+    "ssmcp",
+    "-j1"
+  ],
+  "build_seconds": 273.33,
+  "built_at_utc": "2026-11-17T20:28:21.861287+00:00",
+  "version_smoke_passed": true,
+  "help_tty_smoke_passed": true,
+  "release_recording_e2e_passed": true,
+  "release_recording_e2e_report": "tty-observer-release-e2e-20261118.json",
+  "release_recording_e2e_groups": 7,
+  "source_worktree_clean_at_build": true,
+  "evidence_commit_scope": "This record is added after the binary build in a documentation-only commit. The binary source remains the exact source_head above."
+}

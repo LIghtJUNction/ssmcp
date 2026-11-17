@@ -48,6 +48,10 @@ struct CallObservation {
 pub(crate) struct HarnessCall(Arc<CallObservation>);
 
 impl HarnessCall {
+    pub(crate) fn current_id() -> Option<u64> {
+        HARNESS_CALL.try_with(|call| call.0.id).ok()
+    }
+
     pub(crate) fn new(id: u64) -> Self {
         Self(Arc::new(CallObservation {
             id,
