@@ -74,6 +74,24 @@ impl Drop for Sandbox {
     }
 }
 
+#[tokio::test]
+async fn dns_destination_keeps_portal_origin_after_ssh_hostname_resolution() {
+    let sandbox = Sandbox::new();
+    fs::create_dir_all(sandbox.config.parent().unwrap()).unwrap();
+    fs::write(
+        &sandbox.config,
+        "Host setup.example.invalid\n    HostName 192.0.2.10\n    User example\n",
+    )
+    .unwrap();
+    let mut options = sandbox.options();
+    let target = Target::resolve(&options, &sandbox.home).await.unwrap();
+    assert_eq!(target.host, "192.0.2.10");
+    assert_eq!(target.portal.as_str(), "https://setup.example.invalid/");
+    options.portal = Some("https://accounts.example.com".into());
+    let target = Target::resolve(&options, &sandbox.home).await.unwrap();
+    assert_eq!(target.portal.as_str(), "https://accounts.example.com/");
+}
+
 #[derive(Default)]
 struct FakeConsole {
     answers: VecDeque<String>,

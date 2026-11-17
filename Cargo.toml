@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.89"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
