@@ -146,6 +146,19 @@ heading = "#e8eaed"
 
 要求队列和成员目标需要客户端与服务器支持协议 v7，源码审计需要 v6 或更新版本。兼容旧连接时界面会说明可用范围。源码来自调用方提交的 `code_mode.code`，脱敏后只发送给本次调用实际操作的客户端。重载使用私有、单次读取的草稿与队列交接；交付不确定的记录保留待复核，不会自动重发。[队列与恢复](docs/client-ui.md#输入要求与队列) · [源码范围](docs/client-ui.md#源码审计与运行状态)
 
+### 独立命令观察窗口
+
+启动时添加 `--tty`，可以在本机终端窗口中持续查看命令、输出和结束状态：
+
+```sh
+ssmcp --tty kitty alice@ssmcp.example.com
+ssmcp --tty ztty alice@ssmcp.example.com
+```
+
+顺序命令复用窗口，并行命令使用独立窗口。关闭观察窗口不会停止任务，客户端会重新打开显示；窗口中的键盘输入不发送给任务，交互仍使用 `exec.write` 或 `terminal.write`。终端程序需要能够访问客户端的桌面环境。
+
+启用 `--tty` 后，Unix 命令通过 PTY 输出，`output_mode: "pty"` 表示 stdout 包含合并后的 stdout/stderr；Windows 命令任务继续使用独立管道。完整输出、取消和执行期限仍由原有任务接口管理。[观察窗口、启动器与输出语义](docs/terminal-observers.md) · [已记录的验证](docs/validation-terminal-observers.md)
+
 ## 原子接口
 
 ssmcp 的显示和执行能力各自提供小接口。自定义 TUI、桌面面板或其他 MCP 客户端可以读取状态、选择终端、控制任务和调整主题，不必解析屏幕文字。`ssmcp.ui.get` 支持按 JSON Pointer 读取字段和分页，界面轮询可以只取需要的状态。
@@ -271,6 +284,7 @@ cargo test --locked
 | 执行任务、事件与长输出 | [命令接口](docs/commands.md) · [日志](docs/logging.md) |
 | RTK 命令与输出压缩 | [RTK](docs/rtk.md) |
 | 多终端、后台输入和控制者显示 | [终端控制](docs/terminal-control.md) |
+| 复用终端窗口查看命令与输出 | [命令观察窗口](docs/terminal-observers.md) |
 | 自动发现、本机工具和 JavaScript 编排 | [后端与代码模式](docs/backends.md) |
 | 浏览器、桌面和 Omarchy | [电脑控制](docs/computer-use.md) · [现有 Chrome](docs/browser-existing-session.md) |
 | 后台会话、常驻服务和重载 | [会话管理](docs/session-control.md) · [常驻服务](docs/session-service.md) |
