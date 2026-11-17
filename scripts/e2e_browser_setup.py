@@ -82,6 +82,40 @@ def main() -> None:
         assert config.read_bytes() == saved
         checks.append("repeated_setup_is_idempotent")
 
+        # Exercise the real client's UI load path without connecting to any
+        # relay or discovering installed external harnesses. --list-tools is
+        # explicitly local, and an empty PATH excludes optional MCP providers.
+        if os.name != "nt":
+            isolated_path = root / "empty-bin"
+            isolated_path.mkdir()
+            startup_env = env.copy()
+            startup_env["PATH"] = str(isolated_path)
+            startup_env["SHELL"] = "/bin/sh"
+            startup_env.pop("SSMCP_UI_CONFIG", None)
+            startup_env.pop("SSMCP_PLAYWRIGHT_MCP", None)
+            startup = subprocess.run(
+                [str(binary), "--list-tools", "--shell", "/bin/sh"],
+                env=startup_env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+            if startup.returncode != 0:
+                raise AssertionError(
+                    "client startup rejected setup configuration: "
+                    + startup.stderr[-2048:]
+                )
+            catalog = json.loads(startup.stdout)
+            assert catalog["type"] == "shell"
+            assert any(
+                tool["name"] == "ssmcp.browser.status" for tool in catalog["tools"]
+            )
+            assert config.read_bytes() == saved
+            checks.append("real_client_ui_load_accepts_setup_configuration_offline")
+
         checked = run("--check", "--json")
         assert checked["configuration"]["saved"] is False
         assert checked["configuration"]["effective_entry"] == str(entry)

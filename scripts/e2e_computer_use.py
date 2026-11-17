@@ -34,18 +34,19 @@ FIXTURE = r"""<!doctype html><html><head><meta charset="utf-8">
 main{max-width:750px;margin:auto}p{color:#b3b9c6;line-height:1.6}h1{font-size:38px;letter-spacing:-1px}
 label{display:block;margin:28px 0 10px}input{font:20px system-ui;width:100%;padding:14px;background:#242832;border:1px solid #596171;border-radius:8px;color:white}
 button{margin-top:22px;padding:12px 24px;border:0;border-radius:7px;background:#a9c7ff;color:#11213c;font:18px system-ui}
+#capture-proof{position:fixed;top:0;left:0;width:32px;height:32px;background:#e53935;pointer-events:none;z-index:10000}
 #drag{margin-top:28px;padding:26px;border:1px dashed #626b7e;border-radius:8px;user-select:none}
 output{display:block;margin-top:22px;color:#b3efc2;white-space:pre-wrap}footer{padding-top:800px;color:#8da5cd}
-</style></head><body><main>
+</style></head><body><div id="capture-proof" aria-hidden="true"></div><main>
 <p>SSMCP / COMPUTER USE</p><h1>Browser and desktop verification</h1>
 <p>This temporary page records input received through the native ssmcp tools.</p>
 <label for="message">Test message</label><span id="message-name" hidden>Accessible message</span><input id="message" autocomplete="off" aria-label="Fallback message" aria-labelledby="message-name">
 <button id="run">Run check</button><output id="result">Waiting for native input.</output>
 <div id="drag">Drag across this test area</div><footer id="bottom">Scroll target</footer>
 </main><script>
-window.probe={clicks:0,moves:0,downs:0,ups:0,wheel:0,keys:[],dragMoves:0};
+window.probe={clicks:0,trustedClicks:0,moves:0,downs:0,ups:0,wheel:0,keys:[],dragMoves:0};
 function show(){document.querySelector('#result').textContent='Input: '+document.querySelector('#message').value+'\nChecks: '+probe.clicks;}
-document.querySelector('#run').addEventListener('click',()=>{probe.clicks++;show()});
+document.querySelector('#run').addEventListener('click',event=>{probe.clicks++;if(event.isTrusted)probe.trustedClicks++;document.querySelector('#capture-proof').style.background='#00a060';show()});
 document.querySelector('#message').addEventListener('input',show);
 document.addEventListener('keydown',e=>probe.keys.push(e.key));
 document.addEventListener('mousemove',e=>{probe.moves++;if(e.buttons)probe.dragMoves++});
@@ -95,6 +96,8 @@ class ComputerUse(Harness):
         return self.call("ssmcp.browser." + method, arguments)
 
     def computer(self, method, **arguments):
+        if self.desktop and method in {"focus", "move", "click", "drag", "key", "type", "scroll"}:
+            arguments.setdefault("desktop", "host")
         return self.call("ssmcp.computer." + method, arguments)
 
     def evaluate(self, expression):
@@ -183,8 +186,9 @@ class ComputerUse(Harness):
                    "native fill and click modify the real Chromium document")
         self.browser("key", target_id=self.target, key="Tab")
         self.check("Tab" in self.evaluate("probe.keys"), "browser key dispatch produces a real keyboard event")
+        self.evaluate("scrollTo(0,0);probe.wheel=0;true")
         self.browser("scroll", target_id=self.target, delta_y=360)
-        wait_for(lambda: self.evaluate("scrollY") > 0, description="browser wheel scroll")
+        wait_for(lambda: self.evaluate("scrollY > 0 && probe.wheel > 0"), description="browser wheel event and scroll")
         self.check(True, "browser scroll moves the actual viewport")
         self.evaluate("scrollTo(0,0);true")
         self.screenshot("ssmcp.browser.screenshot", {"target_id": self.target, "max_width": 1100}, "browser.jpg")

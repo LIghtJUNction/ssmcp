@@ -146,6 +146,7 @@ struct Connection {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     sequence: u64,
     closed: bool,
+    focus_emulated: bool,
 }
 impl Cdp {
     async fn connect(url: &str) -> Result<Self, String> {
@@ -164,6 +165,7 @@ impl Cdp {
                 socket,
                 sequence: 0,
                 closed: false,
+                focus_emulated: false,
             })),
             url: url.to_owned(),
         })
@@ -182,6 +184,30 @@ impl Cdp {
         .map_err(|_| format!("CDP {method} timed out"))?
     }
 
+    /// Chromium can acknowledge trusted input to a hidden tab without delivering
+    /// it. Emulate focus only inside this explicit input target; never activate a
+    /// tab or focus an OS window. Keep rendering active until this CDP connection
+    /// closes, including while waiting for asynchronous results.
+    async fn prepare_input(&self) -> Result<(), String> {
+        tokio::time::timeout(CALL_TIMEOUT, async {
+            let mut connection = self.connection.lock().await;
+            // Mark before sending: a cancelled request may already have applied.
+            // Re-send on every input rather than assuming an interrupted request
+            // succeeded; the marker is used only for unconditional restoration.
+            connection.focus_emulated = true;
+            connection
+                .call(
+                    "Emulation.setFocusEmulationEnabled",
+                    json!({"enabled":true}),
+                    CALL_TIMEOUT,
+                )
+                .await
+                .map(|_| ())
+        })
+        .await
+        .map_err(|_| "browser input focus emulation timed out".to_owned())?
+    }
+
     async fn input_pair(&self, method: &str, press: Value, release: Value) -> Result<(), String> {
         let cdp = self.clone();
         let method = method.to_owned();
@@ -198,9 +224,15 @@ impl Cdp {
             if released.is_err() {
                 // The press may have reached Chromium before a connection broke.
                 // Reconnect to that same verified target for one bounded release.
+                let focus_emulated = connection.focus_emulated;
                 released = match tokio::time::timeout(Duration::from_secs(6), async {
                     let fresh = Cdp::connect(&cdp.url).await?;
-                    fresh.call(&method, release).await
+                    if focus_emulated {
+                        fresh.prepare_input().await?;
+                    }
+                    let released = fresh.call(&method, release).await;
+                    fresh.close().await;
+                    released
                 })
                 .await
                 {
@@ -222,6 +254,16 @@ impl Cdp {
         // close write itself. Dropping the connection never waits for a peer.
         let _ = tokio::time::timeout(Duration::from_secs(35), async {
             let mut connection = self.connection.lock().await;
+            if connection.focus_emulated && !connection.closed {
+                let _ = connection
+                    .call(
+                        "Emulation.setFocusEmulationEnabled",
+                        json!({"enabled":false}),
+                        Duration::from_secs(2),
+                    )
+                    .await;
+                connection.focus_emulated = false;
+            }
             connection.closed = true;
             let _ =
                 tokio::time::timeout(Duration::from_secs(2), connection.socket.close(None)).await;
@@ -362,10 +404,10 @@ impl Browser {
             ),
             tool(
                 "launch",
-                "Start an installed Chromium browser with an isolated temporary profile and loopback debugging. Existing user profiles are not modified; disconnect stops only this owned browser.",
+                "Start an installed Chromium browser with an isolated temporary profile, loopback debugging, and background surface capture. Headless is the default; headless:false explicitly opens a desktop window. Disconnect stops only this owned browser.",
                 json!({
                     "executable":{"type":"string","maxLength":4096},
-                    "headless":{"type":"boolean","default":false},
+                    "headless":{"type":"boolean","default":true},
                     "width":{"type":"integer","minimum":320,"maximum":4096,"default":1280},
                     "height":{"type":"integer","minimum":240,"maximum":4096,"default":800}
                 }),
@@ -580,6 +622,13 @@ impl Browser {
                 state["input_scope"] = json!("browser_target");
                 state["moves_system_pointer"] = json!(false);
                 state["default_new_tab_background"] = json!(true);
+                state["default_launch_headless"] = json!(true);
+                state["background_screenshot"] = json!(
+                    "owned launch enables background surface capture; attached browsers depend on their startup configuration"
+                );
+                state["page_focus"] = json!(
+                    "emulated only for explicit input targets; emulation disabled on disconnect"
+                );
                 state["foreground_launch_possible"] = json!(true);
                 state["recommended_for"] = json!(
                     "Use browser tools for web pages; computer tools send desktop-wide input."
@@ -606,6 +655,10 @@ impl Browser {
                     .arg("--no-first-run")
                     .arg("--no-default-browser-check")
                     .arg("--disable-background-networking")
+                    // Match Playwright's Chromium startup: use a fresh surface
+                    // instead of waiting on a redraw of an unpresented tab.
+                    // Only our own temporary-profile browser gets this flag.
+                    .arg("--enable-features=CDPScreenshotNewSurface")
                     .arg(format!("--window-size={},{}", args.width, args.height))
                     .arg("about:blank")
                     .stdin(Stdio::null())
@@ -933,6 +986,7 @@ impl Browser {
                     return Err("invalid mouse button or click_count".into());
                 }
                 let mut page = self.page(&session, &args.target_id).await?;
+                page.cdp.prepare_input().await?;
                 let point = ref_action(&mut page, &args.element_ref, CLICK_SCRIPT, vec![]).await?;
                 let x = point["x"].as_f64().ok_or("element has no x coordinate")?;
                 let y = point["y"].as_f64().ok_or("element has no y coordinate")?;
@@ -959,6 +1013,7 @@ impl Browser {
                     return Err("fill text exceeds 32768 UTF-8 bytes".into());
                 }
                 let mut page = self.page(&session, &args.target_id).await?;
+                page.cdp.prepare_input().await?;
                 let prepared = ref_action(
                     &mut page,
                     &args.element_ref,
@@ -978,6 +1033,7 @@ impl Browser {
                 let (code, key, text) = key_spec(&args.key)?;
                 let modifiers = modifier_bits(&args.modifiers)?;
                 let page = self.page(&session, &args.target_id).await?;
+                page.cdp.prepare_input().await?;
                 let mut down = json!({"type":"keyDown","key":key,"windowsVirtualKeyCode":code,
                     "nativeVirtualKeyCode":code,"modifiers":modifiers});
                 if modifiers & (1 | 2 | 4) == 0
@@ -1003,6 +1059,7 @@ impl Browser {
                     return Err("scroll delta exceeds 100000 CSS pixels".into());
                 }
                 let page = self.page(&session, &args.target_id).await?;
+                page.cdp.prepare_input().await?;
                 let size = page
                     .cdp
                     .value("({width:innerWidth,height:innerHeight})")
@@ -1293,7 +1350,21 @@ async fn screenshot(cdp: &mut Cdp, target_id: &str, max_width: u32) -> Result<Va
         let reply=cdp.call("Page.captureScreenshot",json!({
             "format":"jpeg","quality":quality,"fromSurface":true,"captureBeyondViewport":false,
             "clip":{"x":x,"y":y,"width":width,"height":height,"scale":scale}
-        })).await?;
+        })).await.map_err(|error| {
+            if error.contains("Page.captureScreenshot timed out") {
+                format!(
+                    "{error}; {}",
+                    concat!(
+                        "This browser did not produce the target's surface within 15 seconds. ",
+                        "The tab was not activated. Use browser.snapshot for page structure, ",
+                        "an isolated headless browser or private desktop for visual capture, ",
+                        "or explicitly choose foreground interaction."
+                    )
+                )
+            } else {
+                error
+            }
+        })?;
         let data = reply["data"]
             .as_str()
             .ok_or("browser returned no screenshot data")?;
@@ -1545,10 +1616,10 @@ struct Target {
 #[serde(deny_unknown_fields)]
 struct Open {
     url: String,
-    #[serde(default = "default_background")]
+    #[serde(default = "default_true")]
     background: bool,
 }
-fn default_background() -> bool {
+fn default_true() -> bool {
     true
 }
 #[derive(Deserialize)]
@@ -1597,7 +1668,7 @@ struct Evaluate {
 #[serde(deny_unknown_fields)]
 struct Launch {
     executable: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     headless: bool,
     #[serde(default = "default_width")]
     width: u32,
@@ -2304,8 +2375,19 @@ mod tests {
             assert!(names.insert(name.to_owned()));
             assert_eq!(tool["inputSchema"]["additionalProperties"], false);
         }
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 17);
         assert!(names.contains("ssmcp.browser.discover"));
+        // The default must never open a desktop window implicitly.
+        assert!(parse::<Launch>(json!({})).unwrap().headless);
+        assert!(!parse::<Launch>(json!({"headless":false})).unwrap().headless);
+        let launch = Browser::tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "ssmcp.browser.launch")
+            .unwrap();
+        assert_eq!(
+            launch["inputSchema"]["properties"]["headless"]["default"],
+            true
+        );
     }
     #[tokio::test]
     async fn cancelled_input_still_sends_release() {
@@ -2317,6 +2399,10 @@ mod tests {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let focus = test_request(&mut ws).await;
+            assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
+            assert_eq!(focus["params"]["enabled"], true);
+            test_reply(&mut ws, &focus, json!({})).await;
             let down: Value =
                 serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
                     .unwrap();
@@ -2337,6 +2423,10 @@ mod tests {
             ))
             .await
             .unwrap();
+            let restore = test_request(&mut ws).await;
+            assert_eq!(restore["method"], "Emulation.setFocusEmulationEnabled");
+            assert_eq!(restore["params"]["enabled"], false);
+            test_reply(&mut ws, &restore, json!({})).await;
         });
         let cdp = Cdp::connect(&format!("ws://{address}/devtools/page/test"))
             .await
@@ -2357,13 +2447,14 @@ mod tests {
         tokio::pin!(disconnect);
         assert!(poll_once(disconnect.as_mut()).await.is_pending());
         continue_tx.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(3), server)
-            .await
-            .unwrap()
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), disconnect)
-            .await
-            .unwrap();
+        // Poll disconnect while the peer waits for focus restoration. Merely
+        // constructing the future does not drive its cleanup after input drains.
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let (server, ()) = tokio::join!(server, disconnect);
+            server.unwrap();
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
