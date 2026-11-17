@@ -329,7 +329,7 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 // 管理任务：exec.list(clientId)、exec.cancel(clientId, jobId)、exec.forget(clientId, jobId)
 ```
 
-`wait_ms` 只控制这次等待；`timeout_ms` 才是命令的执行期限，默认没有期限。完成的任务不会被下一次启动立即删除，达到 128 条记录时才淘汰最早完成的记录。每个流保留 64 KiB 内存尾部，长输出另存完整文件；检查截断标记并通过 `outputs.read` 读取转储。[命令接口、边界和恢复方式](docs/commands.md)
+`wait_ms` 只控制这次等待；`timeout_ms` 才是命令的执行期限，默认没有期限。完成的任务不会被下一次启动立即删除，达到 128 条记录时才淘汰最早完成的记录。运行中的 stdout/stderr 各保留 64 KiB 内存尾部；流成功结束后释放重复尾部，小输出保留一份，较大输出通过已有归档按游标读取。归档遵循保留期与容量限制，不可用或缩短时返回错误；捕获失败仍保留尾部并标明错误。检查截断标记，也可通过 `outputs.read` 读取转储。[命令接口、边界和恢复方式](docs/commands.md) · [内存占用与验证边界](docs/client-memory.md)
 
 调用 Harness 或 MCP 工具时，先用 `await tools.search(client.id,{query:'所需能力',limit:20})` 定位工具，再用 `include_schemas:true` 获取完整原生 Schema。`list({client_id})` 和 `await tools(client.id,cursor)` 继续提供完整目录分页。检索减少返回给模型的无关描述，不减少首次扫描的底层分页；`tools.search` 需要服务端更新。`call` 对短结果保留原生 `content`、`structuredContent`、`isError` 和审批状态；大结果使用 artifact 保存原生 MCP JSON，独立命令分别保存 stdout/stderr，PTY 保存会话合并流，OpenCode HTTP 正文使用 `body_artifact` 与 `body_format`。代码应检查错误、转储完整性和任务状态。[完整 JavaScript 接口](docs/backends.md#3-用-code_mode-编排调用)
 
@@ -525,6 +525,7 @@ python3 scripts/e2e_agents.py --bin-dir target/debug
 | 编排 Shell 或 Agent 的原生能力 | [后端与代码模式](docs/backends.md) |
 | 让多个 agent 发现同伴、私信和广播 | [会话内 Agent 协作](docs/agent-collaboration.md) |
 | 设置标题、管理后台会话与重连、重载及读取长输出 | [会话与输出管理](docs/session-control.md) |
+| 查看客户端内存占用、优化边界与复现数据 | [客户端内存报告](docs/client-memory.md) |
 | 两端同步文件、映射端口、读取动态资源 | [工作区教程](docs/workspaces.md) |
 | 为 AI 提供可复用使用指南 | [ssmcp skill](skills/ssmcp/SKILL.md) |
 | 查看测试、架构与实际验收范围 | [验收记录](docs/validation.md) |
