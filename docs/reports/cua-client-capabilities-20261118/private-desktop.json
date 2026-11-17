@@ -1,0 +1,50 @@
+{
+  "status": "passed",
+  "checks": [
+    "effective sshd config permits public keys only",
+    "test host display is privately allocated",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "capability inspection leaves the private desktop stopped",
+    "input without an explicit surface cannot use the host desktop",
+    "owned desktop uses a different display from the test host",
+    "desktop_start reuses the owned display",
+    "native typing reaches the private application",
+    "native click reaches the private button",
+    "ssmcp.computer.screenshot returns a visible MCP image (modern=True)",
+    "image is bounded valid JPEG bytes",
+    "image payload is absent from structured metadata and text",
+    "private screenshot reports its own surface and coordinates",
+    "native input and screenshots preserve the test host cursor and focus",
+    "desktop_stop reaps applications and X server before removing owned state",
+    "stopping the private display never falls back to host input",
+    "host pointer and focus remain unchanged after shutdown"
+  ],
+  "metrics": {
+    "input_before": {
+      "pointer": "X=17\nY=19\nSCREEN=0\nWINDOW=2097185",
+      "focus": "2097184"
+    },
+    "input_after": {
+      "pointer": "X=17\nY=19\nSCREEN=0\nWINDOW=2097185",
+      "focus": "2097184"
+    },
+    "display_scope": "two private displays; no input sent to the operator's desktop"
+  },
+  "duration_seconds": 6.712
+}

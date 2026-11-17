@@ -35,10 +35,42 @@ impl ClientSettings {
     }
 }
 
+/// Browser defaults are local to this client; no credentials are stored here.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct BrowserSettings {
+    pub playwright_mcp: Option<PathBuf>,
+    pub background: bool,
+}
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self {
+            playwright_mcp: None,
+            background: true,
+        }
+    }
+}
+
+impl BrowserSettings {
+    pub(super) fn validate(&self) -> Result<()> {
+        if let Some(path) = &self.playwright_mcp {
+            let text = path.to_str().ok_or("browser CLI path must be UTF-8")?;
+            if !path.is_absolute() || text.len() > 4096 || text.chars().any(char::is_control) {
+                return Err(
+                    "browser CLI path must be absolute and contain no control characters".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct Document {
     client: ClientSettings,
+    browser: BrowserSettings,
 }
 
 pub(super) fn config_path() -> Result<PathBuf> {
@@ -82,11 +114,52 @@ fn read_config(path: &Path, required: bool) -> Result<String> {
     Ok(text)
 }
 
-fn parse(text: &str) -> Result<ClientSettings> {
+fn parse_document(text: &str) -> Result<Document> {
     let doc: Document =
         toml::from_str(text).map_err(|_| "invalid ssmcp client TOML configuration")?;
     doc.client.validate()?;
-    Ok(doc.client)
+    doc.browser.validate()?;
+    Ok(doc)
+}
+
+fn parse(text: &str) -> Result<ClientSettings> {
+    Ok(parse_document(text)?.client)
+}
+
+pub(super) fn browser() -> Result<BrowserSettings> {
+    let text = read_config(
+        &config_path()?,
+        std::env::var_os("SSMCP_CLIENT_CONFIG").is_some(),
+    )?;
+    Ok(parse_document(&text)?.browser)
+}
+
+pub(super) fn set_browser(settings: &BrowserSettings) -> Result<()> {
+    set_browser_at(&config_path()?, settings)
+}
+
+fn set_browser_at(path: &Path, settings: &BrowserSettings) -> Result<()> {
+    settings.validate()?;
+    let text = read_config(path, false)?;
+    let mut document: DocumentMut = text
+        .parse()
+        .map_err(|_| "invalid ssmcp client TOML configuration")?;
+    if !document.contains_key("browser") {
+        document["browser"] = Item::Table(Table::new());
+    }
+    let browser = document["browser"]
+        .as_table_like_mut()
+        .ok_or("browser configuration must be a TOML table")?;
+    if let Some(path) = &settings.playwright_mcp {
+        browser.insert(
+            "playwright_mcp",
+            value(path.to_str().ok_or("browser CLI path must be UTF-8")?),
+        );
+    } else {
+        browser.remove("playwright_mcp");
+    }
+    browser.insert("background", value(settings.background));
+    save_document(path, &text, document)
 }
 
 pub(super) fn server() -> Result<Option<String>> {
@@ -122,8 +195,12 @@ fn set_server_at(path: &Path, server: Option<&str>) -> Result<()> {
             .ok_or("client configuration must be a TOML table")?
             .remove("server");
     }
+    save_document(path, &text, document)
+}
+
+fn save_document(path: &Path, text: &str, document: DocumentMut) -> Result<()> {
     let output = document.to_string();
-    parse(&output)?;
+    parse_document(&output)?;
     if output.len() as u64 > CONFIG_LIMIT {
         return Err("client configuration exceeds 64 KiB".into());
     }
@@ -293,5 +370,80 @@ mod tests {
         normalize_args(&mut connection).unwrap();
         assert_eq!(connection, expected);
         assert!(normalize_args(&mut args(&["--server", "--json", "invite"])).is_err());
+    }
+    #[test]
+    fn browser_config_defaults_to_background_and_preserves_other_settings() {
+        assert!(parse_document("").unwrap().browser.background);
+        let root = directory();
+        let path = root.join("config.toml");
+        let original =
+            "# keep UI\n[ui]\ntheme = 'nord'\n[client]\nserver = 'https://relay.example'\n";
+        fs::write(&path, original).unwrap();
+        let cli = root.join("cli.js");
+        set_browser_at(
+            &path,
+            &BrowserSettings {
+                playwright_mcp: Some(cli.clone()),
+                background: true,
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(original));
+        let doc = parse_document(&text).unwrap();
+        assert_eq!(doc.browser.playwright_mcp, Some(cli));
+        assert!(doc.browser.background);
+        assert_eq!(doc.client.server.as_deref(), Some("https://relay.example"));
+        set_server_at(&path, Some("https://other.example")).unwrap();
+        assert!(
+            parse_document(&fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .browser
+                .playwright_mcp
+                .is_some()
+        );
+        set_browser_at(
+            &path,
+            &BrowserSettings {
+                playwright_mcp: None,
+                background: false,
+            },
+        )
+        .unwrap();
+        let doc = parse_document(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(!doc.browser.background);
+        assert!(doc.browser.playwright_mcp.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_browser_configuration_is_rejected_without_exposing_values() {
+        for text in [
+            "[browser]\nbackground = 'yes'",
+            "[browser]\nplaywright_mcp = 'relative/cli.js'",
+            "[browser]\nplaywrigt_mcp = '/tmp/secret-value'",
+        ] {
+            assert!(parse_document(text).is_err());
+        }
+        let error = parse_document("[browser]\nbackground = 'secret-value'")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(!error.contains("secret-value"));
+        let root = directory();
+        let path = root.join("config.toml");
+        fs::write(&path, "# unchanged").unwrap();
+        assert!(
+            set_browser_at(
+                &path,
+                &BrowserSettings {
+                    playwright_mcp: Some(PathBuf::from("relative")),
+                    background: true
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# unchanged");
+        fs::remove_dir_all(root).unwrap();
     }
 }

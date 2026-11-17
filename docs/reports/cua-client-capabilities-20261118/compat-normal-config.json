@@ -1,0 +1,34 @@
+{
+  "client_version": "0.7.4",
+  "wire_version": 5,
+  "manifest_schema": "ssmcp.client.capabilities.v1",
+  "generation": 16,
+  "tool_count": 1444,
+  "client_provider_tools": 4,
+  "configuration": "SSMCP_CLIENT_CONFIG=target/cua-validation/browser-config-candidate.toml",
+  "ui_override": false,
+  "candidate_cancelled": true,
+  "page1": [
+    "ssmcp-client://guide",
+    "ssmcp-client://limits"
+  ],
+  "page2": [
+    "ssmcp-client://skill",
+    "ssmcp-client://capabilities"
+  ],
+  "templates": [
+    "ssmcp-client://tools{?cursor}",
+    "ssmcp-client://skills{?root,scope,cursor}"
+  ],
+  "guide_uri": "ssmcp-client://guide",
+  "guide_text_characters": 12710,
+  "discovered": [
+    "ssmcp.computer.desktop_start",
+    "ssmcp.browser.wait_for"
+  ],
+  "old_relay_compatibility": true,
+  "completed_at": "2026-11-17T21:04:40.716Z",
+  "missing_original_clients": [],
+  "candidate_offline": true,
+  "passed": true
+}

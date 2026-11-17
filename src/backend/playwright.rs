@@ -7,12 +7,14 @@ use std::{
     collections::HashSet,
     io::Read,
     path::{Path, PathBuf},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
-use tokio::process::Command;
+use tokio::{io::AsyncReadExt, process::Command};
 
 const MAX_PAGES: usize = 128;
 const MAX_TOOLS: usize = 4096;
@@ -21,6 +23,7 @@ pub struct Playwright {
     peer: Arc<Peer>,
     server: Value,
     next_progress: AtomicU64,
+    background: bool,
 }
 
 /// An operator may point at a previously installed CLI entry. Never run npx,
@@ -33,6 +36,15 @@ pub fn installed() -> Result<PathBuf, String> {
                 "SSMCP_PLAYWRIGHT_MCP must name an existing absolute Playwright MCP CLI entry"
                     .into(),
             );
+        }
+        return path.canonicalize().map_err(|e| e.to_string());
+    }
+    if let Some(path) = crate::client::browser_settings()
+        .map_err(|e| e.to_string())?
+        .playwright_mcp
+    {
+        if !path.is_absolute() || !path.is_file() {
+            return Err("browser.playwright_mcp must name an existing absolute Playwright MCP CLI entry; run ssmcp setup browser --install".into());
         }
         return path.canonicalize().map_err(|e| e.to_string());
     }
@@ -108,15 +120,77 @@ pub async fn command(path: &Path) -> Result<Command, String> {
     }).await.map_err(|e| format!("Playwright runtime preparation failed: {e}"))?
 }
 
+/// Probe the installed CLI with bounded output and owned process cleanup.
+async fn background_supported(path: &Path) -> Result<(), String> {
+    let mut command = command(path).await?;
+    command
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut process = super::process::Managed::spawn(&mut command)
+        .map_err(|e| format!("Playwright background capability check: {e}"))?;
+    let mut stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or("Playwright help stdout unavailable")?
+        .take(65537);
+    let mut stderr = process
+        .child
+        .stderr
+        .take()
+        .ok_or("Playwright help stderr unavailable")?
+        .take(65537);
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let checked = tokio::time::timeout(Duration::from_secs(5), async {
+        let (a, b, status) = tokio::join!(
+            stdout.read_to_end(&mut out), stderr.read_to_end(&mut err), process.wait()
+        );
+        a.map_err(|e| e.to_string())?;
+        b.map_err(|e| e.to_string())?;
+        let status = status.map_err(|e| e.to_string())?;
+        if out.len() > 65536 || err.len() > 65536 {
+            return Err("Playwright help output exceeds 64 KiB".to_owned());
+        }
+        if !status.success() {
+            return Err(format!("Playwright --help failed ({status})"));
+        }
+        if !help_has_background(&out) && !help_has_background(&err) {
+            return Err("Installed Playwright MCP does not support --background; run ssmcp setup browser --install to install a version with background control. Foreground fallback is disabled; set browser.background=false only when foreground control is intended.".to_owned());
+        }
+        Ok(())
+    }).await.map_err(|_| "Playwright background capability check timed out".to_owned()).and_then(|v| v);
+    process.shutdown().await;
+    checked
+}
+
+fn help_has_background(bytes: &[u8]) -> bool {
+    String::from_utf8_lossy(bytes)
+        .split_whitespace()
+        .any(|word| word == "--background")
+}
+
 impl Playwright {
     pub async fn start_with_output(
         path: &Path,
         output: Arc<crate::output::OutputStore>,
     ) -> crate::Result<Arc<Self>> {
         let mut command = command(path).await?;
-        // This is the provider's native existing-browser mode. Do not silently
-        // substitute a fresh profile or scrape another extension's credentials.
-        command.arg("--extension");
+        let background = crate::client::browser_settings()?.background;
+        if background {
+            background_supported(path).await?;
+        }
+        // Existing profiles stay under the extension's native approval. An old
+        // provider must never silently fall back to taking the user's focus.
+        command.arg("--extension").env(
+            "PLAYWRIGHT_MCP_BACKGROUND",
+            if background { "1" } else { "0" },
+        );
+        if background {
+            command.arg("--background");
+        }
         let peer = Peer::spawn_with_output_and_audit(
             command,
             "playwright",
@@ -125,10 +199,10 @@ impl Playwright {
             super::events::AuditMode::MetadataOnly,
         )
         .await?;
-        Self::initialize(peer).await.map_err(Into::into)
+        Self::initialize(peer, background).await.map_err(Into::into)
     }
 
-    async fn initialize(peer: Arc<Peer>) -> Result<Arc<Self>, String> {
+    async fn initialize(peer: Arc<Peer>, background: bool) -> Result<Arc<Self>, String> {
         let initialized = async {
             let value = peer
                 .request_discovery(
@@ -157,6 +231,7 @@ impl Playwright {
                 peer,
                 server,
                 next_progress: AtomicU64::new(1),
+                background,
             })),
             Err(error) => {
                 peer.shutdown().await;
@@ -243,6 +318,9 @@ impl Playwright {
     pub fn diagnostics(&self) -> Value {
         json!({"scope":"native Playwright MCP tools", "browser_mode":"existing_browser_extension",
             "browser_connection":"on_demand_with_native_extension_approval",
+            "background":self.background,"input_scope":"browser_target","moves_system_pointer":false,
+            "focus_policy":if self.background {"background_after_native_pairing"} else {"explicit_foreground"},
+            "pairing_note":"Initial extension approval may open a foreground page; background mode does not bypass native approval.",
             "serverInfo":self.server.get("serverInfo"),"protocolVersion":self.server["protocolVersion"],
             "browser_control":"not_checked_by_discovery"})
     }
@@ -285,7 +363,7 @@ for line in sys.stdin:
         let peer = Peer::spawn(command, "playwright-fixture", Dialect::JsonRpc)
             .await
             .unwrap();
-        let bridge = Playwright::initialize(peer).await.unwrap();
+        let bridge = Playwright::initialize(peer, true).await.unwrap();
         let compact = bridge.compact_tools().await.unwrap();
         let tools = bridge.tools().await.unwrap();
         assert_eq!(
@@ -332,7 +410,7 @@ for line in sys.stdin:
         let peer = Peer::spawn(command, "playwright-fixture", Dialect::JsonRpc)
             .await
             .unwrap();
-        Playwright::initialize(peer).await.unwrap()
+        Playwright::initialize(peer, true).await.unwrap()
     }
 
     #[tokio::test]
@@ -509,6 +587,36 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn background_probe_accepts_supported_cli_and_rejects_foreground_only_cli() {
+        if crate::program::node().is_err() {
+            return; // The package supports clients without optional Node installed.
+        }
+        struct Directory(PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let mut nonce = [0u8; 16];
+        crate::platform::random_bytes(&mut nonce).unwrap();
+        let nonce: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+        let directory =
+            Directory(std::env::temp_dir().join(format!("ssmcp-background-probe-{nonce}")));
+        std::fs::create_dir(&directory.0).unwrap();
+        let entry = directory.0.join("provider.cjs");
+        std::fs::write(&entry,
+            "if(process.argv[2]!=='--help')process.exit(7);console.log('--extension --background-color');"
+        ).unwrap();
+        let error = background_supported(&entry).await.unwrap_err();
+        assert!(error.contains("does not support --background"));
+        assert!(error.contains("ssmcp setup browser --install"));
+        std::fs::write(&entry,
+            "if(process.argv[2]!=='--help')process.exit(7);console.log('  --background  keep tabs inactive');"
+        ).unwrap();
+        background_supported(&entry).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn unsupported_protocol_is_not_registered() {
         let script = SERVER.replace("'2025-11-25'", "'2099-01-01'");
         let mut command = Command::new("python3");
@@ -516,6 +624,6 @@ for line in sys.stdin:
         let peer = Peer::spawn(command, "playwright-fixture", Dialect::JsonRpc)
             .await
             .unwrap();
-        assert!(Playwright::initialize(peer).await.is_err());
+        assert!(Playwright::initialize(peer, true).await.is_err());
     }
 }
