@@ -24,6 +24,10 @@ use tokio::{
 // Serialize independent HTTP scenarios so parallel test execution does not
 // consume those slots and accidentally test overload handling instead.
 static CODE_MODE_SCENARIO: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+type SteeringRequest = (
+    wire::SteeringCommand,
+    tokio::sync::oneshot::Sender<Result<wire::SteeringSnapshot, String>>,
+);
 
 struct Client {
     id: String,
@@ -32,6 +36,7 @@ struct Client {
     reload_commits: Arc<AtomicUsize>,
     code_contexts: Arc<Mutex<Vec<wire::CodeContext>>>,
     code_completions: Arc<Mutex<Vec<wire::CodeCompletion>>>,
+    steering: tokio::sync::mpsc::Sender<SteeringRequest>,
     task: JoinHandle<()>,
     attachment: JoinHandle<ssmcp::Result<()>>,
 }
@@ -121,19 +126,50 @@ impl Server {
         let recorded_contexts = code_contexts.clone();
         let code_completions = Arc::new(Mutex::new(Vec::new()));
         let recorded_completions = code_completions.clone();
+        let (steering, mut steering_requests) = tokio::sync::mpsc::channel::<SteeringRequest>(4);
         let task = tokio::spawn(async move {
-            while let Some(frame) = wire::read_frame(&mut reader).await.unwrap() {
+            let mut steering_id = 0u64;
+            let mut steering_replies = std::collections::HashMap::new();
+            loop {
+                let frame = {
+                    let frame = wire::read_frame(&mut reader);
+                    tokio::pin!(frame);
+                    loop {
+                        tokio::select! {
+                            received = &mut frame => break received.unwrap(),
+                            Some((command, reply)) = steering_requests.recv() => {
+                                steering_id += 1;
+                                steering_replies.insert(steering_id, reply);
+                                wire::write_frame(&mut writer, &Frame::Steering { id: steering_id, command }).await.unwrap();
+                            }
+                        }
+                    }
+                };
+                let Some(frame) = frame else {
+                    break;
+                };
                 let (id, operation) = match frame {
-                    Frame::Call { id, operation, code_context, .. } => {
+                    Frame::SteeringReply { id, result } => {
+                        if let Some(reply) = steering_replies.remove(&id) {
+                            let _ = reply.send(result);
+                        }
+                        continue;
+                    }
+                    Frame::Call {
+                        id,
+                        operation,
+                        code_context,
+                        ..
+                    } => {
                         if let Some(context) = code_context {
                             recorded_contexts.lock().unwrap().push(context);
                         }
                         (id, operation)
-                    },
+                    }
                     Frame::CodeModeFinished { completion } => {
                         recorded_completions.lock().unwrap().push(completion);
                         continue;
-                    },
+                    }
                     Frame::ReloadCommit { .. } => {
                         // Negative scenarios retain the connection so a later
                         // barrier call can prove whether a commit was sent.
@@ -177,6 +213,13 @@ impl Server {
                             response["structuredContent"]["status"] = json!("restarting");
                         }
                         Ok(response)
+                    }
+                    Operation::CallTool { name, arguments }
+                        if matches!(name.as_str(), "ssmcp.ui.get" | "ssmcp.ui.queue") =>
+                    {
+                        Ok(ssmcp::backend::result(
+                            json!({"tool":name,"arguments":arguments}),
+                        ))
                     }
                     Operation::CallTool { name, arguments }
                         if name == "ssmcp.client.reload"
@@ -239,6 +282,7 @@ impl Server {
             reload_commits,
             code_contexts,
             code_completions,
+            steering,
             task,
             attachment,
         });
@@ -377,6 +421,23 @@ impl Server {
         body["result"]["structuredContent"].clone()
     }
 
+    async fn steer(
+        &self,
+        index: usize,
+        command: wire::SteeringCommand,
+    ) -> Result<wire::SteeringSnapshot, String> {
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.clients[index]
+            .steering
+            .send((command, reply))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), response)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
     async fn disconnect(&self, index: usize) {
         self.clients[index].task.abort();
         for _ in 0..100 {
@@ -417,21 +478,234 @@ async fn session_title_is_visible_in_inventory_and_selected_client_discovery() {
 
 #[tokio::test]
 #[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
+async fn local_composer_delivers_at_response_boundary_and_exact_targets_require_binding() {
+    let _scenario = CODE_MODE_SCENARIO.lock().await;
+    let mut server = Server::start().await;
+    server.attach(Mode::Shell).await;
+    let target = server.attach(Mode::Shell).await;
+    let publish = |id: &str, text: &str, target: &str| wire::SteeringCommand::Publish {
+        command_id: format!("publish_{id}"),
+        message_id: id.into(),
+        expected_revision: 0,
+        text: text.into(),
+        target: target.into(),
+    };
+    server
+        .steer(0, publish("other", "do not consume another room", "next"))
+        .await
+        .unwrap();
+    server
+        .steer(
+            1,
+            publish("next", "Please run the focused tests next.", "next"),
+        )
+        .await
+        .unwrap();
+    let observation = format!(
+        "await call({0}, 'ssmcp.ui.get', {{}}); return await call({0}, 'ssmcp.ui.queue', {{action:'get'}});",
+        json!(target)
+    );
+    let observed = server.call("code_mode", json!({"code":observation})).await;
+    assert!(observed.get("user_messages").is_none());
+    assert_eq!(
+        server
+            .steer(1, wire::SteeringCommand::Snapshot {})
+            .await
+            .unwrap()
+            .messages[0]
+            .state,
+        wire::SteeringState::Queued,
+        "a UI-only refresh must not consume the next caller's requirement"
+    );
+    assert_eq!(server.clients[1].code_contexts.lock().unwrap().len(), 2);
+    assert_eq!(
+        server.clients[1].code_contexts.lock().unwrap()[0].code,
+        observation,
+        "observational UI calls must still retain their source audit"
+    );
+    let source = format!(
+        "return await call({}, 'fixture.echo', {{value:'unaltered'}});",
+        json!(target)
+    );
+    let (status, body) = server
+        .rpc(
+            "tools/call",
+            json!({"name":"code_mode","arguments":{"code":source}}),
+            true,
+            0,
+        )
+        .await;
+    assert_eq!(status, 200);
+    let response = &body["result"];
+    assert_eq!(
+        response["structuredContent"]["result"]["structuredContent"]["arguments"],
+        json!({"value":"unaltered"})
+    );
+    let messages = response["structuredContent"]["user_messages"]
+        .as_array()
+        .unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["client_id"], target);
+    assert_eq!(messages[0]["message_id"], "next");
+    assert!(response["content"].as_array().unwrap().iter().any(|item| {
+        item["text"].as_str().is_some_and(|text| {
+            text.contains("USER REQUIREMENTS")
+                && text.contains("Please run the focused tests next.")
+        })
+    }));
+    assert_eq!(
+        server
+            .steer(0, wire::SteeringCommand::Snapshot {})
+            .await
+            .unwrap()
+            .messages[0]
+            .state,
+        wire::SteeringState::Queued
+    );
+    assert_eq!(
+        server
+            .steer(1, wire::SteeringCommand::Snapshot {})
+            .await
+            .unwrap()
+            .messages[0]
+            .state,
+        wire::SteeringState::Delivered
+    );
+
+    let member = server
+        .call(
+            "collab",
+            json!({"action":"join","client_id":target,"name":"reviewer"}),
+        )
+        .await;
+    let agent_id = member["agent_id"].as_str().unwrap();
+    let token = member["token"].as_str().unwrap();
+    let snapshot = server
+        .steer(
+            1,
+            publish("exact", "Review the concurrency change.", agent_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.agents[0].agent_id, agent_id);
+    assert_eq!(snapshot.agents[0].status, "available");
+    assert!(!serde_json::to_string(&snapshot).unwrap().contains(token));
+    let unbound = server
+        .call(
+            "code_mode",
+            json!({"code":source,"controller":{"name":"reviewer"}}),
+        )
+        .await;
+    assert!(
+        unbound.get("user_messages").is_none(),
+        "controller name must not authenticate an agent"
+    );
+    let invalid = format!(
+        "await collab.bind({},{{agent_id:{},token:{}}}); return 1;",
+        json!(target),
+        json!(agent_id),
+        json!("0".repeat(64))
+    );
+    let (_, failure) = server
+        .rpc(
+            "tools/call",
+            json!({"name":"code_mode","arguments":{"code":invalid}}),
+            true,
+            0,
+        )
+        .await;
+    assert_eq!(failure["result"]["isError"], true);
+    assert!(
+        failure["result"]["structuredContent"]
+            .get("user_messages")
+            .is_none()
+    );
+    let bound = format!(
+        "await collab.bind({},{{agent_id:{},token:{}}}); {}",
+        json!(target),
+        json!(agent_id),
+        json!(token),
+        source
+    );
+    let result = server.call("code_mode", json!({"code":bound})).await;
+    assert_eq!(result["user_messages"][0]["message_id"], "exact");
+    assert_eq!(result["user_messages"][0]["agent_id"], agent_id);
+    assert_eq!(
+        result["result"]["structuredContent"]["arguments"],
+        json!({"value":"unaltered"})
+    );
+    assert!(!result.to_string().contains(token));
+
+    server
+        .steer(
+            1,
+            publish("bound_ui", "The bound agent may collect this.", "next"),
+        )
+        .await
+        .unwrap();
+    let bound_observation = format!(
+        "await collab.bind({},{{agent_id:{},token:{}}}); {}",
+        json!(target),
+        json!(agent_id),
+        json!(token),
+        observation
+    );
+    let result = server
+        .call("code_mode", json!({"code":bound_observation}))
+        .await;
+    assert_eq!(result["user_messages"][0]["message_id"], "bound_ui");
+    assert_eq!(result["user_messages"][0]["agent_id"], agent_id);
+
+    server
+        .steer(
+            1,
+            publish("input", "Use explicit top-level membership.", agent_id),
+        )
+        .await
+        .unwrap();
+    let result = server
+        .call(
+            "code_mode",
+            json!({"code":"return 42;","agent":{"client_id":target,"id":agent_id,"token":token}}),
+        )
+        .await;
+    assert_eq!(result["result"], 42);
+    assert_eq!(result["user_messages"][0]["message_id"], "input");
+}
+
+#[tokio::test]
+#[ignore = "requires system Node.js, bubblewrap, and permitted user/network namespaces; CI runs explicitly with --include-ignored"]
 async fn code_mode_http_forwards_full_source_only_to_called_clients_and_reports_run_outcome() {
     let _scenario = CODE_MODE_SCENARIO.lock().await;
     let mut server = Server::start().await;
     server.attach(Mode::Shell).await;
     let target = server.attach(Mode::Shell).await;
-    let body = format!("// Unicode source ✓, original indentation and newlines\n  const first = await call({0}, 'fixture.echo', {{value:'first'}});\n  const second = await call({0}, 'fixture.echo', {{value:'second'}});\n  return [first.structuredContent.arguments, second.structuredContent.arguments];\n", json!(target));
-    let code = format!("//{}\n{body}", " ".repeat(wire::MAX_CODE_BYTES - body.len() - 3));
+    let body = format!(
+        "// Unicode source ✓, original indentation and newlines\n  const first = await call({0}, 'fixture.echo', {{value:'first'}});\n  const second = await call({0}, 'fixture.echo', {{value:'second'}});\n  return [first.structuredContent.arguments, second.structuredContent.arguments];\n",
+        json!(target)
+    );
+    let code = format!(
+        "//{}\n{body}",
+        " ".repeat(wire::MAX_CODE_BYTES - body.len() - 3)
+    );
     assert_eq!(code.len(), wire::MAX_CODE_BYTES);
     let execution = server.call("code_mode", json!({"code":code})).await;
-    assert_eq!(execution["result"], json!([{"value":"first"},{"value":"second"}]));
+    assert_eq!(
+        execution["result"],
+        json!([{"value":"first"},{"value":"second"}])
+    );
     tokio::time::timeout(Duration::from_secs(2), async {
-        while server.clients[1].code_completions.lock().unwrap().is_empty() {
+        while server.clients[1]
+            .code_completions
+            .lock()
+            .unwrap()
+            .is_empty()
+        {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-    }).await.expect("target did not receive run completion");
+    })
+    .await
+    .expect("target did not receive run completion");
     let contexts = server.clients[1].code_contexts.lock().unwrap().clone();
     assert_eq!(contexts.len(), 2);
     assert!(contexts.iter().all(|context| context.code == code));
@@ -443,18 +717,36 @@ async fn code_mode_http_forwards_full_source_only_to_called_clients_and_reports_
     assert_eq!(completed.status, "completed");
     assert!(completed.success);
     assert!(server.clients[0].code_contexts.lock().unwrap().is_empty());
-    assert!(server.clients[0].code_completions.lock().unwrap().is_empty());
+    assert!(
+        server.clients[0]
+            .code_completions
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(server.clients[0].calls.load(Ordering::Acquire), 0);
 
-    let failed_source = format!("await call({}, 'fixture.echo', {{value:'before-error'}});\nthrow new Error('failed after native call');\n", json!(target));
-    let (status, response) = server.rpc("tools/call", json!({"name":"code_mode","arguments":{"code":failed_source}}), true, 0).await;
+    let failed_source = format!(
+        "await call({}, 'fixture.echo', {{value:'before-error'}});\nthrow new Error('failed after native call');\n",
+        json!(target)
+    );
+    let (status, response) = server
+        .rpc(
+            "tools/call",
+            json!({"name":"code_mode","arguments":{"code":failed_source}}),
+            true,
+            0,
+        )
+        .await;
     assert_eq!(status, 200);
     assert_eq!(response["result"]["isError"], true, "{response}");
     tokio::time::timeout(Duration::from_secs(2), async {
         while server.clients[1].code_completions.lock().unwrap().len() < 2 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-    }).await.expect("target did not receive failed run completion");
+    })
+    .await
+    .expect("target did not receive failed run completion");
     let contexts = server.clients[1].code_contexts.lock().unwrap();
     assert_eq!(contexts.len(), 3);
     assert_eq!(contexts[2].code, failed_source);
@@ -462,9 +754,21 @@ async fn code_mode_http_forwards_full_source_only_to_called_clients_and_reports_
     assert_eq!(completed.run_id, contexts[2].run_id);
     assert!(!completed.success);
     assert_eq!(completed.status, "failed");
-    assert!(completed.error.as_deref().unwrap().contains("failed after native call"));
+    assert!(
+        completed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("failed after native call")
+    );
     assert!(server.clients[0].code_contexts.lock().unwrap().is_empty());
-    assert!(server.clients[0].code_completions.lock().unwrap().is_empty());
+    assert!(
+        server.clients[0]
+            .code_completions
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

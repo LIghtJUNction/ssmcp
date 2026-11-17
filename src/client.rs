@@ -1,6 +1,7 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod account;
 mod audit_view;
+mod composer;
 mod config;
 mod git_status;
 pub(crate) mod input;
@@ -12,6 +13,7 @@ mod protocol_tests;
 mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;
+mod steering;
 pub(crate) mod terminal;
 mod trust;
 pub(crate) mod ui;
@@ -22,9 +24,9 @@ use crate::{
     platform::{interrupt_signal, terminate_signal},
     runtime::Runtime,
     wire::{
-        CONTROLLER_VERSION, ClientMetadata, Frame, LEGACY_VERSION, MAX_ALLOWED_PRINCIPALS,
-        MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, canonical_github_principal, read_frame,
-        validate_title, write_frame,
+        CODE_VERSION, CONTROLLER_VERSION, ClientMetadata, Frame, LEGACY_VERSION,
+        MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, canonical_github_principal,
+        read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -1194,6 +1196,7 @@ pub async fn run() -> crate::Result<()> {
     }
     interface::initialize_path(options.ui_config.as_deref());
     render::configure(ui.clone());
+    steering::restore_handoff()?;
     let mut attachment = if let Some(runner) = &service {
         Some(crate::session::attach::serve(runner.directory().to_path_buf(), None).await?)
     } else {
@@ -1400,7 +1403,7 @@ impl std::fmt::Display for UnsupportedWireProtocol {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION}, {CONTROLLER_VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
+            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION}, {CODE_VERSION}, {CONTROLLER_VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
         )
     }
 }
@@ -1516,17 +1519,21 @@ async fn register_ssh(
                     || message
                         == "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)"
                 {
-                    if matches!(*protocol, VERSION | CONTROLLER_VERSION) {
+                    if matches!(*protocol, VERSION | CODE_VERSION | CONTROLLER_VERSION) {
                         let rejected = *protocol;
-                        *protocol = if rejected == VERSION {
-                            CONTROLLER_VERSION
-                        } else {
-                            LEGACY_VERSION
+                        *protocol = match rejected {
+                            VERSION => CODE_VERSION,
+                            CODE_VERSION => CONTROLLER_VERSION,
+                            _ => LEGACY_VERSION,
                         };
-                        let limitation = if *protocol == CONTROLLER_VERSION {
-                            "Raw code audit requires a version 6 gateway."
-                        } else {
-                            "Task titles stay local; per-call controller attribution is unavailable."
+                        let limitation = match *protocol {
+                            CODE_VERSION => {
+                                "The local request queue requires a version 7 gateway; composer drafts stay local."
+                            }
+                            CONTROLLER_VERSION => "Raw code audit requires a version 6 gateway.",
+                            _ => {
+                                "Task titles stay local; per-call controller attribution is unavailable."
+                            }
                         };
                         render::status(
                             "ssh",
@@ -1572,6 +1579,57 @@ async fn register_ssh(
             ready,
         }));
     }
+}
+
+async fn send_steering(
+    writer: &Arc<Mutex<tokio::process::ChildStdin>>,
+    id: u64,
+    command: crate::wire::SteeringCommand,
+) -> crate::Result<()> {
+    if !steering::sent(id) {
+        return Ok(());
+    }
+    timeout(Duration::from_secs(10), async {
+        let mut writer = writer.lock().await;
+        write_frame(&mut *writer, &Frame::Steering { id, command }).await
+    })
+    .await
+    .map_err(|_| "request queue write timed out")??;
+    Ok(())
+}
+
+/// Freeze mutations and reclaim queued requests before tearing down their room.
+/// Delivery can win a takeback race; those requests remain delivered and never replay.
+async fn reclaim_steering(
+    incoming: &mut Incoming,
+    writer: &Arc<Mutex<tokio::process::ChildStdin>>,
+    commands: &mut mpsc::Receiver<steering::Transport>,
+    backend: &Runtime,
+) -> crate::Result<()> {
+    steering::begin_reload()?;
+    timeout(Duration::from_secs(15), async {
+        loop {
+            if steering::reload_ready()? { return Ok::<(), crate::Error>(()); }
+            tokio::select! {
+                command = commands.recv() => match command {
+                    Some(steering::Transport::Wire { id, command }) => send_steering(writer, id, command).await?,
+                    Some(steering::Transport::Reload) => {},
+                    None => return Err("client control channel ended while preparing reload".into()),
+                },
+                frame = incoming.frames.recv() => match frame {
+                    Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::reply(id, result)?,
+                    Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
+                    Some(Ok(Some(Frame::Call { id, .. }))) => {
+                        let mut writer = writer.lock().await;
+                        write_frame(&mut *writer, &Frame::Reply { id, result: Err("client reload is preparing; refresh clients after reconnection".into()) }).await?;
+                    },
+                    Some(Ok(Some(Frame::Reject { message }))) => return Err(message.into()),
+                    Some(Err(error)) => return Err(error.into()),
+                    _ => return Err("connection ended while preserving queued requests".into()),
+                }
+            }
+        }
+    }).await.map_err(|_| "queued requests could not be reclaimed in time; client remains running")?
 }
 
 async fn connect(
@@ -1808,6 +1866,9 @@ async fn connect(
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
+    let mut steering_commands = steering::connect(&client_id, *protocol);
+    let mut steering_updates = tokio::time::interval(Duration::from_secs(1));
+    steering_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
     let mut reload_requested = false;
     let mut intentionally_stopped = false;
@@ -1815,6 +1876,36 @@ async fn connect(
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result: crate::Result<()> = 'connected: loop {
         tokio::select! {
+            _ = steering_updates.tick() => {
+                if let Err(error) = steering::poll() { terminal::notice(&error); }
+            },
+            command = steering_commands.recv() => match command {
+                Some(steering::Transport::Wire { id, command }) => {
+                    if let Err(error) = send_steering(&writer, id, command).await { break Err(error); }
+                },
+                Some(steering::Transport::Reload) => {
+                    while let Some(completed) = requests.try_join_next() {
+                        match completed {
+                            Ok(Ok(_)) => {},
+                            Ok(Err(error)) => break 'connected Err(error.into()),
+                            Err(error) => break 'connected Err(error.into()),
+                        }
+                    }
+                    let accepted = if options.temporary {
+                        Err("temporary joined sessions keep their credential only in memory; stop this session and create a new invitation to restart it".into())
+                    } else {
+                        backend.validate_reload().and_then(|()| restart.accept(&json!({}), requests.len(), &client_id, github_auth)).map(|_| ())
+                    };
+                    match accepted {
+                        Err(error) => { steering::abort_reload(&error); terminal::notice(&error); }
+                        Ok(()) => match reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend).await {
+                            Ok(()) => { reload_requested = true; break Ok(()); }
+                            Err(error) => { steering::abort_reload(&error.to_string()); terminal::notice(&error.to_string()); }
+                        },
+                    }
+                },
+                None => {},
+            },
             _ = service_updates.tick(), if service.is_some() => {
                 if service.expect("guarded service runner").stop_requested() {
                     intentionally_stopped = true;
@@ -1844,11 +1935,17 @@ async fn connect(
                     if reload::is_reload(&operation) {
                         let _controller = render::controller_started(id, controller.as_ref());
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
-                        let response = if options.temporary {
+                        let mut response = if options.temporary {
                             Err("temporary joined sessions keep their credential only in memory; stop this session and create a new invitation to restart it".into())
                         } else {
                             backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
                         };
+                        if response.is_ok() {
+                            if let Err(error) = reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend).await {
+                                steering::abort_reload(&error.to_string());
+                                response = Err(error.to_string());
+                            }
+                        }
                         let accepted = response.is_ok();
                         if let Some(call) = &mut code_call { call.finish(&response); }
                         let sent = timeout(Duration::from_secs(10), async {
@@ -1869,6 +1966,7 @@ async fn connect(
                                     match incoming.frames.recv().await {
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
                                         Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
+                                        Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result)?; }
                                         Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
                                             let mut writer = writer.lock().await;
                                             write_frame(&mut *writer, &Frame::Reply { id: next_id, result: Err("client reload is already pending; call list after reconnection".into()) }).await?;
@@ -1882,6 +1980,7 @@ async fn connect(
                                 Ok(Ok(())) => {},
                                 Ok(Err(error)) => break Err(error),
                                 Err(_) => {
+                                    steering::abort_reload("Server did not confirm reload receipt; client remains running");
                                     render::status("ssmcp", "Error", "Server did not confirm reload receipt; client remains running. Update ssmcpd before using reload.");
                                     continue 'connected;
                                 }
@@ -1916,6 +2015,9 @@ async fn connect(
                 Some(Ok(Some(Frame::CodeModeFinished { completion }))) => {
                     if let Err(error) = backend.code_mode_finished(completion) { break Err(error.into()); }
                 }
+                Some(Ok(Some(Frame::SteeringReply { id, result }))) => {
+                    if let Err(error) = steering::reply(id, result) { terminal::notice(&error); }
+                }
                 Some(Ok(None)) | None => break Ok(()),
                 Some(Ok(Some(Frame::Reject {message}))) => break Err(relay::failure(message)),
                 Some(Ok(Some(_))) => break Err("unexpected SSH protocol frame".into()),
@@ -1936,6 +2038,7 @@ async fn connect(
     if let Some(input) = local_input {
         input.shutdown().await;
     }
+    steering::disconnect();
     requests.abort_all();
     while requests.join_next().await.is_some() {}
     if let Some(observer) = git_status {

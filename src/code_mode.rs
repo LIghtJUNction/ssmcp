@@ -3,7 +3,7 @@ use crate::backend::process::Managed;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     io,
     path::{Path, PathBuf},
@@ -41,8 +41,18 @@ pub(crate) struct AuditRun {
     pub context: Arc<crate::wire::CodeContext>,
     pub controller: Option<crate::wire::Controller>,
     targets: Arc<Mutex<HashSet<String>>>,
+    steering_targets: Arc<Mutex<HashSet<String>>>,
     finished: Arc<Mutex<Option<crate::wire::CodeCompletion>>>,
+    bindings: Arc<Mutex<HashMap<String, RunBinding>>>,
     started: Instant,
+}
+
+/// Private server-side proof for one room, never serialized to a native client.
+#[derive(Clone)]
+pub(crate) struct RunBinding {
+    pub owner: String,
+    pub agent_id: String,
+    pub token: String,
 }
 
 tokio::task_local! {
@@ -71,7 +81,9 @@ impl AuditRun {
             context: Arc::new(context),
             controller,
             targets: Arc::new(Mutex::new(HashSet::new())),
+            steering_targets: Arc::new(Mutex::new(HashSet::new())),
             finished: Arc::new(Mutex::new(None)),
+            bindings: Arc::new(Mutex::new(HashMap::new())),
             started: Instant::now(),
         })
     }
@@ -86,6 +98,36 @@ impl AuditRun {
     pub(crate) fn targets(&self) -> Vec<String> {
         let mut targets = self
             .targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets
+    }
+
+    /// UI frontends may poll and change display state through code_mode. Their
+    /// calls still carry source audit, but cannot consume a human requirement
+    /// intended for the next agent operation merely by refreshing the screen.
+    pub(crate) fn native_dispatched(&self, client_id: &str, tool: Option<&str>) {
+        self.dispatched(client_id);
+        if tool.is_some_and(|name| !name.starts_with("ssmcp.ui.")) {
+            self.interacted(client_id);
+        }
+    }
+
+    pub(crate) fn interacted(&self, client_id: &str) {
+        self.dispatched(client_id);
+        self.steering_targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(client_id.into());
+    }
+
+    pub(crate) fn steering_targets(&self) -> Vec<String> {
+        let mut targets = self
+            .steering_targets
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .iter()
@@ -128,6 +170,51 @@ impl AuditRun {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
+    }
+
+    pub(crate) fn bind(
+        &self,
+        client_id: &str,
+        owner: &str,
+        agent_id: &str,
+        token: &str,
+    ) -> Result<(), String> {
+        let mut bindings = self
+            .bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(existing) = bindings.get(client_id) {
+            if existing.owner != owner || existing.agent_id != agent_id || existing.token != token {
+                return Err(
+                    "a code_mode run cannot switch its bound agent within the same room".into(),
+                );
+            }
+        } else {
+            if bindings.len() >= MAX_CALLS {
+                return Err("too many agent bindings in one code_mode run".into());
+            }
+            bindings.insert(
+                client_id.into(),
+                RunBinding {
+                    owner: owner.into(),
+                    agent_id: agent_id.into(),
+                    token: token.into(),
+                },
+            );
+        }
+        drop(bindings);
+        // Explicitly binding a room is an authorized interaction with it, even
+        // if this program only checks messages and makes no native tool call.
+        self.interacted(client_id);
+        Ok(())
+    }
+
+    pub(crate) fn binding(&self, client_id: &str) -> Option<RunBinding> {
+        self.bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(client_id)
+            .cloned()
     }
 }
 
@@ -665,6 +752,32 @@ mod tests {
 
     static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    #[test]
+    fn ui_observation_retains_source_audit_without_claiming_user_requirements() {
+        let run = AuditRun::new("return await ui.get('display');", None).unwrap();
+        for tool in [
+            "ssmcp.ui.get",
+            "ssmcp.ui.queue",
+            "ssmcp.ui.set",
+            "ssmcp.ui.action",
+            "ssmcp.ui.filter",
+        ] {
+            run.native_dispatched("display", Some(tool));
+        }
+        run.native_dispatched("catalog", None);
+        assert_eq!(run.targets(), ["catalog", "display"]);
+        assert!(run.steering_targets().is_empty());
+
+        run.native_dispatched("worker", Some("terminal.status"));
+        run.native_dispatched("files", Some("ssmcp.fs.read_text"));
+        assert_eq!(run.steering_targets(), ["files", "worker"]);
+
+        run.bind("display", "owner", "agent_one", "private-token")
+            .unwrap();
+        assert_eq!(run.steering_targets(), ["display", "files", "worker"]);
+        assert_eq!(run.context.code, "return await ui.get('display');");
+    }
+
     // Fixed test programs verify the runner/pipe protocol; execute() always requires bubblewrap.
     async fn trusted_execute(
         code: String,
@@ -1020,17 +1133,20 @@ mod tests {
         let _guard = TESTS.lock().await;
         let output = run_code(r#"
             const joined = await collab.join('room',{name:'writer',client_id:'cannot-override'});
+            const bound = await collab.bind('room',{agent_id:'a',token:'private',client_id:'cannot-override'});
             const messages = await collab.receive('room',{agent_id:'a',token:'private',after:7,wait_ms:1000});
             const sent = await collab.send('room',{agent_id:'a',token:'private',to:'b',payload:{file:'src/lib.rs'},idempotency_key:'handoff-1'});
             const acked = await collab.ack('room',{agent_id:'a',token:'private',through:8});
             let rejected = '';
             try { await collab.receive('room',{agent_id:'a',token:'private',wait_ms:30000}); }
             catch (error) { rejected = error.message; }
-            return {joined,messages,sent,acked,rejected,frozen:Object.isFrozen(collab)};
+            return {joined,bound,messages,sent,acked,rejected,frozen:Object.isFrozen(collab)};
         "#).await.unwrap();
         let result = &output["result"];
         assert_eq!(result["joined"]["name"], "collab.join");
         assert_eq!(result["joined"]["arguments"]["client_id"], "room");
+        assert_eq!(result["bound"]["name"], "collab.bind");
+        assert_eq!(result["bound"]["arguments"]["client_id"], "room");
         assert_eq!(result["messages"]["name"], "collab.receive");
         assert_eq!(result["messages"]["arguments"]["after"], 7);
         assert_eq!(result["sent"]["arguments"]["payload"]["file"], "src/lib.rs");

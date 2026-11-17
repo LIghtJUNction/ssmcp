@@ -349,10 +349,7 @@ impl AuditView {
         let mut rows = vec![row(&[(title, "heading")], width, ui)];
         if visible.is_empty() {
             rows.push(row(
-                &[(
-                    " Waiting for code_mode calls".into(),
-                    "muted",
-                )],
+                &[(" Waiting for code_mode calls".into(), "muted")],
                 width,
                 ui,
             ));

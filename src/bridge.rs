@@ -589,7 +589,7 @@ fn parse<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, String> {
     serde_json::from_value(args).map_err(|e| format!("invalid builtin arguments: {e}"))
 }
 
-fn owner(user: &str, authorization: &Authorization) -> Result<String, String> {
+pub(crate) fn owner(user: &str, authorization: &Authorization) -> Result<String, String> {
     match authorization {
         Authorization::Identity(identity) => Ok(format!(
             "{user}\0{}\0{}",
@@ -656,12 +656,34 @@ pub async fn dispatch(
                 .ok_or("collab requires client_id from list")?;
             valid_client(&client_id)?;
             let session = access.session(&client_id).await?;
+            if name == "collab.bind" {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Binding {
+                    agent_id: String,
+                    token: String,
+                }
+                let binding: Binding = parse(Value::Object(args))?;
+                let agent =
+                    session
+                        .collaboration
+                        .bind(&owner, &binding.agent_id, &binding.token)?;
+                let run = access.audit_run.as_ref().ok_or(
+                    "collab.bind is scoped to code_mode; call it at the start of each run",
+                )?;
+                access.session(&client_id).await?;
+                run.bind(&client_id, &owner, &binding.agent_id, &binding.token)?;
+                return Ok(json!({"client_id":client_id,"agent":agent,"bound":true}));
+            }
             let result = session
                 .collaboration
                 .dispatch(&owner, &name["collab.".len()..], Value::Object(args))
                 .await?;
             // Waiting never grants authority beyond the current token and ACL.
             access.session(&client_id).await?;
+            if let Some(run) = &access.audit_run {
+                run.interacted(&client_id);
+            }
             Ok(result)
         }
         "resources.list" => {

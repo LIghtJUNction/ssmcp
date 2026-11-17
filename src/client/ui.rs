@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Theme {
-    Minimal,
     #[default]
+    Dark,
+    Minimal,
     CodexDark,
     Nord,
     Solarized,
@@ -17,17 +18,19 @@ pub(crate) enum Theme {
 impl Theme {
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
         match value {
+            "dark" => Ok(Self::Dark),
             "minimal" => Ok(Self::Minimal),
             "codex-dark" => Ok(Self::CodexDark),
             "nord" => Ok(Self::Nord),
             "solarized" => Ok(Self::Solarized),
             "light" => Ok(Self::Light),
-            _ => Err("theme must be minimal, codex-dark, nord, solarized, or light".into()),
+            _ => Err("theme must be dark, minimal, codex-dark, nord, solarized, or light".into()),
         }
     }
 
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Self::Dark => "dark",
             Self::Minimal => "minimal",
             Self::CodexDark => "codex-dark",
             Self::Nord => "nord",
@@ -38,11 +41,12 @@ impl Theme {
 
     pub(crate) fn next(self) -> Self {
         match self {
-            Self::Minimal => Self::CodexDark,
+            Self::Dark => Self::CodexDark,
             Self::CodexDark => Self::Nord,
             Self::Nord => Self::Solarized,
             Self::Solarized => Self::Light,
             Self::Light => Self::Minimal,
+            Self::Minimal => Self::Dark,
         }
     }
 
@@ -60,6 +64,18 @@ impl Theme {
             _ => 6,
         };
         let palette = match self {
+            Self::Dark => [
+                "38;2;235;111;115",
+                "38;2;139;190;131",
+                "38;2;227;179;65",
+                "38;2;139;174;215",
+                "38;2;217;119;87",
+                "38;2;184;160;215",
+                "38;2;151;151;141",
+                "38;2;229;226;216",
+                "48;2;24;24;22",
+                "1;38;2;229;226;216",
+            ],
             Self::Minimal => ["31", "32", "33", "34", "36", "35", "90", "39", "49", "1;39"],
             Self::CodexDark => [
                 "38;2;242;139;130",
@@ -118,6 +134,7 @@ impl Theme {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Layout {
     #[default]
+    Chat,
     Split,
     Audit,
     Logs,
@@ -126,6 +143,7 @@ pub(crate) enum Layout {
 impl Layout {
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Self::Chat => "chat",
             Self::Split => "split",
             Self::Audit => "audit",
             Self::Logs => "logs",
@@ -134,9 +152,10 @@ impl Layout {
 
     pub(crate) fn next(self) -> Self {
         match self {
+            Self::Chat => Self::Split,
             Self::Split => Self::Audit,
             Self::Audit => Self::Logs,
-            Self::Logs => Self::Split,
+            Self::Logs => Self::Chat,
         }
     }
 }
@@ -144,6 +163,8 @@ impl Layout {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Panel {
+    Agents,
+    Queue,
     Controller,
     Tasks,
     Progress,
@@ -246,6 +267,8 @@ impl Default for Ui {
             sidebar: true,
             sidebar_width: 30,
             panels: vec![
+                Panel::Agents,
+                Panel::Queue,
                 Panel::Controller,
                 Panel::Tasks,
                 Panel::Progress,
@@ -352,7 +375,9 @@ impl Ui {
     pub(crate) fn to_toml(&self) -> Result<String, String> {
         self.validate()?;
         #[derive(Serialize)]
-        struct UiDocument<'a> { ui: &'a Ui }
+        struct UiDocument<'a> {
+            ui: &'a Ui,
+        }
         toml::to_string_pretty(&UiDocument { ui: self })
             .map_err(|_| "cannot serialize UI configuration".into())
     }
@@ -439,7 +464,7 @@ mod tests {
         assert!(Ui::load(Some(Path::new("/definitely/missing/ssmcp-ui.toml"))).is_err());
         assert_ne!(Theme::Nord.color("red"), Theme::Solarized.color("red"));
         let mut theme = Theme::default();
-        for _ in 0..5 {
+        for _ in 0..6 {
             assert_eq!(Theme::parse(theme.name()).unwrap(), theme);
             theme = theme.next();
         }
@@ -465,7 +490,7 @@ mod tests {
             .unwrap();
         assert_eq!(terminal.background(), "49");
         assert_eq!(terminal.color("foreground"), "39");
-        assert_eq!(Ui::default().background(), "48;2;16;18;20");
+        assert_eq!(Ui::default().background(), "48;2;24;24;22");
     }
 
     #[test]

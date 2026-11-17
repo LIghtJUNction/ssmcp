@@ -1,0 +1,1674 @@
+//! Client-owned requests. Broker revisions decide whether an edit won against delivery.
+use crate::wire::{
+    MAX_USER_MESSAGE_BYTES, MAX_USER_MESSAGES, SteeringAgent, SteeringCommand, SteeringMessage,
+    SteeringSnapshot, SteeringState,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fs::{self, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::mpsc;
+
+const MAX_RECORDS: usize = 128;
+const MAX_TEXT_BYTES: usize = 512 * 1024;
+const MAX_HANDOFF_BYTES: u64 = 4 * 1024 * 1024;
+const HANDOFF_ENV: &str = "SSMCP_CLIENT_OUTBOX";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+static STATE: OnceLock<Mutex<Manager>> = OnceLock::new();
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum UiEvent {
+    Accepted { id: String, text: String },
+    Editable { id: String, text: String },
+    Failed { id: String, message: String },
+}
+
+pub(super) enum Transport {
+    Wire { id: u64, command: SteeringCommand },
+    Reload,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum MutationKind {
+    Publish,
+    Takeback,
+    Cancel,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Mutation {
+    command_id: String,
+    kind: MutationKind,
+    expected_revision: u64,
+    for_reload: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Record {
+    message: SteeringMessage,
+    room_id: Option<String>,
+    /// A new local request or a successful takeback is known not to be delivered.
+    safe_to_publish: bool,
+    ever_sent: bool,
+    uncertain: bool,
+    retarget_required: bool,
+    resume_after_reload: bool,
+    pending: Option<Mutation>,
+    error: Option<String>,
+}
+
+impl Record {
+    fn terminal(&self) -> bool {
+        matches!(
+            self.message.state,
+            SteeringState::Delivered | SteeringState::Cancelled
+        )
+    }
+    fn status(&self, connected: bool) -> &'static str {
+        if self.message.state == SteeringState::Delivered {
+            return "delivered";
+        }
+        if self.message.state == SteeringState::Cancelled {
+            return "cancelled";
+        }
+        if self.retarget_required {
+            return "retarget-required";
+        }
+        if self.uncertain {
+            return "uncertain";
+        }
+        if let Some(pending) = &self.pending {
+            return match pending.kind {
+                MutationKind::Publish => "sending",
+                MutationKind::Takeback => "taking-back",
+                MutationKind::Cancel => "cancelling",
+            };
+        }
+        if self.message.state == SteeringState::Editing {
+            return "editing";
+        }
+        if !connected && self.safe_to_publish {
+            "offline"
+        } else {
+            "queued"
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Draft {
+    text: String,
+    cursor: usize,
+}
+
+/// A displaced input is retained separately while a queued request is edited.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SavedDraft {
+    pub text: String,
+    pub cursor: usize,
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct DraftContext {
+    pub editing: Option<String>,
+    pub target: Option<String>,
+    pub parked: Option<SavedDraft>,
+}
+
+impl DraftContext {
+    fn validate(&self) -> Result<(), String> {
+        for id in [
+            self.editing.as_deref(),
+            self.target.as_deref(),
+            self.parked
+                .as_ref()
+                .and_then(|draft| draft.target.as_deref()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !valid_id(id) {
+                return Err("invalid draft context identifier".into());
+            }
+        }
+        if self.parked.as_ref().is_some_and(|draft| {
+            draft.text.len() > MAX_USER_MESSAGE_BYTES || !draft.text.is_char_boundary(draft.cursor)
+        }) {
+            return Err("invalid or oversized parked draft".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Outbox {
+    schema_version: u32,
+    room_id: Option<String>,
+    draft: Draft,
+    #[serde(default)]
+    context: DraftContext,
+    records: Vec<Record>,
+}
+
+impl Default for Outbox {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            room_id: None,
+            draft: Draft::default(),
+            context: DraftContext::default(),
+            records: Vec::new(),
+        }
+    }
+}
+
+impl Outbox {
+    fn validate(&self) -> Result<(), String> {
+        self.context.validate()?;
+        if self.schema_version != 1
+            || self.records.len() > MAX_RECORDS
+            || self
+                .records
+                .iter()
+                .map(|record| record.message.text.len())
+                .sum::<usize>()
+                > MAX_TEXT_BYTES
+            || self.draft.text.len() > MAX_USER_MESSAGE_BYTES
+            || !self.draft.text.is_char_boundary(self.draft.cursor)
+            || self.room_id.as_ref().is_some_and(|room| !valid_id(room))
+        {
+            return Err("invalid or oversized client outbox".into());
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for record in &self.records {
+            let message = &record.message;
+            if !valid_id(&message.id)
+                || !valid_id(&message.target)
+                || !ids.insert(&message.id)
+                || record.room_id.as_ref().is_some_and(|room| !valid_id(room))
+                || record
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.len() > 1024)
+                || record
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| !valid_id(&pending.command_id))
+            {
+                return Err("invalid client outbox record".into());
+            }
+            validate_text(&message.text)?;
+        }
+        Ok(())
+    }
+}
+
+struct Request {
+    command: SteeringCommand,
+    queued_at: Instant,
+    sent: bool,
+}
+
+#[derive(Default)]
+struct Manager {
+    outbox: Outbox,
+    connected: bool,
+    supported: bool,
+    ready: bool,
+    revision: u64,
+    agents: Vec<SteeringAgent>,
+    sender: Option<mpsc::Sender<Transport>>,
+    requests: BTreeMap<u64, Request>,
+    next_request: u64,
+    events: VecDeque<UiEvent>,
+    frozen: bool,
+    reload_requested: bool,
+    error: Option<String>,
+    restored: bool,
+}
+
+fn state() -> &'static Mutex<Manager> {
+    STATE.get_or_init(|| Mutex::new(Manager::default()))
+}
+
+fn with<T>(f: impl FnOnce(&mut Manager) -> T) -> T {
+    f(&mut state().lock().unwrap_or_else(|error| error.into_inner()))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+}
+fn random_id() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    crate::platform::random_bytes(&mut bytes)
+        .map_err(|_| "cannot create local request identity")?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+pub(super) fn validate_text(text: &str) -> Result<(), String> {
+    if text.trim().is_empty()
+        || text.len() > MAX_USER_MESSAGE_BYTES
+        || text
+            .chars()
+            .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\t'))
+    {
+        return Err("request must contain 1..=16384 UTF-8 bytes of text; only newline and tab controls are allowed".into());
+    }
+    Ok(())
+}
+
+impl Manager {
+    fn event(&mut self, event: UiEvent) {
+        if self.events.len() == 256 {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+
+    fn snapshot(&self) -> Value {
+        json!({
+            "schema_version":1,"connected":self.connected,"supported":self.supported,
+            "room_id":self.outbox.room_id,"revision":self.revision,"agents":self.agents,
+            "draft":{"text":self.outbox.draft.text,"cursor":self.outbox.draft.cursor},
+            "draft_context":self.outbox.context,
+            "queue":self.outbox.records.iter().map(|record| json!({
+                "id":record.message.id,"text":record.message.text,"target":record.message.target,
+                "revision":record.message.revision,"status":record.status(self.connected),
+                "created_at_ms":record.message.created_at_ms,"updated_at_ms":record.message.updated_at_ms,
+                "delivery":record.message.delivery,"error":record.error,"room_id":record.room_id,
+                "retarget_required":record.retarget_required,"uncertain":record.uncertain
+            })).collect::<Vec<_>>(),
+            "error":self.error,"reloading":self.frozen || self.reload_requested
+        })
+    }
+
+    fn mutable(&self) -> Result<(), String> {
+        if self.frozen {
+            return Err("client reload is preparing; the draft is retained".into());
+        }
+        if self.connected && !self.supported {
+            return Err(
+                "this gateway does not support the request queue; update ssmcpd to wire version 7"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    fn target(&self, target: Option<&str>) -> Result<String, String> {
+        let target = target.unwrap_or("next");
+        if target == "next" {
+            return Ok(target.into());
+        }
+        if !valid_id(target)
+            || !self.connected
+            || !self.ready
+            || !self.agents.iter().any(|agent| agent.agent_id == target)
+        {
+            return Err("choose next or an agent from the current connected room".into());
+        }
+        Ok(target.into())
+    }
+
+    fn index(&self, id: &str) -> Result<usize, String> {
+        self.outbox
+            .records
+            .iter()
+            .position(|record| record.message.id == id)
+            .ok_or_else(|| "queued request was not found".into())
+    }
+
+    fn prune(&mut self) {
+        while self.outbox.records.len() >= MAX_RECORDS
+            || self
+                .outbox
+                .records
+                .iter()
+                .map(|record| record.message.text.len())
+                .sum::<usize>()
+                > MAX_TEXT_BYTES - MAX_USER_MESSAGE_BYTES
+        {
+            let Some(index) = self
+                .outbox
+                .records
+                .iter()
+                .position(|record| record.terminal() && record.pending.is_none())
+            else {
+                break;
+            };
+            self.outbox.records.remove(index);
+        }
+    }
+
+    fn submit(&mut self, text: &str, target: Option<&str>) -> Result<String, String> {
+        self.mutable()?;
+        validate_text(text)?;
+        let target = self.target(target)?;
+        self.prune();
+        if self
+            .outbox
+            .records
+            .iter()
+            .filter(|record| !record.terminal())
+            .count()
+            >= MAX_USER_MESSAGES
+            || self.outbox.records.len() >= MAX_RECORDS
+            || self
+                .outbox
+                .records
+                .iter()
+                .map(|record| record.message.text.len())
+                .sum::<usize>()
+                + text.len()
+                > MAX_TEXT_BYTES
+        {
+            return Err(
+                "local request queue is full; finish or cancel a queued request first".into(),
+            );
+        }
+        let id = random_id()?;
+        self.outbox.records.push(Record {
+            message: SteeringMessage {
+                id: id.clone(),
+                revision: 0,
+                text: text.into(),
+                target,
+                state: SteeringState::Queued,
+                created_at_ms: now_ms(),
+                updated_at_ms: now_ms(),
+                delivery: None,
+            },
+            room_id: self.outbox.room_id.clone(),
+            safe_to_publish: true,
+            ever_sent: false,
+            uncertain: false,
+            retarget_required: false,
+            resume_after_reload: false,
+            pending: None,
+            error: None,
+        });
+        let index = self.outbox.records.len() - 1;
+        if self.connected && self.supported && self.ready {
+            if let Err(error) = self.mutate(index, MutationKind::Publish, false) {
+                self.outbox.records.pop();
+                return Err(error);
+            }
+        }
+        Ok(id)
+    }
+
+    fn publish_edit(&mut self, id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
+        self.mutable()?;
+        validate_text(text)?;
+        let index = self.index(id)?;
+        let target =
+            self.target(target.or(Some(self.outbox.records[index].message.target.as_str())))?;
+        let original = self.outbox.records[index].clone();
+        if original.message.state != SteeringState::Editing
+            || original.pending.is_some()
+            || original.uncertain
+            || original.retarget_required
+        {
+            return Err("take back the queued request before editing; stale targets need explicit retargeting".into());
+        }
+        if self
+            .outbox
+            .records
+            .iter()
+            .map(|record| record.message.text.len())
+            .sum::<usize>()
+            - original.message.text.len()
+            + text.len()
+            > MAX_TEXT_BYTES
+        {
+            return Err("local request queue text limit reached".into());
+        }
+        let record = &mut self.outbox.records[index];
+        record.message.text = text.into();
+        record.message.target = target;
+        record.message.state = SteeringState::Queued;
+        record.message.updated_at_ms = now_ms();
+        record.error = None;
+        if self.connected && self.supported && self.ready {
+            if let Err(error) = self.mutate(index, MutationKind::Publish, false) {
+                self.outbox.records[index] = original;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn take_back(&mut self, id: &str) -> Result<(), String> {
+        self.mutable()?;
+        let index = self.index(id)?;
+        let record = &self.outbox.records[index];
+        if record.terminal()
+            || record.pending.is_some()
+            || record.uncertain
+            || record.retarget_required
+        {
+            return Err("request is delivered, changing, or needs explicit retargeting; refresh its state before editing".into());
+        }
+        if record.safe_to_publish {
+            self.outbox.records[index].message.state = SteeringState::Editing;
+            self.event(UiEvent::Editable {
+                id: id.into(),
+                text: self.outbox.records[index].message.text.clone(),
+            });
+            return Ok(());
+        }
+        self.mutate(index, MutationKind::Takeback, false)
+    }
+
+    fn cancel(&mut self, id: &str) -> Result<(), String> {
+        self.mutable()?;
+        let index = self.index(id)?;
+        let record = &self.outbox.records[index];
+        if record.terminal() || record.pending.is_some() || record.uncertain {
+            return Err(
+                "request is delivered, changing, or its previous delivery is uncertain".into(),
+            );
+        }
+        if record.safe_to_publish
+            && (!record.ever_sent || !self.connected || record.room_id != self.outbox.room_id)
+        {
+            self.outbox.records[index].message.state = SteeringState::Cancelled;
+            self.outbox.records[index].resume_after_reload = false;
+            return Ok(());
+        }
+        self.mutate(index, MutationKind::Cancel, false)
+    }
+
+    fn retarget(&mut self, id: &str, target: Option<&str>) -> Result<(), String> {
+        self.mutable()?;
+        let target = self.target(target)?;
+        let index = self.index(id)?;
+        let record = &mut self.outbox.records[index];
+        let offline_unsent = !self.connected
+            && record.safe_to_publish
+            && !record.uncertain
+            && record.message.state == SteeringState::Queued;
+        if record.terminal()
+            || record.pending.is_some()
+            || (!record.retarget_required
+                && !record.uncertain
+                && record.message.state != SteeringState::Editing
+                && !offline_unsent)
+        {
+            return Err("take back this request before changing its recipient".into());
+        }
+        let changed_room = record.room_id != self.outbox.room_id;
+        if changed_room || record.uncertain {
+            record.message.revision = 0;
+            record.ever_sent = false;
+        }
+        record.message.target = target;
+        record.message.state = SteeringState::Editing;
+        record.room_id = self.outbox.room_id.clone();
+        record.safe_to_publish = true;
+        record.uncertain = false;
+        record.retarget_required = false;
+        record.resume_after_reload = false;
+        record.error = None;
+        let text = record.message.text.clone();
+        self.event(UiEvent::Editable {
+            id: id.into(),
+            text,
+        });
+        Ok(())
+    }
+
+    fn enqueue(&mut self, command: SteeringCommand) -> Result<u64, String> {
+        if !self.connected || !self.supported {
+            return Err("request queue is not connected".into());
+        }
+        let id = self
+            .next_request
+            .checked_add(1)
+            .ok_or("request identity space exhausted")?;
+        self.sender
+            .as_ref()
+            .ok_or("request queue is not connected")?
+            .try_send(Transport::Wire {
+                id,
+                command: command.clone(),
+            })
+            .map_err(|_| "request transport is busy; the draft has been retained")?;
+        self.next_request = id;
+        self.requests.insert(
+            id,
+            Request {
+                command,
+                queued_at: Instant::now(),
+                sent: false,
+            },
+        );
+        Ok(id)
+    }
+
+    fn mutate(&mut self, index: usize, kind: MutationKind, for_reload: bool) -> Result<(), String> {
+        let record = &self.outbox.records[index];
+        if record.pending.is_some() {
+            return Err("request change is already waiting for acknowledgement".into());
+        }
+        if record.room_id != self.outbox.room_id || record.uncertain || record.retarget_required {
+            return Err("this request needs explicit retargeting before it can be changed".into());
+        }
+        let command_id = random_id()?;
+        let message_id = record.message.id.clone();
+        let expected_revision = record.message.revision;
+        let command = match kind {
+            MutationKind::Publish => SteeringCommand::Publish {
+                command_id: command_id.clone(),
+                message_id,
+                expected_revision,
+                text: record.message.text.clone(),
+                target: record.message.target.clone(),
+            },
+            MutationKind::Takeback => SteeringCommand::Takeback {
+                command_id: command_id.clone(),
+                message_id,
+                expected_revision,
+            },
+            MutationKind::Cancel => SteeringCommand::Cancel {
+                command_id: command_id.clone(),
+                message_id,
+                expected_revision,
+            },
+        };
+        self.enqueue(command)?;
+        self.outbox.records[index].pending = Some(Mutation {
+            command_id,
+            kind,
+            expected_revision,
+            for_reload,
+        });
+        self.outbox.records[index].error = None;
+        Ok(())
+    }
+
+    fn request_snapshot(&mut self) -> Result<(), String> {
+        if !self
+            .requests
+            .values()
+            .any(|request| matches!(request.command, SteeringCommand::Snapshot {}))
+        {
+            self.enqueue(SteeringCommand::Snapshot {})?;
+        }
+        Ok(())
+    }
+
+    fn connect(&mut self, room_id: &str, protocol: u32) -> mpsc::Receiver<Transport> {
+        self.disconnect();
+        let (sender, receiver) = mpsc::channel(MAX_RECORDS + 8);
+        let changed = self.outbox.room_id.as_deref() != Some(room_id);
+        self.outbox.room_id = Some(room_id.into());
+        self.connected = true;
+        self.supported = protocol >= 7;
+        self.ready = false;
+        self.revision = 0;
+        self.sender = Some(sender);
+        self.error = None;
+        self.reload_requested = false;
+        self.frozen = false;
+        if changed {
+            for record in &mut self.outbox.records {
+                if record.terminal() {
+                    continue;
+                }
+                record.pending = None;
+                if record.message.target != "next" {
+                    record.retarget_required = true;
+                }
+                if record.safe_to_publish {
+                    record.room_id = Some(room_id.into());
+                    record.message.revision = 0;
+                    record.ever_sent = false;
+                    if record.resume_after_reload {
+                        record.message.state = SteeringState::Queued;
+                    }
+                    record.resume_after_reload = false;
+                } else {
+                    record.uncertain = true;
+                    record.error = Some("Previous room ended before delivery could be confirmed. This request will not be replayed automatically.".into());
+                }
+            }
+        }
+        if self.supported {
+            let _ = self.request_snapshot();
+        }
+        receiver
+    }
+
+    fn disconnect(&mut self) {
+        self.connected = false;
+        self.ready = false;
+        self.sender = None;
+        self.agents.clear();
+        for request in self.requests.values() {
+            if let Some(id) = command_message(&request.command) {
+                if let Some(record) = self
+                    .outbox
+                    .records
+                    .iter_mut()
+                    .find(|record| record.message.id == id)
+                {
+                    if request.sent && !record.terminal() {
+                        record.uncertain = true;
+                    }
+                    record.pending = None;
+                }
+            }
+        }
+        self.requests.clear();
+    }
+
+    fn sent(&mut self, id: u64) -> bool {
+        let Some(request) = self.requests.get_mut(&id) else {
+            return false;
+        };
+        request.sent = true;
+        if let Some(message_id) = command_message(&request.command) {
+            if let Some(record) = self
+                .outbox
+                .records
+                .iter_mut()
+                .find(|record| record.message.id == message_id)
+            {
+                record.ever_sent = true;
+                if matches!(request.command, SteeringCommand::Publish { .. }) {
+                    record.safe_to_publish = false;
+                }
+            }
+        }
+        true
+    }
+
+    fn merge(&mut self, snapshot: &SteeringSnapshot) -> Result<(), String> {
+        if snapshot.schema_version != 1
+            || Some(snapshot.client_id.as_str()) != self.outbox.room_id.as_deref()
+            || snapshot.agents.len() > 64
+            || snapshot.messages.len() > MAX_RECORDS
+            || snapshot
+                .messages
+                .iter()
+                .map(|message| message.text.len())
+                .sum::<usize>()
+                > MAX_TEXT_BYTES
+        {
+            return Err("invalid request queue snapshot".into());
+        }
+        for agent in &snapshot.agents {
+            if !valid_id(&agent.agent_id)
+                || agent.name.len() > 128
+                || agent.role.as_ref().is_some_and(|role| role.len() > 128)
+            {
+                return Err("invalid agent roster".into());
+            }
+        }
+        for message in &snapshot.messages {
+            validate_text(&message.text)?;
+            if !valid_id(&message.id) || !valid_id(&message.target) {
+                return Err("invalid request identity".into());
+            }
+        }
+        if self.ready && snapshot.revision < self.revision {
+            return Ok(());
+        }
+        self.ready = true;
+        self.revision = snapshot.revision;
+        self.agents.clone_from(&snapshot.agents);
+        self.error = None;
+        for message in &snapshot.messages {
+            if let Some(record) = self.outbox.records.iter_mut().find(|record| {
+                record.message.id == message.id && record.room_id == self.outbox.room_id
+            }) {
+                if message.revision >= record.message.revision {
+                    record.message.clone_from(message);
+                    record.ever_sent = true;
+                    record.uncertain = false;
+                    record.safe_to_publish = message.state == SteeringState::Editing;
+                    if record.terminal() {
+                        record.resume_after_reload = false;
+                        record.retarget_required = false;
+                    }
+                }
+            } else if !self
+                .outbox
+                .records
+                .iter()
+                .any(|record| record.message.id == message.id)
+            {
+                self.prune();
+                if self.outbox.records.len() < MAX_RECORDS
+                    && self
+                        .outbox
+                        .records
+                        .iter()
+                        .map(|record| record.message.text.len())
+                        .sum::<usize>()
+                        + message.text.len()
+                        <= MAX_TEXT_BYTES
+                {
+                    self.outbox.records.push(Record {
+                        message: message.clone(),
+                        room_id: self.outbox.room_id.clone(),
+                        safe_to_publish: message.state == SteeringState::Editing,
+                        ever_sent: true,
+                        uncertain: false,
+                        retarget_required: false,
+                        resume_after_reload: false,
+                        pending: None,
+                        error: None,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn reply(&mut self, id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
+        let Some(request) = self.requests.remove(&id) else {
+            return Ok(());
+        };
+        let message_id = command_message(&request.command).map(str::to_owned);
+        let response = result.and_then(|snapshot| {
+            self.merge(&snapshot)?;
+            Ok(snapshot)
+        });
+        if let Some(message_id) = message_id {
+            let Ok(index) = self.index(&message_id) else {
+                return Ok(());
+            };
+            let Some(pending) = self.outbox.records[index].pending.take() else {
+                return Ok(());
+            };
+            let matching = command_id(&request.command) == Some(pending.command_id.as_str());
+            if !matching {
+                self.outbox.records[index].pending = Some(pending);
+                return Ok(());
+            }
+            match response {
+                Ok(snapshot) => {
+                    let acknowledged = snapshot.messages.iter().find(|message| {
+                        message.id == message_id && message.revision > pending.expected_revision
+                    });
+                    match (pending.kind, acknowledged) {
+                        (MutationKind::Publish, Some(message))
+                            if matches!(
+                                message.state,
+                                SteeringState::Queued | SteeringState::Delivered
+                            ) =>
+                        {
+                            let SteeringCommand::Publish { text, .. } = request.command else {
+                                unreachable!()
+                            };
+                            self.event(UiEvent::Accepted {
+                                id: message_id,
+                                text,
+                            });
+                        }
+                        (MutationKind::Takeback, Some(message))
+                            if message.state == SteeringState::Editing =>
+                        {
+                            self.outbox.records[index].safe_to_publish = true;
+                            if pending.for_reload {
+                                self.outbox.records[index].resume_after_reload = self.frozen;
+                            } else {
+                                self.event(UiEvent::Editable {
+                                    id: message_id,
+                                    text: message.text.clone(),
+                                });
+                            }
+                        }
+                        (MutationKind::Cancel, Some(message))
+                            if message.state == SteeringState::Cancelled => {}
+                        _ => {
+                            let message = "Request state changed before the update could be confirmed; refresh before editing".to_owned();
+                            self.outbox.records[index].error = Some(message.clone());
+                            self.event(UiEvent::Failed {
+                                id: message_id,
+                                message,
+                            });
+                        }
+                    }
+                }
+                Err(message) => {
+                    let message = bounded_error(&message);
+                    let record = &mut self.outbox.records[index];
+                    record.error = Some(message.clone());
+                    if !record.terminal() {
+                        // An error can represent a revision conflict after the delivery boundary.
+                        record.uncertain = record.ever_sent;
+                        if !record.ever_sent {
+                            record.message.state = SteeringState::Editing;
+                        }
+                    }
+                    self.event(UiEvent::Failed {
+                        id: message_id,
+                        message,
+                    });
+                    let _ = self.request_snapshot();
+                }
+            }
+        } else if let Err(error) = response {
+            self.error = Some(bounded_error(&error));
+        }
+        Ok(())
+    }
+
+    fn poll(&mut self) -> Result<(), String> {
+        if !self.connected || !self.supported {
+            return Ok(());
+        }
+        let expired = self
+            .requests
+            .iter()
+            .filter(|(_, request)| request.queued_at.elapsed() >= REQUEST_TIMEOUT)
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        for id in expired {
+            self.reply(
+                id,
+                Err(
+                    "Queue acknowledgement timed out; delivery will be checked before any retry"
+                        .into(),
+                ),
+            )?;
+        }
+        if !self.frozen && self.ready {
+            let indices = self
+                .outbox
+                .records
+                .iter()
+                .enumerate()
+                .filter(|(_, record)| {
+                    record.message.state == SteeringState::Queued
+                        && record.safe_to_publish
+                        && record.pending.is_none()
+                        && !record.uncertain
+                        && !record.retarget_required
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            for index in indices {
+                self.mutate(index, MutationKind::Publish, false)?;
+            }
+        }
+        self.request_snapshot()
+    }
+
+    fn begin_reload(&mut self) -> Result<(), String> {
+        self.frozen = true;
+        if self.connected && self.supported {
+            self.request_snapshot()?;
+        }
+        Ok(())
+    }
+
+    fn reload_ready(&mut self) -> Result<bool, String> {
+        if !self.supported {
+            return Ok(true);
+        }
+        if !self.requests.is_empty() || !self.ready {
+            return Ok(false);
+        }
+        let indices = self
+            .outbox
+            .records
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| {
+                record.room_id == self.outbox.room_id
+                    && record.message.state == SteeringState::Queued
+                    && !record.safe_to_publish
+                    && !record.uncertain
+                    && !record.retarget_required
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if indices.is_empty() {
+            return Ok(true);
+        }
+        for index in indices {
+            self.mutate(index, MutationKind::Takeback, true)?;
+        }
+        Ok(false)
+    }
+}
+
+fn command_message(command: &SteeringCommand) -> Option<&str> {
+    match command {
+        SteeringCommand::Snapshot {} => None,
+        SteeringCommand::Publish { message_id, .. }
+        | SteeringCommand::Takeback { message_id, .. }
+        | SteeringCommand::Cancel { message_id, .. } => Some(message_id),
+    }
+}
+fn command_id(command: &SteeringCommand) -> Option<&str> {
+    match command {
+        SteeringCommand::Snapshot {} => None,
+        SteeringCommand::Publish { command_id, .. }
+        | SteeringCommand::Takeback { command_id, .. }
+        | SteeringCommand::Cancel { command_id, .. } => Some(command_id),
+    }
+}
+fn bounded_error(error: &str) -> String {
+    error
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(256)
+        .collect()
+}
+
+pub(super) fn snapshot() -> Value {
+    with(|manager| manager.snapshot())
+}
+pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String> {
+    with(|manager| manager.submit(text, target))
+}
+pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
+    with(|manager| manager.publish_edit(id, text, target))
+}
+pub(super) fn take_back(id: &str) -> Result<(), String> {
+    with(|manager| manager.take_back(id))
+}
+pub(super) fn cancel(id: &str) -> Result<(), String> {
+    with(|manager| manager.cancel(id))
+}
+pub(super) fn retarget(id: &str, target: Option<&str>) -> Result<(), String> {
+    with(|manager| manager.retarget(id, target))
+}
+pub(super) fn draft() -> (String, usize) {
+    with(|manager| {
+        (
+            manager.outbox.draft.text.clone(),
+            manager.outbox.draft.cursor,
+        )
+    })
+}
+pub(super) fn draft_context() -> DraftContext {
+    with(|manager| manager.outbox.context.clone())
+}
+pub(super) fn set_draft_context(context: DraftContext) -> Result<(), String> {
+    context.validate()?;
+    with(|manager| manager.outbox.context = context);
+    Ok(())
+}
+pub(super) fn set_draft(text: &str, cursor: usize) -> Result<(), String> {
+    if text.len() > MAX_USER_MESSAGE_BYTES || !text.is_char_boundary(cursor) {
+        return Err("invalid or oversized composer draft".into());
+    }
+    with(|manager| {
+        manager.outbox.draft = Draft {
+            text: text.into(),
+            cursor,
+        }
+    });
+    Ok(())
+}
+pub(super) fn take_events() -> Vec<UiEvent> {
+    with(|manager| manager.events.drain(..).collect())
+}
+pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport> {
+    with(|manager| manager.connect(room_id, protocol))
+}
+pub(super) fn disconnect() {
+    with(Manager::disconnect);
+}
+pub(super) fn sent(id: u64) -> bool {
+    with(|manager| manager.sent(id))
+}
+pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
+    with(|manager| manager.reply(id, result))
+}
+pub(super) fn poll() -> Result<(), String> {
+    with(Manager::poll)
+}
+pub(super) fn begin_reload() -> Result<(), String> {
+    with(Manager::begin_reload)
+}
+pub(super) fn reload_ready() -> Result<bool, String> {
+    with(Manager::reload_ready)
+}
+pub(super) fn abort_reload(error: &str) {
+    with(|manager| {
+        manager.frozen = false;
+        manager.reload_requested = false;
+        for record in &mut manager.outbox.records {
+            record.resume_after_reload = false;
+        }
+        manager.event(UiEvent::Failed {
+            id: String::new(),
+            message: bounded_error(error),
+        });
+    });
+}
+pub(super) fn request_reload() -> Result<(), String> {
+    with(|manager| {
+        if !manager.connected {
+            return Err("client is not connected; draft and queue are retained".into());
+        }
+        if manager.reload_requested || manager.frozen {
+            return Err("client reload is already pending".into());
+        }
+        manager
+            .sender
+            .as_ref()
+            .ok_or("client is not connected")?
+            .try_send(Transport::Reload)
+            .map_err(|_| "client control queue is busy")?;
+        manager.reload_requested = true;
+        Ok(())
+    })
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Handoff {
+    created_at_ms: u64,
+    outbox: Outbox,
+}
+
+pub(super) struct ReloadHandoff {
+    path: PathBuf,
+}
+impl Drop for ReloadHandoff {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        if let Some(parent) = self.path.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+}
+
+fn write_handoff(outbox: Outbox, directory: &Path) -> Result<ReloadHandoff, String> {
+    outbox.validate()?;
+    let bytes = serde_json::to_vec(&Handoff {
+        created_at_ms: now_ms(),
+        outbox,
+    })
+    .map_err(|_| "cannot serialize client outbox")?;
+    if bytes.len() as u64 > MAX_HANDOFF_BYTES {
+        return Err("client outbox exceeds reload handoff limit".into());
+    }
+    let folder = directory.join(format!("ssmcp-outbox-{}", random_id()?));
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&folder)
+        .map_err(|_| "cannot create private outbox directory")?;
+    let handoff = ReloadHandoff {
+        path: folder.join("state.json"),
+    };
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(&handoff.path)
+        .map_err(|_| "cannot create private client outbox")?;
+    file.write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| "cannot save client outbox")?;
+    Ok(handoff)
+}
+
+fn read_handoff(path: &Path) -> Result<Option<Outbox>, String> {
+    let folder = path.parent().ok_or("invalid client outbox handoff path")?;
+    let name = folder
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("ssmcp-outbox-"));
+    if !path.is_absolute()
+        || path.file_name().and_then(|name| name.to_str()) != Some("state.json")
+        || !name.is_some_and(|name| {
+            name.len() == 32 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err("invalid client outbox handoff path".into());
+    }
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("cannot inspect client outbox handoff".into()),
+    };
+    let directory =
+        fs::symlink_metadata(folder).map_err(|_| "cannot inspect private outbox directory")?;
+    if !metadata.is_file() || !directory.is_dir() || metadata.len() > MAX_HANDOFF_BYTES {
+        return Err("invalid client outbox handoff file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // SAFETY: geteuid only reads the process identity.
+        let uid = unsafe { libc::geteuid() };
+        if metadata.uid() != uid
+            || directory.uid() != uid
+            || metadata.permissions().mode() & 0o077 != 0
+            || directory.permissions().mode() & 0o077 != 0
+        {
+            return Err("client outbox handoff must be private to the current user".into());
+        }
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .map_err(|_| "cannot read client outbox handoff")?;
+    let mut bytes = Vec::new();
+    file.take(MAX_HANDOFF_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "cannot read client outbox handoff")?;
+    if bytes.len() as u64 > MAX_HANDOFF_BYTES {
+        return Err("client outbox handoff is oversized".into());
+    }
+    let handoff: Handoff =
+        serde_json::from_slice(&bytes).map_err(|_| "invalid client outbox handoff")?;
+    if now_ms().saturating_sub(handoff.created_at_ms) > 15 * 60 * 1000 {
+        return Err("client outbox handoff expired".into());
+    }
+    handoff.outbox.validate()?;
+    fs::remove_file(path).map_err(|_| "cannot consume client outbox handoff")?;
+    let _ = fs::remove_dir(folder);
+    Ok(Some(handoff.outbox))
+}
+
+pub(super) fn restore_handoff() -> Result<(), String> {
+    with(|manager| {
+        if manager.restored {
+            return Ok(());
+        }
+        manager.restored = true;
+        if let Some(path) = std::env::var_os(HANDOFF_ENV) {
+            if let Some(outbox) = read_handoff(Path::new(&path))? {
+                manager.outbox = outbox;
+            }
+        }
+        Ok(())
+    })
+}
+
+pub(super) fn prepare_reload(command: &mut std::process::Command) -> Result<ReloadHandoff, String> {
+    let outbox = with(|manager| manager.outbox.clone());
+    let handoff = write_handoff(outbox, &std::env::temp_dir())?;
+    command.env(HANDOFF_ENV, &handoff.path);
+    Ok(handoff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot_for(room: &str, revision: u64, messages: Vec<SteeringMessage>) -> SteeringSnapshot {
+        SteeringSnapshot {
+            schema_version: 1,
+            client_id: room.into(),
+            revision,
+            agents: vec![SteeringAgent {
+                agent_id: "agent_one".into(),
+                name: "Actual member".into(),
+                status: "working".into(),
+                role: None,
+            }],
+            messages,
+        }
+    }
+
+    fn command(
+        manager: &mut Manager,
+        receiver: &mut mpsc::Receiver<Transport>,
+    ) -> (u64, SteeringCommand) {
+        match receiver.try_recv().unwrap() {
+            Transport::Wire { id, command } => {
+                assert!(manager.sent(id));
+                (id, command)
+            }
+            Transport::Reload => panic!("unexpected reload"),
+        }
+    }
+
+    fn ready(manager: &mut Manager, receiver: &mut mpsc::Receiver<Transport>, room: &str) {
+        let (id, request) = command(manager, receiver);
+        assert_eq!(request, SteeringCommand::Snapshot {});
+        manager
+            .reply(id, Ok(snapshot_for(room, 0, vec![])))
+            .unwrap();
+    }
+
+    fn publish(
+        manager: &mut Manager,
+        receiver: &mut mpsc::Receiver<Transport>,
+        text: &str,
+        target: Option<&str>,
+    ) -> SteeringMessage {
+        let message_id = manager.submit(text, target).unwrap();
+        assert!(manager.events.is_empty());
+        let (id, request) = command(manager, receiver);
+        let SteeringCommand::Publish {
+            message_id: sent_id,
+            expected_revision,
+            text: sent_text,
+            target,
+            ..
+        } = request
+        else {
+            panic!("publish required");
+        };
+        assert_eq!(sent_id, message_id);
+        assert_eq!(expected_revision, 0);
+        assert_eq!(sent_text, text);
+        let message = SteeringMessage {
+            id: message_id,
+            revision: 1,
+            text: text.into(),
+            target,
+            state: SteeringState::Queued,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+            delivery: None,
+        };
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 1, vec![message.clone()])))
+            .unwrap();
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Accepted {
+                id: message.id.clone(),
+                text: text.into()
+            })
+        );
+        message
+    }
+
+    #[test]
+    fn enqueue_ack_and_edit_use_the_same_message_and_expected_revision() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        manager.outbox.draft = Draft {
+            text: "original request".into(),
+            cursor: 16,
+        };
+        let mut message = publish(&mut manager, &mut receiver, "original request", None);
+        assert_eq!(
+            manager.outbox.draft.text, "original request",
+            "only the composer may clear its matching draft"
+        );
+        manager.take_back(&message.id).unwrap();
+        assert!(manager.events.is_empty());
+        let (id, request) = command(&mut manager, &mut receiver);
+        assert!(matches!(
+            request,
+            SteeringCommand::Takeback {
+                expected_revision: 1,
+                ..
+            }
+        ));
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 2, vec![message.clone()])))
+            .unwrap();
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                id: message.id.clone(),
+                text: message.text.clone()
+            })
+        );
+        manager
+            .publish_edit(&message.id, "改进后的 request", None)
+            .unwrap();
+        let (id, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { message_id, expected_revision: 2, .. } if message_id == message.id)
+        );
+        message.state = SteeringState::Queued;
+        message.revision = 3;
+        message.text = "改进后的 request".into();
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 3, vec![message.clone()])))
+            .unwrap();
+        assert_eq!(manager.outbox.records.len(), 1);
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Accepted {
+                id: message.id,
+                text: message.text
+            })
+        );
+    }
+
+    #[test]
+    fn delivery_winning_takeback_cannot_restore_or_republish_the_request() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let mut message = publish(&mut manager, &mut receiver, "one request", None);
+        manager.take_back(&message.id).unwrap();
+        let (id, _) = command(&mut manager, &mut receiver);
+        manager
+            .reply(
+                id,
+                Err("already_delivered: request was included in the next response".into()),
+            )
+            .unwrap();
+        assert!(
+            manager
+                .events
+                .iter()
+                .all(|event| !matches!(event, UiEvent::Editable { .. }))
+        );
+        let (id, request) = command(&mut manager, &mut receiver);
+        assert_eq!(request, SteeringCommand::Snapshot {});
+        message.state = SteeringState::Delivered;
+        message.revision = 2;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 2, vec![message.clone()])))
+            .unwrap();
+        assert!(manager.publish_edit(&message.id, "retry", None).is_err());
+        assert!(manager.cancel(&message.id).is_err());
+        assert!(manager.retarget(&message.id, None).is_err());
+        manager.disconnect();
+        let mut receiver = manager.connect("room_two", 7);
+        ready(&mut manager, &mut receiver, "room_two");
+        manager.poll().unwrap();
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert_eq!(
+            request,
+            SteeringCommand::Snapshot {},
+            "delivered requests must never replay"
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn abrupt_reconnect_preserves_uncertain_requests_and_replays_only_never_sent_ones() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let message = publish(&mut manager, &mut receiver, "possibly delivered", None);
+        manager.disconnect();
+        let local = manager.submit("never sent", None).unwrap();
+        let mut receiver = manager.connect("room_two", 7);
+        ready(&mut manager, &mut receiver, "room_two");
+        assert!(manager.outbox.records[manager.index(&message.id).unwrap()].uncertain);
+        manager.poll().unwrap();
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { message_id, expected_revision: 0, .. } if message_id == local)
+        );
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert_eq!(request, SteeringCommand::Snapshot {});
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn planned_reload_reclaims_pending_delivery_and_round_trips_a_private_outbox() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let mut message = publish(&mut manager, &mut receiver, "known undelivered", None);
+        manager.outbox.draft = Draft {
+            text: "未发送草稿".into(),
+            cursor: "未发送".len(),
+        };
+        manager.outbox.context = DraftContext {
+            editing: Some(message.id.clone()),
+            target: Some("agent_one".into()),
+            parked: Some(SavedDraft {
+                text: "parked request".into(),
+                cursor: 6,
+                target: Some("another_agent".into()),
+            }),
+        };
+        manager.begin_reload().unwrap();
+        assert!(manager.submit("blocked during reload", None).is_err());
+        let (id, _) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 1, vec![message.clone()])))
+            .unwrap();
+        assert!(!manager.reload_ready().unwrap());
+        let (id, request) = command(&mut manager, &mut receiver);
+        assert!(matches!(
+            request,
+            SteeringCommand::Takeback {
+                expected_revision: 1,
+                ..
+            }
+        ));
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 2, vec![message])))
+            .unwrap();
+        assert!(manager.reload_ready().unwrap());
+        assert!(
+            manager.events.is_empty(),
+            "reload reclamation must not overwrite the active draft"
+        );
+        let ticket = write_handoff(manager.outbox.clone(), &std::env::temp_dir()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&ticket.path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(ticket.path.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+        let outbox = read_handoff(&ticket.path).unwrap().unwrap();
+        assert!(!ticket.path.exists());
+        assert!(
+            read_handoff(&ticket.path).unwrap().is_none(),
+            "handoff is consumed exactly once"
+        );
+        assert_eq!(outbox.draft.text, "未发送草稿");
+        assert_eq!(outbox.draft.cursor, "未发送".len());
+        assert_eq!(
+            outbox.context, manager.outbox.context,
+            "editing identity and displaced draft recipient must survive reload"
+        );
+        let mut restored = Manager {
+            outbox,
+            ..Manager::default()
+        };
+        let mut receiver = restored.connect("room_two", 7);
+        ready(&mut restored, &mut receiver, "room_two");
+        restored.poll().unwrap();
+        let (_, request) = command(&mut restored, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { expected_revision: 0, text, target, .. } if text == "known undelivered" && target == "next")
+        );
+    }
+
+    #[test]
+    fn exact_agent_targets_need_explicit_retarget_after_a_room_change() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let mut message = publish(
+            &mut manager,
+            &mut receiver,
+            "agent specific",
+            Some("agent_one"),
+        );
+        manager.take_back(&message.id).unwrap();
+        let (id, _) = command(&mut manager, &mut receiver);
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 2, vec![message.clone()])))
+            .unwrap();
+        manager.events.clear();
+        manager.disconnect();
+        let mut receiver = manager.connect("room_two", 7);
+        ready(&mut manager, &mut receiver, "room_two");
+        assert!(manager.outbox.records[0].retarget_required);
+        assert!(
+            manager
+                .publish_edit(&message.id, "agent specific", None)
+                .is_err()
+        );
+        manager.retarget(&message.id, None).unwrap();
+        assert_eq!(manager.outbox.records[0].message.target, "next");
+        assert_eq!(
+            manager.outbox.records[0].message.state,
+            SteeringState::Editing
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "retargeting alone must not send a request"
+        );
+        manager
+            .publish_edit(&message.id, "explicitly resubmitted", None)
+            .unwrap();
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { expected_revision: 0, target, .. } if target == "next")
+        );
+    }
+
+    #[test]
+    fn old_gateways_never_receive_new_frames_and_invalid_input_cannot_change_the_outbox() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("old_room", 6);
+        manager.poll().unwrap();
+        assert!(receiver.try_recv().is_err());
+        assert!(manager.submit("local draft", None).is_err());
+        manager.disconnect();
+        for text in [
+            "".to_owned(),
+            " \n\t".to_owned(),
+            "\x1b[2J".to_owned(),
+            "x".repeat(MAX_USER_MESSAGE_BYTES + 1),
+        ] {
+            assert!(manager.submit(&text, None).is_err());
+        }
+        assert!(manager.outbox.records.is_empty());
+        assert!(manager.submit("valid\n多行\trequest", None).is_ok());
+    }
+
+    #[test]
+    fn offline_unsent_request_can_be_explicitly_retargeted_into_editing() {
+        let mut manager = Manager::default();
+        let id = manager.submit("review this offline draft", None).unwrap();
+        assert_eq!(manager.outbox.records[0].status(false), "offline");
+        manager.retarget(&id, None).unwrap();
+        let record = &manager.outbox.records[0];
+        assert_eq!(record.message.state, SteeringState::Editing);
+        assert!(record.safe_to_publish);
+        assert!(!record.ever_sent);
+        assert!(manager.requests.is_empty());
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                id,
+                text: "review this offline draft".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn draft_context_is_bounded_and_older_handoffs_remain_readable() {
+        let mut previous = serde_json::to_value(Outbox::default()).unwrap();
+        previous.as_object_mut().unwrap().remove("context");
+        let previous: Outbox = serde_json::from_value(previous).unwrap();
+        assert_eq!(previous.context, DraftContext::default());
+        previous.validate().unwrap();
+        for context in [
+            DraftContext {
+                editing: Some("private-fixture\n".into()),
+                ..DraftContext::default()
+            },
+            DraftContext {
+                target: Some("x".repeat(129)),
+                ..DraftContext::default()
+            },
+            DraftContext {
+                parked: Some(SavedDraft {
+                    text: "界".into(),
+                    cursor: 1,
+                    target: None,
+                }),
+                ..DraftContext::default()
+            },
+            DraftContext {
+                parked: Some(SavedDraft {
+                    text: "x".repeat(MAX_USER_MESSAGE_BYTES + 1),
+                    cursor: 0,
+                    target: None,
+                }),
+                ..DraftContext::default()
+            },
+            DraftContext {
+                parked: Some(SavedDraft {
+                    text: String::new(),
+                    cursor: 0,
+                    target: Some("bad target".into()),
+                }),
+                ..DraftContext::default()
+            },
+        ] {
+            let error = context.validate().unwrap_err();
+            assert!(!error.contains("private-fixture"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn handoff_rejects_shared_permissions_without_consuming_private_data() {
+        use std::os::unix::fs::PermissionsExt;
+        let ticket = write_handoff(Outbox::default(), &std::env::temp_dir()).unwrap();
+        fs::set_permissions(&ticket.path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_handoff(&ticket.path).is_err());
+        assert!(ticket.path.exists());
+        fs::set_permissions(&ticket.path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_handoff(&ticket.path).unwrap().is_some());
+    }
+}

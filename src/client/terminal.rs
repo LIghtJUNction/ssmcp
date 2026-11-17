@@ -20,6 +20,8 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod conversation;
+
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
 const MAX_SESSIONS: usize = 16;
@@ -262,6 +264,14 @@ pub(crate) fn browse(action: &str) -> Result<(), String> {
     let shared = shared().ok_or("built-in display is inactive")?;
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     let page = isize::try_from(state.geometry.log_rows.saturating_sub(1).max(1)).unwrap_or(1);
+    if state.ui.layout == Layout::Chat {
+        if action.starts_with("audit.") {
+            state.conversation.view = conversation::View::Audit;
+            state.conversation.content_focus = true;
+        } else if action.starts_with("logs.") {
+            state.conversation.view = conversation::View::Activity;
+        }
+    }
     match action {
         "audit.up" => state.audit.up(),
         "audit.down" => state.audit.down(),
@@ -311,14 +321,17 @@ pub(crate) fn snapshot() -> serde_json::Value {
     };
     let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     let g = state.geometry;
+    let chat = state.ui.layout == Layout::Chat;
+    let conversation = state.conversation.snapshot();
     serde_json::json!({
         "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
-        "panes":{"logs":{"row":0,"col":0,"rows":g.log_rows,"cols":g.left},
-            "audit":{"row":g.pty_top,"col":0,"rows":g.pty_rows,"cols":g.left,"visible":state.ui.layout != Layout::Logs}},
-        "focus":if state.help {"help"} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
+        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.view == conversation::View::Activity},
+            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":g.pty_rows,"cols":g.left,"visible":if chat {state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+            "input":{"row":conversation::prompt_top(g.rows)+1,"col":0,"rows":conversation::prompt_rows(g.rows),"cols":g.left,"visible":chat && conversation::prompt_rows(g.rows)>0}},
+        "focus":if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
-        "audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
+        "conversation":conversation,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
     })
 }
 
@@ -326,7 +339,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
 fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
-    state.log(b"SSMCP / APPEARANCE PREVIEW - example events\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n[OK] #17  exit=0  1.42s\n\n[READY] Scroll logs directly. / filters text; F9 changes level.\n");
+    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · /agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
     state.audit.open();
@@ -441,6 +454,7 @@ impl Geometry {
         );
         let available = if rows >= 3 { rows - 1 } else { rows };
         let log_rows = match ui.layout {
+            Layout::Chat => conversation::body_rows(rows),
             Layout::Logs => available,
             Layout::Split if rows >= 5 => {
                 ((u32::from(available - 1) * u32::from(ui.log_height_percent) / 100) as u16)
@@ -453,7 +467,11 @@ impl Geometry {
         } else {
             0
         };
-        let pty_rows = available.saturating_sub(pty_top).max(1);
+        let pty_rows = if ui.layout == Layout::Chat {
+            log_rows.max(1)
+        } else {
+            available.saturating_sub(pty_top).max(1)
+        };
         Self {
             rows,
             cols,
@@ -484,6 +502,11 @@ enum Key {
     Open,
     Back,
     Filter,
+    FocusBack,
+    Delete,
+    Newline,
+    HistoryStart,
+    HistoryEnd,
     Mouse {
         button: u16,
         x: u16,
@@ -494,6 +517,12 @@ enum Key {
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[Z", Key::FocusBack),
+    (b"\x1b[3~", Key::Delete),
+    (b"\x1b[13;2u", Key::Newline),
+    (b"\x1b[27;2;13~", Key::Newline),
+    (b"\x1b[1;5H", Key::HistoryStart),
+    (b"\x1b[1;5F", Key::HistoryEnd),
     (b"\x1b[A", Key::AuditUp),
     (b"\x1bOA", Key::AuditUp),
     (b"\x1b[B", Key::AuditDown),
@@ -551,6 +580,11 @@ impl Keyboard {
             | Key::Open
             | Key::Back
             | Key::Filter
+            | Key::FocusBack
+            | Key::Delete
+            | Key::Newline
+            | Key::HistoryStart
+            | Key::HistoryEnd
             | Key::Mouse { .. } => true,
             Key::Toggle => allow_logs,
             Key::Up | Key::Down | Key::Home | Key::End => true,
@@ -750,6 +784,7 @@ struct State {
     previous_cr: bool,
     dirty: bool,
     keyboard: Keyboard,
+    conversation: conversation::Conversation,
 }
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
@@ -784,6 +819,7 @@ impl State {
                 logs: ui.layout == Layout::Logs,
                 ..Keyboard::default()
             },
+            conversation: conversation::Conversation::default(),
         }
     }
     fn register_session(&mut self, id: &str, title: &str) {
@@ -1017,6 +1053,9 @@ impl State {
     }
 
     fn keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        if self.ui.layout == Layout::Chat {
+            return self.chat_keyboard(bytes, now, flush);
+        }
         let old_focus = self.keyboard.logs;
         let showing_help = self.help;
         let (output, actions) = self.keyboard.feed(
@@ -1211,6 +1250,9 @@ impl State {
     }
 
     fn frame(&mut self, now: Instant) -> Frame {
+        if self.ui.layout == Layout::Chat {
+            return self.chat_frame(now);
+        }
         let g = self.geometry;
         let filtered = self.filtered_logs();
         let audit_rows = self.audit.render(g.left, g.pty_rows, &self.ui);
@@ -1450,6 +1492,41 @@ fn screen_row(screen: &vt100::Screen, row: u16, width: u16, ui: &Ui) -> String {
     }
     let mut style = Style::default();
     let mut col = 0;
+    let mut padding = 0;
+    if ui.layout == Layout::Chat {
+        let prefix: String = (0..width.min(12))
+            .filter_map(|index| screen.cell(row, index))
+            .map(|cell| cell.contents())
+            .collect();
+        if let Some(close) = prefix.find(']') {
+            let replacement = match prefix[..=close].trim_matches(['[', ']']).trim() {
+                "RUN" | "CALL" => Some(("  ●", "accent")),
+                "OK" | "READY" => Some(("  ●", "success")),
+                "ERR" | "ERROR" | "FAIL" => Some(("  ●", "error")),
+                "USER" => Some(("  ❯", "foreground")),
+                "STDOUT" => Some(("  stdout", "muted")),
+                "STDERR" => Some(("  stderr", "warning")),
+                _ => None,
+            };
+            if prefix.starts_with('[')
+                && let Some((label, semantic)) = replacement
+                && label.width() <= close + 1
+            {
+                if ui.color {
+                    let _ = write!(
+                        text,
+                        "\x1b[{}m{label}\x1b[{}m",
+                        ui.color(semantic),
+                        ui.color("foreground")
+                    );
+                } else {
+                    text.push_str(label);
+                }
+                col = u16::try_from(close + 1).unwrap_or(0);
+                padding = close + 1 - label.width();
+            }
+        }
+    }
     while col < width {
         let Some(cell) = screen.cell(row, col) else {
             text.push(' ');
@@ -1481,6 +1558,18 @@ fn screen_row(screen: &vt100::Screen, row: u16, width: u16, ui: &Ui) -> String {
             text.push(character);
         }
         col += if cell.is_wide() { 2 } else { 1 };
+    }
+    if padding > 0 {
+        let _ = write!(
+            text,
+            "\x1b[0m\x1b[{}m{}",
+            if ui.color {
+                ui.background()
+            } else {
+                "49".into()
+            },
+            " ".repeat(padding)
+        );
     }
     text.push_str("\x1b[0m");
     text
@@ -1790,6 +1879,13 @@ impl Drop for PhysicalOutput {
 mod tests {
     use super::*;
 
+    fn split_ui() -> Ui {
+        Ui {
+            layout: Layout::Split,
+            ..Ui::default()
+        }
+    }
+
     fn physical(frame: &Frame) -> vt100::Parser {
         let mut parser = vt100::Parser::new(
             nonzero(frame.geometry.rows),
@@ -1801,7 +1897,7 @@ mod tests {
     }
     #[test]
     fn geometry_reserves_real_panes_and_survives_narrow_resize() {
-        let mut state = State::new(58, 106, &Ui::default());
+        let mut state = State::new(58, 106, &split_ui());
         assert_eq!(state.geometry.left, 75);
         assert_eq!(state.geometry.pty_rows, 23);
         assert_eq!(state.geometry.log_rows, 33);
@@ -1844,7 +1940,7 @@ mod tests {
 
     #[test]
     fn terminal_switches_keep_independent_screens_cursors_and_input_modes() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         state.register_session("pty-0001", "build");
         state.pty_session("main", b"MAIN\x1b[2;4H");
         state.pty_session("pty-0001", b"\x1b[?1049h\x1b[?1h\x1b[?2004hBUILD\x1b[4;7H");
@@ -1872,7 +1968,7 @@ mod tests {
     }
     #[test]
     fn device_replies_remain_with_the_requesting_terminal_across_selection_and_resize() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         state.register_session("pty-0001", "queries");
         state.pty_session("main", b"\x1b[2;3H\x1b[6n");
         state.pty_session("pty-0001", b"\x1b[4;5H\x1b[6n");
@@ -1900,7 +1996,7 @@ mod tests {
     }
     #[test]
     fn closing_selected_terminal_restores_main_and_ignores_late_output() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         state.register_session("pty-0001", "worker");
         state.pty_session("main", b"main remains");
         state.select_session("pty-0001");
@@ -1922,7 +2018,7 @@ mod tests {
     }
     #[test]
     fn hidden_pty_escape_sequences_cannot_change_audit_layout() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         state.log(b"retained audit\n");
         state.pty.process(b"\x1b[?1049h\x1b[2J\x1b[H\x1b[31m");
         state.pty.process("界 e\u{301}".as_bytes());
@@ -1960,7 +2056,7 @@ mod tests {
     }
     #[test]
     fn native_queries_reply_with_virtual_coordinates_and_a_bounded_queue() {
-        let mut state = State::new(58, 106, &Ui::default());
+        let mut state = State::new(58, 106, &split_ui());
         state
             .pty
             .process(b"\x1b[3;5H\x1b[6n\x1b[5n\x1b[c\x1b[>c\x1b[18t");
@@ -1979,7 +2075,7 @@ mod tests {
     }
     #[test]
     fn visible_log_diff_keeps_hidden_terminal_modes_out_of_the_client() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         let a = state.frame(Instant::now());
         assert!(a.diff(Some(&a)).is_empty());
         state
@@ -2006,7 +2102,7 @@ mod tests {
     fn no_color_does_not_disable_layout_and_log_lf_is_normalized() {
         let ui = Ui {
             color: false,
-            ..Ui::default()
+            ..split_ui()
         };
         let mut state = State::new(30, 110, &ui);
         state.log(b"a\n");
@@ -2070,7 +2166,7 @@ mod tests {
     }
     #[test]
     fn wheel_and_page_keys_scroll_logs_without_a_focus_shortcut() {
-        let mut state = State::new(58, 106, &Ui::default());
+        let mut state = State::new(58, 106, &split_ui());
         for index in 0..200 {
             state.log(format!("audit record {index:03}\n").as_bytes());
         }
@@ -2102,7 +2198,7 @@ mod tests {
     fn full_screen_logs_remain_scrollable_and_never_forward_input() {
         let ui = Ui {
             layout: Layout::Logs,
-            ..Ui::default()
+            ..split_ui()
         };
         let mut state = State::new(30, 110, &ui);
         for index in 0..200 {
@@ -2128,7 +2224,7 @@ mod tests {
     }
     #[test]
     fn escape_closes_help_opened_from_scrolled_logs() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         for index in 0..100 {
             state.log(format!("audit record {index:03}\n").as_bytes());
         }
@@ -2152,7 +2248,7 @@ mod tests {
     fn layout_shortcut_never_forwards_coalesced_text_to_a_hidden_shell() {
         let ui = Ui {
             layout: Layout::Audit,
-            ..Ui::default()
+            ..split_ui()
         };
         let mut state = State::new(30, 110, &ui);
         let now = Instant::now();
@@ -2174,7 +2270,7 @@ mod tests {
 
     #[test]
     fn pasted_and_incomplete_keys_never_reach_a_hidden_shell() {
-        let mut state = State::new(58, 106, &Ui::default());
+        let mut state = State::new(58, 106, &split_ui());
         let now = Instant::now();
         let pasted = b"\x1b[200~literal \x1b[14~ \x1b[5~ \x1b[201~";
         for byte in pasted {
@@ -2203,7 +2299,7 @@ mod tests {
     }
     #[test]
     fn split_unicode_is_preserved_in_logs_and_hidden_native_terminal() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         for byte in "界e\u{301}".as_bytes() {
             state.pty.process(&[*byte]);
             state.log(&[*byte]);
@@ -2225,7 +2321,7 @@ mod tests {
     fn jsonl_and_disabled_ui_never_initialize_a_physical_display() {
         let mut ui = Ui {
             log_format: LogFormat::Jsonl,
-            ..Ui::default()
+            ..split_ui()
         };
         assert!(Session::start(&ui).unwrap().is_none());
         ui.log_format = LogFormat::Pretty;
@@ -2276,7 +2372,7 @@ mod tests {
         // closing the last slave can discard unread bytes on Darwin.
         let keep_slave = slave.try_clone().unwrap();
         let shared = Arc::new(Shared {
-            state: Mutex::new(State::new(30, 110, &Ui::default())),
+            state: Mutex::new(State::new(30, 110, &split_ui())),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
         });
@@ -2352,7 +2448,7 @@ mod tests {
 
     #[test]
     fn typing_keeps_log_scrollback_and_compact_audit_never_exposes_shell() {
-        let mut state = State::new(58, 106, &Ui::default());
+        let mut state = State::new(58, 106, &split_ui());
         for index in 0..100 {
             state.log(format!("combined audit {index:03}\n").as_bytes());
         }
@@ -2376,7 +2472,7 @@ mod tests {
 
     #[test]
     fn text_filter_keeps_matched_command_output_and_completion() {
-        let mut state = State::new(58, 106, &Ui::default());
+        let mut state = State::new(58, 106, &split_ui());
         state.log(b"[RUN ] shell #41 cargo test\n[OUT ] shell #41\n  unit tests passed\n[OK  ] shell #41 completed exit=0\n[RUN ] shell #42 npm run lint\n[OUT ] shell #42\n  unrelated lint output\n[OK  ] shell #42 completed exit=0\n");
         let now = Instant::now();
         assert!(state.keyboard(b"/cargo test\r", now, false).is_empty());
@@ -2403,7 +2499,7 @@ mod tests {
     fn audit_navigation_opens_highlighted_source_and_keeps_final_result() {
         let ui = Ui {
             sidebar: false,
-            ..Ui::default()
+            ..split_ui()
         };
         let mut state = State::new(40, 100, &ui);
         state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","run_id":"source-1","phase":"started","code":"const total = 42;\nreturn total;","timestamp_ms":0}));
