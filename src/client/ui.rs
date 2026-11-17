@@ -79,12 +79,14 @@ impl Default for Ui {
 #[serde(default, deny_unknown_fields)]
 struct Document {
     ui: Ui,
+    client: super::config::ClientSettings,
 }
 impl Ui {
     pub(crate) fn parse(text: &str) -> Result<Self, String> {
         // Parser diagnostics can echo accidentally pasted credentials.
         let doc: Document =
             toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
+        doc.client.validate().map_err(|error| error.to_string())?;
         if !(1..=10000).contains(&doc.ui.max_inline_output) {
             return Err("ui.max_inline_output must be in 1..=10000".into());
         }
@@ -95,17 +97,13 @@ impl Ui {
     }
     pub(crate) fn load(explicit: Option<&Path>) -> Result<Self, String> {
         let env_path = std::env::var_os("SSMCP_UI_CONFIG").map(PathBuf::from);
-        let required = explicit.is_some() || env_path.is_some();
-        let path = explicit.map(Path::to_path_buf).or(env_path).or_else(|| {
-            std::env::var_os("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .or_else(|| std::env::var_os("USERPROFILE"))
-                        .map(|p| PathBuf::from(p).join(".config"))
-                })
-                .map(|p| p.join("ssmcp/config.toml"))
-        });
+        let required = explicit.is_some()
+            || env_path.is_some()
+            || std::env::var_os("SSMCP_CLIENT_CONFIG").is_some();
+        let path = explicit
+            .map(Path::to_path_buf)
+            .or(env_path)
+            .or_else(|| super::config::config_path().ok());
         let Some(path) = path else {
             return Ok(Self::default());
         };

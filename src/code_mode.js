@@ -423,6 +423,19 @@ const bootstrap = `(() => {
   freeze(tools);
 
   const builtin = (name, args = {}) => dispatch('builtin', '_', name, args);
+  const collab = freeze(Object.fromEntries(
+    ['join', 'list', 'update', 'send', 'receive', 'ack', 'leave'].map(action => [
+      action, (clientId, args = {}) => {
+        if (!args || typeof args !== 'object' || isArray(args)) {
+          throw new Failure('collab arguments must be an object');
+        }
+        if (action === 'receive' && (args.wait_ms ?? 0) > 1000) {
+          throw new Failure('Use the direct collab tool for wait_ms above 1000; it does not occupy a code_mode worker');
+        }
+        return builtin('collab.' + action, {...args, client_id: clientId});
+      }
+    ])
+  ));
   const workspaceResult = async (id, name, args = {}) => {
     const reply = await call(id, name, args);
     if (reply.isError) {
@@ -658,6 +671,7 @@ const bootstrap = `(() => {
     omarchy: { value: omarchy, enumerable: true },
     reload: { value: reload, enumerable: true },
     sessions: { value: sessions, enumerable: true },
+    collab: { value: collab, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
     context: { value: context, enumerable: true },
