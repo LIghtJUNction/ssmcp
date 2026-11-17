@@ -623,8 +623,7 @@ pub async fn read(
                     authorization,
                     &session,
                     kind,
-                    uri,
-                    base,
+                    (uri, base),
                     &query,
                 )
                 .await

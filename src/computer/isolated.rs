@@ -605,7 +605,11 @@ fn reap_desktop(
                 Err(_) => break false,
             }
         };
-        let apps_reaped = apps.iter_mut().fold(true, |all, app| wait(app) && all);
+        let mut apps_reaped = true;
+        for app in &mut apps {
+            // Every child must be observed even when an earlier wait failed.
+            apps_reaped &= wait(app);
+        }
         let server_reaped = wait(&mut process);
         drop(apps);
         drop(process);
