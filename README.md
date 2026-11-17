@@ -13,13 +13,13 @@
 
 ## 新版连接体验
 
-宣传片展示开发中的新版入口。连接方式和 SSH 一样，直接输入用户名和服务器：
+直接输入自定义用户名和服务器地址：
 
 ```sh
 ssmcp alice@relay.example.com
 ```
 
-首次连接会引导完成 GitHub 授权，之后复用本机凭据。新版移除了独立的 `ssmcp login` 步骤。进入会话后，交互体验类似 Claude Code。当前 `main` 的操作步骤见下方快速开始。
+首次连接会检查用户名并引导 GitHub 授权，确认后完成账号绑定并通过 HTTPS / WSS 连接。之后复用这台服务器的本机凭据，无须先运行登录命令；`ssmcp login` 仍作为兼容入口保留。连接建立后可用 `ssmcp -i` 选择和控制已授权设备。
 
 ## 从设备到会话
 
@@ -29,7 +29,7 @@ ssmcp alice@relay.example.com
 | 让模型使用设备上的工具 | 用 `list` 发现设备，再用 `code_mode` 调用原生能力 |
 | 让多个 agent 配合工作 | 用 `collab` 在同一会话中发现彼此并发送消息 |
 
-项目、模型配置和工具执行都留在设备上。客户端可通过 HTTPS / WSS 接入可信服务器，也支持已有 SSH 配置。[了解工作原理](docs/backends.md)
+项目、模型配置和工具执行都留在设备上。客户端通过 HTTPS / WSS 接入可信服务器，也可用 `--ssh` 显式复用已有 SSH 配置。[了解工作原理](docs/backends.md)
 
 本项目由 Astra Pro 在网页版 Chat 模式下使用 ssmcp 插件开发。
 
@@ -38,15 +38,18 @@ ssmcp alice@relay.example.com
 先[安装新版客户端](#安装与升级)，并使用已启用 GitHub OAuth、账号门户和客户端 API 的新版服务器。将示例域名换成你的服务地址：
 
 ~~~sh
-ssmcp config set server https://ssmcp.example.com
-ssmcp login
-ssmcp whoami
+# 在项目目录运行，首次连接会打开 GitHub 授权。
+ssmcp alice@ssmcp.example.com --name device-a
 
-# 在项目目录启动自己的被控会话，保持终端打开。
-ssmcp --name device-a
+# 没有图形浏览器时，打印链接和确认码供另一台设备打开。
+ssmcp alice@ssmcp.example.com --no-browser
 ~~~
 
-登录后自动使用自己的 GitHub 身份，无须每次填写自己的 `--allow`。新接入路径不需要 SSH 密钥或设备入站端口；看门狗默认启用，掉线后自动重连，`--no-watchdog` 可关闭。
+`alice` 是你在这台服务器选择的用户名，可以与 GitHub 用户名不同。客户端先检查名字规范，再自动引导 GitHub 登录；在浏览器确认后完成注册绑定并连接。已有账号直接复用该服务器的凭据，日常使用无须单独运行 `login`。保持终端打开即可提供当前目录的 Shell 和本机工具。
+
+用户名不区分大小写，统一为小写；长度 3–32，首字符为 ASCII 字母，末字符为字母或数字，中间可用字母、数字、`_`、`-`。保留名和已属于其他账号的名字不能注册。每个 GitHub 账号在一台服务器绑定一个用户名，换服务器分别注册、分别保存凭据。[用户名与管理员配置](docs/named-accounts.md)
+
+之后运行 `ssmcp --name device-a` 可使用配置指定的默认服务器，未配置时复用上次授权的服务器；`ssmcp whoami` 查看当前身份。前台连接遇到凭据过期会重新请求授权；服务不可用或账号被封禁时保留本地凭据并显示错误。HTTPS 接入不需要 SSH 公钥或设备入站端口；看门狗默认启用，`--no-watchdog` 可关闭。
 
 在 A 的另一个终端查看或进入可控会话：
 
@@ -77,7 +80,7 @@ ssmcp invite --server https://other.example.com
 server = "https://relay.example.com"
 ~~~
 
-地址优先级为 **`--server` → `[client].server` → 最后登录的服务器 → `https://ssmcp.lmm.best`**。命令设置会保留已有 UI 配置与注释。`ssmcp config unset server` 移除配置覆盖，`SSMCP_CLIENT_CONFIG` 可指定另一份绝对路径配置文件。切换服务器后，先在该服务器执行 `ssmcp login`；各服务器的账号令牌分别保存。[配置路径与完整说明](docs/client-server.md#设置默认服务器)
+地址优先级为 **`--server` → `[client].server` → 最后登录的服务器 → `https://ssmcp.lmm.best`**。命令设置会保留已有 UI 配置与注释。`ssmcp config unset server` 移除配置覆盖，`SSMCP_CLIENT_CONFIG` 可指定另一份绝对路径配置文件。首次使用另一台服务器时运行 `ssmcp alice@relay.example.com` 自动注册或登录；各服务器的账号令牌分别保存。[配置路径与完整说明](docs/client-server.md#设置默认服务器)
 
 ## 固定可信服务器的公钥
 
@@ -116,7 +119,7 @@ ssmcp invite --shell powershell
 
 设备操作者决定开放哪个工作目录和系统用户权限；服务器按已验证的 GitHub 数字 ID 与会话规则检查每次调用。临时设备凭据不能查看或控制 A 的其他设备。中转服务器会处理连接和原生工具调用，应使用你信任的服务器。[授权实现](src/device.rs) · [会话访问检查](src/broker.rs)
 
-[默认服务器与公钥](docs/client-server.md) · [客户端账号教程](docs/client-accounts.md) · [账号门户与审计](docs/portal-console.md) · [配置与 SSH](docs/configuration.md) · [服务器部署](docs/deployment.md) · [命令接口](docs/commands.md)
+[用户名与服务器管理](docs/named-accounts.md) · [默认服务器与公钥](docs/client-server.md) · [客户端账号教程](docs/client-accounts.md) · [账号门户与审计](docs/portal-console.md) · [配置与 SSH](docs/configuration.md) · [服务器部署](docs/deployment.md) · [命令接口](docs/commands.md)
 
 ## 使用已有 SSH 配置
 
@@ -133,17 +136,17 @@ Host my-ssmcp
 
 ```sh
 cd ~/projects/ssmcp
-ssmcp --name ssmcp-project --title "改进项目与运行测试" --allow octocat@github my-ssmcp
+ssmcp --ssh --name ssmcp-project --title "改进项目与运行测试" --allow octocat@github my-ssmcp
 ```
 
-`my-ssmcp` 是 SSH 配置别名；用户名、地址、端口和密钥交给系统 OpenSSH 解析。也可将同一命令的目标改为 `alice@ssmcp.example.com`，或 `-F ~/.ssh/work_config` 指定配置文件。0.3.1 起支持省略用户名；已安装的 0.3.0 若提示 `destination must be user@host`，可先用 `alice@my-ssmcp`，或[重新构建安装](#安装与升级)。[SSH 配置细节](docs/configuration.md)
+`--ssh` 显式选择旧 SSH 路径，`my-ssmcp` 是 `~/.ssh/config` 中的 Host 别名；系统 OpenSSH 负责用户名、地址、端口和密钥。也可使用 `ssmcp --ssh alice@ssmcp.example.com`，或通过 `-F`、`--identity`、`-p` 显式选择 SSH 参数。直接运行 `ssmcp alice@ssmcp.example.com` 使用 HTTPS / WSS。[SSH 配置细节](docs/configuration.md)
 
 **已经能用同一把公钥连接该服务器账号，就可以继续用它。** 自助账户在首页管理公钥；已有手工创建的账户仍由管理员通过 OpenSSH 管理，受限账号启用 `ForceCommand` 后，通过独立管理员账号或服务器控制台追加新公钥。完整教程包括首次配置、保留旧钥、验证新钥和撤销旧连接的步骤。[公钥配置与更新](docs/configuration.md#更新公钥)
 
 把 `octocat` 换成获准访问这个客户端的 GitHub 用户名。`--allow` 使用 `用户名@提供方` 格式，目前支持 `@github`；可重复指定或用逗号分隔，最多 32 个不同用户，大小写不敏感：
 
 ```sh
-ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
+ssmcp --ssh --allow alice@github,bob@github --allow carol@github my-ssmcp
 ```
 
 前台启动成功后，交互终端显示清晰的地址与登录提示。重定向 stdout 或选择 JSONL 时，输出连接 JSON：
@@ -169,7 +172,7 @@ ssmcp --allow alice@github,bob@github --allow carol@github my-ssmcp
 需要在退出本机终端后继续运行客户端时，可创建后台会话；断线重连默认启用：
 
 ```sh
-ssmcp --daemon --name workstation \
+ssmcp --ssh --daemon --name workstation \
   --title "修复项目并执行测试" --allow octocat@github my-ssmcp
 ssmcp sessions status workstation --json
 ssmcp sessions logs workstation --lines 100
@@ -190,7 +193,7 @@ Linux 可以安装持久的客户端服务，再用标准 systemctl 启用并启
 sudo "$(command -v ssmcp)" service install --system --user "$(id -un)"
 sudo systemctl enable --now ssmcp
 
-ssmcp sessions create dev --allow octocat@github my-ssmcp
+ssmcp sessions create dev --ssh --allow octocat@github my-ssmcp
 ssmcp attach
 ssmcp attach dev
 ssmcp sessions restart dev
@@ -353,7 +356,7 @@ return { client_id: clientId, ...joined };
 启动时用 `--title` 说明任务，agent 通过 `list` 和 `clients` 就能看到标题：
 
 ```sh
-ssmcp --name dev --title "完善客户端重载和输出转储" --allow octocat@github my-ssmcp
+ssmcp --ssh --name dev --title "完善客户端重载和输出转储" --allow octocat@github my-ssmcp
 ```
 
 安装新版客户端后，在 `code_mode` 中使用 `return await reload(clientId)` 重新加载原启动入口。请求确认后旧连接关闭，连接拥有的后台命令与转发随之停止，Harness 桥接随之关闭；再调用 `list` 获取新客户端 ID。外部 Pi/OpenCode 服务继续由操作者管理。有效的 `--allow` GitHub 授权可继续使用，登录码模式需要重新完成 OAuth 登录。
@@ -366,9 +369,19 @@ return await outputs.read(clientId, { id: artifactId, offset: 0, max_bytes: 1638
 
 转储默认保留 24 小时，已结束文件总量上限为 512 MiB，单文件上限为 256 MiB；超限或写入失败会明确标记不完整。输出 ID、任务与审计归属于原连接，另一连接不能因使用同一系统账户而读取它们。清理跳过活动文件，运行期间每 60 秒执行。`outputs.stat` 检查元数据，`outputs.cleanup` 可立即执行相同清理策略。带标题连接和重载原语需先升级两端。[完整接口、兼容性与输出范围](docs/session-control.md)
 
-## 技能摘要、AGENTS.md 与文本原语
+## 项目上下文：MCP 资源与 code_mode
 
-通过 code_mode 原生生成技能摘要、读取适用于目标路径的指令文件，并直接处理 UTF-8 文本：
+MCP 资源直接提供项目 AGENTS.md 内容、技能摘要、技能全文和项目叠加全局的技能视图。每次读取都检查客户端当前文件，编辑、添加或删除后重新读取即可生效。
+
+| 资源路径（位于 ssmcp://clients/{id} 下） | 内容 |
+| --- | --- |
+| /agents | 当前目录适用的指令全文与来源 |
+| /skills | 项目技能摘要，含全文 readUri |
+| /skills?scope=effective | 项目覆盖同名全局技能后的有效摘要 |
+| /skills/view | 可直接阅读的有效技能视图 |
+| /skills/read?root=...&path=... | 指定技能的完整原文 |
+
+宿主可直接调用标准 resources/read。code_mode 保留等价原语，并支持 UTF-8 文本读写：
 
 ~~~js
 return await skills.view(clientId);
@@ -386,9 +399,23 @@ return await fs.readText(clientId, {path: "README.md"});
 
 成功读写产生文件审计事件；提交成功的可比较文本记录真实增删行数，小 Diff 保留全文，大 Diff 复用输出存储。缺失、可读文本和未知快照分别处理，敏感路径、二进制或不可读内容不会产生伪造的 Diff。技能的发现、读取与实际调用分开记录；读取 `SKILL.md` 不证明模型使用了技能。Harness 外部文件副作用保持 unknown，终端和 JSONL 日志使用脱敏副本。[审计范围与事件](docs/backends.md#文件与技能审计)
 
-默认以客户端启动目录为根；全局技能或上层规则可通过重复的 --context-root PATH 加入只读上下文视图。context.roots(clientId) 返回可选择的根 ID。普通文件写入范围独立于这些只读配置。
+默认以客户端启动目录为项目根；全局技能或上层规则通过重复的 --context-root PATH 加入只读上下文视图。skills.view 默认合并这些已授予根，同名项目技能优先，结果标明来源和被覆盖条目。context.roots(clientId) 返回可选择的根 ID。资源不发送订阅通知，宿主通过重新读取获取当前内容。
 
 [完整接口与示例](docs/context.md) · [上下文能力验收记录](docs/validation-context-primitives.md)
+
+## RTK 命令输出压缩
+
+code_mode 的 rtk 原语调用设备上已有的 RTK，并沿用独立命令任务、超时和输出读取能力：
+
+~~~js
+return await rtk.run(clientId, {
+  command: ["git", "status"],
+  cwd: ".",
+  wait_ms: 5000
+});
+~~~
+
+rtk.status(clientId) 返回安装可用性和版本；rtk.start 启动后台任务，随后使用 exec.read/wait/cancel。command 是不含 rtk 前缀的参数数组，参数按原样传递，结果保留退出码和 RTK 的原文恢复提示。命令输出压缩取决于 RTK 对相应子命令的支持。[完整用法](docs/rtk.md)
 
 ## 文件同步、端口映射和动态资源
 
@@ -506,11 +533,11 @@ python3 scripts/e2e_agents.py --bin-dir target/debug
 上图来自真实渲染器的固定测试事件，用于展示样式。完整说明见 [日志与主题配置](docs/logging.md)。
 
 ```sh
-ssmcp --log-format pretty my-server          # 默认彩色摘要
-ssmcp --log-format pretty-verbose my-server  # 展开输出和脱敏后的元数据
-ssmcp --log-format jsonl my-server           # 每行一个脱敏事件
-ssmcp --no-color my-server
-ssmcp --theme nord --timestamps my-server
+ssmcp --ssh --log-format pretty my-server          # 默认彩色摘要
+ssmcp --ssh --log-format pretty-verbose my-server  # 展开输出和脱敏后的元数据
+ssmcp --ssh --log-format jsonl my-server           # 每行一个脱敏事件
+ssmcp --ssh --no-color my-server
+ssmcp --ssh --theme nord --timestamps my-server
 ```
 
 `--verbose`、`--raw-events`、原有 `--raw` 分别提供详细/JSONL 快捷方式。`~/.config/ssmcp/config.toml` 的 `[ui]` 支持主题、时间戳、请求 ID 和输出行数；`NO_COLOR` 和重定向 stderr 自动关闭颜色。日志脱敏不改写原生调用结果。真实终端的交互式 PTY 保留原始字节与控制序列，配色开关只影响日志颜色。后台输出实时显示；查询历史 `read/wait` 结果不会重复打印同一段正文。

@@ -307,6 +307,11 @@ impl Credentials {
         self.save(next)?;
         Ok((device, expires_at.saturating_sub(now()), record.subject))
     }
+    pub(crate) fn revoke_subject(&mut self, subject: &str) -> Result<(), Problem> {
+        let mut next = self.pruned();
+        next.retain(|_, record| record.subject != subject);
+        self.save(next)
+    }
     fn logout(&mut self, raw: &str) -> Result<(), Problem> {
         let (key, _) = self.authenticate(raw, true)?;
         let mut next = self.pruned();
@@ -324,6 +329,18 @@ pub(crate) struct Registration {
 
 impl Registration {
     pub(crate) async fn is_live(&self, broker: &Broker) -> bool {
+        if broker.user_policies.is_banned(&self.identity.subject) {
+            return false;
+        }
+        let subject = self.identity.subject.clone();
+        if broker
+            .portal
+            .storage(move |store| store.account(&subject))
+            .await
+            .is_err()
+        {
+            return false;
+        }
         let key = self.key.clone();
         broker
             .portal
@@ -362,6 +379,10 @@ fn problem(error: Problem) -> ApiError {
         Problem::Unauthorized => "invalid_token",
         Problem::Busy => "rate_limited",
         Problem::Invalid => "invalid_request",
+        Problem::UsernameInvalid => "invalid_username",
+        Problem::UsernameTaken => "username_taken",
+        Problem::UsernameBound => "username_bound",
+        Problem::Banned => "account_banned",
         _ => "temporarily_unavailable",
     };
     fail(error.status(), code)
@@ -457,6 +478,7 @@ async fn body<T: serde::de::DeserializeOwned>(
 pub fn routes() -> Router<Arc<Broker>> {
     Router::new()
         .route("/api/client/whoami", get(whoami))
+        .route("/api/client/username", post(claim_username))
         .route("/api/client/logout", post(logout))
         .route("/api/client/sessions", get(sessions))
         .route("/api/client/invites", post(invite))
@@ -493,10 +515,44 @@ async fn whoami(
             return Err(fail(StatusCode::UNAUTHORIZED, "invalid_token"));
         }
     }
-    Ok(Json(
-        json!({"identity":identity_json(&registration.identity)}),
-    ))
+    let subject = registration.identity.subject.clone();
+    let account = broker
+        .portal
+        .storage(move |store| store.account(&subject))
+        .await
+        .map_err(problem)?;
+    let mut identity = identity_json(&registration.identity);
+    identity["username"] = json!(account.handle);
+    Ok(Json(json!({"identity":identity})))
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClaimUsername {
+    username: String,
+}
+
+async fn claim_username(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let registration = authenticate(&broker, request.headers(), true).await?;
+    let input: ClaimUsername = body(request, &broker).await?;
+    if !registration.is_live(&broker).await {
+        return Err(fail(StatusCode::UNAUTHORIZED, "invalid_token"));
+    }
+    let subject = registration.identity.subject.clone();
+    let username = crate::portal::store::normalize_handle(&input.username).map_err(problem)?;
+    let account = broker
+        .portal
+        .storage(move |store| store.claim_handle(&subject, &username))
+        .await
+        .map_err(problem)?;
+    let mut identity = identity_json(&registration.identity);
+    identity["username"] = json!(account.handle);
+    Ok(Json(json!({"identity":identity})))
+}
+
 async fn logout(
     State(broker): State<Arc<Broker>>,
     headers: HeaderMap,
@@ -631,6 +687,9 @@ async fn connect(
         .on_upgrade(move |socket| socket_bridge(broker, registration, socket)))
 }
 async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: WebSocket) {
+    let bandwidth = broker.user_policies.get(&registration.identity.subject);
+    let incoming_budget = bandwidth.clone();
+    let outgoing_budget = bandwidth.clone();
     let (transport, stream) = tokio::io::duplex(256 * 1024);
     let (input, mut output) = tokio::io::split(transport);
     let mut input = tokio::io::BufReader::new(input);
@@ -643,6 +702,9 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
                 Message::Close(_) => break,
                 _ => continue,
             };
+            if incoming_budget.charge(false, data.len()).await.is_err() {
+                break;
+            }
             let Ok(frame) = serde_json::from_slice::<wire::Frame>(&data) else {
                 break;
             };
@@ -669,6 +731,9 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
                         break;
                     };
                     data.push(b'\n');
+                    if outgoing_budget.charge(true, data.len()).await.is_err() {
+                        break;
+                    }
                     if sender.send(Message::Binary(data.into())).await.is_err() {
                         break;
                     }
@@ -679,7 +744,7 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
         let _ = sender.close().await;
     };
     let pumps = async move {
-        tokio::select! {_=inbound=>{},_=outbound=>{}}
+        tokio::select! {_=inbound=>{},_=outbound=>{},_=bandwidth.wait_banned()=>{}}
     };
     tokio::pin!(pumps);
     let mut session = tokio::spawn(broker.attach_device(stream, registration));
@@ -1072,5 +1137,262 @@ mod tests {
                 .is_empty()
         );
         server.abort();
+    }
+    #[tokio::test]
+    async fn username_binding_and_admin_ban_cover_real_http_and_live_websockets() {
+        let directory = Temporary::new();
+        let mut broker = Broker::with_identity_config(
+            "https://ssmcp.test".into(),
+            crate::oauth::OAuthConfig::default(),
+            Some(crate::identity::GitHubConfig {
+                client_id: "test-client".into(),
+                client_secret: "test-secret".into(),
+            }),
+        )
+        .unwrap();
+        broker.portal = crate::portal::Portal::open(&directory.0).unwrap();
+        broker
+            .portal
+            .storage(|store| {
+                for (subject, login) in [("123", "alice"), ("456", "bob"), ("999", "maintainer")] {
+                    store.login(&Identity {
+                        provider: "github".into(),
+                        subject: subject.into(),
+                        login: login.into(),
+                    })?;
+                }
+                store.claim_handle("999", "maintainer")?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            broker
+                .portal
+                .resolve_admin_usernames(&["Maintainer".into()])
+                .await
+                .unwrap(),
+            ["999"]
+        );
+        assert!(
+            broker
+                .portal
+                .resolve_admin_usernames(&["unregistered".into()])
+                .await
+                .is_err()
+        );
+        broker.configure_management(
+            crate::management::ManagementPolicy::new(vec!["999".into()], Default::default())
+                .unwrap(),
+            Arc::new(
+                crate::history::AuditLog::open(
+                    &directory.0.join("audit"),
+                    crate::history::AuditConfig::default(),
+                )
+                .unwrap(),
+            ),
+        );
+        broker
+            .configure_user_policies(crate::user_policy::DEFAULT_RATE_LIMIT_BPS)
+            .await
+            .unwrap();
+        let alice = broker
+            .portal
+            .client_storage(|store| store.login("123".into()))
+            .await
+            .unwrap()
+            .0;
+        let bob = broker
+            .portal
+            .client_storage(|store| store.login("456".into()))
+            .await
+            .unwrap()
+            .0;
+        let invite = {
+            let alice = alice.clone();
+            broker
+                .portal
+                .client_storage(move |store| store.invite(&alice, 600, 3600))
+                .await
+                .unwrap()
+                .0
+        };
+        let broker = Arc::new(broker);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let router = crate::http::router(broker.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = reqwest::Client::new();
+        let claimed: Value = client
+            .post(format!("{base}/api/client/username"))
+            .bearer_auth(&alice)
+            .json(&json!({"username":"Alice"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(claimed["identity"]["username"], "alice");
+        assert_eq!(claimed["identity"]["subject"], "123");
+        let duplicate = client
+            .post(format!("{base}/api/client/username"))
+            .bearer_auth(&bob)
+            .json(&json!({"username":"ALICE"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        let invalid = client
+            .post(format!("{base}/api/client/username"))
+            .bearer_auth(&bob)
+            .json(&json!({"username":"admin"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+        let mut first = open_socket(&base, &alice, vec![]).await;
+        let mut second = open_socket(&base, &alice, vec![]).await;
+        let mut foreign = open_socket(&base, &bob, vec![]).await;
+        assert!(matches!(
+            receive(&mut first).await,
+            Some(wire::Frame::Ready { .. })
+        ));
+        assert!(matches!(
+            receive(&mut second).await,
+            Some(wire::Frame::Ready { .. })
+        ));
+        assert!(matches!(
+            receive(&mut foreign).await,
+            Some(wire::Frame::Ready { .. })
+        ));
+        let admin = Identity {
+            provider: "github".into(),
+            subject: "999".into(),
+            login: "maintainer".into(),
+        };
+        let user = Identity {
+            provider: "github".into(),
+            subject: "123".into(),
+            login: "alice".into(),
+        };
+        assert_eq!(
+            broker
+                .management_set_user_policy(&user, "456", Some(true), None)
+                .await,
+            Err(crate::management::ManagementError::Forbidden)
+        );
+        assert_eq!(
+            broker
+                .management_set_user_policy(&admin, "999", Some(true), None)
+                .await,
+            Err(crate::management::ManagementError::Forbidden)
+        );
+        broker
+            .management_set_user_policy(&admin, "123", None, Some(Some(2 * 1024 * 1024)))
+            .await
+            .unwrap();
+        broker
+            .management_set_user_policy(&admin, "123", Some(true), None)
+            .await
+            .unwrap();
+        for socket in [&mut first, &mut second] {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(2), receive(socket))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let stored = broker
+            .portal
+            .storage(|store| store.account_record("123"))
+            .await
+            .unwrap();
+        assert!(stored.banned);
+        assert_eq!(stored.rate_limit_bps, Some(2 * 1024 * 1024));
+        assert!(
+            broker
+                .clients(IDENTITY_RESOURCE, &Authorization::Identity(user))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            client
+                .get(format!("{base}/api/client/whoami"))
+                .bearer_auth(&alice)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .post(format!("{base}/api/client/enroll"))
+                .json(&json!({"token":invite}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let live: Value = client
+            .get(format!("{base}/api/client/sessions"))
+            .bearer_auth(&bob)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(live["clients"].as_array().unwrap().len(), 1);
+        broker
+            .management_set_user_policy(&admin, "123", Some(false), None)
+            .await
+            .unwrap();
+        // Unbanning never resurrects revoked credentials.
+        assert_eq!(
+            client
+                .get(format!("{base}/api/client/whoami"))
+                .bearer_auth(&alice)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        broker
+            .management_set_user_policy(&admin, "123", None, Some(None))
+            .await
+            .unwrap();
+        let restored = broker
+            .portal
+            .storage(|store| store.account("123"))
+            .await
+            .unwrap();
+        assert!(!restored.banned);
+        assert_eq!(restored.rate_limit_bps, None);
+        let fresh = broker
+            .portal
+            .client_storage(|store| store.login("123".into()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(
+            client
+                .get(format!("{base}/api/client/whoami"))
+                .bearer_auth(&fresh)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        broker.disconnect_all().await;
+        server.abort();
+        let _ = server.await;
     }
 }

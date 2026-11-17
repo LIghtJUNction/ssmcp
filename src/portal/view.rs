@@ -24,7 +24,7 @@ pub(super) fn page(title: &str, body: &str) -> String {
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0c0d0f">
-  <meta name="description" content="通过 SSH 把本机工具接入 ChatGPT。管理 ssmcp 账户、公钥和连接配置。">
+  <meta name="description" content="使用用户名连接本机工具。GitHub 自动登录绑定，HTTPS 接入，管理账户与在线连接。">
   <title>{} · ssmcp</title>
   <link rel="stylesheet" href="/portal.css">
 </head>
@@ -37,7 +37,7 @@ pub(super) fn page(title: &str, body: &str) -> String {
   </nav>
 </header>
 <main class="container" id="content">{body}</main>
-<footer class="site-footer container"><p class="footer-brand">ssmcp<span>your machine, connected.</span></p><p>SSH 接入 · GitHub 身份验证 · MCP 工具调用</p><a href="https://github.com/LIghtJUNction/ssmcp">开源代码 ↗</a></footer>
+<footer class="site-footer container"><p class="footer-brand">ssmcp<span>your machine, connected.</span></p><p>HTTPS 接入 · GitHub 身份验证 · MCP 工具调用</p><a href="https://github.com/LIghtJUNction/ssmcp">开源代码 ↗</a></footer>
 </body>
 </html>"##,
         escape(title)
@@ -63,23 +63,23 @@ fn account_panel(
     );
     if let Some(a) = account {
         html.push_str(&format!(
-            r##"<h2 id="account-title">{}</h2><p class="account-description">你的账户已就绪。管理公钥，连接工作目录。</p>
-<dl class="account-facts"><div><dt>SSH 用户名</dt><dd class="mono">{}</dd></div><div><dt>已登记公钥</dt><dd class="mono">{} / 20</dd></div></dl>
-<div class="account-actions"><a class="button" href="#keys">管理公钥 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出登录</button></form></div>
-<small class="account-note">SSH 用户名绑定 GitHub 账号编号，改名后保持不变。</small>"##,
+            r##"<h2 id="account-title">{}</h2><p class="account-description">在项目目录运行连接命令，即可使用已授权的工具。</p>
+<dl class="account-facts"><div><dt>服务器用户名</dt><dd class="mono">{}</dd></div><div><dt>GitHub 账户</dt><dd>{}</dd></div></dl>
+<div class="account-actions"><a class="button" href="#connect">连接这台电脑 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出门户</button></form></div>
+<small class="account-note">用户名绑定 GitHub 账号编号，GitHub 改名后保持不变。</small>"##,
+            escape(a.handle.as_deref().unwrap_or(&a.github_login)),
+            escape(a.handle.as_deref().unwrap_or("尚未选择 · 在终端命令中填写")),
             escape(&a.github_login),
-            escape(&a.username),
-            a.keys.len()
         ));
     } else if enabled {
         html.push_str(&format!(
-            r#"<h2 id="account-title">连接，从这里开始。</h2><p class="account-description">使用 GitHub 登录，获取你的 SSH 用户名，<br>管理有权连接的电脑公钥。</p>
-<form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 登录<span class="arrow" aria-hidden="true">↗</span></button></form>
-<small class="account-note">公钥在这里登记，私钥始终留在你的电脑。</small>"#
+            r#"<h2 id="account-title">一条命令，连接电脑。</h2><p class="account-description">在终端选择用户名，客户端会自动打开 GitHub 登录并完成绑定。已有凭据时直接连接。</p>
+<form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 管理账户<span class="arrow" aria-hidden="true">↗</span></button></form>
+<small class="account-note">门户用于查看账户和连接；从终端开始即可完成首次接入。</small>"#
         ));
     } else {
         html.push_str(
-            r#"<h2 id="account-title">账户门户尚未启用。</h2><p class="account-description">已有 SSH 账户仍可连接。首次接入，请联系管理员登记公钥。</p><small class="account-note">管理员需配置 GitHub 登录与账户存储。</small>"#,
+            r#"<h2 id="account-title">账户门户尚未启用。</h2><p class="account-description">服务器完成 GitHub 登录与账户存储配置后，即可用自选用户名连接。</p><small class="account-note">请联系服务器管理员完成配置。</small>"#,
         );
     }
     if account.is_some() && management_enabled {
@@ -141,39 +141,40 @@ fn keys_panel(account: Option<&Account>, csrf: &str, enabled: bool) -> String {
     html
 }
 
-fn connect_panel(account: Option<&Account>) -> String {
-    let (command, hint) = match account {
-        Some(a) => (
-            format!(
-                "ssmcp --allow {}@github {}@ssmcp.lmm.best",
-                a.github_login, a.username
-            ),
-            "已填入你的账户信息 · 点击命令可全选",
-        ),
-        None => (
-            "ssmcp --allow USER@github gh-ID@ssmcp.lmm.best".into(),
-            "命令示例 · 登录后显示你的专属命令",
-        ),
+fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
+    let origin = public_url.trim_end_matches('/');
+    let host = origin
+        .strip_prefix("https://")
+        .or_else(|| origin.strip_prefix("http://"))
+        .unwrap_or(origin);
+    let username = account
+        .and_then(|account| account.handle.as_deref())
+        .unwrap_or("myname");
+    let command = format!("ssmcp {username}@{host}");
+    let hint = if account.is_some_and(|account| account.handle.is_some()) {
+        "已填入你的服务器用户名"
+    } else {
+        "把 myname 换成你想使用的用户名"
     };
     format!(
-        r#"<section class="workspace-section" id="connect" aria-labelledby="connect-title"><div class="section-heading"><p class="eyebrow">03 / CONNECT</p><h2 id="connect-title">连接你的工作目录</h2><p class="section-description">安装客户端后，在需要操作的项目目录运行。</p></div>
+        r#"<section class="workspace-section" id="connect" aria-labelledby="connect-title"><div class="section-heading"><p class="eyebrow">02 / CONNECT</p><h2 id="connect-title">连接你的工作目录</h2><p class="section-description">安装客户端后，在需要操作的项目目录运行。</p></div>
 <div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code>{}</code></pre></div></div>
 <div class="connect-actions"><p class="command-hint">{hint}</p></div>
-<p class="section-description">保持客户端运行，ChatGPT 就能发现你允许访问的在线工具。</p>
+<p class="section-description">首次连接时，浏览器会引导 GitHub 登录。核对用户名和设备后允许连接；后续自动复用本机凭据。</p>
 <a class="text-link" href="https://github.com/LIghtJUNction/ssmcp#安装与升级">安装与升级 <span class="arrow" aria-hidden="true">↗</span></a>
-<details><summary>连接与工具发现说明</summary><p>Shell 始终可用。客户端自动发现 PATH 中已安装的 Codex、Claude Code、Pi 和 OpenCode；需要使用时，请先在本机完成安装与登录。</p><p>首次 SSH 连接请核对服务器主机密钥。GitHub 改名后，更新命令中的 <code>--allow</code> 用户名，SSH 用户名保持不变。</p></details></section>"#,
+<details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>Shell 始终可用。客户端自动发现本机已安装的工具；工具需要的本机登录和授权仍由你管理。</p></details></section>"#,
         escape(&command)
     )
 }
 
 const GUIDE: &str = r#"<section class="guide" id="guide" aria-labelledby="guide-title">
-<div class="guide-header"><div><p class="eyebrow">04 / CHATGPT</p><h2 id="guide-title">最后一步，在 ChatGPT 中连接。</h2></div><a class="text-link" href="https://chatgpt.com/plugins">打开插件设置 <span class="arrow" aria-hidden="true">↗</span></a></div>
+<div class="guide-header"><div><p class="eyebrow">03 / CHATGPT</p><h2 id="guide-title">最后一步，在 ChatGPT 中连接。</h2></div><a class="text-link" href="https://chatgpt.com/plugins">打开插件设置 <span class="arrow" aria-hidden="true">↗</span></a></div>
 <div class="guide-grid">
-<div class="guide-step"><span class="step-number">01</span><h3>添加一个插件</h3><p>完成公钥登记并启动本机客户端后，打开 <a href="https://chatgpt.com/plugins">ChatGPT Plugins</a>，点击 <strong>Add</strong>。</p></div>
-<div class="guide-step"><span class="step-number">02</span><h3>填写连接信息</h3><dl class="connection-fields"><div><dt>Name</dt><dd>ssmcp</dd></div><div><dt>Connection</dt><dd>https://ssmcp.lmm.best/mcp</dd></div></dl></div>
+<div class="guide-step"><span class="step-number">01</span><h3>添加一个插件</h3><p>启动本机客户端后，打开 <a href="https://chatgpt.com/plugins">ChatGPT Plugins</a>，点击 <strong>Add</strong>。</p></div>
+<div class="guide-step"><span class="step-number">02</span><h3>填写连接信息</h3><dl class="connection-fields"><div><dt>Name</dt><dd>ssmcp</dd></div><div><dt>Connection</dt><dd>{mcp_url}</dd></div></dl></div>
 <div class="guide-step"><span class="step-number">03</span><h3>授权，然后开始</h3><p>勾选同意后点击 <strong>Create</strong>。按提示使用 GitHub 登录，核对身份与客户端，再点击“允许连接”。</p></div>
 </div>
-<details class="guide-help"><summary>已添加插件，接下来怎么用？</summary><div><p>回到 ChatGPT，调用 <code>list</code> 查看在线客户端，再使用 <code>code_mode</code> 调用工具。列表为空时，检查本机进程是否运行，以及 <code>--allow</code> 是否包含当前 GitHub 用户。</p><p>首页登录与插件授权是两个独立步骤。授权时请核对 MCP 客户端与回调来源。插件可调用获准客户端的工具，包括执行命令和修改文件，请按需设置允许名单。</p></div></details>
+<details class="guide-help"><summary>已添加插件，接下来怎么用？</summary><div><p>回到 ChatGPT，调用 <code>list</code> 查看在线客户端，再使用 <code>code_mode</code> 调用工具。列表为空时，检查本机客户端是否运行，以及插件与客户端是否使用同一 GitHub 账户。</p><p>插件授权时请核对 MCP 客户端与回调来源。插件可以调用你已授权的本机工具，包括执行命令和修改文件。</p></div></details>
 </section>"#;
 
 pub(super) fn home(
@@ -181,18 +182,22 @@ pub(super) fn home(
     csrf: Option<&str>,
     enabled: bool,
     management_enabled: bool,
+    public_url: &str,
 ) -> String {
     let csrf = escape(csrf.unwrap_or(""));
     let mut body = String::from(
-        r#"<section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">LOCAL TOOLS. OPEN POSSIBILITIES.</p><h1 id="hero-title">本机工具，<br><span>连接你的 AI。</span></h1><p class="hero-description">通过 SSH，把终端接入 ChatGPT。<br>工具在本机执行，访问权限由你掌控。</p><div class="protocol" aria-label="本机通过 SSH 和 MCP 连接 ChatGPT"><span>YOUR MACHINE</span><span class="arrow" aria-hidden="true">→</span><span>SSH / MCP</span><span class="arrow" aria-hidden="true">→</span><span>ChatGPT</span></div></div>"#,
+        r#"<section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">LOCAL TOOLS. OPEN POSSIBILITIES.</p><h1 id="hero-title">本机工具，<br><span>连接你的 AI。</span></h1><p class="hero-description">用一个用户名，把本机工具接入 ChatGPT。<br>工具在本机执行，访问权限由你掌控。</p><div class="protocol" aria-label="本机通过 HTTPS 和 MCP 连接 ChatGPT"><span>YOUR MACHINE</span><span class="arrow" aria-hidden="true">→</span><span>HTTPS / MCP</span><span class="arrow" aria-hidden="true">→</span><span>ChatGPT</span></div></div>"#,
     );
     body.push_str(&account_panel(account, &csrf, enabled, management_enabled));
     body.push_str(
-        r#"</section><div class="workspace-header"><p class="eyebrow">WORKSPACE / 接入配置</p><p>你的密钥，你的工具，你的工作方式。</p></div><div class="workspace-grid">"#,
+        r#"</section><div class="workspace-header"><p class="eyebrow">WORKSPACE / 接入配置</p><p>选择用户名，完成 GitHub 绑定，即可连接。</p></div><div class="workspace-flow">"#,
     );
+    body.push_str(&connect_panel(account, public_url));
+    body.push_str("<details><summary>旧版 SSH 公钥管理</summary>");
     body.push_str(&keys_panel(account, &csrf, enabled));
-    body.push_str(&connect_panel(account));
+    body.push_str("</details>");
     body.push_str("</div>");
-    body.push_str(GUIDE);
+    let mcp_url = format!("{}/mcp", public_url.trim_end_matches('/'));
+    body.push_str(&GUIDE.replace("{mcp_url}", &escape(&mcp_url)));
     page("账号门户", &body)
 }

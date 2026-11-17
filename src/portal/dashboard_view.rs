@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 fn navigation(active: &str, admin: bool) -> String {
     let mut html = String::from(r#"<nav class="console-nav" aria-label="账户管理">"#);
     for (path, label) in [
-        ("/", "账户与公钥"),
+        ("/", "我的账户"),
         ("/account/sessions", "我的会话"),
         ("/account/history", "历史记录"),
         ("/account/admin", "管理员"),
@@ -71,12 +71,18 @@ fn metric(value: usize, label: &str) -> String {
     format!(r#"<div class="metric"><dt>{label}</dt><dd>{value}</dd></div>"#)
 }
 
-fn session_cards(snapshot: &DashboardSnapshot, csrf: &str, return_to: &str) -> String {
+fn session_cards(
+    snapshot: &DashboardSnapshot,
+    csrf: &str,
+    return_to: &str,
+    accounts: &[AccountSummary],
+) -> String {
     if snapshot.sessions.is_empty() {
         return String::from(
             r#"<div class="console-empty"><span class="empty-prompt" aria-hidden="true">&gt;_</span><h3>当前没有在线会话</h3><p>在本机启动 ssmcp 后，刷新这里查看连接。</p><a class="text-link" href="/#connect">查看连接命令 ↗</a></div>"#,
         );
     }
+    let owners: BTreeMap<_, _> = accounts.iter().map(|a| (a.subject.as_str(), a)).collect();
     let mut html = String::from(r#"<div class="session-list">"#);
     for session in &snapshot.sessions {
         html.push_str(&session_card(
@@ -84,30 +90,54 @@ fn session_cards(snapshot: &DashboardSnapshot, csrf: &str, return_to: &str) -> S
             csrf,
             return_to,
             snapshot.scope == Scope::All,
+            session
+                .owner_subject
+                .as_deref()
+                .and_then(|id| owners.get(id).copied()),
         ));
     }
     html.push_str("</div>");
     html
 }
 
-fn session_card(session: &SessionSnapshot, csrf: &str, return_to: &str, admin: bool) -> String {
+fn session_card(
+    session: &SessionSnapshot,
+    csrf: &str,
+    return_to: &str,
+    admin: bool,
+    account: Option<&AccountSummary>,
+) -> String {
+    let username = account
+        .map(|a| a.handle.as_deref().unwrap_or(&a.username))
+        .unwrap_or(&session.ssh_user);
     let mut html = format!(
-        r#"<article class="session-card"><header class="session-heading"><div><h3>{}</h3><p class="muted">连接于 {}</p></div><span class="status signed-in">在线 · {}</span></header>
-<dl class="session-facts"><div class="session-id"><dt>会话 ID</dt><dd><code>{}</code></dd></div><div><dt>主机</dt><dd><code>{}</code></dd></div><div><dt>SSH 账户</dt><dd><code>{}</code></dd></div><div class="session-path"><dt>工作目录</dt><dd><code>{}</code></dd></div>"#,
+        r#"<article class="session-card" id="session-{}"><header class="session-heading"><div><h3>{}</h3><p class="muted">连接于 {}</p></div><span class="status signed-in">在线 · {}</span></header>
+<dl class="session-facts"><div class="session-id"><dt>会话 ID</dt><dd><code>{}</code></dd></div><div><dt>主机</dt><dd><code>{}</code></dd></div><div><dt>服务器用户</dt><dd><code>{}</code></dd></div><div class="session-path"><dt>工作目录</dt><dd><code>{}</code></dd></div>"#,
+        escape(&session.id),
         escape(&session.name),
         timestamp(session.connected_at),
         escape(&session.mode),
         escape(&session.id),
         escape(&session.hostname),
-        escape(&session.ssh_user),
+        escape(username),
         escape(&session.cwd),
     );
     if admin {
-        let owner = session
-            .owner_subject
-            .as_ref()
-            .map(|id| format!("GitHub #{}", escape(id)))
-            .unwrap_or_else(|| "尚未绑定门户账户".into());
+        let owner = account
+            .map(|a| {
+                format!(
+                    "{} · GitHub #{}",
+                    escape(&a.github_login),
+                    escape(&a.subject)
+                )
+            })
+            .or_else(|| {
+                session
+                    .owner_subject
+                    .as_ref()
+                    .map(|id| format!("GitHub #{}", escape(id)))
+            })
+            .unwrap_or_else(|| "尚未绑定账户".into());
         html.push_str(&format!(r#"<div><dt>归属</dt><dd>{owner}</dd></div>"#));
     }
     html.push_str("</dl>");
@@ -125,10 +155,10 @@ fn session_card(session: &SessionSnapshot, csrf: &str, return_to: &str, admin: b
                 escape(&identity.subject)
             ));
         }
-        html.push_str("</ul><p>此名单授予工具访问权；会话管理权由 SSH 账户归属决定。</p>");
+        html.push_str("</ul><p>此名单授予工具访问权；会话管理权由服务器验证的账户归属决定。</p>");
     }
     html.push_str(&format!(
-        r#"</details><details class="disconnect-control"><summary>断开此会话</summary><form method="post" action="/account/sessions/disconnect"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="session_id" value="{}"><input type="hidden" name="return_to" value="{}"><p>将关闭当前 SSH 工具连接。启用了看门狗的客户端可能重新连接；持续停用请在本机关闭客户端。</p><button class="danger" type="submit">确认断开会话</button></form></details></article>"#,
+        r#"</details><details class="disconnect-control"><summary>断开此会话</summary><form method="post" action="/account/sessions/disconnect"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="session_id" value="{}"><input type="hidden" name="return_to" value="{}"><p>将关闭当前工具连接。启用了自动重连的客户端可能重新连接；管理员可封禁用户，阻止继续访问。</p><button class="danger" type="submit">确认断开会话</button></form></details></article>"#,
         escape(csrf), escape(&session.id), escape(return_to)
     ));
     html
@@ -146,8 +176,8 @@ pub(super) fn sessions(snapshot: &DashboardSnapshot, csrf: &str) -> String {
     body.push_str(&metric(snapshot.stats.active_sessions, "在线会话"));
     body.push_str(&metric(snapshot.stats.hosts, "报告的主机"));
     body.push_str(&metric(snapshot.retention_days as usize, "历史保留天数"));
-    body.push_str(r#"</dl><section class="dashboard-section"><div class="dashboard-section-heading"><h2>在线连接</h2><a class="text-link" href="/account/history">查看连接历史 ↗</a></div><p class="dashboard-note">名称、主机和工作目录由客户端报告；会话归属按服务器验证的 SSH 账户确认。</p>"#);
-    body.push_str(&session_cards(snapshot, csrf, "/account/sessions"));
+    body.push_str(r#"</dl><section class="dashboard-section"><div class="dashboard-section-heading"><h2>在线连接</h2><a class="text-link" href="/account/history">查看连接历史 ↗</a></div><p class="dashboard-note">名称、主机和工作目录由客户端报告；会话归属按服务器验证的账户确认。</p>"#);
+    body.push_str(&session_cards(snapshot, csrf, "/account/sessions", &[]));
     body.push_str("</section>");
     page("我的会话", &body)
 }
@@ -164,6 +194,7 @@ fn action_label(action: AuditAction) -> &'static str {
         AuditAction::SessionDisconnectRequested => "请求断开会话",
         AuditAction::ToolCall => "调用工具",
         AuditAction::AdminViewed => "查看管理员数据",
+        AuditAction::UserPolicyChanged => "用户策略已更新",
     }
 }
 
@@ -251,88 +282,158 @@ pub(super) fn history(snapshot: &DashboardSnapshot) -> String {
     page(title, &body)
 }
 
-fn topology(snapshot: &DashboardSnapshot) -> String {
-    let mut html = String::from(
-        r#"<section class="dashboard-section" id="topology"><div class="dashboard-section-heading"><h2>连接拓扑</h2><span class="muted">网关 → SSH 账户 → 会话</span></div><p class="dashboard-note">展示当前实际登记的连接及授权关系；设备名称与主机名来自客户端报告。</p>"#,
+pub(super) fn mib_per_second(bytes: u64) -> String {
+    let whole = bytes / 1_048_576;
+    let remainder = bytes % 1_048_576;
+    if remainder == 0 {
+        return whole.to_string();
+    }
+    // One byte is exactly 0.00000095367431640625 MiB.
+    let fraction = u128::from(remainder) * 95_367_431_640_625;
+    format!("{whole}.{fraction:020}")
+        .trim_end_matches('0')
+        .into()
+}
+
+fn user_row(
+    account: &AccountSummary,
+    sessions: &[&SessionSnapshot],
+    csrf: &str,
+    actor_subject: &str,
+    default_rate_limit_bps: u64,
+) -> String {
+    let username = escape(account.handle.as_deref().unwrap_or(&account.username));
+    let subject = escape(&account.subject);
+    let csrf = escape(csrf);
+    let own_account = account.subject == actor_subject;
+    let mut html = format!(
+        r#"<tr><th scope="row"><code>{username}</code>{}</th><td data-label="GitHub"><span>{}</span><small class="user-identifier">GitHub #{subject}</small></td><td data-label="连接">"#,
+        if own_account {
+            r#"<small class="user-self">你</small>"#
+        } else if account.handle.is_none() {
+            r#"<small class="user-identifier">待设置用户名</small>"#
+        } else {
+            ""
+        },
+        escape(&account.github_login),
     );
-    if snapshot.sessions.is_empty() {
-        html.push_str(r#"<div class="console-empty"><h3>网关当前没有在线客户端</h3><p>客户端连接后，拓扑会自动出现在新的快照中。</p></div></section>"#);
-        return html;
-    }
-    html.push_str(r#"<div class="topology"><div class="topology-root"><span class="topology-symbol" aria-hidden="true">&gt;_</span><div><strong>ssmcp 网关</strong><code>MCP / SSH</code></div></div><div class="topology-branches">"#);
-    let mut owners: BTreeMap<&str, Vec<&SessionSnapshot>> = BTreeMap::new();
-    for session in &snapshot.sessions {
-        owners.entry(&session.ssh_user).or_default().push(session);
-    }
-    for (owner, sessions) in owners {
+    if sessions.is_empty() {
+        html.push_str(r#"<span class="muted">0</span>"#);
+    } else {
         html.push_str(&format!(
-            r#"<section class="topology-owner"><h3><span>SSH</span><code>{}</code></h3><ul>"#,
-            escape(owner)
+            r#"<details class="user-connections"><summary>{} 在线</summary><ul>"#,
+            sessions.len()
         ));
         for session in sessions {
             html.push_str(&format!(
-                r#"<li><div class="topology-session"><div><strong>{}</strong><span class="status signed-in">{}</span></div><p><code>{}</code> · {}</p><details class="audit-id"><summary>会话 ID</summary><code>{}</code></details><p class="topology-allow">授权 GitHub： "#,
-                escape(&session.name), escape(&session.mode), escape(&session.hostname),
-                timestamp(session.connected_at), escape(&session.id)
+                r##"<li><a href="#session-{}">{}</a></li>"##,
+                escape(&session.id),
+                escape(&session.name)
             ));
-            if session.allowed_github.is_empty() {
-                html.push_str("登录码模式");
-            } else {
-                for (index, identity) in session.allowed_github.iter().enumerate() {
-                    if index != 0 {
-                        html.push('、');
-                    }
-                    html.push_str(&format!(
-                        "<code>{}</code> <span>#{}</span>",
-                        escape(&identity.login),
-                        escape(&identity.subject)
-                    ));
-                }
-            }
-            html.push_str("</p></div></li>");
         }
-        html.push_str("</ul></section>");
+        html.push_str("</ul></details>");
     }
-    html.push_str("</div></div></section>");
+    let (state_class, state) = if account.banned {
+        ("banned", "已封禁")
+    } else {
+        ("active", "正常")
+    };
+    let value = account
+        .rate_limit_bps
+        .map(mib_per_second)
+        .unwrap_or_default();
+    let default_rate = mib_per_second(default_rate_limit_bps);
+    html.push_str(&format!(
+        r#"</td><td data-label="状态"><span class="account-state {state_class}">{state}</span></td><td class="user-rate-cell" data-label="限速 · MiB/s"><form class="user-rate-form" method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="rate"><label class="visually-hidden" for="rate-{subject}">{username} 的限速，MiB/s</label><div class="rate-input"><input id="rate-{subject}" type="number" name="rate_mib" min="0.00000095367431640625" max="1024" step="any" inputmode="decimal" value="{value}" placeholder="默认 {default_rate}" aria-describedby="rate-help" autocomplete="off"><button class="secondary" type="submit">保存</button></div><small>{}</small></form></td><td class="user-actions" data-label="访问管理">"#,
+        if account.rate_limit_bps.is_some() { "自定义 · 留空恢复默认" } else { "使用服务器默认" },
+    ));
+    html.push_str(&user_access_control(
+        account,
+        &username,
+        &subject,
+        &csrf,
+        own_account,
+    ));
+    html.push_str("</td></tr>");
     html
+}
+
+// Attribute values and username are escaped once by user_row.
+fn user_access_control(
+    account: &AccountSummary,
+    username: &str,
+    subject: &str,
+    csrf: &str,
+    own_account: bool,
+) -> String {
+    if own_account {
+        r#"<span class="muted">当前账户</span>"#.into()
+    } else if account.banned {
+        format!(
+            r#"<form method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="unban"><button class="secondary" type="submit">解除封禁</button></form>"#,
+        )
+    } else {
+        format!(
+            r#"<details class="user-ban"><summary>封禁用户</summary><form method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="ban"><p>封禁 <strong>{username}</strong> 后，将断开其全部连接并阻止继续访问。</p><button class="danger" type="submit">确认封禁</button></form></details>"#,
+        )
+    }
 }
 
 pub(super) fn admin(
     snapshot: &DashboardSnapshot,
     accounts: &[AccountSummary],
     csrf: &str,
+    actor_subject: &str,
 ) -> String {
     let mut body = navigation("/account/admin", true);
     body.push_str(&heading(
         snapshot,
-        "管理员控制台",
-        "查看注册用户、在线连接与授权拓扑，处理需要关注的安全事件。",
+        "服务器管理",
+        "管理这台服务器上的用户与连接。",
         "/account/admin",
     ));
     body.push_str(r#"<dl class="metrics metrics-four">"#);
     body.push_str(&metric(accounts.len(), "注册用户"));
-    body.push_str(&metric(snapshot.stats.active_sessions, "在线会话"));
-    body.push_str(&metric(snapshot.stats.hosts, "报告的主机"));
-    body.push_str(&metric(snapshot.stats.owners, "在线 SSH 账户"));
-    body.push_str(r##"</dl><nav class="section-links" aria-label="管理员区域"><a href="#topology">连接拓扑</a><a href="#registered-users">注册用户</a><a href="#all-sessions">会话管理</a><a href="/account/admin/history">安全审计 ↗</a></nav>"##);
-    body.push_str(&topology(snapshot));
-    body.push_str(r#"<section class="dashboard-section" id="registered-users"><div class="dashboard-section-heading"><h2>注册用户</h2><span class="muted">仅显示账户摘要</span></div>"#);
+    body.push_str(&metric(snapshot.stats.active_sessions, "在线连接"));
+    body.push_str(&metric(
+        accounts.iter().filter(|a| a.banned).count(),
+        "已封禁用户",
+    ));
+    body.push_str(&metric(snapshot.stats.hosts, "在线主机"));
+    body.push_str(r##"</dl><nav class="section-links" aria-label="管理员区域"><a href="#registered-users">用户</a><a href="#all-sessions">连接</a><a href="/account/admin/history">安全审计 ↗</a></nav>"##);
+    body.push_str(r#"<section class="dashboard-section" id="registered-users"><div class="dashboard-section-heading"><h2>用户</h2><span class="muted">账号绑定 GitHub 身份</span></div>"#);
+    body.push_str(&format!(
+        r#"<p class="dashboard-note" id="rate-help">网络限速按每位用户的全部连接合计，上传、下载分别计量。服务器默认 <strong>{} MiB/s</strong>；留空使用默认值。1 MiB = 1,048,576 字节。</p>"#,
+        mib_per_second(snapshot.default_rate_limit_bps),
+    ));
     if accounts.is_empty() {
         body.push_str(r#"<div class="console-empty"><h3>尚无注册用户</h3><p>首次完成 GitHub 登录后，账户会出现在这里。</p></div>"#);
     } else {
-        body.push_str(r#"<div class="table-scroll" tabindex="0" role="region" aria-label="注册用户表"><table class="users-table"><thead><tr><th scope="col">GitHub 用户</th><th scope="col">SSH 用户名</th><th scope="col">GitHub ID</th><th scope="col">公钥数量</th></tr></thead><tbody>"#);
+        let mut sessions: BTreeMap<&str, Vec<&SessionSnapshot>> = BTreeMap::new();
+        for session in &snapshot.sessions {
+            if let Some(subject) = session.owner_subject.as_deref() {
+                sessions.entry(subject).or_default().push(session);
+            }
+        }
+        body.push_str(r#"<div class="table-scroll" tabindex="0" role="region" aria-label="用户管理表"><table class="users-table user-management-table"><thead><tr><th scope="col">用户名</th><th scope="col">GitHub</th><th scope="col">连接</th><th scope="col">状态</th><th scope="col">限速 · MiB/s</th><th scope="col">访问管理</th></tr></thead><tbody>"#);
         for account in accounts {
-            body.push_str(&format!(
-                "<tr><th scope=\"row\">{}</th><td><code>{}</code></td><td><code>{}</code></td><td>{}</td></tr>",
-                escape(&account.github_login), escape(&account.username), escape(&account.subject), account.key_count
+            body.push_str(&user_row(
+                account,
+                sessions
+                    .get(account.subject.as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+                csrf,
+                actor_subject,
+                snapshot.default_rate_limit_bps,
             ));
         }
         body.push_str("</tbody></table></div>");
     }
-    body.push_str(r#"</section><section class="dashboard-section" id="all-sessions"><div class="dashboard-section-heading"><h2>会话管理</h2><a class="text-link" href="/account/admin/history">查看安全审计 ↗</a></div>"#);
-    body.push_str(&session_cards(snapshot, csrf, "/account/admin"));
+    body.push_str(r#"</section><section class="dashboard-section" id="all-sessions"><div class="dashboard-section-heading"><h2>连接</h2><a class="text-link" href="/account/admin/history">查看连接历史 ↗</a></div><p class="dashboard-note">名称、主机和工作目录由客户端报告。断开只关闭当前连接；封禁用户会阻止其重新连接。</p>"#);
+    body.push_str(&session_cards(snapshot, csrf, "/account/admin", accounts));
     body.push_str("</section>");
-    page("管理员控制台", &body)
+    page("服务器管理", &body)
 }
 
 #[cfg(test)]
@@ -345,5 +446,112 @@ mod tests {
         assert_eq!(timestamp(1_709_164_800), "2024-02-29 00:00:00 UTC");
         assert_eq!(timestamp(1_735_689_599), "2024-12-31 23:59:59 UTC");
         assert_eq!(timestamp(253_402_300_800), "时间不可用");
+    }
+
+    fn sample_account() -> AccountSummary {
+        AccountSummary {
+            subject: "123".into(),
+            username: "gh-123".into(),
+            handle: Some("developer".into()),
+            github_login: "octocat".into(),
+            key_count: 0,
+            banned: false,
+            rate_limit_bps: Some(524_288),
+        }
+    }
+
+    fn sample_session() -> SessionSnapshot {
+        SessionSnapshot {
+            id: "a".repeat(64),
+            name: "build-machine".into(),
+            hostname: "workstation".into(),
+            cwd: "/workspace".into(),
+            mode: "shell".into(),
+            ssh_user: "gh-123".into(),
+            owner_subject: Some("123".into()),
+            connected_at: 1_700_000_000,
+            allowed_github: vec![],
+        }
+    }
+
+    #[test]
+    fn user_actions_are_independent_and_hide_self_ban() {
+        let mut account = sample_account();
+        let row = user_row(&account, &[], "csrf", "999", 8 * 1_048_576);
+        assert!(row.contains(r#"value="0.5""#));
+        assert!(row.contains(r#"name="action" value="rate""#));
+        assert!(row.contains(r#"name="action" value="ban""#));
+        assert!(!row.contains(r#"name="banned""#));
+        account.banned = true;
+        let row = user_row(&account, &[], "csrf", "999", 8 * 1_048_576);
+        assert!(row.contains("已封禁"));
+        assert!(row.contains(r#"name="action" value="unban""#));
+        assert!(!row.contains(r#"name="action" value="ban""#));
+        let own = user_row(&account, &[], "csrf", "123", 8 * 1_048_576);
+        assert!(own.contains("当前账户"));
+        assert!(!own.contains(r#"name="action" value="unban""#));
+        assert!(!own.contains(r#"name="action" value="ban""#));
+        account.rate_limit_bps = None;
+        let row = user_row(&account, &[], "csrf", "999", 4 * 1_048_576);
+        assert!(row.contains(r#"value="" placeholder="默认 4""#));
+    }
+
+    #[test]
+    fn user_and_connection_metadata_are_escaped_and_linked_by_subject() {
+        let mut account = sample_account();
+        account.handle = Some("<script>".into());
+        account.github_login = r#"<img src=x onerror="alert(1)">"#.into();
+        let mut session = sample_session();
+        session.name = "<svg onload=alert(1)>".into();
+        let row = user_row(
+            &account,
+            &[&session],
+            r#"csrf" injected="#,
+            "999",
+            8 * 1_048_576,
+        );
+        for raw in ["<script>", "<img", "<svg", r#"value="csrf" injected="#] {
+            assert!(!row.contains(raw), "{raw}");
+        }
+        assert!(row.contains("&lt;script&gt;"));
+        assert!(row.contains("&lt;img"));
+        assert!(row.contains("&lt;svg"));
+        assert!(row.contains(&format!(r##"href="#session-{}""##, session.id)));
+        let card = session_card(&session, "csrf", "/account/admin", true, Some(&account));
+        assert!(card.contains(&format!(r#"id="session-{}""#, session.id)));
+        assert!(card.contains("<dt>服务器用户</dt><dd><code>&lt;script&gt;</code>"));
+        assert!(!card.contains("<svg"));
+        assert!(!card.contains("<img"));
+        assert!(!card.contains("<script>"));
+    }
+
+    #[test]
+    fn admin_uses_server_default_and_counts_actual_owner_connections() {
+        let account = sample_account();
+        let own = sample_session();
+        let mut foreign = sample_session();
+        foreign.id = "b".repeat(64);
+        foreign.owner_subject = Some("456".into());
+        foreign.ssh_user = "gh-456".into();
+        let snapshot = DashboardSnapshot {
+            is_admin: true,
+            scope: Scope::All,
+            generated_at: 1_700_000_000,
+            sessions: vec![own, foreign],
+            stats: crate::management::DashboardStats {
+                active_sessions: 2,
+                owners: 2,
+                hosts: 1,
+            },
+            audit: vec![],
+            audit_next_before: None,
+            retention_days: 7,
+            default_rate_limit_bps: 3 * 1_048_576,
+        };
+        let html = admin(&snapshot, &[account], "csrf", "999");
+        assert!(html.contains("服务器默认 <strong>3 MiB/s</strong>"));
+        assert!(html.contains("<summary>1 在线</summary>"));
+        assert!(!html.contains("<summary>2 在线</summary>"));
+        assert!(html.contains("<dt>服务器用户</dt><dd><code>developer</code>"));
     }
 }

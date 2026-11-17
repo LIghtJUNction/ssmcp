@@ -206,6 +206,26 @@ async fn skill_discovery_and_instruction_resolution_preserve_scope_and_provenanc
     assert_eq!(result["global"]["skills"].as_array().unwrap().len(), 1);
     assert_eq!(result["global"]["skills"][0]["name"], "global-guide");
     assert_eq!(result["global"]["root"]["id"], "context-1");
+    assert_eq!(result["view"]["scope"], "effective");
+    assert!(
+        result["view"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("global-guide")
+    );
+    assert!(
+        result["view"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("context-1")
+    );
+    assert!(
+        !result["view"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("GLOBAL_BODY_NOT")
+    );
+
     assert_eq!(result["selected"]["skills"].as_array().unwrap().len(), 1);
     assert_eq!(
         result["selected"]["skills"][0]["path"],

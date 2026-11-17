@@ -216,8 +216,17 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         username: "gh-1".into(),
         github_login: "<script>".into(),
         keys: vec![],
+        handle: None,
+        banned: false,
+        rate_limit_bps: None,
     };
-    let html = view::home(Some(&a), Some("csrf"), true, false);
+    let html = view::home(
+        Some(&a),
+        Some("csrf"),
+        true,
+        false,
+        "https://ssmcp.lmm.best",
+    );
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
     for step in [
@@ -227,7 +236,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         "Connection",
         "https://ssmcp.lmm.best/mcp",
         "Create",
-        "gh-1",
+        "ssmcp myname@ssmcp.lmm.best",
     ] {
         assert!(html.contains(step), "missing {step}");
     }
@@ -378,7 +387,9 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .text()
         .await
         .unwrap();
-    assert!(html.contains("alice") && html.contains("gh-123"));
+    assert!(html.contains("<h2 id=\"account-title\">alice</h2>"));
+    assert!(html.contains("尚未选择 · 在终端命令中填写"));
+    assert!(html.contains("ssmcp myname@ssmcp.test"));
     assert!(!html.contains("bob key"));
     let csrf = html
         .split("name=\"csrf\" value=\"")

@@ -520,7 +520,7 @@ impl Runtime {
                     for skill in skills {
                         self.audit
                             .push(json!({"type":"ssmcp.skill.discovered","tool":name,
-                            "root":native["root"],"path":skill["path"],"name":skill["name"],
+                            "root":skill.get("root").unwrap_or(&native["root"]),"path":skill["path"],"name":skill["name"],
                             "scope":"ssmcp context operation","invoked":false}));
                     }
                 }
@@ -551,10 +551,14 @@ impl Runtime {
         };
         // Retrieval pages already point to the original complete capture. Guarding
         // them again would recursively archive the artifact-read response itself.
-        if matches!(
-            name.as_str(),
-            "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
-        ) {
+        // Context already enforces a 1 MiB response and 256 KiB full-document limit.
+        // Keep structured contents available to resources/read instead of spilling them.
+        if tool.provider == Provider::Context
+            || matches!(
+                name.as_str(),
+                "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
+            )
+        {
             Ok(value)
         } else {
             Ok(self.output.guard_result(value))
