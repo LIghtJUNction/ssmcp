@@ -1,0 +1,300 @@
+{
+  "schema": "ssmcp.unified-acceptance.v1",
+  "status": "passed",
+  "revision": "76613f3a0506f00a74b23e59bdd02a3c828fd6fc",
+  "transport": "real local OpenSSH public-key + OAuth PKCE + HTTP MCP + independent processes + PTY",
+  "model_calls_attempted": 0,
+  "installed_harnesses_exposed": [],
+  "scope": "no-Harness unified runtime; installed native Harness discovery/approval needs its separate acceptance runs",
+  "binaries": {
+    "ssmcp": {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcp",
+      "sha256": "672fb50a2a1173437e8ea1702cba8cbea95e7dd506fc9a0c48c7e10f46d28900"
+    },
+    "ssmcpd": {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcpd",
+      "sha256": "eba663591eca9c9e3bfce8dc9ecf0f72ccf7603884dc4983262fba76bd8bdc54"
+    }
+  },
+  "remaining_observed_processes": [],
+  "checks": [
+    "effective sshd config permits public keys only",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "a client without any Harness starts its interactive shell",
+    "public MCP exposes exactly list/code_mode (modern=False)",
+    "public MCP exposes exactly list/code_mode (modern=True)",
+    "all four absent Harnesses are diagnosed without preventing Shell access",
+    "the absent optional Playwright MCP provider is diagnosed independently of the four Harnesses",
+    "list preserves the connection title and authorized workspace",
+    "list and code_mode tools return one identical collision-free full-schema catalog",
+    "unavailable Harnesses and the optional Playwright provider contribute no invented native tools",
+    "two starts return distinct active processes without claiming command success",
+    "reported supervisor PID owns the separately observed live command PID",
+    "alpha runs in the authorized cwd with its explicit environment",
+    "alpha emits live stdout/stderr while blocked behind the release gate",
+    "reported supervisor PID owns the separately observed live command PID",
+    "beta runs in the authorized cwd with its explicit environment",
+    "beta emits live stdout/stderr while blocked behind the release gate",
+    "the terminal displays each live job/stdout/stderr marker once before any wait completes",
+    "final exit codes distinguish a successful command from a started command that exits 7",
+    "alpha read-back exactly matches ordered, nonduplicated live events per stream",
+    "beta read-back exactly matches ordered, nonduplicated live events per stream",
+    "the environment value is absent from audit events and the terminal transcript",
+    "UTF-8 command output completes with exit zero and both streams at EOF",
+    "UTF-8 stdout preserves the exact byte-52 delimiter fixture",
+    "UTF-8 stderr preserves the exact byte-52 delimiter fixture",
+    "UTF-8 stdout and stderr remain exact in ordered audit event bytes",
+    "a subsequent native call succeeds on the same live connection after UTF-8 output",
+    "output spilling does not stop live events and active capture remains explicitly incomplete",
+    "long stdout retains its complete prefix/body/tail in both stored bytes and live events",
+    "long-output metadata truthfully reports full integrity, SHA-256, lines and 24-hour retention",
+    "outputs.read reconstructs the exact artifact across bounded SSH pages",
+    "600 short lines independently trigger the existing line threshold",
+    "a large structured result is archived with its native result format",
+    "retrieval preserves the complete structured result and native MCP fields",
+    "explicit cleanup preserves fresh output and retains the existing quota policy",
+    "only successful committed writes produce file change events; stale edits leave bytes unchanged",
+    "file read and queryable Diff reflect actual bytes without claiming external audit coverage",
+    "sensitive-file audit records metadata without storing its contents or a diff preview",
+    "skill discovery emits discovery metadata without claiming that a skill was read or invoked",
+    "explicit skill reading is recorded separately and never relabeled as invocation",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "the sibling is authorized and online before testing its per-client resource boundary",
+    "a separate client cannot list or address the first client's tasks",
+    "ssmcp.exec.events on another client does not expose the first client's audit stream",
+    "ssmcp.fs.events on another client does not expose the first client's audit stream",
+    "ssmcp.audit.events on another client does not expose the first client's audit stream",
+    "another client's cleanup leaves the first client's retained artifact intact",
+    "reported supervisor PID owns the separately observed live command PID",
+    "cancel starts an actual double-fork daemon in a detached session",
+    "cancel returns a final cancellation state",
+    "explicit cancellation reaps every observed supervisor, command and daemon instance",
+    "reported supervisor PID owns the separately observed live command PID",
+    "timeout starts an actual double-fork daemon in a detached session",
+    "an execution timeout terminates the job and reports timeout",
+    "execution timeout reaps every observed supervisor, command and daemon instance",
+    "reported supervisor PID owns the separately observed live command PID",
+    "native-exit starts an actual double-fork daemon in a detached session",
+    "native exit 17 is preserved and detached stdout/stderr holders are closed without a drain timeout",
+    "native parent exit reaps every observed supervisor, command and daemon instance",
+    "expiration fixture is finalized before its timestamp is aged",
+    "automatic expiration removes aged completed output while keeping fresh output",
+    "reported supervisor PID owns the separately observed live command PID",
+    "reload starts an actual double-fork daemon in a detached session",
+    "reload acknowledgement arrives over SSH before the connection is replaced",
+    "reload reconnects the same client process with a new connection ID and preserved metadata",
+    "reload reaps every observed supervisor, command and daemon instance",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "reload starts with no inherited background job handles",
+    "reload rebuilds the full no-Harness catalog through the new registry",
+    "acknowledged reload preserves owned output through the private one-use handoff",
+    "reported supervisor PID owns the separately observed live command PID",
+    "disconnect starts an actual double-fork daemon in a detached session",
+    "connection shutdown reaps every observed supervisor, command and daemon instance",
+    "disconnect cleanup leaves the independently authorized sibling client usable"
+  ],
+  "sections": {
+    "ssh_oauth": {
+      "status": "passed",
+      "duration_seconds": 0.641
+    },
+    "catalog_no_harness": {
+      "status": "passed",
+      "duration_seconds": 0.209
+    },
+    "concurrent_execution": {
+      "status": "passed",
+      "duration_seconds": 1.48
+    },
+    "utf8_transport": {
+      "status": "passed",
+      "duration_seconds": 0.298
+    },
+    "output_storage": {
+      "status": "passed",
+      "duration_seconds": 5.856
+    },
+    "file_skill_audit": {
+      "status": "passed",
+      "duration_seconds": 1.371
+    },
+    "client_isolation": {
+      "status": "passed",
+      "duration_seconds": 1.058
+    },
+    "cancel_timeout": {
+      "status": "passed",
+      "duration_seconds": 3.271
+    },
+    "native_parent_exit": {
+      "status": "passed",
+      "duration_seconds": 0.257
+    },
+    "automatic_expiration": {
+      "status": "passed",
+      "duration_seconds": 0.991
+    },
+    "reload": {
+      "status": "passed",
+      "duration_seconds": 1.668
+    },
+    "disconnect": {
+      "status": "passed",
+      "duration_seconds": 0.207
+    }
+  },
+  "evidence": [
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/catalog.json",
+      "bytes": 80900,
+      "sha256": "ce3a9c67f6053971612b0291a2e8814607ed55c4153e13dfb575b0ca593b5101"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/concurrent-commands.json",
+      "bytes": 8456,
+      "sha256": "f4ea3f9d80f5434a6446569a81e9b094b1e2599dbbc72ebb78a14504e897ab93"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/utf8-transport.json",
+      "bytes": 478,
+      "sha256": "283708eecdd7010d5474bf8baca68c89547113237ba438374cf12bd72d61c7bd"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/execution-events.jsonl",
+      "bytes": 401522,
+      "sha256": "cfef30bf30795a06e51769e9c4270b1a8ab392c4fdd1fdcff951fb6c2b894536"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/long-stdout.log",
+      "bytes": 163920,
+      "sha256": "c980067038b5e63ab9256bdd436002aea8943bb54263efe424046747c56fba86"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/long-output.json",
+      "bytes": 4154,
+      "sha256": "eb07347ba84198f97b343e8cca2a689df6c9f1625a835b74a393903f01d36a11"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/structured-result.json",
+      "bytes": 687,
+      "sha256": "caee34d148b193a2b9f698a5f8b68af460067e37da064eb9c7303445cda61e34"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/file-events.jsonl",
+      "bytes": 5341,
+      "sha256": "2858131ba7a35e79cf2f0eefddc1e0898f75eeade9d5bf15184b98b819ba11b4"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/skill-events.jsonl",
+      "bytes": 571,
+      "sha256": "527800c05f9b4b5502617a1142dae910e163389e352abd6dd271bb9bd3e63bfc"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/file-results.json",
+      "bytes": 1474,
+      "sha256": "f34cdb36277b1a66c658995c77b53ea6e0b47f12d80f4f14f9a2d78a31d805eb"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/client-isolation.json",
+      "bytes": 568,
+      "sha256": "1e0f75e080958b16cff7229c6535856436deab1a25f2b3d7f4b1e5f7e3d9575d"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/cancel-timeout.json",
+      "bytes": 5331,
+      "sha256": "80d71eb1d8d7ceb9ee28211de97ed92578fa6a28b9c5ff77ba20d9afbd216572"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/native-parent-exit.json",
+      "bytes": 4699,
+      "sha256": "f3b9d55023e8fb28f3fc4d76616e4c68b97038777e627e576211ce2c4445bd31"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/automatic-expiration.json",
+      "bytes": 827,
+      "sha256": "f16baa16d723a1a25ba8e9c91efeba8bafa6682438302d3c80cab5eeb0814387"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/reload.json",
+      "bytes": 1956,
+      "sha256": "7395be9dcfdad7916d1e1d3ac7f74667824d88ef26c62e311b81794389a10f9c"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/disconnect.json",
+      "bytes": 2731,
+      "sha256": "36bc70c21f06df179c2bedeccf5073aa363b3af7a089b2128eb178efc236470b"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-daemon.log",
+      "bytes": 45332,
+      "sha256": "92c97d4409b18a45f1cef9fd6f7fbd8863d3a18cfbd790d639faea6ced744c21"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-sshd.log",
+      "bytes": 807,
+      "sha256": "5173f33ae786ffe22ff668799477382bff2f95e0c204937054e07e45ab3ec73f"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-unified-primary.log",
+      "bytes": 183110,
+      "sha256": "02274f58046c680de284e643fa5e4e37bcc3f2b1f52d4bc234beaf227b7541ca"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-unified-sibling.log",
+      "bytes": 1079,
+      "sha256": "ba1f50edb212c41dec57f840e2bae0b6c7168abd311b926da852a3195b417d88"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence/terminal-unified-retention.log",
+      "bytes": 760,
+      "sha256": "02f8848115062e2664a1a5d61b55fe1a6e22101dd331dcacd10d63a7376c332d"
+    }
+  ],
+  "duration_seconds": 17.519
+}

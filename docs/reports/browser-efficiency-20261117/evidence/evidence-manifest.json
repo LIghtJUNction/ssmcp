@@ -1,0 +1,172 @@
+{
+  "schema": "ssmcp.selected-evidence.v1",
+  "note": "Source SHA-256 values identify the native or previously verified source bytes. Archive SHA-256 values identify these redacted copies; they can differ. Native raw-log references inside reports are provenance, not links to files included here.",
+  "files": [
+    {
+      "path": "evidence/final-r3/gates.json",
+      "bytes": 4070,
+      "sha256": "1aad45eb5f0d866bf50afe6d220f2c114df647eda8cf8ace01738bda5e94c5b0",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/gates.json",
+      "source_bytes": 4070,
+      "source_sha256": "1aad45eb5f0d866bf50afe6d220f2c114df647eda8cf8ace01738bda5e94c5b0",
+      "transformation": "byte-identical"
+    },
+    {
+      "path": "evidence/final-r3/binaries.json",
+      "bytes": 474,
+      "sha256": "1d4a1d3483e63dd1b0cc8d6ab625bfe76b6f708cdc8c61d2b0f612e5dfb17e23",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/binaries.json",
+      "source_bytes": 596,
+      "source_sha256": "b8385688f742e7f5ce53b4a659181368bbd0d7d24d74f031ef12fd7d9a3d8db0",
+      "transformation": "JSON formatting, workspace/home path redaction and removal of transient PID fields; test results unchanged"
+    },
+    {
+      "path": "evidence/final-r1/gates.json",
+      "bytes": 638,
+      "sha256": "d03f9b7c45dea0a6c26c1093b4798186a8eb5fc7f7517560e2e1b8c1835cf61e",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r1/gates.json",
+      "source_bytes": 638,
+      "source_sha256": "d03f9b7c45dea0a6c26c1093b4798186a8eb5fc7f7517560e2e1b8c1835cf61e",
+      "transformation": "byte-identical"
+    },
+    {
+      "path": "evidence/final-r2/gates.json",
+      "bytes": 800,
+      "sha256": "960c07c03d8f6c7d97cc9dca2276a326b420673c10fe2109878c5ec59f011e07",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r2/gates.json",
+      "source_bytes": 800,
+      "source_sha256": "960c07c03d8f6c7d97cc9dca2276a326b420673c10fe2109878c5ec59f011e07",
+      "transformation": "byte-identical"
+    },
+    {
+      "path": "evidence/final-r2-remaining/clippy.log",
+      "bytes": 41,
+      "sha256": "99cd2400d618f046ddfffae50e16d73f0034e85a04e91c29445eff5cdc3cd195",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r2-remaining/clippy.log",
+      "source_bytes": 102,
+      "source_sha256": "b29a6757d028de380e4be5688986e950dcca49a04af2d26dd1aa3862d361c65c",
+      "transformation": "Project absolute path replaced with ${WORKSPACE}; 102-byte original becomes a 41-byte redacted copy. Original bytes are not included."
+    },
+    {
+      "path": "evidence/source-commit.json",
+      "bytes": 806,
+      "sha256": "7f00afdd93bff817ac9b64c40b8b04a28c1ef4604d092e915baf3c1483943ff0",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/source-commit.json",
+      "source_bytes": 806,
+      "source_sha256": "7f00afdd93bff817ac9b64c40b8b04a28c1ef4604d092e915baf3c1483943ff0",
+      "transformation": "byte-identical"
+    },
+    {
+      "path": "evidence/final-r3-observed-summary.json",
+      "bytes": 8074,
+      "sha256": "e75def036a367955062902dfa470061f78f536844b05d7e10cc132174952f069",
+      "source_reference": "derived from actual native gate logs; source log hashes are retained",
+      "source_bytes": 8074,
+      "source_sha256": "e75def036a367955062902dfa470061f78f536844b05d7e10cc132174952f069",
+      "transformation": "byte-identical"
+    },
+    {
+      "path": "evidence/final-r3/e2e-browser/receipt.json",
+      "bytes": 2349,
+      "sha256": "813c0770df1b3c4cf7dd1c101d9c218323744694b1e7387b597ee102eebacbba",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-browser/receipt.json",
+      "source_bytes": 2532,
+      "source_sha256": "a14b6d8081a5b6ac2b9712aa024d25a51f9113ecf3664671f603f07d689562e3",
+      "transformation": "JSON formatting, workspace/home path redaction and removal of transient PID fields; test results unchanged"
+    },
+    {
+      "path": "evidence/final-r3/e2e-browser/report.json",
+      "bytes": 4404,
+      "sha256": "860920667afbfbf12b8ba76f610c83eaa20751e55f7f9dfe50f26d3f8a0e0a8a",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-browser/report.json",
+      "source_bytes": 4404,
+      "source_sha256": "860920667afbfbf12b8ba76f610c83eaa20751e55f7f9dfe50f26d3f8a0e0a8a",
+      "transformation": "byte-identical"
+    },
+    {
+      "path": "evidence/final-r3/e2e-daemon/receipt.json",
+      "bytes": 1718,
+      "sha256": "1628a12aad7bba4f7b661040e63b216e1a9cb17897df7daa20d45d6e23a7c908",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-daemon/receipt.json",
+      "source_bytes": 1901,
+      "source_sha256": "ae11da79b5ecb793da73d371ae3d80fe781dc6f381017e4b3d0c706ac76efa4a",
+      "transformation": "JSON formatting, workspace/home path redaction and removal of transient PID fields; test results unchanged"
+    },
+    {
+      "path": "evidence/final-r3/e2e-daemon/report.json",
+      "bytes": 21720,
+      "sha256": "5cbcf7b02abb99c9197b3dd9e36ad181bbba20c7295f5e0dcdec2d1db735776d",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-daemon/report.json",
+      "source_bytes": 21720,
+      "source_sha256": "5cbcf7b02abb99c9197b3dd9e36ad181bbba20c7295f5e0dcdec2d1db735776d",
+      "transformation": "byte-identical"
+    },
+    {
+      "path": "evidence/final-r3/e2e-unified-r2/receipt.json",
+      "bytes": 1353,
+      "sha256": "ac837b69ef2819de38a0a48898e69313481c205485418db09ba47114bb02603a",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/receipt.json",
+      "source_bytes": 1536,
+      "source_sha256": "c57507aacd026825f8fc7935acf98d91ede47cb77f174b9ec7d9ca54bdb9250f",
+      "transformation": "JSON formatting, workspace/home path redaction and removal of transient PID fields; test results unchanged"
+    },
+    {
+      "path": "evidence/final-r3/e2e-unified-r2/report.json",
+      "bytes": 15912,
+      "sha256": "420a6b43e36f9d1837b2ea3ab6ca30f21fc0cd1343f313cc7681052b933d095f",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/report.json",
+      "source_bytes": 17315,
+      "source_sha256": "a1f4913a347985db86052c90001c91e60f5cbe77adcb89a73589091402075e26",
+      "transformation": "JSON formatting, workspace/home path redaction and removal of transient PID fields; test results unchanged"
+    },
+    {
+      "path": "evidence/final-r3/e2e-unified/report.json",
+      "bytes": 3293,
+      "sha256": "e597616efb18392d2aa67d2eef38758ec893583f7a97f5d399b768418a63cd75",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified/report.json",
+      "source_bytes": 3598,
+      "source_sha256": "019f742aaa25b0213667f978cd9642ec01ddbc98178407780c1e8fbfbd132bde",
+      "transformation": "JSON formatting, workspace/home path redaction and removal of transient PID fields; test results unchanged"
+    },
+    {
+      "path": "evidence/final-r3/live-discovery/report.json",
+      "bytes": 5945,
+      "sha256": "54d0b5ef6b5c5bae0a7c2b3d9b3aedf54f83d0d899db0def669f9292f1eacd2d",
+      "source_reference": "target/acceptance/browser-efficiency-20261117/final-r3/live-discovery/report.json",
+      "source_bytes": 6091,
+      "source_sha256": "d2a6ef2c5ed2ee4b53a3c6b20565f32782c63357bdf89f2cf7ef8a744f040dbe",
+      "transformation": "JSON formatting, workspace/home path redaction and removal of transient PID fields; test results unchanged"
+    },
+    {
+      "path": "evidence/source-comparison.json",
+      "bytes": 600,
+      "sha256": "1606fd000ff5b078189ea2f2d507dc0ba2f22c2618d196ef21cf189af2077409",
+      "source_reference": "read-only native SHA-256 calculation and git diff between the two immutable commits",
+      "source_bytes": 600,
+      "source_sha256": "1606fd000ff5b078189ea2f2d507dc0ba2f22c2618d196ef21cf189af2077409",
+      "transformation": "byte-identical"
+    },
+    {
+      "path": "evidence/source-status.json",
+      "bytes": 540,
+      "sha256": "a73be50e256b6318362809d09600a087d0229dca8cfd2a39d8bf4eb03160ae1a",
+      "source_reference": "Development acceptance record confirming the PR merge and both clean main project copies",
+      "transformation": "derived metadata; raw source log bodies not included"
+    },
+    {
+      "path": "evidence/native-log-index.json",
+      "bytes": 10830,
+      "sha256": "6ee46571e9fc287d52e11ed755c7a420ecc9f4ad9fcca1d59c9e327ef6971f45",
+      "source_reference": "Derived from preserved gate/E2E source receipts and source-log summaries",
+      "transformation": "derived metadata; raw source log bodies not included"
+    },
+    {
+      "path": "evidence/history/release-0.6.1-failures.json",
+      "bytes": 1728,
+      "sha256": "88d597ab11ee929e1fdb0660c4e5030bf276c0c64bfe307f00c00178474b920d",
+      "source_reference": "Previously retrieved historical CI evidence and hashes",
+      "transformation": "derived metadata; raw source log bodies not included"
+    }
+  ],
+  "path_base": "Directory containing README.md and verification.json"
+}

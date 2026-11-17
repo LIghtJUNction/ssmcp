@@ -1,0 +1,95 @@
+{
+  "status": "passed",
+  "checks": [
+    "effective sshd config permits public keys only",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "all 48 native computer, browser and Omarchy tools are discoverable through public list",
+    "browser discovery reports observations without connecting or starting a browser",
+    "tools.search returns browser tools with descriptors identical to public list",
+    "Omarchy status reports native platform availability without changing system settings",
+    "control works without a coding-agent provider",
+    "browser starts disconnected without opening a user profile",
+    "native launch owns an isolated system Chromium process",
+    "native tabs include the opened fixture",
+    "snapshot exposes observed input and button references",
+    "browser fill clears text with an empty string",
+    "browser modifier chord and Backspace clear input",
+    "native fill and click modify the real Chromium document",
+    "browser key dispatch produces a real keyboard event",
+    "browser scroll moves the actual viewport",
+    "ssmcp.browser.screenshot returns a visible MCP image (modern=True)",
+    "image is bounded valid JPEG bytes",
+    "image payload is absent from structured metadata and text",
+    "ssmcp.browser.screenshot returns a visible MCP image (modern=False)",
+    "image is bounded valid JPEG bytes",
+    "image payload is absent from structured metadata and text",
+    "browser attach rejects a non-loopback debugger endpoint",
+    "browser click rejects unobserved element references",
+    "page B completes a native call while page A's Promise is still waiting",
+    "page A completes only after the explicit page B release, before its 5s deadline",
+    "navigation invalidates references from the prior document",
+    "close removes only the selected test tab",
+    "disconnect releases owned browser connection",
+    "disconnect stops the browser owned by this connection",
+    "native connect attaches to an existing loopback browser",
+    "disconnect preserves an attached operator-owned browser",
+    "control audit retains the complete requested event range",
+    "native control calls produce completion audit events",
+    "native Omarchy observations produce completion audit events"
+  ],
+  "metrics": {
+    "browser_search": {
+      "matches": 16,
+      "pages_read": 2,
+      "tools_scanned": 100,
+      "total_tools_scanned": 100
+    },
+    "omarchy_available": true,
+    "browser": {
+      "owned": true,
+      "browser": {
+        "jsVersion": "15.7.112.23",
+        "product": "Chrome/157.0.8103.38",
+        "protocolVersion": "1.3",
+        "revision": "@a733b5afbb3ba618844ff8876b89ad1a774b2f18",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.0.0 Safari/537.36"
+      }
+    },
+    "browser_parallel": {
+      "scope": "two local fixture tabs in the ssmcp-owned temporary Chromium profile",
+      "gate_deadline_ms": 5000,
+      "elapsed_seconds": 0.066,
+      "page_a": {
+        "deadline_expired": false,
+        "released": true
+      },
+      "page_b": {
+        "completed_before_a": true,
+        "observed": {
+          "observed_phase": "waiting"
+        },
+        "release_requested": true
+      }
+    },
+    "native_tools": 48,
+    "desktop_exercised": false
+  },
+  "duration_seconds": 6.199,
+  "transport": "OpenSSH public-key + OAuth PKCE + HTTP MCP + native Chromium CDP"
+}

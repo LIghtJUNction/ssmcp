@@ -1,0 +1,72 @@
+{
+  "schema": "ssmcp.unified-acceptance.v1",
+  "status": "failed",
+  "revision": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+  "transport": "real local OpenSSH public-key + OAuth PKCE + HTTP MCP + independent processes + PTY",
+  "model_calls_attempted": 0,
+  "installed_harnesses_exposed": [],
+  "scope": "no-Harness unified runtime; installed native Harness discovery/approval needs its separate acceptance runs",
+  "binaries": {
+    "ssmcp": {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcp",
+      "sha256": "672fb50a2a1173437e8ea1702cba8cbea95e7dd506fc9a0c48c7e10f46d28900"
+    },
+    "ssmcpd": {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcpd",
+      "sha256": "eba663591eca9c9e3bfce8dc9ecf0f72ccf7603884dc4983262fba76bd8bdc54"
+    }
+  },
+  "failure": "AssertionError: Timed out waiting for four independent absent-Harness probes",
+  "remaining_observed_processes": [],
+  "checks": [
+    "effective sshd config permits public keys only",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "a client without any Harness starts its interactive shell",
+    "public MCP exposes exactly list/code_mode (modern=False)",
+    "public MCP exposes exactly list/code_mode (modern=True)"
+  ],
+  "sections": {
+    "ssh_oauth": {
+      "status": "passed",
+      "duration_seconds": 0.64
+    },
+    "catalog_no_harness": {
+      "status": "failed",
+      "error": "AssertionError: Timed out waiting for four independent absent-Harness probes"
+    }
+  },
+  "evidence": [
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified/evidence/terminal-daemon.log",
+      "bytes": 33549,
+      "sha256": "ab6ea59c87ff18db09cc7325ae71b1498690407040ee459c242e54088b8757a6"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified/evidence/terminal-sshd.log",
+      "bytes": 297,
+      "sha256": "e045e722ceb9a9a29a7e09577dc101a90ed813d5be8f758def1db735a223eb12"
+    },
+    {
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified/evidence/terminal-unified-primary.log",
+      "bytes": 836,
+      "sha256": "9382c0951152f501fed01aea7dc79c901c42389046b5d3eab419c36ea1b45668"
+    }
+  ],
+  "duration_seconds": 10.931
+}

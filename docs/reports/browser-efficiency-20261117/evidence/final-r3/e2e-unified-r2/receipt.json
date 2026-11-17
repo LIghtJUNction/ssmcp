@@ -1,0 +1,39 @@
+{
+  "suite": "unified",
+  "revision": "76613f3a0506f00a74b23e59bdd02a3c828fd6fc",
+  "argv": [
+    "/usr/bin/python3",
+    "scripts/e2e_unified.py",
+    "--bin-dir",
+    "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin",
+    "--timeout",
+    "300",
+    "--evidence-dir",
+    "target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/evidence",
+    "--report",
+    "target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/report.json",
+    "--revision",
+    "76613f3a0506f00a74b23e59bdd02a3c828fd6fc"
+  ],
+  "exit": 0,
+  "duration_seconds": 17.605,
+  "log": "target/acceptance/browser-efficiency-20261117/final-r3/e2e-unified-r2/run.log",
+  "log_sha256": "11e084031b940c3b81e900ee240779a375306055095251867000cf1190ee543c",
+  "binaries": [
+    {
+      "name": "ssmcp",
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcp",
+      "sha256": "672fb50a2a1173437e8ea1702cba8cbea95e7dd506fc9a0c48c7e10f46d28900",
+      "version": "ssmcp 0.6.2"
+    },
+    {
+      "name": "ssmcpd",
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcpd",
+      "sha256": "eba663591eca9c9e3bfce8dc9ecf0f72ccf7603884dc4983262fba76bd8bdc54",
+      "version": "ssmcpd 0.6.2"
+    }
+  ],
+  "report_status": "passed",
+  "checks": 120,
+  "metrics": null
+}

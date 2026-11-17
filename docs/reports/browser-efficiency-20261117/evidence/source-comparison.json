@@ -1,0 +1,23 @@
+{
+  "files": [
+    {
+      "path": "e2e-daemon/report.json",
+      "bytes": 21720,
+      "sha256": "5cbcf7b02abb99c9197b3dd9e36ad181bbba20c7295f5e0dcdec2d1db735776d"
+    },
+    {
+      "path": "e2e-unified-r2/report.json",
+      "bytes": 17315,
+      "sha256": "a1f4913a347985db86052c90001c91e60f5cbe77adcb89a73589091402075e26"
+    }
+  ],
+  "source_comparison": {
+    "base": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+    "head": "76613f3a0506f00a74b23e59bdd02a3c828fd6fc",
+    "changed_paths": [
+      "scripts/e2e.py",
+      "scripts/e2e_unified.py"
+    ],
+    "rust_cargo_unchanged": true
+  }
+}

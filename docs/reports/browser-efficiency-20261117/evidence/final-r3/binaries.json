@@ -1,0 +1,14 @@
+[
+  {
+    "name": "ssmcp",
+    "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcp",
+    "sha256": "672fb50a2a1173437e8ea1702cba8cbea95e7dd506fc9a0c48c7e10f46d28900",
+    "version": "ssmcp 0.6.2"
+  },
+  {
+    "name": "ssmcpd",
+    "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcpd",
+    "sha256": "eba663591eca9c9e3bfce8dc9ecf0f72ccf7603884dc4983262fba76bd8bdc54",
+    "version": "ssmcpd 0.6.2"
+  }
+]

@@ -1,0 +1,856 @@
+{
+  "report_state": "local_development_matrix_passed_existing_chrome_extension_and_release_unverified",
+  "report_date": "2026-11-17",
+  "timezone": "Asia/Taipei",
+  "repository": "https://github.com/LIghtJUNction/ssmcp",
+  "pr": "https://github.com/LIghtJUNction/ssmcp/pull/10",
+  "first_iteration_commit_short": "a0d600a",
+  "final_commit": null,
+  "tested_worktree_manifest": null,
+  "published": false,
+  "deployed": false,
+  "validation_source": "Native JSON reports read via ssmcp; page assembly and SHA-256 checked; actual final-r3 logs and immutable-commit file comparison separately verified. Local development acceptance only.",
+  "suites": [
+    {
+      "id": "node_runtime",
+      "scope": "Node runtime discovery/probe",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "state": "passed_prior_targeted_report",
+      "evidence_path": null,
+      "evidence_sha256": null,
+      "included_in_rust_all_targets": true,
+      "counts_basis": "Earlier targeted run retained for provenance; use final-r3 aggregate for the final Rust gate."
+    },
+    {
+      "id": "code_mode",
+      "scope": "Rust code_mode tests",
+      "passed": 17,
+      "failed": 0,
+      "ignored": 1,
+      "state": "passed_prior_targeted_report",
+      "evidence_path": null,
+      "evidence_sha256": null,
+      "included_in_rust_all_targets": true,
+      "counts_basis": "Earlier targeted run retained for provenance; use final-r3 aggregate for the final Rust gate."
+    },
+    {
+      "id": "browser",
+      "scope": "CDP browser regression tests",
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0,
+      "state": "passed_prior_targeted_report",
+      "evidence_path": null,
+      "evidence_sha256": null,
+      "included_in_rust_all_targets": true,
+      "counts_basis": "Earlier targeted run retained for provenance; use final-r3 aggregate for the final Rust gate."
+    },
+    {
+      "id": "rpc",
+      "scope": "Native RPC transport regression tests",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "state": "passed_prior_targeted_report",
+      "evidence_path": null,
+      "evidence_sha256": null,
+      "included_in_rust_all_targets": true,
+      "counts_basis": "Earlier targeted run retained for provenance; use final-r3 aggregate for the final Rust gate."
+    },
+    {
+      "id": "playwright",
+      "scope": "Playwright native protocol fixtures",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "state": "passed_prior_targeted_report",
+      "evidence_path": null,
+      "evidence_sha256": null,
+      "included_in_rust_all_targets": true,
+      "counts_basis": "Earlier targeted run retained for provenance; use final-r3 aggregate for the final Rust gate."
+    },
+    {
+      "id": "tool_search",
+      "scope": "Real Node worker JSON-transport tests for tools.search",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "state": "passed_observed_final_r3",
+      "evidence_path": "target/acceptance/browser-efficiency-20261117/final-r3/tool-search.log",
+      "evidence_sha256": "302e9a5290245271f45401dbb1d226f9d5126bf58c08774f23ecf523130355a2"
+    },
+    {
+      "id": "browser_discovery",
+      "scope": "Browser/extension read-only discovery regression tests",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "state": "passed_in_final_r3",
+      "evidence_path": "target/acceptance/browser-efficiency-20261117/final-r3/rust-all-targets.log",
+      "evidence_sha256": "e1765aba6b48881bdf38c28decd9b120f37f1a8143b6fec92074685a98582c28",
+      "initial_planned_cases": 7,
+      "test_lines": [
+        "test browser::discovery::tests::candidate_count_reports_only_entries_examined_before_the_result_limit ... ok",
+        "test browser::discovery::tests::executable_candidates_are_presence_only_and_platform_roots_remain_distinct ... ok",
+        "test browser::discovery::tests::hardlinked_manifests_and_locale_messages_are_rejected ... ok",
+        "test browser::discovery::tests::invalid_locale_does_not_escape_to_adjacent_messages ... ok",
+        "test browser::discovery::tests::linux_process_inventory_is_uid_scoped_bounded_and_never_returns_arguments ... ok",
+        "test browser::discovery::tests::localized_unicode_metadata_does_not_claim_a_connection_or_read_sensitive_stores ... ok",
+        "test browser::discovery::tests::normal_and_collapsed_process_titles_do_not_turn_children_into_browsers ... ok",
+        "test browser::discovery::tests::profiles_extensions_versions_and_json_budgets_are_bounded ... ok",
+        "test browser::discovery::tests::symlink_manifests_and_locale_directories_are_not_read ... ok"
+      ],
+      "included_in_rust_all_targets": true
+    },
+    {
+      "id": "audit_new",
+      "scope": "New audit regression tests",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "state": "passed_in_final_r3",
+      "evidence_path": "target/acceptance/browser-efficiency-20261117/final-r3/rust-all-targets.log",
+      "evidence_sha256": "e1765aba6b48881bdf38c28decd9b120f37f1a8143b6fec92074685a98582c28",
+      "test_lines": [
+        "test backend::events::tests::metadata_only_is_applied_before_terminal_buffer_and_archive_sinks ... ok",
+        "test backend::rpc::tests::metadata_audit_keeps_native_arguments_results_and_pending_requests_intact ... ok"
+      ],
+      "included_in_rust_all_targets": true
+    },
+    {
+      "id": "browser_live_e2e",
+      "scope": "ssmcp-owned isolated Chromium profile and controlled loopback browser attachment; not the existing user Chrome session",
+      "passed": 51,
+      "failed": 0,
+      "ignored": 0,
+      "state": "passed_isolated_chromium",
+      "evidence_path": "evidence/final-r3/e2e-browser/report.json",
+      "evidence_sha256": "860920667afbfbf12b8ba76f610c83eaa20751e55f7f9dfe50f26d3f8a0e0a8a"
+    }
+  ],
+  "change_evidence": [
+    {
+      "change": "Node runtime probe and code_mode execution reliability",
+      "source_paths": [
+        "src/program.rs",
+        "src/code_mode.rs"
+      ],
+      "suite_ids": [
+        "node_runtime",
+        "code_mode"
+      ],
+      "evidence_limit": "Local tests do not retroactively make the historical failed release workflows successful."
+    },
+    {
+      "change": "Bounded tools.search with native Schema fidelity and authorized continuation",
+      "source_paths": [
+        "src/code_mode.js",
+        "scripts/test_tools_search.mjs"
+      ],
+      "suite_ids": [
+        "tool_search",
+        "code_mode"
+      ],
+      "evidence_limit": "Reduces model-visible catalog output and manual pagination; does not remove initial native page fetches. An updated broker is required."
+    },
+    {
+      "change": "CDP operations isolated by page",
+      "source_paths": [
+        "src/browser.rs"
+      ],
+      "suite_ids": [
+        "browser",
+        "browser_live_e2e"
+      ],
+      "evidence_limit": "A real isolated Chromium E2E confirms page B completes while A is waiting and explicitly releases A before the deadline. This is not control of the existing user Chrome session and not a performance multiplier."
+    },
+    {
+      "change": "Playwright MCP extension-mode discovery, registration and forwarding",
+      "source_paths": [
+        "src/backend/playwright.rs",
+        "src/backend/rpc.rs",
+        "src/backend/mod.rs",
+        "src/registry.rs",
+        "src/runtime.rs"
+      ],
+      "suite_ids": [
+        "playwright",
+        "rpc"
+      ],
+      "evidence_limit": "Protocol fixtures establish tested routing behavior. Real installed @playwright/mcp and a browser-approved connection are separate gates."
+    },
+    {
+      "change": "Read-only existing-browser and extension discovery",
+      "source_paths": [
+        "src/browser.rs",
+        "src/browser/discovery.rs"
+      ],
+      "suite_ids": [
+        "browser_discovery"
+      ],
+      "evidence_limit": "The new native discover tool was run against actual HOME via local SSH/OAuth/MCP. Manifest presence is not enabled/paired/authorized state; before and after browser connection state stayed false."
+    },
+    {
+      "change": "Playwright-only metadata audit mode",
+      "source_paths": [
+        "src/backend/events.rs",
+        "src/backend/rpc.rs",
+        "src/backend/playwright.rs"
+      ],
+      "suite_ids": [
+        "audit_new"
+      ],
+      "evidence_limit": "The mode is selected by Playwright only; native arguments, results and pending requests remain intact. Other provider audit modes retain their existing contracts."
+    },
+    {
+      "change": "Usage/help and existing-Chrome workflow",
+      "source_paths": [
+        "src/http.rs",
+        "src/resources.rs",
+        "README.md",
+        "docs/backends.md",
+        "docs/computer-use.md",
+        "docs/browser-existing-session.md",
+        "skills/ssmcp/SKILL.md"
+      ],
+      "suite_ids": [],
+      "evidence_limit": "Documentation changes are not a production deployment. Broker and client capabilities must be verified separately."
+    }
+  ],
+  "existing_user_chrome": {
+    "state": "manifest_presence_verified_live_extension_control_not_verified",
+    "browser_version": "157.0.8103.78",
+    "chrome_cdp_endpoint_observed": false,
+    "chatgpt_extension_version": "1.26.1102.11740",
+    "playwright_extension_version": "0.5.0",
+    "playwright_mcp_package_found": false,
+    "claude_extension_manifest_found_in_observed_scope": false,
+    "chatgpt_originating_context_available": false,
+    "native_approval_observed": false,
+    "current_blocker": "No installed Playwright extension MCP server was found in the bounded initial inventory or live-discovery observed paths; live-discovery used isolated provider PATH.",
+    "future_connection_requirement": "Any native browser/extension approval must be handled through its original interface. No pending approval has been asserted from the missing-package state.",
+    "inventory": "docs/reports/browser-existing-session-20261117-inventory.json",
+    "inventory_observed_at": "2026-11-17T11:36:51+08:00",
+    "inventory_source_sha256": "4776bd4cb438d808503927ab209af8d6085e737b141feaedaf48a38a9b9ef045",
+    "live_discovery_evidence": "evidence/final-r3/live-discovery/report.json"
+  },
+  "historical_release_failures": [
+    {
+      "version": "0.6.1",
+      "commit": "ff09364bdc3ec85d7debd3675c782bfce5d04045",
+      "run_id": 43926079974,
+      "attempt": 1,
+      "state": "failure",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43926079974/attempts/1",
+      "linux_x64_job": 133506182594,
+      "linux_library": {
+        "passed": 344,
+        "failed": 2,
+        "ignored": 6
+      },
+      "observed_failure": "Native Node compatibility_wait exceeded 3000 ms; the supervisor requested termination and reaped Node. Publish gates were skipped.",
+      "evidence_sha256": "23f15c6b60985c35841625cad92aed4207504387aa5288c22840049a334a4279",
+      "source_artifact_reference": "release-v0.6.1-43926079974-attempt1.json",
+      "source_artifact_included": false
+    },
+    {
+      "version": "0.6.1",
+      "commit": "ff09364bdc3ec85d7debd3675c782bfce5d04045",
+      "run_id": 43926079974,
+      "attempt": 2,
+      "state": "failure",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/43926079974/attempts/2",
+      "linux_x64_job": 133511322156,
+      "linux_library": {
+        "passed": 345,
+        "failed": 1,
+        "ignored": 6
+      },
+      "observed_failure": "cancelling_the_request_releases_worker_and_host_future failed on Node compatibility_wait at 3003 ms against a 3000 ms bound; the supervisor performed SIGKILL cleanup.",
+      "evidence_sha256": "f3000ffbe26c26f5c5dcb488c915cee6e3549779c0330d5304a3dbdd82536619",
+      "source_artifact_reference": "ci-attempt2-linux-x64.log",
+      "source_artifact_included": false
+    }
+  ],
+  "reporting_rules": [
+    "Do not sum overlapping Rust suites, targeted reruns or E2E checks as unique acceptance cases.",
+    "Report internal-suite duration and outer process receipt duration separately.",
+    "The 0.066-second two-page observation is not a benchmark or measured speed multiplier.",
+    "Isolated Chromium and controlled CDP attachment do not prove control of the user existing Chrome session.",
+    "limited=false means discovery budgets were not exhausted, not that all possible files and profiles were audited.",
+    "Preserve the earlier local failures, interrupted Clippy and both historical v0.6.1 CI failures.",
+    "No Harness model calls, automatic dependency downloads or native approval bypass belong to this acceptance.",
+    "Publishing, installation and production deployment each require their own actual receipts."
+  ],
+  "release_version": "0.6.2",
+  "latest_observed_source_commit": "76613f3a0506f00a74b23e59bdd02a3c828fd6fc",
+  "source_commit_receipt": {
+    "path": "evidence/source-commit.json",
+    "sha256": "7f00afdd93bff817ac9b64c40b8b04a28c1ef4604d092e915baf3c1483943ff0",
+    "pushed": true,
+    "branch": "feat/browser-existing-session-20261117",
+    "revision": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+    "scope": "The earlier implementation commit receipt, retained separately from the later E2E-script-only commit."
+  },
+  "rust_all_targets": {
+    "state": "passed",
+    "suites": 18,
+    "passed": 555,
+    "failed": 0,
+    "ignored": 21,
+    "library": {
+      "passed": 469,
+      "failed": 0,
+      "ignored": 7
+    },
+    "exit_code": 0,
+    "log": "target/acceptance/browser-efficiency-20261117/final-r3/rust-all-targets.log",
+    "sha256": "e1765aba6b48881bdf38c28decd9b120f37f1a8143b6fec92074685a98582c28",
+    "suite_summaries": [
+      "ok. 469 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 16.73s",
+      "ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.34s",
+      "ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.39s",
+      "ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.26s",
+      "ok. 14 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 20.66s",
+      "ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s",
+      "ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s",
+      "ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.22s",
+      "ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s",
+      "ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+      "ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+      "ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s",
+      "ok. 2 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+      "ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    ],
+    "overlap_rule": "Targeted Rust suites and the single output-final-state rerun are already covered here; do not add them again."
+  },
+  "final_r3_gate_receipt": {
+    "path": "evidence/final-r3/gates.json",
+    "sha256": "1aad45eb5f0d866bf50afe6d220f2c114df647eda8cf8ace01738bda5e94c5b0",
+    "steps": [
+      {
+        "step": "format",
+        "argv": [
+          "cargo",
+          "fmt",
+          "--all"
+        ],
+        "started_at": "2026-11-17T04:34:44.835775+00:00",
+        "exit": 0,
+        "seconds": 1.013,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/format.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "step": "output-final-state",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--lib",
+          "large_output_keeps_the_full_artifact_and_the_bounded_tail",
+          "--",
+          "--test-threads=1"
+        ],
+        "started_at": "2026-11-17T04:34:45.849496+00:00",
+        "exit": 0,
+        "seconds": 10.068,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/output-final-state.log",
+        "sha256": "d9891c3212859305865fc16a291485b022f0a48eb069fc71305c8b9c321c191b"
+      },
+      {
+        "step": "rust-all-targets",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--all-targets",
+          "--",
+          "--test-threads=4"
+        ],
+        "started_at": "2026-11-17T04:34:55.925804+00:00",
+        "exit": 0,
+        "seconds": 62.486,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/rust-all-targets.log",
+        "sha256": "e1765aba6b48881bdf38c28decd9b120f37f1a8143b6fec92074685a98582c28"
+      },
+      {
+        "step": "clippy",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--offline",
+          "--locked",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "started_at": "2026-11-17T04:35:58.440910+00:00",
+        "exit": 0,
+        "seconds": 16.014,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/clippy.log",
+        "sha256": "e9674b22bf5f120937fc996ae38ce97f1fbf33287a582370877c74ba7f3d9f86"
+      },
+      {
+        "step": "tool-search",
+        "argv": [
+          "/usr/bin/node",
+          "--test",
+          "scripts/test_tools_search.mjs"
+        ],
+        "started_at": "2026-11-17T04:36:14.455340+00:00",
+        "exit": 0,
+        "seconds": 1.718,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/tool-search.log",
+        "sha256": "302e9a5290245271f45401dbb1d226f9d5126bf58c08774f23ecf523130355a2"
+      },
+      {
+        "step": "cua-facade",
+        "argv": [
+          "/usr/bin/node",
+          "--test",
+          "scripts/test_cua_facade.mjs"
+        ],
+        "started_at": "2026-11-17T04:36:16.173474+00:00",
+        "exit": 0,
+        "seconds": 0.255,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/cua-facade.log",
+        "sha256": "93053f56e7e103f4729151a2c4d3d1f7d43b14d507fe909081402a3c6358733c"
+      },
+      {
+        "step": "execution-helpers",
+        "argv": [
+          "/usr/bin/node",
+          "--test",
+          "scripts/test_execution_helpers.mjs"
+        ],
+        "started_at": "2026-11-17T04:36:16.428781+00:00",
+        "exit": 0,
+        "seconds": 0.389,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/execution-helpers.log",
+        "sha256": "66b5b85b88ba7bbc2e23c2b717cad41d99c96dfe2a8ace1d90b5f32a68edd6c3"
+      },
+      {
+        "step": "release-tests",
+        "argv": [
+          "/usr/bin/python3",
+          "scripts/test_release.py"
+        ],
+        "started_at": "2026-11-17T04:36:16.817543+00:00",
+        "exit": 0,
+        "seconds": 1.502,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/release-tests.log",
+        "sha256": "3d53feba75abe3effd32fae95653cb198652756118bbe9886f53a4f9f13d3c4f"
+      },
+      {
+        "step": "build-binaries",
+        "argv": [
+          "cargo",
+          "build",
+          "--offline",
+          "--locked",
+          "--bins"
+        ],
+        "started_at": "2026-11-17T04:36:18.320044+00:00",
+        "exit": 0,
+        "seconds": 1.541,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/build-binaries.log",
+        "sha256": "fce6b314679c565a221431e935531059f00d75f593a5773de3e17685762508e9"
+      },
+      {
+        "step": "whitespace",
+        "argv": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "started_at": "2026-11-17T04:36:19.861648+00:00",
+        "exit": 0,
+        "seconds": 0.094,
+        "log": "target/acceptance/browser-efficiency-20261117/final-r3/whitespace.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  },
+  "frozen_binaries": [
+    {
+      "name": "ssmcp",
+      "version": "ssmcp 0.6.2",
+      "sha256": "672fb50a2a1173437e8ea1702cba8cbea95e7dd506fc9a0c48c7e10f46d28900",
+      "path": "final-r3/bin/ssmcp",
+      "status": "built and frozen; not an installation or deployment receipt"
+    },
+    {
+      "name": "ssmcpd",
+      "version": "ssmcpd 0.6.2",
+      "sha256": "eba663591eca9c9e3bfce8dc9ecf0f72ccf7603884dc4983262fba76bd8bdc54",
+      "path": "final-r3/bin/ssmcpd",
+      "status": "built and frozen; not an installation or deployment receipt"
+    }
+  ],
+  "release_notes": {
+    "path": "docs/release-notes-0.6.2.md",
+    "audit_scope": "Only Playwright selects metadata-only AuditMode; other provider audit contracts are not globally changed.",
+    "scope": "Note digest retained in the development acceptance record; not a publication or deployment receipt.",
+    "recorded_native_sha256": "ae1c486b6ef292a0920b2fe3617919e00c95967ccdd53f13cbed572cb45a3bda"
+  },
+  "additional_final_suites": [
+    {
+      "id": "cua_facade",
+      "passed": 5,
+      "failed": 0,
+      "state": "passed",
+      "evidence": {
+        "lines": [
+          "# tests 5",
+          "# pass 5",
+          "# fail 0",
+          "# skipped 0",
+          "# todo 0"
+        ],
+        "sha256": "93053f56e7e103f4729151a2c4d3d1f7d43b14d507fe909081402a3c6358733c",
+        "bytes": 1248
+      }
+    },
+    {
+      "id": "execution_helpers",
+      "passed": 5,
+      "failed": 0,
+      "state": "passed",
+      "evidence": {
+        "lines": [
+          "# tests 5",
+          "# pass 5",
+          "# fail 0",
+          "# skipped 0",
+          "# todo 0"
+        ],
+        "sha256": "66b5b85b88ba7bbc2e23c2b717cad41d99c96dfe2a8ace1d90b5f32a68edd6c3",
+        "bytes": 1334
+      }
+    },
+    {
+      "id": "release_python",
+      "passed": 46,
+      "failed": 0,
+      "state": "passed",
+      "evidence": {
+        "lines": [
+          "Ran 46 tests in 0.939s",
+          "OK"
+        ],
+        "sha256": "3d53feba75abe3effd32fae95653cb198652756118bbe9886f53a4f9f13d3c4f",
+        "bytes": 3164
+      }
+    }
+  ],
+  "focused_output_rerun": {
+    "passed": 1,
+    "failed": 0,
+    "state": "passed",
+    "included_in_rust_all_targets": true,
+    "evidence": {
+      "lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.93s"
+      ],
+      "sha256": "d9891c3212859305865fc16a291485b022f0a48eb069fc71305c8b9c321c191b",
+      "bytes": 104092
+    }
+  },
+  "local_history": [
+    {
+      "run": "final-r1",
+      "state": "failure",
+      "exit_code": 101,
+      "passed": 466,
+      "failed": 1,
+      "ignored": 7,
+      "failed_tests": [
+        "browser::tests::tool_names_and_schemas_are_native_and_unique"
+      ],
+      "log": "target/acceptance/browser-efficiency-20261117/final-r1/rust-all-targets.log",
+      "log_sha256": "988b1b05b8bcaa889de3edd69e81fd061441d878627fbd11f589cb5b493dface",
+      "gate_receipt_sha256": "d03f9b7c45dea0a6c26c1093b4798186a8eb5fc7f7517560e2e1b8c1835cf61e"
+    },
+    {
+      "run": "final-r2",
+      "state": "failure",
+      "exit_code": 101,
+      "passed": 468,
+      "failed": 1,
+      "ignored": 7,
+      "failed_tests": [
+        "backend::shell::tests::large_output_keeps_the_full_artifact_and_the_bounded_tail"
+      ],
+      "log": "target/acceptance/browser-efficiency-20261117/final-r2/rust-all-targets.log",
+      "log_sha256": "998226fc4cf39b709c4dc341fa1b4b55a2d8de0ffb59870e7512e696c7b25650",
+      "gate_receipt_sha256": "960c07c03d8f6c7d97cc9dca2276a326b420673c10fe2109878c5ec59f011e07"
+    },
+    {
+      "run": "final-r2-remaining/clippy",
+      "state": "interrupted_acceptance_record",
+      "exit_code": null,
+      "log": "target/acceptance/browser-efficiency-20261117/final-r2-remaining/clippy.log",
+      "log_sha256": "b29a6757d028de380e4be5688986e950dcca49a04af2d26dd1aa3862d361c65c",
+      "observed_scope": "Only the initial Checking line exists; no completed gate receipt. This is not counted as passed. The final-r3 Clippy exit 0 is a separate successful run."
+    },
+    {
+      "run": "final-r3/e2e-unified",
+      "state": "failure",
+      "completed_checks_before_failure": 21,
+      "failure": "AssertionError: Timed out waiting for four independent absent-Harness probes",
+      "report_duration_seconds": 10.931,
+      "report": "evidence/final-r3/e2e-unified/report.json",
+      "followup": "evidence/final-r3/e2e-unified-r2/report.json",
+      "explanation_in_acceptance_record": "The no-Harness fixture still expected four provider probes after Playwright increased the provider count to five; the later script-only commit updated the assertion and isolated SSMCP_PLAYWRIGHT_MCP."
+    }
+  ],
+  "google_drive_existing_inventory": {
+    "file_id": "1dKFCcZmgw05I0w5lLOLzkcgWAdaZEe3I",
+    "bytes": 2409,
+    "url": "https://drive.google.com/file/d/1dKFCcZmgw05I0w5lLOLzkcgWAdaZEe3I/view",
+    "status": "Initial inventory upload and metadata verified as of this report snapshot.",
+    "scope": "Final acceptance archive location will be supplied with the release receipt."
+  },
+  "schema": "ssmcp.browser-efficiency.development-acceptance.v1",
+  "source_revision": "76613f3a0506f00a74b23e59bdd02a3c828fd6fc",
+  "binary_source_revision": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+  "source_comparison": {
+    "base": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+    "head": "76613f3a0506f00a74b23e59bdd02a3c828fd6fc",
+    "changed_paths": [
+      "scripts/e2e.py",
+      "scripts/e2e_unified.py"
+    ],
+    "rust_cargo_unchanged": true,
+    "evidence": "evidence/source-comparison.json"
+  },
+  "local_end_to_end": [
+    {
+      "id": "browser",
+      "status": "passed",
+      "checks": 51,
+      "report_duration_seconds": 6.199,
+      "process_duration_seconds": 6.383,
+      "exit_code": 0,
+      "source_revision": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+      "report": "evidence/final-r3/e2e-browser/report.json",
+      "receipt": "evidence/final-r3/e2e-browser/receipt.json",
+      "scope": "ssmcp-owned isolated Chromium profile and controlled loopback browser attachment; not the existing user Chrome session",
+      "not_covered": [],
+      "cleanup_confirmed": null,
+      "remaining_observed_processes": null,
+      "metrics": {
+        "browser_search": {
+          "matches": 16,
+          "pages_read": 2,
+          "tools_scanned": 100,
+          "total_tools_scanned": 100
+        },
+        "omarchy_available": true,
+        "browser": {
+          "owned": true,
+          "browser": {
+            "jsVersion": "15.7.112.23",
+            "product": "Chrome/157.0.8103.38",
+            "protocolVersion": "1.3",
+            "revision": "@a733b5afbb3ba618844ff8876b89ad1a774b2f18",
+            "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.0.0 Safari/537.36"
+          }
+        },
+        "browser_parallel": {
+          "scope": "two local fixture tabs in the ssmcp-owned temporary Chromium profile",
+          "gate_deadline_ms": 5000,
+          "elapsed_seconds": 0.066,
+          "page_a": {
+            "deadline_expired": false,
+            "released": true
+          },
+          "page_b": {
+            "completed_before_a": true,
+            "observed": {
+              "observed_phase": "waiting"
+            },
+            "release_requested": true
+          }
+        },
+        "native_tools": 48,
+        "desktop_exercised": false
+      }
+    },
+    {
+      "id": "daemon",
+      "status": "passed",
+      "checks": 145,
+      "report_duration_seconds": 32.497,
+      "process_duration_seconds": 32.669,
+      "exit_code": 0,
+      "source_revision": "eb86b8ff5d25d6c0222552d80f4f7a2aa93e7f89",
+      "report": "evidence/final-r3/e2e-daemon/report.json",
+      "receipt": "evidence/final-r3/e2e-daemon/receipt.json",
+      "scope": "actual Linux user-manager lifecycle + loopback SSH public keys + OAuth PKCE + MCP; no Harness/model request or installation",
+      "not_covered": [
+        "macOS launchd actual lifecycle",
+        "Windows Task Scheduler actual lifecycle",
+        "cross-platform CI",
+        "GitHub identity-provider login",
+        "logout/reboot startup"
+      ],
+      "cleanup_confirmed": true,
+      "remaining_observed_processes": null,
+      "metrics": {
+        "ssh_reconnect_seconds": 2.068,
+        "observed_watchdog_wait_seconds": 1.972,
+        "native_crash_reconnect_seconds": 3.884,
+        "manual_stop_windows": [
+          {
+            "seconds": 2.75,
+            "samples": 21
+          },
+          {
+            "seconds": 2.75,
+            "samples": 21
+          }
+        ],
+        "unavailable_manager_injection": {
+          "changed_environment_keys": [
+            "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS"
+          ],
+          "native_probe_exit_code": 1
+        },
+        "journal_runner_records": 124
+      }
+    },
+    {
+      "id": "unified",
+      "status": "passed",
+      "checks": 120,
+      "report_duration_seconds": 17.519,
+      "process_duration_seconds": 17.605,
+      "exit_code": 0,
+      "source_revision": "76613f3a0506f00a74b23e59bdd02a3c828fd6fc",
+      "report": "evidence/final-r3/e2e-unified-r2/report.json",
+      "receipt": "evidence/final-r3/e2e-unified-r2/receipt.json",
+      "scope": "no-Harness unified runtime; installed native Harness discovery/approval needs its separate acceptance runs",
+      "not_covered": [],
+      "cleanup_confirmed": null,
+      "remaining_observed_processes": [],
+      "metrics": null
+    }
+  ],
+  "live_discovery": {
+    "status": "passed",
+    "observed_at": "2026-11-17T12:49:19.637826+08:00",
+    "scope": "actual host browser process/profile metadata; isolated provider PATH; no tab control or extension handshake",
+    "model_calls_attempted": 0,
+    "browser_connected_before": false,
+    "browser_connected_after": false,
+    "profiles": 8,
+    "profile_counts_by_browser": {
+      "google_chrome": 6,
+      "chromium": 2
+    },
+    "extension_manifests": [
+      {
+        "name": "ChatGPT",
+        "id": "hehggadaopoacecdllhhajmbjkdcmajg",
+        "version": "1.26.1102.11740",
+        "match_basis": "observed_extension_id",
+        "enabled": "not_inspected",
+        "paired": "not_inspected",
+        "callable": "not_verified"
+      },
+      {
+        "name": "Playwright Extension",
+        "id": "mmlmfjhmonkocbjadbfplnigmagldckm",
+        "version": "0.5.0",
+        "match_basis": "observed_extension_id",
+        "enabled": "not_inspected",
+        "paired": "not_inspected",
+        "callable": "not_verified"
+      },
+      {
+        "name": "ChatGPT search",
+        "id": "ejcfepkfckglbgocfkanmcdngdijcgld",
+        "version": "1.11",
+        "match_basis": "name_keyword",
+        "enabled": "not_inspected",
+        "paired": "not_inspected",
+        "callable": "not_verified"
+      }
+    ],
+    "limited": false,
+    "scanned": {
+      "extension_candidates": 26,
+      "json_bytes": 348499,
+      "json_read_attempts": 50,
+      "profiles": 8
+    },
+    "diagnostics": {
+      "json_file_rejected": 2,
+      "process_executable_unreadable": 7
+    },
+    "playwright_mcp": {
+      "candidates_checked": 4,
+      "entries": [],
+      "protocol_handshake": "not_attempted",
+      "state": "not_found_in_observed_paths"
+    },
+    "filesystem_observation": {
+      "hardlink_check": "enforced",
+      "transactional_snapshot": false
+    },
+    "evidence": "evidence/final-r3/live-discovery/report.json",
+    "limit_interpretation": "No discovery budget was exhausted; this does not prove all profiles/files were accessible or provide an atomic filesystem snapshot."
+  },
+  "historical_release_evidence": "evidence/history/release-0.6.1-failures.json",
+  "remaining_acceptance": [
+    "Actual existing-user-Chrome Playwright extension connection, native approval and tool call.",
+    "ChatGPT originating-context/browser-plugin availability and any actual Claude extension handshake.",
+    "Formal 0.6.2 cross-platform CI and release workflow.",
+    "Development-machine installation and production broker deployment/online protocol verification.",
+    "Actual macOS launchd and Windows Task Scheduler lifecycle; logout/reboot startup.",
+    "Live GitHub identity-provider login; local fixtures used an OAuth issuer.",
+    "Remaining native Harness MCP/approval acceptance in the original 12-item architecture checklist."
+  ],
+  "evidence_manifest": "evidence/evidence-manifest.json",
+  "privacy": {
+    "workspace_home_paths": "Redacted in report payloads; the operator-provided absolute project workspace path is retained only in the native-log index for locating original evidence.",
+    "transient_process_ids": "omitted",
+    "browser_profile_contents": "not included; only approved manifest metadata",
+    "credentials_or_token_values": "not included",
+    "raw_terminal_logs": "No original terminal-log body is included. The interrupted Clippy original is 102 bytes; its archived path-redacted copy is 41 bytes. Original source paths and hashes are retained.",
+    "evidence_report_paths": "relative archive links; native source references are separately labelled in the manifest"
+  },
+  "merge_status": {
+    "pr": "https://github.com/LIghtJUNction/ssmcp/pull/10",
+    "state": "merged",
+    "merge_commit": "ec199f386b6b0e30619bd68ac5cece7b138f69ce",
+    "evidence_basis": "Development acceptance record confirms that PR #10 was merged and both project copies fast-forwarded to clean main.",
+    "evidence": "evidence/source-status.json",
+    "project_copies": [
+      {
+        "role": "development_checkout",
+        "branch": "main",
+        "clean": true
+      },
+      {
+        "role": "primary_checkout",
+        "branch": "main",
+        "clean": true
+      }
+    ]
+  },
+  "source_revision_note": "The E2E scripts ran at 76613f3; PR #10 was subsequently merged as ec199f3. Binary source revision and E2E receipts remain separately identified.",
+  "native_log_index": "evidence/native-log-index.json"
+}

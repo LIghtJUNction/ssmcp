@@ -1,0 +1,190 @@
+{
+  "schema": "ssmcp.browser-discovery.acceptance.v1",
+  "observed_at": "2026-11-17T12:49:19.637826+08:00",
+  "status": "passed",
+  "source_revision": "76613f3a0506f00a74b23e59bdd02a3c828fd6fc",
+  "binaries": [
+    {
+      "name": "ssmcp",
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcp",
+      "sha256": "672fb50a2a1173437e8ea1702cba8cbea95e7dd506fc9a0c48c7e10f46d28900",
+      "version": "ssmcp 0.6.2"
+    },
+    {
+      "name": "ssmcpd",
+      "path": "${WORKSPACE}/target/acceptance/browser-efficiency-20261117/final-r3/bin/ssmcpd",
+      "sha256": "eba663591eca9c9e3bfce8dc9ecf0f72ccf7603884dc4983262fba76bd8bdc54",
+      "version": "ssmcpd 0.6.2"
+    }
+  ],
+  "transport": "local OpenSSH public-key + OAuth PKCE + HTTP MCP",
+  "scope": "actual host browser process/profile metadata; isolated provider PATH; no tab control or extension handshake",
+  "model_calls_attempted": 0,
+  "browser_connected_before": false,
+  "browser_connected_after": false,
+  "discovery": {
+    "diagnostics": {
+      "json_file_rejected": 2,
+      "process_executable_unreadable": 7
+    },
+    "discovery_only": true,
+    "extension_manifests": [
+      {
+        "browser": "google_chrome",
+        "callable": "not_verified",
+        "enabled": "not_inspected",
+        "family_hint": "chatgpt",
+        "id": "hehggadaopoacecdllhhajmbjkdcmajg",
+        "manifest_version": 3,
+        "match_basis": "observed_extension_id",
+        "name": "ChatGPT",
+        "paired": "not_inspected",
+        "permissions": [
+          "debugger",
+          "tabs",
+          "tabGroups",
+          "nativeMessaging",
+          "scripting",
+          "sidePanel"
+        ],
+        "profile": "Default",
+        "root": "~/.config/google-chrome",
+        "state": "manifest_present",
+        "version": "1.26.1102.11740",
+        "version_directory": "1.26.1102.11740_0"
+      },
+      {
+        "browser": "google_chrome",
+        "callable": "not_verified",
+        "enabled": "not_inspected",
+        "family_hint": "playwright",
+        "id": "mmlmfjhmonkocbjadbfplnigmagldckm",
+        "manifest_version": 3,
+        "match_basis": "observed_extension_id",
+        "name": "Playwright Extension",
+        "paired": "not_inspected",
+        "permissions": [
+          "debugger",
+          "activeTab",
+          "tabs",
+          "tabGroups"
+        ],
+        "profile": "Default",
+        "root": "~/.config/google-chrome",
+        "state": "manifest_present",
+        "version": "0.5.0",
+        "version_directory": "0.5.0_0"
+      },
+      {
+        "browser": "google_chrome",
+        "callable": "not_verified",
+        "enabled": "not_inspected",
+        "family_hint": "chatgpt",
+        "id": "ejcfepkfckglbgocfkanmcdngdijcgld",
+        "manifest_version": 3,
+        "match_basis": "name_keyword",
+        "name": "ChatGPT search",
+        "paired": "not_inspected",
+        "permissions": [],
+        "profile": "Profile 5",
+        "root": "~/.config/google-chrome",
+        "state": "manifest_present",
+        "version": "1.11",
+        "version_directory": "1.11_0"
+      }
+    ],
+    "filesystem_observation": {
+      "hardlink_check": "enforced",
+      "transactional_snapshot": false
+    },
+    "limited": false,
+    "limits": {
+      "cmdline_bytes": 8192,
+      "entry_candidates": 128,
+      "extension_candidates": 64,
+      "json_bytes_total": 4194304,
+      "json_file_bytes": 65536,
+      "json_read_attempts": 256,
+      "path_directories": 64,
+      "process_entries": 8192,
+      "profiles": 16,
+      "versions_per_extension": 16
+    },
+    "playwright_mcp": {
+      "candidates_checked": 4,
+      "entries": [],
+      "protocol_handshake": "not_attempted",
+      "state": "not_found_in_observed_paths"
+    },
+    "profiles": [
+      {
+        "browser": "google_chrome",
+        "profile": "Default",
+        "root": "~/.config/google-chrome"
+      },
+      {
+        "browser": "google_chrome",
+        "profile": "Guest Profile",
+        "root": "~/.config/google-chrome"
+      },
+      {
+        "browser": "google_chrome",
+        "profile": "Profile 2",
+        "root": "~/.config/google-chrome"
+      },
+      {
+        "browser": "google_chrome",
+        "profile": "Profile 4",
+        "root": "~/.config/google-chrome"
+      },
+      {
+        "browser": "google_chrome",
+        "profile": "Profile 5",
+        "root": "~/.config/google-chrome"
+      },
+      {
+        "browser": "google_chrome",
+        "profile": "System Profile",
+        "root": "~/.config/google-chrome"
+      },
+      {
+        "browser": "chromium",
+        "profile": "Default",
+        "root": "~/.config/chromium"
+      },
+      {
+        "browser": "chromium",
+        "profile": "System Profile",
+        "root": "~/.config/chromium"
+      }
+    ],
+    "running_browsers": {
+      "items": [
+        {
+          "browser": "google_chrome",
+          "executable": "/opt/google/chrome/chrome",
+          "protocol_handshake": "not_attempted",
+          "remote_debugging_pipe": false,
+          "remote_debugging_port_requested": null,
+          "state": "running_main_process"
+        }
+      ],
+      "scope": "current_uid",
+      "status": "observed"
+    },
+    "scanned": {
+      "extension_candidates": 26,
+      "json_bytes": 348499,
+      "json_read_attempts": 50,
+      "profiles": 8
+    },
+    "scope": [
+      "Only standard profile manifest metadata is inspected; enabled state and connection approval are not inferred.",
+      "No browser, model, MCP server or package installer is started.",
+      "Only manifest.json and safe locale messages.json are requested; sensitive browser stores are not requested by path.",
+      "Filesystem checks do not provide an atomic boundary against concurrent directory replacement; check hardlink_check for platform coverage.",
+      "Process observation is supported only on Linux and only for the current UID."
+    ],
+    "selected_browser": null
+  }
+}

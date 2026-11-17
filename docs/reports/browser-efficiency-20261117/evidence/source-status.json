@@ -1,0 +1,19 @@
+{
+  "pr": "https://github.com/LIghtJUNction/ssmcp/pull/10",
+  "state": "merged",
+  "merge_commit": "ec199f386b6b0e30619bd68ac5cece7b138f69ce",
+  "evidence_basis": "Development acceptance record confirms that PR #10 was merged and both project copies fast-forwarded to clean main.",
+  "evidence": "evidence/source-status.json",
+  "project_copies": [
+    {
+      "role": "development_checkout",
+      "branch": "main",
+      "clean": true
+    },
+    {
+      "role": "primary_checkout",
+      "branch": "main",
+      "clean": true
+    }
+  ]
+}
