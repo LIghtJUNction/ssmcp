@@ -143,12 +143,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
 [profile.release]
-lto = "thin"
+opt-level = "s"
+lto = "fat"
 codegen-units = 1
 strip = true
-
-[profile.release.package.ssmcp]
-opt-level = "s"
 
 [profile.dev]
 debug = 0
