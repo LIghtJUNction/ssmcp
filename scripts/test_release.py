@@ -453,6 +453,7 @@ class GithubReleaseTests(unittest.TestCase):
         self.calls = []
         self.downloaded = self.archive.read_bytes()
         self.bad_upload = None
+        self.hidden_draft_reads = 0
 
     def asset(self):
         return {"name": self.archive.name, "size": self.archive.stat().st_size,
@@ -463,7 +464,11 @@ class GithubReleaseTests(unittest.TestCase):
         if args == ("gh", "api", "--paginate", "--slurp",
                     "repos/owner/repo/releases?per_page=100"):
             # Include another page so draft discovery must inspect all pages.
-            return json.dumps([[{"id": 1, "tag_name": "v0.4.0"}], self.releases])
+            visible = self.releases
+            if visible and self.hidden_draft_reads:
+                self.hidden_draft_reads -= 1
+                visible = []
+            return json.dumps([[{"id": 1, "tag_name": "v0.4.0"}], visible])
         if args == ("gh", "api", "repos/owner/repo/releases/123"):
             return json.dumps(self.metadata)
         if args[:3] == ("gh", "release", "view"):
@@ -521,6 +526,88 @@ class GithubReleaseTests(unittest.TestCase):
         self.assertEqual(len(self.operations("create")), 1)
         self.assertEqual(self.calls.count(("gh", "api", "repos/owner/repo/releases/123")), 2)
         self.assertFalse(self.metadata["draft"])
+
+    def test_new_draft_can_become_visible_on_a_later_read(self):
+        for hidden_reads in (2, 4):
+            with self.subTest(hidden_reads=hidden_reads):
+                self.releases = []
+                self.metadata.update(draft=True, assets=[])
+                self.calls.clear()
+                self.hidden_draft_reads = hidden_reads
+
+                def waiting(_delay):
+                    self.assertEqual(len(self.operations("create")), 1)
+                    self.assertFalse(self.operations("upload") or self.operations("edit"))
+
+                with mock.patch.object(release.time, "sleep", side_effect=waiting) as sleep:
+                    self.publish_release()
+                self.assertEqual(sleep.call_args_list,
+                                 [mock.call(delay) for delay in (1, 2, 4, 8)[:hidden_reads]])
+                self.assertEqual(len(self.operations("create")), 1)
+                self.assertEqual(len(self.operations("upload")), 1)
+                self.assertEqual(len(self.operations("edit")), 1)
+                self.assertEqual(self.calls.count(("gh", "api", "repos/owner/repo/releases/123")), 2)
+                self.assertFalse(self.metadata["draft"])
+
+    def test_invisible_new_draft_stops_after_bounded_reads_and_can_resume(self):
+        self.releases = []
+        self.hidden_draft_reads = 100
+        with mock.patch.object(release.time, "sleep") as sleep, \
+             self.assertRaisesRegex(RuntimeError, "draft retained: retry this tag's release job"):
+            self.publish_release()
+        self.assertEqual(sleep.call_args_list, [mock.call(delay) for delay in (1, 2, 4, 8)])
+        self.assertEqual(self.calls.count(("gh", "api", "--paginate", "--slurp",
+                                          "repos/owner/repo/releases?per_page=100")), 6)
+        self.assertEqual(len(self.operations("create")), 1)
+        self.assertFalse(self.operations("upload") or self.operations("edit"))
+        self.assertTrue(self.metadata["draft"])
+        self.assertEqual(self.metadata["assets"], [])
+
+        self.hidden_draft_reads = 0
+        with mock.patch.object(release.time, "sleep") as sleep:
+            self.publish_release()
+        sleep.assert_not_called()
+        self.assertEqual(len(self.operations("create")), 1)
+        self.assertEqual(len(self.operations("upload")), 1)
+        self.assertEqual(len(self.operations("edit")), 1)
+        self.assertEqual(self.releases, [self.metadata])
+        self.assertFalse(self.metadata["draft"])
+
+    def test_draft_visibility_wait_propagates_lookup_errors_without_retrying(self):
+        for error in (RuntimeError("gh: Forbidden (HTTP 403)"),
+                      RuntimeError("gh: server error (HTTP 500)"),
+                      ValueError("multiple releases use tag v0.5.0"),
+                      json.JSONDecodeError("invalid response", "", 0)):
+            with self.subTest(error=str(error)):
+                self.releases = []
+                self.calls.clear()
+                with mock.patch.object(release, "find_release", side_effect=[None, None, error]) as lookup, \
+                     mock.patch.object(release.time, "sleep") as sleep, \
+                     self.assertRaises(type(error)) as caught:
+                    self.publish_release()
+                self.assertIs(caught.exception, error)
+                self.assertEqual(lookup.call_count, 3)
+                sleep.assert_called_once_with(1)
+                self.assertEqual(len(self.operations("create")), 1)
+                self.assertFalse(self.operations("upload") or self.operations("edit"))
+                self.assertTrue(self.metadata["draft"])
+
+    def test_failed_creation_never_enters_visibility_wait(self):
+        self.releases = []
+        error = subprocess.CalledProcessError(1, ["gh", "release", "create"])
+        with mock.patch.object(release, "find_release", return_value=None) as lookup, \
+             mock.patch.object(release.subprocess, "run", side_effect=error) as create, \
+             mock.patch.object(release.time, "sleep") as sleep, \
+             mock.patch.object(release, "validate_tag"), \
+             mock.patch.object(release, "checksums"), \
+             mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "owner/repo"}), \
+             self.assertRaises(subprocess.CalledProcessError):
+            release.release("v0.5.0", self.root)
+        lookup.assert_called_once()
+        create.assert_called_once()
+        self.assertEqual(create.call_args.args[0][:3], ["gh", "release", "create"])
+        sleep.assert_not_called()
+        self.assertEqual(self.releases, [])
 
     def test_published_release_with_identical_assets_is_idempotent(self):
         self.metadata.update(draft=False, assets=[self.asset()])
