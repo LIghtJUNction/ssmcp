@@ -1,0 +1,32 @@
+{
+  "name": "ssmcp-cua-20261118",
+  "source_commit": "397a14a5ef18b6444226298284e66ab784af9443",
+  "transport": "existing live relay via native call",
+  "client_version": "0.7.4",
+  "wire_version": 5,
+  "schema": "ssmcp.client.capabilities.v1",
+  "generation": 17,
+  "tool_count": 1498,
+  "providers": {
+    "browser": 17,
+    "computer": 15,
+    "client": 4,
+    "playwright": 28
+  },
+  "server_provider_catalog": false,
+  "desktop": {
+    "supported": true,
+    "running": false,
+    "input_scope": "private_display",
+    "moves_host_pointer": false,
+    "helpers": {
+      "Xvfb": true,
+      "dbus-daemon": true,
+      "dbus-run-session": true,
+      "magick": true,
+      "xdotool": true,
+      "xprop": true
+    }
+  },
+  "errors": false
+}

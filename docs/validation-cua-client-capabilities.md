@@ -4,15 +4,15 @@
 
 对应 PR：[LIghtJUNction/ssmcp #19](https://github.com/LIghtJUNction/ssmcp/pull/19)
 
-代码基线：已合并 PR #18 的 TTY observer / 0.7.4，保留已发布的终端观察功能。
+代码基线：已合并 PR #18 的 TTY observer / 0.7.4 与 PR #21 的客户端内存优化，保留两轮已发布到主分支的改动。
 
-本轮功能代码：`9bd2471851a589bd42df2eb26dd8732d60c8fc85`；合入 0.7.4 后：`e1e58155f3c5b0bd862bd8715ef298cfaf529f88`。
+最终验收与部署源码：`397a14a5ef18b6444226298284e66ab784af9443`；对应主分支基线为 `a9fbd53c4d52c8e178cbb32defc297defe135a3f`。初轮 `e1e58155` 的证据同时保留，最终复验文件使用 `memory-merged-` 前缀。
 
 ## 交付结论
 
 本轮把电脑输入目标与用户当前桌面分开，并打通了后台浏览器的真实输入、等待、截图和关闭流程。浏览器环境可通过 setup 检查、安装和保存；客户端独立提供能力清单、资源和工具目录，服务端保留通用转发接口。
 
-“达到 CUA 水平”在此落实为可验证的操作行为：真实输入到正确目标、返回实际截图、保持用户鼠标与键盘焦点、不隐式切到用户桌面、连接关闭后清理自有进程。本报告没有把这些验收等同于所有平台、所有浏览器和所有网页均已达到完整功能对等。
+“达到 CUA 水平”在此落实为可验证的操作行为：真实输入到正确目标、返回实际截图、保持用户鼠标与键盘焦点、不隐式切到用户桌面、连接关闭后清理自有进程。这些结果覆盖本次 Linux 开发机与所列浏览器路径；其他平台与复杂网页行为仍需各自的兼容验证。
 
 ## 行为变化
 
@@ -35,16 +35,16 @@
 
 | 验收层 | 结果 | 主要证据 |
 | --- | --- | --- |
-| 合并后的 Rust 单元测试 | 658 项通过，0 失败；8 项按标记跳过 | `target/cua-validation/merged-rust-tests.log` |
+| 合并后的 Rust 单元测试 | 672 项通过，0 失败；8 项按标记跳过 | `target/cua-validation/memory-merged-rust.log` |
 | 客户端资源、上下文集成 | 2 项通过 | 同上；覆盖版本摘要、分页、最新内容、完整长文档与根目录权限 |
 | JavaScript 能力、CUA facade、工具搜索 | 23 项通过 | `scripts/test_client_capabilities.mjs` 等三组 Node 测试 |
-| 独立桌面完整链路 | 33 项通过 | `private-desktop.json`，含传输认证与实际 GUI 输入、截图、清理 |
-| 自有可见浏览器的后台标签 | 37 项通过 | `browser-background-owned.json` |
-| Headless 浏览器完整链路 | 57 项通过 | `browser-headless.json` |
-| Setup 与真实客户端配置加载 | 9 项通过 | `browser-setup.json` |
-| 保留 TTY observer 的回归 | 7 组通过，recording 模式 | `tty-regression.json` |
+| 独立桌面完整链路 | 33 项通过 | `memory-merged-private-desktop.json`，含传输认证与实际 GUI 输入、截图、清理 |
+| 自有可见浏览器的后台标签 | 37 项通过 | `memory-merged-browser-background-owned.json` |
+| Headless 浏览器完整链路 | 57 项通过 | `memory-merged-browser-headless.json` |
+| Setup 与真实客户端配置加载 | 9 项通过 | `memory-merged-setup.json` |
+| 保留 TTY observer 的回归 | 7 组通过，recording 模式 | `memory-merged-tty.json` |
 | 新客户端连接现有服务端 | 通过：完整组合配置、已有账号、旧 relay 原语 | 使用保存账号及现有 `call` / `ListTools`，没有部署新 relay |
-| 优化构建 | 优化构建通过，release CLI 启动检查通过 | `merged-release-build.log` |
+| 优化构建 | 优化构建通过（opt-level=z、fat LTO），release CLI 启动与浏览器 setup 检查通过 | `memory-merged-release.log` |
 
 后台浏览器的验收不仅检查“命令返回成功”。它检查点击事件的 `isTrusted`、滚轮事件计数和实际页面位移；图片中的标记由可信点击从红色变为绿色，证明截图来自更新后的目标页面。浏览器原前台标签的窗口标题、另一个测试窗口的键盘焦点、指针坐标均保持不变。自有浏览器关闭后继续检查这些状态。
 
@@ -89,15 +89,15 @@ ssmcp setup browser --playwright-mcp /absolute/path/to/cli.js
 
 Playwright MCP Bridge 需要 0.5.0 或更新版本。发现扩展 manifest、验证 CLI 与完成浏览器配对是不同状态。首次连接仍需要用户在扩展原生界面批准；本轮未代替用户批准，也没有读取扩展 token 存储。ChatGPT 扩展被纳入公开安装信息检查；未发现可供 ssmcp 直接调用的公开通用控制接口，因此没有声称已接管它的私有能力。
 
-开发机现已运行独立会话 **`ssmcp-cua-20261118`**。安装时发现默认客户端已被并行的内存优化分支更新，因而将本轮验收构建独立部署，保留了默认安装及其尚未合并的优化。
+开发机现已运行独立会话 **`ssmcp-cua-20261118`**。安装时发现默认客户端正被并行的内存优化任务使用，因此采用独立部署。随后 PR #21 合入主分支，本轮将其完整合并并复验，现在线上的独立会话同时包含后台控制、TTY 与内存优化；默认安装继续保留。
 
-- 构建：`~/.local/share/ssmcp/builds/cua-e1e58155f3c5/ssmcp`
+- 构建：`~/.local/share/ssmcp/builds/cua-397a14a5ef18/ssmcp`
 - 配置：`~/.config/ssmcp/profiles/cua-20261118.toml`
 - 用户服务：`ssmcp-cua-20261118.service`
-- 版本：0.7.4 开发构建，包含本轮 CUA 改动与已发布 TTY 功能。
-- SHA256：`7d9807464587a9ab212850c7ea5a52da9d5ef50badfd3d189e5e58e25a834b69`
+- 版本：0.7.4 开发构建，包含本轮 CUA 改动、已发布 TTY 功能与主分支内存优化。
+- SHA256：`2f097558335a468ed847abf9148fe0f5686fcaa70282a69311374b078f0f8734`
 
-已对优化产物执行实际 CLI 启动检查，并通过在线新会话读取能力清单和独立桌面状态。新会话报告 wire 5，浏览器、电脑及客户端资源原语均可发现；独立桌面处于未启动状态，验证按需分配。原有 7 个客户端保持在线。
+已对优化产物执行实际 CLI 启动检查，并通过在线新会话读取能力清单和独立桌面状态。新会话报告 wire 5，浏览器、电脑及客户端资源原语均可发现；独立桌面处于未启动状态，验证按需分配。核对时原有 7 个客户端仍在线，本轮只更新自己创建的独立会话。
 
 这是当前用户管理器中的临时服务，停止或用户管理器重启后不会自动恢复；构建与配置文件会保留。停止本轮会话：
 
@@ -109,14 +109,14 @@ systemctl --user stop ssmcp-cua-20261118.service
 
 ```sh
 SSMCP_CLIENT_CONFIG="$HOME/.config/ssmcp/profiles/cua-20261118.toml" \
-  "$HOME/.local/share/ssmcp/builds/cua-e1e58155f3c5/ssmcp" setup browser --check --json
+  "$HOME/.local/share/ssmcp/builds/cua-397a14a5ef18/ssmcp" setup browser --check --json
 ```
 
 用户管理器重启后，可用同一配置重新连接；以下命令需要保持运行：
 
 ```sh
 SSMCP_CLIENT_CONFIG="$HOME/.config/ssmcp/profiles/cua-20261118.toml" \
-  "$HOME/.local/share/ssmcp/builds/cua-e1e58155f3c5/ssmcp" \
+  "$HOME/.local/share/ssmcp/builds/cua-397a14a5ef18/ssmcp" \
   --name ssmcp-cua-20261118 --no-browser --no-setup --watchdog
 ```
 
@@ -142,7 +142,7 @@ ssmcp.resources.read
 
 未知的新资源类型和扩展字段沿通用通道传输；远程读取完成后重新核对授权。wire v4/v5 保持兼容。现有服务端可以通过旧 `call(clientId, name, args)` 访问新客户端原子能力；新的 `native(clientId)`、`capabilities(clientId)` 和 `resources.forClient(clientId)` 便捷接口需要一次服务端更新。
 
-本次没有声称已部署新 ssmcpd，也没有给出未经测量的内存、空间或吞吐提升百分比。已完成的是降低职责耦合、按需获取客户端信息，以及真实旧服务端兼容验收。
+本次上线的是新客户端；现有 ssmcpd 继续提供连接。新增服务端便捷接口尚未部署，客户端原子工具已通过现有通道实测可用。本轮未测量服务端 RSS、磁盘占用或吞吐量；已验证的是职责解耦、按需获取客户端信息，以及与现有服务端的兼容性。
 
 ## 复现与证据位置
 
