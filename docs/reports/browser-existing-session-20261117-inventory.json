@@ -1,0 +1,61 @@
+{
+  "observed_at": "2026-11-17T11:36:51+08:00",
+  "scope": "Read-only metadata on the development machine; not an end-to-end test of the new discover implementation.",
+  "source_inventory_sha256": "4776bd4cb438d808503927ab209af8d6085e737b141feaedaf48a38a9b9ef045",
+  "chrome": {
+    "version": "157.0.8103.78",
+    "executable": "/opt/google/chrome/chrome",
+    "running_main_process_observed": true,
+    "remote_debugging_port_arg": null,
+    "remote_debugging_pipe": false,
+    "devtools_active_port_observed": false
+  },
+  "extensions": [
+    {
+      "name": "ChatGPT",
+      "id": "hehggadaopoacecdllhhajmbjkdcmajg",
+      "version": "1.26.1102.11740",
+      "state": "installed manifest observed; enabled/paired state not inspected"
+    },
+    {
+      "name": "Playwright Extension",
+      "id": "mmlmfjhmonkocbjadbfplnigmagldckm",
+      "version": "0.5.0",
+      "state": "installed manifest observed; enabled/paired state not inspected"
+    },
+    {
+      "name": "Claude",
+      "state": "official extension manifest not found in four observed Chrome profiles or actual --load-extension paths; no claim about other profiles or browsers"
+    }
+  ],
+  "native_messaging": {
+    "claude_code_host_file_exists": true,
+    "claude_desktop_host_file_exists": false,
+    "native_handshake_performed": false
+  },
+  "playwright": {
+    "system_package_version": "1.65.0",
+    "mcp_server_package_found": false,
+    "npx_cache_directories_checked": 13,
+    "candidate_package_paths_checked": 20,
+    "system_cli_mcp_scope_observed": "hidden run-test-mcp-server and test/* backend; not the extension browser MCP server"
+  },
+  "chatgpt_browser_connection": {
+    "observed_error": "Browser access requires the originating browser context. Open ChatGPT in the browser with the connected extension and try again.",
+    "connection_established": false
+  },
+  "current_native_browser_status": {
+    "connected": false,
+    "protocol": "cdp",
+    "discovered_executable": "/usr/bin/chromium",
+    "matches_requested_running_chrome": false
+  },
+  "excluded_operations": [
+    "cookies/history/preferences/local-state/token/extension-storage reads",
+    "browser launch or restart",
+    "tab content reads or input",
+    "Harness model requests",
+    "dependency installation"
+  ],
+  "release_status": "This inventory does not assert a published version, production deployment, or successful live extension control."
+}
