@@ -138,3 +138,16 @@ ssmcp Release 的下载或校验失败保留已有安装。所有公开镜像均
 | 提示需要交互终端 | 在真实终端先运行 `ssmcp setup`，再启动服务或自动化任务。 |
 
 这些说明描述实现行为，不代表当前线上服务已完成升级。仓库的[客户端流程测试](../src/client/onboarding/flow_tests.rs)、[门户 HTTP 测试](../src/portal/setup_tests.rs)、[下载与进程生命周期测试](../src/client/onboarding/dependencies.rs)和[真实 HTTPS 字节上限 fixture](../scripts/test_installer_download_bounds.py)覆盖相应协议及失败路径；原生 Windows/macOS 环境和三平台桌面交互的实际验收范围仍以对应记录为准。电脑与浏览器权限见 [computer-use 指南](computer-use.md)。
+
+
+## 浏览器操作环境
+
+浏览器环境可以独立于 SSH 配置，不要求先登录门户：
+
+```sh
+ssmcp setup browser --check
+ssmcp setup browser --install
+ssmcp setup browser --check --json
+```
+
+默认只检查。`--install` 使用 Node.js 18+ 和 npm，在 ssmcp 用户数据目录安装并验证固定版本的 Playwright MCP，重复执行复用已有版本。检查会区分运行时缺失、provider 缺失、扩展待升级与首次配对，并显示 Linux 独立桌面依赖。浏览器已有 profile、账号和 ChatGPT 扩展保持原有管理方式。首次配对采用扩展自身的确认流程。[完整配置与后台操作](background-control.md)

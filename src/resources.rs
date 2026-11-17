@@ -32,16 +32,15 @@ await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
 Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
-Use cua.status(clientId) to inspect native desktop capabilities. cua aliases computer and cua.browser aliases browser. computer.screenshot, \
-move/click/drag/key/type/scroll and windows/focus operate the client desktop. Browser control \
-uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/\
+Use cua.status(clientId) to inspect native desktop capabilities. cua aliases computer and cua.browser aliases browser. On Linux, call computer.session_start(clientId), then computer.launch(clientId,{command:[...]}) for a private Xvfb desktop. Screenshots and input then use that private display. computer.session_stop stops its owned apps and display. Shared desktop input requires the explicit argument desktop:'shared'; missing or failed isolation never falls back to the user's pointer. Browser control \
+uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/\
 evaluate/screenshot/close/disconnect. Neither provider invokes a model. Both convenience \
 namespaces return complete native MCP results; inspect isError and structuredContent. \
 Use image(await computer.screenshot(clientId)) or image(await browser.screenshot(clientId,\
 {target_id})) for visible MCP image content, then return only metadata. Do not print image \
 base64. Use screenshot image_to_desktop mapping for scaled desktop coordinates. Browser \
-element refs come from the current snapshot and expire on navigation or replacement.\n\n\
-For the operator's existing Chrome, first call ssmcp.browser.discover for read-only browser and extension metadata, and ssmcp.harnesses.list for provider readiness. Extension files alone do not prove an active connection. Installed Playwright MCP starts in its native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered.\n\n\
+element refs come from the current snapshot and expire on navigation or replacement. browser.launch defaults to headless, and browser.open defaults to background:true. browser.act runs up to 16 ordered actions under one tab lock and returns a fresh snapshot. On failure inspect completed_count, failed_index and phase before continuing; do not replay the whole batch. browser.wait polls an observed selector and/or literal text without a fixed sleep.\n\n\
+For the operator's existing Chrome, first call ssmcp.browser.discover for read-only browser and extension metadata, and ssmcp.harnesses.list for provider readiness. Configure dependencies with ssmcp setup browser --check or explicitly install them with ssmcp setup browser --install. Installed Playwright MCP starts with --extension --background --no-tab-group and is registered only after version, handshake and enumeration checks. Select actual playwright.* names with tools.search and preserve native approvals; the first pairing page may take focus. Discovery never installs dependencies. ChatGPT uses its own official Browser tools and originating browser context. Do not invoke a model or replace requested existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered.\n\n\
 Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
 command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
 incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \
@@ -397,7 +396,11 @@ fn limits() -> Value {
             "browser_discovery":"ssmcp.browser.discover reads metadata; installation is not a connection",
             "model_invocation":false,
             "desktop_coordinates":"read coordinate_space: Linux/macOS logical, Windows physical virtual-desktop pixels; use image_to_desktop mapping",
-            "browser_transport":"native Chromium CDP at explicit loopback endpoints; optional installed Playwright MCP in --extension mode",
+            "browser_transport":"native Chromium CDP at explicit loopback endpoints; optional installed Playwright MCP with --extension --background --no-tab-group",
+            "browser_setup":"ssmcp setup browser [--check | --install] [--json]",
+            "browser_defaults":{"headless":true,"background_tabs":true,"system_pointer":false},
+            "browser_batch":{"tool":"ssmcp.browser.act","max_actions":16,"deadline_ms":25000,"failure":"stops at first error; reports completed steps; no automatic replay"},
+            "desktop_isolation":{"platform":"linux","start":"ssmcp.computer.session_start","launch":"ssmcp.computer.launch","stop":"ssmcp.computer.session_stop","shared_input":"requires desktop: shared"},
             "image_max_decoded_bytes":400*1024,
             "image_formats":["image/png","image/jpeg"],
             "lifetime":"client connection; owned browser processes stop on disconnect; attached browsers remain running"

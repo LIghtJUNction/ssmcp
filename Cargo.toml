@@ -32,6 +32,7 @@ include = [
     "/docs/validation-workspace-bridge.md",
     "/docs/native-control.md",
     "/docs/computer-use.md",
+    "/docs/background-control.md",
     "/docs/onboarding.md",
     "/docs/validation-computer-use.md",
     "/docs/reports/computer-use-*.json",

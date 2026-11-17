@@ -26,6 +26,10 @@ ssmcp invite
 
 邀请默认 10 分钟内兑换一次，B 会话默认可用 1 小时；`--ttl`、`--session-ttl` 可调整。已安装兼容客户端的 B 可用 `--no-bootstrap`。看门狗默认开启，`--no-watchdog` 可禁用，显式停止或授权到期后不会继续恢复。[完整账号流程与服务器配置](client-accounts.md)
 
+## 浏览器环境
+
+`ssmcp setup browser [--check | --install] [--json]` 检查浏览器运行时、Playwright MCP、已安装扩展和独立桌面依赖。显式 `--install` 安装专用 provider；无需 SSH 主机或门户登录。[后台浏览器与独立桌面](background-control.md)
+
 ## 独立命令接口
 
 `exec` 在选定客户端启动独立进程，并用任务 ID 保存状态。每个任务有自己的工作目录、退出码和 stdout/stderr。它适合构建、测试、开发服务器等可由 argv 表达的命令。需要持续交互、终端控制或修改同一 Shell 状态时，使用 `terminal.*`。
