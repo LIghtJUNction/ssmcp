@@ -1,4 +1,5 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
+mod capabilities;
 use crate::rsync::Rsync;
 use crate::{
     backend::{self, Backend, events::EventLog},
@@ -163,6 +164,7 @@ impl Runtime {
         let computer = Computer::new(root.clone())?;
         let omarchy = Omarchy::new(root.clone())?;
         let rsync = Rsync::new(root)?;
+        registry.replace(Provider::Client, capabilities::tools())?;
         registry.replace(Provider::Workspace, Workspace::tools())?;
         registry.replace(Provider::Browser, Browser::tools())?;
         registry.replace(Provider::Computer, Computer::tools())?;
@@ -287,6 +289,10 @@ impl Runtime {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let outcome = match tool.provider {
+            Provider::Client => self
+                .client_resource_call(&tool.native_name, arguments)
+                .await
+                .map(backend::result),
             Provider::Browser => self.browser.perform(&tool.native_name, arguments).await,
             Provider::Computer => self.computer.perform(&tool.native_name, arguments).await,
             Provider::Omarchy => self.omarchy.perform(&tool.native_name, arguments).await,
@@ -390,7 +396,7 @@ impl Runtime {
         // them again would recursively archive the artifact-read response itself.
         // Context already enforces a 1 MiB response and 256 KiB full-document limit.
         // Keep structured contents available to resources/read instead of spilling them.
-        if tool.provider == Provider::Context
+        if matches!(tool.provider, Provider::Context | Provider::Client)
             || matches!(
                 name.as_str(),
                 "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
