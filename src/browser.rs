@@ -34,6 +34,11 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const INPUT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PAGES: usize = 64;
 
+/// Observe installed browser metadata without creating a browser runtime.
+pub fn discovery() -> Value {
+    discovery::inspect()
+}
+
 pub struct Browser {
     root: PathBuf,
     http: reqwest::Client,
@@ -385,8 +390,8 @@ impl Browser {
             ),
             tool(
                 "open",
-                "Open a new browser tab and return its target_id.",
-                json!({"url":{"type":"string","maxLength":32768}}),
+                "Open a new browser tab in the background and return its target_id. Set background=false only when foreground activation is intended.",
+                json!({"url":{"type":"string","maxLength":32768},"background":{"type":"boolean","default":true}}),
                 &["url"],
                 false,
             ),
@@ -463,6 +468,20 @@ impl Browser {
                 false,
             ),
             tool(
+                "wait_for",
+                "Wait on this client for visible page text to appear or disappear without moving the system pointer or repeatedly transferring snapshots. Bounded timeout; holds this target's action order.",
+                merge(
+                    target.clone(),
+                    json!({
+                        "text":{"type":"string","minLength":1,"maxLength":1024},
+                        "state":{"type":"string","enum":["present","absent"],"default":"present"},
+                        "timeout_ms":{"type":"integer","minimum":1,"maximum":30000,"default":5000}
+                    }),
+                ),
+                &["target_id", "text"],
+                true,
+            ),
+            tool(
                 "evaluate",
                 "Evaluate explicit JavaScript in the selected page; return a JSON value bounded to 128 KiB. May change page state.",
                 merge(
@@ -499,6 +518,8 @@ impl Browser {
         ];
         for descriptor in &mut out {
             descriptor["annotations"]["openWorldHint"] = json!(true);
+            descriptor["_meta"]["ssmcp/input_scope"] = json!("browser_target");
+            descriptor["_meta"]["ssmcp/moves_system_pointer"] = json!(false);
         }
         out
     }
@@ -526,7 +547,7 @@ impl Browser {
                 let _: Empty = parse(args)?;
                 let session = self.session.lock().await.clone();
                 self.ensure_open()?;
-                let state = if let Some(s) = session.as_ref() {
+                let mut state = if let Some(s) = session.as_ref() {
                     let probe = tokio::time::timeout(Duration::from_secs(2), async {
                         let discovery = self.get_json(&s.endpoint, "json/version").await?;
                         let ws = websocket(
@@ -556,6 +577,13 @@ impl Browser {
                     json!({"connected":false,"native":true,"protocol":"cdp",
                         "executable":installed_browser(None).ok(),"connect_supported":true})
                 };
+                state["input_scope"] = json!("browser_target");
+                state["moves_system_pointer"] = json!(false);
+                state["default_new_tab_background"] = json!(true);
+                state["foreground_launch_possible"] = json!(true);
+                state["recommended_for"] = json!(
+                    "Use browser tools for web pages; computer tools send desktop-wide input."
+                );
                 Ok(result(state))
             }
             "ssmcp.browser.launch" => {
@@ -832,7 +860,10 @@ impl Browser {
                 valid_url(&args.url)?;
                 let opened = session
                     .browser
-                    .call("Target.createTarget", json!({"url":"about:blank"}))
+                    .call(
+                        "Target.createTarget",
+                        json!({"url":"about:blank","background":args.background}),
+                    )
                     .await?;
                 let id = opened["targetId"]
                     .as_str()
@@ -840,7 +871,7 @@ impl Browser {
                 let id = id.to_owned();
                 let mut page = self.page(&session, &id).await?;
                 navigate(&mut page.cdp, &args.url).await?;
-                json!({"target_id":id,"url":args.url})
+                json!({"target_id":id,"url":args.url,"background":args.background,"input_scope":"browser_target","moves_system_pointer":false})
             }
             "ssmcp.browser.navigate" => {
                 let args: Navigate = parse(args)?;
@@ -986,6 +1017,41 @@ impl Browser {
                     )
                     .await?;
                 json!({"target_id":args.target_id,"scrolled":true})
+            }
+            "ssmcp.browser.wait_for" => {
+                let args: WaitFor = parse(args)?;
+                args.validate()?;
+                let started = tokio::time::Instant::now();
+                // JSON encoding keeps requested text data, never page code.
+                let expression = format!(
+                    "(document.body ? document.body.innerText : '').includes({})",
+                    json!(args.text)
+                );
+                tokio::time::timeout(Duration::from_millis(args.timeout_ms), async {
+                    let page = self.page(&session, &args.target_id).await?;
+                    loop {
+                        self.ensure_session(&session)?;
+                        let present = page
+                            .cdp
+                            .value(&expression)
+                            .await?
+                            .as_bool()
+                            .ok_or("browser text check returned no boolean")?;
+                        if present == (args.state == "present") {
+                            return Ok::<(), String>(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                })
+                .await
+                .map_err(|_| {
+                    format!(
+                        "browser.wait_for timed out after {} ms waiting for text to be {}",
+                        args.timeout_ms, args.state
+                    )
+                })??;
+                json!({"target_id":args.target_id,"matched":true,"state":args.state,
+                    "elapsed_ms":started.elapsed().as_millis()})
             }
             "ssmcp.browser.evaluate" => {
                 let args: Evaluate = parse(args)?;
@@ -1479,7 +1545,42 @@ struct Target {
 #[serde(deny_unknown_fields)]
 struct Open {
     url: String,
+    #[serde(default = "default_background")]
+    background: bool,
 }
+fn default_background() -> bool {
+    true
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WaitFor {
+    target_id: String,
+    text: String,
+    #[serde(default = "default_wait_state")]
+    state: String,
+    #[serde(default = "default_wait_timeout")]
+    timeout_ms: u64,
+}
+fn default_wait_state() -> String {
+    "present".into()
+}
+fn default_wait_timeout() -> u64 {
+    5000
+}
+impl WaitFor {
+    fn validate(&self) -> Result<(), String> {
+        if self.text.is_empty() || self.text.len() > 1024 {
+            return Err("wait_for text must contain 1..1024 UTF-8 bytes".into());
+        }
+        if !matches!(self.state.as_str(), "present" | "absent")
+            || !(1..=30000).contains(&self.timeout_ms)
+        {
+            return Err("wait_for requires state present/absent and timeout_ms 1..30000".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Navigate {
@@ -1647,14 +1748,25 @@ const SNAPSHOT_SCRIPT: &str = r#"(() => {
         const r=e.getBoundingClientRect(), s=getComputedStyle(e);
         return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none';
     };
-    const candidates=Array.from(document.querySelectorAll('a,button,input,textarea,select,summary,[role],[contenteditable="true"],h1,h2,h3')).filter(visible);
+    const candidates=Array.from(document.querySelectorAll('a,button,input,textarea,select,summary,[role],[contenteditable="true"],h1,h2,h3,h4,h5,h6,img[alt]')).filter(visible);
     const nodes=candidates.slice(0,limit);
-    const text=(document.body ? document.body.innerText : '').slice(0,maxChars);
+    const bodyText=document.body ? document.body.innerText : '';
+    const text=bodyText.slice(0,maxChars);
+    const implicitRole=e=>{
+        const tag=e.tagName.toLowerCase();
+        if(tag==='input') return ({checkbox:'checkbox',radio:'radio',button:'button',submit:'button',reset:'button',image:'button',range:'slider',number:'spinbutton',search:'searchbox'})[e.type] ?? (['text','email','url','tel','password'].includes(e.type) ? 'textbox' : '');
+        if(tag==='select') return e.multiple || e.size>1 ? 'listbox' : 'combobox';
+        if(tag==='a') return e.hasAttribute('href') ? 'link' : '';
+        if(/^h[1-6]$/.test(tag)) return 'heading';
+        return ({button:'button',textarea:'textbox',summary:'button',img:'img'})[tag] || (e.isContentEditable ? 'textbox' : '');
+    };
     const items=nodes.map((e,i)=>{
         const r=e.getBoundingClientRect();
-        const label=e.getAttribute('aria-label') || (e.labels ? Array.from(e.labels).map(x=>x.innerText).join(' ') : '') ||
-            e.getAttribute('placeholder') || e.innerText || e.getAttribute('title') || '';
-        return {ref:token+'e'+(i+1),tag:e.tagName.toLowerCase(),role:(e.getAttribute('role')||'').slice(0,80),
+        const labelled=(e.getAttribute('aria-labelledby')||'').trim().split(/\s+/).slice(0,32)
+            .map(id=>document.getElementById(id)?.textContent||'').join(' ').trim();
+        const label=labelled || e.getAttribute('aria-label') || (e.labels ? Array.from(e.labels).map(x=>x.innerText).join(' ') : '') ||
+            e.getAttribute('alt') || e.getAttribute('placeholder') || e.innerText || e.getAttribute('title') || '';
+        return {ref:token+'e'+(i+1),tag:e.tagName.toLowerCase(),role:(e.getAttribute('role')||implicitRole(e)).slice(0,80),
             name:label.slice(0,400),type:(e.getAttribute('type')||'').slice(0,80),
             value:e.type==='password'?undefined:typeof e.value==='string'?e.value.slice(0,1000):undefined,
             disabled:!!e.disabled,checked:typeof e.checked==='boolean'?e.checked:undefined,
@@ -1662,7 +1774,7 @@ const SNAPSHOT_SCRIPT: &str = r#"(() => {
     });
     return {doc:document,href:location.href,nodes,info:{snapshot_id:token,url:location.href,
         title:document.title,text,elements:items,elements_truncated:candidates.length>limit,
-        text_truncated:!!document.body && document.body.innerText.length>maxChars,
+        text_truncated:bodyText.length>maxChars,
         viewport:{width:innerWidth,height:innerHeight},scope:'main document; iframe contents omitted'}};
 })()"#;
 const REF_SCRIPT: &str = r#"function(index,value){
@@ -1779,6 +1891,98 @@ mod tests {
             ))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn opening_tabs_defaults_to_background_and_allows_explicit_foreground() {
+        for background in [None, Some(false)] {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let expected = background.unwrap_or(true);
+            let server = tokio::spawn(async move {
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["method"], "Target.createTarget");
+                assert_eq!(request["params"]["background"], expected);
+                test_reply(&mut socket, &request, json!({"targetId":"a"})).await;
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["method"], "Page.navigate");
+                test_reply(
+                    &mut socket,
+                    &request,
+                    json!({"frameId":"main","loaderId":"l"}),
+                )
+                .await;
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["method"], "Page.getFrameTree");
+                test_reply(
+                    &mut socket,
+                    &request,
+                    json!({"frameTree":{"frame":{"loaderId":"l"}}}),
+                )
+                .await;
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["params"]["expression"], "document.readyState");
+                test_reply(
+                    &mut socket,
+                    &request,
+                    json!({"result":{"value":"complete"}}),
+                )
+                .await;
+            });
+            let mut args = json!({"url":"https://example.test/"});
+            if let Some(background) = background {
+                args["background"] = json!(background);
+            }
+            let reply = browser.perform("ssmcp.browser.open", args).await.unwrap();
+            assert_eq!(reply["structuredContent"]["background"], expected);
+            assert_eq!(reply["structuredContent"]["moves_system_pointer"], false);
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_for_observes_text_changes_locally_and_times_out_without_input() {
+        let (cdp, mut socket) = test_cdp().await;
+        let browser = test_browser(vec![("a", cdp)]).await;
+        let server = tokio::spawn(async move {
+            for present in [false, true, false] {
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["method"], "Runtime.evaluate");
+                let expression = request["params"]["expression"].as_str().unwrap();
+                assert!(expression.contains(".includes("));
+                test_reply(&mut socket, &request, json!({"result":{"value":present}})).await;
+            }
+            let request = test_request(&mut socket).await;
+            assert_eq!(request["method"], "Runtime.evaluate");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+        let appeared = browser
+            .perform(
+                "ssmcp.browser.wait_for",
+                json!({"target_id":"a","text":"Ready","timeout_ms":1000}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(appeared["structuredContent"]["matched"], true);
+        let absent = browser
+            .perform(
+                "ssmcp.browser.wait_for",
+                json!({"target_id":"a","text":"Ready","state":"absent","timeout_ms":1000}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(absent["structuredContent"]["matched"], true);
+        let started = tokio::time::Instant::now();
+        let error = browser
+            .perform(
+                "ssmcp.browser.wait_for",
+                json!({"target_id":"a","text":"Ready","timeout_ms":20}),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("timed out after 20 ms"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        server.await.unwrap();
     }
 
     #[tokio::test]

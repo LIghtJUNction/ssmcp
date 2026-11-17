@@ -39,7 +39,7 @@ output{display:block;margin-top:22px;color:#b3efc2;white-space:pre-wrap}footer{p
 </style></head><body><main>
 <p>SSMCP / COMPUTER USE</p><h1>Browser and desktop verification</h1>
 <p>This temporary page records input received through the native ssmcp tools.</p>
-<label for="message">Test message</label><input id="message" autocomplete="off" aria-label="Test message">
+<label for="message">Test message</label><span id="message-name" hidden>Accessible message</span><input id="message" autocomplete="off" aria-label="Fallback message" aria-labelledby="message-name">
 <button id="run">Run check</button><output id="result">Waiting for native input.</output>
 <div id="drag">Drag across this test area</div><footer id="bottom">Scroll target</footer>
 </main><script>
@@ -146,7 +146,11 @@ class ComputerUse(Harness):
         self.metrics["browser"] = {key: launched.get(key) for key in ("owned", "browser")}
         endpoint = launched["endpoint"]
         self.check(launched["connected"] and launched["owned"], "native launch owns an isolated system Chromium process")
-        opened = self.browser("open", url=url)
+        self.check(initial["input_scope"] == "browser_target" and initial["moves_system_pointer"] is False,
+                   "browser status distinguishes target-local input from desktop-wide input")
+        opened = self.browser("open", url=url, **({"background": False} if self.desktop else {}))
+        self.check(opened["background"] is (not self.desktop),
+                   "new tabs default to background; desktop fixture opts in to foreground")
         self.target = opened["target_id"]
         snapshot = wait_for(self.fixture_snapshot, timeout=15, description="fixture DOM ready")
         tabs = self.browser("tabs")["tabs"]
@@ -154,7 +158,17 @@ class ComputerUse(Harness):
         inputs = [item for item in snapshot["elements"] if item.get("tag", "").lower() == "input"]
         buttons = [item for item in snapshot["elements"] if item.get("name") == "Run check"]
         self.check(bool(inputs) and bool(buttons), "snapshot exposes observed input and button references")
+        self.check(inputs[0]["role"] == "textbox" and inputs[0]["name"] == "Accessible message"
+                   and buttons[0]["role"] == "button", "snapshot includes implicit roles and aria-labelledby accessible names")
         input_ref, button_ref = inputs[0]["ref"], buttons[0]["ref"]
+        self.evaluate("setTimeout(()=>{let p=document.createElement('p');p.id='async-ready';p.textContent='ssmcp async ready';document.body.append(p)},120);true")
+        self.check(self.browser("wait_for", target_id=self.target, text="ssmcp async ready", timeout_ms=5000)["matched"],
+                   "client-local wait observes asynchronous text without repeated snapshots")
+        self.evaluate("setTimeout(()=>document.querySelector('#async-ready').remove(),120);true")
+        self.check(self.browser("wait_for", target_id=self.target, text="ssmcp async ready", state="absent", timeout_ms=5000)["matched"],
+                   "client-local wait observes disappearing text")
+        self.check(self.rejected("ssmcp.browser.wait_for", {"target_id":self.target,"text":"never appears marker","timeout_ms":50}),
+                   "client-local wait has a bounded timeout")
         message = "ssmcp 原生浏览器 ✓"
         self.browser("fill", target_id=self.target, ref=input_ref, text=message)
         self.browser("fill", target_id=self.target, ref=input_ref, text="")
@@ -343,10 +357,10 @@ class ComputerUse(Harness):
             if not cursor:
                 break
         names = {tool["name"] for tool in tools}
-        expected = {"ssmcp.browser." + name for name in ("status", "discover", "launch", "connect", "tabs", "open", "navigate", "snapshot", "click", "fill", "key", "scroll", "evaluate", "screenshot", "close", "disconnect")}
+        expected = {"ssmcp.browser." + name for name in ("status", "discover", "launch", "connect", "tabs", "open", "navigate", "snapshot", "click", "fill", "key", "scroll", "wait_for", "evaluate", "screenshot", "close", "disconnect")}
         expected |= {"ssmcp.computer." + name for name in ("status", "monitors", "windows", "focus", "screenshot", "move", "click", "drag", "key", "type", "scroll")}
         expected |= {"ssmcp.omarchy." + name for name in ("status", "themes", "theme_set", "backgrounds", "background_set", "fonts", "font_set", "audio", "audio_set", "brightness", "brightness_set", "toggles", "toggle_set", "workspaces", "workspace_switch", "window_action", "apps", "app_launch", "menu", "battery", "network")}
-        self.check(expected <= names, "all 48 native computer, browser and Omarchy tools are discoverable through public list")
+        self.check(expected <= names, "all native computer, browser and Omarchy tools are discoverable through public list")
         discovery = self.browser("discover")
         self.check(discovery["discovery_only"] is True and discovery["selected_browser"] is None
                    and discovery["playwright_mcp"]["protocol_handshake"] == "not_attempted"
