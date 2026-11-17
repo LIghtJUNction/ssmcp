@@ -310,7 +310,7 @@ ssmcp --name ssmcp-project my-ssmcp
 
 该授权绑定签发登录码的 SSH 连接，只能发现和调用同一 SSH 账号下未设置 `--allow` 的连接。即使使用同一个 SSH 账户，登录码授权也不能访问设置了 `--allow` 的客户端。签发连接退出会撤销对应授权。[授权隔离](../src/broker.rs)
 
-远程 MCP 的工具列表始终只有 `list` 和 `code_mode`。本机 `--list-tools` 展示的是后端的原生工具；远程调用这些工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[两工具接口](../README.md)
+远程 MCP 的工具列表包含 `list`、`code_mode` 和 `collab`。`collab` 管理同一在线连接内的 agent 身份与消息，本机 `--list-tools` 展示后端原生工具；远程调用原生工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[MCP 接口](../README.md#mcp-接口) · [Agent 协作](agent-collaboration.md)
 
 两种方式都要求 MCP 客户端支持 Authorization Code、S256 PKCE 和动态客户端注册（DCR）。注册时省略 `grant_types` 默认获得 `authorization_code` 与 `refresh_token`，响应返回实际登记类型；显式只请求 `["authorization_code"]` 的客户端只获得访问令牌。注册、资源绑定及回调细节见 [OAuth 兼容性](deployment.md#oauth-兼容性)。
 

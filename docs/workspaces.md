@@ -1,6 +1,6 @@
 # 工作区同步与端口映射
 
-ssmcp 通过已经认证的客户端连接，在两个工作区之间传文件或转发 TCP。公开 MCP 工具仍然只有 `list` 和 `code_mode`，文件、同步任务、端口映射和资源读取都放在 `code_mode` 内。
+ssmcp 通过已经认证的客户端连接，在两个工作区之间传文件或转发 TCP。使用 `list` 选择连接，通过 `code_mode` 操作文件、同步任务和端口映射；标准 MCP resources 或 `resources.*` 可读取动态资源。多个 agent 的成员发现与消息交换使用独立的 [`collab` 工具](agent-collaboration.md)。
 
 ## 先确定每一端在哪里
 
