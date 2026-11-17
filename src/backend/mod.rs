@@ -4,6 +4,7 @@ pub mod codex;
 pub mod events;
 pub mod opencode;
 pub mod pi;
+pub mod playwright;
 pub mod process;
 pub mod rpc;
 pub mod shell;
@@ -33,6 +34,7 @@ enum Driver {
     Claude(Arc<cc::Claude>),
     Pi(Arc<pi::Pi>),
     OpenCode(Arc<opencode::OpenCode>),
+    Playwright(Arc<playwright::Playwright>),
 }
 impl Driver {
     async fn tools(&self) -> Result<Vec<Value>, String> {
@@ -41,6 +43,7 @@ impl Driver {
             Self::Claude(d) => d.tools().await,
             Self::Pi(d) => d.tools().await,
             Self::OpenCode(d) => d.tools().await,
+            Self::Playwright(d) => d.tools().await,
         }
     }
     async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
@@ -49,6 +52,7 @@ impl Driver {
             Self::Claude(d) => d.call(name, args).await,
             Self::Pi(d) => d.call(name, args).await,
             Self::OpenCode(d) => d.call(name, args).await,
+            Self::Playwright(d) => d.call(name, args).await,
         }
     }
     async fn shutdown(&self) {
@@ -57,6 +61,7 @@ impl Driver {
             Self::Claude(d) => d.shutdown().await,
             Self::Pi(d) => d.shutdown().await,
             Self::OpenCode(d) => d.shutdown().await,
+            Self::Playwright(d) => d.shutdown().await,
         }
     }
     async fn details(&self) -> Value {
@@ -65,6 +70,7 @@ impl Driver {
             Self::Pi(d) => d.diagnostics().await,
             Self::Claude(_) => json!({"scope":"native MCP tools"}),
             Self::OpenCode(_) => json!({"scope":"native OpenAPI operations"}),
+            Self::Playwright(d) => d.diagnostics(),
         }
     }
 }
@@ -118,7 +124,7 @@ impl Backend {
             diagnostics: StdMutex::new(BTreeMap::new()),
             tasks: StdMutex::new(Vec::new()),
             closed: AtomicBool::new(false),
-            initial: AtomicUsize::new(4),
+            initial: AtomicUsize::new(5),
             discovered: Notify::new(),
         });
         for (provider, name) in [
@@ -126,6 +132,7 @@ impl Backend {
             (Provider::Claude, "claude"),
             (Provider::Pi, "pi"),
             (Provider::OpenCode, "opencode"),
+            (Provider::Playwright, "playwright"),
         ] {
             backend
                 .diagnostics
@@ -188,7 +195,7 @@ impl Backend {
         let mut detected_program = None;
         let mut detected_version = None;
         let outcome = async {
-            let program = crate::program::executable(name)?;
+            let program = if provider == Provider::Playwright { playwright::installed()? } else { crate::program::executable(name)? };
             let metadata = std::fs::metadata(&program).map_err(|e| e.to_string())?;
             detected_program = Some(program.clone());
             let identity = (program.clone(), metadata.len(), metadata.modified().map_err(|e| e.to_string())?);
@@ -200,10 +207,11 @@ impl Backend {
             }
             let mut driver = self.drivers.lock().unwrap().get(&provider).cloned();
             if driver.is_none() {
-                detected_version = Some(probe_version(&program).await?);
+                detected_version = Some(if provider == Provider::Playwright { probe_command(playwright::command(&program).await?).await? } else { probe_version(&program).await? });
                 let output = self.output.clone();
                 let future = async {
                     match provider {
+                        Provider::Playwright => playwright::Playwright::start_with_output(&program, output).await.map(Driver::Playwright),
                         Provider::Codex => codex::Codex::start_with_output(program.as_os_str(), &[], output).await.map(Driver::Codex),
                         Provider::Claude => cc::Claude::start_with_output(program.as_os_str(), &[], output).await.map(Driver::Claude),
                         Provider::Pi => pi::Pi::start_discovered_with_output(program.as_os_str(), &[], output).await.map(Driver::Pi),
@@ -328,7 +336,7 @@ impl Backend {
                     json!({"harnesses":harnesses,"generation":self.registry.generation()}),
                 ))
             }
-            provider if provider.is_harness() => {
+            provider if provider.is_harness() || provider == Provider::Playwright => {
                 let driver = self
                     .drivers
                     .lock()
@@ -392,8 +400,11 @@ fn diagnostic_changed(previous: &Value, current: &Value) -> bool {
 }
 
 async fn probe_version(program: &Path) -> Result<String, String> {
+    probe_command(tokio::process::Command::new(program)).await
+}
+
+async fn probe_command(mut command: tokio::process::Command) -> Result<String, String> {
     use std::process::Stdio;
-    let mut command = tokio::process::Command::new(program);
     crate::program::configure(&mut command);
     command
         .arg("--version")

@@ -1,5 +1,8 @@
 //! A small bidirectional JSON-lines peer for native MCP, Codex App Server and Pi.
-use super::{events::EventLog, process::Managed};
+use super::{
+    events::{AuditMode, EventLog},
+    process::Managed,
+};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -24,6 +27,7 @@ use tokio::{
 
 const MAX_NATIVE_FRAME: usize = 16 * 1024 * 1024;
 const MAX_CALLS: usize = 8; // Leave bridge slots free for approvals, interrupt and event reads.
+const MAX_DISCOVERY_CALLS: usize = 1; // Refresh must not kill a provider with eight active tool calls.
 const MAX_REQUESTS: usize = 64;
 type Response = Result<Value, String>;
 type NativeWriter = Box<dyn AsyncWrite + Unpin + Send>;
@@ -113,10 +117,21 @@ impl Peer {
     }
 
     pub async fn spawn_with_output(
+        command: Command,
+        label: &str,
+        dialect: Dialect,
+        output: Arc<crate::output::OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        Self::spawn_with_output_and_audit(command, label, dialect, output, AuditMode::default())
+            .await
+    }
+
+    pub async fn spawn_with_output_and_audit(
         mut command: Command,
         label: &str,
         dialect: Dialect,
         output: Arc<crate::output::OutputStore>,
+        audit_mode: AuditMode,
     ) -> crate::Result<Arc<Self>> {
         crate::program::configure(&mut command);
         command
@@ -146,6 +161,7 @@ impl Peer {
             label,
             dialect,
             output,
+            audit_mode,
         )?;
         let events = Arc::downgrade(&peer.events);
         let stderr_task = tokio::spawn(async move {
@@ -207,7 +223,15 @@ impl Peer {
             return Err("native RPC socket peer belongs to another user".into());
         }
         let (reader, writer) = stream.into_split();
-        Self::from_transport(reader, Box::new(writer), None, label, dialect, output)
+        Self::from_transport(
+            reader,
+            Box::new(writer),
+            None,
+            label,
+            dialect,
+            output,
+            AuditMode::default(),
+        )
     }
 
     fn from_transport(
@@ -217,6 +241,7 @@ impl Peer {
         label: &str,
         dialect: Dialect,
         output: Arc<crate::output::OutputStore>,
+        audit_mode: AuditMode,
     ) -> crate::Result<Arc<Self>> {
         // An attached service can outlive this connection and retain old replies.
         // Never reuse an earlier connection's request ID namespace.
@@ -234,7 +259,7 @@ impl Peer {
             request_prefix,
             next: AtomicU64::new(1),
             alive: AtomicBool::new(true),
-            events: EventLog::with_output(label, output),
+            events: EventLog::with_output_and_audit(label, output, audit_mode),
             weak: weak.clone(),
         });
         let mut stdout = BufReader::new(reader);
@@ -372,7 +397,14 @@ impl Peer {
         let (reply, receiver) = oneshot::channel();
         {
             let mut calls = self.calls.lock().unwrap();
-            if calls.len() >= MAX_CALLS {
+            let used = calls
+                .values()
+                .filter(|call| call.internal_discovery == internal_discovery)
+                .count();
+            if internal_discovery && used >= MAX_DISCOVERY_CALLS {
+                return Err("native discovery busy; at most 1 outstanding discovery call".into());
+            }
+            if !internal_discovery && used >= MAX_CALLS {
                 return Err("native backend busy; at most 8 outstanding native calls".into());
             }
             calls.insert(
@@ -748,6 +780,145 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn metadata_audit_keeps_native_arguments_results_and_pending_requests_intact() {
+        timeout(Duration::from_secs(10), async {
+            const MARKER: &str = "vH8nP4cM9qR2yT6s";
+            let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+            command.args(["-u", "-c", r#"
+import json,sys
+m='vH8nP4cM9qR2yT6s'
+print(m,file=sys.stderr,flush=True)
+def send(v): print(json.dumps(v),flush=True)
+for line in sys.stdin:
+ r=json.loads(line)
+ if r.get('method')=='tools/call':
+  call=r
+  send({'method':'notifications/progress','params':{'progressToken':r['id'],'progress':2,'total':3,'message':m}})
+  send({'method':'notifications/message','params':{'level':'info','data':{'value':m}}})
+  send({'jsonrpc':'2.0','id':'review-1','method':'elicitation/create','params':{'message':m,'requestedSchema':{'type':'object','properties':{'value':{'type':'string','default':m}}}}})
+ elif r.get('id')=='review-1':
+  send({'jsonrpc':'2.0','id':call['id'],'result':{'content':[{'type':'text','text':m}],'structuredContent':{'arguments':call['params']['arguments'],'approval':r['result']},'isError':False,'_native':[m,None]}})
+"#]);
+            let peer = Peer::spawn_with_output_and_audit(
+                command, "native-metadata-fixture", Dialect::JsonRpc,
+                crate::output::OutputStore::new_connection().unwrap(), AuditMode::MetadataOnly,
+            ).await.unwrap();
+            let arguments = json!({"text":MARKER,"fields":[{"value":MARKER}]});
+            let request = peer.request("tools/call", json!({"name":"browser_fill_form","arguments":arguments}));
+            tokio::pin!(request);
+            tokio::select! {
+                _ = request_seen(&peer, "review-1") => {},
+                _ = &mut request => panic!("native request completed before caller input"),
+            }
+            assert_eq!(peer.pending().await["requests"], json!([{
+                "jsonrpc":"2.0", "id":"review-1", "method":"elicitation/create",
+                "params":{"message":MARKER,"requestedSchema":{"type":"object","properties":{"value":{"type":"string","default":MARKER}}}},
+            }]));
+            let decision = json!({"action":"decline","content":{"value":MARKER}});
+            peer.respond(json!({"id":"review-1","result":decision})).await.unwrap();
+            let result = request.await.unwrap();
+            assert_eq!(result, json!({
+                "content":[{"type":"text","text":MARKER}],
+                "structuredContent":{"arguments":arguments,"approval":decision},
+                "isError":false,"_native":[MARKER,null],
+            }));
+            assert!(peer.pending().await["requests"].as_array().unwrap().is_empty());
+            // Stderr may arrive on a different task; wait for that actual event.
+            loop {
+                let page = peer.events.read(json!({"max_events":64})).await.unwrap();
+                assert!(!page.to_string().contains(MARKER));
+                if page["events"].as_array().unwrap().iter().any(|entry| entry["event"]["type"] == "stderr") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            peer.shutdown().await;
+            let page = peer.events.read(json!({"max_events":64})).await.unwrap();
+            assert!(!page.to_string().contains(MARKER));
+            let entries = page["events"].as_array().unwrap();
+            assert!(entries.iter().any(|entry| entry["event"]["method"] == "notifications/message"));
+            assert!(entries.iter().any(|entry| entry["event"]["method"] == "elicitation/create"));
+            let progress = entries.iter().map(|entry| &entry["event"]).find(|event| event["method"] == "notifications/progress").unwrap();
+            assert_eq!(progress["params"]["progress"], 2);
+            assert_eq!(progress["params"]["total"], 3);
+        }).await.expect("native metadata audit fixture stalled");
+    }
+
+    #[tokio::test]
+    async fn discovery_has_one_reserved_slot_without_raising_the_native_call_limit() {
+        timeout(Duration::from_secs(5), async {
+            let (client, server) = tokio::io::duplex(64 * 1024);
+            let (client_reader, client_writer) = tokio::io::split(client);
+            let peer = Peer::from_transport(
+                client_reader,
+                Box::new(client_writer),
+                None,
+                "discovery-capacity-fixture",
+                Dialect::JsonRpc,
+                crate::output::OutputStore::new_connection().unwrap(),
+                AuditMode::default(),
+            ).unwrap();
+            let (native_seen_tx, native_seen_rx) = oneshot::channel();
+            let (discovery_seen_tx, discovery_seen_rx) = oneshot::channel();
+            let (release_tx, release_rx) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (read, mut write) = tokio::io::split(server);
+                let mut read = BufReader::new(read);
+                let mut pending = Vec::new();
+                for _ in 0..MAX_CALLS {
+                    let request = read_json(&mut read).await.unwrap().unwrap();
+                    assert_eq!(request["method"], "tools/call");
+                    pending.push(request);
+                }
+                native_seen_tx.send(()).unwrap();
+                let discovery = read_json(&mut read).await.unwrap().unwrap();
+                assert_eq!(discovery["method"], "tools/list");
+                assert!(discovery.get("internal_discovery").is_none());
+                discovery_seen_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                write.write_all(format!("{}\n", json!({
+                    "jsonrpc":"2.0","id":discovery["id"],"result":{"tools":[]}
+                })).as_bytes()).await.unwrap();
+                for request in pending {
+                    write.write_all(format!("{}\n", json!({
+                        "jsonrpc":"2.0","id":request["id"],"result":{"index":request["params"]["index"]}
+                    })).as_bytes()).await.unwrap();
+                }
+            });
+            let mut native = Vec::new();
+            for index in 0..MAX_CALLS {
+                let peer = peer.clone();
+                native.push(tokio::spawn(async move {
+                    peer.request("tools/call", json!({"index":index})).await
+                }));
+            }
+            native_seen_rx.await.unwrap();
+            assert!(peer.request("tools/call", json!({"index":8})).await
+                .unwrap_err().contains("at most 8"));
+            // The public method name alone cannot claim the trusted reserve.
+            assert!(peer.request("tools/list", json!({})).await
+                .unwrap_err().contains("at most 8"));
+            let discovery = tokio::spawn({
+                let peer = peer.clone();
+                async move { peer.request_discovery("tools/list", json!({})).await }
+            });
+            discovery_seen_rx.await.unwrap();
+            assert_eq!(peer.calls.lock().unwrap().len(), MAX_CALLS + 1);
+            assert!(peer.request_discovery("tools/list", json!({})).await
+                .unwrap_err().contains("at most 1"));
+            assert!(peer.alive.load(Ordering::Acquire));
+            release_tx.send(()).unwrap();
+            assert_eq!(discovery.await.unwrap().unwrap(), json!({"tools":[]}));
+            for (index, task) in native.into_iter().enumerate() {
+                assert_eq!(task.await.unwrap().unwrap(), json!({"index":index}));
+            }
+            server.await.unwrap();
+            assert!(peer.calls.lock().unwrap().is_empty());
+            peer.shutdown().await;
+        }).await.expect("discovery was starved by active native calls or fixture stalled");
+    }
+
+    #[tokio::test]
     async fn discovery_provenance_is_bound_to_the_exact_request_and_never_changes_native_json() {
         let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
         command.args(["-u", "-c", r#"
@@ -891,6 +1062,7 @@ for line in sys.stdin:
             "harness-early-failure",
             Dialect::Pi,
             crate::output::OutputStore::global().unwrap(),
+            AuditMode::default(),
         )
         .unwrap();
         let rejected = HarnessCall::new(112);

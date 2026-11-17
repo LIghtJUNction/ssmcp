@@ -1,6 +1,6 @@
 # computer-use：原生电脑、浏览器与 Omarchy 操作
 
-computer-use 是 ssmcp 客户端内置的控制能力。它提供 Linux、Windows 和 macOS 桌面适配器、直接使用 Chrome DevTools Protocol（CDP）的浏览器适配器，以及 Omarchy 系统原语。操作在连接的开发机执行，结构化结果和截图通过原有 SSH 连接返回；这些接口不调用模型，也不依赖另一个 MCP 控制服务。
+computer-use 是 ssmcp 客户端内置的控制能力。它提供 Linux、Windows 和 macOS 桌面适配器、直接使用 Chrome DevTools Protocol（CDP）的浏览器适配器，以及 Omarchy 系统原语。操作在连接的开发机执行，结构化结果和截图通过原有 SSH 连接返回；桌面和 CDP 原生接口不调用模型，也不依赖另一个 MCP 控制服务；复用浏览器扩展时，可选的 Playwright 桥会连接已安装的原生 MCP server。
 
 当前名称统一为 `computer-use`，专用客户端与用户服务名称为 `ssmcp-computer-use`。已有调用继续使用 `ssmcp.computer.*` 和 `ssmcp.browser.*`；Omarchy 新增 `ssmcp.omarchy.*`。名称调整不改变客户端 ID 的路由规则。实现入口见 [电脑适配器](../src/computer.rs)、[浏览器适配器](../src/browser.rs)和 [Omarchy 适配器](../src/omarchy.rs)。
 
@@ -34,7 +34,7 @@ macOS 输入使用 Quartz 全局桌面点，主显示器左上角为原点，其
 
 ## 发现与调用
 
-先调用 `list({})`，根据显示名称、任务标题和工作目录选择目标客户端，再通过 `list({client_id})` 读取它的工具目录和 schema。目录分页时继续传入 `nextCursor`。客户端 ID 是连接身份，显示名称可能重复，也会随配置变化。
+先调用 `list({})`，根据显示名称、任务标题和工作目录选择目标客户端，再用 `tools.search(clientId,{query:'browser',limit:20})` 查询所需工具，调用前以 `include_schemas:true` 取得完整原生 schema。旧服务端继续使用 `list({client_id})` 分页。客户端 ID 是连接身份，显示名称可能重复，也会随配置变化。
 
 以下源码放入 `code_mode` 的 `code` 参数：
 
@@ -53,7 +53,7 @@ return {
 return await call("CLIENT_ID_FROM_LIST", "ssmcp.computer.status", {});
 ```
 
-旧服务器连接新客户端时仍可通过工具目录和 `call` 使用原生接口。`computer`、`browser`、`omarchy` 便捷命名空间及 `image()` 图片显示通道需要同步更新服务端。
+旧服务器连接新客户端时仍可通过工具目录和 `call` 使用原生接口。`tools.search`、`computer`、`browser`、`omarchy` 便捷命名空间及 `image()` 图片显示通道需要同步更新服务端。`ssmcp.browser.discover` 和 Playwright 适配器由客户端提供，需要更新并重新发现客户端能力。
 
 ## CUA 入口与 Codex 工具
 
@@ -147,7 +147,11 @@ Hyprland、Windows 和 macOS 的聚焦实现只发送一次焦点请求，随后
 
 ## 浏览器接口
 
-`browser.launch` 使用独立临时 profile 和本机随机调试端口，默认显示窗口；`headless:true` 适合后台验证。`executable` 可指定系统浏览器路径，启动保留 Chromium 沙箱。它直接使用 [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)。
+用户要求控制正在使用的 Chrome 时，先通过 `call(id,'ssmcp.browser.discover',{})` 读取浏览器与扩展元数据，并检查 `ssmcp.harnesses.list`。Playwright 工具只在本机 MCP server 可启动、握手及目录枚举成功后注册为 `playwright.*`；首次实际控制仍可能需要扩展自己的批准。没有可用桥时报告具体缺口，不能用 `browser.launch` 创建新 profile 或改用 Chromium 代替这次指定的会话。步骤与现场观察见[复用现有 Chrome](browser-existing-session.md)。
+
+已有 CDP 端点可用 `browser.connect` 显式附着；`discover` 本身不会连接、启动或重启浏览器。页面操作按标签页串行，不同标签页可并发读取；同一页面的导航、快照、点击与填表仍按依赖顺序等待。快照能回答的问题优先返回有界文本和元素引用，只有需要视觉判断时再请求截图。
+
+需要独立测试会话时，`browser.launch` 使用独立临时 profile 和本机随机调试端口，默认显示窗口；`headless:true` 适合后台验证。`executable` 可指定系统浏览器路径，启动保留 Chromium 沙箱。它直接使用 [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)。
 
 ```javascript
 const id = "CLIENT_ID_FROM_LIST";
@@ -176,6 +180,7 @@ return await browser.fill("CLIENT_ID_FROM_LIST", {
 
 | 方法 | 主要参数 | 返回或效果 |
 | --- | --- | --- |
+| `call(id,'ssmcp.browser.discover',{})` | 无 | 只读浏览器与扩展元数据；不证明连接可用 |
 | `browser.status` | 无 | 连接、所有权和版本 |
 | `browser.launch` | 可选 `executable,headless,width,height` | 启动当前连接拥有的浏览器 |
 | `browser.connect` | `endpoint` | 附着已开启调试的本机浏览器 |

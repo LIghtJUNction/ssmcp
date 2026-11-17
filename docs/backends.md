@@ -41,6 +41,7 @@ ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
 | ssmcp | 交互式终端、独立后台进程、文件、上下文原语 | 不依赖安装 coding harness；文件读写与命令执行直接在本机完成 |
 | Codex | `codex app-server --listen stdio://`，并须支持 `app-server generate-json-schema --experimental` | App Server 方法；成功发现时注册 `codex.mcp.*`，通过原生 MCP 调用接口转发 |
 | Claude Code | `claude mcp serve` | 该入口实际返回的 MCP 工具目录，统一加 `claude.` 前缀 |
+| Playwright MCP | 已安装的 `playwright-mcp` 或显式配置的本机入口，固定 `--extension` | 原生 MCP 握手和分页枚举后注册 `playwright.*`；扩展连接和批准仍由原生接口处理 |
 | Pi | 显式连接已初始化的本机私有 Unix RPC socket | `pi.rpc` 与事件、请求、回复四项桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
 | OpenCode | 操作者已启动的本机 HTTP 服务；显式配置 loopback 地址 | 从 `/api/info` 握手和 `/openapi.json` 发现操作；发现阶段不代为启动服务 |
 
@@ -49,6 +50,8 @@ ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
 各提供者在后台独立探测和刷新；Shell 的连接与目录不等待可选 Harness。版本、握手或目录读取超时只使该提供者不可用，断线会取消仍挂起的发现。时间、页数和工具数量有界，具体限制由对应适配器定义。[启动回归测试](../tests/client_startup.rs)
 
 发现只使用已有程序，不安装运行时、依赖或 Harness，也不提交模型任务。mise、asdf、Volta 等 shim 需要解析到已安装入口；无法确认安全启动的版本保留为 unavailable，并给出原因。关闭网络下载不能证明不会从缓存安装依赖。参见 [OpenCode 的启动限制](#8-opencode从-openapi-发现操作) 和 [原生程序解析](../src/program.rs)。
+
+Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already-installed/cli.js` 配置；JavaScript 入口由已验证的真实 Node.js 执行。发现先检查版本，再启动 `--extension` 模式并执行 MCP 握手和工具枚举。不会使用 `npx`、`npm`、`corepack` 或 shim 去下载安装，缺失时只保留 unavailable 诊断。已有环境传给原生程序，但 ssmcp 不读取扩展 token 存储、不生成 token，也不代替 Chrome 中的确认。`ssmcp.playwright.events/requests/respond` 只用于已发现的原生事件和待处理请求，参数以实时 Schema 为准。[现有浏览器流程](browser-existing-session.md) · [适配器](../src/backend/playwright.rs)
 
 后续显式调用是否使用模型由原生方法决定。例如 Codex 的 turn、Pi 的 prompt 控制请求，以及 Claude 目录中可能存在的 Agent 工具会进入其任务流程；直接 MCP 工具也可能在内部使用模型。开发与验收默认使用协议 fixture、状态查询和已确认无模型的工具。普通读写文件与 Shell 命令可直接使用 `fs` 和 `exec`。
 
@@ -97,6 +100,7 @@ MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有
 | `clients` | 本次调用开始时的只读客户端元数据快照 |
 | `await call(clientId, toolName, arguments = {})` | 选定提供者的完整 MCP 工具结果 |
 | `await tools(clientId, cursor?)` | 一页原生能力目录；用 `nextCursor` 继续读取 |
+| `await tools.search(clientId, options)` | 有界目录检索；默认摘要，`include_schemas:true` 返回完整原生 descriptor |
 | `exec.run(clientId, options)` | 启动独立命令，并在指定等待时间内返回状态和分离的输出流 |
 | `exec.parallel(clientId, commands, {concurrency:4})` | 有界并行启动和观察命令，按输入顺序保留每项结果 |
 | `exec.start/list/status/read/wait/cancel/forget` | 管理客户端后台命令；与服务端传输用的 `jobs.*` 分开 |
@@ -126,6 +130,27 @@ return states;
 ```
 
 每次 `call` 或 `tools` 都会重新检查当前授权及目标客户端的访问条件。客户端离线时请重新调用 `list`；断线后重连会得到新 ID。JavaScript 变量不会跨请求保留，但 Shell 和 Agent 的本机会话仍由客户端进程维护。需要继续读取输出或会话时，把游标、thread ID 或 session ID 保存到 MCP 调用方，再显式传入下一段代码。
+
+### 按需查询目录
+
+`tools.search` 在一次代码调用中读取所需的目录页，只把匹配结果返回给模型。`query` 是名称或描述的不区分大小写子串；默认返回 20 项名称、路由命名空间与短说明。`namespace` 来自实际注册名称前缀，不是额外的权威 provider 字段。指定 `include_schemas:true` 时返回整个原生 descriptor，保留 input/output Schema、注解及扩展字段。[worker 实现](../src/code_mode.js)
+
+```javascript
+const id = "CLIENT_ID_FROM_LIST";
+return await tools.search(id, {
+  query: "playwright",
+  limit: 10,
+  include_schemas: true
+});
+```
+
+返回 `nextCursor` 表示还可继续。下一次传入该游标，并保持同一客户端、query、limit 与 schema 模式；这些搜索游标不能直接传给原生 `tools(id,cursor)`。页内续查会重新读取该页并核对 SHA-256，变更时明确要求重新搜索。底层仍保留原有目录快照语义，每页重新经过在线状态与授权校验，没有新增 helper 缓存。
+
+一次搜索最多读取 32 页，`max_pages` 可设为 1–32；单条续查链最多经过 128 个不同页和 8,192 个工具。`limit` 为 1–50。结果中的 `complete`、`stopped_reason` 和 `stats` 区分已结束、条数上限、分页预算与输出预算；即使本页没有匹配项，仍应检查 `nextCursor`。
+
+默认说明最多 240 个 Unicode 字符，`description_truncated` 会说明缩略。工具 JSON 合计预算为 96 KiB，完整搜索结果最多 128 KiB。单个原生 descriptor 超限时明确报错并提示使用原始 `tools` 分页，不会裁掉 Schema 或悄悄跳过工具。
+
+检索减少的是模型上下文中的无关目录内容和手工分页往返，不减少首次扫描的底层请求数量。每页仍计入 `code_mode` 的 128 次原生调用预算；外层时间不足时应降低 `max_pages` 并续查。`tools.search` 位于 broker worker，需要服务端更新；客户端更新负责新增原生能力，二者分别验收。
 
 ## 4. 命令：并行执行、后台管理与等待
 

@@ -181,6 +181,7 @@ class ComputerUse(Harness):
                    "browser click rejects unobserved element references")
         if self.desktop:
             self.desktop_checks()
+        self.parallel_browser_checks(url)
         self.browser("navigate", target_id=self.target, url="about:blank")
         self.check(self.rejected("ssmcp.browser.fill", {"target_id": self.target, "ref": input_ref, "text": "stale"}),
                    "navigation invalidates references from the prior document")
@@ -190,6 +191,80 @@ class ComputerUse(Harness):
         self.check(not self.browser("status")["connected"], "disconnect releases owned browser connection")
         wait_for(lambda: json_get(endpoint + "/json/version") is None, description="owned browser stopped")
         self.check(True, "disconnect stops the browser owned by this connection")
+
+    def parallel_browser_checks(self, url):
+        # Both targets are our local fixture in the ssmcp-owned temporary profile.
+        # Page B must complete a native call while A's Promise is still gated;
+        # no latency comparison or host-side network access substitutes for this.
+        second = self.browser("open", url=url)["target_id"]
+        gate = "ssmcp-e2e-parallel-" + str(time.monotonic_ns())
+        expression_a = r"""(() => {
+          const key = %s, channel = new BroadcastChannel(key);
+          return new Promise(resolve => {
+            const finish = released => {
+              clearTimeout(timer); channel.close();
+              localStorage.setItem(key, released ? 'released' : 'deadline');
+              resolve({released, deadline_expired: !released});
+            };
+            const timer = setTimeout(() => finish(false), 5000);
+            channel.onmessage = event => { if (event.data === 'release') finish(true); };
+            localStorage.setItem(key, 'waiting');
+          });
+        })()""" % json.dumps(gate)
+        expression_b = r"""(() => {
+          const key = %s, deadline = performance.now() + 5000;
+          return new Promise(resolve => {
+            const observe = () => {
+              const phase = localStorage.getItem(key);
+              if (phase !== null) return resolve({observed_phase: phase});
+              if (performance.now() >= deadline) return resolve({observed_phase: 'not-started'});
+              setTimeout(observe, 10);
+            };
+            observe();
+          });
+        })()""" % json.dumps(gate)
+        release = r"""(() => {
+          const channel = new BroadcastChannel(%s);
+          channel.postMessage('release'); channel.close(); return true;
+        })()""" % json.dumps(gate)
+        parameters = {"client": self.client_id, "a": self.target, "b": second,
+                      "expression_a": expression_a, "expression_b": expression_b, "release": release}
+        source = "const p=" + json.dumps(parameters) + ";" + r"""
+          let aFinished = false;
+          const request = (target_id, expression) => call(p.client, 'ssmcp.browser.evaluate', {target_id, expression});
+          const value = r => { if (r.isError) throw Error(JSON.stringify(r)); return r.structuredContent.value; };
+          const a = request(p.a, p.expression_a).then(
+            r => { aFinished = true; return r; },
+            e => { aFinished = true; return {isError:true,error:String(e)}; }
+          );
+          const b = (async () => {
+            const observed = value(await request(p.b, p.expression_b));
+            const completedBeforeA = !aFinished;
+            const releaseRequested = value(await request(p.b, p.release));
+            return {observed, completed_before_a:completedBeforeA, release_requested:releaseRequested};
+          })();
+          const results = await Promise.all([a,b]);
+          return {page_a:value(results[0]), page_b:results[1]};
+        """
+        started = time.monotonic()
+        try:
+            observed = self.code(source)
+            self.metrics["browser_parallel"] = {
+                "scope": "two local fixture tabs in the ssmcp-owned temporary Chromium profile",
+                "gate_deadline_ms": 5000, "elapsed_seconds": round(time.monotonic() - started, 3),
+                **observed,
+            }
+            self.check(observed["page_b"]["observed"]["observed_phase"] == "waiting"
+                       and observed["page_b"]["completed_before_a"],
+                       "page B completes a native call while page A's Promise is still waiting")
+            self.check(observed["page_b"]["release_requested"] is True
+                       and observed["page_a"] == {"released": True, "deadline_expired": False},
+                       "page A completes only after the explicit page B release, before its 5s deadline")
+        finally:
+            with contextlib.suppress(Exception):
+                self.browser("evaluate", target_id=second,
+                             expression="localStorage.removeItem(%s);true" % json.dumps(gate))
+            self.browser("close", target_id=second)
 
     def desktop_checks(self):
         status = self.computer("status")
@@ -268,10 +343,23 @@ class ComputerUse(Harness):
             if not cursor:
                 break
         names = {tool["name"] for tool in tools}
-        expected = {"ssmcp.browser." + name for name in ("status", "launch", "connect", "tabs", "open", "navigate", "snapshot", "click", "fill", "key", "scroll", "evaluate", "screenshot", "close", "disconnect")}
+        expected = {"ssmcp.browser." + name for name in ("status", "discover", "launch", "connect", "tabs", "open", "navigate", "snapshot", "click", "fill", "key", "scroll", "evaluate", "screenshot", "close", "disconnect")}
         expected |= {"ssmcp.computer." + name for name in ("status", "monitors", "windows", "focus", "screenshot", "move", "click", "drag", "key", "type", "scroll")}
         expected |= {"ssmcp.omarchy." + name for name in ("status", "themes", "theme_set", "backgrounds", "background_set", "fonts", "font_set", "audio", "audio_set", "brightness", "brightness_set", "toggles", "toggle_set", "workspaces", "workspace_switch", "window_action", "apps", "app_launch", "menu", "battery", "network")}
-        self.check(expected <= names, "all 47 native computer, browser and Omarchy tools are discoverable through public list")
+        self.check(expected <= names, "all 48 native computer, browser and Omarchy tools are discoverable through public list")
+        discovery = self.browser("discover")
+        self.check(discovery["discovery_only"] is True and discovery["selected_browser"] is None
+                   and discovery["playwright_mcp"]["protocol_handshake"] == "not_attempted"
+                   and not self.browser("status")["connected"],
+                   "browser discovery reports observations without connecting or starting a browser")
+        found = self.code("return await tools.search(%s,{query:'ssmcp.browser.',limit:50,include_schemas:true});"
+                          % json.dumps(self.client_id))
+        expected_browser = sorted((tool for tool in tools if tool["name"].startswith("ssmcp.browser.")),
+                                  key=lambda tool: tool["name"])
+        self.check(found["complete"] is True
+                   and sorted(found["tools"], key=lambda tool: tool["name"]) == expected_browser,
+                   "tools.search returns browser tools with descriptors identical to public list")
+        self.metrics["browser_search"] = {"matches": len(found["tools"]), **found["stats"]}
         omarchy = self.call("ssmcp.omarchy.status", {})
         self.check(omarchy.get("platform") == "linux" and isinstance(omarchy.get("available"), bool),
                    "Omarchy status reports native platform availability without changing system settings")
