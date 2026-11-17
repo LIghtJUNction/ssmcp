@@ -1,0 +1,84 @@
+{
+  "schema": "ssmcp.deployment-preflight.v1",
+  "schema_version": 1,
+  "status": "inspected_not_applied",
+  "inspection_time_utc": null,
+  "timing_note": "The original read-only checks did not record an inspection timestamp. Version, service and port values below describe those observations, not a current-state guarantee.",
+  "scope": "Read-only preparation for a 0.8.0 candidate; no deployment is asserted.",
+  "production": {
+    "observed_server_version": "0.7.2",
+    "observed_server_version_output": "ssmcpd 0.7.2",
+    "installed_package": {
+      "name": "ssmcp-git",
+      "version": "0.7.2.r182.g13a0ac7-1"
+    },
+    "installed_binary_sha256": {
+      "ssmcp": "f685725b975ad4cc46f1eb28833b1a74c876e87dda18f3ce898fbc5195191cca",
+      "ssmcpd": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28"
+    },
+    "services": {
+      "ssmcpd.service": {
+        "active_state": "active",
+        "sub_state": "running"
+      },
+      "ssmcp-portal.service": {
+        "active_state": "inactive",
+        "sub_state": "dead"
+      }
+    }
+  },
+  "rollback": {
+    "location_alias": "production_current_0_7_2_rollout_package",
+    "package": {
+      "name": "ssmcp-git",
+      "version": "0.7.2.r182.g13a0ac7-1"
+    },
+    "bytes": 8076528,
+    "sha256": "b18dc05729dbd602e646e7af641527b20f8531623ad39054e57844628f36a6fe",
+    "observed_file_mode": "0600",
+    "package_member_sha256": {
+      "ssmcp": "f685725b975ad4cc46f1eb28833b1a74c876e87dda18f3ce898fbc5195191cca",
+      "ssmcpd": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28"
+    },
+    "package_binaries_match_installed": {
+      "ssmcp": true,
+      "ssmcpd": true
+    },
+    "verification_method": "Package metadata was queried without installation. Binary members were streamed directly from the archive for SHA-256 comparison; they were not extracted to deployment paths."
+  },
+  "staging_port": {
+    "transport": "tcp",
+    "port": 18087,
+    "listener_observed": false,
+    "observation_scope": "The port had no listening socket at the time of inspection.",
+    "reserved": false
+  },
+  "development_client": {
+    "binary_location_alias": "developer_user_cargo_bin",
+    "observed_version": "0.7.4",
+    "observed_version_output": "ssmcp 0.7.4",
+    "shim_modified": false
+  },
+  "server_instruction_files": {
+    "scoped_paths_checked": 16,
+    "agents_files_found": 0,
+    "inspection_errors": 0
+  },
+  "actions_performed_by_this_preflight": {
+    "read_only_inspection": true,
+    "build": false,
+    "package_creation": false,
+    "stage": false,
+    "apply": false,
+    "package_installation": false,
+    "client_binary_replacement": false,
+    "service_modification": false
+  },
+  "sanitization": {
+    "hostname_or_ssh_alias_included": false,
+    "ip_address_included": false,
+    "absolute_user_directory_included": false,
+    "credentials_included": false,
+    "rollback_path_replaced_with_alias": true
+  }
+}

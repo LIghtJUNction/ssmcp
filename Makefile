@@ -46,12 +46,11 @@ install:
 	install -m 0644 src/code_mode.js $(DESTDIR)$(PREFIX)/libexec/ssmcp/code-mode.js
 	install -m 0644 packaging/man/ssmcp.1 $(DESTDIR)$(PREFIX)/share/man/man1/
 	install -m 0644 packaging/man/ssmcpd.8 $(DESTDIR)$(PREFIX)/share/man/man8/
-	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/assets
+	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs
 	install -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/
 	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/skills/ssmcp
 	install -m 0644 skills/ssmcp/SKILL.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/skills/ssmcp/
-	install -m 0644 docs/*.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/
-	install -m 0644 docs/assets/*.svg docs/assets/*.jpg docs/assets/*.png $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/assets/
+	cp -R docs/. "$(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/"
 	install -m 0644 packaging/sshd-ssmcp.conf packaging/Caddyfile packaging/nginx-ssmcp.conf.example packaging/ssmcp-client.toml.example packaging/ssmcpd.env packaging/ssmcpd.toml.example $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
 
 # Installs the unit and a first-time config; account creation and activation are explicit.
