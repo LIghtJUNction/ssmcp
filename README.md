@@ -148,7 +148,11 @@ ssmcp sessions logs workstation --lines 100
 ssmcp sessions stop workstation
 ```
 
-`--watchdog` 默认每 5 秒重试连接；`--reconnect-delay SECONDS` 可指定 1–3600 秒的整数值，必须同时启用 watchdog。`--daemon` 本身不启用重试或开机/登录自启。管理器已经运行不代表 Broker 已连通，以 `connection_state` 和 MCP `list` 为准。手动 stop 后不会自动复活；后台会话使用保存的二进制副本，升级需 remove 后重新创建。连接断开仍会清理它拥有的任务。[会话管理、平台差异与升级](docs/session-control.md#后台运行与延时重连)
+`--watchdog` 默认每 5 秒重试连接；`--reconnect-delay SECONDS` 可指定 1–3600 秒的整数值，必须同时启用 watchdog。`--daemon` 不隐式启用 watchdog。
+
+管理服务运行时，`--daemon` 创建由该服务托管的会话；管理服务按已安装的开机或登录启动配置运行，并恢复期望运行的会话。管理服务未运行时，`--daemon` 使用旧的逐会话原生后台管理方式，本身不配置开机或登录自启。
+
+管理器已经运行不代表 Broker 已连通，以 `connection_state` 和 MCP `list` 为准。手动 stop 后不会自动复活；后台会话使用保存的二进制副本，升级需 remove 后重新创建。连接断开仍会清理它拥有的任务。[会话管理、平台差异与升级](docs/session-control.md#后台运行与延时重连)
 
 ## 常驻服务与具名会话
 
