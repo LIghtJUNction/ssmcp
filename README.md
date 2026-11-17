@@ -274,6 +274,8 @@ cargo test --locked
 
 协议与 Harness 测试使用确定性 fixture。[0.8.0 集成验证](docs/reports/client-experience-0.8.0-20261118/README.md)记录完整 Rust 回归、真实 PTY、账号队列、重载及观察窗口的结果与复现范围；[首轮客户端交互验证](docs/reports/client-experience-20261118/README.md)保留此前证据与渲染截图；[历史权限验收](docs/validation.md)保留早期 SSH 与 OAuth 记录。发布与平台构建见[发布流程](docs/releases.md)。提交改动时，请附上对应验证结果；界面修改同时附上渲染截图。
 
+优化构建、安装包内容和隔离网关试运行分别记录在 [0.8.0 候选包报告](docs/reports/client-experience-0.8.0-20261118/ROLLOUT.md)中；候选包验证与正式发布、生产切换的状态分别列明。
+
 ## 文档
 
 | 主题 | 文档 |
