@@ -421,13 +421,12 @@ fn validate(database: &Database) -> crate::Result<()> {
         {
             return Err("invalid account rate limit".into());
         }
-        if let Some(handle) = &account.handle {
-            if normalize_handle(handle).ok().as_ref() != Some(handle) || !handles.insert(handle) {
-                return Err(
-                    "invalid or duplicate account username; refusing to discard account data"
-                        .into(),
-                );
-            }
+        if let Some(handle) = &account.handle
+            && (normalize_handle(handle).ok().as_ref() != Some(handle) || !handles.insert(handle))
+        {
+            return Err(
+                "invalid or duplicate account username; refusing to discard account data".into(),
+            );
         }
         let mut seen = std::collections::HashSet::new();
         for key in &account.keys {
