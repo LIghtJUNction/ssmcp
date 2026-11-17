@@ -1,0 +1,30 @@
+{
+  "source_runtime_commit": "f57127bd99fd5eb4aa805d0c68be5c0bbc91a2af",
+  "binary_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+  "execution": "local developer machine",
+  "checks": [
+    {
+      "command": "cargo test --lib client::zero",
+      "passed": 7,
+      "failed": 0,
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test --lib session -- --test-threads=2",
+      "passed": 63,
+      "failed": 0,
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --bin ssmcp -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --release --bin ssmcp",
+      "exit_code": 0
+    }
+  ],
+  "release_e2e_report": "e2e-release.json",
+  "native_systemd_e2e_checks_passed": 33,
+  "native_systemd_e2e_cleanup_errors": []
+}
