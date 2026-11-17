@@ -1,0 +1,33 @@
+{
+  "schema": "ssmcp.deployment-preparation.v1",
+  "source_commit": "6d2802b8533314fb8a43a962d88d74165c026b0c",
+  "target_version": "0.7.0",
+  "date": "2026-11-17",
+  "build": {
+    "command": "cargo build --locked --release --bins -j 2",
+    "exit_code": 0,
+    "profile": "release"
+  },
+  "artifact": {
+    "name": "ssmcp-git-0.7.0.r171.g6d2802b-1-x86_64.pkg.tar.zst",
+    "bytes": 8059338,
+    "sha256": "fffa331b698964d6853dbd0ff47fc0b5ece73981bdc8c52f2431653e6000ec30"
+  },
+  "production_baseline": {
+    "installed_package": "ssmcp-git 0.6.3.r156.g3e3b7b6-1",
+    "running_gateway_version": "ssmcpd 0.6.4",
+    "running_portal_version": "ssmcpd 0.6.4",
+    "gateway_health": true,
+    "portal_health": true,
+    "public_health": true
+  },
+  "deployment_status": "artifact_prepared",
+  "acceptance": [
+    "isolated gateway and portal staging",
+    "DCR registration survives staged restart",
+    "installed package and running binary both 0.7.0",
+    "public health and OAuth metadata",
+    "unauthenticated MCP access rejected",
+    "fresh authenticated ssmcp list and native command after service restart"
+  ]
+}
