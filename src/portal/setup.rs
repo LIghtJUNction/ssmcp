@@ -28,7 +28,7 @@ use tokio::sync::Mutex as AsyncMutex;
 const TTL: Duration = Duration::from_secs(600);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_GRANTS: usize = 512;
-const MAX_BODY: usize = 4096;
+const MAX_BODY: usize = 32 * 1024;
 const ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
 #[derive(Default)]
@@ -382,7 +382,7 @@ async fn body<T: serde::de::DeserializeOwned>(
     )
     .await
     .map_err(|_| ApiError::invalid("The JSON request body timed out."))?
-    .map_err(|_| ApiError::invalid("The JSON request body exceeds 4096 bytes."))?;
+    .map_err(|_| ApiError::invalid("The JSON request body exceeds 32 KiB."))?;
     serde_json::from_slice(&bytes).map_err(|_| {
         ApiError::invalid("The JSON request contains invalid, duplicate or unknown fields.")
     })
