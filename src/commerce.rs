@@ -258,7 +258,15 @@ impl Commerce {
         let event = self
             .gateway
             .verify(raw, signature, now().saturating_mul(1000))?;
-        if event.event_type != "order.completed" {
+        // The Pancake dashboard sends a signed zero-value probe with no local order.
+        let dashboard_probe = event.mode == "test"
+            && event.data.charged_amount.as_deref() == Some("0.00")
+            && event
+                .data
+                .order_merchant_external_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("[TEST] ORDER-REF-"));
+        if event.event_type != "order.completed" || dashboard_probe {
             return Ok(store::Settlement::Ignored);
         }
         let config = self.config.clone();
