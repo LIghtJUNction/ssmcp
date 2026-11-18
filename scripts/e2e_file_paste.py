@@ -424,14 +424,16 @@ class FilePaste(InputHistory):
         self.clear_draft(front)
         # A legal private PNG chunk forces signal/control bytes and several stdin
         # reads without altering the image's actual pixels.
-        data = b"\x00\x03\x11\x13\xff\x1b[18~" + bytes(range(256)) * 40
+        data = (b"\x00\x1b[201~\x03\x1d\x11\x13\xff\x1b[18~"
+                b"\x1b_Gi=4294967295;OK\x1b\\\x1b[200~" + bytes(range(256)) * 40)
         kind = b"raWp"
         chunk = (struct.pack(">I", len(data)) + kind + data
                  + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
         original = png_fixture()
         source = original[:-12] + chunk + original[-12:]
-        self.check(4096 < len(source) < 400 * 1024 and b"\x03" in source,
-                   "the raw PNG fixture crosses stdin read boundaries and contains literal Ctrl-C bytes")
+        self.check(4096 < len(source) < 400 * 1024
+                   and all(marker in source for marker in (b"\x1b[201~", b"\x03", b"\x1d", b"\x1b_G")),
+                   "the legal raw PNG spans stdin reads and embeds paste-end, Ctrl-C, detach and graphics markers")
         before_reads = self.reads()
         packet = b"\x1b[200~" + source + b"\x1b[201~"
         previous = 0
