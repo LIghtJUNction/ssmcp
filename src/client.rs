@@ -14,6 +14,7 @@ pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
     config::browser()
 }
 mod git_status;
+mod highlight;
 pub(crate) mod input;
 pub(crate) mod interface;
 mod messages;

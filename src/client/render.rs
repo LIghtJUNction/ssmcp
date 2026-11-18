@@ -1,6 +1,7 @@
 //! Human transcript only; never changes events retained for MCP consumers.
 use super::{
     git_status::GitSnapshot,
+    highlight::{Lexer, Spans},
     panel::{ControllerView, PanelSnapshot, ProgressView, TaskView},
     ui::Ui,
 };
@@ -260,6 +261,49 @@ struct Lines {
     tone: String,
     summarize_json: bool,
     folded_bytes: usize,
+    fence: Option<CodeFence>,
+}
+
+struct CodeFence {
+    marker: char,
+    count: usize,
+    lexer: Option<Lexer>,
+    diff: bool,
+}
+
+impl CodeFence {
+    fn opening(line: &str) -> Option<Self> {
+        let trimmed = line.trim_start_matches(' ');
+        if line.len() - trimmed.len() > 3 {
+            return None;
+        }
+        let marker = trimmed.chars().next()?;
+        if !matches!(marker, '\u{60}' | '~') {
+            return None;
+        }
+        let count = trimmed.chars().take_while(|ch| *ch == marker).count();
+        if count < 3 {
+            return None;
+        }
+        let language = trimmed[count..].split_whitespace().next().unwrap_or("");
+        Some(Self {
+            marker,
+            count,
+            lexer: Lexer::for_language(language),
+            diff: matches!(language, "diff" | "patch"),
+        })
+    }
+
+    fn closes(&self, line: &str) -> bool {
+        let trimmed = line.trim_start_matches(' ');
+        let count = trimmed.chars().take_while(|ch| *ch == self.marker).count();
+        line.len() - trimmed.len() <= 3 && count >= self.count && trimmed[count..].trim().is_empty()
+    }
+}
+
+fn fence_prefix(text: &str) -> bool {
+    let trimmed = text.trim_start_matches(' ');
+    text.len() - trimmed.len() <= 3 && (trimmed.is_empty() || trimmed.starts_with(['\u{60}', '~']))
 }
 
 struct Renderer {
@@ -1615,7 +1659,14 @@ impl Renderer {
         let tail = if total > limit { limit / 3 } else { 0 };
         let head = shown - tail;
         let digits = total.max(1).to_string().len();
+        let program = value
+            .as_array()
+            .and_then(|args| args.first())
+            .and_then(Value::as_str)
+            .unwrap_or("sh");
+        let mut lexer = Lexer::for_program(program);
         for (index, line) in script.lines().enumerate() {
+            let spans = lexer.line(&clean(&self.source_excerpt(line)));
             if index >= head && index < total - tail && total > limit {
                 if index == head {
                     self.text(out, label, &format!(
@@ -1626,7 +1677,7 @@ impl Renderer {
                 }
                 continue;
             }
-            self.source_line(out, index + 1, digits, &self.source_excerpt(line))?;
+            self.source_line(out, index + 1, digits, &spans)?;
         }
         Ok(())
     }
@@ -1648,43 +1699,19 @@ impl Renderer {
         out: &mut impl Write,
         number: usize,
         digits: usize,
-        text: &str,
+        spans: &Spans,
     ) -> io::Result<()> {
         let prefix = format!("  {number:>digits$} │ ");
         let continuation = format!("  {:>digits$} │ ", "");
-        let available = self
-            .width
-            .saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str()))
-            .max(2);
-        painted(out, self.color, &self.ui.color("gray"), &prefix)?;
-        let mut column = 0;
-        let mut fragment = String::new();
-        for c in clean(text).chars() {
-            // Tabs in source are expanded at tab stops so both the terminal and
-            // plain transcript agree on the continuation column.
-            let expanded = if c == '\t' {
-                " ".repeat(4 - column % 4)
-            } else {
-                c.to_string()
-            };
-            for c in expanded.chars() {
-                let cells = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-                if c == '\n' || column + cells > available {
-                    painted(out, self.color, "0", &fragment)?;
-                    fragment.clear();
-                    writeln!(out)?;
-                    painted(out, self.color, &self.ui.color("gray"), &continuation)?;
-                    column = 0;
-                    if c == '\n' {
-                        continue;
-                    }
-                }
-                fragment.push(c);
-                column += cells;
-            }
-        }
-        painted(out, self.color, "0", &fragment)?;
-        writeln!(out)
+        render_source(
+            out,
+            self.color,
+            self.width,
+            spans,
+            &prefix,
+            &continuation,
+            &self.ui,
+        )
     }
 
     fn value(
@@ -2034,6 +2061,8 @@ impl Renderer {
             .any(|prefix| prefix.starts_with(&lines.pending) || lines.pending.starts_with(prefix));
         if !lines.pending.is_empty()
             && !lines.hunk
+            && lines.fence.is_none()
+            && !fence_prefix(&lines.pending)
             && !diff_prefix
             && !(lines.summarize_json && (lines.folded_bytes > 0 || json_record(&lines.pending)))
         {
@@ -2438,6 +2467,57 @@ fn painted(out: &mut impl Write, color: bool, code: &str, text: &str) -> io::Res
     }
 }
 
+// Tokens are display-only. Escape every character before adding our own SGR,
+// then measure Unicode cells so wrapping is identical with and without color.
+fn render_source(
+    out: &mut impl Write,
+    color: bool,
+    width: usize,
+    spans: &Spans,
+    prefix: &str,
+    continuation: &str,
+    ui: &Ui,
+) -> io::Result<()> {
+    let available = width
+        .saturating_sub(unicode_width::UnicodeWidthStr::width(prefix))
+        .max(2);
+    painted(out, color, &ui.color("muted"), prefix)?;
+    let mut column = 0;
+    for (text, tone) in spans {
+        let mut fragment = String::new();
+        for ch in text.chars() {
+            let expanded = match ch {
+                '\t' => " ".repeat(4 - column % 4),
+                '\u{1b}' => "␛".into(),
+                '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => "�".into(),
+                ch if ch.is_control() && ch != '\n' => " ".into(),
+                ch => ch.to_string(),
+            };
+            for ch in expanded.chars() {
+                let cells = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if ch == '\n' || column + cells > available {
+                    if !fragment.is_empty() {
+                        painted(out, color, &ui.color(tone), &fragment)?;
+                        fragment.clear();
+                    }
+                    writeln!(out)?;
+                    painted(out, color, &ui.color("muted"), continuation)?;
+                    column = 0;
+                    if ch == '\n' {
+                        continue;
+                    }
+                }
+                fragment.push(ch);
+                column += cells;
+            }
+        }
+        if !fragment.is_empty() {
+            painted(out, color, &ui.color(tone), &fragment)?;
+        }
+    }
+    writeln!(out)
+}
+
 fn render_line(
     out: &mut impl Write,
     color: bool,
@@ -2446,6 +2526,25 @@ fn render_line(
     line: &str,
     ui: &Ui,
 ) -> io::Result<()> {
+    if let Some(fence) = &mut lines.fence {
+        if fence.closes(line) {
+            lines.fence = None;
+            lines.hunk = false;
+            return painted(out, color, &ui.color("muted"), &format!("  {line}\n"));
+        }
+        if !fence.diff {
+            let spans = fence
+                .lexer
+                .as_mut()
+                .map(|lexer| lexer.line(line))
+                .unwrap_or_else(|| vec![(line.into(), "foreground")]);
+            return render_source(out, color, width, &spans, "  ", "  ", ui);
+        }
+    } else if let Some(fence) = CodeFence::opening(line) {
+        lines.fence = Some(fence);
+        lines.hunk = false;
+        return painted(out, color, &ui.color("muted"), &format!("  {line}\n"));
+    }
     let outline = if lines.summarize_json && json_record(line) && line.len() > 16 * 1024 {
         Some("JSON output · large record folded; inspect original output".into())
     } else if lines.summarize_json && json_record(line) {
@@ -2468,13 +2567,21 @@ fn render_line(
             || lower.starts_with("fatal")
             || lower.contains(" failed")
             || lower.contains("timed out"));
-    let code = if line.starts_with("diff --git")
+    let diff_header = line.starts_with("diff --git")
         || line.starts_with("--- ")
         || line.starts_with("+++ ")
-        || line.starts_with("index ")
-    {
+        || line.starts_with("index ");
+    let code = if diff_header {
         lines.hunk = false;
-        "1".to_owned()
+        if line.starts_with("--- ") {
+            ui.color("error")
+        } else if line.starts_with("+++ ") {
+            ui.color("success")
+        } else if line.starts_with("index ") {
+            ui.color("muted")
+        } else {
+            ui.color("heading")
+        }
     } else if line.starts_with("@@ ") {
         let mut fields = line.split_whitespace().skip(1);
         lines.old = fields
@@ -2499,17 +2606,23 @@ fn render_line(
         prefix = format!("{:>5} {:>5} │ ", lines.old, lines.new);
         lines.old += 1;
         lines.new += 1;
-        ui.color("gray")
+        ui.color("foreground")
+    } else if lines.hunk && line.starts_with("\\ No newline at end of file") {
+        ui.color("muted")
     } else if failure {
+        lines.hunk = false;
         prefix = "[ERR ] ".into();
         ui.color("red")
     } else if progress {
+        lines.hunk = false;
         prefix = "[PROG] ".into();
         ui.color("yellow")
     } else if outline.is_none() && (lower.starts_with("warning") || lower.contains("retrying")) {
+        lines.hunk = false;
         prefix = "[WARN] ".into();
         ui.color("yellow")
     } else {
+        lines.hunk = false;
         if lines.tone.is_empty() {
             ui.color("foreground")
         } else {
@@ -2518,7 +2631,7 @@ fn render_line(
     };
     // Keep diff/source columns intact. Prose wraps without dropping characters.
     let text = format!("{prefix}{line}");
-    if lines.hunk || code == "1" {
+    if lines.hunk || diff_header {
         return painted(out, color, &code, &format!("{text}\n"));
     }
     let mut column = 0;
@@ -2566,6 +2679,8 @@ fn clean(text: &str) -> String {
             if chars.peek() != Some(&'\n') {
                 output.push('\n');
             }
+        } else if matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
+            output.push('�');
         } else if !c.is_control() || matches!(c, '\n' | '\t') {
             output.push(c);
         }
@@ -2889,10 +3004,134 @@ mod tests {
     }
 
     #[test]
+    fn fenced_code_highlights_unicode_and_multiline_comments_at_each_chunk_boundary() {
+        let source = "\u{60}\u{60}\u{60}js\n/* first\ncomment */ const 名 = \"值\";\nconst n = 1e-3;\n\u{60}\u{60}\u{60}\nordinary text\n";
+        let whole = render(&[json!({"delta":source})], false, true);
+        let plain = render(&[json!({"delta":source})], false, false);
+        assert_eq!(clean(&whole), plain);
+        assert!(!plain.contains('\u{1b}'));
+        for (text, semantic) in [
+            ("const", "accent"),
+            ("\"值\"", "success"),
+            ("comment */", "muted"),
+            ("1e-3", "warning"),
+        ] {
+            assert!(
+                whole.contains(&format!("\x1b[{}m{text}", Ui::default().color(semantic))),
+                "{whole}"
+            );
+        }
+        for (split, _) in source.char_indices().skip(1) {
+            assert_eq!(
+                render(
+                    &[
+                        json!({"delta":&source[..split]}),
+                        json!({"delta":&source[split..]})
+                    ],
+                    false,
+                    true
+                ),
+                whole,
+                "split {split}",
+            );
+        }
+        // Real command output can flush incomplete lines early. Fence prefixes
+        // and their code must still wait for a logical line, not change on chunks.
+        let delta = |text: &str| {
+            json!({
+                "method":"command/exec/outputDelta",
+                "params":{"deltaBase64":STANDARD.encode(text)}
+            })
+        };
+        let command_source = source.strip_suffix("ordinary text\n").unwrap();
+        let command = render(&[delta(command_source)], false, true);
+        for (split, _) in command_source.char_indices().skip(1) {
+            assert_eq!(
+                render(
+                    &[
+                        delta(&command_source[..split]),
+                        delta(&command_source[split..])
+                    ],
+                    false,
+                    true
+                ),
+                command,
+                "command split {split}",
+            );
+        }
+    }
+
+    #[test]
+    fn source_color_keeps_unicode_wrapping_and_cannot_emit_tool_controls() {
+        let source = "const 名 = \"e\u{301}界\";\t// \x1b[2J\u{9b}31m\u{202e}tail";
+        let spans = Lexer::default().line(source);
+        for width in [12, 21, 80] {
+            let mut plain = Vec::new();
+            let mut colored = Vec::new();
+            render_source(&mut plain, false, width, &spans, "  ", "  ", &Ui::default()).unwrap();
+            render_source(
+                &mut colored,
+                true,
+                width,
+                &spans,
+                "  ",
+                "  ",
+                &Ui::default(),
+            )
+            .unwrap();
+            let plain = String::from_utf8(plain).unwrap();
+            let colored = String::from_utf8(colored).unwrap();
+            assert_eq!(clean(&colored), plain);
+            assert!(!plain.contains(['\x1b', '\u{9b}', '\u{202e}']));
+            assert!(plain.contains("e\u{301}"));
+            assert!(plain.contains('␛'));
+            for line in plain.lines() {
+                assert!(
+                    unicode_width::UnicodeWidthStr::width(line) <= width,
+                    "{line:?}"
+                );
+            }
+            let mut terminal = vt100::Parser::new(20, width as u16, 0);
+            terminal.process(colored.replace('\n', "\r\n").as_bytes());
+            assert!(terminal.screen().contents().contains("const"));
+            assert!(!terminal.screen().application_cursor());
+            assert!(!terminal.screen().bracketed_paste());
+        }
+    }
+
+    #[test]
+    fn diff_headers_markers_and_prose_boundary_keep_plain_text() {
+        let diff = "diff --git a/名.rs b/名.rs\nindex 000..111 100644\n--- a/名.rs\n+++ b/名.rs\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n\\ No newline at end of file\nfinished\n";
+        let plain = render(&[json!({"delta":diff})], false, false);
+        let colored = render(&[json!({"delta":diff})], false, true);
+        assert_eq!(clean(&colored), plain);
+        assert!(!plain.contains('\x1b'));
+        for (marker, semantic) in [
+            ("diff --git", "heading"),
+            ("--- a/", "error"),
+            ("+++ b/", "success"),
+            ("@@ ", "cyan"),
+        ] {
+            assert!(colored.contains(&format!("\x1b[{}m{marker}", Ui::default().color(semantic))));
+        }
+        assert!(plain.contains("    1       │ -old"));
+        assert!(plain.contains("          1 │ +new"));
+        assert!(plain.contains("    2     2 │  same"));
+        assert!(plain.ends_with("  finished\n"), "{plain}");
+        let fenced = format!("\u{60}\u{60}\u{60}diff\n{diff}\u{60}\u{60}\u{60}\n");
+        let text = render(&[json!({"delta":fenced})], false, false);
+        assert!(text.contains("    1       │ -old"));
+        assert!(text.contains("          1 │ +new"));
+    }
+
+    #[test]
     fn unified_diff_categories_and_every_chunk_boundary() {
         let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,2 +2,2 @@\n-old\n+new\n same\n";
         let whole = render(&[json!({"delta":diff})], false, true);
-        assert!(whole.contains("\x1b[1mdiff --git"));
+        assert!(whole.contains(&format!(
+            "\x1b[{}mdiff --git",
+            Ui::default().color("heading")
+        )));
         assert!(whole.contains(&format!("\x1b[{}m@@", Ui::default().color("cyan"))));
         assert!(whole.contains(&format!(
             "\x1b[{}m    2       │ -old",
