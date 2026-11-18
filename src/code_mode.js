@@ -726,8 +726,8 @@ const bootstrap = `(() => {
   };
   const rtk = freeze({
     status: rtkStatus,
-    start: (id, args) => execution('start', id, rtkCommand(args, false)),
-    run: (id, args) => executeCommand(id, rtkCommand(args, true)),
+    start: async (id, args) => execution('start', id, rtkCommand(args, false)),
+    run: async (id, args) => executeCommand(id, rtkCommand(args, true)),
   });
   const terminal = freeze(Object.fromEntries(
     ['open','list','select','close','read','write','status','resize']
