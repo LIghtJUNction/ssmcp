@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::{
     io::{Cursor, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
 };
 use tokio::{sync::oneshot, task::JoinHandle};
 
@@ -40,19 +41,85 @@ pub(crate) enum Loaded {
     Context(String),
     Copied,
 }
+// An attach frontend owns local input files without owning the service's
+// Runtime, tools or model connection. Only an explicit, scoped binding enables
+// this fallback; ordinary live clients keep their existing Runtime path.
+static LOCAL_INPUT: Mutex<Option<Weak<Workspace>>> = Mutex::new(None);
+
+pub(crate) struct LocalInput {
+    workspace: Arc<Workspace>,
+}
+
+impl LocalInput {
+    pub(crate) fn bind(root: PathBuf) -> Result<Self, String> {
+        let workspace = Arc::new(Workspace::new(root)?);
+        let mut binding = LOCAL_INPUT
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if binding.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err("Local input is already bound to an attached workspace".into());
+        }
+        *binding = Some(Arc::downgrade(&workspace));
+        Ok(Self { workspace })
+    }
+}
+
+impl Drop for LocalInput {
+    fn drop(&mut self) {
+        let mut binding = LOCAL_INPUT
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if binding
+            .as_ref()
+            .is_some_and(|current| current.ptr_eq(&Arc::downgrade(&self.workspace)))
+        {
+            *binding = None;
+        }
+    }
+}
+
 pub(super) struct Task {
     receiver: oneshot::Receiver<Result<Loaded, String>>,
     handle: JoinHandle<()>,
 }
 impl Task {
     pub(super) fn start(source: Source) -> Result<Self, String> {
-        let (runtime, handle) = super::interface::harness::local_runtime()?;
         let (sender, receiver) = oneshot::channel();
-        let handle = handle.spawn(async move {
-            let result = runtime.import_input(source).await;
-            let _ = sender.send(result);
-            super::terminal::invalidate();
-        });
+        let handle = match super::interface::harness::local_runtime() {
+            Ok((runtime, handle)) => handle.spawn(async move {
+                let result = runtime.import_input(source).await;
+                let _ = sender.send(result);
+                super::terminal::invalidate();
+            }),
+            Err(error) => {
+                // Context and handoff depend on the connected client's state;
+                // the attach scope grants only explicit local input operations.
+                if !matches!(
+                    &source,
+                    Source::Clipboard
+                        | Source::Path(_)
+                        | Source::Files(_)
+                        | Source::Text(_)
+                        | Source::Image(_)
+                        | Source::Copy(_)
+                ) {
+                    return Err(error);
+                }
+                let workspace = LOCAL_INPUT
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+                    .ok_or(error)?;
+                let handle = tokio::runtime::Handle::try_current()
+                    .map_err(|_| "Local input requires the interactive attach runtime")?;
+                handle.spawn(async move {
+                    let result = load(source, &workspace).await;
+                    let _ = sender.send(result);
+                    super::terminal::invalidate();
+                })
+            }
+        };
         Ok(Self { receiver, handle })
     }
     #[cfg(test)]
@@ -665,6 +732,74 @@ mod tests {
         drop(files);
         assert_eq!(std::fs::read_to_string(&source).unwrap(), text);
         assert_eq!(std::fs::read(&picture).unwrap(), image_bytes);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attached_input_scope_imports_without_a_runtime_or_harness_access() {
+        // Runtime::new binds a process global during other unit tests. Run this
+        // contract in its own process so absence of that capability is real.
+        const CHILD: &str = "SSMCP_ATTACH_INPUT_SCOPE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "client::attachments::tests::attached_input_scope_imports_without_a_runtime_or_harness_access",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        assert!(super::super::interface::harness::local_runtime().is_err());
+        let temp = FileFixture::new();
+        assert_ne!(std::env::current_dir().unwrap(), temp.0);
+        let input = LocalInput::bind(temp.0.clone()).unwrap();
+        let held_workspace = input.workspace.clone();
+        assert!(LocalInput::bind(temp.0.clone()).is_err());
+        assert!(super::super::interface::harness::local_runtime().is_err());
+        assert!(
+            Task::start(Source::Context {
+                command: "context".into(),
+                arguments: String::new(),
+            })
+            .is_err()
+        );
+        assert!(Task::start(Source::Handoff("scope must not grant this".into())).is_err());
+
+        let bytes = png(8, 8);
+        let mut task = Task::start(Source::Image(bytes.clone())).unwrap();
+        let loaded = tokio::time::timeout(std::time::Duration::from_secs(5), &mut task.receiver)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let Loaded::Reference { reference, .. } = loaded else {
+            panic!("attached image must become a private reference");
+        };
+        let path = reference
+            .strip_prefix("@\"")
+            .unwrap()
+            .strip_suffix('"')
+            .unwrap();
+        assert_eq!(std::fs::read(temp.0.join(path)).unwrap(), bytes);
+        assert_eq!(held_workspace.root(), temp.0.as_path());
+        assert!(super::super::interface::harness::local_runtime().is_err());
+
+        drop(task);
+        drop(input);
+        // Revocation is explicit even if another owner still holds the workspace.
+        assert!(Task::start(Source::Image(bytes)).is_err());
+        assert!(super::super::interface::harness::local_runtime().is_err());
+        drop(held_workspace);
     }
 
     #[cfg(unix)]

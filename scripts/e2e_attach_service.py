@@ -220,8 +220,8 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
         checks.append(label)
         print(f"PASS {label}", flush=True)
 
-    def open_frontend(label, read_only=False, *, dashboard=False):
-        frontend = AttachFrontend(binary, env, cwd, name, read_only=read_only,
+    def open_frontend(label, read_only=False, *, dashboard=False, launch_cwd=None):
+        frontend = AttachFrontend(binary, env, launch_cwd or cwd, name, read_only=read_only,
                                   dashboard=dashboard,
                                   rows=26 if read_only and not dashboard else 44,
                                   cols=80 if read_only and not dashboard else 110)
@@ -245,10 +245,13 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
     try:
         # The default chat layout owns navigation; it must never send composer
         # text to the session PTY. Exercise Escape before raw terminal input.
-        chat = open_frontend("chat-navigation", read_only=True, dashboard=True)
+        frontend_cwd = cwd.parent / "attach-frontend-cwd"
+        frontend_cwd.mkdir()
+        chat = open_frontend("chat-navigation", read_only=True, dashboard=True,
+                             launch_cwd=frontend_cwd)
         chat.until(lambda s: s["alternate_screen"], "read-only chat attach compositor")
         chat.send("/help\r")
-        help_title = "ssmcp · keyboard and commands"
+        help_title = "ssmcp help"
         records["chat_help"] = chat.until(
             lambda s: help_title in text(s), "attach help before standalone Escape"
         )
@@ -286,6 +289,8 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
         check(saved_image.read_bytes() == pasted_png
               and saved_image.stat().st_mode & 0o777 == 0o600,
               "attach preserves a split raw PNG byte-for-byte in a private input file")
+        check(not tuple((frontend_cwd / ".ssmcp" / "inputs").glob("image-*.png")),
+              "attach imports into the session workspace instead of its frontend launch directory")
         check(saved_image.name in text(records["chat_png"])
               and chat.process.poll() is None,
               "pasted Ctrl-C, Ctrl-] and F7 bytes stay literal in read-only attach")
