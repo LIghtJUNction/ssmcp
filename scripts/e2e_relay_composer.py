@@ -319,7 +319,7 @@ class RelayComposer(Composer):
         self.check(any(item["id"] == self.client_id for item in self.public_call("list")["clients"]),
                    "the independently authorized MCP identity sees the same account relay session")
         self.command(front, "/queue")
-        self.check(self.queue()["supported"], "the real WebSocket relay negotiated the v7 composer protocol")
+        self.check(self.queue()["supported"], "the real WebSocket relay negotiated the request-queue protocol")
 
         first = self.submit(front, "touch relay-composer-hidden-shell-leak")
         self.check(not (self.workspace / "relay-composer-hidden-shell-leak").exists(),
