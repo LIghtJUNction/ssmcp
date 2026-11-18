@@ -1320,7 +1320,8 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
         json!({"terminal_id":terminal}),
     )
     .await?;
-    let mut keyboard = input::Keyboard::open()?;
+    let mut keyboard = input::Keyboard::open(false)?;
+    let mut utf8 = input::Utf8Input::default();
     eprintln!(
         "Connected to {} / {} · Ctrl-] detaches · Ctrl-C reaches the remote shell",
         safe(id),
@@ -1352,9 +1353,23 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
             tokio::select!{
                 _=terminate.recv()=>break,
                 event=keyboard.next()=>match event?{
-                    input::Event::Detach|input::Event::End=>break,
-                    input::Event::Text(text)=>{
+                    input::Event::Detach=>break,
+                    input::Event::InputProgress(_)=>{}
+                    input::Event::PasteExpired=>{utf8=input::Utf8Input::default();}
+                    input::Event::End=>{
+                        let text=utf8.push(&[],true);
+                        if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
+                        break;
+                    }
+                    input::Event::Interrupt=>{
+                        // This interactive command owns a remote shell, not a
+                        // dashboard. Preserve the advertised remote Ctrl-C.
+                        let text=utf8.push(b"\x03",false);
                         api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;
+                    }
+                    input::Event::Bytes(bytes)|input::Event::PasteBytes(bytes)=>{
+                        let text=utf8.push(&bytes,false);
+                        if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
                     }
                     input::Event::Resize(rows,cols)=>{
                         api.call(credential,id,"terminal.resize",json!({"terminal_id":terminal,"rows":rows.clamp(1,1000),"cols":cols.clamp(1,1000)})).await?;

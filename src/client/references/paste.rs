@@ -67,7 +67,8 @@ pub(super) fn open_at(
     parent: &std::fs::File,
     name: &std::ffi::CString,
     flags: i32,
-    mode: libc::mode_t,
+    // Variadic C arguments require integer promotion (mode_t is u16 on macOS).
+    mode: libc::c_uint,
 ) -> io::Result<std::fs::File> {
     use std::os::fd::{AsRawFd, FromRawFd};
     // SAFETY: the parent fd and NUL-terminated name remain valid for this call.

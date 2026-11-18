@@ -23,6 +23,26 @@ from e2e_dashboard import sha256
 from e2e_input_history import InputHistory
 
 
+def binary_identity(path):
+    result = subprocess.run([str(path), "--version"], capture_output=True,
+                            text=True, timeout=5)
+    if result.returncode:
+        raise RuntimeError("cannot identify terminal version: " + str(path))
+    return {"path": str(path), "version": (result.stdout or result.stderr).strip(),
+            "sha256": sha256(path)}
+
+
+def export_logs(harness, directory, output):
+    for name in ("ztty.stderr", "xvfb.stderr"):
+        path = directory / name
+        if path.exists():
+            text = path.read_text(errors="replace")
+            for secret in [harness.secret, *harness.sensitive]:
+                if secret:
+                    text = text.replace(secret, "[redacted]")
+            (output / name).write_text(text)
+
+
 class Window:
     def __init__(self, harness, binary, directory):
         self.process_info = directory / "owned-processes.json"
@@ -103,7 +123,7 @@ class Window:
             f"    open({str(self.process_info)!r},'w').write(json.dumps({{'client':child.pid,'wrapper':os.getpid(),'started':started}}))\n"
             "    status=child.wait()\n"
             f"open({str(self.exit_info)!r},'w').write(json.dumps({{'exit_code':status}}))\n"
-            "if not stopped: time.sleep(10)\n",
+            ,
             encoding="utf-8",
         )
         log = open(directory / "ztty.stderr", "wb")
@@ -253,12 +273,14 @@ def run(harness, binary, temporary, output):
     raster.save(harness.workspace / "native-grid.png")
     raster.save(output / "source-grid.png")
     native = Window(harness, binary, temporary)
+    ready = False
     try:
         credentials = native.connection()
         harness.client_id = credentials["client_id"]
         harness.sensitive.append(credentials["login_code"])
         harness.oauth_login(credentials)
         native.wait(lambda: harness.ui("/display/rows") == 32, "live candidate UI")
+        ready = True
         harness.check(harness.ui("/display/conversation/draft/text") == "",
                       "real graphics and cell-size replies do not enter the composer")
 
@@ -350,8 +372,9 @@ def run(harness, binary, temporary, output):
         return {"transport": "candidate ssmcp directly in an owned ztty PTY",
                 "display": "private Xvfb", "pixels": "X11 window readback"}
     except BaseException:
-        with contextlib.suppress(Exception):
-            native.image().save(output / "failure.png")
+        if ready:
+            with contextlib.suppress(Exception):
+                native.image().save(output / "failure.png")
         raise
     finally:
         native.close()
@@ -377,6 +400,7 @@ def main():
             parser.error("missing already-built binary: " + str(path))
     args.out.mkdir(parents=True, exist_ok=True)
     report = {"status": "failed", "binaries": {name: sha256(path) for name, path in binaries.items()}}
+    report["terminal"] = binary_identity(args.ztty)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="ssmcp-native-images-") as directory:
         temporary = Path(directory)
@@ -394,10 +418,7 @@ def main():
         finally:
             harness.close_frontends()
             harness.cleanup()
-            for name in ("ztty.stderr", "xvfb.stderr"):
-                source = temporary / name
-                if source.exists():
-                    shutil.copyfile(source, args.out / name)
+            export_logs(harness, temporary, args.out)
             report.update(checks=harness.checks, metrics=harness.metrics,
                           duration_seconds=round(time.monotonic() - started, 3))
             (args.out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")

@@ -414,3 +414,29 @@ test('job object calls preserve native failures without retrying side effects', 
       ['status','wait','read','write','cancel','forget'].map(name => 'ssmcp.exec.'+name));
   }
 });
+
+
+test('UI helpers expose registered workflows and preserve native arguments and failures', async () => {
+  const names = ['get','set','action','filter','queue','message','present','ask','questions','history','harness'];
+  const record = await run(
+    'const names=' + JSON.stringify(names) + ';'
+    + 'const values=await Promise.all(names.map(name=>ui[name]("one",{fixture:name})));'
+    + 'return {values,frozen:Object.isFrozen(ui),unsupported:typeof ui.messages};',
+    request => {
+      assert(names.some(name => request.name === 'ssmcp.ui.' + name));
+      assert.equal(request.client_id, 'one');
+      assert.equal(request.arguments.fixture, request.name.slice('ssmcp.ui.'.length));
+      return native({name:request.name});
+    },
+  );
+  succeeded(record);
+  assert.equal(result(record).frozen, true);
+  assert.equal(result(record).unsupported, 'undefined');
+  assert.deepEqual(result(record).values.map(value=>value.name), names.map(name=>'ssmcp.ui.'+name));
+  const rejected = await run(
+    'try{await ui.history("one",{action:"read"});return "unexpected";}catch(error){return error.message;}',
+    () => ({ok:true,value:{isError:true,content:[{type:'text',text:'history unavailable'}]}}),
+  );
+  succeeded(rejected);
+  assert.match(result(rejected), /history unavailable/);
+});

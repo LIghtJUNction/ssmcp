@@ -29,7 +29,7 @@ pub const MAX_IMAGES: usize = 4;
 pub const MAX_IMAGE_ENCODED_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CALLS: usize = 128;
 pub const MAX_NATIVE_INFLIGHT: usize = 16;
-pub(crate) const MAX_CONTEXT_ENTRY_BYTES: usize = 12 * 1024;
+pub(crate) const MAX_CONTEXT_ENTRY_BYTES: usize = crate::wire::MAX_CONTEXT_ENTRY_BYTES;
 pub(crate) const MAX_CONTEXT_BYTES: usize = 64 * 1024;
 pub const MAX_CONCURRENT: usize = 4;
 const MAX_ERROR_BYTES: usize = 4096;
@@ -886,6 +886,21 @@ async fn read_frame<R: AsyncBufRead + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    use std::time::Instant;
+    use tokio::sync::Notify;
+
+    static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn memory_result(workspace: char, revision: u64, text: &str) -> Value {
+        json!({"content":[],"_meta":{"ssmcp.context":{
+            "workspace":{"id":workspace.to_string().repeat(64)},
+            "revision":revision,"summary":text,"mode":"provided_summary"
+        }}})
+    }
 
     #[test]
     fn native_argument_size_has_an_explicit_error_at_the_unchanged_boundary() {
@@ -910,22 +925,6 @@ mod tests {
             .unwrap_err(),
             "invalid native tool name or arguments",
         );
-    }
-
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    };
-    use std::time::Instant;
-    use tokio::sync::Notify;
-
-    static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-    fn memory_result(workspace: char, revision: u64, text: &str) -> Value {
-        json!({"content":[],"_meta":{"ssmcp.context":{
-            "workspace":{"id":workspace.to_string().repeat(64)},
-            "revision":revision,"summary":text,"mode":"provided_summary"
-        }}})
     }
 
     #[test]

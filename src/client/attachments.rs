@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::{
     io::{Cursor, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
 };
 use tokio::{sync::oneshot, task::JoinHandle};
 
@@ -17,19 +18,13 @@ pub(super) const REFERENCE_RESERVE: usize = 64;
 
 pub(crate) enum Source {
     Clipboard,
-    Image {
-        mime_type: &'static str,
-        bytes: Vec<u8>,
-    },
     Path(String),
     Files(Vec<PathBuf>),
     Text(String),
+    Image(Vec<u8>),
     Copy(String),
     Handoff(String),
-    Context {
-        command: String,
-        arguments: String,
-    },
+    Context { command: String, arguments: String },
 }
 #[derive(Debug)]
 pub(crate) enum Loaded {
@@ -46,19 +41,85 @@ pub(crate) enum Loaded {
     Context(String),
     Copied,
 }
+// An attach frontend owns local input files without owning the service's
+// Runtime, tools or model connection. Only an explicit, scoped binding enables
+// this fallback; ordinary live clients keep their existing Runtime path.
+static LOCAL_INPUT: Mutex<Option<Weak<Workspace>>> = Mutex::new(None);
+
+pub(crate) struct LocalInput {
+    workspace: Arc<Workspace>,
+}
+
+impl LocalInput {
+    pub(crate) fn bind(root: PathBuf) -> Result<Self, String> {
+        let workspace = Arc::new(Workspace::new(root)?);
+        let mut binding = LOCAL_INPUT
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if binding.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err("Local input is already bound to an attached workspace".into());
+        }
+        *binding = Some(Arc::downgrade(&workspace));
+        Ok(Self { workspace })
+    }
+}
+
+impl Drop for LocalInput {
+    fn drop(&mut self) {
+        let mut binding = LOCAL_INPUT
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if binding
+            .as_ref()
+            .is_some_and(|current| current.ptr_eq(&Arc::downgrade(&self.workspace)))
+        {
+            *binding = None;
+        }
+    }
+}
+
 pub(super) struct Task {
     receiver: oneshot::Receiver<Result<Loaded, String>>,
     handle: JoinHandle<()>,
 }
 impl Task {
     pub(super) fn start(source: Source) -> Result<Self, String> {
-        let (runtime, handle) = super::interface::harness::local_runtime()?;
         let (sender, receiver) = oneshot::channel();
-        let handle = handle.spawn(async move {
-            let result = runtime.import_input(source).await;
-            let _ = sender.send(result);
-            super::terminal::invalidate();
-        });
+        let handle = match super::interface::harness::local_runtime() {
+            Ok((runtime, handle)) => handle.spawn(async move {
+                let result = runtime.import_input(source).await;
+                let _ = sender.send(result);
+                super::terminal::invalidate();
+            }),
+            Err(error) => {
+                // Context and handoff depend on the connected client's state;
+                // the attach scope grants only explicit local input operations.
+                if !matches!(
+                    &source,
+                    Source::Clipboard
+                        | Source::Path(_)
+                        | Source::Files(_)
+                        | Source::Text(_)
+                        | Source::Image(_)
+                        | Source::Copy(_)
+                ) {
+                    return Err(error);
+                }
+                let workspace = LOCAL_INPUT
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+                    .ok_or(error)?;
+                let handle = tokio::runtime::Handle::try_current()
+                    .map_err(|_| "Local input requires the interactive attach runtime")?;
+                handle.spawn(async move {
+                    let result = load(source, &workspace).await;
+                    let _ = sender.send(result);
+                    super::terminal::invalidate();
+                })
+            }
+        };
         Ok(Self { receiver, handle })
     }
     #[cfg(test)]
@@ -91,6 +152,56 @@ pub(super) fn source_argument(text: &str) -> Result<Source, String> {
         return Ok(Source::Files(paths));
     }
     path_argument(text).map(Source::Path)
+}
+
+/// Apply the image budget only after its signature is available. Text keeps
+/// the existing 4 MiB limit; both paths stay bounded while reads are fragmented.
+pub(super) fn paste_source(bytes: Vec<u8>) -> Result<Source, String> {
+    if crate::output::image_mime_type(&bytes).is_some() {
+        if bytes.len() > MAX_SOURCE_BYTES {
+            return Err("Image paste exceeds 16 MiB; use a smaller image or /attach PATH".into());
+        }
+        return Ok(Source::Image(bytes));
+    }
+    let head = &bytes[..bytes.len().min(96)];
+    let damaged_png = head.starts_with(b"\xef\xbf\xbdPNG")
+        || head.starts_with(b"\xc2\x89PNG")
+        || (head.starts_with(b"PNG") && head.windows(4).any(|part| part == b"IHDR"));
+    let damaged_jpeg = head.starts_with(b"\xef\xbf\xbd\xef\xbf\xbd")
+        && head
+            .windows(4)
+            .any(|part| part == b"JFIF" || part == b"Exif");
+    let damaged_webp = head.starts_with(b"RIFF") && head.windows(4).any(|part| part == b"WEBP");
+    if damaged_png || damaged_jpeg || damaged_webp {
+        return Err("The terminal altered image bytes; paste was not saved as text. Copy the original image and use Ctrl+V or /paste, or use /attach PATH.".into());
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| "Paste contains binary data that is not a supported image. Use Ctrl+V or /paste for an image, or /attach PATH for a file.")?;
+    if text.contains('\0') {
+        return Err(
+            "Paste contains binary data, not plain text. Use Ctrl+V or /paste, or /attach PATH."
+                .into(),
+        );
+    }
+    if text.len() > super::references::paste::MAX_PASTE_BYTES {
+        return Err("Paste exceeds 4 MiB of UTF-8 text; save it as a file and use @path".into());
+    }
+    Ok(Source::Text(text))
+}
+
+/// Inspect only a fixed header while collecting; images and text keep separate caps.
+pub(super) fn paste_limit(current: &[u8], incoming: &[u8]) -> usize {
+    let mut head = [0u8; 16];
+    let mut count = 0;
+    for byte in current.iter().chain(incoming).take(head.len()) {
+        head[count] = *byte;
+        count += 1;
+    }
+    if crate::output::image_mime_type(&head[..count]).is_some() {
+        MAX_SOURCE_BYTES
+    } else {
+        super::references::paste::MAX_PASTE_BYTES
+    }
 }
 
 /// Parse one explicit path, with quotes/escaped spaces, without shell expansion.
@@ -147,55 +258,6 @@ fn quoted(path: &str) -> String {
     format!("@\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// Classify a complete bracketed paste before any UTF-8 conversion or text cleanup.
-pub(crate) fn paste_source(bytes: Vec<u8>) -> Result<Source, String> {
-    if let Some(mime_type) = crate::output::image_mime_type(&bytes) {
-        if bytes.len() > MAX_SOURCE_BYTES {
-            return Err("Image paste exceeds 16 MiB; use a smaller image or /attach PATH".into());
-        }
-        return Ok(Source::Image { mime_type, bytes });
-    }
-    let head = &bytes[..bytes.len().min(96)];
-    let damaged_png = head.starts_with(b"\xef\xbf\xbdPNG")
-        || head.starts_with(b"\xc2\x89PNG")
-        || (head.starts_with(b"PNG") && head.windows(4).any(|part| part == b"IHDR"));
-    let damaged_jpeg = head.starts_with(b"\xef\xbf\xbd\xef\xbf\xbd")
-        && head
-            .windows(4)
-            .any(|part| part == b"JFIF" || part == b"Exif");
-    let damaged_webp = head.starts_with(b"RIFF") && head.windows(4).any(|part| part == b"WEBP");
-    if damaged_png || damaged_jpeg || damaged_webp {
-        return Err("The terminal altered image bytes; paste was not saved as text. Copy the original image and use Ctrl+V or /paste, or use /attach PATH.".into());
-    }
-    let text = String::from_utf8(bytes)
-        .map_err(|_| "Paste contains binary data that is not a supported image. Use Ctrl+V or /paste for an image, or /attach PATH for a file.")?;
-    if text.contains('\0') {
-        return Err(
-            "Paste contains binary data, not plain text. Use Ctrl+V or /paste, or /attach PATH."
-                .into(),
-        );
-    }
-    if text.len() > super::references::paste::MAX_PASTE_BYTES {
-        return Err("Paste exceeds 4 MiB of UTF-8 text; save it as a file and use @path".into());
-    }
-    Ok(Source::Text(text))
-}
-
-/// Inspect only a fixed header while collecting; images and text keep separate caps.
-pub(crate) fn paste_limit(current: &[u8], incoming: &[u8]) -> usize {
-    let mut head = [0u8; 16];
-    let mut count = 0;
-    for byte in current.iter().chain(incoming).take(head.len()) {
-        head[count] = *byte;
-        count += 1;
-    }
-    if crate::output::image_mime_type(&head[..count]).is_some() {
-        MAX_SOURCE_BYTES
-    } else {
-        super::references::paste::MAX_PASTE_BYTES
-    }
-}
-
 pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded, String> {
     match source {
         Source::Copy(text) => super::clipboard::write_text(&text)
@@ -216,18 +278,18 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
                 bytes,
             } => store_image(workspace.root().to_path_buf(), name, mime_type, bytes).await,
         },
-        Source::Image { mime_type, bytes } => {
+        Source::Path(path) => load_path(workspace, &path).await,
+        Source::Files(paths) => load_files(workspace.root().to_path_buf(), paths).await,
+        Source::Text(text) => store_text(workspace.root().to_path_buf(), text).await,
+        Source::Image(bytes) => {
             store_image(
                 workspace.root().to_path_buf(),
-                "pasted image".into(),
-                mime_type.into(),
+                "pasted-image".into(),
+                String::new(),
                 bytes,
             )
             .await
         }
-        Source::Path(path) => load_path(workspace, &path).await,
-        Source::Files(paths) => load_files(workspace.root().to_path_buf(), paths).await,
-        Source::Text(text) => store_text(workspace.root().to_path_buf(), text).await,
         Source::Context { command, arguments } => tokio::task::spawn_blocking(move || {
             super::context_memory::command(&command, &arguments).map(Loaded::Context)
         })
@@ -700,32 +762,138 @@ mod tests {
         assert_eq!(std::fs::read(&picture).unwrap(), image_bytes);
     }
 
-    #[test]
-    fn bracketed_paste_classifies_png_before_utf8_and_enforces_separate_caps() {
-        let png = super::super::input::paste::fixture_png();
-        let Source::Image { mime_type, bytes } = paste_source(png.clone()).unwrap() else {
-            panic!("raw PNG must not become a text attachment");
-        };
-        assert_eq!(mime_type, "image/png");
-        assert_eq!(bytes, png);
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attached_input_scope_imports_without_a_runtime_or_harness_access() {
+        // Runtime::new binds a process global during other unit tests. Run this
+        // contract in its own process so absence of that capability is real.
+        const CHILD: &str = "SSMCP_ATTACH_INPUT_SCOPE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "client::attachments::tests::attached_input_scope_imports_without_a_runtime_or_harness_access",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        assert!(super::super::interface::harness::local_runtime().is_err());
+        let temp = FileFixture::new();
+        assert_ne!(std::env::current_dir().unwrap(), temp.0);
+        let input = LocalInput::bind(temp.0.clone()).unwrap();
+        let held_workspace = input.workspace.clone();
+        assert!(LocalInput::bind(temp.0.clone()).is_err());
+        assert!(super::super::interface::harness::local_runtime().is_err());
         assert!(
-            paste_source(String::from_utf8_lossy(&png).into_owned().into_bytes())
-                .err()
-                .unwrap()
-                .contains("terminal altered image bytes")
+            Task::start(Source::Context {
+                command: "context".into(),
+                arguments: String::new(),
+            })
+            .is_err()
         );
-        assert!(paste_source(b"ordinary\0binary".to_vec()).is_err());
-        assert!(paste_source(vec![0xff, 0x80]).is_err());
-        let Source::Text(text) = paste_source("中文正常粘贴".as_bytes().to_vec()).unwrap()
-        else {
-            panic!("UTF-8 prose must remain text");
+        assert!(Task::start(Source::Handoff("scope must not grant this".into())).is_err());
+
+        let bytes = png(8, 8);
+        let mut task = Task::start(Source::Image(bytes.clone())).unwrap();
+        let loaded = tokio::time::timeout(std::time::Duration::from_secs(5), &mut task.receiver)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let Loaded::Reference { reference, .. } = loaded else {
+            panic!("attached image must become a private reference");
         };
-        assert_eq!(text, "中文正常粘贴");
-        assert_eq!(paste_limit(&png[..4], &png[4..16]), MAX_SOURCE_BYTES);
+        let path = reference
+            .strip_prefix("@\"")
+            .unwrap()
+            .strip_suffix('"')
+            .unwrap();
+        assert_eq!(std::fs::read(temp.0.join(path)).unwrap(), bytes);
+        assert_eq!(held_workspace.root(), temp.0.as_path());
+        assert!(super::super::interface::harness::local_runtime().is_err());
+
+        drop(task);
+        drop(input);
+        // Revocation is explicit even if another owner still holds the workspace.
+        assert!(Task::start(Source::Image(bytes)).is_err());
+        assert!(super::super::interface::harness::local_runtime().is_err());
+        drop(held_workspace);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn binary_paste_stores_original_png_and_reads_native_image_content() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = FileFixture::new();
+        let workspace = Workspace::new(temp.0.clone()).unwrap();
+        let bytes = png(8, 8);
+        let source = paste_source(bytes.clone()).unwrap();
+        let Loaded::Reference { reference, .. } = load(source, &workspace).await.unwrap() else {
+            panic!("binary image must become a private image reference");
+        };
+        let path = reference
+            .strip_prefix("@\"")
+            .unwrap()
+            .strip_suffix('"')
+            .unwrap();
+        assert_eq!(std::fs::read(temp.0.join(path)).unwrap(), bytes);
         assert_eq!(
-            paste_limit(b"text", b" more"),
-            super::super::references::paste::MAX_PASTE_BYTES
+            std::fs::metadata(temp.0.join(path))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
         );
+        let reply = workspace
+            .perform("ssmcp.fs.read_image", json!({"path": path}))
+            .await
+            .unwrap();
+        let block = reply["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|block| block["type"] == "image")
+            .unwrap();
+        assert_eq!(block["mimeType"], "image/png");
+        assert_eq!(
+            STANDARD.decode(block["data"].as_str().unwrap()).unwrap(),
+            bytes
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn malformed_binary_paste_creates_no_private_image() {
+        let temp = FileFixture::new();
+        let workspace = Workspace::new(temp.0.clone()).unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\ninvalid".to_vec();
+        assert!(
+            load(paste_source(bytes).unwrap(), &workspace)
+                .await
+                .is_err()
+        );
+        assert!(!temp.0.join(".ssmcp").exists());
+    }
+
+    #[test]
+    fn paste_classification_preserves_text_and_rejects_unknown_binary_or_overflow() {
+        let text = "原稿\n/paste\t保持";
+        assert!(matches!(
+            paste_source(text.as_bytes().to_vec()).unwrap(),
+            Source::Text(value) if value == text
+        ));
+        assert!(paste_source(vec![0xff, 0x00, 0x03]).is_err());
         assert!(
             paste_source(vec![
                 b'x';
@@ -733,60 +901,32 @@ mod tests {
             ])
             .is_err()
         );
-        let mut oversized = png;
-        oversized.resize(MAX_SOURCE_BYTES + 1, 0);
-        assert!(paste_source(oversized).err().unwrap().contains("16 MiB"));
+        let mut image = vec![0; MAX_SOURCE_BYTES + 1];
+        image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        assert!(paste_source(image).is_err());
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn bracketed_png_import_is_a_private_image_readable_by_native_tool() {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
-        let temp = FileFixture::new();
-        let workspace = Workspace::new(temp.0.clone()).unwrap();
-        let png = super::super::input::paste::fixture_png();
-        let Loaded::Reference { reference, .. } =
-            load(paste_source(png.clone()).unwrap(), &workspace)
-                .await
-                .unwrap()
-        else {
-            panic!("PNG import must yield one image reference");
-        };
-        let path = reference
-            .strip_prefix("@\"")
-            .unwrap()
-            .strip_suffix('"')
-            .unwrap();
-        assert!(path.starts_with(".ssmcp/inputs/image-"));
-        assert!(path.ends_with(".png"));
-        assert_eq!(std::fs::read(temp.0.join(path)).unwrap(), png);
-        let reply = workspace
-            .perform("ssmcp.fs.read_image", json!({"path":path}))
-            .await
-            .unwrap();
-        assert_eq!(reply["structuredContent"]["mime_type"], "image/png");
-        assert_eq!(
-            reply["structuredContent"]["size"].as_u64(),
-            Some(png.len() as u64)
-        );
-        assert!(png.len() <= MAX_IMAGE_BYTES);
-        let block = reply["content"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|block| block["type"] == "image")
-            .unwrap();
-        assert_eq!(
-            STANDARD.decode(block["data"].as_str().unwrap()).unwrap(),
-            png
-        );
-
-        let invalid_root = temp.0.join("invalid");
-        std::fs::create_dir(&invalid_root).unwrap();
-        let invalid_workspace = Workspace::new(invalid_root.clone()).unwrap();
-        let invalid = paste_source(b"\x89PNG\r\n\x1a\n".to_vec()).unwrap();
-        assert!(load(invalid, &invalid_workspace).await.is_err());
-        assert!(!invalid_root.join(".ssmcp").exists());
+    #[test]
+    fn damaged_image_or_nul_paste_is_never_imported_as_text() {
+        for bytes in [
+            b"plain\0binary".as_slice(),
+            b"\xef\xbf\xbdPNG\r\n\x1a\n",
+            b"\xc2\x89PNG\r\n\x1a\n",
+            b"PNG damaged IHDR",
+            b"\xef\xbf\xbd\xef\xbf\xbd broken JFIF",
+            b"\xef\xbf\xbd\xef\xbf\xbd broken Exif",
+            b"RIFF damaged WEBP",
+        ] {
+            assert!(paste_source(bytes.to_vec()).is_err(), "{bytes:?}");
+        }
+        assert!(matches!(
+            paste_source("ordinary replacement � is valid text".as_bytes().to_vec()).unwrap(),
+            Source::Text(_)
+        ));
+        let png = png(1, 1);
+        for split in 0..=16 {
+            assert_eq!(paste_limit(&png[..split], &png[split..]), MAX_SOURCE_BYTES);
+        }
     }
 
     #[cfg(unix)]

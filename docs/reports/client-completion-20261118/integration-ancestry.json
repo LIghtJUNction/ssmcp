@@ -1,0 +1,12 @@
+{
+  "source_commit": "6ae8ab98f2804b0601827cdda99d2a8182958f05",
+  "integration_commit": "d4eed29657bda8ea5d2de2ac212df69c3fa51e21",
+  "tree_before_and_after": "16ad3c8529c69ad155bc7e200612d494a1df8529",
+  "adapted_heads": {
+    "fix/steering-reliability-20261118": "aa8b95d66655adfd4d97ac8191e2b935bcd57c44",
+    "feat/session-attachments-20261118": "8253343710373f6906d6b99423015553696fdaa1",
+    "feat/compact-tools-20261118": "c27502879a05c24e2e4495be45d9083548d2b32f"
+  },
+  "tree_unchanged_by_ancestry_merge": true,
+  "recorded_at": 1795010589.7181525
+}

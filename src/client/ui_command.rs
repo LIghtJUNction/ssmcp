@@ -203,25 +203,24 @@ async fn preview(ui: Ui, explicit: Option<&Path>) -> crate::Result<()> {
     else {
         return Err("interactive preview requires a foreground terminal with dashboard enabled and a pretty log format; use ssmcp ui preview --static for a single frame".into());
     };
-    let mut keyboard = Keyboard::open()?;
+    let mut keyboard = Keyboard::open(false)?;
     super::terminal::seed_preview();
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             event = keyboard.next() => match event? {
-                Event::Text(text) => {
-                    if text.contains('\u{3}') {
-                        break;
-                    }
-                    let _ = super::terminal::keyboard(&text);
+                Event::Bytes(bytes) | Event::PasteBytes(bytes) => {
+                    let _ = super::terminal::keyboard_bytes(&bytes);
                 }
+                Event::InputProgress(now) => super::terminal::paste_input_progress(now),
+                Event::PasteExpired => super::terminal::discard_image_paste(),
                 Event::Resize(rows, cols) => {
                     if rows > 0 && cols > 0 {
                         super::terminal::physical_resize(rows, cols);
                     }
                 }
-                Event::Detach | Event::End => break,
+                Event::Interrupt | Event::Detach | Event::End => break,
             },
             _ = tick.tick() => {
                 let _ = super::terminal::take_keyboard();

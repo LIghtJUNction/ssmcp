@@ -321,12 +321,12 @@ impl AuditView {
     /// Observed calls are display rows, not authenticated collaboration members.
     /// Keep equal names separate by their server-issued run IDs.
     pub(super) fn observed_controllers(&self) -> Vec<Value> {
-        let mut entries = self.entries.iter().collect::<Vec<_>>();
-        entries.sort_by_key(|entry| !entry.running);
+        let mut entries = self.entries.iter().enumerate().collect::<Vec<_>>();
+        entries.sort_by_key(|(_, entry)| !entry.running);
         entries
             .into_iter()
             .take(32)
-            .map(|entry| {
+            .map(|(order, entry)| {
                 let controller = entry.controller.as_ref();
                 let source = match controller.map(|controller| controller.source) {
                     Some(crate::wire::ControllerSource::CallerReported) => "caller-reported",
@@ -340,7 +340,7 @@ impl AuditView {
                     .find(|call| !call.finished)
                     .or_else(|| entry.calls.values().next_back());
                 json!({
-                    "kind":"observed","targetable":false,"run_id":entry.run_id,
+                    "kind":"observed","targetable":false,"run_id":entry.run_id,"order":order,
                     "name":controller.and_then(|controller|controller.name.as_deref()).unwrap_or("Unknown controller"),
                     "model":controller.and_then(|controller|controller.model.as_deref()).unwrap_or("Model unknown"),
                     "role":"observed call","status":entry.status(),"source":source,

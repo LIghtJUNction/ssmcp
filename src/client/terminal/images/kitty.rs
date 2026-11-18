@@ -4,7 +4,7 @@
 use super::super::super::ui::Ui;
 use crate::client::input::paste::{IMAGE_IDLE_TIMEOUT, PngFraming};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use image::{DynamicImage, ImageEncoder};
+use image::DynamicImage;
 use std::{
     fmt::Write as _,
     io::{self, Write},
@@ -16,12 +16,14 @@ use std::{
 };
 
 pub(crate) const CACHE_BYTES: usize = 12 * 1024 * 1024;
-const NATIVE_SIDE: u32 = 1024;
-const PNG_BYTES: usize = (NATIVE_SIDE * NATIVE_SIDE * 4) as usize + 64 * 1024;
+const FALLBACK_SIDE: u32 = 1024;
+// Keep the existing payload budget while retaining full-resolution images
+// whenever their lossless PNG fits. Screenshots usually compress well.
+const PNG_BYTES: usize = (FALLBACK_SIDE * FALLBACK_SIDE * 4) as usize + 64 * 1024;
 const QUERY_ID: u32 = u32::MAX;
 const IMAGE_PREFIX: u32 = 0x5353_0000;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-static NEXT_IMAGE: AtomicU32 = AtomicU32::new(IMAGE_PREFIX + 1);
+static NEXT_IMAGE: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) struct Native {
     pub(crate) id: u32,
@@ -46,34 +48,63 @@ impl Write for PngBuffer {
 
 impl Native {
     /// Called after the original image's dimension/output checks and outside
-    /// the display lock. Retain one static RGBA8 frame; never enlarge it.
+    /// the display lock. Try the original pixels first; a single bounded
+    /// fallback keeps noisy images from increasing the retained payload budget.
     pub(crate) fn prepare(decoded: &DynamicImage) -> Option<Arc<Self>> {
-        let pixels = decoded
-            .thumbnail(
-                NATIVE_SIDE.min(decoded.width()),
-                NATIVE_SIDE.min(decoded.height()),
-            )
-            .into_rgba8();
-        let (width, height) = pixels.dimensions();
-        let mut png = PngBuffer(Vec::new());
-        image::codecs::png::PngEncoder::new(&mut png)
-            .write_image(
-                pixels.as_raw(),
-                width,
-                height,
-                image::ExtendedColorType::Rgba8,
-            )
-            .ok()?;
-        let id = NEXT_IMAGE
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
-                id.checked_add(1).filter(|next| *next < QUERY_ID)
-            })
-            .ok()?;
+        let (width, height) = (decoded.width(), decoded.height());
+        if width == 0
+            || height == 0
+            || width > super::MAX_DIMENSION
+            || height > super::MAX_DIMENSION
+        {
+            return None;
+        }
+        if let Some(native) = Self::encode(decoded) {
+            return Some(native);
+        }
+        // Encoding failure never retries at the same resolution, and never
+        // enlarges small images. The decoded source is still owned by decode.
+        if width <= FALLBACK_SIDE && height <= FALLBACK_SIDE {
+            return None;
+        }
+        Self::encode(&decoded.thumbnail(FALLBACK_SIDE.min(width), FALLBACK_SIDE.min(height)))
+    }
+
+    fn encode(decoded: &DynamicImage) -> Option<Arc<Self>> {
+        // Ordinary screenshots and photographs can be encoded directly without
+        // a second full-size pixel allocation. Convert other formats once.
+        let converted;
+        let (pixels, color) = if let Some(pixels) = decoded.as_rgba8() {
+            (pixels.as_raw(), png::ColorType::Rgba)
+        } else if let Some(pixels) = decoded.as_rgb8() {
+            (pixels.as_raw(), png::ColorType::Rgb)
+        } else {
+            converted = decoded.to_rgba8();
+            (converted.as_raw(), png::ColorType::Rgba)
+        };
+        let (width, height) = (decoded.width(), decoded.height());
+        let mut buffer = PngBuffer(Vec::new());
+        // The image encoder's whole-image path buffers all compressed bytes
+        // before writing. Stream scanlines into our bounded sink instead, so
+        // an incompressible source stops as soon as the payload budget is hit.
+        let mut encoder = png::Encoder::new(&mut buffer, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_filter(png::Filter::Adaptive);
+        let mut writer = encoder.write_header().ok()?;
+        {
+            let mut stream = writer.stream_writer().ok()?;
+            stream.write_all(pixels).ok()?;
+            stream.finish().ok()?;
+        }
+        writer.finish().ok()?;
+        let id = IMAGE_PREFIX | (NEXT_IMAGE.fetch_add(1, Ordering::Relaxed) % 65535 + 1);
         Some(Arc::new(Self {
             id,
             width,
             height,
-            encoded: STANDARD.encode(png.0),
+            encoded: STANDARD.encode(buffer.0),
         }))
     }
 
@@ -81,8 +112,14 @@ impl Native {
         self.encoded.len()
     }
 
+    /// Fit only the available width. A tall image remains tall in the event
+    /// transcript; placement crops it to the viewport as the reader scrolls.
+    pub(crate) fn layout_width(&self, columns: u16, cell: CellSize) -> Option<ImageBox> {
+        self.layout(columns, u16::MAX, cell)
+    }
+
     pub(crate) fn layout(&self, columns: u16, rows: u16, cell: CellSize) -> Option<ImageBox> {
-        if columns == 0 || rows == 0 {
+        if columns == 0 || rows == 0 || cell.width == 0 || cell.height == 0 {
             return None;
         }
         let max_width = u32::from(columns) * u32::from(cell.width);
@@ -381,7 +418,9 @@ impl Graphics {
     }
 
     pub(crate) fn prepare_native(&self) -> bool {
-        self.enabled && !self.failed
+        // Avoid PNG encoding and cache allocation until the terminal has
+        // acknowledged graphics support and reported usable cell dimensions.
+        self.enabled && self.cell().is_some()
     }
 
     pub(crate) fn cell(&self) -> Option<CellSize> {
@@ -399,8 +438,12 @@ impl Graphics {
     }
 
     pub(crate) fn resized(&mut self) {
-        // Grid dimensions alone do not identify the current font's pixel size.
-        // Hide native placements until a fresh terminal measurement arrives.
+        // Once initial discovery succeeded, later resize measurements must not
+        // reuse its expired startup deadline. Until the new report arrives,
+        // hide native placements instead of using stale pixel dimensions.
+        if self.cell().is_some() {
+            self.started_at = None;
+        }
         self.cell = None;
         self.changed = true;
         if self.enabled && self.started && !self.failed && self.requests.len() < 256 {
@@ -417,6 +460,35 @@ impl Graphics {
                     .into_bytes();
             self.changed = true;
         }
+        if !self.failed
+            && self.cell().is_none()
+            && self
+                .started_at
+                .is_some_and(|at| now.saturating_duration_since(at) > PROBE_TIMEOUT)
+        {
+            self.failed = true;
+            self.changed = true;
+        }
+    }
+
+    /// Forward real outer input progress without extending deadlines on redraw.
+    pub(crate) fn paste_input_progress(&mut self, now: Instant) {
+        if self.pasting && self.paste_png.is_image_prefix() {
+            self.paste_last = Some(self.paste_last.map_or(now, |last| last.max(now)));
+        }
+    }
+
+    /// Clear only a timed-out image paste; keep unrelated terminal reports intact.
+    pub(crate) fn discard_image_paste(&mut self) -> bool {
+        if !self.pasting || !self.paste_png.is_image_prefix() {
+            return false;
+        }
+        self.pasting = false;
+        self.pending.clear();
+        self.pending_at = None;
+        self.paste_png = PngFraming::default();
+        self.paste_last = None;
+        true
     }
 
     /// Consume only terminal reports, leaving ordinary keys and bracketed paste
@@ -427,19 +499,14 @@ impl Graphics {
         }
         self.ready(now);
         if self.pasting
-            && self.paste_png.is_png()
-            && !self.paste_png.allows_end()
+            && self.paste_png.is_image_prefix()
             && self
                 .paste_last
                 .is_some_and(|last| now.saturating_duration_since(last) >= IMAGE_IDLE_TIMEOUT)
         {
             // Match the shared input/PNG collector's recovery boundary before
             // interpreting the next batch of actual user input.
-            self.pasting = false;
-            self.pending.clear();
-            self.pending_at = None;
-            self.paste_png = PngFraming::default();
-            self.paste_last = None;
+            self.discard_image_paste();
         }
         let mut output = Vec::with_capacity(bytes.len());
         for &byte in bytes {
@@ -469,6 +536,12 @@ impl Graphics {
                     output.extend_from_slice(&self.pending[..end]);
                     self.pending.drain(..end);
                 }
+                continue;
+            }
+            // Dashboard raw mode routes real Ctrl-C through Keyboard. Keep any
+            // pending APC intact so a delayed report tail cannot become draft text.
+            if byte == 0x03 {
+                output.push(byte);
                 continue;
             }
             if self.discard_apc {
@@ -561,11 +634,12 @@ impl Graphics {
                         && !self.failed
                     {
                         self.supported = status == "OK";
+                        self.failed = !self.supported;
                         self.changed = true;
                     }
                     return true;
                 }
-                if id.is_some_and(|id| (IMAGE_PREFIX + 1..QUERY_ID).contains(&id)) {
+                if id.is_some_and(|id| id & 0xffff_0000 == IMAGE_PREFIX) {
                     if status != "OK" {
                         self.failed = true;
                         self.changed = true;
@@ -620,6 +694,52 @@ mod tests {
             image::Rgba([30, 120, 210, 255]),
         ));
         Native::prepare(&image).unwrap()
+    }
+
+    #[test]
+    fn resize_hides_native_pixels_until_fresh_cell_dimensions_arrive() {
+        let now = Instant::now();
+        let mut graphics = probe();
+        let reply = format!("\x1b_Gi={QUERY_ID};OK\x1b\\\x1b[6;25;10t");
+        assert!(graphics.input(reply.as_bytes(), now, false).is_empty());
+        assert_eq!(
+            graphics.cell(),
+            Some(CellSize {
+                width: 10,
+                height: 25
+            })
+        );
+        graphics.take_requests();
+        graphics.take_changed();
+
+        graphics.resized();
+        assert!(graphics.take_changed());
+        assert_eq!(graphics.take_requests(), b"\x1b[16t");
+        assert_eq!(
+            graphics.cell(),
+            None,
+            "old font geometry must not place an image"
+        );
+        assert!(!graphics.prepare_native());
+        let later = now + PROBE_TIMEOUT + Duration::from_secs(1);
+        assert_eq!(graphics.input(b"draft", later, true), b"draft");
+        assert_eq!(
+            graphics.cell(),
+            None,
+            "a missing measurement keeps the fallback"
+        );
+        assert!(graphics.input(b"\x1b[6;0;0t", later, false).is_empty());
+        assert_eq!(graphics.cell(), None);
+        assert!(graphics.input(b"\x1b[6;12;6t", later, false).is_empty());
+        assert_eq!(
+            graphics.cell(),
+            Some(CellSize {
+                width: 6,
+                height: 12
+            })
+        );
+        assert!(graphics.take_changed());
+        assert!(graphics.prepare_native());
     }
 
     #[test]
@@ -693,12 +813,94 @@ mod tests {
             })
         );
         assert_eq!(graphics.input(b"draft", now, false), b"draft");
+
+        let oversized = format!("\x1b_Gi={QUERY_ID};{}", "x".repeat(300));
+        assert!(graphics.input(oversized.as_bytes(), now, false).is_empty());
+        assert!(graphics.discard_apc && graphics.pending.len() <= 1);
+        assert!(
+            !graphics.discard_image_paste(),
+            "image paste recovery cannot erase an unrelated pending APC"
+        );
+        assert!(
+            graphics
+                .input(b"", now + Duration::from_millis(150), true)
+                .is_empty()
+        );
+        assert_eq!(
+            graphics.input(b"\x1b\\next draft", now + Duration::from_millis(151), false),
+            b"next draft"
+        );
+        assert!(!graphics.discard_apc);
+    }
+
+    #[test]
+    fn real_interrupt_passes_through_buffered_and_discarded_apc_without_leaking_tails() {
+        let now = Instant::now();
+        for discard in [false, true] {
+            let mut graphics = probe();
+            let prefix = format!(
+                "\x1b_Gi={QUERY_ID};{}",
+                if discard {
+                    "x".repeat(300)
+                } else {
+                    String::new()
+                }
+            );
+            assert!(graphics.input(prefix.as_bytes(), now, false).is_empty());
+            assert_eq!(graphics.discard_apc, discard);
+            let pending = graphics.pending.clone();
+            assert_eq!(
+                graphics.input(b"\x03", now + Duration::from_millis(150), false),
+                b"\x03",
+                "real Ctrl-C must reach Keyboard even before a terminal report ends"
+            );
+            assert_eq!(graphics.discard_apc, discard);
+            assert_eq!(graphics.pending, pending);
+            assert_eq!(
+                graphics.input(
+                    b"OK\x1b\\next draft",
+                    now + Duration::from_millis(151),
+                    false
+                ),
+                b"next draft",
+                "the APC tail stays out of the draft after passing through Ctrl-C"
+            );
+            assert!(!graphics.discard_apc && graphics.pending.is_empty());
+        }
+    }
+
+    #[test]
+    fn only_raw_image_paste_progress_extends_the_idle_deadline() {
+        let now = Instant::now();
+        let mut graphics = probe();
+        assert_eq!(
+            graphics.input(b"\x1b[200~\x89P", now, false),
+            b"\x1b[200~\x89P"
+        );
+        let progress = now + Duration::from_secs(1);
+        graphics.paste_input_progress(progress);
+        graphics.paste_input_progress(now + Duration::from_millis(500));
+        assert_eq!(graphics.paste_last, Some(progress), "progress is monotonic");
+        assert!(
+            graphics
+                .input(b"", now + Duration::from_millis(2500), true)
+                .is_empty()
+        );
+        assert!(graphics.pasting);
+        assert_eq!(graphics.paste_last, Some(progress), "ticks are not input");
+        assert!(
+            graphics
+                .input(b"", progress + IMAGE_IDLE_TIMEOUT, true)
+                .is_empty()
+        );
+        assert!(!graphics.pasting);
     }
 
     #[test]
     fn binary_bracketed_paste_is_opaque_to_graphics_reports() {
         let now = Instant::now();
         let payload = crate::client::input::paste::fixture_png();
+        assert!(payload.contains(&0x03), "PNG control bytes stay literal");
         image::load_from_memory_with_format(&payload, image::ImageFormat::Png).unwrap();
         let embedded_end = payload
             .windows(6)
@@ -734,71 +936,68 @@ mod tests {
             !graphics.pasting,
             "incomplete PNG timeout recovers before new input"
         );
-    }
-
-    #[test]
-    fn resize_hides_native_pixels_until_fresh_cell_dimensions_arrive() {
-        let now = Instant::now();
-        let mut graphics = probe();
-        let reply = format!("\x1b_Gi={QUERY_ID};OK\x1b\\\x1b[6;25;10t");
-        assert!(graphics.input(reply.as_bytes(), now, false).is_empty());
-        assert_eq!(
-            graphics.cell(),
-            Some(CellSize {
-                width: 10,
-                height: 25
-            })
-        );
-        graphics.take_requests();
-        graphics.take_changed();
-
-        graphics.resized();
-        assert!(graphics.take_changed());
-        assert_eq!(graphics.take_requests(), b"\x1b[16t");
-        assert_eq!(
-            graphics.cell(),
-            None,
-            "old font geometry must not place an image"
-        );
-        let later = now + PROBE_TIMEOUT + Duration::from_secs(1);
-        assert_eq!(graphics.input(b"draft", later, true), b"draft");
-        assert_eq!(
-            graphics.cell(),
-            None,
-            "a missing measurement keeps the fallback"
-        );
-        assert!(graphics.input(b"\x1b[6;0;0t", later, false).is_empty());
-        assert_eq!(graphics.cell(), None);
-        assert!(graphics.input(b"\x1b[6;12;6t", later, false).is_empty());
-        assert_eq!(
-            graphics.cell(),
-            Some(CellSize {
-                width: 6,
-                height: 12
-            })
-        );
-        assert!(graphics.take_changed());
+        for bytes in [b"\x89P".as_slice(), payload.as_slice()] {
+            let mut graphics = probe();
+            assert_eq!(graphics.input(b"\x1b[200~", now, false), b"\x1b[200~");
+            assert_eq!(graphics.input(bytes, now, false), bytes);
+            assert!(graphics.pasting && graphics.paste_png.is_image_prefix());
+            assert!(
+                graphics
+                    .input(b"", now + IMAGE_IDLE_TIMEOUT, true)
+                    .is_empty()
+            );
+            assert!(
+                !graphics.pasting,
+                "partial signature and complete PNG without outer End share the same idle recovery"
+            );
+            assert_eq!(
+                graphics.input(b"next draft", now + IMAGE_IDLE_TIMEOUT, false),
+                b"next draft"
+            );
+        }
     }
 
     #[test]
     fn timeout_and_native_errors_keep_the_fallback_available() {
         let now = Instant::now();
         let mut graphics = probe();
-        let _ = graphics.input(b"", now, true);
+        graphics.input(b"", now, true);
+        assert!(
+            !graphics.prepare_native(),
+            "unanswered probes must not allocate native images"
+        );
         let response = format!("\x1b_Gi={QUERY_ID};OK\x1b\\\x1b[6;16;8t");
+        let expired = now + PROBE_TIMEOUT + Duration::from_millis(1);
+        assert!(graphics.input(b"", expired, true).is_empty());
+        assert!(
+            graphics.failed,
+            "a silent terminal must stop native preparation after timeout"
+        );
+        assert!(!graphics.prepare_native());
         assert!(
             graphics
-                .input(
-                    response.as_bytes(),
-                    now + PROBE_TIMEOUT + Duration::from_millis(1),
-                    false
-                )
+                .input(response.as_bytes(), expired, false)
                 .is_empty()
         );
-        assert_eq!(graphics.cell(), None);
+        assert_eq!(
+            graphics.cell(),
+            None,
+            "late reports cannot revive an expired probe"
+        );
+        assert!(!graphics.prepare_native());
+        let paste = b"\x1b[200~\x89PNG\r\n\x1a\n\x00\x03\xff\x1b[18~\x1b[201~";
+        assert_eq!(graphics.input(paste, expired, false), paste);
+        assert_eq!(
+            graphics.input(b"user\x1b[Dinput", expired, false),
+            b"user\x1b[Dinput"
+        );
         let mut graphics = probe();
-        let _ = graphics.input(response.as_bytes(), now, false);
+        graphics.input(response.as_bytes(), now, false);
         assert!(graphics.cell().is_some());
+        assert!(
+            graphics.prepare_native(),
+            "only acknowledged support enables native encoding"
+        );
         assert!(
             graphics
                 .input(
@@ -887,54 +1086,12 @@ mod tests {
     }
 
     #[test]
-    fn multi_chunk_direct_transport_preserves_png_bytes_and_final_marker() {
-        let pixels = image::RgbaImage::from_fn(128, 128, |x, y| {
-            let mut value = x + y * 128 + 1;
-            value ^= value << 13;
-            value ^= value >> 17;
-            value ^= value << 5;
-            image::Rgba([value as u8, (value >> 8) as u8, (value >> 16) as u8, 255])
-        });
-        let expected = *pixels.get_pixel(71, 89);
-        let native = Native::prepare(&DynamicImage::ImageRgba8(pixels)).unwrap();
-        let mut wire = String::new();
-        native.upload(&mut wire);
-        let chunks = wire.split("\x1b_G").skip(1).collect::<Vec<_>>();
-        assert!(chunks.len() > 1);
-        let mut encoded = String::new();
-        for (index, chunk) in chunks.iter().enumerate() {
-            let (header, payload) = chunk
-                .strip_suffix("\x1b\\")
-                .unwrap()
-                .split_once(';')
-                .unwrap();
-            assert!(payload.len() <= 4096 && payload.len() % 4 == 0);
-            assert!(header.contains(if index + 1 == chunks.len() {
-                "m=0"
-            } else {
-                "m=1"
-            }));
-            if index != 0 {
-                assert!(!header.contains("a="));
-            }
-            encoded.push_str(payload);
-        }
-        assert_eq!(encoded, native.encoded);
-        let decoded = image::load_from_memory(&STANDARD.decode(encoded).unwrap())
-            .unwrap()
-            .into_rgba8();
-        assert_eq!(*decoded.get_pixel(71, 89), expected);
-    }
-
-    #[test]
     fn native_png_is_bounded_and_protocol_chunks_decode_to_the_same_pixels() {
-        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-            2048,
-            1024,
-            image::Rgba([10, 40, 90, 200]),
-        ));
+        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(2048, 1024, |x, y| {
+            image::Rgba([if x % 2 == 0 { 10 } else { 240 }, (y % 256) as u8, 90, 200])
+        }));
         let native = Native::prepare(&source).unwrap();
-        assert_eq!((native.width, native.height), (1024, 512));
+        assert_eq!((native.width, native.height), (2048, 1024));
         assert!(native.bytes() <= PNG_BYTES.div_ceil(3) * 4);
         let mut wire = String::new();
         native.upload(&mut wire);
@@ -958,8 +1115,11 @@ mod tests {
         let decoded = image::load_from_memory(&STANDARD.decode(encoded).unwrap())
             .unwrap()
             .into_rgba8();
-        assert_eq!(decoded.dimensions(), (1024, 512));
-        assert_eq!(decoded.get_pixel(0, 0).0, [10, 40, 90, 200]);
+        assert_eq!(decoded.dimensions(), (2048, 1024));
+        assert!(
+            decoded.as_raw() == source.as_rgba8().unwrap().as_raw(),
+            "one-pixel details must survive native preparation and protocol transmission"
+        );
         let tiny = Native::prepare(&DynamicImage::ImageRgba8(image::RgbaImage::new(2, 2))).unwrap();
         let area = tiny
             .layout(
@@ -979,5 +1139,56 @@ mod tests {
             !wire.contains(",c="),
             "tiny native images keep their actual pixel size"
         );
+    }
+
+    #[test]
+    fn noisy_native_images_fall_back_without_increasing_the_payload_budget() {
+        let mut state = 0x3141_5926u32;
+        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1200, 1000, |_, _| {
+            image::Rgba(std::array::from_fn(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            }))
+        }));
+        assert!(Native::encode(&source).is_none());
+        let native = Native::prepare(&source).unwrap();
+        assert!(native.width <= FALLBACK_SIDE && native.height <= FALLBACK_SIDE);
+        assert!(native.width < source.width() && native.height < source.height());
+        let png = STANDARD.decode(&native.encoded).unwrap();
+        assert!(png.len() <= PNG_BYTES);
+        assert!(native.bytes() <= PNG_BYTES.div_ceil(3) * 4);
+        assert_eq!(
+            image::load_from_memory(&png)
+                .unwrap()
+                .into_rgba8()
+                .dimensions(),
+            (native.width, native.height)
+        );
+    }
+
+    #[test]
+    fn width_fitted_tall_images_scroll_at_a_constant_scale() {
+        let source = DynamicImage::ImageRgba8(image::RgbaImage::new(1200, 2400));
+        let image = Native::prepare(&source).unwrap();
+        let bounds = image
+            .layout_width(
+                60,
+                CellSize {
+                    width: 10,
+                    height: 20,
+                },
+            )
+            .unwrap();
+        assert_eq!((bounds.columns, bounds.rows), (60, 60));
+        let first = bounds.placement(image.clone(), 4, 2, 0, 20).unwrap();
+        let next = bounds.placement(image, 4, 2, 10, 20).unwrap();
+        assert_eq!((first.rect.y, first.rect.height), (0, 800));
+        assert_eq!((next.rect.y, next.rect.height), (400, 800));
+        let mut wire = String::new();
+        next.display(&mut wire);
+        assert!(wire.contains(",c=60"));
+        assert!(!wire.contains(",r="));
     }
 }

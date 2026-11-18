@@ -26,7 +26,7 @@
   </section>
 
   <section id="start" aria-labelledby="start-title">
-    <div class="section-heading"><p class="eyebrow">01 / 开始</p><h2 id="start-title">完成连接，再选择需要的工具。</h2></div>
+    <div class="section-heading"><p class="eyebrow">01 / 开始</p><h2 id="start-title">连接电脑，选择工具。</h2></div>
     <ol class="steps">
       <li><h3>安装客户端。</h3><p>从 <a href="https://github.com/LIghtJUNction/ssmcp/releases">GitHub Releases</a> 获取适合系统的客户端，然后在需要处理的项目目录里打开终端。</p></li>
       <li><h3>连接这台电脑。</h3><p>在<a href="/">网关账户页面</a>选择账户名，再运行下面的命令。出现授权提示时，按流程使用 GitHub 登录。</p><pre><code>ssmcp yourname@{{gateway_authority}}</code></pre><p class="note">把 <code>yourname</code> 换成你的账户名。之后直接运行 <code>ssmcp</code>，可以复用上次已授权的账户。</p></li>
@@ -34,8 +34,18 @@
     </ol>
   </section>
 
+  <section id="devices" aria-labelledby="devices-title">
+    <div class="section-heading"><p class="eyebrow">02 / 设备与桌面</p><h2 id="devices-title">让另一台设备临时接入。</h2></div>
+    <div class="scenarios">
+      <article><h3>生成设备邀请。</h3><p>在已经登录的电脑上运行 <code>ssmcp invite</code>，把生成的完整命令复制到另一台设备。命令从同一网关下载并校验客户端，安装到用户目录后，启动临时连接。</p><pre><code>ssmcp invite
+ssmcp invite --shell powershell</code></pre><p>邀请只能兑换一次，通常在 10 分钟后失效；兑换后的连接最多使用 1 小时，并受原授权剩余期限约束。结束被控设备上的进程即可停止该会话。已安装兼容客户端时，可加上 <code>--no-bootstrap</code>。</p><details><summary>从已授权的 MCP 应用发出邀请</summary><p>让已连接的应用调用公共 <code>invite</code> 工具。它使用应用当前的授权，无需先取得在线客户端 ID。目标是 Windows 时，把 <code>shell</code> 改为 <code>powershell</code>。</p><pre><code>{"ttl_secs": 600, "session_ttl_secs": 3600, "shell": "sh"}</code></pre></details></article>
+      <article><h3>在私有桌面里操作应用。</h3><p>桌面观察和输入默认使用当前连接的私有显示。在 Linux 上，启动已安装的应用时会按需创建这个显示；你正在使用的桌面保留鼠标位置和焦点。</p><pre><code>在私有桌面打开编辑器。
+检查文档，并截图展示结果。</code></pre><p class="note">私有桌面需要 Linux、Xvfb 以及状态工具列出的辅助程序。其他平台会报告缺少的支持；只有调用者明确选择 <code>desktop: "host"</code>，才会操作日常桌面。浏览器页面控制是独立入口。</p></article>
+    </div>
+  </section>
+
   <section id="basics" aria-labelledby="basics-title">
-    <div class="section-heading"><p class="eyebrow">02 / 日常输入</p><h2 id="basics-title">写下需求，附上必要的上下文。</h2></div>
+    <div class="section-heading"><p class="eyebrow">03 / 日常输入</p><h2 id="basics-title">写下需求，附上上下文。</h2></div>
     <p>按 Enter 后，请求进入队列，交给选中的成员或下一次符合条件的 Agent 交互。工作继续执行时，你可以接着写下一条草稿。保持 AI 对话在工作，让 Agent 有机会接收排队的输入。</p>
     <div class="table-wrap"><table><thead><tr><th scope="col">输入</th><th scope="col">作用</th></tr></thead><tbody>
       <tr><td><code>@src/main.rs</code></td><td>引用工作区文件。路径有空格时使用 <code>@"文档/使用 说明.md"</code>。</td></tr>
@@ -50,7 +60,7 @@
   </section>
 
   <section id="scenarios" aria-labelledby="scenarios-title">
-    <div class="section-heading"><p class="eyebrow">03 / 使用场景</p><h2 id="scenarios-title">从一个明确的结果开始。</h2></div>
+    <div class="section-heading"><p class="eyebrow">04 / 使用场景</p><h2 id="scenarios-title">从一个明确的结果开始。</h2></div>
     <div class="scenarios">
       <article><h3>修改项目</h3><p>提供相关文件和具体目标，让 Agent 检查改动、运行相关验证，并解释结果。</p><pre><code>@src/main.rs 修复已报告的错误。
 运行相关测试，并展示 diff。</code></pre></article>
@@ -67,7 +77,7 @@
   </section>
 
   <section id="tools" aria-labelledby="tools-title">
-    <div class="section-heading"><p class="eyebrow">04 / 工具调用</p><h2 id="tools-title">以当前客户端的接口为准。</h2></div>
+    <div class="section-heading"><p class="eyebrow">05 / 工具调用</p><h2 id="tools-title">以当前客户端的接口为准。</h2></div>
     <p>先用 <code>list</code> 获取选中客户端的 ID。在 code_mode 中查询它实际注册的工具，读取返回的 schema，再发起调用。已安装 harness 的原始参数与审批规则保持有效。</p>
     <pre><code>const clientId = "ID_FROM_LIST";
 return await tools.search(clientId, {

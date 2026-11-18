@@ -22,6 +22,12 @@ pub(crate) struct PngFraming {
 }
 
 impl PngFraming {
+    /// A leading raw PNG byte is not valid UTF-8 text. Recover even when the
+    /// following signature bytes are truncated or damaged.
+    pub(crate) fn is_image_prefix(&self) -> bool {
+        self.prefix > 0
+    }
+
     pub(crate) fn is_png(&self) -> bool {
         !self.other && self.prefix == SIGNATURE.len()
     }
@@ -95,7 +101,7 @@ pub(crate) fn fixture_png() -> Vec<u8> {
     let mut png = cursor.into_inner();
     // A valid private ancillary chunk with bytes that must never become keys.
     let payload =
-        b"\0\x03\x11\x13\x1a\xff\x80\r\n\x1b[200~\x1b[201~\x1b[18~\x1b[15~\x1b_Gi=1;OK\x1b\\";
+        b"\0\x03\x1d\x11\x13\x1a\xff\x80\r\n\x1b[200~\x1b[201~\x1b[18~\x1b[15~\x1b_Gi=1;OK\x1b\\";
     let mut chunk = (payload.len() as u32).to_be_bytes().to_vec();
     chunk.extend_from_slice(b"ssMc");
     chunk.extend_from_slice(payload);

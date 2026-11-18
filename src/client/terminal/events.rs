@@ -4,14 +4,12 @@ use super::{super::ui::Ui, images};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+mod correlation;
+use correlation::{Meta, Status};
 
-mod activity;
-
-const MAX_TOOL_BYTES: usize = 8 * 1024;
 const MAX_EVENTS: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
-const LONG_LINES: usize = 6;
-const LONG_BYTES: usize = 640;
+const MAX_DETAIL: usize = 128 * 1024;
 
 struct Event {
     id: u64,
@@ -21,10 +19,42 @@ struct Event {
     expanded: bool,
     truncated: bool,
     tone: &'static str,
-    cache: Option<(usize, bool, Vec<String>)>,
+    cache: Option<(usize, String, Vec<String>)>,
+    meta: Meta,
     image: Option<images::Preview>,
-    activity: Option<activity::Activity>,
     diagnostic: Option<(u64, u64)>,
+}
+
+impl Event {
+    fn append(&mut self, text: String, truncated: bool) {
+        if !text.is_empty() {
+            self.text.push_str(&text);
+            let (retained, trimmed) = retained_text(self.text.as_bytes());
+            self.text = retained;
+            self.truncated |= trimmed;
+            self.lines = unstyled(&self.text).lines().count().max(1);
+        }
+        self.truncated |= truncated;
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.text.len() + self.summary.len() + self.meta.bytes()
+    }
+
+    fn matches(&self, query: &str, level: u8) -> bool {
+        (level != 1 || self.meta.command || self.summary.starts_with("[RUN"))
+            && (level != 2 || self.meta.status.is_some_and(Status::failed) || self.tone == "error")
+            && (query.is_empty()
+                || self.summary.to_lowercase().contains(query)
+                || self.text.to_lowercase().contains(query))
+    }
+
+    fn summary_with_status(&self) -> String {
+        match self.meta.status {
+            Some(status) => format!("{} [{}]", self.summary, status.label()),
+            None => self.summary.clone(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -42,6 +72,9 @@ pub(crate) struct EventView {
     page_rows: usize,
     image_cells: Option<images::CellSize>,
     placements: Vec<images::Placement>,
+    new_image: Option<u64>,
+    query: String,
+    level: u8,
 }
 
 impl EventView {
@@ -57,93 +90,27 @@ impl EventView {
     }
 
     pub(crate) fn ingest(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
-        }
-        let (text, truncated) = retained_text(bytes);
-        let plain = unstyled(&text);
-        let Some(first) = plain.lines().find(|line| !line.trim().is_empty()) else {
-            return;
-        };
-        let first = first.trim();
-        let conversation = ["[USER]", "[AGENT]", "[ANSWER]", "[IMAGE]"]
-            .iter()
-            .any(|prefix| first.starts_with(prefix));
-        let tone = if first.starts_with("[ERR") {
-            "error"
-        } else if first.starts_with("[WARN") || first.starts_with("[STDERR") {
-            "warning"
-        } else if first.starts_with("[OK") {
-            "success"
-        } else if conversation || first.starts_with("[RUN") || first.starts_with("[REQ") {
-            "accent"
-        } else {
-            "foreground"
-        };
-        let summary = super::super::panel::fit(first, 200);
-        let lines = plain.lines().count().max(1);
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
-        let at_end = self.events.is_empty() || self.follow;
-        self.bytes += text.len();
-        self.events.push_back(Event {
-            id,
-            text,
-            summary,
-            lines,
-            expanded: conversation || (lines <= LONG_LINES && plain.len() <= LONG_BYTES),
-            truncated,
-            tone,
-            cache: None,
-            image: None,
-            activity: None,
-            diagnostic: None,
-        });
-        self.prune();
-        if at_end {
-            self.selected = Some(id);
-            self.follow = true;
-        } else if !self
-            .events
-            .iter()
-            .any(|event| Some(event.id) == self.selected)
-        {
-            self.selected = self.events.front().map(|event| event.id);
-            self.reveal = true;
-        }
+        self.ingest_inner(bytes, Meta::default());
     }
 
-    /// An explicit verbose/raw request expands the retained event body.
-    pub(crate) fn ingest_expanded(&mut self, bytes: &[u8]) {
-        let previous = self.next_id;
-        self.ingest(bytes);
-        if self.next_id != previous
-            && let Some(event) = self.events.back_mut()
-        {
-            event.expanded = true;
-        }
-    }
-
-    /// One card per renderer-issued diagnostic ID, including across interleaved
-    /// backends. Clear/eviction drops only the preview: the next update recreates it.
+    /// Keep one bounded warning card per renderer diagnostic. Repeated updates
+    /// preserve its position, expansion and the reader's current viewport.
     pub(crate) fn ingest_diagnostic(
         &mut self,
         update: &super::super::render::DiagnosticUpdate,
     ) -> bool {
-        let (text, truncated) = retained_text_limit(update.text().as_bytes(), MAX_TOOL_BYTES);
+        let (text, truncated) = retained_text(update.text().as_bytes());
         let inserted = if let Some(event) = self
             .events
             .iter_mut()
             .find(|event| event.diagnostic.is_some_and(|(id, _)| id == update.id))
         {
-            self.bytes -= event.text.len();
             event.text = text;
             event.summary = super::super::panel::fit(&update.heading(), 200);
             event.lines = unstyled(&event.text).lines().count().max(1);
             event.truncated = truncated;
             event.cache = None;
             event.diagnostic = Some((update.id, update.occurrences));
-            self.bytes += event.text.len();
             false
         } else {
             self.ingest(text.as_bytes());
@@ -157,81 +124,222 @@ impl EventView {
             true
         };
         self.prune();
+        if !self
+            .events
+            .iter()
+            .any(|event| Some(event.id) == self.selected)
+        {
+            self.selected = self
+                .events
+                .iter()
+                .find(|event| event.matches(&self.query, self.level))
+                .map(|event| event.id);
+            self.reveal = true;
+        }
         inserted
     }
 
-    /// Fold tool activity in this same bounded store; notices/images still append.
-    pub(crate) fn ingest_event(&mut self, label: &str, value: &Value, bytes: &[u8]) {
-        if activity::duplicate_correlation(value) {
+    /// Correlate only registered event identities. Text is never an identity.
+    pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
+        self.ingest_inner(bytes, Meta::from_event(label, event));
+    }
+
+    fn ingest_inner(&mut self, bytes: &[u8], mut meta: Meta) {
+        if meta.skip {
             return;
         }
-        let (text, truncated) = retained_text_limit(bytes, MAX_TOOL_BYTES);
-        let plain = unstyled(&text);
-        let first = plain
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("")
-            .trim();
-        if ["[USER]", "[AGENT]", "[ANSWER]", "[IMAGE]"]
-            .iter()
-            .any(|p| first.starts_with(p))
-        {
-            self.ingest(bytes);
-            return;
-        }
-        let next = activity::metadata(label, value);
-        let old = self.events.iter().rposition(|event| {
-            event.activity.as_ref().is_some_and(|old| {
-                old.matches(&next) && (!next.started || old.status == activity::Status::Running)
-            })
-        });
-        if let Some(index) = old {
-            let event = &mut self.events[index];
-            self.bytes -= event.text.len();
-            let mut combined = std::mem::take(&mut event.text);
-            combined.push_str(&text);
-            let (text, trimmed) = retained_text_limit(combined.as_bytes(), MAX_TOOL_BYTES);
-            event.text = text;
-            event.lines = unstyled(&event.text).lines().count().max(1);
-            event.truncated |= truncated || trimmed;
-            event.cache = None;
-            let metadata = event.activity.as_mut().unwrap();
-            metadata.update(next);
-            event.expanded |= metadata.diff;
-            event.tone = activity_tone(metadata, event.tone);
-            self.bytes += event.text.len();
-            self.prune();
-        } else if !first.is_empty() {
-            let previous = self.next_id;
-            self.ingest(text.as_bytes());
-            if self.next_id == previous {
-                return;
+        let mut matches = Vec::new();
+        for key in &meta.keys {
+            if let Some((index, _)) = self.events.iter().enumerate().rev().find(|(_, event)| {
+                event.meta.keys.contains(key)
+                    && (!meta.started
+                        || event
+                            .meta
+                            .status
+                            .is_none_or(|status| status == Status::Running))
+            }) && !matches.contains(&index)
+            {
+                matches.push(index);
             }
-            if let Some(event) = self.events.back_mut() {
-                event.expanded = next.diff;
-                event.truncated |= truncated;
-                event.tone = activity_tone(&next, event.tone);
-                event.activity = Some(next);
+        }
+        matches.sort_unstable();
+        let (text, truncated) = retained_text(bytes);
+        let plain = unstyled(&text);
+        let first = plain.lines().map(heading).find(|line| !line.is_empty());
+        if first.is_none() && matches.is_empty() {
+            return; // Empty stream chunks must not become separate UI cards.
+        }
+        let first = first.unwrap_or("");
+        let conversation = [
+            "[USER]",
+            "[AGENT]",
+            "[UPDATE]",
+            "[ANSWER]",
+            "[IMAGE]",
+            "[CONTEXT]",
+        ]
+        .iter()
+        .any(|prefix| first.starts_with(prefix));
+        let error = plain
+            .lines()
+            .map(heading)
+            .find(|line| line.starts_with("[ERR"));
+        let warning = plain
+            .lines()
+            .map(heading)
+            .find(|line| line.starts_with("[WARN") || line.starts_with("[STDERR"));
+        let attention = error.or(warning);
+        meta.diff |= first.starts_with("[DIFF]") || first.starts_with("diff --git ");
+        if meta.language.is_empty() {
+            meta.language = first
+                .split_whitespace()
+                .find_map(|part| {
+                    let language = correlation::language_for_path(part);
+                    (!language.is_empty()).then_some(language)
+                })
+                .unwrap_or("");
+        }
+        let tone = if error.is_some() {
+            "error"
+        } else if attention.is_some() {
+            "warning"
+        } else if first.starts_with("[OK") {
+            "success"
+        } else if first.starts_with("[READ") || first.starts_with("[WRITE") {
+            "blue"
+        } else if first.starts_with("[REQ") || first.starts_with("[RES") {
+            "purple"
+        } else if conversation || first.starts_with("[RUN") {
+            "accent"
+        } else {
+            "foreground"
+        };
+        // Ordinary short log lines keep their original styled body visible.
+        // Compact defaults apply to tool events, whose heading carries meaning.
+        let short_log = meta.keys.is_empty()
+            && !meta.command
+            && !first.starts_with('[')
+            && plain.lines().count() <= 6
+            && text.len() <= 640;
+        let expanded = conversation
+            || short_log
+            || attention.is_some()
+            || meta.diff
+            || meta.status.is_some_and(Status::failed);
+        let follow = self.follow || self.events.is_empty();
+        if let Some(&index) = matches.first() {
+            // A response can join a request row and its native job row. Keep
+            // their earliest position and both retained bodies, once.
+            for &other in matches.iter().skip(1).rev() {
+                if let Some(previous) = self.events.remove(other) {
+                    if self.selected == Some(previous.id) {
+                        self.selected = Some(self.events[index].id);
+                    }
+                    if previous.summary.starts_with("[RUN")
+                        && !self.events[index].summary.starts_with("[RUN")
+                    {
+                        self.events[index].summary = previous.summary;
+                    }
+                    self.events[index].expanded |= previous.expanded;
+                    self.events[index].append(previous.text, previous.truncated);
+                    self.events[index].meta.merge(previous.meta);
+                }
+            }
+            let event = &mut self.events[index];
+            event.append(text, truncated);
+            event.meta.merge(meta);
+            event.expanded |= expanded;
+            event.cache = None;
+        } else {
+            let id = self.next_id;
+            self.next_id = self.next_id.wrapping_add(1);
+            let summary = event_summary(
+                &plain,
+                if conversation {
+                    first
+                } else {
+                    attention.unwrap_or(first)
+                },
+            );
+            let lines = plain.lines().count().max(1);
+            self.events.push_back(Event {
+                id,
+                text,
+                summary,
+                lines,
+                expanded,
+                truncated,
+                tone,
+                meta,
+                cache: None,
+                image: None,
+                diagnostic: None,
+            });
+        }
+        self.prune();
+        if follow {
+            self.selected = self
+                .events
+                .iter()
+                .rev()
+                .find(|event| event.matches(&self.query, self.level))
+                .map(|event| event.id);
+            self.follow = true;
+        } else if !self
+            .events
+            .iter()
+            .any(|event| Some(event.id) == self.selected)
+        {
+            self.selected = self
+                .events
+                .iter()
+                .find(|event| event.matches(&self.query, self.level))
+                .map(|event| event.id);
+            self.reveal = true;
+        }
+        // Updating a correlated row does not move a reader away from their viewport.
+    }
+
+    fn prune(&mut self) {
+        self.bytes = self.events.iter().map(Event::retained_bytes).sum();
+        while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
+            if let Some(event) = self.events.pop_front() {
+                self.bytes -= event.retained_bytes();
+                self.dropped = self.dropped.saturating_add(1);
             }
         }
     }
 
-    fn prune(&mut self) {
-        while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
-            if let Some(event) = self.events.pop_front() {
-                self.bytes -= event.text.len();
-                self.dropped = self.dropped.saturating_add(1);
-            }
+    pub(crate) fn filter(&mut self, query: &str, level: u8) {
+        let query = query.to_lowercase();
+        if self.query == query && self.level == level {
+            return;
         }
-        if self.selected.is_some()
-            && !self
+        self.query = query;
+        self.level = level;
+        self.new_image = None;
+        if !self
+            .events
+            .iter()
+            .any(|event| Some(event.id) == self.selected && event.matches(&self.query, self.level))
+        {
+            self.selected = self
                 .events
                 .iter()
-                .any(|event| Some(event.id) == self.selected)
-        {
-            self.selected = self.events.front().map(|event| event.id);
-            self.reveal = !self.follow;
+                .find(|event| event.matches(&self.query, self.level))
+                .map(|event| event.id);
         }
+        self.reveal = true;
+    }
+
+    pub(crate) fn rows_below(&self) -> usize {
+        self.total_rows
+            .saturating_sub(self.page_rows)
+            .saturating_sub(self.scroll)
+    }
+
+    pub(crate) fn is_following(&self) -> bool {
+        self.follow
     }
 
     /// Attach only a decoded image from the native result path. Text containing
@@ -239,6 +347,9 @@ impl EventView {
     pub(crate) fn attach_image(&mut self, preview: images::Preview) {
         if let Some(event) = self.events.back_mut() {
             event.image = Some(preview);
+            if self.follow {
+                self.new_image.get_or_insert(event.id);
+            }
         }
         let mut bytes = self.image_bytes();
         for event in &mut self.events {
@@ -278,50 +389,60 @@ impl EventView {
 
     /// Negative selects an earlier event; positive selects a later event.
     pub(crate) fn select(&mut self, delta: isize) {
-        if self.events.is_empty() {
-            return;
-        }
-        let current = self
+        self.new_image = None;
+        let visible = self
             .events
             .iter()
-            .position(|event| Some(event.id) == self.selected)
-            .unwrap_or(self.events.len() - 1);
-        let next = current
-            .saturating_add_signed(delta)
-            .min(self.events.len() - 1);
-        self.selected = Some(self.events[next].id);
+            .filter(|event| event.matches(&self.query, self.level))
+            .map(|event| event.id)
+            .collect::<Vec<_>>();
+        if visible.is_empty() {
+            return;
+        }
+        let current = visible
+            .iter()
+            .position(|id| Some(*id) == self.selected)
+            .unwrap_or(visible.len() - 1);
+        let next = current.saturating_add_signed(delta).min(visible.len() - 1);
+        self.selected = Some(visible[next]);
         self.follow = false;
         self.reveal = true;
     }
 
     /// Scroll within expanded events without changing the selected event.
     pub(crate) fn scroll_by(&mut self, delta: isize) {
-        if delta == 0 {
-            return;
-        }
+        self.new_image = None;
         self.follow = false;
         self.reveal = false;
         self.scroll = self
             .scroll
             .saturating_add_signed(delta)
             .min(self.total_rows.saturating_sub(self.page_rows));
-        if delta > 0 && self.scroll == self.total_rows.saturating_sub(self.page_rows) {
-            self.latest();
-        }
+        self.follow = self.scroll == self.total_rows.saturating_sub(self.page_rows);
     }
 
     pub(crate) fn latest(&mut self) {
+        self.new_image = None;
         self.follow = true;
         self.reveal = false;
-        self.selected = self.events.back().map(|event| event.id);
+        self.selected = self
+            .events
+            .iter()
+            .rev()
+            .find(|event| event.matches(&self.query, self.level))
+            .map(|event| event.id);
     }
 
     pub(crate) fn toggle(&mut self) -> bool {
+        self.new_image = None;
         if let Some(event) = self
             .events
             .iter_mut()
             .find(|event| Some(event.id) == self.selected)
         {
+            if event.meta.diff {
+                return false;
+            }
             event.expanded = !event.expanded;
             self.follow = false;
             self.reveal = true;
@@ -340,6 +461,7 @@ impl EventView {
     }
 
     fn set_expanded(&mut self, expanded: bool) -> bool {
+        self.new_image = None;
         let Some(event) = self
             .events
             .iter_mut()
@@ -347,6 +469,9 @@ impl EventView {
         else {
             return false;
         };
+        if event.meta.diff && !expanded {
+            return false;
+        }
         let changed = event.expanded != expanded;
         event.expanded = expanded;
         self.follow = false;
@@ -363,6 +488,7 @@ impl EventView {
             return false;
         }
         self.selected = Some(id);
+        self.new_image = None;
         self.follow = false;
         // Preserve the clicked row, even when it belongs to a long body.
         self.reveal = false;
@@ -381,6 +507,9 @@ impl EventView {
         self.total_rows = 0;
         self.page_rows = 0;
         self.placements.clear();
+        self.new_image = None;
+        self.query.clear();
+        self.level = 0;
     }
 
     pub(crate) fn snapshot(&self) -> Value {
@@ -389,13 +518,13 @@ impl EventView {
                 "id":event.id,"summary":event.summary,"lines":event.lines,
                 "bytes":event.text.len(),"expanded":event.expanded,"truncated":event.truncated,
                 "selected":Some(event.id)==self.selected,
-                "tool_status":event.activity.as_ref().map(|value| value.status.label()),
+                "status":event.meta.status.map(Status::label),"command":event.meta.command,
                 "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count)
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
-            "selected":self.selected,"scroll":self.scroll,"follow":self.follow,
-            "max_tool_bytes":MAX_TOOL_BYTES,
+            "selected":self.selected,"scroll":self.scroll,
+            "rows_below":self.rows_below(),"following":self.follow,
             "image_cache_bytes":self.image_bytes(),"max_image_cache_bytes":images::CACHE_BYTES,
             "scope":"retained display preview; original tool output uses its archive"
         })
@@ -423,7 +552,15 @@ impl EventView {
         let mut rows: Vec<(u64, String)> = Vec::new();
         let mut selected_row = None;
         let mut image_spans = Vec::new();
+        let new_image = self.new_image.take();
+        let mut new_images = false;
+        let mut image_anchor = None;
+        let palette = palette_key(ui);
         for event in &mut self.events {
+            new_images |= new_image == Some(event.id);
+            if !event.matches(&self.query, self.level) {
+                continue;
+            }
             let selected = Some(event.id) == self.selected;
             if selected {
                 selected_row = Some(rows.len());
@@ -434,29 +571,70 @@ impl EventView {
             let tone = if selected && focused {
                 "accent"
             } else {
-                event.tone
+                event.meta.status.map_or(event.tone, Status::tone)
             };
-            if event.expanded {
+            if event.expanded || !self.query.is_empty() {
                 if let Some(image) = &event.image {
+                    let image_start = rows.len();
                     rows.push((
                         event.id,
                         format!(
                             "{}{}",
                             paint(&prefix, tone, ui, selected && focused),
-                            paint(&clip_plain(&event.summary, body_width), tone, ui, false)
+                            paint(
+                                &clip_plain(&event.summary_with_status(), body_width),
+                                tone,
+                                ui,
+                                false
+                            )
                         ),
                     ));
                     let inset = 2.min(body_width.saturating_sub(1));
                     let image_width = body_width.saturating_sub(inset).max(1) as u16;
-                    let image_height = page.saturating_sub(2).clamp(1, 18) as u16;
+                    let image_height = page.saturating_sub(2).max(1) as u16;
                     let native = self.image_cells.filter(|_| ui.color).and_then(|cell| {
                         let native = image.native.as_ref()?;
-                        Some((
-                            native.clone(),
-                            native.layout(image_width, image_height, cell)?,
-                        ))
+                        Some((native.clone(), native.layout_width(image_width, cell)?))
                     });
+                    let detail = match &native {
+                        Some((native, area)) => {
+                            let dimensions =
+                                if (native.width, native.height) == (image.width, image.height) {
+                                    format!("{} × {}", image.width, image.height)
+                                } else {
+                                    format!(
+                                        "{} × {} preview · {} × {} source",
+                                        native.width, native.height, image.width, image.height
+                                    )
+                                };
+                            if usize::from(area.rows) > page.saturating_sub(2) {
+                                format!("{dimensions} · scroll to inspect")
+                            } else {
+                                dimensions
+                            }
+                        }
+                        None => "Low-resolution thumbnail · text may be unreadable".into(),
+                    };
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            " ".repeat(indent + inset),
+                            paint(
+                                &clip_plain(&detail, usize::from(image_width)),
+                                "muted",
+                                ui,
+                                false
+                            )
+                        ),
+                    ));
                     if let Some((native, area)) = native {
+                        if new_images
+                            && image_anchor.is_none()
+                            && usize::from(area.rows) > page.saturating_sub(2)
+                        {
+                            image_anchor = Some((event.id, image_start));
+                        }
                         image_spans.push((rows.len(), (indent + inset) as u16, native, area));
                         rows.extend((0..area.rows).map(|_| (event.id, String::new())));
                     } else {
@@ -468,24 +646,15 @@ impl EventView {
                     }
                     continue;
                 }
-                if event.cache.as_ref().is_none_or(|(cached_width, color, _)| {
-                    *cached_width != body_width || *color != ui.color
-                }) {
-                    event.cache = Some((
-                        body_width,
-                        ui.color,
-                        styled_rows(&event.text, body_width, ui.color),
-                    ));
-                }
-                let content = &event.cache.as_ref().unwrap().2;
-                if event.activity.is_some() {
+                let correlated = !event.meta.keys.is_empty();
+                if correlated {
                     rows.push((
                         event.id,
                         format!(
                             "{}{}",
                             paint(&prefix, tone, ui, selected && focused),
                             paint(
-                                &clip_plain(&event_heading(event), body_width),
+                                &clip_plain(&event.summary_with_status(), body_width),
                                 tone,
                                 ui,
                                 false
@@ -493,8 +662,34 @@ impl EventView {
                         ),
                     ));
                 }
+                if event
+                    .cache
+                    .as_ref()
+                    .is_none_or(|(cached_width, cached_palette, _)| {
+                        *cached_width != body_width || *cached_palette != palette
+                    })
+                {
+                    event.cache = Some((
+                        body_width,
+                        palette.clone(),
+                        styled_rows(
+                            &semantic_text(
+                                if correlated {
+                                    event.text.split_once('\n').map_or("", |(_, body)| body)
+                                } else {
+                                    &event.text
+                                },
+                                ui,
+                                event.meta.language,
+                            ),
+                            body_width,
+                            ui.color,
+                        ),
+                    ));
+                }
+                let content = &event.cache.as_ref().unwrap().2;
                 for (index, row) in content.iter().enumerate() {
-                    let prefix = if index == 0 && event.activity.is_none() {
+                    let prefix = if index == 0 && !correlated {
                         paint(&prefix, tone, ui, selected && focused)
                     } else {
                         " ".repeat(indent)
@@ -518,7 +713,7 @@ impl EventView {
             } else {
                 let label = format!(
                     "{} · {} lines{}",
-                    event_heading(event),
+                    event.summary_with_status(),
                     event.lines,
                     if event.truncated { " · partial" } else { "" }
                 );
@@ -536,7 +731,17 @@ impl EventView {
         self.total_rows = rows.len();
         self.page_rows = page;
         let max_scroll = rows.len().saturating_sub(page);
-        if self.follow {
+        if self.follow
+            && let Some((id, start)) = image_anchor
+        {
+            // A new tall image starts at its heading, rather than silently
+            // showing only its bottom. The existing Ctrl+End action resumes
+            // following; later tool output cannot pull the reader away.
+            self.selected = Some(id);
+            self.scroll = start;
+            self.follow = false;
+            self.reveal = false;
+        } else if self.follow {
             self.scroll = max_scroll;
         } else if self.reveal {
             if let Some(selected_row) = selected_row
@@ -598,29 +803,134 @@ impl EventView {
     }
 }
 
-fn activity_tone(value: &activity::Activity, fallback: &'static str) -> &'static str {
-    if value.failed {
-        "error"
-    } else {
-        match value.status {
-            activity::Status::Running => "accent",
-            activity::Status::Done | activity::Status::Exit(0) => "success",
-            _ => fallback,
-        }
+fn heading(line: &str) -> &str {
+    let line = line.trim();
+    if let Some((timestamp, rest)) = line.split_once(' ')
+        && timestamp.len() == 13
+        && timestamp.ends_with('Z')
+        && timestamp
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || b":.Z".contains(&byte))
+    {
+        return rest.trim_start();
     }
+    line
 }
 
-fn event_heading(event: &Event) -> String {
-    let status = event
-        .activity
-        .as_ref()
-        .map(|value| value.status.label())
-        .unwrap_or_default();
-    if status.is_empty() {
-        event.summary.clone()
-    } else {
-        format!("{} · {status}", event.summary)
+fn event_summary(plain: &str, first: &str) -> String {
+    let mut summary = first.to_owned();
+    if (first.starts_with("[RES") || first.starts_with("[REQ"))
+        && first.ends_with("audit")
+        && let Some(detail) = plain.lines().map(heading).find(|line| {
+            line.contains('.')
+                && line.len() <= 128
+                && line
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+        })
+    {
+        summary.push_str(" · ");
+        summary.push_str(detail);
     }
+    super::super::panel::fit(&summary, 200)
+}
+
+/// Reuse the shared lexer, preserving existing renderer SGR and exact text.
+fn semantic_text(text: &str, ui: &Ui, language: &str) -> String {
+    if !ui.color {
+        return sanitize(text, false);
+    }
+    let mut output = String::new();
+    let mut lexer = crate::client::highlight::Lexer::for_language(language);
+    let mut code = !language.is_empty();
+    let mut fence: Option<char> = None;
+    for line in text.split_inclusive('\n') {
+        let plain = unstyled(line);
+        let trimmed = plain.trim_start();
+        let marker = trimmed.chars().next();
+        let is_fence = matches!(marker, Some('\u{60}' | '~'))
+            && trimmed.chars().take_while(|ch| Some(*ch) == marker).count() >= 3;
+        if is_fence {
+            if fence == marker {
+                fence = None;
+                code = !language.is_empty();
+                lexer = crate::client::highlight::Lexer::for_language(language);
+            } else if fence.is_none() {
+                fence = marker;
+                code = true;
+                lexer = crate::client::highlight::Lexer::for_language(
+                    trimmed.trim_start_matches(marker.unwrap()).trim(),
+                );
+            }
+            output.push_str(&paint(line, "muted", ui, false));
+            continue;
+        }
+        if line.contains('\x1b') {
+            // Advance language state, but the renderer's established colors win.
+            if code {
+                let _ = lexer.line(&plain);
+            }
+            output.push_str(line);
+        } else if trimmed.starts_with('[') {
+            let tone = if trimmed.starts_with("[ERR") {
+                "error"
+            } else if trimmed.starts_with("[WARN") || trimmed.starts_with("[STDERR") {
+                "warning"
+            } else if trimmed.starts_with("[OK") {
+                "success"
+            } else if trimmed.starts_with("[READ") || trimmed.starts_with("[WRITE") {
+                "blue"
+            } else if trimmed.starts_with("[RES") || trimmed.starts_with("[REQ") {
+                "purple"
+            } else {
+                "accent"
+            };
+            output.push_str(&paint(line, tone, ui, false));
+        } else if code {
+            for token in lexer.line(line) {
+                output.push_str(&paint(token.text, token.tone, ui, token.bold));
+            }
+        } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+            output.push_str(&paint(line, "success", ui, false));
+        } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+            output.push_str(&paint(line, "error", ui, false));
+        } else if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            output.push_str(&paint(line, "muted", ui, false));
+        } else {
+            for word in line.split_inclusive(char::is_whitespace) {
+                let token = word.trim_end();
+                let path = token.contains('/')
+                    || token.contains('\\')
+                    || !correlation::language_for_path(token).is_empty();
+                if path {
+                    output.push_str(&paint(word, "blue", ui, false));
+                } else {
+                    output.push_str(word);
+                }
+            }
+        }
+    }
+    output
+}
+
+fn palette_key(ui: &Ui) -> String {
+    if !ui.color {
+        return String::new();
+    }
+    [
+        "foreground",
+        "muted",
+        "accent",
+        "success",
+        "warning",
+        "error",
+        "blue",
+        "purple",
+    ]
+    .iter()
+    .map(|tone| ui.color(tone))
+    .collect::<Vec<_>>()
+    .join(";")
 }
 
 fn paint(text: &str, tone: &str, ui: &Ui, bold: bool) -> String {
@@ -709,17 +1019,13 @@ fn unstyled(text: &str) -> String {
 }
 
 fn retained_text(bytes: &[u8]) -> (String, bool) {
-    retained_text_limit(bytes, MAX_BYTES)
-}
-
-fn retained_text_limit(bytes: &[u8], limit: usize) -> (String, bool) {
     let raw = String::from_utf8_lossy(bytes);
     let clean = sanitize(&raw, true);
-    if clean.len() <= limit {
+    if clean.len() <= MAX_DETAIL {
         return (clean, false);
     }
     let note = "\n… preview truncated; inspect the original output archive …\n";
-    let budget = limit - note.len();
+    let budget = MAX_DETAIL - note.len();
     let mut head = budget / 2;
     while !clean.is_char_boundary(head) {
         head -= 1;
@@ -854,10 +1160,7 @@ mod tests {
         assert_eq!(view.events[0].diagnostic, Some((10, 3)));
         assert_eq!(
             view.bytes,
-            view.events
-                .iter()
-                .map(|event| event.text.len())
-                .sum::<usize>()
+            view.events.iter().map(Event::retained_bytes).sum::<usize>()
         );
     }
 
@@ -885,10 +1188,7 @@ mod tests {
         assert!(view.bytes <= MAX_BYTES);
         assert_eq!(
             view.bytes,
-            view.events
-                .iter()
-                .map(|event| event.text.len())
-                .sum::<usize>()
+            view.events.iter().map(Event::retained_bytes).sum::<usize>()
         );
     }
 
@@ -896,6 +1196,140 @@ mod tests {
         Ui {
             color: false,
             ..Ui::default()
+        }
+    }
+
+    fn image_preview(width: u32, height: u32, native: bool) -> images::Preview {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::new(width, height));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        images::decode(
+            &json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(png.into_inner())}),
+            native,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tall_native_images_keep_readable_width_and_scroll_through_the_source() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        assert!(view.is_following());
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        let rows = view.render(66, 20, &ui, true);
+        assert_eq!(rows.len(), 20);
+        assert!(unstyled(&rows.join("\n")).contains("screenshot.png"));
+        assert!(unstyled(&rows.join("\n")).contains("scroll to inspect"));
+        assert!(
+            !view.is_following(),
+            "start a new tall image at its heading"
+        );
+        assert_eq!(
+            view.total_rows, 122,
+            "retain the full 120-row image, plus its heading"
+        );
+        assert!(view.rows_below() > 0);
+        let mut renderer = images::Renderer::default();
+        let (_, head) = renderer.update(view.image_placements(0), (19, 0), false);
+        assert!(head.contains("y=0,w=400,h=340"));
+        view.scroll_by(25);
+        view.render(66, 20, &ui, true);
+        let (_, middle) = renderer.update(view.image_placements(0), (19, 0), false);
+        assert!(middle.contains("y=460,w=400,h=380"));
+        assert!(
+            !middle.contains("a=t"),
+            "scrolling reuses the original uploaded pixels"
+        );
+        assert!(
+            !middle.contains(",c="),
+            "a fitting source stays at its natural pixel size"
+        );
+        view.ingest(b"[AGENT] Later progress\n");
+        view.render(66, 20, &ui, true);
+        assert_eq!(
+            view.scroll, 25,
+            "new output must not interrupt image inspection"
+        );
+        view.latest();
+        let latest = view.render(66, 20, &ui, true).join("\n");
+        assert!(view.is_following());
+        assert!(unstyled(&latest).contains("Later progress"));
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn explicit_latest_before_the_first_image_frame_keeps_following() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        view.latest();
+        view.render(
+            66,
+            20,
+            &Ui {
+                color: true,
+                ..Ui::default()
+            },
+            true,
+        );
+        assert!(view.is_following());
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn batched_images_reveal_the_first_tall_image_after_a_small_preview() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] small.png\n");
+        view.attach_image(image_preview(32, 32, true));
+        view.ingest(b"[IMAGE] tall.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        let rows = view.render(
+            66,
+            20,
+            &Ui {
+                color: true,
+                ..Ui::default()
+            },
+            true,
+        );
+        assert!(unstyled(&rows.join("\n")).contains("tall.png"));
+        assert_eq!(view.scroll, 4);
+        assert!(!view.is_following());
+    }
+
+    #[test]
+    fn fallback_images_disclose_low_resolution_and_use_the_available_height() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.attach_image(image_preview(128, 128, false));
+        let rows = view.render(134, 80, &plain_ui(), true);
+        assert!(rows.join("\n").contains("Low-resolution thumbnail"));
+        assert_eq!(
+            view.total_rows, 66,
+            "the old 18-row cap must not shrink a larger viewport"
+        );
+        assert!(view.image_placements(0).is_empty());
+        for width in [1, 10, 40] {
+            for row in view.render(width, 8, &plain_ui(), true) {
+                assert!(row.width() <= usize::from(width));
+            }
         }
     }
 
@@ -1015,294 +1449,208 @@ mod tests {
         assert!(view.render(0, 0, &plain_ui(), true).is_empty());
         assert_eq!(view.render(0, 2, &plain_ui(), true), vec!["", ""]);
     }
-}
-
-#[cfg(test)]
-mod image_tests {
-    use super::*;
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    use std::io::Cursor;
-
-    fn image_event(view: &mut EventView) {
-        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-            600,
-            300,
-            image::Rgba([30, 120, 210, 255]),
-        ));
-        let mut encoded = Cursor::new(Vec::new());
-        image
-            .write_to(&mut encoded, image::ImageFormat::Png)
-            .unwrap();
-        let block = json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(encoded.into_inner())});
-        let preview = images::decode(&block, true).unwrap();
-        view.ingest(b"[IMAGE] 600 x 300\n");
-        view.attach_image(preview);
-        view.image_cells(Some(images::CellSize {
-            width: 8,
-            height: 16,
-        }));
-    }
-
     #[test]
-    fn native_images_follow_visible_event_crops_and_clear_on_fold() {
-        let ui = Ui {
-            color: true,
-            ..Ui::default()
-        };
-        let mut view = EventView::new();
-        image_event(&mut view);
-        for index in 0..3 {
-            view.ingest(format!("after {index}\n").as_bytes());
-        }
-        view.render(28, 8, &ui, false);
-        let placements = view.image_placements(3);
-        assert_eq!(placements.len(), 1);
-        let mut renderer = images::Renderer::default();
-        let (_, wire) = renderer.update(placements, (20, 0), false);
-        let placement = wire
-            .split("\x1b_Ga=p,")
-            .nth(1)
-            .unwrap()
-            .split("\x1b\\")
-            .next()
-            .unwrap();
-        let number = |key: &str| -> Option<u32> {
-            placement.split(',').find_map(|field| {
-                let (name, value) = field.split_once('=')?;
-                (name == key).then(|| value.parse().unwrap())
-            })
-        };
-        let y = number("y").unwrap();
-        let height = number("h").unwrap();
-        assert!(
-            y > 0,
-            "the image is cropped after scrolling its header off screen"
-        );
-        assert!(y + height <= 300);
-        let (pixel_width, pixel_height) = match (number("c"), number("r")) {
-            (Some(columns), None) => (columns * 8, height * columns * 8 / 600),
-            (None, Some(rows)) => (600 * rows * 16 / height, rows * 16),
-            axes => panic!("scaled placement must specify exactly one limiting axis: {axes:?}"),
-        };
-        assert!(pixel_width <= 22 * 8 && pixel_height <= 7 * 16);
-        assert!(
-            wire.contains("\x1b[4;7H"),
-            "physical anchor includes the Activity top and image inset"
-        );
-        view.select(-100);
-        assert!(view.back());
-        view.render(28, 8, &ui, true);
-        let (deletes, _) = renderer.update(view.image_placements(3), (20, 0), false);
-        assert!(
-            deletes.contains("a=d,d=I"),
-            "folding releases the image instead of leaving an overlay"
-        );
-        renderer.complete();
-        assert!(renderer.clear().is_empty());
-        view.clear();
-        assert!(view.image_placements(3).is_empty());
-        assert_eq!(view.snapshot()["image_cache_bytes"], 0);
-    }
-
-    #[test]
-    fn narrow_native_images_stay_inside_the_pane_and_text_cannot_place_images() {
-        let ui = Ui {
-            color: true,
-            ..Ui::default()
-        };
-        for width in 1..=6 {
-            let mut view = EventView::new();
-            image_event(&mut view);
-            view.render(width, 3, &ui, false);
-            let placements = view.image_placements(0);
-            assert_eq!(placements.len(), 1);
-            let (_, wire) = images::Renderer::default().update(placements, (3, 0), true);
-            let anchor = wire
-                .split("\x1b[")
-                .find_map(|part| {
-                    let (position, suffix) = part.split_once('H')?;
-                    suffix.starts_with("\x1b_Ga=p,").then_some(position)
-                })
-                .unwrap();
-            let col: u16 = anchor.split(';').nth(1).unwrap().parse().unwrap();
-            assert!(col <= width);
-            assert!(!wire.contains("c=0"));
-        }
-        let mut view = EventView::new();
-        view.image_cells(Some(images::CellSize {
-            width: 8,
-            height: 16,
-        }));
-        view.ingest(b"[IMAGE] forged log label\n");
-        view.render(80, 20, &ui, false);
-        assert!(view.image_placements(0).is_empty());
-    }
-}
-
-#[cfg(test)]
-mod activity_tests {
-    use super::*;
-    fn ui() -> Ui {
-        Ui {
-            color: false,
-            ..Ui::default()
-        }
-    }
-
-    #[test]
-    fn one_job_is_collapsed_with_live_and_final_status_and_original_detail() {
+    fn rpc_and_native_output_share_one_command_row_and_preserve_the_final_outcome() {
         let mut view = EventView::new();
         view.ingest_event(
             "shell",
-            &json!({"type":"ssmcp.exec.started","job_id":"job-a"}),
+            &json!({"request":{"id":1,"method":"tools/call",
+            "params":{"name":"ssmcp.exec.start","arguments":{"command":["cargo","test"]}}}}),
+            b"[REQ] exec.start\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":"job","command":["cargo","test"]}),
             b"[RUN] cargo test\n",
         );
-        assert_eq!(view.snapshot()["events"][0]["tool_status"], "running");
-        assert_eq!(view.snapshot()["events"][0]["expanded"], false);
+        assert_eq!(view.events.len(), 2);
         view.ingest_event(
             "shell",
-            &json!({"type":"ssmcp.exec.stdout","job_id":"job-a"}),
-            b"unique-output-line\n",
+            &json!({"id":1,"result":{"structuredContent":{"job_id":"job","running":true}}}),
+            b"started\n",
         );
-        view.ingest_event(
-            "shell",
-            &json!({"type":"ssmcp.exec.exited","job_id":"job-a","exit_code":0}),
-            b"[OK] completed\n",
-        );
-        assert_eq!(view.snapshot()["retained_events"], 1);
-        view.ingest_event(
-            "shell",
-            &json!({"type":"tool.completed","job_id":"job-a","success":true}),
-            b"",
-        );
-        assert_eq!(view.snapshot()["events"][0]["tool_status"], "exit=0");
-        let closed = view.render(100, 8, &ui(), true).join("\n");
-        assert!(closed.contains("exit=0"));
-        assert!(!closed.contains("unique-output-line"));
-        assert!(view.open());
-        let expanded = view.render(100, 12, &ui(), true).join("\n");
-        assert!(expanded.contains("unique-output-line"));
-        assert!(expanded.contains("[OK] completed"));
-    }
-
-    #[test]
-    fn provider_and_reused_request_ids_cannot_overwrite_another_tool() {
-        let mut view = EventView::new();
-        for label in ["first", "second"] {
-            view.ingest_event(
-                label,
-                &json!({"request":{"id":7,"method":"tools/call"}}),
-                b"[REQ] tool\n",
-            );
-        }
-        view.ingest_event(
-            "first",
-            &json!({"response":{"id":7,"result":{"isError":true}}}),
-            b"[ERR] failed\n",
-        );
-        assert_eq!(view.snapshot()["events"][0]["tool_status"], "failed");
-        assert_eq!(view.snapshot()["events"][1]["tool_status"], "running");
-        view.ingest_event(
-            "first",
-            &json!({"request":{"id":7,"method":"tools/call"}}),
-            b"[REQ] new call\n",
-        );
-        assert_eq!(view.snapshot()["retained_events"], 3);
-    }
-
-    #[test]
-    fn process_and_harness_correlation_preserve_a_single_preview() {
-        let mut view = EventView::new();
-        view.ingest_event(
-            "codex",
-            &json!({"request":{"id":1,"method":"command/exec",
-            "params":{"processId":"process-a"}},"harness_call_id":"call-a"}),
-            b"[RUN] command\n",
-        );
-        view.ingest_event(
-            "codex",
-            &json!({"method":"command/exec/outputDelta",
-            "params":{"processId":"process-a"}}),
-            b"process output\n",
-        );
-        view.ingest_event(
-            "codex",
-            &json!({"call_id":"call-a","type":"tool.completed","success":true}),
-            b"finished\n",
-        );
-        assert_eq!(view.snapshot()["retained_events"], 1);
-        assert_eq!(view.snapshot()["events"][0]["tool_status"], "done");
-        view.ingest_event(
-            "codex",
-            &json!({"rpc_correlation":true,"command_rpc_completed":true}),
-            b"redundant completion\n",
-        );
-        assert_eq!(view.snapshot()["retained_events"], 1);
-    }
-
-    #[test]
-    fn failed_cancelled_timeout_and_signal_remain_distinct() {
-        for (fields, expected) in [
-            (json!({"exit_code":12}), "exit=12"),
-            (json!({"cancelled":true}), "cancelled"),
-            (json!({"timed_out":true}), "timeout"),
-            (json!({"exit_signal":15}), "signal=15"),
-            (json!({"success":false}), "failed"),
+        for bytes in [
+            b"first line\n".as_slice(),
+            b"\n\n".as_slice(),
+            b"second line\n".as_slice(),
         ] {
-            let mut value = fields;
-            value["type"] = json!("ssmcp.exec.exited");
-            value["job_id"] = json!("job");
-            let mut view = EventView::new();
-            view.ingest_event("shell", &value, b"[ERR] command ended\n");
-            assert_eq!(view.snapshot()["events"][0]["tool_status"], expected);
-            assert_eq!(view.events[0].tone, "error");
             view.ingest_event(
                 "shell",
-                &json!({"type":"tool.completed","job_id":"job","success":true}),
-                b"",
+                &json!({"type":"exec.stdout","job_id":"job"}),
+                bytes,
             );
-            assert_eq!(view.snapshot()["events"][0]["tool_status"], expected);
-            assert_eq!(view.events[0].tone, "error");
         }
-    }
-
-    #[test]
-    fn streaming_tool_preview_is_bounded_without_replacing_open_messages() {
-        let mut view = EventView::new();
-        view.ingest(b"[ANSWER] keep this reply open\n");
-        let value = json!({"type":"ssmcp.exec.stdout","job_id":"job"});
-        for _ in 0..6 {
-            view.ingest_event("shell", &value, "unicode 世界\n".repeat(1800).as_bytes());
-        }
-        assert_eq!(view.snapshot()["retained_events"], 2);
-        assert!(view.events[0].expanded);
-        assert!(view.events[1].text.len() <= MAX_TOOL_BYTES);
-        assert!(view.events[1].truncated);
-        assert_eq!(
-            view.bytes,
-            view.events.iter().map(|e| e.text.len()).sum::<usize>()
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"job","exit_code":7}),
+            b"[ERR] command failed\n",
         );
         view.ingest_event(
-            "fs",
-            &json!({"type":"ssmcp.file.diff"}),
-            b"[DIFF] file\n-old\n+new\n",
+            "shell",
+            &json!({"type":"ssmcp.harness.tool.completed",
+            "rpc_correlation":true,"command_rpc_completed":true,"success":true}),
+            b"",
         );
-        assert!(view.events.back().unwrap().expanded);
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].summary, "[RUN] cargo test");
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(7)));
+        assert!(view.events[0].text.contains("first line\n\n\nsecond line"));
+        assert!(view.snapshot()["events"][0]["status"] == "exit=7");
+        view.back();
+        assert!(
+            view.render(90, 8, &plain_ui(), true)
+                .join("\n")
+                .contains("exit=7")
+        );
     }
 
     #[test]
-    fn returning_to_the_bottom_resumes_following_new_activity() {
+    fn unrelated_jobs_and_reused_rpc_ids_do_not_combine() {
         let mut view = EventView::new();
-        for i in 0..25 {
-            view.ingest(format!("[USER] message-{i}\n").as_bytes());
+        for provider in ["a", "b"] {
+            view.ingest_event(
+                provider,
+                &json!({"type":"exec.started","job_id":"job"}),
+                b"[RUN] task\n",
+            );
         }
-        view.render(80, 6, &ui(), false);
-        view.scroll_by(-3);
-        assert!(!view.follow);
+        view.ingest_event(
+            "a",
+            &json!({"type":"exec.exited","job_id":"job","exit_code":0}),
+            b"done\n",
+        );
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
+        assert_eq!(view.events[1].meta.status, Some(Status::Running));
+        let request = json!({"request":{"id":"reused","method":"command/exec","params":{"processId":"same"}}});
+        for code in [7, 0] {
+            view.ingest_event("rpc", &request, b"[RUN] invocation\n");
+            view.ingest_event(
+                "rpc",
+                &json!({"id":"reused","result":{"exitCode":code}}),
+                b"result\n",
+            );
+        }
+        assert_eq!(view.events.len(), 4);
+        assert_eq!(view.events[2].meta.status, Some(Status::Exit(7)));
+        assert_eq!(view.events[3].meta.status, Some(Status::Exit(0)));
+    }
+
+    #[test]
+    fn cancelled_signalled_failed_and_timed_out_snapshots_never_show_done() {
+        let mut view = EventView::new();
+        for (id, snapshot, expected) in [
+            (1, json!({"cancelled":true}), "cancelled"),
+            (2, json!({"exit_signal":15}), "signal=15"),
+            (
+                3,
+                json!({"error":"capture unavailable","state":"failed"}),
+                "failed",
+            ),
+            (4, json!({"timed_out":true}), "timeout"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"id":id,"result":{"structuredContent":snapshot}}),
+                b"[RES] status\n",
+            );
+            assert_eq!(
+                view.events.back().unwrap().meta.status.unwrap().label(),
+                expected
+            );
+        }
+        view.filter("", 2);
+        assert_eq!(
+            view.events
+                .iter()
+                .filter(|event| event.matches("", 2))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn short_tools_fold_but_diffs_and_attention_remain_open() {
+        let mut view = EventView::new();
+        view.ingest(b"[RES ] audit\n  ssmcp.fs.read_text\n  source.rs\n");
+        assert!(!view.events[0].expanded);
+        assert!(view.events[0].summary.contains("ssmcp.fs.read_text"));
+        view.ingest(b"12:34:56.789Z [UPDATE] progress\nvisible details\n");
+        assert!(view.events[1].expanded);
+        view.ingest(b"[STDOUT] job\npartial\n[ERR] exit=7\n");
+        assert!(view.events[2].expanded);
+        assert_eq!(view.events[2].tone, "error");
+        assert_eq!(view.events[2].summary, "[ERR] exit=7");
+        view.ingest_event("fs", &json!({"type":"ssmcp.file.diff"}), b"-old\n+new\n");
+        assert!(view.events[3].expanded);
+        assert!(!view.back());
+        assert!(!view.toggle());
+        view.ingest(b"\n\n");
+        assert_eq!(view.events.len(), 4);
+    }
+
+    #[test]
+    fn filtered_navigation_and_scroll_to_bottom_restore_live_following() {
+        let mut view = EventView::new();
+        for (id, output) in [
+            ("one", "needle first"),
+            ("two", "unrelated"),
+            ("three", "needle last"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":id}),
+                format!("[RUN] {output}\n").as_bytes(),
+            );
+        }
+        view.filter("needle", 0);
+        view.select(isize::MIN);
+        view.select(1);
+        assert_eq!(view.selected, Some(2));
+        view.filter("", 0);
+        view.ingest(b"[AGENT]\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+        view.latest();
+        view.render(70, 5, &plain_ui(), true);
+        view.scroll_by(-2);
+        let before = view.scroll;
+        assert!(!view.is_following());
+        assert_eq!(view.rows_below(), 2);
+        view.ingest(b"[READ] latest event\n");
+        view.render(70, 5, &plain_ui(), true);
+        assert_eq!(view.scroll, before);
+        assert!(view.rows_below() > 2);
         view.scroll_by(isize::MAX);
-        assert!(view.follow);
-        view.ingest(b"[ANSWER] newest-answer\n");
-        let rows = view.render(80, 6, &ui(), false).join("\n");
-        assert!(rows.contains("newest-answer"));
+        assert!(view.is_following());
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn source_highlighting_semantic_colors_and_no_color_preserve_content() {
+        let ui = Ui::default();
+        let source = "let answer = 42; // comment\nlet path = \"src/lib.rs\";\n";
+        let styled = semantic_text(source, &ui, "rust");
+        assert_eq!(unstyled(&styled), source);
+        for tone in ["accent", "warning", "muted", "success"] {
+            assert!(
+                styled.contains(&ui.color(tone)),
+                "missing {tone}: {styled:?}"
+            );
+        }
+        let existing = "\x1b[31moriginal red\x1b[0m\n";
+        assert_eq!(semantic_text(existing, &ui, ""), existing);
+        assert_eq!(semantic_text(source, &plain_ui(), "rust"), source);
+        assert!(!semantic_text(existing, &plain_ui(), "").contains('\x1b'));
+        let mut view = EventView::new();
+        view.ingest_event(
+            "fs",
+            &json!({"request":{"id":1,"method":"tools/call",
+            "params":{"arguments":{"path":"src/lib.rs"}}}}),
+            format!("[READ] src/lib.rs\n{source}").as_bytes(),
+        );
+        view.open();
+        let rows = view.render(90, 12, &ui, false).join("\n");
+        assert!(rows.contains(&ui.color("accent")));
+        let plain = view.render(90, 12, &plain_ui(), false).join("\n");
+        assert!(!plain.contains('\x1b'));
+        assert!(plain.contains("let answer = 42; // comment"));
     }
 }

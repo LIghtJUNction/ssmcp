@@ -47,11 +47,15 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/logs",
-        description: "Show compact activity; expand a selected tool",
+        description: "Show compact tool activity",
     },
     SlashCommand {
         name: "/raw",
-        description: "Toggle the retained, unfolded transcript",
+        description: "Toggle the original tool transcript",
+    },
+    SlashCommand {
+        name: "/questions",
+        description: "Review pending questions",
     },
     SlashCommand {
         name: "/filter",

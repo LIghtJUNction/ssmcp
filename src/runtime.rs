@@ -746,7 +746,7 @@ fn attach_context_metadata(mut result: Value, context: Option<Value>) -> Value {
     }
     let base = result.to_string().len();
     let limit = crate::wire::MAX_FRAME.saturating_sub(8192);
-    if context.to_string().len() > crate::code_mode::MAX_CONTEXT_ENTRY_BYTES
+    if context.to_string().len() > crate::wire::MAX_CONTEXT_ENTRY_BYTES
         || base
             .saturating_add(context.to_string().len())
             .saturating_add(64)
@@ -818,7 +818,7 @@ mod tests {
             original.clone(),
             Some(json!({
                 "workspace":{"id":"b".repeat(64)},"revision":5,
-                "summary":"x".repeat(crate::code_mode::MAX_CONTEXT_ENTRY_BYTES)
+                "summary":"x".repeat(crate::wire::MAX_CONTEXT_ENTRY_BYTES)
             })),
         );
         assert_eq!(result["content"], original["content"]);
