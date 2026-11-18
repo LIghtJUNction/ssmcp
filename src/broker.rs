@@ -20,7 +20,7 @@ use subtle::ConstantTimeEq;
 use tokio::{
     io::BufReader,
     net::UnixStream,
-    sync::{Notify, RwLock, Semaphore, mpsc, oneshot},
+    sync::{Notify, OnceCell, RwLock, Semaphore, mpsc, oneshot},
     time::{Instant, timeout},
 };
 
@@ -79,6 +79,8 @@ struct LoginCode {
 pub struct Session {
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
+    thread_scope: OnceCell<bool>,
+    queue_changed: Notify,
     login: Mutex<Option<LoginCode>>,
     // Resolved provider subject IDs are immutable for this SSH connection.
     allow: Vec<Identity>,
@@ -136,6 +138,102 @@ impl Session {
             .command(self.client_id(), self.collaboration.presence()?, command)
     }
 
+    /// The caller must authorize this session before invoking this user action.
+    pub(crate) fn dispatch_user_message(
+        &self,
+        thread_id: Option<&str>,
+        text: &str,
+        broadcast: bool,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, String> {
+        self.dispatch_message(
+            thread_id,
+            text,
+            broadcast,
+            idempotency_key,
+            crate::steering::MessageSource::User,
+        )
+    }
+
+    /// Webhook events remain external data at delivery; they cannot impersonate
+    /// a user requirement merely by using the same waiting queue.
+    pub(crate) fn dispatch_notification(
+        &self,
+        thread_id: Option<&str>,
+        text: &str,
+        broadcast: bool,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, String> {
+        self.dispatch_message(
+            thread_id,
+            text,
+            broadcast,
+            idempotency_key,
+            crate::steering::MessageSource::Webhook,
+        )
+    }
+
+    fn dispatch_message(
+        &self,
+        thread_id: Option<&str>,
+        text: &str,
+        broadcast: bool,
+        idempotency_key: Option<&str>,
+        source: crate::steering::MessageSource,
+    ) -> Result<Value, String> {
+        if !self.is_alive() {
+            return Err("client connection is closed".into());
+        }
+        let receipt = self.steering.enqueue(
+            self.client_id(),
+            self.collaboration.presence()?,
+            thread_id,
+            text,
+            broadcast,
+            idempotency_key,
+            source,
+        )?;
+        self.queue_changed.notify_one();
+        Ok(receipt)
+    }
+
+    /// Probe with the legacy-safe frame before adding optional scope metadata.
+    /// The response comes from this authenticated connection, never from caller
+    /// arguments or a controller display name.
+    async fn supports_thread_scope(&self) -> Result<bool, String> {
+        self.thread_scope
+            .get_or_try_init(|| async {
+                let _permit = self
+                    .slots
+                    .try_acquire()
+                    .map_err(|_| "client busy; retry later")?;
+                let (reply, response) = oneshot::channel();
+                self.sender
+                    .try_send(Call {
+                        operation: Operation::CallTool {
+                            name: "ssmcp.client.capabilities".into(),
+                            arguments: serde_json::json!({}),
+                        },
+                        controller: None,
+                        code_context: None,
+                        reply,
+                    })
+                    .map_err(|_| "client disconnected or busy; scope probe was not dispatched")?;
+                let result = timeout(Duration::from_secs(15), response)
+                    .await
+                    .map_err(|_| "thread scope capability probe timed out")?
+                    .map_err(|_| "client disconnected during thread scope capability probe")?;
+                let value = match result {
+                    Ok(value) => value,
+                    Err(_) => return Ok(false),
+                };
+                let native = value.get("structuredContent").unwrap_or(&value);
+                Ok(native["thread_scope"].as_u64() == Some(1))
+            })
+            .await
+            .copied()
+    }
+
     pub async fn call(&self, operation: Operation) -> CallResult {
         self.call_with_controller(operation, None).await
     }
@@ -191,7 +289,20 @@ impl Session {
         if let Some(controller) = &controller {
             controller.validate()?;
         }
-        let code_context = audit_run.as_ref().map(|run| (*run.context).clone());
+        let mut code_context = audit_run.as_ref().map(|run| (*run.context).clone());
+        if let Some(binding) = audit_run
+            .as_ref()
+            .and_then(|run| run.binding(self.client_id()))
+        {
+            self.collaboration
+                .bind(&binding.owner, &binding.agent_id, &binding.token)?;
+            if self.supports_thread_scope().await?
+                && let Some(context) = &mut code_context
+            {
+                context.session_id = Some(self.client_id().into());
+                context.thread_id = Some(binding.agent_id);
+            }
+        }
         let carries_source = code_context.is_some();
         if !self.alive.load(Ordering::Acquire) {
             return Err("client disconnected".into());
@@ -452,8 +563,10 @@ impl Broker {
         let (reports, _reports_rx) = mpsc::channel(1);
         let id = generate_secret().unwrap();
         let session = Arc::new(Session {
-            collaboration: crate::collab::Hub::default(),
+            collaboration: crate::collab::Hub::for_session(&id),
             steering: crate::steering::Queue::default(),
+            thread_scope: OnceCell::new(),
+            queue_changed: Notify::new(),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -710,8 +823,10 @@ impl Broker {
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
         let (reports, mut code_reports) = mpsc::channel::<wire::CodeCompletion>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
-            collaboration: crate::collab::Hub::default(),
+            collaboration: crate::collab::Hub::for_session(&client_id),
             steering: crate::steering::Queue::default(),
+            thread_scope: OnceCell::new(),
+            queue_changed: Notify::new(),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -858,6 +973,13 @@ impl Broker {
                                 }
                                 timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                             }
+                        }
+                        _ = session.queue_changed.notified() => {
+                            let frame = Frame::SteeringReply { id:0, result:session.steering_command(wire::SteeringCommand::Snapshot {}) };
+                            if let Some(subject) = legacy_subject {
+                                self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1).await?;
+                            }
+                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                         }
                         _ = expiry.tick() => {
                             if pending.values().any(|(_, deadline, _)| Instant::now() >= *deadline) {
@@ -1416,8 +1538,10 @@ mod tests {
         let (sender, _rx) = mpsc::channel(1);
         let (reports, _reports_rx) = mpsc::channel(1);
         Arc::new(Session {
-            collaboration: crate::collab::Hub::default(),
+            collaboration: crate::collab::Hub::for_session(id),
             steering: crate::steering::Queue::default(),
+            thread_scope: OnceCell::new(),
+            queue_changed: Notify::new(),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),

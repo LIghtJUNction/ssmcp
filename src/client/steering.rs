@@ -329,7 +329,13 @@ impl Manager {
     fn snapshot(&self) -> Value {
         json!({
             "schema_version":1,"connected":self.connected,"supported":self.supported,
-            "room_id":self.outbox.room_id,"revision":self.revision,"agents":self.agents,
+            "room_id":self.outbox.room_id,"session_id":self.outbox.room_id,"revision":self.revision,
+            "agents":self.agents.iter().map(|agent| {
+                let mut value = serde_json::to_value(agent).expect("serializable agent");
+                value["thread_id"] = json!(agent.agent_id);
+                value["session_id"] = json!(self.outbox.room_id);
+                value
+            }).collect::<Vec<_>>(),
             "draft":{"text":self.outbox.draft.text,"cursor":self.outbox.draft.cursor},
             "draft_context":self.outbox.context,
             "queue":self.outbox.records.iter().map(|record| json!({
@@ -337,6 +343,7 @@ impl Manager {
                 "revision":record.message.revision,"status":record.status(self.connected),
                 "created_at_ms":record.message.created_at_ms,"updated_at_ms":record.message.updated_at_ms,
                 "delivery":record.message.delivery,"error":record.error,"room_id":record.room_id,
+                "source":if record.message.id.starts_with("webhook_") {"webhook"} else {"client_user"},
                 "retarget_required":record.retarget_required,"uncertain":record.uncertain
             })).collect::<Vec<_>>(),
             "error":self.error,"reloading":self.frozen || self.reload_requested
@@ -360,6 +367,13 @@ impl Manager {
         let target = target.unwrap_or("next");
         if target == "next" {
             return Ok(target.into());
+        }
+        if target == "global" {
+            return if self.connected && self.ready && !self.agents.is_empty() {
+                Ok(target.into())
+            } else {
+                Err("global messages require an active session with at least one thread".into())
+            };
         }
         if !valid_id(target)
             || !self.connected
@@ -916,6 +930,7 @@ impl Manager {
                         && message.state == SteeringState::Delivered
                         && message.delivery.is_some()
                         && message.target == "next"
+                        && !message.id.starts_with("webhook_")
                     {
                         self.delivered_memory.push(DeliveredMemory {
                             id: message.id.clone(),
@@ -1011,6 +1026,9 @@ impl Manager {
     }
 
     fn reply(&mut self, id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
+        if id == 0 {
+            return self.merge(&result?);
+        }
         let Some(request) = self.requests.remove(&id) else {
             return Ok(());
         };
