@@ -357,6 +357,14 @@ impl State {
     }
 
     fn chat_command(&mut self, text: &str) -> Result<bool, String> {
+        if let Some(command) = text.strip_prefix('!') {
+            if self.preview {
+                return Err("Preview does not execute shell commands".into());
+            }
+            crate::client::interface::harness::submit_shell(command)?;
+            self.notice = Some("Shell command started · results appear here".into());
+            return Ok(true);
+        }
         if !text.starts_with('/') {
             return Ok(false);
         }
@@ -380,6 +388,13 @@ impl State {
                 }
                 crate::client::interface::harness::submit(&command[1..], rest)?;
                 self.notice = Some("Harness request queued · results appear here".into());
+            }
+            "/tasks" => {
+                if self.preview {
+                    return Err("Preview has no live command jobs".into());
+                }
+                crate::client::interface::harness::submit_tasks(rest)?;
+                self.notice = Some("Task status requested · results appear here".into());
             }
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
@@ -457,9 +472,19 @@ impl State {
         Ok(true)
     }
 
+    fn chat_refresh_completions(&mut self) {
+        let enabled = !self.preview
+            && !self.selection
+            && !self.help
+            && self.conversation.view != View::Questions
+            && !self.conversation.content_focus;
+        self.conversation.composer.refresh_completions(enabled);
+    }
+
     fn chat_menu_visible(&self) -> bool {
         !self.conversation.content_focus
-            && self.conversation.editing.is_none()
+            && (self.conversation.editing.is_none()
+                || self.conversation.composer.reference_active())
             && self
                 .conversation
                 .composer
@@ -467,6 +492,25 @@ impl State {
     }
 
     fn chat_submit(&mut self) {
+        self.chat_refresh_completions();
+        if self.conversation.composer.completion_loading() {
+            self.notice = Some("Loading reference suggestions · your draft is preserved".into());
+            return;
+        }
+        if self.chat_menu_visible()
+            && self
+                .conversation
+                .composer
+                .selected_suggestion()
+                .is_some_and(|item| item.reference)
+        {
+            if let Err(error) = self.conversation.composer.accept_suggestion() {
+                self.notice = Some(error);
+            } else {
+                self.notice = None;
+            }
+            return;
+        }
         if self.conversation.submitting.is_some() {
             self.notice = Some("Waiting for queue confirmation · your draft is preserved".into());
             return;
@@ -648,6 +692,7 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        self.chat_refresh_completions();
         if matches!(key, Key::Select) || (self.selection && matches!(key, Key::Escape)) {
             self.selection = !self.selection;
             self.notice = self.selection.then(|| {
@@ -925,7 +970,8 @@ impl State {
             self.question_key(Key::Escape);
             return;
         }
-        if !self.help && self.chat_menu_visible() {
+        if !self.help && (self.chat_menu_visible() || self.conversation.composer.reference_active())
+        {
             self.conversation.composer.dismiss_suggestions();
             self.notice = None;
             return;
@@ -981,6 +1027,7 @@ impl State {
     }
 
     fn chat_character(&mut self, character: char) {
+        self.chat_refresh_completions();
         if self.selection {
             if character == '\u{1b}' {
                 self.chat_key(Key::Select);
@@ -1064,9 +1111,12 @@ impl State {
             '\u{1b}' => self.chat_escape(),
             '\t' => {
                 if self.chat_menu_visible() {
-                    let selected = self.conversation.composer.selected_suggestion().unwrap();
-                    let completion = format!("{} ", selected.name);
-                    self.conversation.composer.set_text(&completion);
+                    if let Err(error) = self.conversation.composer.accept_suggestion() {
+                        self.notice = Some(error);
+                    }
+                } else if self.conversation.composer.completion_loading() {
+                    self.notice =
+                        Some("Loading reference suggestions · your draft is preserved".into());
                 } else {
                     self.conversation.content_focus = !self.conversation.content_focus;
                 }
@@ -1243,6 +1293,7 @@ impl State {
                 self.chat_key(key);
             }
         }
+        self.chat_refresh_completions();
         self.chat_persist_draft();
         Vec::new()
     }
@@ -1517,6 +1568,7 @@ impl State {
 
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.chat_updates();
+        self.chat_refresh_completions();
         let g = self.geometry;
         let data = self.chat_data();
         let agents = items(&data, "agents");
@@ -1564,7 +1616,7 @@ impl State {
             &self.ui,
             self.conversation.view != View::Questions
                 && !self.conversation.content_focus
-                && self.conversation.editing.is_none(),
+                && (self.conversation.editing.is_none() || input.reference_active()),
         );
         if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
         {

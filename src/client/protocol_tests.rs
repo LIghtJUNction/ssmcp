@@ -8,7 +8,7 @@ const PEER: &str = r#"
 import json, os, pathlib, sys, time
 root = pathlib.Path(os.environ["SSMCP_PROTOCOL_FIXTURE"])
 scenario = os.environ["SSMCP_PROTOCOL_SCENARIO"]
-# A second subprocess cannot register while its rejected predecessor is alive.
+# A reconnect cannot register while the previous rejected subprocess is alive.
 lease = open(root / "ssh-owner.lock", "a+b")
 if os.name == "nt":
     import msvcrt
@@ -27,11 +27,15 @@ with open(root / "hellos.jsonl", "a", encoding="utf-8") as recorded:
 
 def reject(message):
     print(json.dumps({"type":"reject", "message":message}), flush=True)
-    # Force the client to terminate and reap us before trying another version.
+    # The client must terminate and reap this process before a later reconnect.
     time.sleep(60)
     raise SystemExit(2)
 
 unsupported = "unsupported ssmcp wire protocol"
+if scenario == "unsupported":
+    reject(unsupported)
+if scenario == "unsupported-detail":
+    reject(unsupported + "; server requires version 8")
 if scenario == "auth":
     reject("GitHub access policy denied")
 if scenario == "near-match":
@@ -52,29 +56,20 @@ if scenario == "wrong-frame":
 if scenario == "timeout":
     time.sleep(60)
     raise SystemExit(2)
-if scenario == "reject-all" or (scenario.startswith("legacy") and hello["version"] != 4):
-    reject(unsupported)
 
-if scenario == "code-only" and hello["version"] > 6:
-    reject(unsupported)
-if scenario == "controller-only" and hello["version"] > 5:
-    reject(unsupported + "; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)")
-
-if hello["version"] == 4:
-    assert set(hello["metadata"]) <= {"name", "cwd", "hostname", "allow"}
 github = bool(hello["metadata"].get("allow"))
 code, ttl = ("", 0) if github else ("a" * 64, 600)
-if scenario == "legacy-policy-login":
+if scenario == "policy-login":
     code, ttl = "a" * 64, 0
-elif scenario == "legacy-policy-ttl":
+elif scenario == "policy-ttl":
     code, ttl = "", 600
-elif scenario == "legacy-no-login":
+elif scenario == "no-login":
     code, ttl = "", 600
-elif scenario == "legacy-no-expiry":
+elif scenario == "no-expiry":
     code, ttl = "a" * 64, 0
 print(json.dumps({"type":"ready", "url":"https://fixture.invalid/mcp",
                   "login_code":code, "login_expires_in":ttl, "client_id":"b"*64}), flush=True)
-# Keep the registration live until its test explicitly performs normal cleanup.
+# Keep registration live until its test explicitly performs normal cleanup.
 sys.stdin.read()
 "#;
 
@@ -122,14 +117,12 @@ impl Fixture {
         &self,
         scenario: &str,
         metadata: &ClientMetadata,
-        protocol: &mut u32,
         registered: &mut bool,
         deadline: Duration,
     ) -> (crate::Result<Option<RegisteredSsh>>, usize) {
         let count = Cell::new(0usize);
         let result = register_ssh(
             metadata,
-            protocol,
             registered,
             || {
                 count.set(count.get() + 1);
@@ -188,181 +181,69 @@ async fn close(mut registration: RegisteredSsh) {
 const READY_LIMIT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn current_protocol_is_preferred_without_changing_metadata() {
-    let fixture = Fixture::new();
-    let metadata = metadata(false);
-    let mut protocol = VERSION;
-    let mut registered = false;
-    let (result, attempts) = fixture
-        .register(
-            "current",
-            &metadata,
-            &mut protocol,
-            &mut registered,
-            READY_LIMIT,
-        )
-        .await;
-    let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(attempts, 1);
-    assert_eq!(protocol, VERSION);
-    assert!(registered);
-    assert_eq!(fixture.hellos()[0]["version"], VERSION);
-    assert_eq!(
-        fixture.hellos()[0]["metadata"],
-        serde_json::to_value(&metadata).unwrap()
-    );
-    close(registration).await;
+async fn current_protocol_preserves_metadata_for_login_and_allow() {
+    for allow in [false, true] {
+        let fixture = Fixture::new();
+        let metadata = metadata(allow);
+        let mut registered = false;
+        let (result, attempts) = fixture
+            .register("current", &metadata, &mut registered, READY_LIMIT)
+            .await;
+        let registration = result.unwrap().expect("registration was cancelled");
+        assert_eq!(attempts, 1);
+        assert!(registered);
+        assert_eq!(registration.ready.1.is_empty(), allow);
+        assert_eq!(registration.ready.2 == 0, allow);
+        assert_eq!(fixture.hellos()[0]["version"], VERSION);
+        assert_eq!(
+            fixture.hellos()[0]["metadata"],
+            serde_json::to_value(&metadata).unwrap()
+        );
+        close(registration).await;
+    }
 }
 
 #[tokio::test]
-async fn explicit_rejections_use_fresh_transports_and_remember_the_legacy_version() {
-    let fixture = Fixture::new();
-    let metadata = metadata(true);
-    let original = metadata.clone();
-    let mut protocol = VERSION;
-    let mut registered = false;
-    let (result, attempts) = fixture
-        .register(
-            "legacy",
-            &metadata,
-            &mut protocol,
-            &mut registered,
-            READY_LIMIT,
-        )
-        .await;
-    let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(attempts, 4);
-    assert_eq!(protocol, LEGACY_VERSION);
-    assert!(registered);
-    assert!(registration.ready.1.is_empty());
-    assert_eq!(registration.ready.2, 0);
-    assert_eq!(
-        metadata, original,
-        "compatibility must not alter local task/access metadata"
-    );
-    let hellos = fixture.hellos();
-    assert_eq!(hellos[0]["version"], VERSION);
-    assert_eq!(
-        hellos[0]["metadata"]["title"],
-        original.title.as_ref().unwrap().as_str()
-    );
-    assert_eq!(hellos[1]["version"], CODE_VERSION);
-    assert_eq!(
-        hellos[1]["metadata"]["title"],
-        original.title.as_ref().unwrap().as_str()
-    );
-    assert_eq!(hellos[2]["version"], CONTROLLER_VERSION);
-    assert_eq!(hellos[3]["version"], LEGACY_VERSION);
-    assert!(hellos[3]["metadata"].get("title").is_none());
-    assert_eq!(
-        hellos[3]["metadata"]["allow"],
-        serde_json::to_value(&original.allow).unwrap()
-    );
-    close(registration).await;
+async fn protocol_rejection_is_terminal_without_downgrade_and_reaps_transport() {
+    for scenario in ["unsupported", "unsupported-detail"] {
+        let fixture = Fixture::new();
+        let metadata = metadata(true);
+        let mut registered = false;
+        let (result, attempts) = fixture
+            .register(scenario, &metadata, &mut registered, READY_LIMIT)
+            .await;
+        let error = registration_error(result);
+        assert!(error.downcast_ref::<UnsupportedWireProtocol>().is_some());
+        assert_eq!(attempts, 1);
+        assert!(!registered);
+        assert_eq!(fixture.hellos().len(), 1);
+        assert_eq!(fixture.hellos()[0]["version"], VERSION);
+        assert_eq!(
+            fixture.hellos()[0]["metadata"],
+            serde_json::to_value(&metadata).unwrap()
+        );
 
-    // A later connection in the same runner reuses v4 without another probe.
-    let (result, attempts) = fixture
-        .register(
-            "legacy",
-            &metadata,
-            &mut protocol,
-            &mut registered,
-            READY_LIMIT,
-        )
-        .await;
-    assert_eq!(attempts, 1);
-    let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(
-        fixture
-            .hellos()
-            .iter()
-            .map(|value| value["version"].as_u64().unwrap())
-            .collect::<Vec<_>>(),
-        [7, 6, 5, 4, 4]
-    );
-    close(registration).await;
+        // A later explicit connection still uses v7, and the prior process lock is gone.
+        let (result, attempts) = fixture
+            .register("current", &metadata, &mut registered, READY_LIMIT)
+            .await;
+        let registration = result.unwrap().expect("registration was cancelled");
+        assert_eq!(attempts, 1);
+        assert!(registered);
+        assert_eq!(
+            fixture
+                .hellos()
+                .iter()
+                .map(|value| value["version"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [u64::from(VERSION), u64::from(VERSION)]
+        );
+        close(registration).await;
+    }
 }
 
 #[tokio::test]
-async fn version_six_gateway_keeps_code_audit_without_sending_steering_frames() {
-    let fixture = Fixture::new();
-    let metadata = metadata(true);
-    let mut protocol = VERSION;
-    let mut registered = false;
-    let (result, attempts) = fixture
-        .register(
-            "code-only",
-            &metadata,
-            &mut protocol,
-            &mut registered,
-            READY_LIMIT,
-        )
-        .await;
-    let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(attempts, 2);
-    assert_eq!(protocol, CODE_VERSION);
-    assert!(registered);
-    assert_eq!(
-        fixture.hellos()[1]["metadata"],
-        serde_json::to_value(&metadata).unwrap()
-    );
-    close(registration).await;
-}
-
-#[tokio::test]
-async fn known_version_five_gateway_rejection_preserves_controller_protocol_and_title() {
-    let fixture = Fixture::new();
-    let metadata = metadata(true);
-    let mut protocol = VERSION;
-    let mut registered = false;
-    let (result, attempts) = fixture
-        .register(
-            "controller-only",
-            &metadata,
-            &mut protocol,
-            &mut registered,
-            READY_LIMIT,
-        )
-        .await;
-    let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(attempts, 3);
-    assert_eq!(protocol, CONTROLLER_VERSION);
-    assert!(registered);
-    let hellos = fixture.hellos();
-    assert_eq!(hellos[0]["version"], VERSION);
-    assert_eq!(hellos[1]["version"], CODE_VERSION);
-    assert_eq!(hellos[2]["version"], CONTROLLER_VERSION);
-    assert_eq!(
-        hellos[2]["metadata"]["title"],
-        metadata.title.as_ref().unwrap().as_str()
-    );
-    close(registration).await;
-}
-
-#[tokio::test]
-async fn explicit_legacy_rejection_is_terminal_after_all_supported_versions() {
-    let fixture = Fixture::new();
-    let mut protocol = VERSION;
-    let mut registered = false;
-    let (result, attempts) = fixture
-        .register(
-            "reject-all",
-            &metadata(false),
-            &mut protocol,
-            &mut registered,
-            READY_LIMIT,
-        )
-        .await;
-    let error = registration_error(result);
-    assert!(error.downcast_ref::<UnsupportedWireProtocol>().is_some());
-    assert_eq!(attempts, 4);
-    assert_eq!(protocol, LEGACY_VERSION);
-    assert!(!registered);
-    assert_eq!(fixture.hellos().len(), 4);
-}
-
-#[tokio::test]
-async fn authentication_errors_and_untyped_failures_never_trigger_downgrade() {
+async fn authentication_errors_and_untyped_failures_never_retry_registration() {
     for scenario in [
         "auth",
         "near-match",
@@ -373,20 +254,12 @@ async fn authentication_errors_and_untyped_failures_never_trigger_downgrade() {
         "wrong-frame",
     ] {
         let fixture = Fixture::new();
-        let mut protocol = VERSION;
         let mut registered = false;
         let (result, attempts) = fixture
-            .register(
-                scenario,
-                &metadata(true),
-                &mut protocol,
-                &mut registered,
-                READY_LIMIT,
-            )
+            .register(scenario, &metadata(true), &mut registered, READY_LIMIT)
             .await;
         let error = registration_error(result);
         assert_eq!(attempts, 1, "{scenario}: {error}");
-        assert_eq!(protocol, VERSION, "{scenario}: {error}");
         assert!(!registered, "{scenario}");
         assert!(
             error.downcast_ref::<UnsupportedWireProtocol>().is_none(),
@@ -399,64 +272,46 @@ async fn authentication_errors_and_untyped_failures_never_trigger_downgrade() {
 }
 
 #[tokio::test]
-async fn compatibility_preserves_both_allow_checks_and_login_code_requirement() {
+async fn current_protocol_preserves_allow_checks_and_login_requirements() {
     for (scenario, allow, expected) in [
-        (
-            "legacy-policy-login",
-            true,
-            "did not acknowledge the --allow",
-        ),
-        ("legacy-policy-ttl", true, "did not acknowledge the --allow"),
-        ("legacy-no-login", false, "returned no login code"),
-        ("legacy-no-expiry", false, "returned no login code"),
+        ("policy-login", true, "did not acknowledge the --allow"),
+        ("policy-ttl", true, "did not acknowledge the --allow"),
+        ("no-login", false, "returned no login code"),
+        ("no-expiry", false, "returned no login code"),
     ] {
         let fixture = Fixture::new();
         let metadata = metadata(allow);
         let original = metadata.clone();
-        let mut protocol = VERSION;
         let mut registered = false;
         let (result, attempts) = fixture
-            .register(
-                scenario,
-                &metadata,
-                &mut protocol,
-                &mut registered,
-                READY_LIMIT,
-            )
+            .register(scenario, &metadata, &mut registered, READY_LIMIT)
             .await;
         let error = registration_error(result);
         assert!(error.to_string().contains(expected), "{scenario}: {error}");
-        assert_eq!(attempts, 4);
-        assert_eq!(protocol, LEGACY_VERSION);
+        assert_eq!(attempts, 1);
         assert!(
             registered,
             "a received Ready still suppresses unrelated onboarding"
         );
         assert_eq!(metadata, original);
-        let hello = fixture.hellos().pop().unwrap();
+        assert_eq!(fixture.hellos()[0]["version"], VERSION);
         assert_eq!(
-            hello["metadata"]
-                .get("allow")
-                .cloned()
-                .unwrap_or_else(|| json!([])),
-            json!(original.allow)
+            fixture.hellos()[0]["metadata"],
+            serde_json::to_value(&original).unwrap()
         );
-        assert!(hello["metadata"].get("title").is_none());
     }
 }
 
 #[tokio::test]
-async fn handshake_deadline_never_selects_a_legacy_protocol() {
+async fn handshake_deadline_stops_the_single_current_protocol_attempt() {
     let fixture = Fixture::new();
-    let mut protocol = VERSION;
     let mut registered = false;
-    // Only this dedicated timeout case has a short injected deadline. Successful
-    // process/handshake tests retain a separate generous startup allowance.
+    // Only this timeout case uses a short deadline; successful subprocess tests
+    // retain a separate generous startup allowance.
     let (result, attempts) = fixture
         .register(
             "timeout",
             &metadata(false),
-            &mut protocol,
             &mut registered,
             Duration::from_millis(200),
         )
@@ -467,6 +322,28 @@ async fn handshake_deadline_never_selects_a_legacy_protocol() {
         "{error}"
     );
     assert_eq!(attempts, 1);
-    assert_eq!(protocol, VERSION);
+    assert!(!registered);
+}
+
+#[tokio::test]
+async fn cancelled_registration_does_not_start_a_transport() {
+    let fixture = Fixture::new();
+    let metadata = metadata(false);
+    let mut registered = false;
+    let attempts = Cell::new(0usize);
+    let result = register_ssh(
+        &metadata,
+        &mut registered,
+        || {
+            attempts.set(attempts.get() + 1);
+            fixture.command("current")
+        },
+        std::future::ready(()),
+        READY_LIMIT,
+    )
+    .await
+    .unwrap();
+    assert!(result.is_none());
+    assert_eq!(attempts.get(), 0);
     assert!(!registered);
 }

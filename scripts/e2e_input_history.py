@@ -162,6 +162,27 @@ class InputHistory(Composer):
                         "the UTF-8 draft did not reach the composer")
         return self.queue_current(front, source)
 
+    def complete_reference(self, front, typed, candidate, expected, key, shot_name):
+        before = {item["id"] for item in self.queue()["queue"]}
+        front.send(typed)
+        front.until(
+            lambda shot: any(row.lstrip().startswith("› " + candidate + "  ")
+                             for row in shot["rows"]),
+            f"the real enumerated {candidate} completion",
+        )
+        self.save_shot(shot_name, front)
+        front.send(key)
+        state = self.wait_state(
+            front, lambda state: state["draft"]["text"] == expected,
+            f"accepting {candidate} did not preserve the surrounding UTF-8 draft",
+        )
+        label = "Tab" if key == b"\t" else "Enter"
+        self.check(state["draft"]["cursor"] == len(expected.encode("utf-8")),
+                   f"{label} completes {candidate} at its correct UTF-8 cursor")
+        self.check({item["id"] for item in self.queue()["queue"]} == before,
+                   f"the first {label} accepts {candidate} without queuing a requirement")
+        return expected
+
     def delivered_references(self, front, member, record, source):
         response = self.work(member=member)
         self.expect_delivery(response, record, agent_id=member["agent_id"])
@@ -198,8 +219,22 @@ class InputHistory(Composer):
         )
         (self.workspace / skill_path).parent.mkdir(parents=True)
         (self.workspace / skill_path).write_text(skill, encoding="utf-8")
-        source = f'REFERENCE_REQUEST 界 @"{notes_path}" $input-fixture'
-        record = self.submit_source(front, source)
+        image_path = "资料/红蓝.png"
+        image_bytes = png_fixture()
+        (self.workspace / image_path).write_bytes(image_bytes)
+        # Create every file before enumeration so a cached directory listing is
+        # a real fixture snapshot, not an accidental cache-expiry dependency.
+        file_draft = self.complete_reference(
+            front, "REFERENCE_REQUEST 界 @资料/说", "@" + notes_path,
+            f'REFERENCE_REQUEST 界 @"{notes_path}" ', b"\t", "complete-file",
+        )
+        source = self.complete_reference(
+            front, "$input-f", "$input-fixture", file_draft + "$input-fixture ",
+            ENTER, "complete-skill",
+        )
+        # The prior Enter only accepted the skill. This second Enter must send
+        # exactly this completed draft to the explicitly selected fixture agent.
+        record = self.queue_current(front, source)
         references = self.delivered_references(front, member, record, source)
         file_ref = next(item for item in references if item["kind"] == "text")
         skill_ref = next(item for item in references if item["kind"] == "skill")
@@ -213,11 +248,11 @@ class InputHistory(Composer):
                    "delivered file and skill read actions retrieve the complete fixture contents")
         self.save_shot("references", front)
 
-        image_path = "资料/红蓝.png"
-        image_bytes = png_fixture()
-        (self.workspace / image_path).write_bytes(image_bytes)
-        image_source = f'IMAGE_REQUEST @"{image_path}"'
-        image_record = self.submit_source(front, image_source)
+        image_source = self.complete_reference(
+            front, "IMAGE_REQUEST @资料/红", "@" + image_path,
+            f"IMAGE_REQUEST @{image_path} ", ENTER, "complete-image",
+        )
+        image_record = self.queue_current(front, image_source)
         image_refs = self.delivered_references(front, member, image_record, image_source)
         self.check(len(image_refs) == 1 and image_refs[0]["kind"] == "image"
                    and image_refs[0]["read"]["tool"] == "ssmcp.fs.read_image",
@@ -396,6 +431,26 @@ class InputHistory(Composer):
         self.metrics["history_messages"] = len(history["messages"])
         resumed.close()
 
+    def shell_scenario(self, front):
+        before = len(self.queue()["queue"])
+        front.send("!printf '%s_%s' SHELL_PREFIX OK; exit 7")
+        front.send(ENTER)
+        front.until(lambda shot: "command · exit 7" in text(shot),
+                    "the explicit shell command completes and shows its exit status")
+        state = self.ui("/display/conversation")
+        self.check(not state["draft"]["text"] and len(self.queue()["queue"]) == before,
+                   "the ! command clears its draft without entering the agent request queue")
+        self.check("SHELL_PREFIX_OK" in bytes(front.transcript).decode("utf-8", errors="replace"),
+                   "the real shell command output reaches the terminal")
+        self.save_shot("shell-command", front)
+        front.send("/tasks")
+        front.send(ENTER)
+        front.until(lambda shot: "Local tasks" in text(shot) and "exit 7" in text(shot),
+                    "the local task list includes the completed shell job")
+        self.check(len(self.queue()["queue"]) == before,
+                   "/tasks remains a local command instead of an agent requirement")
+        self.save_shot("tasks", front)
+
     def run(self):
         self.prepare()
         self.workspace = self.directory / "workspace"
@@ -423,6 +478,7 @@ class InputHistory(Composer):
         first_source = self.reference_scenarios(front, member)
         self.paste_scenario(front, member)
         self.copy_and_help(front)
+        self.shell_scenario(front)
         self.history_scenario(front, first_source)
 
 
@@ -447,7 +503,7 @@ def main():
     report = {
         "status": "failed", "platform": platform.system(),
         "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
-        "scope": "file/skill/image references, large paste, copy/help, automatic JSONL and local resume; no models",
+        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, copy/help, local shell/tasks, automatic JSONL and resume; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",

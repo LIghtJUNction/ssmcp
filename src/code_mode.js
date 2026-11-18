@@ -143,20 +143,27 @@ function emitImage(encoded) {
   }
   let item;
   try { item = decode(encoded); } catch { return failure('image content must be JSON'); }
-  if (!item || item.type !== 'image' || !['image/png', 'image/jpeg'].includes(item.mimeType)
+  if (!item || item.type !== 'image' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(item.mimeType)
       || typeof item.data !== 'string' || !item.data
       || item.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4
       || item.data.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(item.data)) {
-    return failure('image requires PNG or JPEG content and canonical base64 data within 400 KiB');
+    return failure('image requires PNG, JPEG, GIF or WebP content and canonical base64 data within 400 KiB');
   }
   const data = Buffer.from(item.data, 'base64');
   if (data.length > MAX_IMAGE_BYTES || data.toString('base64') !== item.data) {
     return failure('image requires canonical base64 data within 400 KiB');
   }
+  // Match output::image_mime_type: check raster headers, not full codec validity.
   const magic = item.mimeType === 'image/png'
     ? data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
-    : data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255;
-  if (!magic) return failure('image bytes do not match their PNG or JPEG MIME type');
+    : item.mimeType === 'image/jpeg'
+      ? data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255
+      : item.mimeType === 'image/gif'
+        ? data.subarray(0, 6).equals(Buffer.from('GIF87a'))
+          || data.subarray(0, 6).equals(Buffer.from('GIF89a'))
+        : data.subarray(0, 4).equals(Buffer.from('RIFF'))
+          && data.subarray(8, 12).equals(Buffer.from('WEBP'));
+  if (!magic) return failure('image bytes do not match their declared raster MIME type');
   if (imageCount >= MAX_IMAGES || imageBytes + item.data.length > MAX_IMAGE_ENCODED_BYTES) {
     return failure('code_mode images exceed 4 images or 2 MiB of encoded data');
   }

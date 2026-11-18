@@ -984,7 +984,7 @@ mod tests {
             ),
             (
                 "image({type:'image',mimeType:'image/svg+xml',data:'PHN2Zy8+'});".into(),
-                "PNG or JPEG",
+                "PNG, JPEG, GIF or WebP",
             ),
             (
                 "image({type:'image',mimeType:'image/png',data:'not-base64'});".into(),

@@ -199,7 +199,7 @@ fn native_limits() -> Value {
         },
         "client_ui":{
             "layouts":["chat","split","audit","logs"],
-            "source_wire_version":crate::wire::CODE_VERSION,
+            "source_wire_version":crate::wire::VERSION,
             "queue_wire_version":crate::wire::VERSION,
             "audit_max_runs":128,
             "audit_max_bytes":2097152,
@@ -503,7 +503,7 @@ executed by the UI; targeted delivery requires collab.bind with the registered m
 UI calls, tool directory queries, ssmcp.client.capabilities and ssmcp.resources.list/templates/read \
 do not claim Next caller requirements by themselves. Explicit collab.bind remains eligible; \
 terminal, file and output calls retain their normal delivery behavior. Source audit still records \
-native queries. Queue support requires protocol v7; source lifecycle support requires v6.\n\n\
+native queries. Queue and source lifecycle support require the current wire protocol v7; other wire versions are rejected.\n\n\
 To communicate in the user's ssmcp terminal, call(clientId,'ssmcp.ui.message',{text}) with your Markdown reply; \
 the client renders it locally and records the assistant message. Use ssmcp.ui.ask for a nonblocking question, \
 then ssmcp.ui.questions to retrieve its answer; the user opens the queue with Shift+Up. Do not wait inside \

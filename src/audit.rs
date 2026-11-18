@@ -435,7 +435,7 @@ fn payload_text_redacted(text: &str, depth: usize) -> String {
         let safe = payload_json_redacted(value.clone(), false, depth + 1);
         // An encoded output payload is application data. A field named result
         // is not an RPC response boundary and must not trigger summarization.
-        return if safe == value {
+        return if safe == value && json_keys_are_unique(text) {
             text.to_owned()
         } else {
             safe.to_string()
@@ -482,6 +482,48 @@ fn payload_json_redacted(value: Value, inherited_sensitive: bool, depth: usize) 
     }
 }
 
+// Value parsing discards earlier duplicate keys. Only restore original bytes
+// when no object contains aliases that could hide a discarded secret value.
+fn json_keys_are_unique(text: &str) -> bool {
+    let mut objects = Vec::<std::collections::BTreeSet<String>>::new();
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while let Some(byte) = bytes.get(at) {
+        match byte {
+            b'{' => objects.push(std::collections::BTreeSet::new()),
+            b'}' => {
+                objects.pop();
+            }
+            b'"' => {
+                let start = at;
+                at += 1;
+                while let Some(byte) = bytes.get(at) {
+                    match byte {
+                        b'\\' => at += 2,
+                        b'"' => break,
+                        _ => at += 1,
+                    }
+                }
+                let end = at + 1;
+                if end > text.len() {
+                    return false;
+                }
+                if text[end..].trim_start().starts_with(':') {
+                    let Ok(key) = serde_json::from_str::<String>(&text[start..end]) else {
+                        return false;
+                    };
+                    if !objects.last_mut().is_some_and(|keys| keys.insert(key)) {
+                        return false;
+                    }
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    true
+}
+
 fn text_redacted(text: &str, depth: usize) -> String {
     if depth > DEPTH_LIMIT {
         return "[redacted: nesting limit]".into();
@@ -493,7 +535,12 @@ fn text_redacted(text: &str, depth: usize) -> String {
     if (trimmed.starts_with('{') || trimmed.starts_with('['))
         && let Ok(value) = serde_json::from_str::<Value>(text)
     {
-        return redact(value, false, depth + 1).to_string();
+        let safe = redact(value.clone(), false, depth + 1);
+        return if safe == value && json_keys_are_unique(text) {
+            text.to_owned()
+        } else {
+            safe.to_string()
+        };
     }
     let mut output = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
@@ -636,6 +683,38 @@ fn urls_redacted(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_text_preserves_source_only_when_no_redaction_is_needed() {
+        for source in [
+            r#"  { "z": 1, "a": "\t" }  "#,
+            r#"[ { "z": true, "a": "界" }, { "z": false, "a": "text" } ]"#,
+        ] {
+            assert_eq!(event(json!(source)), json!(source));
+        }
+        let source =
+            r#"{ "z": 1, "nested": { "api\u004bey": "fixture-private-value" }, "a": "\t" }"#;
+        let safe = event(json!(source));
+        let text = safe.as_str().unwrap();
+        assert!(!text.contains("fixture-private-value"), "{text}");
+        let value: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(value["nested"]["apiKey"], REDACTED);
+        assert_eq!(value["z"], 1);
+        assert_eq!(value["a"], "\t");
+
+        let duplicate =
+            r#"{ "item": {"apiKey": "discarded-private-value"}, "i\u0074em": {"ok": true} }"#;
+        for text in [
+            event(json!(duplicate)).as_str().unwrap().to_owned(),
+            payload_text_redacted(duplicate, 0),
+        ] {
+            assert!(!text.contains("discarded-private-value"), "{text}");
+            assert_eq!(
+                serde_json::from_str::<Value>(&text).unwrap()["item"]["ok"],
+                true
+            );
+        }
+    }
 
     #[test]
     fn nested_credentials_environment_and_private_file_content_are_removed() {
