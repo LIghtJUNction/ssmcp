@@ -20,7 +20,8 @@ import subprocess
 import tempfile
 import time
 
-from e2e_composer import Composer, DELETE, DOWN, ENTER, ESC, HOME, LEFT, RIGHT
+from e2e_composer import Composer, DELETE, DOWN, ENTER, ESC, HOME, LEFT
+from e2e_client_ui import column
 from e2e_dashboard import sha256, text
 
 
@@ -78,6 +79,9 @@ class Questions(Composer):
         for _ in range(3):
             state = self.ui("/display/conversation")
             if state["view"] == "activity":
+                front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+                            and not shot["hide_cursor"],
+                            "the restored conversation column and ordinary composer")
                 return state
             front.send(ESC)
             front.pump(0.15)
@@ -86,7 +90,7 @@ class Questions(Composer):
     def details(self, front, marker):
         front.send(SHIFT_UP)
         front.until(
-            lambda shot: "ssmcp  /  questions" in text(shot)
+            lambda shot: column(shot) == ("questions", 5, 8)
             and marker in text(shot) and not shot["hide_cursor"],
             "Shift+Up opening the expected question with its answer input",
         )
@@ -138,10 +142,10 @@ class Questions(Composer):
         roster = self.queue()["agents"]
         selected = 1 + next(index for index, item in enumerate(roster)
                             if item["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * selected + RIGHT)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot)
+        front.send(HOME + DOWN * selected + ENTER)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
                     and "To · Question fixture agent" in text(shot),
-                    "an exact member recipient")
+                    "Enter selecting an exact member recipient")
         ordinary = "QUESTIONS_ORDINARY_DRAFT 保留文字界"
         front.send(ordinary.encode("utf-8") + LEFT)
         original = self.wait_conversation(
@@ -200,10 +204,10 @@ class Questions(Composer):
                    and self.question(second["id"])["state"] == "pending",
                    "repeated Shift+Up changes questions without answering either one")
         front.send(ESC)
-        front.until(lambda shot: "ssmcp  /  questions" in text(shot) and shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("questions", 5, 8) and shot["hide_cursor"],
                     "Escape returning from answer input to the question list")
         front.send(ESC)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "a second Escape restoring the normal conversation")
         self.check(self.composition(self.ui("/display/conversation")) == original,
                    "two Escape transitions preserve normal text, cursor, recipient and edit identity")
@@ -226,7 +230,7 @@ class Questions(Composer):
 
         self.details(front, "DETAIL_SKIP_THIRD")
         front.send(ESC)
-        front.until(lambda shot: "ssmcp  /  questions" in text(shot) and shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("questions", 5, 8) and shot["hide_cursor"],
                     "the optional question selected in the list")
         front.send(DELETE)
         skipped = self.wait_question(front, third["id"], "skipped")
@@ -323,6 +327,7 @@ def main():
         "sources": {path.name: sha256(path) for path in (
             Path(__file__), Path(__file__).with_name("e2e.py"),
             Path(__file__).with_name("e2e_dashboard.py"),
+            Path(__file__).with_name("e2e_client_ui.py"),
             Path(__file__).with_name("e2e_composer.py"),
         )},
     }
