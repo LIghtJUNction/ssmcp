@@ -270,14 +270,14 @@ impl Computer {
             ),
             tool(
                 "app_launch",
-                "Launch an argv application in the active private desktop with a separate display, runtime directory and D-Bus session. Use browser tools for existing browser sessions.",
-                json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":128}}),
+                "Launch an argv application in a private desktop, starting the desktop automatically when needed. Uses a separate display, runtime directory and D-Bus session; never moves host focus. Use browser tools for existing browser sessions.",
+                json!({"command":{"type":"array","items":{"type":"string","maxLength":4096},"minItems":1,"maxItems":128,"description":"Literal argv: existing executable first, at most 4096 UTF-8 bytes per item and 32 KiB total. Validated before automatic desktop startup."}}),
                 &["command"],
                 false,
             ),
             tool(
                 "status",
-                "Inspect native desktop capabilities and missing system helpers; no screenshot or input is produced.",
+                "Inspect the selected private desktop, or report private-desktop readiness and missing helpers when none is running. Does not start a display. Host inspection requires desktop: host.",
                 json!({}),
                 &[],
                 true,
@@ -363,8 +363,8 @@ impl Computer {
                     | "ssmcp.computer.app_launch"
             ) {
                 descriptor["inputSchema"]["properties"]["desktop"] = json!({
-                    "type":"string", "enum":["isolated","host"],
-                    "description":"Defaults to the active private desktop. Host input requires an explicit host selection; it can move the user's mouse and focus."
+                    "type":"string", "enum":["isolated","host"], "default":"isolated",
+                    "description":"All observation and input defaults to isolated. Without a private desktop, status reports readiness and other operations require app_launch or desktop_start; read-only calls never start one. Host access requires explicit host selection and may move the user's mouse or focus."
                 });
             }
         }
@@ -1235,8 +1235,7 @@ fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Err("JPEG dimensions are missing".into())
 }
 
-#[cfg(any(test, target_os = "macos"))]
-async fn run_helper(
+pub(crate) async fn run_helper(
     root: &std::path::Path,
     program: &str,
     args: &[String],
@@ -1828,10 +1827,35 @@ if root.exists():
     #[cfg(unix)]
     #[tokio::test]
     async fn release_wait_deadlines_preserve_tracking_and_order_later_input() {
+        use std::{
+            future::{Future, poll_fn},
+            task::Poll,
+        };
+
         let fixture = ReleaseFixture::new();
         let computer = Arc::new(Computer::new(fixture.0.clone()).unwrap());
-        drop(fixture.guard(&computer, WAITING_RELEASE));
-        fixture.started().await;
+        let released = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let task = std::thread::spawn({
+            let released = released.clone();
+            move || {
+                let _ = started_tx.send(());
+                release_rx
+                    .recv()
+                    .map_err(|_| "release fixture was cancelled".to_owned())?;
+                released.store(true, Ordering::Release);
+                Ok(())
+            }
+        });
+        computer.releases.state.lock().unwrap().tasks.push(task);
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // The release cannot finish until this test opens the channel, even if
+        // the executor is delayed beyond the requested wait deadline.
         let error = computer
             .releases
             .wait(Duration::from_millis(20))
@@ -1839,35 +1863,36 @@ if root.exists():
             .unwrap_err();
         assert!(error.contains("remain tracked"), "{error}");
         assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
+
+        // Cancelling a polled waiter must not remove the still-owned cleanup.
+        let mut waiting = Box::pin(computer.releases.wait(RELEASE_WAIT_TIMEOUT));
         assert!(
-            tokio::time::timeout(
-                Duration::from_millis(20),
-                computer.releases.wait(RELEASE_WAIT_TIMEOUT)
-            )
-            .await
-            .is_err()
+            poll_fn(|cx| Poll::Ready(waiting.as_mut().poll(cx)))
+                .await
+                .is_pending()
         );
+        drop(waiting);
         assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
 
-        let mut next = tokio::spawn({
-            let computer = computer.clone();
-            async move {
-                computer
-                    .perform("ssmcp.computer.not_a_tool", json!({}))
-                    .await
-            }
-        });
+        // Test local input serialization directly: the public dispatcher now
+        // defaults to an isolated desktop and may reject before this queue.
+        // An unknown operation cannot send input to any host desktop.
+        let mut next = Box::pin(computer.perform_local("ssmcp.computer.not_a_tool", json!({})));
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut next)
+            poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx)))
                 .await
-                .is_err()
+                .is_pending()
         );
-        fixture.release();
+        assert!(!released.load(Ordering::Acquire));
+        assert!(computer.serial.try_lock().is_err());
+        assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
+
+        release_tx.send(()).unwrap();
         let error = tokio::time::timeout(Duration::from_secs(5), next)
             .await
             .unwrap()
-            .unwrap()
             .unwrap_err();
+        assert!(released.load(Ordering::Acquire));
         assert!(error.contains("unknown computer tool"), "{error}");
         computer.shutdown().await.unwrap();
         assert!(computer.releases.state.lock().unwrap().tasks.is_empty());

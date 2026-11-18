@@ -835,44 +835,187 @@ overridden in the local [ui.colors] table.
 Include UTC timestamps on event headings.
 .TP
 .B --max-inline-output N
-Show at most N lines per buffered output block. Default: 12.
+Show at most N lines per buffered tool output block. Default: 8.
+User, agent and answer messages retain their conversation text.
 
 .SH CONVERSATION INTERFACE
 The default chat layout shows command activity above a multiline requirement
 input, with a collapsible status sidebar. F3 toggles the sidebar; F4 changes
 theme, F5 reloads display configuration, and F8 saves the current appearance.
-Run ssmcp ui preview to inspect the actual renderer with fixed sample events.
+Semantic colors distinguish calls, success, warnings and errors while retaining
+text labels. Run ssmcp ui preview to inspect the renderer with fixed samples.
 Preview submissions do not contact an agent or restart a real session.
+.SS "Requirements and recipients"
+Enter queues a local user requirement and releases the editor for the next
+draft. Sending waits for server acknowledgement; acknowledgement does not clear
+a newer draft. Tab switches input and content focus. Use /queue and the arrow
+keys to select requests; Enter takes a pending request back for editing after
+server acknowledgement, Delete cancels a retractable request, and Right/Left
+opens/closes details.
 .PP
-Enter queues a local user requirement. Tab switches input and content focus.
-Use /queue and the arrow keys to select queued requests; Enter takes a pending
-request back for editing after server acknowledgement, Delete cancels a
-retractable request, and Right/Left opens/closes details. /agents selects a
-registered recipient by its authenticated member ID. Multiple requests remain
-queued until an eligible tool response can carry them.
+Left at the start of an empty or existing draft opens the agent chooser.
+Up/Down selects a registered recipient; Enter/Right chooses it and returns to
+the conversation. Esc/Left returns with the previous recipient, draft and
+cursor preserved. The local /agents command is no longer used.
 .PP
-Requirements are delivered separately from native execution output in the next
-eligible code_mode response. Delivered means attached to a response, not proof
-that a model has read or executed the requirement. Exact recipients bind their
-collaboration identity for that run. Queue support requires protocol 7 on both
-ends. Local attach remains observational; use the foreground client or the
+Requirements remain queued until an eligible code_mode response carries them,
+separately from native execution output. Delivered means attached to a response,
+not proof that a model has read or executed it. Exact recipients bind their
+collaboration identity for that run. Client and server accept only protocol 7;
+a different version is rejected without legacy downgrade. Local attach remains observational; use the foreground client or the
 ssmcp.ui.queue primitive to manage requirements.
 .PP
+Requirements from both the foreground editor and background ssmcp.ui.queue
+are written to local conversation history after server acknowledgement.
+A requested:true response is not that acknowledgement or proof of delivery.
+A history-write failure is reported without reversing an acknowledged request.
+.SS "File, skill and image references"
+Use @path or @"path with spaces" for a readable regular file in the workspace,
+and $skill-name for an effective project or global skill. References are checked
+before transmission. Invalid, unreadable, escaping or oversized references
+report an error and preserve the source draft. Text files receive a preview of
+at most 1 KiB; binary and image references include type, size, path and an actual
+native reading method. A path reference does not upload an immutable file copy.
+.PP
+A requirement supports at most 8 references, files up to 64 MiB, and skill
+instructions up to 256 KiB. The draft and expanded requirement must each fit
+within 16 KiB. A retry reuses the successfully expanded text, and taking a
+request back for editing restores the source notation.
+.PP
+ssmcp.fs.read_image accepts a workspace-relative image path and returns an MCP
+image block with small metadata. PNG, JPEG, GIF and WebP are supported up to
+400 KiB (409600 bytes), without silent resizing. After an actual native image
+read, the foreground renders a local thumbnail using terminal color cells or
+a grayscale fallback. Merely typing @image does not read or decode it.
+Local logs do not print the base64 payload. Preview decoding is limited to
+4096 pixels per dimension and 64 MiB of decoded pixels.
+.PP
+PNG and JPEG remain compatible with older relays. Passing GIF or WebP through
+image() also requires the relay's updated MIME validator; reloading only the
+client does not update that validator. No wire-protocol upgrade is required.
+.SS "Clipboard and file import"
+Ctrl-V or /paste reads the local operating-system clipboard asynchronously.
+Small text enters the active draft or answer; text over 8 KiB and images become
+private files referenced by ordinary @ notation. Terminal-handled paste remains
+available; use /paste if the terminal intercepts Ctrl-V.
+.PP
+Use /attach PATH for one regular workspace file; quote paths containing spaces.
+Ordinary files retain their path reference. Images are validated and, when
+needed, resized or re-encoded into a private .ssmcp/inputs/image-* copy.
+Input images are bounded to 16 MiB, 33,554,432 pixels and 16384 pixels per side.
+Prepared files fit within 400 KiB of raw image bytes and 4096 pixels per side.
+PNG alpha is preserved. Processing reports changed dimensions or encoding;
+GIF/WebP converted to PNG/JPEG retain only the first frame and report that limit.
+The source image is not overwritten.
+.PP
+These actions prepare an editable draft without sending it, changing its
+recipient or invoking a model. A changed draft, answer or recipient rejects
+a late insertion; an already saved file is identified for manual recovery.
+Only one local input job runs at a time. Errors preserve new user input.
+Private image, long-text and handoff storage currently requires Unix.
+Plain clipboard text is never implicitly treated as a file path.
+.PP
+/copy copies the latest displayed Agent message as original Markdown text,
+up to the 16 KiB latest-message cache, using the operating-system clipboard.
+An oversized latest reply clears the cache instead of copying an older reply.
+A helper failure reports
+an error instead of claiming successful copying. Native clipboard helpers
+are used only on explicit user action and are not installed automatically.
+.SS "Long paste"
+On Unix, a bracketed paste exceeding 8 KiB is saved as a private
+\&.ssmcp/inputs/paste-<random-id>.txt file and inserted as a quoted @file reference.
+Add the request after the reference. A paste may contain at most 4 MiB of UTF-8
+text. Capacity and storage failures are reported without silently truncating
+the paste. Directories and files are opened without following symbolic links;
+the inputs directory is private and new files use mode 0600.
+.PP
+Automatic paste storage is unavailable on Windows; save a workspace file and
+reference it manually. Successful input files are not deleted automatically:
+remove them only after later reads are no longer needed. These files are
+separate from the request queue and saved conversation history.
+.SS "Local agent messages and questions"
+Use ssmcp.ui.message for Markdown progress and results addressed to the local
+user. Use ssmcp.ui.ask for a nonblocking question: it returns an ID immediately,
+so other work may continue. Read the answer later with ssmcp.ui.questions.
+This is a local communication convention; it does not intercept messages from
+external chat applications.
+.PP
+Shift-Up opens pending questions. Enter a choice number or free text and press
+Enter to save. The answer editor is separate from the normal requirement draft.
+Esc returns to the question list; Delete skips a question there; Esc returns
+to the conversation. Questions are bounded to 32 pending, 64 retained and
+256 KiB in total. Connection reconnects within the same process preserve them;
+process restart or /reload does not restore the pending-question queue.
+The foreground user supplies answers; background callers may ask and read.
+.SS "Events, help and copying"
+Buffered tool output uses an 8-line summary by default, with an omission marker
+and retained head/tail text. Conversation messages keep their body text.
+In the unfiltered chat activity view, each published display block is one
+event. The event view retains at most 128 events and 2 MiB of display text,
+separately from the audit cache. Long tool events start folded; user, agent,
+answer and image events start open.
+.PP
+With content focused, Up/Down selects an event, Enter toggles it, Right opens
+it and Left folds it. Clicking an event also selects and toggles it.
+Expansion only reveals retained display text: it does not recover output
+already omitted by the summary and never reruns a tool. Read complete output
+using the corresponding task cursor or output archive.
+.PP
 Mouse wheel and PageUp/PageDown scroll content directly. /filter TEXT searches
-the retained log history while keeping matching command output and completion.
-Use --all, --commands or --errors with /filter to select a category.
-/audit or Ctrl-O opens source audit; Up/Down browse runs, Enter/Right opens
-syntax-highlighted source, and Left returns to the list. Source audit requires
-protocol 6 or later.
+retained logs while keeping matching command output and completion. Use --all,
+--commands or --errors with /filter to select a category. Filtering and other
+log layouts retain the existing screen-history view.
 .PP
-/reload restarts the client connection and restores its controlled draft/queue
-handoff. Existing connection-owned tasks end according to the session lifecycle.
-Uncertain delivery is not replayed automatically. F5 and the native UI action
-named reload only reload appearance. /help lists local commands and shortcuts.
+F7 freezes the display and releases mouse capture for native terminal selection.
+Use the terminal's copy shortcut, commonly Ctrl-Shift-C; F7 or Esc returns.
+Terminals supporting Shift-drag can use that selection gesture directly.
+F1 or /help opens full, scrollable help: use arrows, wheel, PageUp/PageDown or
+Home/End. F2 cycles activity, audit, agents, queue, questions and history.
 .PP
-Alternate frontends use ssmcp.ui.get/set/action/filter/queue. UI get supports
-JSON Pointer projections and array/string pages, bounded to 8 KiB per projected
-response. Pure UI polling does not implicitly claim next-caller requirements.
+/audit or Ctrl-O opens source audit; Up/Down browses runs, Enter/Right opens
+syntax-highlighted source, and Left returns to the list. Source audit uses the
+same current protocol 7; older protocol connections are no longer accepted.
+.SS "Context handoff"
+Use /handoff [note] to prepare a bounded Markdown snapshot of the current
+conversation, pending requests and questions. It is saved privately as
+\&.ssmcp/inputs/handoff-*.md and inserted as an editable @file draft.
+The current recipient is retained; no requirement is automatically sent,
+model invoked or external session switched. The document is limited to
+2 MiB and the optional note to 16 KiB; omitted content is identified.
+It does not include the unsent normal draft or credentials. Retain the file
+until later readers no longer need it. See docs/conversation-history.md.
+.SS "History and reload"
+Use /resume to select saved conversation text for the current workspace and
+continue appending to it. The versioned JSONL schema is ssmcp.conversation.v1,
+with system/user/assistant/tool roles and string content. History is redacted.
+Restoring text never resends old requirements, reruns tools, resumes an external
+harness session or restores saved credentials. See docs/conversation-history.md
+for storage paths, capacity limits and schema details.
+.PP
+/reload and /restart restart the client connection and restore its controlled
+draft/queue handoff. Existing connection-owned tasks end according to the
+session lifecycle. Uncertain delivery is not replayed automatically.
+F5 and the native UI action named reload only reload appearance.
+.SS "Local execution tasks"
+/tasks displays the actual local execution jobs. Use /tasks cancel JOB_ID only
+when explicitly cancelling that exact job. Listing tasks does not cancel them.
+.SS "Actual harness tools"
+The local /pi, /cc and /codex commands display the current installed registry.
+Adding tools OFFSET pages the directory; adding TOOL alone inspects that
+tool's original descriptor and input schema. Only TOOL followed by an explicit
+JSON object invokes it asynchronously, retaining native authorization rules.
+The cc alias uses Claude's canonical namespace. Missing tools report an error;
+discovery neither installs software nor starts a model turn.
+.PP
+Pi RPC get_commands lists commands, skills or templates; it is not a catalog
+of internal LSP, model or plugin tools. The client does not invent such
+interfaces. See docs/client-input.md for reference syntax and examples.
+.SS "Alternate frontends"
+Alternate frontends use ssmcp.ui.get/set/action/filter/queue, local
+ssmcp.ui.message/ask/questions, read-only ssmcp.ui.history, and read-only
+ssmcp.ui.harness catalog inspection. UI get supports JSON Pointer projections
+and array/string pages, bounded to 8 KiB per projected response. Pure UI polling
+does not implicitly claim next-caller requirements.
 
 .SH PLATFORMS
 The client supports Linux, macOS and Windows. Linux releases contain ssmcp and

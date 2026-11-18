@@ -67,7 +67,7 @@ return await exec.parallel(client.id, [
 
 CI 配置包含六个平台的原生检查与测试、Linux SSH／OAuth 集成测试，以及可下载的终端渲染样本；发布矩阵另对生成的原生归档执行安装与更新验证。维护者推送版本 tag，或手动运行 Bump 创建 tag 后，Release 才进入发布路径；全部检查和源码包验证成功后，分别发布 GitHub 资产与 crates.io 包。普通 main push 不触发日常 CI 或发布；main 上留空 tag 的手动 Release 只生成预检 artifacts。具体版本的结果以对应 [Actions 运行][actions]、[Release 附件][releases] 和 [crates.io 版本][crates] 为准。[CI 配置][ci] · [原生文件与进程测试][native-tests] · [发布校验脚本][release-script]
 
-[backend]: https://github.com/LIghtJUNction/ssmcp/blob/main/src/backend/mod.rs
+[backend]: https://github.com/LIghtJUNction/ssmcp/blob/main/src/backend.rs
 [shell]: https://github.com/LIghtJUNction/ssmcp/blob/main/src/backend/shell.rs
 [client]: https://github.com/LIghtJUNction/ssmcp/blob/main/src/client.rs
 [backends-doc]: https://github.com/LIghtJUNction/ssmcp/blob/main/docs/backends.md

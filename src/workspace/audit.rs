@@ -162,14 +162,20 @@ impl Root {
     pub(super) fn perform_audited(&self, name: &str, args: Value) -> Result<Value, String> {
         let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
         let result = self.perform(name, args)?;
-        if matches!(name, "ssmcp.fs.read" | "ssmcp.fs.read_text")
-            && let Some(path) = path
+        if matches!(
+            name,
+            "ssmcp.fs.read" | "ssmcp.fs.read_text" | "ssmcp.fs.read_image"
+        ) && let Some(path) = path
         {
+            let (offset, next_offset) = if name == "ssmcp.fs.read_image" {
+                (Some(0), result["structuredContent"]["size"].as_u64())
+            } else {
+                (result["offset"].as_u64(), result["next_offset"].as_u64())
+            };
             self.audit.events.push(json!({
                 "type":"ssmcp.file.read","tool":name,"path":path,
-                "offset":result.get("offset"),"next_offset":result.get("next_offset"),
-                "bytes":result["next_offset"].as_u64().zip(result["offset"].as_u64())
-                    .map(|(end, start)| end.saturating_sub(start)),
+                "offset":offset,"next_offset":next_offset,
+                "bytes":next_offset.zip(offset).map(|(end, start)| end.saturating_sub(start)),
                 "sensitive":sensitive_path(&path),
                 "observation":"native_file_read","external_operations":"unknown"
             }));

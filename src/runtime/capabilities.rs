@@ -163,7 +163,11 @@ fn native_limits() -> Value {
             "browser_extension_namespace":"playwright.* when native MCP discovery succeeds",
             "browser_discovery":"ssmcp.browser.discover reads metadata; installation is not a connection",
             "model_invocation":false,
-            "input_scope":"isolated desktop by default; explicit desktop:host for shared host input",
+            "input_scope":"all desktop observation and input defaults to isolated; host access requires explicit desktop:host",
+            "isolated_desktop_platforms":["linux"],
+            "automatic_desktop_start":{"tool":"ssmcp.computer.app_launch","width":1280,"height":800},
+            "read_only_startup":false,
+            "inactive_desktop":"status reports readiness; other observation/input returns an explicit startup requirement without host fallback",
             "desktop_coordinates":"read coordinate_space: Linux/macOS logical, Windows physical virtual-desktop pixels; use image_to_desktop mapping",
             "browser_transport":"native Chromium CDP at explicit loopback endpoints; optional installed Playwright MCP in --extension mode",
             "browser_batch":{"tool":"ssmcp.browser.act","max_actions":16,"deadline_ms":25000,
@@ -171,8 +175,8 @@ fn native_limits() -> Value {
             "browser_wait":{"tool":"ssmcp.browser.wait","timeout_ms":[1,10000],
                 "states":["visible","hidden","attached","detached"],"includes_target_queue":true},
             "image_max_decoded_bytes":400*1024,
-            "image_formats":["image/png","image/jpeg"],
-            "lifetime":"client connection; owned browser processes stop on disconnect; attached browsers remain running"
+            "image_formats":["image/png","image/jpeg","image/gif","image/webp"],
+            "lifetime":"client connection; owned private desktops, apps and browser processes stop on disconnect; attached browsers remain running"
         },
         "command_jobs":{
             "default_wait_ms":5000,
@@ -201,12 +205,12 @@ fn native_limits() -> Value {
         },
         "client_ui":{
             "layouts":["chat","split","audit","logs"],
-            "source_wire_version":crate::wire::CODE_VERSION,
+            "source_wire_version":crate::wire::VERSION,
             "queue_wire_version":crate::wire::VERSION,
             "audit_max_runs":128,
             "audit_max_bytes":2097152,
             "audit_source_max_bytes":65536,
-            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue"],
+            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue","ssmcp.ui.message","ssmcp.ui.ask","ssmcp.ui.questions","ssmcp.ui.history","ssmcp.ui.harness"],
             "get_projection_max_bytes":8192,
             "queue_message_max_bytes":crate::wire::MAX_USER_MESSAGE_BYTES,
             "queue_pending_max":crate::wire::MAX_USER_MESSAGES,
@@ -450,17 +454,17 @@ await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
 Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
-For web apps, prefer scoped browser CDP or a discovered Playwright extension provider: page input does not move the system mouse. For native apps, computer.desktop_start(clientId) starts an isolated desktop; use computer.app_launch on that desktop, and desktop_status/desktop_stop to inspect or release it. Native input defaults to the running isolated desktop. Without one, host input requires an explicit desktop: 'host'; read-only host inspection remains available. New operations are also callable through native(clientId).ssmcp.computer after schema discovery.\n\n\
+For web apps, prefer scoped browser CDP or a discovered Playwright extension provider: page input does not move the system mouse. All native desktop observation and input defaults to isolated. On Linux, computer.app_launch(clientId,{command:[existingExecutable,...args]}) validates argv and automatically starts a private 1280x800 Xvfb desktop when needed; desktop_start is only required for a custom size. Without a private desktop, status reports readiness and missing helpers; monitors/windows/screenshot/input return an explicit startup requirement. Read-only calls never start a desktop or fall back to the host. Use desktop_status/desktop_stop to inspect or release owned state. Host observation and input both require explicit desktop: 'host'. Private desktops are Linux-only; other platforms report unsupported rather than selecting the host. New operations are also callable through native(clientId).ssmcp.computer after schema discovery.\n\n\
 Use cua.status(clientId) to inspect native desktop capabilities. cua aliases computer and cua.browser aliases browser. computer.screenshot, \
 move/click/drag/key/type/scroll and windows/focus operate the client desktop. Browser control \
 uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/wait_for/\
 evaluate/screenshot/close/disconnect. Neither provider invokes a model. Both convenience \
 namespaces return complete native MCP results; inspect isError and structuredContent. \
-Use image(await computer.screenshot(clientId)) or image(await browser.screenshot(clientId,\
+After app_launch has started a private desktop, use image(await computer.screenshot(clientId)); for a selected browser page use image(await browser.screenshot(clientId,\
 {target_id})) for visible MCP image content, then return only metadata. Do not print image \
 base64. Use screenshot image_to_desktop mapping for scaled desktop coordinates. Browser \
 element refs come from the current snapshot and expire on navigation or replacement.\n\n\
-For the operator's existing Chrome, first call ssmcp.browser.discover for read-only browser and extension metadata, and ssmcp.harnesses.list for provider readiness. Extension files alone do not prove an active connection. Installed Playwright MCP starts in its native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered. Use browser.wait_for for page text to appear or disappear, and keep snapshot references scoped to their target and generation; opening a target defaults to the background. browser.act holds one target lock for up to 16 ordered actions and an optional final snapshot within 25 seconds; inspect completed_count, phase and failed_index on error before continuing, and do not replay the whole batch. browser.wait polls an observed selector and/or literal text for visible, hidden, attached or detached content with a 1–10000 ms deadline including the target queue.\n\n\
+For the operator's existing browser, prefer the authorized ChatGPT Browser plugin when the calling application actually exposes it for that requested browser. Its native API is outside ssmcp code_mode; the client cannot invoke the public ChatGPT browser JavaScript API. Otherwise call ssmcp.browser.discover for read-only metadata and cached registered routes, and ssmcp.harnesses.list for provider readiness. Prefer actual registered Playwright extension tools before explicitly selected CDP. Extension files alone do not prove an active connection. Installed Playwright MCP starts in its native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered. Use browser.wait_for for page text to appear or disappear, and keep snapshot references scoped to their target and generation; opening a target defaults to the background. browser.act holds one target lock for up to 16 ordered actions and an optional final snapshot within 25 seconds; inspect completed_count, phase and failed_index on error before continuing, and do not replay the whole batch. browser.wait polls an observed selector and/or literal text for visible, hidden, attached or detached content with a 1–10000 ms deadline including the target queue.\n\n\
 Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
 command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
 incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \
@@ -505,7 +509,13 @@ executed by the UI; targeted delivery requires collab.bind with the registered m
 UI calls, tool directory queries, ssmcp.client.capabilities and ssmcp.resources.list/templates/read \
 do not claim Next caller requirements by themselves. Explicit collab.bind remains eligible; \
 terminal, file and output calls retain their normal delivery behavior. Source audit still records \
-native queries. Queue support requires protocol v7; source lifecycle support requires v6.\n\n\
+native queries. Queue and source lifecycle support require the current wire protocol v7; other wire versions are rejected.\n\n\
+To communicate in the user's ssmcp terminal, call(clientId,'ssmcp.ui.message',{text}) with your Markdown reply; \
+the client renders it locally and records the assistant message. Use ssmcp.ui.ask for a nonblocking question, \
+then ssmcp.ui.questions to retrieve its answer; the user opens the queue with Shift+Up. Do not wait inside \
+code_mode or fabricate an answer. ssmcp.ui.history lists or reads versioned JSONL conversations; /resume \
+continues one locally without replaying tools or restoring a remote model thread. The composer accepts \
+@file and $skill references. Read images with ssmcp.fs.read_image, then image(result); do not print base64.\n\n\
 A custom frontend can read ssmcp.audit.events for source lifecycle events and ssmcp.exec.events \
 for command output/results. Full code_mode source goes only to actual authorized target clients; \
 the client applies audit redaction before display and storage. The local composer retains pending \

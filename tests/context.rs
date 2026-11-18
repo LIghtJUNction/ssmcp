@@ -465,7 +465,17 @@ async fn document_and_metadata_budgets_fail_explicitly_without_partial_instructi
             .is_err()
     );
     for tool in Context::tools() {
-        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        let name = tool["name"].as_str().unwrap();
+        // Source discovery stays read-only; only the three explicit local
+        // memory mutations write state. Their annotations must remain honest.
+        let writes_memory = matches!(
+            name,
+            "ssmcp.context.compact" | "ssmcp.context.fork" | "ssmcp.context.switch"
+        );
+        assert_eq!(
+            tool["annotations"]["readOnlyHint"], !writes_memory,
+            "{name}"
+        );
     }
 }
 

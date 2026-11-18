@@ -390,6 +390,117 @@ class ReleaseTests(unittest.TestCase):
             release.bump("patch", self.root)
         self.assertEqual(before, {name: (self.root / name).read_bytes() for name in before})
 
+
+    def add_workspace_package(self):
+        member = self.root / "crates/ztui/Cargo.toml"
+        member.parent.mkdir(parents=True)
+        member.write_text('[package]\nname = "ztui-core"\nversion = "0.1.0"\n[lib]\nname = "ztui"\n')
+        with (self.root / "Cargo.toml").open("a") as stream:
+            stream.write('\n[dependencies]\nztui = { package = "ztui-core", version = "=0.1.0", path = "crates/ztui" }\n')
+        with (self.root / "Cargo.lock").open("a") as stream:
+            stream.write('\n[[package]]\nname = "ztui-core"\nversion = "0.1.0"\n')
+        output = self.root / "target/package"
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "ztui-core-0.1.0.crate").write_bytes(b"core crate")
+        (output / "ssmcp-0.5.0.crate").write_bytes(b"application crate")
+        return member
+
+    def test_workspace_dependency_is_pinned_to_our_registry_package(self):
+        member = self.add_workspace_package()
+        self.assertEqual(release.publication_packages(self.root),
+                         [("ztui-core", "0.1.0"), ("ssmcp", "0.5.0")])
+        self.assertEqual(release.validate_package("v0.5.0", self.root), "0.5.0")
+        manifest = self.root / "Cargo.toml"
+        manifest.write_text(manifest.read_text().replace('version = "=0.1.0"', 'version = "0.1.0"'))
+        with self.assertRaisesRegex(ValueError, "pin"):
+            release.publication_packages(self.root)
+        manifest.write_text(manifest.read_text().replace('version = "0.1.0"', 'version = "=0.1.0"'))
+        member.write_text(member.read_text().replace('name = "ztui-core"', 'name = "ztui"'))
+        with self.assertRaisesRegex(ValueError, "Project Z"):
+            release.publication_packages(self.root)
+
+    def test_workspace_lock_mismatch_blocks_tag_validation(self):
+        self.add_workspace_package()
+        lock = self.root / "Cargo.lock"
+        lock.write_text(lock.read_text().replace('version = "0.1.0"', 'version = "0.0.9"'))
+        with self.assertRaisesRegex(ValueError, "ztui-core"):
+            release.validate_package("v0.5.0", self.root)
+
+    def test_workspace_bump_updates_core_manifest_dependency_and_lock_together(self):
+        member = self.add_workspace_package()
+        result = release.bump("minor", self.root)
+        self.assertEqual(result["version"], "0.6.0")
+        self.assertEqual(result["ztui_core_version"], "0.1.1")
+        self.assertIn('version = "0.1.1"', member.read_text())
+        self.assertIn('version = "=0.1.1"', (self.root / "Cargo.toml").read_text())
+        self.assertEqual(release.validate_package("v0.6.0", self.root), "0.6.0")
+
+    def test_bad_workspace_lock_prevents_every_bump_write(self):
+        member = self.add_workspace_package()
+        lock = self.root / "Cargo.lock"
+        lock.write_text(lock.read_text().replace('version = "0.1.0"', 'version = "0.0.9"'))
+        paths = [member, self.root / "Cargo.toml", lock]
+        before = [path.read_bytes() for path in paths]
+        with self.assertRaisesRegex(ValueError, "ztui-core"):
+            release.bump("patch", self.root)
+        self.assertEqual(before, [path.read_bytes() for path in paths])
+
+    def test_workspace_publishes_dependency_before_application(self):
+        self.add_workspace_package()
+        checksums = {name: release.digest(self.root / "target/package" / filename)
+                     for name, filename in [("ztui-core", "ztui-core-0.1.0.crate"),
+                                            ("ssmcp", "ssmcp-0.5.0.crate")]}
+        uploaded = []
+
+        def registry(version, package):
+            return checksums[package] if package in uploaded else None
+
+        def upload(args, **kwargs):
+            package = args[-1]
+            self.assertEqual(args, ["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io", "--package", package])
+            if package == "ssmcp":
+                self.assertEqual(uploaded, ["ztui-core"])
+            uploaded.append(package)
+
+        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token",
+                                           "CARGO_REGISTRY_DEFAULT": "unrelated-fixture"}, clear=True), \
+             mock.patch.object(release, "registry_checksum", side_effect=registry), \
+             mock.patch.object(release.subprocess, "run", side_effect=upload):
+            release.publish(self.root)
+        self.assertEqual(uploaded, ["ztui-core", "ssmcp"])
+
+    def test_later_workspace_collision_stops_before_first_upload(self):
+        self.add_workspace_package()
+        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
+             mock.patch.object(release, "registry_checksum", side_effect=[None, "different"]), \
+             mock.patch.object(release.subprocess, "run") as upload, \
+             self.assertRaisesRegex(ValueError, "different bytes"):
+            release.publish(self.root)
+        upload.assert_not_called()
+
+    def test_workspace_retry_skips_identical_dependency_and_resumes_application(self):
+        self.add_workspace_package()
+        core = release.digest(self.root / "target/package/ztui-core-0.1.0.crate")
+        application = release.digest(self.root / "target/package/ssmcp-0.5.0.crate")
+        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
+             mock.patch.object(release, "registry_checksum", side_effect=[core, None, application]), \
+             mock.patch.object(release.subprocess, "run") as upload:
+            release.publish(self.root)
+        upload.assert_called_once_with(
+            ["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io", "--package", "ssmcp"],
+            cwd=self.root, check=True)
+
+    def test_failed_core_upload_stops_before_application_upload(self):
+        self.add_workspace_package()
+        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
+             mock.patch.object(release, "registry_checksum", return_value=None), \
+             mock.patch.object(release.subprocess, "run",
+                               side_effect=subprocess.CalledProcessError(1, "cargo")) as upload, \
+             self.assertRaises(subprocess.CalledProcessError):
+            release.publish(self.root)
+        self.assertEqual(upload.call_count, 1)
+        self.assertEqual(upload.call_args.args[0][-1], "ztui-core")
+
     def test_registry_only_treats_404_as_unpublished(self):
         for status in (404, 403, 500):
             error = urllib.error.HTTPError("https://crates.io/test", status, "test", {}, None)

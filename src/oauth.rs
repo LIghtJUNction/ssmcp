@@ -25,7 +25,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use reqwest::Url;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -226,6 +226,32 @@ struct Family {
 struct AccessToken {
     family: Key,
     expires: Instant,
+}
+
+/// Non-secret references to the original grant, never a replacement controller
+/// credential. The access entry keeps the original monotonic deadline even when
+/// its family later refreshes; the wall deadline can only shorten delegation.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Delegation {
+    family: Key,
+    access: Key,
+    pub(crate) user: String,
+    resource: String,
+    pub(crate) subject: String,
+    pub(crate) expires_at: u64,
+}
+
+impl Delegation {
+    pub(crate) fn valid_for(&self, subject: &str) -> bool {
+        let Some(username) = crate::portal::store::stable_username(subject) else {
+            return false;
+        };
+        self.subject == subject
+            && (self.user == crate::broker::IDENTITY_RESOURCE || self.user == username)
+            && self.resource.len() <= 2048
+            && self.expires_at > 0
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -458,6 +484,93 @@ impl OAuth {
             return None;
         }
         family.binding.live()
+    }
+
+    /// Delegate only a verified account's existing resource and fixed access
+    /// lifetime. This snapshots under the OAuth lock and performs no storage I/O.
+    pub(crate) fn delegation(
+        &self,
+        user: &str,
+        access_token: &str,
+    ) -> Option<(Delegation, Identity)> {
+        if !valid_username(user) || !opaque(access_token, "at_") {
+            return None;
+        }
+        let instant = Instant::now();
+        let mut state = self.state.lock().ok()?;
+        state.sweep(instant);
+        let access_key = hash(access_token);
+        let access = state.access.get(&access_key)?;
+        let family = state.families.get(&access.family)?;
+        if instant >= access.expires
+            || instant >= family.expires
+            || instant >= family.absolute_expires
+            || family.revoked
+            || family.binding.user != user
+            || family.binding.resource != self.resource(user)
+        {
+            return None;
+        }
+        let Authorization::Identity(identity) = family.binding.live()? else {
+            return None;
+        };
+        if identity.provider != "github" {
+            return None;
+        }
+        let remaining = access
+            .expires
+            .min(family.expires)
+            .min(family.absolute_expires)
+            .saturating_duration_since(instant)
+            .as_secs();
+        if remaining == 0 {
+            return None;
+        }
+        let parent = Delegation {
+            family: access.family,
+            access: access_key,
+            user: user.into(),
+            resource: family.binding.resource.clone(),
+            subject: identity.subject.clone(),
+            expires_at: crate::management::now().checked_add(remaining)?,
+        };
+        parent
+            .valid_for(&identity.subject)
+            .then_some((parent, identity))
+    }
+
+    /// Called after dropping the device-ledger lock. No await or disk I/O may
+    /// run while the OAuth mutex is held.
+    pub(crate) fn delegation_is_live(&self, parent: &Delegation) -> bool {
+        if !parent.valid_for(&parent.subject)
+            || parent.expires_at <= crate::management::now()
+            || parent.resource != self.resource(&parent.user)
+        {
+            return false;
+        }
+        let instant = Instant::now();
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        state.sweep(instant);
+        let Some(access) = state.access.get(&parent.access) else {
+            return false;
+        };
+        let Some(family) = state.families.get(&parent.family) else {
+            return false;
+        };
+        access.family == parent.family
+            && instant < access.expires
+            && instant < family.expires
+            && instant < family.absolute_expires
+            && !family.revoked
+            && family.binding.user == parent.user
+            && family.binding.resource == parent.resource
+            && matches!(
+                family.binding.live(),
+                Some(Authorization::Identity(identity))
+                    if identity.provider == "github" && identity.subject == parent.subject
+            )
     }
 
     /// Revoke current MCP grants and pending codes for a banned account.
@@ -1975,6 +2088,78 @@ async fn token(State(broker): State<Arc<Broker>>, request: Request) -> Response 
 mod github_tests;
 
 #[cfg(test)]
+impl OAuth {
+    /// Exercise the normal code/PKCE exchange with a fixture provider identity;
+    /// no network, real provider token, or production authorization bypass.
+    pub(crate) fn test_identity_tokens(&self, user: &str, subject: &str) -> Value {
+        fn checked<T>(result: OResult<T>) -> T {
+            result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.description))
+        }
+        let parameters = |pairs: &[(&str, &str)]| {
+            Parameters(
+                pairs
+                    .iter()
+                    .map(|(key, value)| ((*key).into(), (*value).into()))
+                    .collect(),
+            )
+        };
+        let registration = checked(
+            self.register(
+                serde_json::from_value(json!({
+                    "redirect_uris":["https://controller.example/callback"],
+                    "token_endpoint_auth_method":"none",
+                    "grant_types":["authorization_code","refresh_token"]
+                }))
+                .unwrap(),
+            ),
+        );
+        let client = registration["client_id"].as_str().unwrap();
+        let resource = self.resource(user);
+        let consent = checked(self.begin_authorization(
+            &parameters(&[
+                ("client_id", client),
+                ("redirect_uri", "https://controller.example/callback"),
+                ("response_type", "code"),
+                ("resource", &resource),
+                ("scope", "mcp"),
+                ("code_challenge_method", "S256"),
+                (
+                    "code_challenge",
+                    "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                ),
+            ]),
+            &HeaderMap::new(),
+        ));
+        let (state, _) = checked(self.begin_provider_login(&consent.id, &consent.csrf, "github"));
+        let upstream = checked(self.take_provider_login(&state, &consent.csrf, "github"));
+        let identity = Identity {
+            provider: "github".into(),
+            subject: subject.into(),
+            login: "alice".into(),
+        };
+        checked(self.finish_provider_login(upstream, identity.clone()));
+        let attempt = checked(self.begin_login(&consent.id, &consent.csrf));
+        let code = attempt.code.clone();
+        checked(self.finish_authorization(attempt, Authorization::Identity(identity)));
+        let mut tokens = checked(self.token(
+            &parameters(&[
+                ("client_id", client),
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                (
+                    "code_verifier",
+                    "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+                ),
+                ("resource", &resource),
+            ]),
+            &HeaderMap::new(),
+        ));
+        tokens["client_id"] = json!(client);
+        tokens
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2300,6 +2485,86 @@ mod tests {
         }
         .validate()
         .unwrap();
+    }
+
+    #[test]
+    fn delegation_keeps_original_scope_and_deadline_through_refresh_and_replay() {
+        let oauth = OAuth::new(ISSUER.into());
+        let tokens = oauth.test_identity_tokens("mcp", "42");
+        let access = tokens["access_token"].as_str().unwrap();
+        let (parent, identity) = oauth.delegation("mcp", access).unwrap();
+        assert_eq!(identity.subject, "42");
+        assert!(oauth.delegation_is_live(&parent));
+        assert!(oauth.delegation("gh-42", access).is_none());
+        let other = oauth.test_identity_tokens("gh-43", "42");
+        assert!(
+            oauth
+                .delegation("gh-43", other["access_token"].as_str().unwrap())
+                .is_none()
+        );
+        let scoped = oauth.test_identity_tokens("gh-42", "42");
+        assert!(
+            oauth
+                .delegation("gh-42", scoped["access_token"].as_str().unwrap())
+                .is_some()
+        );
+        let original_deadline = parent.expires_at;
+        let refresh = parameters(&[
+            ("client_id", tokens["client_id"].as_str().unwrap()),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+            ("resource", "https://ssmcp.example/mcp"),
+        ]);
+        let refreshed = ok(oauth.token(&refresh, &HeaderMap::new()));
+        assert!(oauth.delegation_is_live(&parent));
+        assert_eq!(parent.expires_at, original_deadline);
+        assert_ne!(tokens["access_token"], refreshed["access_token"]);
+        assert!(oauth.token(&refresh, &HeaderMap::new()).is_err());
+        assert!(
+            !oauth.delegation_is_live(&parent),
+            "refresh replay revokes the original family"
+        );
+    }
+
+    #[test]
+    fn delegation_rejects_changed_subject_resource_and_original_access_expiry() {
+        let oauth = OAuth::new(ISSUER.into());
+        let tokens = oauth.test_identity_tokens("mcp", "42");
+        let (parent, _) = oauth
+            .delegation("mcp", tokens["access_token"].as_str().unwrap())
+            .unwrap();
+        let mut changed = parent.clone();
+        changed.subject = "43".into();
+        assert!(!oauth.delegation_is_live(&changed));
+        let mut changed = parent.clone();
+        changed.resource = "https://other.example/mcp".into();
+        assert!(!oauth.delegation_is_live(&changed));
+        {
+            let mut state = oauth.state.lock().unwrap();
+            state.access.get_mut(&parent.access).unwrap().expires = Instant::now();
+            state.families.get_mut(&parent.family).unwrap().expires += Duration::from_secs(300);
+        }
+        assert!(
+            !oauth.delegation_is_live(&parent),
+            "refresh must not extend the original access grant"
+        );
+        assert!(
+            !OAuth::new(ISSUER.into()).delegation_is_live(&parent),
+            "restart loses the original authorization"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_login_codes_cannot_delegate_an_account() {
+        let fixture = Fixture::new(true).await;
+        let tokens = fixture.tokens();
+        assert!(
+            fixture
+                .broker
+                .oauth
+                .delegation("alice", tokens["access_token"].as_str().unwrap())
+                .is_none()
+        );
     }
 
     const ISSUER: &str = "https://ssmcp.example";
