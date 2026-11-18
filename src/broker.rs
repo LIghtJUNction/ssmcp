@@ -1,5 +1,6 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
 mod management;
+mod traffic;
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
     wire::{self, ClientInfo, Controller, Frame, Operation},
@@ -311,7 +312,8 @@ pub struct Broker {
     pub portal: crate::portal::Portal,
     pub client_downloads: Option<crate::client_downloads::Publisher>,
     management: Option<crate::management::State>,
-    pub(crate) user_policies: crate::user_policy::UserPolicies,
+    traffic_utc_offset_minutes: std::sync::atomic::AtomicI32,
+    pub(crate) user_policies: Arc<crate::user_policy::UserPolicies>,
     pub(crate) user_policy_updates: tokio::sync::Mutex<()>,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
 }
@@ -342,7 +344,10 @@ impl Broker {
             portal: crate::portal::Portal::default(),
             client_downloads: None,
             management: None,
-            user_policies: crate::user_policy::UserPolicies::default(),
+            user_policies: Arc::default(),
+            traffic_utc_offset_minutes: std::sync::atomic::AtomicI32::new(
+                crate::user_policy::DEFAULT_TRAFFIC_UTC_OFFSET_MINUTES,
+            ),
             user_policy_updates: tokio::sync::Mutex::new(()),
             sessions: RwLock::new(HashMap::new()),
         })
@@ -378,10 +383,29 @@ impl Broker {
             Err(_) => return Err("could not load account restrictions; refusing to start".into()),
         };
         for account in accounts {
-            self.user_policies
-                .set(&account.subject, account.banned, account.rate_limit_bps);
+            self.user_policies.apply_account(
+                &account.subject,
+                account.banned,
+                account.rate_limit_bps,
+                account.has_recharged,
+            );
         }
         Ok(())
+    }
+
+    pub(crate) async fn record_recharge(
+        &self,
+        subject: &str,
+    ) -> Result<(), crate::portal::Problem> {
+        let subject = subject.to_owned();
+        let policies = self.user_policies.clone();
+        self.portal
+            .storage(move |store| {
+                let account = store.record_recharge(&subject)?;
+                policies.apply_account(&subject, account.banned, account.rate_limit_bps, true);
+                Ok(())
+            })
+            .await
     }
 
     pub async fn online_session(&self, user: &str) -> Option<Arc<Session>> {
@@ -608,11 +632,29 @@ impl Broker {
             .await?;
             return Ok(());
         }
-        let owner = user.strip_prefix("gh-").map(str::to_owned).or_else(|| {
-            self.management
-                .as_ref()
-                .and_then(|state| state.policy.owner_subject(&user))
-        });
+        let owner = registration
+            .as_ref()
+            .map(|r| r.identity.subject.clone())
+            .or_else(|| {
+                self.management
+                    .as_ref()
+                    .and_then(|state| state.policy.owner_subject(&user))
+            })
+            .or_else(|| {
+                user.strip_prefix("gh-")
+                    .filter(|id| crate::management::valid_subject(id))
+                    .map(str::to_owned)
+            });
+        if self.portal.has_storage() && owner.is_none() {
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reject {
+                    message: crate::user_policy::TrafficError::AccountRequired.to_string(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         if owner
             .as_deref()
             .is_some_and(|id| self.user_policies.is_banned(id))
@@ -688,14 +730,7 @@ impl Broker {
             slots: Semaphore::new(wire::MAX_INFLIGHT),
             alive: AtomicBool::new(true),
             ssh_user: user.clone(),
-            owner_subject: registration
-                .as_ref()
-                .map(|r| r.identity.subject.clone())
-                .or_else(|| {
-                    self.management
-                        .as_ref()
-                        .and_then(|state| state.policy.owner_subject(&user))
-                }),
+            owner_subject: owner,
             connected_at: crate::management::now(),
             audit: self.management.as_ref().map(|state| state.audit.clone()),
             disconnect: Notify::new(),
@@ -753,9 +788,9 @@ impl Broker {
             .owner_subject
             .as_deref()
             .map(|id| self.user_policies.get(id));
-        let legacy_bandwidth = registration
+        let legacy_subject = registration
             .is_none()
-            .then(|| owner_policy.clone())
+            .then(|| session.owner_subject.as_deref())
             .flatten();
         let result: crate::Result<()> = tokio::select! {
             biased;
@@ -803,9 +838,8 @@ impl Broker {
                             pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation), reload));
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
                             let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, code_context:call.code_context };
-                            if let Some(budget) = &legacy_bandwidth {
-                                budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
-                                    .map_err(|_| "account is banned")?;
+                            if let Some(subject) = legacy_subject {
+                                self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1).await?;
                             }
                             timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                             if let Some(run_id) = run_id && !delivered_runs.contains(&run_id) {
@@ -819,9 +853,8 @@ impl Broker {
                             if let Some(index) = delivered_runs.iter().position(|id| *id == completion.run_id) {
                                 delivered_runs.remove(index);
                                 let frame = Frame::CodeModeFinished { completion };
-                                if let Some(budget) = &legacy_bandwidth {
-                                    budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
-                                        .map_err(|_| "account is banned")?;
+                                if let Some(subject) = legacy_subject {
+                                    self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1).await?;
                                 }
                                 timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                             }
@@ -833,17 +866,15 @@ impl Broker {
                         }
                     }
                 };
-                if let (Some(budget), Some(frame)) = (&legacy_bandwidth, &received) {
-                    budget.charge(false, serde_json::to_vec(frame)?.len() + 1).await
-                        .map_err(|_| "account is banned")?;
+                if let (Some(subject), Some(frame)) = (legacy_subject, &received) {
+                    self.charge_relay(subject, false, serde_json::to_vec(frame)?.len() + 1).await?;
                 }
                 match received {
                     Some(Frame::Steering { id, command }) => {
                         let result = session.steering_command(command);
                         let frame = Frame::SteeringReply { id, result };
-                        if let Some(budget) = &legacy_bandwidth {
-                            budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
-                                .map_err(|_| "account is banned")?;
+                        if let Some(subject) = legacy_subject {
+                            self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1).await?;
                         }
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                     }
@@ -862,6 +893,22 @@ impl Broker {
             Ok(())
         } => result,
         };
+        if let Err(error) = &result
+            && error
+                .downcast_ref::<crate::user_policy::TrafficError>()
+                .is_some()
+        {
+            let _ = timeout(
+                IO_TIMEOUT,
+                wire::write_frame(
+                    &mut writer,
+                    &Frame::Reject {
+                        message: error.to_string(),
+                    },
+                ),
+            )
+            .await;
+        }
         // Drop both wire halves before reporting the disconnect complete.
         drop(reader);
         drop(writer);

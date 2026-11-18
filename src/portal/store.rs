@@ -38,6 +38,8 @@ pub(crate) struct Account {
     pub banned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit_bps: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_recharged: bool,
 }
 
 /// Account directory data deliberately excludes public keys and their fingerprints.
@@ -50,6 +52,7 @@ pub(crate) struct AccountSummary {
     pub handle: Option<String>,
     pub banned: bool,
     pub rate_limit_bps: Option<u64>,
+    pub has_recharged: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -63,6 +66,7 @@ pub(crate) struct Store {
     _lock: File,
     database: Database,
     failed: bool,
+    traffic: super::traffic::TrafficLedger,
 }
 
 impl Drop for Store {
@@ -78,7 +82,7 @@ impl Drop for Store {
     }
 }
 
-fn private_file(file: &File) -> crate::Result<()> {
+pub(super) fn private_file(file: &File) -> crate::Result<()> {
     let m = file.metadata()?;
     // SAFETY: geteuid has no preconditions.
     if !m.is_file()
@@ -163,11 +167,13 @@ impl Store {
             Err(e) => return Err(e.into()),
         };
         validate(&database)?;
+        let traffic = super::traffic::TrafficLedger::open(&directory)?;
         Ok(Self {
             directory,
             _lock: lock,
             database,
             failed: false,
+            traffic,
         })
     }
 
@@ -208,6 +214,7 @@ impl Store {
                 handle: account.handle.clone(),
                 banned: account.banned,
                 rate_limit_bps: account.rate_limit_bps,
+                has_recharged: account.has_recharged,
             })
             .collect())
     }
@@ -246,6 +253,7 @@ impl Store {
                 handle: None,
                 banned: false,
                 rate_limit_bps: None,
+                has_recharged: false,
             });
         account.github_login.clone_from(&identity.login);
         let account = account.clone();
@@ -355,6 +363,73 @@ impl Store {
             .ok_or(Problem::NotFound)?;
         account.keys.remove(index);
         self.save(next)
+    }
+
+    pub(crate) fn traffic_quota(
+        &self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        unlimited: bool,
+    ) -> Result<crate::user_policy::TrafficQuota, Problem> {
+        self.account(subject)?;
+        self.traffic
+            .snapshot(subject, period, utc_offset_minutes, unlimited)
+    }
+
+    pub(crate) fn reserve_traffic(
+        &mut self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        bytes: u64,
+        unlimited: bool,
+    ) -> Result<(), Problem> {
+        self.account(subject)?;
+        self.traffic.reserve(
+            &self.directory,
+            subject,
+            period,
+            utc_offset_minutes,
+            bytes,
+            unlimited,
+        )
+    }
+
+    pub(crate) fn grant_paid_traffic(
+        &mut self,
+        subject: &str,
+        period: &str,
+        current_period: &str,
+        order_id: &str,
+        bytes: u64,
+    ) -> Result<bool, Problem> {
+        // An already paid order must remain reconcilable after a later account ban.
+        self.account_record(subject)?;
+        self.traffic.grant(
+            &self.directory,
+            subject,
+            period,
+            current_period,
+            order_id,
+            bytes,
+        )
+    }
+
+    pub(crate) fn record_recharge(&mut self, subject: &str) -> Result<Account, Problem> {
+        let account = self.account_record(subject)?;
+        if account.has_recharged {
+            return Ok(account);
+        }
+        let mut next = self.database.clone();
+        let account = next
+            .accounts
+            .get_mut(subject)
+            .ok_or(Problem::Unauthorized)?;
+        account.has_recharged = true;
+        let account = account.clone();
+        self.save(next)?;
+        Ok(account)
     }
 
     fn save(&mut self, next: Database) -> Result<(), Problem> {
@@ -592,6 +667,7 @@ mod tests {
                     handle: Some("shared-name".into()),
                     banned: false,
                     rate_limit_bps: None,
+                    has_recharged: false,
                 },
             );
         }

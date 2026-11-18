@@ -485,6 +485,14 @@ impl State {
                 crate::client::interface::harness::submit(&command[1..], rest)?;
                 self.notice = Some("Harness request queued · results appear here".into());
             }
+            "/computer" => {
+                if self.preview {
+                    return Err(
+                        "Preview cannot grant host input; use the connected local terminal".into(),
+                    );
+                }
+                self.notice = Some(crate::client::interface::computer::local_command(rest)?);
+            }
             "/tasks" => {
                 if rest.is_empty() {
                     self.chat_change_view(View::Tasks);
@@ -1800,6 +1808,9 @@ impl State {
         // Keep text and navigation in their original order, including coalesced reads.
         for byte in bytes {
             let (output, keys) = self.keyboard.feed(&[*byte], now, false, true, false);
+            if !self.preview && (!output.is_empty() || !keys.is_empty()) {
+                crate::client::interface::computer::local_input();
+            }
             self.chat_output(&output);
             for key in keys {
                 self.chat_key(key);
@@ -1807,6 +1818,9 @@ impl State {
         }
         if flush {
             let (output, keys) = self.keyboard.feed(&[], now, true, true, false);
+            if !self.preview && (!output.is_empty() || !keys.is_empty()) {
+                crate::client::interface::computer::local_input();
+            }
             self.chat_output(&output);
             for key in keys {
                 self.chat_key(key);
