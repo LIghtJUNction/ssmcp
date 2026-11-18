@@ -118,7 +118,11 @@ mod tests {
         assert!(colored[1].contains(&ui.color("muted")));
         assert!(colored[2].contains(&ui.color("accent")));
         assert!(colored.iter().all(|row| row.contains(&ui.background())));
-        let mut screen = vt100::Parser::new(5, 37, 0);
+        let mut screen = vt100::Parser::new(
+            std::num::NonZeroU16::new(5).unwrap(),
+            std::num::NonZeroU16::new(37).unwrap(),
+            0,
+        );
         screen.process(colored.join("\r\n").as_bytes());
         assert!(screen.screen().contents().contains("( o.o )"));
         ui.color = false;
