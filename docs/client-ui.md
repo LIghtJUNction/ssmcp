@@ -556,3 +556,7 @@ return { conversation, panes, requests };
 无需内置终端界面时，在配置中设置 `dashboard = false`。使用 `ssmcp --log-format jsonl` 可以将脱敏后的事件交给自己的日志消费者。自定义前端仍通过现有客户端授权访问设备能力。
 
 相关说明：[命令与事件](commands.md) · [多终端](terminal-control.md) · [后端与代码模式](backends.md) · [日志与归档](logging.md)
+
+### 顶部调用状态
+
+顶部绿色 ● Active 显示当前连接中仍在工具调用的调用者，灰色 ○ Idle 显示已观察到结束的调用者；相同名称、模型和来源仅按显示分组，任意一个调用未结束就保持 Active。注册成员的自报状态单列为 Reported，不代表实测执行。断连显示 Offline；重连前未确认结束的历史调用显示 Unknown，不会自动变成 Idle 或重新变绿。名称会随终端宽度截短，侧栏折叠不影响顶部。

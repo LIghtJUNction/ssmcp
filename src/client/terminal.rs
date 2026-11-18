@@ -232,6 +232,7 @@ pub(crate) fn audit(value: &serde_json::Value) {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.audit.ingest(value) {
+            state.chat_observe_run(value);
             state.dirty = true;
         }
     }
