@@ -56,6 +56,7 @@ pub(super) struct Conversation {
     pub(super) content_focus: bool,
     selected: usize,
     selected_agent: Option<String>,
+    drawn_agents: Vec<String>,
     list_start: usize,
     list_count: usize,
     detail: bool,
@@ -363,6 +364,7 @@ impl State {
         self.conversation.content_focus = view != View::Activity;
         self.conversation.selected = 0;
         self.conversation.selected_agent = None;
+        self.conversation.drawn_agents.clear();
         self.conversation.list_start = 0;
         self.conversation.list_count = 0;
         self.conversation.detail = false;
@@ -1037,7 +1039,15 @@ impl State {
                             return;
                         };
                         self.conversation.selected = index;
-                        self.conversation.selected_agent = None;
+                        self.conversation.selected_agent = if self.conversation.view == View::Agents
+                        {
+                            let Some(key) = self.conversation.drawn_agents.get(index) else {
+                                return;
+                            };
+                            Some(key.clone())
+                        } else {
+                            None
+                        };
                     }
                     if button == 2 {
                         self.chat_open(false);
@@ -1794,6 +1804,7 @@ impl State {
             .as_ref()
             .is_some_and(|key| !entries.iter().any(|entry| agent_key(entry) == *key));
         let window = self.chat_list_window(entries.len(), height);
+        self.conversation.drawn_agents = entries.iter().map(agent_key).collect();
         let selected = &entries[self.conversation.selected];
         if !missing {
             self.conversation.selected_agent = Some(agent_key(selected));
@@ -1829,7 +1840,15 @@ impl State {
             } else {
                 ""
             };
-            let title = format!(" {marker} {symbol}{}", field(entry, "name"));
+            let title = if observed && !field(entry, "model").is_empty() {
+                format!(
+                    " {marker} {symbol}{} · {}",
+                    field(entry, "name"),
+                    field(entry, "model")
+                )
+            } else {
+                format!(" {marker} {symbol}{}", field(entry, "name"))
+            };
             let subtitle = if observed {
                 format!("     {} calls · {}", entry["calls"], field(entry, "status"))
             } else if field(entry, "agent_id") == "next" {
@@ -2658,6 +2677,52 @@ mod tests {
                 .iter()
                 .any(|(text, _)| text == "1 pending for this recipient")
         );
+    }
+
+    #[test]
+    fn mouse_uses_the_drawn_caller_identity_when_new_activity_reorders_the_list() {
+        let mut state = preview(32, 120);
+        state.audit = Default::default();
+        state.audit.ingest(&json!({
+            "type":"ssmcp.code_mode", "run_id":"drawn", "phase":"started",
+            "controller":{"name":"Original caller","model":"A","source":"caller-reported"}
+        }));
+        state.chat_agents();
+        let data = state.chat_data();
+        state.chat_agent_rows(&data, 24);
+        let index = state
+            .chat_recipients(&data)
+            .iter()
+            .position(|entry| field(entry, "run_id") == "drawn")
+            .unwrap();
+        state.audit.ingest(&json!({
+            "type":"ssmcp.code_mode", "run_id":"new-first-row", "phase":"started",
+            "controller":{"name":"Another caller","model":"B","source":"caller-reported"}
+        }));
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 2,
+            y: body_top(state.geometry.rows) + 1 + index as u16 * 2,
+            release: false,
+        });
+        assert_eq!(state.audit.snapshot()["selected"]["run_id"], "drawn");
+        assert!(state.conversation.target.is_none());
+    }
+
+    #[test]
+    fn narrow_agent_list_keeps_different_models_visible() {
+        let mut state = preview(24, 70);
+        state.audit = Default::default();
+        for model in ["Model A", "Model B"] {
+            state.audit.ingest(&json!({
+                "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
+                "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
+            }));
+        }
+        state.chat_agents();
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("ChatGPT · Model A"));
+        assert!(screen.contains("ChatGPT · Model B"));
     }
 
     #[test]

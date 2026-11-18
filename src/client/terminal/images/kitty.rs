@@ -4,7 +4,7 @@
 use super::super::super::ui::Ui;
 use crate::client::input::paste::{IMAGE_IDLE_TIMEOUT, PngFraming};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use image::{DynamicImage, ImageEncoder};
+use image::DynamicImage;
 use std::{
     fmt::Write as _,
     io::{self, Write},
@@ -16,8 +16,10 @@ use std::{
 };
 
 pub(crate) const CACHE_BYTES: usize = 12 * 1024 * 1024;
-const NATIVE_SIDE: u32 = 1024;
-const PNG_BYTES: usize = (NATIVE_SIDE * NATIVE_SIDE * 4) as usize + 64 * 1024;
+const FALLBACK_SIDE: u32 = 1024;
+// Keep the existing payload budget while retaining full-resolution images
+// whenever their lossless PNG fits. Screenshots usually compress well.
+const PNG_BYTES: usize = (FALLBACK_SIDE * FALLBACK_SIDE * 4) as usize + 64 * 1024;
 const QUERY_ID: u32 = u32::MAX;
 const IMAGE_PREFIX: u32 = 0x5353_0000;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -46,30 +48,63 @@ impl Write for PngBuffer {
 
 impl Native {
     /// Called after the original image's dimension/output checks and outside
-    /// the display lock. Retain one static RGBA8 frame; never enlarge it.
+    /// the display lock. Try the original pixels first; a single bounded
+    /// fallback keeps noisy images from increasing the retained payload budget.
     pub(crate) fn prepare(decoded: &DynamicImage) -> Option<Arc<Self>> {
-        let pixels = decoded
-            .thumbnail(
-                NATIVE_SIDE.min(decoded.width()),
-                NATIVE_SIDE.min(decoded.height()),
-            )
-            .into_rgba8();
-        let (width, height) = pixels.dimensions();
-        let mut png = PngBuffer(Vec::new());
-        image::codecs::png::PngEncoder::new(&mut png)
-            .write_image(
-                pixels.as_raw(),
-                width,
-                height,
-                image::ExtendedColorType::Rgba8,
-            )
-            .ok()?;
+        let (width, height) = (decoded.width(), decoded.height());
+        if width == 0
+            || height == 0
+            || width > super::MAX_DIMENSION
+            || height > super::MAX_DIMENSION
+        {
+            return None;
+        }
+        if let Some(native) = Self::encode(decoded) {
+            return Some(native);
+        }
+        // Encoding failure never retries at the same resolution, and never
+        // enlarges small images. The decoded source is still owned by decode.
+        if width <= FALLBACK_SIDE && height <= FALLBACK_SIDE {
+            return None;
+        }
+        Self::encode(&decoded.thumbnail(FALLBACK_SIDE.min(width), FALLBACK_SIDE.min(height)))
+    }
+
+    fn encode(decoded: &DynamicImage) -> Option<Arc<Self>> {
+        // Ordinary screenshots and photographs can be encoded directly without
+        // a second full-size pixel allocation. Convert other formats once.
+        let converted;
+        let (pixels, color) = if let Some(pixels) = decoded.as_rgba8() {
+            (pixels.as_raw(), png::ColorType::Rgba)
+        } else if let Some(pixels) = decoded.as_rgb8() {
+            (pixels.as_raw(), png::ColorType::Rgb)
+        } else {
+            converted = decoded.to_rgba8();
+            (converted.as_raw(), png::ColorType::Rgba)
+        };
+        let (width, height) = (decoded.width(), decoded.height());
+        let mut buffer = PngBuffer(Vec::new());
+        // The image encoder's whole-image path buffers all compressed bytes
+        // before writing. Stream scanlines into our bounded sink instead, so
+        // an incompressible source stops as soon as the payload budget is hit.
+        let mut encoder = png::Encoder::new(&mut buffer, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_filter(png::Filter::Adaptive);
+        let mut writer = encoder.write_header().ok()?;
+        {
+            let mut stream = writer.stream_writer().ok()?;
+            stream.write_all(pixels).ok()?;
+            stream.finish().ok()?;
+        }
+        writer.finish().ok()?;
         let id = IMAGE_PREFIX | (NEXT_IMAGE.fetch_add(1, Ordering::Relaxed) % 65535 + 1);
         Some(Arc::new(Self {
             id,
             width,
             height,
-            encoded: STANDARD.encode(png.0),
+            encoded: STANDARD.encode(buffer.0),
         }))
     }
 
@@ -77,8 +112,14 @@ impl Native {
         self.encoded.len()
     }
 
+    /// Fit only the available width. A tall image remains tall in the event
+    /// transcript; placement crops it to the viewport as the reader scrolls.
+    pub(crate) fn layout_width(&self, columns: u16, cell: CellSize) -> Option<ImageBox> {
+        self.layout(columns, u16::MAX, cell)
+    }
+
     pub(crate) fn layout(&self, columns: u16, rows: u16, cell: CellSize) -> Option<ImageBox> {
-        if columns == 0 || rows == 0 {
+        if columns == 0 || rows == 0 || cell.width == 0 || cell.height == 0 {
             return None;
         }
         let max_width = u32::from(columns) * u32::from(cell.width);
@@ -1046,13 +1087,11 @@ mod tests {
 
     #[test]
     fn native_png_is_bounded_and_protocol_chunks_decode_to_the_same_pixels() {
-        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-            2048,
-            1024,
-            image::Rgba([10, 40, 90, 200]),
-        ));
+        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(2048, 1024, |x, y| {
+            image::Rgba([if x % 2 == 0 { 10 } else { 240 }, (y % 256) as u8, 90, 200])
+        }));
         let native = Native::prepare(&source).unwrap();
-        assert_eq!((native.width, native.height), (1024, 512));
+        assert_eq!((native.width, native.height), (2048, 1024));
         assert!(native.bytes() <= PNG_BYTES.div_ceil(3) * 4);
         let mut wire = String::new();
         native.upload(&mut wire);
@@ -1076,8 +1115,11 @@ mod tests {
         let decoded = image::load_from_memory(&STANDARD.decode(encoded).unwrap())
             .unwrap()
             .into_rgba8();
-        assert_eq!(decoded.dimensions(), (1024, 512));
-        assert_eq!(decoded.get_pixel(0, 0).0, [10, 40, 90, 200]);
+        assert_eq!(decoded.dimensions(), (2048, 1024));
+        assert!(
+            decoded.as_raw() == source.as_rgba8().unwrap().as_raw(),
+            "one-pixel details must survive native preparation and protocol transmission"
+        );
         let tiny = Native::prepare(&DynamicImage::ImageRgba8(image::RgbaImage::new(2, 2))).unwrap();
         let area = tiny
             .layout(
@@ -1097,5 +1139,56 @@ mod tests {
             !wire.contains(",c="),
             "tiny native images keep their actual pixel size"
         );
+    }
+
+    #[test]
+    fn noisy_native_images_fall_back_without_increasing_the_payload_budget() {
+        let mut state = 0x3141_5926u32;
+        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1200, 1000, |_, _| {
+            image::Rgba(std::array::from_fn(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            }))
+        }));
+        assert!(Native::encode(&source).is_none());
+        let native = Native::prepare(&source).unwrap();
+        assert!(native.width <= FALLBACK_SIDE && native.height <= FALLBACK_SIDE);
+        assert!(native.width < source.width() && native.height < source.height());
+        let png = STANDARD.decode(&native.encoded).unwrap();
+        assert!(png.len() <= PNG_BYTES);
+        assert!(native.bytes() <= PNG_BYTES.div_ceil(3) * 4);
+        assert_eq!(
+            image::load_from_memory(&png)
+                .unwrap()
+                .into_rgba8()
+                .dimensions(),
+            (native.width, native.height)
+        );
+    }
+
+    #[test]
+    fn width_fitted_tall_images_scroll_at_a_constant_scale() {
+        let source = DynamicImage::ImageRgba8(image::RgbaImage::new(1200, 2400));
+        let image = Native::prepare(&source).unwrap();
+        let bounds = image
+            .layout_width(
+                60,
+                CellSize {
+                    width: 10,
+                    height: 20,
+                },
+            )
+            .unwrap();
+        assert_eq!((bounds.columns, bounds.rows), (60, 60));
+        let first = bounds.placement(image.clone(), 4, 2, 0, 20).unwrap();
+        let next = bounds.placement(image, 4, 2, 10, 20).unwrap();
+        assert_eq!((first.rect.y, first.rect.height), (0, 800));
+        assert_eq!((next.rect.y, next.rect.height), (400, 800));
+        let mut wire = String::new();
+        next.display(&mut wire);
+        assert!(wire.contains(",c=60"));
+        assert!(!wire.contains(",r="));
     }
 }

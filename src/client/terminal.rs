@@ -1191,9 +1191,9 @@ impl State {
     }
     fn image(&mut self, preview: images::Preview, mime: &str) {
         let width = usize::from(self.geometry.left.saturating_sub(4).max(1));
-        let height = usize::from(self.geometry.log_rows.saturating_sub(3).clamp(1, 18));
+        let height = usize::from(self.geometry.log_rows.saturating_sub(3).max(1));
         let mut text = format!(
-            "\n[IMAGE] {} × {} · {}\n",
+            "\n[IMAGE] {} × {} · {}\n  Low-resolution thumbnail\n",
             preview.width, preview.height, mime
         );
         for row in preview.render(width, height, &self.ui) {

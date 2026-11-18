@@ -172,6 +172,7 @@ pub(crate) struct CallerGroup {
     pub running: usize,
     pub unknown: bool,
     pub status: String,
+    representative: (u8, std::cmp::Reverse<u64>),
 }
 
 impl CallerTracker {
@@ -247,6 +248,7 @@ impl CallerTracker {
                     } else {
                         "offline".into()
                     },
+                    representative: (0, std::cmp::Reverse(u64::MAX)),
                 });
                 groups.len() - 1
             });
@@ -259,12 +261,19 @@ impl CallerTracker {
                             .any(|(id, room)| id == run && room == field(data, "room_id"))));
             let group = &mut groups[index];
             group.calls += 1;
-            if entry["active"].as_bool().unwrap_or(false) {
-                // Prefer a verified live call over a retained, unfinished one.
-                if current && group.running == 0 {
-                    group.run_id = run.into();
-                    group.tool = super::super::panel::safe_text(field(entry, "tool"));
-                }
+            let active = entry["active"].as_bool().unwrap_or(false);
+            // Audit display sorts unfinished calls first. Its original order
+            // still identifies the newest call after a reconnect or timeout.
+            let priority = (
+                if current { 1 + u8::from(active) } else { 0 },
+                std::cmp::Reverse(entry["order"].as_u64().unwrap_or(u64::MAX)),
+            );
+            if priority > group.representative {
+                group.run_id = run.into();
+                group.tool = super::super::panel::safe_text(field(entry, "tool"));
+                group.representative = priority;
+            }
+            if active {
                 group.running += usize::from(current);
                 group.unknown |= connected && !current;
             }
@@ -440,6 +449,22 @@ mod caller_tests {
         assert_eq!(group.run_id, "live");
         assert_eq!(group.running, 1);
         assert!(group.unknown);
+        let group = tracker
+            .groups(&[call("old", true), call("live", false)], &data)
+            .remove(0);
+        assert_eq!(
+            group.run_id, "live",
+            "a completed current call replaces the stale one"
+        );
+        let mut newest = call("newest", false);
+        newest["order"] = json!(0);
+        let group = tracker
+            .groups(&[call("old", true), newest], &json!({"connected":false}))
+            .remove(0);
+        assert_eq!(
+            group.run_id, "newest",
+            "offline inspection still opens the newest retained call"
+        );
     }
 }
 
