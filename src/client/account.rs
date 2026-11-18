@@ -1036,7 +1036,12 @@ fn join_command(server: &str, token: &str) -> Result<String> {
     command(server, token, false, false)
 }
 
-fn command(server: &str, token: &str, bootstrap: bool, powershell: bool) -> Result<String> {
+pub(crate) fn command(
+    server: &str,
+    token: &str,
+    bootstrap: bool,
+    powershell: bool,
+) -> Result<String> {
     let server = normalize_server(server)?;
     if !valid_secret(token) {
         return Err("server returned an invalid enrollment token".into());
@@ -1154,10 +1159,26 @@ async fn invite(args: &Arguments) -> Result<()> {
             "{}",
             json!({"server":credential.server,"command":selected,"command_sh":sh,"command_powershell":powershell,
             "bootstrap":bootstrap,"requires_installed_client":!bootstrap,"server_pins":pins,
+            "release":value["release"],"release_error":value["release_error"],
+            "wire_version":crate::wire::VERSION,"supported_targets":value["supported_targets"],
             "expires_in":value["expires_in"],"session_expires_in":value["session_expires_in"]})
         );
     } else {
         println!("{selected}");
+        if bootstrap {
+            if let Some(version) = value["release"]["version"].as_str() {
+                eprintln!(
+                    "Gateway publication: ssmcp {}; wire {}. The installer verifies the current compatible release before replacing the user installation.",
+                    safe(version),
+                    crate::wire::VERSION
+                );
+            } else if let Some(error) = value["release_error"].as_str() {
+                eprintln!(
+                    "Bootstrap publication unavailable: {}. Use --no-bootstrap with an installed compatible client.",
+                    safe(error)
+                );
+            }
+        }
         if !pins.is_empty() {
             eprintln!(
                 "Server public key pinning is enabled. Install ssmcp on device B from a trusted source first; this command saves the trusted keys before joining."

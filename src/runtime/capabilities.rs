@@ -163,7 +163,11 @@ fn native_limits() -> Value {
             "browser_extension_namespace":"playwright.* when native MCP discovery succeeds",
             "browser_discovery":"ssmcp.browser.discover reads metadata; installation is not a connection",
             "model_invocation":false,
-            "input_scope":"isolated desktop by default; explicit desktop:host for shared host input",
+            "input_scope":"all desktop observation and input defaults to isolated; host access requires explicit desktop:host",
+            "isolated_desktop_platforms":["linux"],
+            "automatic_desktop_start":{"tool":"ssmcp.computer.app_launch","width":1280,"height":800},
+            "read_only_startup":false,
+            "inactive_desktop":"status reports readiness; other observation/input returns an explicit startup requirement without host fallback",
             "desktop_coordinates":"read coordinate_space: Linux/macOS logical, Windows physical virtual-desktop pixels; use image_to_desktop mapping",
             "browser_transport":"native Chromium CDP at explicit loopback endpoints; optional installed Playwright MCP in --extension mode",
             "browser_batch":{"tool":"ssmcp.browser.act","max_actions":16,"deadline_ms":25000,
@@ -172,7 +176,7 @@ fn native_limits() -> Value {
                 "states":["visible","hidden","attached","detached"],"includes_target_queue":true},
             "image_max_decoded_bytes":400*1024,
             "image_formats":["image/png","image/jpeg","image/gif","image/webp"],
-            "lifetime":"client connection; owned browser processes stop on disconnect; attached browsers remain running"
+            "lifetime":"client connection; owned private desktops, apps and browser processes stop on disconnect; attached browsers remain running"
         },
         "command_jobs":{
             "default_wait_ms":5000,
@@ -450,13 +454,13 @@ await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
 Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
-For web apps, prefer scoped browser CDP or a discovered Playwright extension provider: page input does not move the system mouse. For native apps, computer.desktop_start(clientId) starts an isolated desktop; use computer.app_launch on that desktop, and desktop_status/desktop_stop to inspect or release it. Native input defaults to the running isolated desktop. Without one, host input requires an explicit desktop: 'host'; read-only host inspection remains available. New operations are also callable through native(clientId).ssmcp.computer after schema discovery.\n\n\
+For web apps, prefer scoped browser CDP or a discovered Playwright extension provider: page input does not move the system mouse. All native desktop observation and input defaults to isolated. On Linux, computer.app_launch(clientId,{command:[existingExecutable,...args]}) validates argv and automatically starts a private 1280x800 Xvfb desktop when needed; desktop_start is only required for a custom size. Without a private desktop, status reports readiness and missing helpers; monitors/windows/screenshot/input return an explicit startup requirement. Read-only calls never start a desktop or fall back to the host. Use desktop_status/desktop_stop to inspect or release owned state. Host observation and input both require explicit desktop: 'host'. Private desktops are Linux-only; other platforms report unsupported rather than selecting the host. New operations are also callable through native(clientId).ssmcp.computer after schema discovery.\n\n\
 Use cua.status(clientId) to inspect native desktop capabilities. cua aliases computer and cua.browser aliases browser. computer.screenshot, \
 move/click/drag/key/type/scroll and windows/focus operate the client desktop. Browser control \
 uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/wait_for/\
 evaluate/screenshot/close/disconnect. Neither provider invokes a model. Both convenience \
 namespaces return complete native MCP results; inspect isError and structuredContent. \
-Use image(await computer.screenshot(clientId)) or image(await browser.screenshot(clientId,\
+After app_launch has started a private desktop, use image(await computer.screenshot(clientId)); for a selected browser page use image(await browser.screenshot(clientId,\
 {target_id})) for visible MCP image content, then return only metadata. Do not print image \
 base64. Use screenshot image_to_desktop mapping for scaled desktop coordinates. Browser \
 element refs come from the current snapshot and expire on navigation or replacement.\n\n\
