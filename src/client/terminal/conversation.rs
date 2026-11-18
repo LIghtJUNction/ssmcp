@@ -3218,6 +3218,7 @@ mod tests {
             state.canvas_focus(view);
             state.conversation.content_focus = true;
             state.conversation.selected = 15;
+            state.conversation.selected_agent = None;
             let rows = state.chat_list_rows(&data, body_rows(state.geometry.rows));
             let start = state.conversation.list_start;
             assert!(start > 0);
