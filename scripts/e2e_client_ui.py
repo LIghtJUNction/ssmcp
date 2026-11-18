@@ -186,8 +186,12 @@ def main():
                 shot = vt.request(op="snapshot", cells=True)
             finally:
                 vt.close()
-            check("ssmcp  /  activity" in text(shot) and "❯" in prompt_text(shot)
-                  and "exit=0" in text(shot), f"{name} layout shows activity and its bottom composer")
+            check("● Active" in text(shot) and "○ Idle" in text(shot)
+                  and "❯" in prompt_text(shot) and "exit=0" in text(shot),
+                  f"{name} layout shows observed activity and its bottom composer")
+            if cols >= 120:
+                check("ssmcp  /  activity" in text(shot),
+                      f"{name} wide header retains the view title")
             if rows >= 30:
                 check("cargo test --lib" in text(shot), f"{name} layout retains the command and result")
             check(not shot["hide_cursor"] and shot["cursor"][0] >= rows - 4,
