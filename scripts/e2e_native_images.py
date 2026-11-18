@@ -195,6 +195,10 @@ class Window:
                         time.sleep(0.025)
                     if not self.exit_info.exists() and same_child():
                         os.kill(pid, signal.SIGKILL)
+        if self.display is not None:
+            with contextlib.suppress(Exception):
+                self.display.close()
+            self.display = None
         for process in (self.terminal, self.xvfb):
             if process is not None and process.poll() is None:
                 with contextlib.suppress(ProcessLookupError):
@@ -204,8 +208,6 @@ class Window:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=3)
-        if self.display is not None:
-            self.display.close()
         for log in self.logs:
             log.close()
 
@@ -365,7 +367,9 @@ def main():
         raise TimeoutError("native image fixture interrupted; cleaning up owned processes")
     signal.signal(signal.SIGTERM, interrupted)
     args.bin_dir, args.ztty, args.out = args.bin_dir.resolve(), args.ztty.resolve(), args.out.resolve()
-    decoder = args.bin_dir / "examples/vt_snapshot"
+    decoder = args.bin_dir / "vt_snapshot"
+    if not decoder.is_file():
+        decoder = args.bin_dir / "examples/vt_snapshot"
     binaries = {"ssmcp": args.bin_dir / "ssmcp", "ssmcpd": args.bin_dir / "ssmcpd",
                 "vt_snapshot": decoder, "ztty": args.ztty}
     for path in binaries.values():

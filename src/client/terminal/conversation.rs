@@ -2181,7 +2181,7 @@ impl State {
         );
         if let Some(rect) = layout.sidebar {
             let limit = usize::from(g.rows.saturating_sub(1));
-            let footer = self.guide_rows(rect.width, limit as u16);
+            let footer = self.guide_rows(rect.width, limit as u16, 0, rect.col);
             let footer_start = limit.saturating_sub(footer.len());
             let mut sidebar = Vec::new();
             for kind in &self.ui.panels {

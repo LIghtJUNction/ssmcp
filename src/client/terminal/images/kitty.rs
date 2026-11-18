@@ -391,6 +391,10 @@ impl Graphics {
     }
 
     pub(crate) fn resized(&mut self) {
+        // Grid dimensions alone do not identify the current font's pixel size.
+        // Hide native placements until a fresh terminal measurement arrives.
+        self.cell = None;
+        self.changed = true;
         if self.enabled && self.started && !self.failed && self.requests.len() < 256 {
             self.requests.extend_from_slice(b"\x1b[16t");
         }
@@ -722,6 +726,50 @@ mod tests {
             !graphics.pasting,
             "incomplete PNG timeout recovers before new input"
         );
+    }
+
+    #[test]
+    fn resize_hides_native_pixels_until_fresh_cell_dimensions_arrive() {
+        let now = Instant::now();
+        let mut graphics = probe();
+        let reply = format!("\x1b_Gi={QUERY_ID};OK\x1b\\\x1b[6;25;10t");
+        assert!(graphics.input(reply.as_bytes(), now, false).is_empty());
+        assert_eq!(
+            graphics.cell(),
+            Some(CellSize {
+                width: 10,
+                height: 25
+            })
+        );
+        graphics.take_requests();
+        graphics.take_changed();
+
+        graphics.resized();
+        assert!(graphics.take_changed());
+        assert_eq!(graphics.take_requests(), b"\x1b[16t");
+        assert_eq!(
+            graphics.cell(),
+            None,
+            "old font geometry must not place an image"
+        );
+        let later = now + PROBE_TIMEOUT + Duration::from_secs(1);
+        assert_eq!(graphics.input(b"draft", later, true), b"draft");
+        assert_eq!(
+            graphics.cell(),
+            None,
+            "a missing measurement keeps the fallback"
+        );
+        assert!(graphics.input(b"\x1b[6;0;0t", later, false).is_empty());
+        assert_eq!(graphics.cell(), None);
+        assert!(graphics.input(b"\x1b[6;12;6t", later, false).is_empty());
+        assert_eq!(
+            graphics.cell(),
+            Some(CellSize {
+                width: 6,
+                height: 12
+            })
+        );
+        assert!(graphics.take_changed());
     }
 
     #[test]
