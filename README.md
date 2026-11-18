@@ -14,7 +14,7 @@ ssmcp 是一个可自建的远程 harness 通道。客户端把命令、文件�
 
 | 你想做的事 | ssmcp 提供什么 |
 | --- | --- |
-| 让云端 Agent 操作开发机 | 原生 Shell、独立命令任务、文件、浏览器、桌面，以及实际发现到的 Codex / Claude Code / Pi / OpenCode / Playwright 工具 |
+| 让云端 Agent 操作开发机 | 原生 Shell、独立命令任务、文件、浏览器、桌面，以及按需加载的 Codex / Claude Code / Pi / OpenCode / Playwright 工具 |
 | 在终端里持续协作 | Markdown 回复、代码高亮、文件和技能引用、问答队列、历史恢复；运行期间仍可继续输入 |
 | 做自己的远程 harness | 客户端拥有工具目录、schema、上下文与 UI；复用协议和客户端扩展 hook，替换自己需要的部分 |
 
@@ -138,10 +138,10 @@ ssmcp ui check
 
 ## 复用现有工具
 
-ssmcp 发现并转发已安装工具的原生能力，保留它们的 schema、会话状态和审批方式。目录查询和原语调用不会自动启动模型回合；显式调用某个 harness 的模型接口仍以该接口的原生行为为准。
+ssmcp 默认启用内置命令、文件、浏览器和会话工具，不要求安装其他 harness。Codex、Claude Code、Pi、OpenCode 和 Playwright MCP 默认不探测、不启动；需要时用 `ssmcp.harnesses.load` 显式加载一项，`ssmcp.harnesses.list` 只读取缓存状态。加载后保留该工具的完整 schema、会话和审批方式，实际模型调用仍须显式发起。[按需加载说明](docs/optional-harnesses.md)
 
 - **开发工具**：Codex、Claude Code、Pi、OpenCode；能力以当前成功注册的目录为准。
-- **浏览器**：在 ChatGPT 中优先使用已连接的 Browser 插件；客户端也可转发已注册的 Playwright MCP 扩展工具，并提供独立 Chromium CDP、批量动作和条件等待。
+- **浏览器**：优先使用内置 Chromium CDP、批量动作和条件等待；明确需要已有浏览器扩展会话时，再加载对应 Playwright MCP。Windows 安装器可同时准备 Node.js、Playwright 与 Chromium。[Windows 浏览器安装](docs/windows-browser-setup.md)
 - **桌面**：观察和输入默认指向独立桌面，`computer.app_launch` 在 Linux 上按需启动私有 Xvfb 桌面；操作宿主桌面需要显式指定 `desktop:"host"`。
 - **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 

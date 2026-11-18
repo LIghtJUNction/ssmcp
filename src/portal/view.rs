@@ -162,7 +162,7 @@ fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
 <div class="connect-actions"><p class="command-hint">{hint}</p></div>
 <p class="section-description">首次连接时，浏览器会引导 GitHub 登录。核对用户名和设备后允许连接；后续自动复用本机凭据。</p>
 <a class="text-link" href="https://github.com/LIghtJUNction/ssmcp#安装与升级">安装与升级 <span class="arrow" aria-hidden="true">↗</span></a>
-<details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>Shell 始终可用。客户端自动发现本机已安装的工具；工具需要的本机登录和授权仍由你管理。</p></details></section>"#,
+<details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>Shell 始终可用。客户端默认提供内置工具，外部 harness 仅在显式使用时加载；工具需要的本机登录和授权仍由你管理。</p></details></section>"#,
         escape(&command)
     )
 }
