@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise references, image preview, copy/help, and persisted history in owned PTYs.
+"""Exercise references, image attachment cards, copy/help, and persisted history in owned PTYs.
 
 Build ssmcp, ssmcpd, and examples/vt_snapshot first, then run:
   python3 scripts/e2e_input_history.py --bin-dir target/debug --out /tmp/input-history
@@ -71,7 +71,7 @@ class InputHistory(Composer):
             (directory / name).mkdir(mode=0o700)
 
         # Frontend deliberately forces NO_COLOR for its other suites. A private
-        # launcher changes that one setting for this real RGB-image scenario.
+        # launcher keeps colors enabled; graphics capability replies remain unanswered.
         launchers = directory / "launchers"
         launchers.mkdir(mode=0o700)
         (launchers / "ssmcpd").symlink_to(self.binary_dir / "ssmcpd")
@@ -273,15 +273,17 @@ class InputHistory(Composer):
                    and metadata["sha256"] == hashlib.sha256(image_bytes).hexdigest(),
                    "the image metadata describes the same bytes returned to the model")
 
-        def red_over_blue(shot):
+        def attachment_card(shot):
+            rows = shot["rows"]
             return any(
-                cell["text"] == "▀" and cell["foreground"] == [255, 0, 0]
-                and cell["background"] == [0, 0, 255]
-                for row in shot.get("cells", []) for cell in row
+                "2 × 2 · Image attachment" in row
+                and "Inline preview unavailable" in rows[index + 1]
+                for index, row in enumerate(rows[:-1])
             )
 
-        front.until(red_over_blue, "red/blue image pixels in real terminal half-block cells", cells=True)
-        self.check(True, "the TUI visibly previews the PNG with true-color half-block pixels")
+        image_shot = front.until(attachment_card, "the PNG attachment card in the real terminal", cells=True)
+        self.check("▀" not in text(image_shot),
+                   "the TUI shows original PNG dimensions and an attachment card without half-block pixels")
         self.save_shot("image", front, cells=True)
         return source
 
