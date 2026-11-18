@@ -352,6 +352,12 @@ impl Runtime {
         crate::client::completion::bind(&runtime);
         Ok(runtime)
     }
+
+    /// Production startup opts in to exact installed skill sources and builtins.
+    /// Runtime constructors themselves never inspect the caller's home directory.
+    pub fn enable_default_skill_sources(&self) -> Result<(), String> {
+        self.context.enable_default_skill_sources()
+    }
     /// Install an optional in-process call hook. The default is None.
     /// Each call keeps one snapshot; replacement affects subsequent calls.
     pub fn set_tool_call_hook(&self, hook: Option<Arc<dyn hooks::ToolCallHook>>) {

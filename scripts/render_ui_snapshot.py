@@ -56,18 +56,27 @@ def main():
                                rows * cell_height + padding * 2),
                        rgb(snapshot["cells"][0][0]["background"], default_bg))
     draw = ImageDraw.Draw(canvas)
+    glyphs = []
     for row_index, row in enumerate(snapshot["cells"]):
         for col_index, cell in enumerate(row):
-            fg = rgb(cell.get("foreground"), default_fg)
-            bg = rgb(cell.get("background"), default_bg)
-            if cell.get("inverse"):
+            # vt100 stores default attributes in a wide character's continuation.
+            # Both halves use the leading cell's style, including inverse colors.
+            style = cell
+            if cell.get("continuation") and col_index > 0 and row[col_index - 1].get("wide"):
+                style = row[col_index - 1]
+            fg = rgb(style.get("foreground"), default_fg)
+            bg = rgb(style.get("background"), default_bg)
+            if style.get("inverse"):
                 fg, bg = bg, fg
-            if cell.get("dim"):
+            if style.get("dim"):
                 fg = tuple(round((a + b) / 2) for a, b in zip(fg, bg))
             x, y = padding + col_index * cell_width, padding + row_index * cell_height
             draw.rectangle((x, y, x + cell_width - 1, y + cell_height - 1), fill=bg)
             if cell["text"] and not cell.get("continuation"):
-                draw.text((x, y + 3), cell["text"], fill=fg, font=bold if cell.get("bold") else font)
+                glyphs.append((x, y, cell["text"], fg, bold if cell.get("bold") else font))
+    # A wide glyph spans its continuation cell, whose background must be drawn first.
+    for x, y, value, fg, glyph_font in glyphs:
+        draw.text((x, y + 3), value, fill=fg, font=glyph_font)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(args.output, optimize=True)
     print(f"{args.output}: {canvas.width}×{canvas.height}, {cols}×{rows} VT cells")

@@ -26,6 +26,14 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show keyboard shortcuts and commands",
     },
     SlashCommand {
+        name: "/exit",
+        description: "Close this frontend and restore the terminal",
+    },
+    SlashCommand {
+        name: "/quit",
+        description: "Close this frontend (alias of /exit)",
+    },
+    SlashCommand {
         name: "/reload",
         description: "Restart this client session; preserve pending requests",
     },
@@ -39,7 +47,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/tasks",
-        description: "List local command jobs; cancel an exact job ID",
+        description: "Open Tasks beside Logs; browse jobs or cancel an exact ID",
     },
     SlashCommand {
         name: "/queue",
@@ -50,12 +58,28 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Open code audit",
     },
     SlashCommand {
+        name: "/diff",
+        description: "Choose diff layout: single or split; narrow screens use single",
+    },
+    SlashCommand {
+        name: "/login",
+        description: "Sign in with GitHub; open a browser, copy the link or show the link",
+    },
+    SlashCommand {
         name: "/logs",
-        description: "Show compact tool activity",
+        description: "Open the Logs canvas panel; Esc returns to the previous panel",
     },
     SlashCommand {
         name: "/raw",
-        description: "Toggle the original tool transcript",
+        description: "Toggle the diagnostic log panel",
+    },
+    SlashCommand {
+        name: "/new",
+        description: "Add a canvas panel: chat, agents, audit, queue, questions or history",
+    },
+    SlashCommand {
+        name: "/close",
+        description: "Close this canvas panel; keep the session and running work",
     },
     SlashCommand {
         name: "/questions",

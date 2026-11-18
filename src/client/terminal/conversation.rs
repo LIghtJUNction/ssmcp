@@ -2,8 +2,12 @@
 use super::*;
 use crate::client::{attachments, composer::Composer, references, steering};
 use serde_json::{Value, json};
+mod canvas;
+mod hints;
 mod history;
+mod login;
 mod questions;
+mod tasks;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum View {
@@ -14,26 +18,32 @@ pub(super) enum View {
     Queue,
     Questions,
     History,
+    Logs,
+    Tasks,
 }
 impl View {
     fn name(self) -> &'static str {
         match self {
-            Self::Activity => "activity",
+            Self::Activity => "conversation",
             Self::Audit => "code audit",
             Self::Agents => "agents",
             Self::Queue => "queue",
             Self::Questions => "questions",
             Self::History => "history",
+            Self::Logs => "Logs",
+            Self::Tasks => "Tasks",
         }
     }
     fn next(self) -> Self {
         match self {
             Self::Activity => Self::Audit,
-            Self::Audit => Self::Agents,
-            Self::Agents => Self::Queue,
+            Self::Audit => Self::Queue,
+            Self::Agents => Self::Activity,
             Self::Queue => Self::Questions,
             Self::Questions => Self::History,
-            Self::History => Self::Activity,
+            Self::History => Self::Logs,
+            Self::Logs => Self::Tasks,
+            Self::Tasks => Self::Agents,
         }
     }
 }
@@ -54,6 +64,10 @@ pub(super) struct Conversation {
     pub(super) composer: Composer,
     pub(super) view: View,
     pub(super) content_focus: bool,
+    canvas: canvas::Canvas,
+    pub(super) logs_open: bool,
+    pub(super) exit_requested: bool,
+    tasks: tasks::TaskPanel,
     selected: usize,
     selected_agent: Option<String>,
     drawn_agents: Vec<String>,
@@ -69,6 +83,7 @@ pub(super) struct Conversation {
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
     input_task: Option<attachments::Task>,
+    login_task: Option<crate::client::account::login::Task>,
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
@@ -76,17 +91,18 @@ pub(super) struct Conversation {
     answers: BTreeMap<String, Composer>,
     help_scroll: usize,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
-    history: Option<crate::client::interface::history::Conversation>,
+    history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_rows: Vec<String>,
     pub(super) history_width: u16,
 }
 
 impl Conversation {
     pub(super) fn snapshot(&self) -> Value {
-        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history" },
+        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history",View::Logs=>"logs",View::Tasks=>"tasks" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
+            "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
 }
@@ -230,7 +246,7 @@ impl State {
             let _ = writeln!(record, "{line}");
         }
         record.push_str("  queued · waiting for the next eligible tool response\n\n");
-        self.log(record.as_bytes());
+        self.log_message("user", &text, record.as_bytes());
         if self
             .conversation
             .submitting
@@ -268,6 +284,9 @@ impl State {
     }
 
     fn chat_updates(&mut self) {
+        if self.conversation.tasks.poll() {
+            self.dirty = true;
+        }
         if !self.conversation.restored && !self.preview {
             let (text, cursor) = steering::draft();
             let context = steering::draft_context();
@@ -284,6 +303,7 @@ impl State {
             return;
         }
         self.chat_poll_input();
+        self.chat_poll_login();
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
@@ -360,22 +380,23 @@ impl State {
     }
 
     fn chat_change_view(&mut self, view: View) {
-        self.conversation.view = view;
-        self.conversation.content_focus = view != View::Activity;
-        self.conversation.selected = 0;
-        self.conversation.selected_agent = None;
-        self.conversation.drawn_agents.clear();
-        self.conversation.list_start = 0;
-        self.conversation.list_count = 0;
-        self.conversation.detail = false;
-        self.conversation.detail_scroll = 0;
+        self.canvas_focus(view);
         self.help = false;
         self.notice = None;
         self.dirty = true;
     }
 
+    pub(super) fn chat_initial_logs(&mut self) {
+        self.logs_open();
+    }
+
+    #[cfg(test)]
     fn chat_agents(&mut self) {
         self.chat_change_view(View::Agents);
+        self.chat_select_target();
+    }
+
+    fn chat_select_target(&mut self) {
         let data = self.chat_data();
         let entries = self.chat_recipients(&data);
         let target = self.conversation.target.as_deref().unwrap_or("next");
@@ -401,6 +422,13 @@ impl State {
         let (command, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
         let rest = rest.trim();
         match command {
+            "/exit" | "/quit" => {
+                if !rest.is_empty() {
+                    return Err("Use /exit or /quit without arguments".into());
+                }
+                self.conversation.exit_requested = true;
+                self.notice = Some("Closing this client · restoring the terminal".into());
+            }
             "/help" => {
                 self.conversation.help_scroll = 0;
                 self.help = true;
@@ -425,6 +453,7 @@ impl State {
                     .ok_or("No agent message is available to copy")?;
                 self.chat_start_input(attachments::Source::Copy(text), true)?;
             }
+            "/login" => self.chat_login(rest)?,
             "/handoff" => {
                 if self.preview {
                     return Err("Preview cannot export a live conversation".into());
@@ -465,17 +494,44 @@ impl State {
                 self.notice = Some(crate::client::interface::computer::local_command(rest)?);
             }
             "/tasks" => {
-                if self.preview {
-                    return Err("Preview has no live command jobs".into());
+                if rest.is_empty() {
+                    self.chat_change_view(View::Tasks);
+                    self.conversation.content_focus = true;
+                    if let Err(error) = self.conversation.tasks.refresh(self.preview) {
+                        self.notice = Some(error);
+                    }
+                } else {
+                    let arguments: Vec<_> = rest.split_whitespace().collect();
+                    if !matches!(arguments.as_slice(), ["cancel", id] if !id.is_empty()) {
+                        return Err("Use /tasks to browse jobs, or /tasks cancel ID".into());
+                    }
+                    if self.preview {
+                        return Err("Preview cannot cancel live tasks".into());
+                    }
+                    crate::client::interface::harness::submit_tasks(rest)?;
+                    self.notice = Some("Task cancellation requested".into());
                 }
-                crate::client::interface::harness::submit_tasks(rest)?;
-                self.notice = Some("Task status requested · results appear here".into());
             }
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
+            "/diff" => {
+                if !rest.is_empty() {
+                    self.events.set_diff_mode(events::DiffMode::parse(rest)?);
+                    self.dirty = true;
+                }
+                self.notice = Some(format!(
+                    "Diff layout · {}{}",
+                    self.events.diff_mode().name(),
+                    if self.events.diff_mode() == events::DiffMode::Split {
+                        " · narrow screens use single"
+                    } else {
+                        ""
+                    }
+                ));
+            }
             "/logs" => {
-                self.raw_logs = false;
-                self.chat_change_view(View::Activity);
+                self.logs_open();
+                self.notice = None;
             }
             "/raw" => {
                 if !rest.is_empty() {
@@ -483,8 +539,25 @@ impl State {
                         "Use /raw without arguments to toggle the original transcript".into(),
                     );
                 }
-                self.raw_logs = !self.raw_logs;
-                self.chat_change_view(View::Activity);
+                self.logs_toggle();
+            }
+            "/new" => {
+                let view = match rest {
+                    "" | "chat" | "conversation" => View::Activity,
+                    "agents" => View::Agents,
+                    "audit" => View::Audit,
+                    "queue" => View::Queue,
+                    "questions" => View::Questions,
+                    "history" => View::History,
+                    _ => return Err("Use /new [chat|agents|audit|queue|questions|history]".into()),
+                };
+                self.canvas_new(view);
+            }
+            "/close" => {
+                if !rest.is_empty() {
+                    return Err("Use /close without arguments to close this view".into());
+                }
+                self.canvas_close();
             }
             "/questions" => self.chat_questions(),
             "/sidebar" => self.actions.push("sidebar.toggle"),
@@ -499,7 +572,7 @@ impl State {
             }
             "/filter" => {
                 if let Some(level) = rest.strip_prefix("--") {
-                    self.log_level = match level {
+                    let level = match level {
                         "all" => 0,
                         "commands" => 1,
                         "errors" => 2,
@@ -507,14 +580,18 @@ impl State {
                             return Err("Use /filter text, or --all / --commands / --errors".into());
                         }
                     };
+                    self.logs_open();
+                    self.log_level = level;
                 } else {
                     if rest.len() > 256 || rest.chars().any(char::is_control) {
                         return Err("A log filter accepts up to 256 bytes of plain text".into());
                     }
+                    self.logs_open();
                     self.log_query = rest.into();
                 }
                 self.filter_offset = 0;
-                self.chat_change_view(View::Activity);
+                self.help = false;
+                self.notice = None;
             }
             "/clear" => {
                 self.events.clear();
@@ -589,6 +666,15 @@ impl State {
     }
 
     fn chat_submit(&mut self) {
+        // Exit is local even while editing a queued request or waiting for an acknowledgement.
+        let text = self.conversation.composer.text().to_owned();
+        if matches!(text.split_whitespace().next(), Some("/exit" | "/quit")) {
+            if let Err(error) = self.chat_command(text.trim()) {
+                self.notice = Some(error);
+            }
+            self.dirty = true;
+            return;
+        }
         if self.chat_wait_for_input() {
             return;
         }
@@ -698,9 +784,8 @@ impl State {
                         if self.audit.open_run(field(&agent, "run_id")) {
                             self.conversation.detail = true;
                             self.conversation.content_focus = true;
-                            self.notice = Some(
-                                "Observed call · ← / Esc / left click returns to agents".into(),
-                            );
+                            self.notice =
+                                Some("Observed call · Esc / left click returns to agents".into());
                         } else {
                             self.notice =
                                 Some("This call is no longer in the retained audit history".into());
@@ -732,6 +817,10 @@ impl State {
                 }
             }
             View::History => self.chat_resume_selected(),
+            View::Tasks => {
+                self.conversation.tasks.open();
+            }
+            View::Logs => {}
             View::Activity => {
                 if self.raw_logs {
                     self.notice = Some("Raw transcript · /logs returns to tool details".into());
@@ -754,6 +843,8 @@ impl State {
                 self.events.scroll_by(delta);
             }
             View::Audit => self.audit.scroll_by(delta),
+            View::Logs => self.scroll_logs(-delta),
+            View::Tasks => self.conversation.tasks.scroll_by(delta),
             View::Agents if self.conversation.detail => self.audit.scroll_by(delta),
             View::Queue | View::History if self.conversation.detail => {
                 self.conversation.detail_scroll =
@@ -795,6 +886,7 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        self.events.set_scope(events::EventScope::Conversation);
         if matches!(key, Key::Interrupt) {
             request_interrupt();
             return;
@@ -810,6 +902,61 @@ impl State {
         }
         if self.selection {
             return;
+        }
+        if let Key::Mouse {
+            button,
+            release: false,
+            ..
+        } = key
+            && button & 3 == 2
+            && button & (32 | 64) == 0
+        {
+            self.logs_toggle();
+            return;
+        }
+        if matches!(key, Key::CanvasLeft | Key::CanvasRight) {
+            self.canvas_move(if matches!(key, Key::CanvasLeft) {
+                -1
+            } else {
+                1
+            });
+            return;
+        }
+        if self.conversation.logs_open && !self.help {
+            let scrolling = match key {
+                Key::AuditUp | Key::AuditDown | Key::Home | Key::End => {
+                    self.conversation.content_focus
+                }
+                Key::Up | Key::Down | Key::HistoryStart | Key::HistoryEnd | Key::Filter => true,
+                Key::Mouse {
+                    button,
+                    release: false,
+                    ..
+                } => button & 64 != 0,
+                _ => false,
+            };
+            if scrolling {
+                self.logs_key(key);
+                return;
+            }
+        }
+        if !self.help && matches!(key, Key::Back | Key::Open) {
+            let editor = if self.conversation.view == View::Questions {
+                self.question_editor()
+            } else {
+                Some(&self.conversation.composer)
+            };
+            let at_edge = editor.is_none_or(|editor| {
+                if matches!(key, Key::Back) {
+                    editor.cursor() == 0
+                } else {
+                    editor.cursor() == editor.text().len()
+                }
+            });
+            if self.conversation.content_focus || at_edge {
+                self.canvas_move(if matches!(key, Key::Back) { -1 } else { 1 });
+                return;
+            }
         }
         if matches!(key, Key::Questions) {
             self.chat_questions();
@@ -878,6 +1025,7 @@ impl State {
             Key::Reload => self.actions.push("reload"),
             Key::Save => self.actions.push("save"),
             Key::Filter => {
+                self.logs_open();
                 self.log_level = (self.log_level + 1) % 3;
                 self.filter_offset = 0;
             }
@@ -888,6 +1036,14 @@ impl State {
             Key::Down => self.chat_move(
                 (isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
             ),
+            Key::HistoryStart if self.conversation.view == View::Tasks => {
+                self.conversation
+                    .tasks
+                    .scroll_by(isize::MIN.saturating_add(1));
+            }
+            Key::HistoryEnd if self.conversation.view == View::Tasks => {
+                self.conversation.tasks.scroll_by(isize::MAX);
+            }
             Key::HistoryStart => {
                 self.scroll_logs(isize::MAX);
                 self.events.scroll_by(isize::MIN.saturating_add(1));
@@ -907,6 +1063,12 @@ impl State {
                 if content && self.conversation.view == View::Activity && !self.raw_logs =>
             {
                 self.events.select(1)
+            }
+            Key::AuditUp if content && self.conversation.view == View::Tasks => {
+                self.conversation.tasks.move_selection(-1);
+            }
+            Key::AuditDown if content && self.conversation.view == View::Tasks => {
+                self.conversation.tasks.move_selection(1);
             }
             Key::AuditUp if content => self.chat_move(-1),
             Key::AuditDown if content => self.chat_move(1),
@@ -959,26 +1121,34 @@ impl State {
                     }
                 }
             }
-            Key::Back if self.conversation.view == View::Agents && content => {
-                self.chat_escape();
-            }
+            Key::Back if self.conversation.view == View::Agents && content => self.canvas_move(-1),
             Key::Back if self.conversation.view == View::Activity && content => {
                 if self.raw_logs {
                     self.notice = Some("Raw transcript · /logs returns to tool details".into());
                 } else if !self.events.back() {
-                    self.chat_agents();
+                    self.canvas_move(-1);
                 }
             }
             Key::Back if content => {
-                self.audit.back();
-                self.conversation.detail = false;
-                self.conversation.detail_scroll = 0;
+                if self.conversation.detail {
+                    self.audit.back();
+                    self.conversation.detail = false;
+                    self.conversation.detail_scroll = 0;
+                } else {
+                    self.canvas_move(-1);
+                }
             }
-            Key::Back if self.conversation.composer.cursor() == 0 => self.chat_agents(),
+            Key::Back if self.conversation.composer.cursor() == 0 => self.canvas_move(-1),
             Key::Back => {
                 self.conversation.composer.left();
             }
             Key::Open if content => self.chat_open(false),
+            Key::Open
+                if self.conversation.composer.cursor()
+                    == self.conversation.composer.text().len() =>
+            {
+                self.canvas_move(1)
+            }
             Key::Open => {
                 self.conversation.composer.right();
             }
@@ -997,10 +1167,19 @@ impl State {
                     self.notice = Some(error);
                 }
             }
+            Key::Delete if content && self.conversation.view == View::Tasks => {
+                self.notice = Some("Cancel a task explicitly with /tasks cancel ID".into());
+            }
             Key::Delete => {
+                if self.conversation.view == View::Logs {
+                    self.conversation.content_focus = false;
+                }
                 self.conversation.composer.delete();
             }
             Key::Newline => {
+                if matches!(self.conversation.view, View::Tasks | View::Logs) {
+                    self.conversation.content_focus = false;
+                }
                 self.conversation.composer.insert("\n");
             }
             Key::Escape => self.chat_escape(),
@@ -1016,6 +1195,16 @@ impl State {
                     self.conversation.content_focus = false;
                 } else {
                     self.conversation.content_focus = true;
+                    if self.conversation.view == View::Tasks {
+                        if let Some(row) = y.checked_sub(body_top(self.geometry.rows))
+                            && self.conversation.tasks.mouse_select(row)
+                            && button == 0
+                        {
+                            self.conversation.tasks.open();
+                        }
+                        self.dirty = true;
+                        return;
+                    }
                     if self.conversation.view == View::Activity
                         && !self.raw_logs
                         && !self.events.is_empty()
@@ -1088,6 +1277,15 @@ impl State {
         if self.help {
             self.help = false;
             self.conversation.content_focus = false;
+            self.notice = None;
+            return;
+        }
+        if self.conversation.logs_open {
+            self.logs_close_restore();
+            return;
+        }
+        if self.conversation.view == View::Tasks {
+            self.conversation.content_focus = self.conversation.tasks.back();
             self.notice = None;
             return;
         }
@@ -1177,7 +1375,21 @@ impl State {
         {
             self.chat_change_view(View::Activity);
         }
+        if matches!(self.conversation.view, View::Tasks | View::Logs)
+            && self.conversation.content_focus
+            && matches!(
+                character,
+                '\n' | '\u{1}' | '\u{5}' | '\u{15}' | '\u{b}' | '\u{17}' | '\u{7f}' | '\u{8}'
+            )
+        {
+            self.conversation.content_focus = false;
+        }
         match character {
+            'i' | 'I'
+                if self.conversation.content_focus && self.conversation.view == View::Queue =>
+            {
+                self.chat_open(false);
+            }
             'r' | 'R'
                 if self.conversation.content_focus && self.conversation.view == View::Queue =>
             {
@@ -1405,7 +1617,11 @@ impl State {
                     let _ = writeln!(record, "{line}");
                 }
                 record.push('\n');
-                self.log(record.as_bytes());
+                self.log_event(
+                    "context",
+                    &json!({"type":"ssmcp.message", "author":"Context", "text":text}),
+                    record.as_bytes(),
+                );
                 self.notice = Some(
                     "Local context updated · source history and queue were not replayed".into(),
                 );
@@ -1937,7 +2153,7 @@ impl State {
             .selected
             .min(entries.len().saturating_sub(1));
         let mut rows = vec![self.chat_line(
-            "  Requests · Enter edit · → details · Delete cancel · R resend",
+            "  Requests · Enter edit · i/I inspect · Delete cancel · R resend · Alt+←/→ panels",
             PanelTone::Muted,
             width,
         )];
@@ -1953,7 +2169,7 @@ impl State {
             let entry = &entries[self.conversation.selected];
             rows.push(self.chat_line(
                 &format!(
-                    "  {} · {} · ← back",
+                    "  {} · {} · Esc back",
                     field(entry, "status"),
                     message_id(entry)
                 ),
@@ -2008,10 +2224,10 @@ impl State {
     }
 
     fn chat_scroll_hint(&self) -> Option<String> {
-        if self.help || self.conversation.view != View::Activity {
+        if !self.conversation.logs_open && (self.help || self.conversation.view != View::Activity) {
             return None;
         }
-        if self.raw_logs || self.events.is_empty() {
+        if self.conversation.logs_open {
             let below = if self.log_query.is_empty() && self.log_level == 0 {
                 self.logs.screen().scrollback()
             } else {
@@ -2033,7 +2249,14 @@ impl State {
     }
 
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
+        self.events.set_scope(events::EventScope::Conversation);
+        self.conversation.logs_open = self.conversation.view == View::Logs;
         self.chat_updates();
+        if self.conversation.view == View::Tasks
+            && let Err(error) = self.conversation.tasks.refresh(self.preview)
+        {
+            self.notice = Some(error);
+        }
         self.chat_refresh_completions();
         let g = self.geometry;
         let data = self.chat_data();
@@ -2049,20 +2272,18 @@ impl State {
         let height = body_rows(g.rows);
         let mut body = match self.conversation.view {
             View::Activity => {
-                if self.raw_logs || self.events.is_empty() {
-                    self.filtered_logs().unwrap_or_else(|| {
-                        (0..height)
-                            .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
-                            .collect()
-                    })
-                } else {
-                    self.events.filter(&self.log_query, self.log_level);
-                    self.events
-                        .render(g.left, height, &self.ui, self.conversation.content_focus)
-                }
+                self.events.filter("", 0);
+                self.events
+                    .render(g.left, height, &self.ui, self.conversation.content_focus)
             }
             View::History => self.chat_history_rows(height),
             View::Questions => self.question_rows(height),
+            View::Logs => self.filtered_logs().unwrap_or_else(|| {
+                (0..height)
+                    .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
+                    .collect()
+            }),
+            View::Tasks => self.conversation.tasks.render(g.left, height, &self.ui),
             View::Audit => self.audit.render(g.left, height, &self.ui),
             View::Agents if self.conversation.detail => self.audit.render(g.left, height, &self.ui),
             _ => self.chat_list_rows(&data, height),
@@ -2142,7 +2363,16 @@ impl State {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
+                    if let Some(hint) = self.chat_contextual_hint(status) { return hint; }
+                    if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
+                    if self.conversation.view == View::Tasks {
+                        return if self.conversation.content_focus {
+                            "Tasks · ↑↓ select · Enter details · PgUp/PgDn scroll · Esc back · ←/→ panels".into()
+                        } else {
+                            "Tasks · Tab browse · Enter sends draft · /tasks cancel ID".into()
+                        };
+                    }
                     if self.conversation.view == View::History {
                         return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
                             else { "↑↓ select · Enter resume · Esc back".into() };
@@ -2159,9 +2389,9 @@ impl State {
                             "← / Esc  back to agents".into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
-                                "↑↓ select · Enter latest call · Esc back · view only".into()
+                                "↑↓ select · Enter latest call · ←/→ panels · Esc back".into()
                             } else {
-                                "↑↓ select · Enter/→ message · Esc back · ● current recipient".into()
+                                "↑↓ select · Enter message · ←/→ panels · Esc back".into()
                             }
                         };
                     }
@@ -2171,20 +2401,20 @@ impl State {
                             else { "F1 · full online guide link".into() };
                     }
                     format!(
-                        "{} · {status} · {} members / {} callers · {pending} queued · ← agents · /help",
+                        "{} · {status} · Alt+←/→ panels · right-click logs · /help",
                         if self.conversation.content_focus {
                             "browse"
                         } else {
                             "input"
-                        },
-                        agents.len(),
-                        grouped_callers.len()
+                        }
                     )
                 });
                 rows.push(self.chat_line(&format!(" {hint}"), hint_tone, g.cols));
                 continue;
             } else if top > 0 && index == 0 {
-                let suffix = if !self.log_query.is_empty() || self.log_level != 0 {
+                let suffix = if self.conversation.view == View::Logs
+                    && (!self.log_query.is_empty() || self.log_level != 0)
+                {
                     format!(
                         " · {} /{}",
                         ["all", "commands", "errors"][usize::from(self.log_level)],
@@ -2193,19 +2423,16 @@ impl State {
                 } else {
                     String::new()
                 };
-                self.chat_line(
-                    &format!(
+                let label = self.conversation.canvas.label(g.left);
+                let mut heading = format!("  ssmcp  /  {label}{}{suffix}", self.context_label);
+                if heading.width() > usize::from(g.left) {
+                    heading = format!(
                         "  ssmcp  /  {}{}{suffix}",
-                        if self.conversation.view == View::Activity && self.raw_logs {
-                            "raw transcript"
-                        } else {
-                            self.conversation.view.name()
-                        },
+                        self.conversation.canvas.label(0),
                         self.context_label,
-                    ),
-                    PanelTone::Heading,
-                    g.left,
-                )
+                    );
+                }
+                self.chat_line(&heading, PanelTone::Heading, g.left)
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g.rows) && prompt_rows(g.rows) > 0 {
@@ -2376,6 +2603,130 @@ mod tests {
         parser
     }
 
+    #[test]
+    fn tasks_command_renders_its_own_jobs_without_appending_conversation_or_logs() {
+        let mut state = preview(32, 120);
+        display(&mut state);
+        state.conversation.composer.set_text("保留草稿界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("chosen-agent".into());
+        state.conversation.editing = Some("editable-request".into());
+        let draft = state.conversation.snapshot()["draft"].clone();
+        let events = state.events.snapshot()["events"].clone();
+        let logs = state.logs.screen().contents_formatted();
+
+        assert!(state.chat_command("/tasks").unwrap());
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert!(!state.conversation.logs_open);
+        let tasks = state.conversation.tasks.snapshot();
+        assert_eq!(tasks["source"], "preview_fixture");
+        assert_eq!(tasks["selected_id"], "preview-task-build");
+        assert_eq!(tasks["jobs"].as_array().unwrap().len(), 2);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("fictional task data"), "{screen}");
+        assert!(screen.contains("cargo check --workspace"), "{screen}");
+        assert_eq!(state.events.snapshot()["events"], events);
+        assert_eq!(state.logs.screen().contents_formatted(), logs);
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+        assert_eq!(
+            state.conversation.editing.as_deref(),
+            Some("editable-request")
+        );
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+    }
+
+    #[test]
+    fn logs_and_tasks_are_adjacent_columns_and_escape_restores_the_bookmark() {
+        let mut state = preview(30, 120);
+        state.conversation.composer.set_text("unfinished 界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("chosen-agent".into());
+        state.chat_change_view(View::Audit);
+        let draft = state.conversation.snapshot()["draft"].clone();
+        assert!(state.chat_command("/logs").unwrap());
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(
+            state.conversation.snapshot()["logs_open"]
+                .as_bool()
+                .unwrap()
+        );
+        state.chat_key(Key::Open);
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+        state.chat_key(Key::Back);
+        assert_eq!(state.conversation.view, View::Logs);
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Audit);
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+    }
+
+    #[test]
+    fn tasks_selection_enter_and_escape_keep_the_shared_draft_intact() {
+        let mut state = preview(30, 120);
+        state.conversation.composer.set_text("draft stays 界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("chosen-agent".into());
+        let draft = state.conversation.snapshot()["draft"].clone();
+        state.chat_command("/tasks").unwrap();
+        display(&mut state);
+        state.chat_key(Key::AuditDown);
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_id"],
+            "preview-task-test"
+        );
+        state.chat_character('\r');
+        assert_eq!(state.conversation.tasks.snapshot()["detail"], true);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("cargo test --lib"), "{screen}");
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.tasks.snapshot()["detail"], false);
+        assert!(state.conversation.content_focus);
+        assert_eq!(state.conversation.view, View::Tasks);
+        state.chat_key(Key::Delete);
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("/tasks cancel ID")
+        );
+        state.chat_key(Key::Escape);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_id"],
+            "preview-task-test"
+        );
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+    }
+
+    #[test]
+    fn task_commands_require_an_explicit_cancellation_id_and_preview_never_cancels() {
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("keep this draft");
+        let before = state.chat_input_stamp().unwrap();
+        let events = state.events.snapshot()["events"].clone();
+        for command in [
+            "/tasks unknown",
+            "/tasks cancel",
+            "/tasks cancel job extra",
+            "/tasks cancel preview-task-build",
+        ] {
+            assert!(state.chat_command(command).is_err(), "{command}");
+            assert_eq!(state.chat_input_stamp().as_ref(), Some(&before));
+            assert_eq!(state.events.snapshot()["events"], events);
+            assert!(state.actions.is_empty());
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn file_batch_acceptance_is_atomic_and_changed_drafts_roll_back_copies() {
@@ -2476,25 +2827,29 @@ mod tests {
             (
                 "/workspace/alpha-project/",
                 None,
-                "  ssmcp  /  activity  /  alpha-project",
+                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›  /  alpha-project",
             ),
             (
                 "/workspace/终端",
                 Some("修复输入框"),
-                "  ssmcp  /  activity  /  终端  /  修复输入框",
+                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›  /  终端  /  修复输入框",
             ),
-            ("", None, "  ssmcp  /  activity"),
+            (
+                "",
+                None,
+                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›",
+            ),
         ] {
             state.set_context(cwd, title);
             let screen = display(&mut state).screen().contents();
             assert_eq!(screen.lines().next().unwrap().trim_end(), expected);
         }
         state.set_context("/workspace/alpha-project", Some("Review uploads"));
-        state.conversation.view = View::Queue;
+        state.chat_change_view(View::Queue);
         let screen = display(&mut state).screen().contents();
         assert_eq!(
             screen.lines().next().unwrap().trim_end(),
-            "  ssmcp  /  queue  /  alpha-project  /  Review uploads",
+            "  ssmcp  /  ‹ code audit     queue  4/8     questions ›  /  alpha-project  /  Review uploads",
         );
     }
 
@@ -2550,11 +2905,11 @@ mod tests {
     }
 
     #[test]
-    fn quick_escape_then_arrow_opens_agents_without_inserting_csi_text() {
+    fn quick_escape_then_arrow_moves_columns_without_inserting_csi_text() {
         let mut state = preview(28, 120);
         state.chat_change_view(View::Queue);
         input(&mut state, b"\x1b\x1b[D");
-        assert_eq!(state.conversation.view, View::Agents);
+        assert_eq!(state.conversation.view, View::Audit);
         assert!(state.conversation.composer.is_empty());
     }
 
@@ -2583,7 +2938,7 @@ mod tests {
                 }
                 state.keyboard(&[], now + Duration::from_millis(200), true);
                 if sequence.ends_with("[D") {
-                    assert_eq!(state.conversation.view, View::Agents);
+                    assert_eq!(state.conversation.view, View::Audit);
                     assert!(state.conversation.composer.is_empty());
                 } else {
                     assert_eq!(state.conversation.composer.text(), "literal draft");
@@ -2714,11 +3069,12 @@ mod tests {
             "controller":{"name":"Another caller","model":"B","source":"caller-reported"}
         }));
         state.chat_key(Key::Mouse {
-            button: 2,
+            button: 0,
             x: 2,
             y: body_top(state.geometry.rows) + 1 + index as u16 * 2,
             release: false,
         });
+        state.chat_key(Key::Open);
         assert_eq!(state.audit.snapshot()["selected"]["run_id"], "drawn");
         assert!(state.conversation.target.is_none());
     }
@@ -2764,11 +3120,16 @@ mod tests {
             state.conversation.selected_agent.as_deref(),
             Some("member:example-builder")
         );
-        input(&mut state, b"\x1b[B\x1b[C");
+        input(&mut state, b"\x1b[B\r");
         assert_eq!(state.conversation.view, View::Activity);
         assert_eq!(
             state.conversation.target.as_deref(),
             Some("example-reviewer")
+        );
+        assert_eq!(state.conversation.composer.text(), "draft under review");
+        assert_eq!(
+            state.conversation.editing.as_deref(),
+            Some("existing-request")
         );
         assert_eq!(state.conversation.composer.cursor(), 0);
     }
@@ -2839,7 +3200,7 @@ mod tests {
         state.chat_agents();
         display(&mut state);
         state.chat_key(Key::Mouse {
-            button: 2,
+            button: 0,
             x: state.chat_agent_list_width() + 5,
             y: body_top(state.geometry.rows) + 5,
             release: false,
@@ -2868,9 +3229,10 @@ mod tests {
         });
         for view in [View::Agents, View::Queue] {
             let mut state = preview(18, 120);
-            state.conversation.view = view;
+            state.canvas_focus(view);
             state.conversation.content_focus = true;
             state.conversation.selected = 15;
+            state.conversation.selected_agent = None;
             let rows = state.chat_list_rows(&data, body_rows(state.geometry.rows));
             let start = state.conversation.list_start;
             assert!(start > 0);
@@ -2896,7 +3258,7 @@ mod tests {
                 "subtitle selects its visible item"
             );
             state.chat_key(Key::Mouse {
-                button: 2,
+                button: 0,
                 x: 1,
                 y: body_top(state.geometry.rows),
                 release: false,
@@ -2910,6 +3272,14 @@ mod tests {
             state.chat_key(Key::Mouse {
                 button: 2,
                 x: 1,
+                y: body_top(state.geometry.rows),
+                release: false,
+            });
+            assert_eq!(state.conversation.view, View::Logs);
+            assert!(state.conversation.logs_open);
+            state.chat_key(Key::Mouse {
+                button: 2,
+                x: 1,
                 y: prompt_top(state.geometry.rows),
                 release: false,
             });
@@ -2918,6 +3288,8 @@ mod tests {
                 start + 1,
                 "prompt border is not an entry"
             );
+            assert!(!state.conversation.logs_open);
+            assert_eq!(state.conversation.view, view);
         }
     }
 
@@ -2946,6 +3318,39 @@ mod tests {
     }
 
     #[test]
+    fn queue_inspect_keys_preserve_the_draft_recipient_and_editing_request() {
+        let mut state = preview(36, 120);
+        state.chat_change_view(View::Queue);
+        state.conversation.composer.set_text("Keep this draft 界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("example-builder".into());
+        state.conversation.editing = Some("another-request".into());
+        let saved = state.chat_saved_draft();
+
+        for key in ['i', 'I'] {
+            state.conversation.detail = false;
+            state.conversation.detail_scroll = 17;
+            state.chat_character(key);
+            assert!(state.conversation.detail);
+            assert_eq!(state.conversation.detail_scroll, 0);
+            assert_eq!(state.conversation.view, View::Queue);
+            assert!(state.conversation.content_focus);
+            assert_eq!(state.chat_saved_draft(), saved);
+            assert_eq!(
+                state.conversation.editing.as_deref(),
+                Some("another-request")
+            );
+        }
+
+        state.conversation.detail = false;
+        state.conversation.content_focus = false;
+        state.conversation.composer.set_text("typing ");
+        state.chat_character('i');
+        assert_eq!(state.conversation.composer.text(), "typing i");
+        assert!(!state.conversation.detail);
+    }
+
+    #[test]
     fn help_blocks_hidden_queue_actions_and_printable_input_returns_to_the_editor() {
         let mut state = preview(36, 120);
         state.conversation.view = View::Queue;
@@ -2956,7 +3361,7 @@ mod tests {
         state.chat_character('\r');
         state.chat_key(Key::Open);
         state.chat_key(Key::Mouse {
-            button: 2,
+            button: 0,
             x: 1,
             y: 2,
             release: false,
@@ -3399,23 +3804,26 @@ mod tests {
     }
 
     #[test]
-    fn mouse_wheel_scrolls_without_focus_switch_or_draft_loss() {
+    fn diagnostic_mouse_wheel_scrolls_without_changing_the_draft() {
         let mut state = preview(24, 100);
         for index in 0..80 {
             state.log(format!("event {index}\n").as_bytes());
         }
         input(&mut state, b"unfinished");
+        state.chat_command("/logs").unwrap();
+        assert!(state.conversation.logs_open);
         assert_eq!(state.logs.screen().scrollback(), 0);
         input(&mut state, b"\x1b[<64;10;5M");
         assert!(state.logs.screen().scrollback() > 0);
-        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(display(&mut state).screen().hide_cursor());
         assert_eq!(state.conversation.composer.text(), "unfinished");
         input(&mut state, b"\x1b[1;5F");
         assert_eq!(state.logs.screen().scrollback(), 0);
     }
 
     #[test]
-    fn activity_body_keeps_sidebar_columns_and_theme_background_with_short_unicode_rows() {
+    fn diagnostic_log_body_keeps_sidebar_columns_and_theme_background_with_short_unicode_rows() {
         for sidebar in [false, true] {
             let ui = Ui {
                 color: true,
@@ -3423,11 +3831,13 @@ mod tests {
                 panels: vec![crate::client::ui::Panel::Agents],
                 ..Ui::default()
             };
-            let mut state = super::super::preview_state(18, 120, &ui);
-            state.events.clear();
-            state.log(b"\x1b[38;2;20;40;60mshort\x1b[0m\n");
-            state.log("中文界\n".as_bytes());
-            state.log(b"\x1b[38;2;255;0;0;48;2;0;0;255m\xe2\x96\x80\x1b[0m\n");
+            let mut state = State::new(18, 120, &ui);
+            state.preview = true;
+            state.log(b"    \x1b[38;2;20;40;60mshort\x1b[0m\n");
+            state.log("    中文界\n".as_bytes());
+            state.log(b"    \x1b[38;2;255;0;0;48;2;0;0;255m\xe2\x96\x80\x1b[0m\n");
+            state.logs_toggle();
+            assert!(state.conversation.logs_open);
             let g = state.geometry;
             let screen = display(&mut state);
             let screen = screen.screen();
@@ -3481,27 +3891,49 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_sections_obey_configuration_and_log_filters_keep_results() {
+    fn sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results() {
         let mut state = preview(36, 120);
         state.ui.panels = vec![crate::client::ui::Panel::Queue];
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("Queue · 1 pending"));
         assert!(!screen.contains("Members · 2"));
-        // The READY fixture also mentions `/filter cargo`; use the full command
-        // so this assertion tests block association rather than that second match.
         input(&mut state, b"/filter cargo test --lib\r");
+        assert!(state.conversation.logs_open);
+        state.chat_key(Key::HistoryStart);
+        let start = display(&mut state).screen().contents();
+        assert!(
+            start
+                .lines()
+                .skip(1)
+                .any(|row| row.trim_start().starts_with("● #17  cargo test --lib")),
+            "filtered diagnostics retain the command heading at Home:\n{start}"
+        );
+        assert!(
+            state
+                .logs
+                .screen()
+                .contents()
+                .contains("[RUN] #17  cargo test --lib"),
+            "semantic log labels must not rewrite the retained raw transcript"
+        );
+        assert!(!start.contains("A quieter workspace"));
+        state.chat_key(Key::HistoryEnd);
         let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("exit=0"), "{screen}");
+        assert!(screen.contains("custom_colors ... ok"), "{screen}");
+        assert!(!screen.contains("A quieter workspace"));
+        state.chat_key(Key::Escape);
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.view, View::Activity);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("Improve the client experience"));
         assert!(screen.contains("cargo test --lib"));
         assert!(!screen.contains("A quieter workspace"));
-        state.events.open();
-        let screen = display(&mut state).screen().contents();
-        assert!(screen.contains("exit=0"));
-        assert!(screen.contains("custom_colors ... ok"));
-        assert!(!screen.contains("A quieter workspace"));
-        assert!(
-            screen.contains("[RUN]"),
-            "filtered activity keeps the same semantic command heading"
-        );
+        state.chat_command("/logs").unwrap();
+        assert_eq!(state.conversation.view, View::Logs);
+        assert_eq!(state.log_query, "cargo test --lib");
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Activity);
     }
     #[test]
     fn observed_agent_calls_open_audit_without_changing_the_message_recipient() {
@@ -3539,7 +3971,7 @@ mod tests {
                 .contents()
                 .contains("Declared model")
         );
-        state.chat_key(Key::Back);
+        state.chat_key(Key::Escape);
         assert_eq!(state.conversation.view, View::Agents);
         assert!(!state.conversation.detail);
         state.chat_open(false);
@@ -3775,7 +4207,8 @@ mod tests {
             let mut state = preview(30, 120);
             state.conversation.composer.set_text("keep this draft");
             for index in 0..80 {
-                state.log(format!("\n[INFO] retained event {index}\n").as_bytes());
+                let text = format!("retained event {index}");
+                state.log_message("user", &text, format!("\n[USER] {text}\n").as_bytes());
             }
             display(&mut state);
             input(&mut state, b"\x1b[1;5H");
@@ -3792,7 +4225,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_diagnostics_open_original_output_and_allow_compact_navigation() {
+    fn explicit_diagnostics_start_in_logs_and_escape_restores_conversation() {
         for ui in [
             Ui {
                 log_format: super::super::LogFormat::PrettyVerbose,
@@ -3804,36 +4237,152 @@ mod tests {
             },
         ] {
             let mut state = super::super::preview_state(40, 120, &ui);
+            assert!(state.conversation.logs_open);
             let original = display(&mut state).screen().contents();
-            assert!(original.contains("raw transcript"));
+            assert!(original.contains("Logs"));
             assert!(original.contains("Command completed successfully."));
             state.chat_command("/logs").unwrap();
             assert!(
-                !display(&mut state)
-                    .screen()
-                    .contents()
-                    .contains("raw transcript")
+                state.conversation.logs_open,
+                "/logs opens the same panel idempotently"
             );
+            state.chat_key(Key::Escape);
+            assert!(!state.conversation.logs_open);
+            let conversation = display(&mut state).screen().contents();
+            assert!(
+                conversation
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("conversation  2/8")
+            );
+            assert!(conversation.contains("cargo test --lib"));
+            assert!(!conversation.contains("A quieter workspace"));
         }
     }
 
     #[test]
-    fn raw_transcript_toggle_keeps_draft_and_returns_to_compact_activity() {
+    fn raw_and_logs_commands_share_diagnostics_without_changing_the_draft() {
         let mut state = preview(30, 120);
         state.conversation.composer.set_text("unsent request");
         assert!(state.chat_command("/raw").unwrap());
-        assert!(state.raw_logs);
-        assert!(
-            display(&mut state)
-                .screen()
-                .contents()
-                .contains("raw transcript")
-        );
+        assert!(state.conversation.logs_open);
+        assert!(display(&mut state).screen().contents().contains("Logs"));
         assert_eq!(state.conversation.composer.text(), "unsent request");
         assert!(state.chat_command("/raw unexpected").is_err());
-        assert!(state.raw_logs);
+        assert!(state.conversation.logs_open);
         assert!(state.chat_command("/logs").unwrap());
-        assert!(!state.raw_logs);
+        assert!(state.conversation.logs_open);
+        assert!(state.chat_command("/raw").unwrap());
+        assert!(!state.conversation.logs_open);
         assert_eq!(state.conversation.composer.text(), "unsent request");
+        let conversation = display(&mut state).screen().contents();
+        assert!(
+            conversation
+                .lines()
+                .next()
+                .unwrap()
+                .contains("conversation  2/8")
+        );
+        assert!(!conversation.contains("A quieter workspace"));
+    }
+    #[test]
+    fn logs_editor_stays_in_its_column_and_commands_target_that_column() {
+        let mut state = preview(36, 120);
+        state.canvas_focus(View::Audit);
+        state.conversation.target = Some("example-builder".into());
+        state.conversation.composer.set_text("abc");
+        state.conversation.composer.home();
+        state.conversation.composer.right();
+        state.logs_open();
+        input(&mut state, b"\t");
+        assert!(!state.conversation.content_focus);
+        state.chat_key(Key::Open);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert_eq!(state.conversation.composer.cursor(), 2);
+        input(&mut state, b"d");
+        assert_eq!(state.conversation.composer.text(), "abdc");
+        assert!(!display(&mut state).screen().hide_cursor());
+        state.chat_key(Key::CanvasRight);
+        assert_eq!(state.conversation.view, View::Tasks);
+        state.chat_key(Key::CanvasLeft);
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Audit);
+        assert_eq!(state.conversation.composer.text(), "abdc");
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-builder")
+        );
+
+        state.logs_open();
+        state.conversation.composer.set_text("ab");
+        state.conversation.composer.home();
+        state.conversation.content_focus = true;
+        state.chat_key(Key::Delete);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "b");
+        state.conversation.content_focus = true;
+        state.chat_key(Key::Newline);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "\nb");
+        assert!(!display(&mut state).screen().hide_cursor());
+        state.conversation.composer.set_text("");
+        input(&mut state, b"/close\r");
+        assert!(
+            !state.conversation.canvas.snapshot()["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|column| column == "Logs")
+        );
+        state.chat_command("/logs").unwrap();
+        input(&mut state, b"/new chat\r");
+        assert_eq!(state.conversation.view, View::Activity);
+        let canvas = state.conversation.canvas.snapshot();
+        let columns = canvas["columns"].as_array().unwrap();
+        let logs = columns.iter().position(|column| column == "Logs").unwrap();
+        assert_eq!(columns[logs + 1], "Tasks");
+        assert_eq!(canvas["active"].as_u64().unwrap() as usize, logs + 2);
+    }
+
+    #[test]
+    fn exit_aliases_request_local_cleanup_without_publishing_a_message() {
+        for command in ["/exit", "/quit"] {
+            for pending in 0..3 {
+                let mut state = preview(36, 120);
+                state.events.set_scope(events::EventScope::Conversation);
+                if pending > 0 {
+                    state.conversation.editing = Some("pending-edit".into());
+                }
+                if pending > 1 {
+                    state.conversation.submitting =
+                        Some(("pending-request".into(), "pending-command".into()));
+                }
+                let editing = state.conversation.editing.clone();
+                let submitting = state.conversation.submitting.clone();
+                let before = state.events.snapshot();
+                input(&mut state, format!("{command} extra\r").as_bytes());
+                assert!(!state.conversation.exit_requested);
+                assert!(
+                    state
+                        .notice
+                        .as_deref()
+                        .unwrap()
+                        .contains("without arguments")
+                );
+                assert_eq!(
+                    state.conversation.composer.text(),
+                    format!("{command} extra")
+                );
+                state.conversation.composer.set_text("");
+                input(&mut state, format!("{command}\r").as_bytes());
+                assert!(state.conversation.exit_requested);
+                assert_eq!(state.events.snapshot(), before);
+                assert_eq!(state.conversation.editing, editing);
+                assert_eq!(state.conversation.submitting, submitting);
+            }
+        }
     }
 }

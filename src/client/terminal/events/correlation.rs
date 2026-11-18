@@ -46,8 +46,108 @@ impl Status {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Kind {
+    #[default]
+    Log,
+    Conversation,
+    Tool,
+}
+
+impl Kind {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Log => "log",
+            Self::Conversation => "conversation",
+            Self::Tool => "tool",
+        }
+    }
+
+    fn from_event(event: &Value, rpc: &Value) -> Self {
+        let kind = event["type"].as_str().unwrap_or("");
+        // Lifecycle notices and backend stderr stay in the full log even when
+        // their text or extra fields resemble an assistant reply or tool result.
+        if matches!(
+            kind,
+            "ssmcp.status"
+                | "ssmcp.controller.started"
+                | "ssmcp.controller.finished"
+                | "stderr"
+                | "ssmcp.stderr"
+                | "skill.discovery.completed"
+                | "ssmcp.skill.discovery.completed"
+                | "skill.discovered"
+                | "ssmcp.skill.discovered"
+        ) {
+            return Self::Log;
+        }
+        let method = rpc["method"].as_str().unwrap_or("");
+        let tool = matches!(
+            method,
+            "tools/call" | "command/exec" | "command/exec/outputDelta"
+        ) || matches!(
+            kind,
+            "exec.started"
+                | "ssmcp.exec.started"
+                | "exec.stdout"
+                | "ssmcp.exec.stdout"
+                | "exec.stderr"
+                | "ssmcp.exec.stderr"
+                | "exec.exited"
+                | "ssmcp.exec.exited"
+                | "ssmcp.exec.finished"
+                | "process_output"
+                | "ssmcp.terminal_output"
+                | "ssmcp.output_archived"
+                | "file.read"
+                | "ssmcp.file.read"
+                | "ssmcp.fileread"
+                | "file.write"
+                | "ssmcp.file.write"
+                | "file.diff"
+                | "ssmcp.file.diff"
+                | "ssmcp.filechange"
+                | "skill.read"
+                | "ssmcp.skill.read"
+                | "skill.invoked"
+                | "ssmcp.skill.invoked"
+                | "ssmcp.skill_use"
+                | "harness.tool.started"
+                | "ssmcp.harness.tool.started"
+                | "harness.tool.completed"
+                | "ssmcp.harness.tool.completed"
+                | "tool_use"
+                | "tool_result"
+                | "ssmcp.code_mode"
+                | "image"
+        );
+        if tool {
+            return Self::Tool;
+        }
+        // Only native message metadata routes prose to the conversation. Tool
+        // bodies are not inspected recursively and cannot promote themselves.
+        if kind == "ssmcp.message"
+            || matches!(event["role"].as_str(), Some("assistant" | "user"))
+            || matches!(kind, "assistant" | "user")
+            || (matches!(kind, "message_start" | "message_update" | "message_end")
+                && (matches!(
+                    event["message"]["role"].as_str(),
+                    Some("assistant" | "user")
+                ) || event.get("assistantMessageEvent").is_some()))
+            || matches!(method, "item/agentMessage/delta" | "item/userMessage/delta")
+        {
+            return Self::Conversation;
+        }
+        Self::Log
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Meta {
+    pub(super) kind: Kind,
+    pub(super) user: bool,
+    pub(super) author: String,
+    pub(super) raw_message: bool,
     pub(super) keys: Vec<String>,
     pub(super) status: Option<Status>,
     pub(super) command: bool,
@@ -70,6 +170,20 @@ impl Meta {
             .get("request")
             .or_else(|| event.get("response"))
             .unwrap_or(event);
+        meta.kind = Kind::from_event(event, rpc);
+        if meta.kind == Kind::Conversation {
+            meta.user = event["role"] == "user"
+                || kind == "user"
+                || event["message"]["role"] == "user"
+                || rpc["method"] == "item/userMessage/delta";
+            meta.author = event["author"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .take(80)
+                .collect();
+        }
         let params = rpc["params"].get("arguments").unwrap_or(&rpc["params"]);
         let result = rpc["result"]
             .get("structuredContent")
@@ -199,6 +313,13 @@ impl Meta {
                 self.status = Some(status);
             }
         }
+        if self.kind == Kind::Log {
+            self.kind = other.kind;
+        }
+        self.user |= other.user;
+        if self.author.is_empty() {
+            self.author = other.author;
+        }
         self.command |= other.command;
         self.diff |= other.diff;
         if self.language.is_empty() {
@@ -207,7 +328,7 @@ impl Meta {
     }
 
     pub(super) fn bytes(&self) -> usize {
-        self.keys.iter().map(String::len).sum()
+        self.author.len() + self.keys.iter().map(String::len).sum::<usize>()
     }
 }
 
@@ -239,6 +360,39 @@ pub(super) fn language_for_path(path: &str) -> &'static str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_metadata_separates_messages_and_tools_from_background_logs() {
+        for event in [
+            json!({"type":"ssmcp.message","text":"reply"}),
+            json!({"role":"user","text":"request"}),
+            json!({"role":"assistant","text":"reply"}),
+            json!({"type":"message_update","message":{"role":"assistant"},"delta":"hello"}),
+        ] {
+            assert_eq!(Meta::from_event("native", &event).kind, Kind::Conversation);
+        }
+        for event in [
+            json!({"type":"exec.stderr","job_id":"job","text":"failure detail"}),
+            json!({"type":"ssmcp.file.diff","path":"lib.rs"}),
+            json!({"type":"ssmcp.harness.tool.started","call_id":3}),
+            json!({"request":{"id":4,"method":"tools/call","params":{"name":"fs.read"}}}),
+            json!({"method":"command/exec/outputDelta","params":{"processId":"job"}}),
+        ] {
+            assert_eq!(Meta::from_event("native", &event).kind, Kind::Tool);
+        }
+        for event in [
+            json!({"type":"ssmcp.status","level":"Connected","message":"ready"}),
+            json!({"type":"ssmcp.controller.started","request_id":4}),
+            json!({"type":"ssmcp.stderr","role":"assistant","text":"[AGENT] not a reply"}),
+            json!({"type":"ssmcp.skill.discovered","path":"SKILL.md"}),
+            json!({"message":{"role":"assistant","content":"untyped data"}}),
+        ] {
+            assert_eq!(Meta::from_event("native", &event).kind, Kind::Log);
+        }
+        let tool_payload = json!({"request":{"id":8,"method":"tools/call",
+            "params":{"name":"fs.read","arguments":{"role":"assistant"}}}});
+        assert_eq!(Meta::from_event("native", &tool_payload).kind, Kind::Tool);
+    }
 
     #[test]
     fn native_outcomes_are_preserved_inside_mcp_results_and_read_snapshots() {

@@ -5,7 +5,26 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod correlation;
-use correlation::{Meta, Status};
+mod diff;
+use correlation::{Kind, Meta, Status};
+pub(crate) use diff::DiffMode;
+
+/// Both panes share retained events; this changes only which rows are visible.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum EventScope {
+    Conversation,
+    #[default]
+    All,
+}
+
+impl EventScope {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Conversation => "conversation",
+            Self::All => "all",
+        }
+    }
+}
 
 const MAX_EVENTS: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -17,6 +36,7 @@ struct Event {
     summary: String,
     lines: usize,
     expanded: bool,
+    chat_expanded: bool,
     truncated: bool,
     tone: &'static str,
     cache: Option<(usize, String, Vec<String>)>,
@@ -26,6 +46,42 @@ struct Event {
 }
 
 impl Event {
+    fn expanded(&self, scope: EventScope) -> bool {
+        match scope {
+            EventScope::Conversation => self.meta.kind == Kind::Conversation || self.chat_expanded,
+            EventScope::All => self.expanded,
+        }
+    }
+
+    fn chat_heading(&self) -> String {
+        if self.meta.kind == Kind::Conversation {
+            return if self.meta.user {
+                "You".into()
+            } else if self.meta.author.is_empty() {
+                "Assistant".into()
+            } else {
+                self.meta.author.clone()
+            };
+        }
+        let plain = unstyled(&self.summary);
+        let title = heading(&plain);
+        let title = title
+            .strip_prefix('[')
+            .and_then(|text| text.split_once(']'))
+            .map_or(title, |(_, text)| text)
+            .trim();
+        title
+            .split_whitespace()
+            .filter(|word| {
+                !word.strip_prefix('#').is_some_and(|id| {
+                    id.len() > 12
+                        || (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     fn append(&mut self, text: String, truncated: bool) {
         if !text.is_empty() {
             self.text.push_str(&text);
@@ -41,8 +97,9 @@ impl Event {
         self.text.len() + self.summary.len() + self.meta.bytes()
     }
 
-    fn matches(&self, query: &str, level: u8) -> bool {
-        (level != 1 || self.meta.command || self.summary.starts_with("[RUN"))
+    fn matches(&self, query: &str, level: u8, scope: EventScope) -> bool {
+        (scope == EventScope::All || self.meta.kind != Kind::Log)
+            && (level != 1 || self.meta.command || self.summary.starts_with("[RUN"))
             && (level != 2 || self.meta.status.is_some_and(Status::failed) || self.tone == "error")
             && (query.is_empty()
                 || self.summary.to_lowercase().contains(query)
@@ -53,6 +110,30 @@ impl Event {
         match self.meta.status {
             Some(status) => format!("{} [{}]", self.summary, status.label()),
             None => self.summary.clone(),
+        }
+    }
+}
+
+/// A canvas column keeps only its reading position, never another event store.
+#[derive(Clone, Debug)]
+pub(super) struct EventPosition {
+    selected: Option<u64>,
+    scroll: usize,
+    follow: bool,
+    reveal: bool,
+    new_image: Option<u64>,
+    chat_expanded: Vec<u64>,
+}
+
+impl Default for EventPosition {
+    fn default() -> Self {
+        Self {
+            selected: None,
+            scroll: 0,
+            follow: true,
+            reveal: false,
+            new_image: None,
+            chat_expanded: Vec::new(),
         }
     }
 }
@@ -75,6 +156,8 @@ pub(crate) struct EventView {
     new_image: Option<u64>,
     query: String,
     level: u8,
+    scope: EventScope,
+    diff_mode: DiffMode,
 }
 
 impl EventView {
@@ -85,8 +168,134 @@ impl EventView {
         }
     }
 
+    pub(crate) fn diff_mode(&self) -> DiffMode {
+        self.diff_mode
+    }
+
+    pub(crate) fn set_diff_mode(&mut self, mode: DiffMode) {
+        if self.diff_mode == mode {
+            return;
+        }
+        self.diff_mode = mode;
+        for event in &mut self.events {
+            if event.meta.diff {
+                event.cache = None;
+            }
+        }
+        self.hit_rows.clear();
+        self.placements.clear();
+        self.reveal = !self.follow;
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
-        self.events.is_empty()
+        !self
+            .events
+            .iter()
+            .any(|event| event.matches(&self.query, self.level, self.scope))
+    }
+
+    pub(crate) fn set_scope(&mut self, scope: EventScope) {
+        if self.scope == scope {
+            return;
+        }
+        self.scope = scope;
+        self.new_image = None;
+        self.hit_rows.clear();
+        self.placements.clear();
+        self.total_rows = 0;
+        self.page_rows = 0;
+        self.scroll = 0;
+        if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            let mut visible = self
+                .events
+                .iter()
+                .filter(|event| event.matches(&self.query, self.level, self.scope));
+            self.selected = if self.follow {
+                visible.next_back()
+            } else {
+                visible.next()
+            }
+            .map(|event| event.id);
+        }
+        self.reveal = !self.follow;
+    }
+
+    /// Only explicit local conversation producers may use this entry point.
+    /// Plain log text, including a literal "[AGENT]", stays in the log pane.
+    #[cfg(test)]
+    pub(crate) fn ingest_conversation(&mut self, bytes: &[u8]) {
+        let text = String::from_utf8_lossy(bytes);
+        let user = text
+            .lines()
+            .map(unstyled)
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| heading(&line).starts_with("[USER]"));
+        self.ingest_inner(
+            bytes,
+            Meta {
+                kind: Kind::Conversation,
+                user,
+                ..Meta::default()
+            },
+        );
+    }
+
+    pub(super) fn position(&self) -> EventPosition {
+        EventPosition {
+            selected: self.selected,
+            scroll: self.scroll,
+            follow: self.follow,
+            reveal: self.reveal,
+            new_image: self.new_image,
+            chat_expanded: self
+                .events
+                .iter()
+                .filter(|event| event.chat_expanded)
+                .map(|event| event.id)
+                .collect(),
+        }
+    }
+
+    pub(super) fn restore_position(&mut self, position: &EventPosition) {
+        self.selected = position.selected;
+        self.scroll = position.scroll;
+        self.follow = position.follow;
+        self.reveal = position.reveal;
+        for event in &mut self.events {
+            event.chat_expanded = position.chat_expanded.contains(&event.id);
+        }
+        // The deferred first-image anchor belongs to this column's reading
+        // position. Switching columns is not an explicit request for latest.
+        self.new_image = position.new_image.filter(|id| {
+            self.follow
+                && self.events.iter().any(|event| {
+                    event.id == *id
+                        && event.matches(&self.query, self.level, self.scope)
+                        && event
+                            .image
+                            .as_ref()
+                            .is_some_and(|image| image.native.is_some())
+                })
+        });
+        self.hit_rows.clear();
+        self.placements.clear();
+        if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            let mut visible = self
+                .events
+                .iter()
+                .filter(|event| event.matches(&self.query, self.level, self.scope));
+            self.selected = if self.follow {
+                visible.next_back()
+            } else {
+                visible.next()
+            }
+            .map(|event| event.id);
+            self.reveal = !self.follow;
+        }
     }
 
     pub(crate) fn ingest(&mut self, bytes: &[u8]) {
@@ -111,6 +320,7 @@ impl EventView {
             event.truncated = truncated;
             event.cache = None;
             event.diagnostic = Some((update.id, update.occurrences));
+            event.meta.kind = Kind::Log;
             false
         } else {
             self.ingest(text.as_bytes());
@@ -120,19 +330,18 @@ impl EventView {
                 event.truncated |= truncated;
                 event.tone = "warning";
                 event.diagnostic = Some((update.id, update.occurrences));
+                event.meta.kind = Kind::Log;
             }
             true
         };
         self.prune();
-        if !self
-            .events
-            .iter()
-            .any(|event| Some(event.id) == self.selected)
-        {
+        if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
             self.selected = self
                 .events
                 .iter()
-                .find(|event| event.matches(&self.query, self.level))
+                .find(|event| event.matches(&self.query, self.level, self.scope))
                 .map(|event| event.id);
             self.reveal = true;
         }
@@ -141,7 +350,19 @@ impl EventView {
 
     /// Correlate only registered event identities. Text is never an identity.
     pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
-        self.ingest_inner(bytes, Meta::from_event(label, event));
+        let mut meta = Meta::from_event(label, event);
+        if meta.kind == Kind::Conversation
+            && event["presentation"].is_null()
+            && let Some(text) = event["text"].as_str()
+        {
+            // Render ordinary prose from its source at the pane's current width.
+            // Structured presentations keep their already-rendered cards and tables;
+            // their text field is the plain fallback used for copying and history.
+            meta.raw_message = true;
+            self.ingest_inner(text.as_bytes(), meta);
+        } else {
+            self.ingest_inner(bytes, meta);
+        }
     }
 
     fn ingest_inner(&mut self, bytes: &[u8], mut meta: Meta) {
@@ -170,16 +391,17 @@ impl EventView {
             return; // Empty stream chunks must not become separate UI cards.
         }
         let first = first.unwrap_or("");
-        let conversation = [
-            "[USER]",
-            "[AGENT]",
-            "[UPDATE]",
-            "[ANSWER]",
-            "[IMAGE]",
-            "[CONTEXT]",
-        ]
-        .iter()
-        .any(|prefix| first.starts_with(prefix));
+        let conversation = meta.kind == Kind::Conversation
+            || [
+                "[USER]",
+                "[AGENT]",
+                "[UPDATE]",
+                "[ANSWER]",
+                "[IMAGE]",
+                "[CONTEXT]",
+            ]
+            .iter()
+            .any(|prefix| first.starts_with(prefix));
         let error = plain
             .lines()
             .map(heading)
@@ -241,6 +463,7 @@ impl EventView {
                         self.events[index].summary = previous.summary;
                     }
                     self.events[index].expanded |= previous.expanded;
+                    self.events[index].chat_expanded |= previous.chat_expanded;
                     self.events[index].append(previous.text, previous.truncated);
                     self.events[index].meta.merge(previous.meta);
                 }
@@ -253,14 +476,18 @@ impl EventView {
         } else {
             let id = self.next_id;
             self.next_id = self.next_id.wrapping_add(1);
-            let summary = event_summary(
-                &plain,
-                if conversation {
-                    first
-                } else {
-                    attention.unwrap_or(first)
-                },
-            );
+            let summary = if meta.raw_message {
+                if meta.user { "[USER]" } else { "[AGENT]" }.to_owned()
+            } else {
+                event_summary(
+                    &plain,
+                    if conversation {
+                        first
+                    } else {
+                        attention.unwrap_or(first)
+                    },
+                )
+            };
             let lines = plain.lines().count().max(1);
             self.events.push_back(Event {
                 id,
@@ -268,6 +495,7 @@ impl EventView {
                 summary,
                 lines,
                 expanded,
+                chat_expanded: false,
                 truncated,
                 tone,
                 meta,
@@ -282,18 +510,16 @@ impl EventView {
                 .events
                 .iter()
                 .rev()
-                .find(|event| event.matches(&self.query, self.level))
+                .find(|event| event.matches(&self.query, self.level, self.scope))
                 .map(|event| event.id);
             self.follow = true;
-        } else if !self
-            .events
-            .iter()
-            .any(|event| Some(event.id) == self.selected)
-        {
+        } else if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
             self.selected = self
                 .events
                 .iter()
-                .find(|event| event.matches(&self.query, self.level))
+                .find(|event| event.matches(&self.query, self.level, self.scope))
                 .map(|event| event.id);
             self.reveal = true;
         }
@@ -318,15 +544,13 @@ impl EventView {
         self.query = query;
         self.level = level;
         self.new_image = None;
-        if !self
-            .events
-            .iter()
-            .any(|event| Some(event.id) == self.selected && event.matches(&self.query, self.level))
-        {
+        if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
             self.selected = self
                 .events
                 .iter()
-                .find(|event| event.matches(&self.query, self.level))
+                .find(|event| event.matches(&self.query, self.level, self.scope))
                 .map(|event| event.id);
         }
         self.reveal = true;
@@ -347,7 +571,9 @@ impl EventView {
     pub(crate) fn attach_image(&mut self, preview: images::Preview) {
         if let Some(event) = self.events.back_mut() {
             event.image = Some(preview);
-            if self.follow {
+            event.meta.kind = Kind::Tool;
+            if self.follow && event.matches(&self.query, self.level, self.scope) {
+                self.selected = Some(event.id);
                 self.new_image.get_or_insert(event.id);
             }
         }
@@ -414,7 +640,7 @@ impl EventView {
         let visible = self
             .events
             .iter()
-            .filter(|event| event.matches(&self.query, self.level))
+            .filter(|event| event.matches(&self.query, self.level, self.scope))
             .map(|event| event.id)
             .collect::<Vec<_>>();
         if visible.is_empty() {
@@ -450,21 +676,26 @@ impl EventView {
             .events
             .iter()
             .rev()
-            .find(|event| event.matches(&self.query, self.level))
+            .find(|event| event.matches(&self.query, self.level, self.scope))
             .map(|event| event.id);
     }
 
     pub(crate) fn toggle(&mut self) -> bool {
         self.new_image = None;
-        if let Some(event) = self
-            .events
-            .iter_mut()
-            .find(|event| Some(event.id) == self.selected)
-        {
-            if event.meta.diff {
-                return false;
+        if let Some(event) = self.events.iter_mut().find(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            if self.scope == EventScope::Conversation {
+                if event.meta.kind == Kind::Conversation {
+                    return false;
+                }
+                event.chat_expanded = !event.chat_expanded;
+            } else {
+                if event.meta.diff {
+                    return false;
+                }
+                event.expanded = !event.expanded;
             }
-            event.expanded = !event.expanded;
             self.follow = false;
             self.reveal = true;
             true
@@ -483,18 +714,26 @@ impl EventView {
 
     fn set_expanded(&mut self, expanded: bool) -> bool {
         self.new_image = None;
-        let Some(event) = self
-            .events
-            .iter_mut()
-            .find(|event| Some(event.id) == self.selected)
-        else {
+        let Some(event) = self.events.iter_mut().find(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) else {
             return false;
         };
-        if event.meta.diff && !expanded {
-            return false;
-        }
-        let changed = event.expanded != expanded;
-        event.expanded = expanded;
+        let changed = if self.scope == EventScope::Conversation {
+            if event.meta.kind == Kind::Conversation {
+                return false;
+            }
+            let changed = event.chat_expanded != expanded;
+            event.chat_expanded = expanded;
+            changed
+        } else {
+            if event.meta.diff && !expanded {
+                return false;
+            }
+            let changed = event.expanded != expanded;
+            event.expanded = expanded;
+            changed
+        };
         self.follow = false;
         self.reveal = true;
         changed
@@ -505,7 +744,11 @@ impl EventView {
         let Some(id) = self.hit_rows.get(usize::from(row)).copied().flatten() else {
             return false;
         };
-        if !self.events.iter().any(|event| event.id == id) {
+        if !self
+            .events
+            .iter()
+            .any(|event| event.id == id && event.matches(&self.query, self.level, self.scope))
+        {
             return false;
         }
         self.selected = Some(id);
@@ -537,12 +780,15 @@ impl EventView {
         json!({
             "schema_version":1, "events":self.events.iter().map(|event| json!({
                 "id":event.id,"summary":event.summary,"lines":event.lines,
-                "bytes":event.text.len(),"expanded":event.expanded,"truncated":event.truncated,
+                "bytes":event.text.len(),"expanded":event.expanded(self.scope),"truncated":event.truncated,
                 "selected":Some(event.id)==self.selected,
                 "status":event.meta.status.map(Status::label),"command":event.meta.command,
+                "kind":event.meta.kind.label(),
                 "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count)
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
+            "event_scope":self.scope.label(),"diff_mode":self.diff_mode().name(),
+            "visible_events":self.events.iter().filter(|event| event.matches(&self.query,self.level,self.scope)).count(),
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
             "selected":self.selected,"scroll":self.scroll,
             "rows_below":self.rows_below(),"following":self.follow,
@@ -566,27 +812,87 @@ impl EventView {
         }
         let width = usize::from(width);
         let height = usize::from(height);
-        let footer = usize::from(height > 1);
+        let footer = usize::from(height > 1 && self.scope == EventScope::All);
         let page = height - footer;
         let indent = 4.min(width.saturating_sub(1));
         let body_width = width.saturating_sub(indent).max(1);
         let mut rows: Vec<(u64, String)> = Vec::new();
+        let mut visible_events = 0;
         let mut selected_row = None;
         let mut image_spans = Vec::new();
         let new_image = self.new_image.take();
         let mut new_images = false;
         let mut image_anchor = None;
-        let palette = palette_key(ui);
+        let palette = format!(
+            "{}:{}:{}",
+            palette_key(ui),
+            self.scope.label(),
+            self.diff_mode.name()
+        );
         for event in &mut self.events {
-            new_images |= new_image == Some(event.id);
-            if !event.matches(&self.query, self.level) {
+            if !event.matches(&self.query, self.level, self.scope) {
                 continue;
             }
+            visible_events += 1;
+            new_images |= new_image == Some(event.id);
             let selected = Some(event.id) == self.selected;
+            let chat = self.scope == EventScope::Conversation;
+            if chat && !rows.is_empty() {
+                rows.push((event.id, String::new()));
+            }
             if selected {
                 selected_row = Some(rows.len());
             }
-            let marker = if event.expanded { "▾" } else { "▸" };
+            let conversation = chat && event.meta.kind == Kind::Conversation;
+            if conversation && event.image.is_none() {
+                let role = event.chat_heading();
+                let tone = if event.meta.user { "accent" } else { "heading" };
+                rows.push((
+                    event.id,
+                    format!(
+                        "  {}",
+                        paint(&clip_plain(&role, width.saturating_sub(2)), tone, ui, true)
+                    ),
+                ));
+                if event
+                    .cache
+                    .as_ref()
+                    .is_none_or(|(cached_width, cached_palette, _)| {
+                        *cached_width != body_width || *cached_palette != palette
+                    })
+                {
+                    let body = if event.meta.raw_message {
+                        &event.text
+                    } else {
+                        conversation_body(&event.text)
+                    };
+                    let lines = if event.meta.raw_message && !event.meta.user {
+                        super::markdown::rows(body, body_width as u16, ui)
+                    } else {
+                        styled_rows(body, body_width, ui.color)
+                    };
+                    event.cache = Some((body_width, palette.clone(), lines));
+                }
+                for row in &event.cache.as_ref().unwrap().2 {
+                    rows.push((event.id, format!("  {row}")));
+                }
+                continue;
+            }
+            let expanded = event.expanded(self.scope);
+            let title = if chat {
+                let heading = event.chat_heading();
+                if conversation {
+                    heading
+                } else {
+                    match event.meta.status {
+                        Some(status) => format!("{heading} · {}", status.label()),
+                        None => heading,
+                    }
+                }
+            } else {
+                event.summary_with_status()
+            };
+            let marker = if expanded { "▾" } else { "▸" };
             let prefix = format!("{} {marker} ", if selected && focused { "›" } else { " " });
             let prefix = clip_plain(&prefix, indent);
             let tone = if selected && focused {
@@ -594,7 +900,7 @@ impl EventView {
             } else {
                 event.meta.status.map_or(event.tone, Status::tone)
             };
-            if event.expanded || !self.query.is_empty() {
+            if expanded || !self.query.is_empty() {
                 if let Some(image) = &event.image {
                     let image_start = rows.len();
                     rows.push((
@@ -602,12 +908,7 @@ impl EventView {
                         format!(
                             "{}{}",
                             paint(&prefix, tone, ui, selected && focused),
-                            paint(
-                                &clip_plain(&event.summary_with_status(), body_width),
-                                tone,
-                                ui,
-                                false
-                            )
+                            paint(&clip_plain(&title, body_width), tone, ui, false)
                         ),
                     ));
                     let inset = 2.min(body_width.saturating_sub(1));
@@ -678,19 +979,14 @@ impl EventView {
                     }
                     continue;
                 }
-                let correlated = !event.meta.keys.is_empty();
+                let correlated = chat || event.meta.raw_message || !event.meta.keys.is_empty();
                 if correlated {
                     rows.push((
                         event.id,
                         format!(
                             "{}{}",
                             paint(&prefix, tone, ui, selected && focused),
-                            paint(
-                                &clip_plain(&event.summary_with_status(), body_width),
-                                tone,
-                                ui,
-                                false
-                            )
+                            paint(&clip_plain(&title, body_width), tone, ui, false)
                         ),
                     ));
                 }
@@ -701,23 +997,31 @@ impl EventView {
                         *cached_width != body_width || *cached_palette != palette
                     })
                 {
-                    event.cache = Some((
-                        body_width,
-                        palette.clone(),
-                        styled_rows(
-                            &semantic_text(
-                                if correlated {
-                                    event.text.split_once('\n').map_or("", |(_, body)| body)
-                                } else {
-                                    &event.text
-                                },
-                                ui,
-                                event.meta.language,
-                            ),
-                            body_width,
-                            ui.color,
-                        ),
-                    ));
+                    let lines = if event.meta.raw_message {
+                        if event.meta.user {
+                            styled_rows(&event.text, body_width, ui.color)
+                        } else {
+                            super::markdown::rows(&event.text, body_width as u16, ui)
+                        }
+                    } else {
+                        let body = if chat {
+                            conversation_body(&event.text)
+                        } else if correlated {
+                            event.text.split_once('\n').map_or("", |(_, body)| body)
+                        } else {
+                            &event.text
+                        };
+                        if event.meta.diff {
+                            diff::rows(body, body_width, ui, event.meta.language, self.diff_mode)
+                        } else {
+                            styled_rows(
+                                &semantic_text(body, ui, event.meta.language),
+                                body_width,
+                                ui.color,
+                            )
+                        }
+                    };
+                    event.cache = Some((body_width, palette.clone(), lines));
                 }
                 let content = &event.cache.as_ref().unwrap().2;
                 for (index, row) in content.iter().enumerate() {
@@ -733,7 +1037,11 @@ impl EventView {
                         event.id,
                         paint(
                             &clip_plain(
-                                "    Preview truncated; inspect the original output archive.",
+                                if chat {
+                                    "    More output is available in Logs."
+                                } else {
+                                    "    Preview truncated; inspect the original output archive."
+                                },
                                 width,
                             ),
                             "warning",
@@ -743,12 +1051,16 @@ impl EventView {
                     ));
                 }
             } else {
-                let label = format!(
-                    "{} · {} lines{}",
-                    event.summary_with_status(),
-                    event.lines,
-                    if event.truncated { " · partial" } else { "" }
-                );
+                let label = if chat {
+                    title
+                } else {
+                    format!(
+                        "{} · {} lines{}",
+                        title,
+                        event.lines,
+                        if event.truncated { " · partial" } else { "" }
+                    )
+                };
                 let label = clip_plain(&label, body_width);
                 rows.push((
                     event.id,
@@ -813,25 +1125,77 @@ impl EventView {
             self.hit_rows.push(None);
         }
         if footer != 0 {
-            let hint = if self.events.is_empty() {
-                "No events yet.".to_owned()
+            let hint = if visible_events == 0 {
+                if self.events.is_empty() {
+                    "No events yet."
+                } else {
+                    "No matching events."
+                }
+                .to_owned()
             } else if width < 60 {
                 "Enter fold/open · retained preview only".to_owned()
             } else if focused {
                 format!(
                     "{} events · ↑↓ select · Enter fold/open · full output: archive",
-                    self.events.len()
+                    visible_events
                 )
             } else {
                 format!(
                     "{} events · focus Activity to fold/open · full output: archive",
-                    self.events.len()
+                    visible_events
                 )
             };
             result.push(paint(&clip_plain(&hint, width), "muted", ui, false));
             self.hit_rows.push(None);
         }
         result
+    }
+}
+
+/// Remove the renderer's first label only. Message text and tool output below
+/// that boundary are retained verbatim in both the event and the original log.
+fn conversation_body(text: &str) -> &str {
+    let text = text.trim_matches(['\r', '\n']);
+    let Some((first, body)) = text.split_once('\n') else {
+        return text;
+    };
+    let plain = unstyled(first);
+    let first = heading(&plain);
+    if first
+        .strip_prefix('[')
+        .and_then(|text| text.split_once(']'))
+        .is_some_and(|(tag, _)| {
+            matches!(
+                tag.trim(),
+                "USER"
+                    | "AGENT"
+                    | "UPDATE"
+                    | "ANSWER"
+                    | "CONTEXT"
+                    | "HISTORY"
+                    | "REQ"
+                    | "RES"
+                    | "RUN"
+                    | "OUT"
+                    | "STDOUT"
+                    | "STDERR"
+                    | "READ"
+                    | "EDIT"
+                    | "DIFF"
+                    | "ERR"
+                    | "WARN"
+                    | "OK"
+                    | "IMG"
+                    | "IMAGE"
+                    | "SKIL"
+                    | "PROG"
+                    | "SAVE"
+            )
+        })
+    {
+        body.trim_matches(['\r', '\n'])
+    } else {
+        text
     }
 }
 
@@ -1148,6 +1512,342 @@ fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn diff_modes_reflow_existing_events_without_changing_retained_content() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.ingest_event(
+            "files",
+            &json!({"type":"ssmcp.file.diff","path":"example.rs"}),
+            b"[DIFF] example.rs\n@@ -1 +1 @@\n-old value\n+new value\n",
+        );
+        assert_eq!(view.diff_mode(), DiffMode::Single);
+        assert!(view.open());
+        let retained = (view.events.len(), view.bytes);
+        let single = view.render(120, 30, &plain_ui(), true);
+        view.set_diff_mode(DiffMode::Split);
+        assert!(
+            !view.mouse_select(0),
+            "old row hit targets must be invalidated"
+        );
+        let split = view.render(120, 30, &plain_ui(), true).join("\n");
+        assert!(split.contains("Old") && split.contains("New"));
+        assert!(
+            split
+                .lines()
+                .any(|row| row.contains("- old value") && row.contains("+ new value"))
+        );
+        assert_eq!(view.snapshot()["diff_mode"], "split");
+        assert_eq!((view.events.len(), view.bytes), retained);
+        view.set_diff_mode(DiffMode::Single);
+        assert_eq!(view.render(120, 30, &plain_ui(), true), single);
+        let narrow_single = view.render(40, 30, &plain_ui(), true);
+        view.set_diff_mode(DiffMode::Split);
+        assert_eq!(view.render(40, 30, &plain_ui(), true), narrow_single);
+        assert_eq!((view.events.len(), view.bytes), retained);
+    }
+
+    #[test]
+    fn native_prose_uses_original_markdown_instead_of_pre_wrapped_log_rows() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        let source = "连续中文正文保持自然换行，段落不被旧终端列宽切碎。";
+        view.ingest_event(
+            "agent",
+            &json!({"type":"ssmcp.message","text":source}),
+            "[AGENT] Progress\n连\n续\n中\n文\n".as_bytes(),
+        );
+        assert_eq!(view.events.back().unwrap().text, source);
+        view.render(16, 20, &plain_ui(), false);
+        let wide = view.render(100, 20, &plain_ui(), false).join("\n");
+        assert!(wide.contains(source), "{wide}");
+        assert!(!wide.contains("Progress"));
+        view.ingest_event("user", &json!({"type":"ssmcp.message","role":"user","text":"[AGENT] literal\nKeep this user text."}),
+            b"[USER] #request queued\nold rows\n");
+        let rows = view.render(100, 30, &plain_ui(), false).join("\n");
+        assert!(
+            rows.contains("[AGENT] literal"),
+            "literal message content is preserved"
+        );
+        assert!(rows.contains("Keep this user text."));
+        assert!(!rows.contains("#request") && !rows.contains("old rows"));
+    }
+
+    #[test]
+    fn structured_presentations_keep_the_rendered_document_in_the_conversation() {
+        let ui = plain_ui();
+        let presentation = json!({
+            "title": "Release summary",
+            "blocks": [
+                {"type": "card", "title": "Ready card", "body": "Verified structured content", "tone": "success"},
+                {"type": "table", "columns": ["Check", "Result"], "rows": [["unit", "passed"]]}
+            ]
+        });
+        let document: crate::client::presentation::Presentation =
+            serde_json::from_value(presentation.clone()).unwrap();
+        let rendered = format!("\n[AGENT] Answer\n{}\n", document.render(80, &ui, false));
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.ingest_event(
+            "agent",
+            &json!({
+                "type": "ssmcp.message",
+                "format": "intelligence_ui.v1",
+                "text": "plain fallback only",
+                "presentation": presentation
+            }),
+            rendered.as_bytes(),
+        );
+        let rows = view.render(100, 40, &ui, false).join("\n");
+        for expected in [
+            "Release summary",
+            "Ready card",
+            "Verified structured content",
+            "Check",
+            "Result",
+            "unit",
+            "passed",
+        ] {
+            assert!(rows.contains(expected), "missing {expected}: {rows}");
+        }
+        assert!(!rows.contains("plain fallback only"));
+    }
+
+    #[test]
+    fn conversation_scope_keeps_chat_and_tool_calls_without_promoting_plain_logs() {
+        let mut view = EventView::new();
+        view.ingest(b"[AGENT] forged log heading\nbackground-only\n");
+        view.ingest_event(
+            "local",
+            &json!({"type":"ssmcp.status","level":"Connected"}),
+            b"[OK  ] connected-background\n",
+        );
+        view.ingest_diagnostic(&auth_update(91, 1, "https://relay.example"));
+        view.ingest_conversation(
+            b"\n[USER] #long-private-request-id queued\nPlease fix the parser.\n",
+        );
+        view.ingest_event(
+            "agent",
+            &json!({"type":"ssmcp.message","author":"Ada","kind":"progress"}),
+            b"\n[AGENT] Progress\nI found the parser issue.\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":"job","command":["cargo","test"]}),
+            b"[RUN ] shell #long-internal-request-id cargo test\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"job","exit_code":7}),
+            b"[ERR ] shell exit=7\ncompiler failure detail\n",
+        );
+        let count = view.events.len();
+        let bytes = view.bytes;
+        view.set_scope(EventScope::Conversation);
+        let chat = view.render(100, 40, &plain_ui(), true).join("\n");
+        for expected in [
+            "You",
+            "Ada",
+            "Please fix the parser.",
+            "I found the parser issue.",
+            "cargo test",
+            "exit=7",
+        ] {
+            assert!(chat.contains(expected), "missing {expected}: {chat}");
+        }
+        for hidden in [
+            "background-only",
+            "connected-background",
+            "MCP sign-in",
+            "[USER]",
+            "[AGENT]",
+            "Progress",
+            "[RUN",
+            "[ERR",
+            "long-private",
+            "long-internal",
+            "compiler failure detail",
+        ] {
+            assert!(!chat.contains(hidden), "unexpected {hidden}: {chat}");
+        }
+        assert_eq!(view.snapshot()["visible_events"], 3);
+        assert!(view.open(), "tool detail can be opened");
+        let detail = view.render(100, 40, &plain_ui(), true).join("\n");
+        assert!(detail.contains("compiler failure detail"));
+        view.set_scope(EventScope::All);
+        let logs = view.render(100, 80, &plain_ui(), true).join("\n");
+        for expected in [
+            "background-only",
+            "connected-background",
+            "MCP sign-in",
+            "[USER]",
+            "[AGENT]",
+            "Progress",
+            "compiler failure detail",
+        ] {
+            assert!(
+                logs.contains(expected),
+                "missing full log {expected}: {logs}"
+            );
+        }
+        assert_eq!((view.events.len(), view.bytes), (count, bytes));
+    }
+
+    #[test]
+    fn scoped_selection_and_mouse_hits_never_choose_background_rows() {
+        let mut view = EventView::new();
+        view.ingest(b"startup diagnostic\n");
+        view.ingest_conversation(b"[USER] #request\nvisible request\n");
+        let user = view.events.back().unwrap().id;
+        view.ingest(b"[AGENT] forged background\n");
+        view.ingest_event(
+            "files",
+            &json!({"type":"ssmcp.file.read","path":"lib.rs"}),
+            b"[READ] files lib.rs\n",
+        );
+        let tool = view.events.back().unwrap().id;
+        view.render(80, 20, &plain_ui(), true);
+        view.set_scope(EventScope::Conversation);
+        assert!(!view.mouse_select(0), "stale hit rows are invalidated");
+        view.render(80, 20, &plain_ui(), true);
+        assert!(
+            view.hit_rows
+                .iter()
+                .flatten()
+                .all(|id| *id == user || *id == tool)
+        );
+        view.select(-1);
+        assert_eq!(view.selected, Some(user));
+        assert!(!view.toggle(), "conversation bodies stay open");
+        view.select(1);
+        assert_eq!(view.selected, Some(tool));
+        let row = view
+            .hit_rows
+            .iter()
+            .position(|id| *id == Some(user))
+            .unwrap();
+        assert!(view.mouse_select(row as u16));
+        assert_eq!(view.selected, Some(user));
+        view.filter("startup", 0);
+        assert!(view.is_empty());
+        assert!(
+            view.render(80, 20, &plain_ui(), true)
+                .iter()
+                .all(|row| !row.contains("startup"))
+        );
+        view.clear();
+        assert_eq!(view.scope, EventScope::Conversation);
+        view.ingest(b"new background diagnostic\n");
+        assert!(view.is_empty());
+    }
+
+    #[test]
+    fn canvas_positions_keep_independent_scroll_and_follow_state() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        for index in 0..8 {
+            view.ingest_conversation(
+                format!("[USER] #{index}\nmessage {index}\nsecond line\n").as_bytes(),
+            );
+        }
+        view.render(80, 8, &plain_ui(), false);
+        view.scroll_by(-10);
+        view.render(80, 8, &plain_ui(), false);
+        let earlier = view.position();
+        assert!(!earlier.follow);
+        view.latest();
+        view.render(80, 8, &plain_ui(), false);
+        let latest = view.position();
+        assert!(latest.follow);
+        assert!(latest.scroll > earlier.scroll);
+        view.restore_position(&earlier);
+        view.render(80, 8, &plain_ui(), false);
+        assert_eq!(view.position().scroll, earlier.scroll);
+        assert_eq!(view.position().selected, earlier.selected);
+        assert!(!view.is_following());
+        view.restore_position(&latest);
+        view.render(80, 8, &plain_ui(), false);
+        assert_eq!(view.position().scroll, latest.scroll);
+        assert!(view.is_following());
+        view.clear();
+        view.restore_position(&earlier);
+        assert_eq!(view.selected, None);
+    }
+
+    #[test]
+    fn canvas_positions_keep_tool_expansion_separate_and_ignore_evicted_events() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        for (path, detail) in [
+            ("first.rs", "first retained detail"),
+            ("second.rs", "second retained detail"),
+        ] {
+            view.ingest_event(
+                "files",
+                &json!({"type": "ssmcp.file.read", "path": path}),
+                format!("[READ] {path}\n{detail}\n").as_bytes(),
+            );
+        }
+        let retained = (view.events.len(), view.bytes);
+        let collapsed = view.position();
+        view.select(-1);
+        assert!(view.open());
+        let first_column = view.position();
+        view.restore_position(&collapsed);
+        assert!(view.open());
+        let second_column = view.position();
+
+        view.restore_position(&first_column);
+        let first = view.render(100, 20, &plain_ui(), true).join("\n");
+        assert!(first.contains("first retained detail"));
+        assert!(!first.contains("second retained detail"));
+        view.restore_position(&second_column);
+        let second = view.render(100, 20, &plain_ui(), true).join("\n");
+        assert!(second.contains("second retained detail"));
+        assert!(!second.contains("first retained detail"));
+        assert_eq!((view.events.len(), view.bytes), retained);
+
+        view.restore_position(&EventPosition::default());
+        let fresh = view.render(100, 20, &plain_ui(), true).join("\n");
+        assert!(!fresh.contains("first retained detail"));
+        assert!(!fresh.contains("second retained detail"));
+
+        for index in 0..MAX_EVENTS - 1 {
+            view.ingest(format!("background {index}\n").as_bytes());
+        }
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert!(
+            !view
+                .events
+                .iter()
+                .any(|event| Some(event.id) == first_column.selected)
+        );
+        let retained = (view.events.len(), view.bytes);
+        view.restore_position(&first_column);
+        let pruned = view.render(100, 20, &plain_ui(), true).join("\n");
+        assert!(!pruned.contains("first retained detail"));
+        assert!(!pruned.contains("second retained detail"));
+        assert_eq!((view.events.len(), view.bytes), retained);
+    }
+
+    #[test]
+    fn decoded_image_is_a_tool_event_while_a_plain_image_marker_is_only_a_log() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.ingest(b"[IMAGE] plain marker\n");
+        assert!(view.is_empty());
+        view.attach_image(image_preview(2, 2, false));
+        assert!(!view.is_empty());
+        assert_eq!(view.snapshot()["events"][0]["kind"], "tool");
+        assert!(view.open());
+        assert!(
+            !view
+                .render(80, 12, &plain_ui(), true)
+                .join("\n")
+                .contains("[IMAGE]")
+        );
+    }
+
     fn auth_update(
         id: u64,
         count: u64,
@@ -1296,6 +1996,119 @@ mod tests {
         assert!(view.is_following());
         assert!(unstyled(&latest).contains("Later progress"));
         assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn pending_image_position_survives_column_restore_resize_and_progress() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        for scope in [EventScope::All, EventScope::Conversation] {
+            for explicit_latest in [false, true] {
+                let mut view = EventView::new();
+                view.set_scope(scope);
+                view.image_cells(Some(images::CellSize {
+                    width: 10,
+                    height: 20,
+                }));
+                view.image_cells(None);
+                view.ingest_event(
+                    "image",
+                    &serde_json::json!({"type":"exec.started","job_id":"column-image"}),
+                    b"[IMAGE] column-resize.png\n",
+                );
+                view.open();
+                view.latest();
+                view.attach_image(image_preview(400, 2400, true));
+                let fallback = view.render(66, 20, &ui, true).join("\n");
+                assert!(unstyled(&fallback).contains("Low-resolution thumbnail"));
+                let pending = view.position();
+                assert!(pending.new_image.is_some());
+                view.latest();
+                let latest = view.position();
+                view.restore_position(&EventPosition::default());
+                view.restore_position(&pending);
+                assert_eq!(view.new_image, pending.new_image);
+                if explicit_latest {
+                    view.restore_position(&latest);
+                    assert!(view.new_image.is_none());
+                }
+
+                view.ingest_event(
+                    "assistant",
+                    &serde_json::json!({"type":"ssmcp.message","text":"Later progress"}),
+                    b"[AGENT] Later progress\n",
+                );
+                let waiting = view.render(66, 20, &ui, true).join("\n");
+                assert!(unstyled(&waiting).contains("Later progress"));
+                assert!(view.is_following());
+                assert_eq!(view.new_image.is_some(), !explicit_latest);
+                let after_progress = view.position();
+                view.restore_position(&EventPosition::default());
+                view.restore_position(&after_progress);
+
+                view.image_cells(Some(images::CellSize {
+                    width: 10,
+                    height: 20,
+                }));
+                let measured = view.render(66, 20, &ui, true).join("\n");
+                assert!(view.new_image.is_none());
+                if explicit_latest {
+                    assert!(view.is_following());
+                    assert_eq!(view.rows_below(), 0);
+                    assert!(unstyled(&measured).contains("Later progress"));
+                } else {
+                    assert!(!view.is_following());
+                    assert_eq!(view.scroll, 0);
+                    assert!(view.rows_below() > 0);
+                    assert!(unstyled(&measured).contains("column-resize.png"));
+                    assert!(unstyled(&measured).contains("scroll to inspect"));
+                    assert!(!view.image_placements(0).is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn position_restore_does_not_revive_paused_rejected_or_removed_image_anchors() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] retained.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        let pending = view.position();
+        let native_id = view
+            .events
+            .back()
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .native
+            .as_ref()
+            .unwrap()
+            .id();
+        view.select(0);
+        let paused = view.position();
+        assert!(!paused.follow);
+        view.restore_position(&pending);
+        assert!(view.new_image.is_some());
+        view.restore_position(&paused);
+        assert!(!view.is_following());
+        assert!(view.new_image.is_none());
+
+        view.reject_image(native_id);
+        view.restore_position(&pending);
+        assert!(
+            view.new_image.is_none(),
+            "a rejected native payload cannot be anchored"
+        );
+        view.clear();
+        view.restore_position(&pending);
+        assert!(
+            view.new_image.is_none(),
+            "a removed event cannot be anchored"
+        );
+        assert!(view.selected.is_none());
     }
 
     #[test]
@@ -1637,7 +2450,7 @@ mod tests {
         assert_eq!(
             view.events
                 .iter()
-                .filter(|event| event.matches("", 2))
+                .filter(|event| event.matches("", 2, EventScope::All))
                 .count(),
             4
         );
