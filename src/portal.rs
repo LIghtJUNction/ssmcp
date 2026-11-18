@@ -2,6 +2,7 @@
 //! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
 mod dashboard;
 mod dashboard_view;
+mod guide;
 mod setup;
 pub(crate) mod store;
 #[cfg(test)]
@@ -428,6 +429,7 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/account/logout", post(logout))
         .route("/account/keys", post(add_key))
         .route("/account/keys/delete", post(delete_key))
+        .merge(guide::routes())
         .merge(setup::routes())
         .merge(dashboard::routes())
         .layer(middleware::map_response(security_headers))

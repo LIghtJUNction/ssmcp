@@ -1,8 +1,8 @@
 [package]
 name = "ssmcp"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
 license = "MIT"
 repository = "https://github.com/LIghtJUNction/ssmcp"
@@ -14,6 +14,7 @@ include = [
     "/Makefile",
     "/rust-toolchain.toml",
     "/src/**",
+    "/crates/ztui/**",
     "/skills/**",
     "/docs/workspaces.md",
     "/docs/context.md",
@@ -148,9 +149,15 @@ include = [
     "/packaging/ssmcpd.toml.example",
 ]
 
+[workspace]
+members = ["crates/ztui"]
+resolver = "3"
+
 [dependencies]
+ztui = { package = "ztui-core", version = "=0.1.0", path = "crates/ztui" }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
+qrcodegen = "1.8.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 getrandom = "0.3"
 libc = "0.2"
