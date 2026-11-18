@@ -226,6 +226,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         true,
         false,
         "https://ssmcp.lmm.best",
+        None,
     );
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
