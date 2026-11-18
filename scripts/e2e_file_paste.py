@@ -529,7 +529,8 @@ class FilePaste(InputHistory):
         self.save_shot("native-graphics", front, cells=True)
 
         deletions = len(front.native_deletions)
-        self.command(front, "/help")
+        self.focus_input(front)
+        front.send("/help\r")
         front.until(lambda _shot: len(front.native_deletions) > deletions,
                     "hiding activity removes its native placements")
         self.check(image_id in front.native_deletions[deletions:],
