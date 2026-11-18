@@ -44,6 +44,8 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
     "ssmcp.fs.read_image", "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text", "ssmcp.fs.events",
     "ssmcp.context.roots", "ssmcp.skills.list", "ssmcp.skills.read", "ssmcp.skills.view",
+    "ssmcp.context.status", "ssmcp.context.read", "ssmcp.context.list",
+    "ssmcp.context.compact", "ssmcp.context.fork", "ssmcp.context.switch",
     "ssmcp.agents.list", "ssmcp.agents.read", "ssmcp.agents.resolve",
     "ssmcp.net.listen", "ssmcp.net.accept", "ssmcp.net.connect", "ssmcp.net.read",
     "ssmcp.net.write", "ssmcp.net.shutdown", "ssmcp.net.close", "ssmcp.net.list",
@@ -55,7 +57,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
     "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.audit.events",
-    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.history", "ssmcp.ui.harness",
+    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.history", "ssmcp.ui.harness",
     "ssmcp.browser.discover",
     "ssmcp.browser.status",
     "ssmcp.browser.launch",
@@ -719,10 +721,16 @@ class Harness:
             capabilities = self.public_call("list", {"client_id": self.client_id, "cursor": cursor})
             catalog.extend(capabilities["tools"])
         expected_tools = SHELL_TOOLS | BUILTIN_TOOLS
-        self.check({tool["name"] for tool in catalog} == expected_tools
+        actual_tools = {tool["name"] for tool in catalog}
+        invalid_schemas = [tool["name"] for tool in catalog
+                           if not isinstance(tool.get("inputSchema"), dict)]
+        self.check(actual_tools == expected_tools
                    and len(catalog) == len(expected_tools)
-                   and all(isinstance(tool["inputSchema"], dict) for tool in catalog),
-                   "list discovers exact native capability names and schemas for code_mode")
+                   and not invalid_schemas,
+                   "list discovers exact native capability names and schemas for code_mode: "
+                   f"missing={sorted(expected_tools - actual_tools)}, "
+                   f"extra={sorted(actual_tools - expected_tools)}, "
+                   f"duplicates={len(catalog) - len(actual_tools)}, invalid_schemas={invalid_schemas}")
         self.check(any(key.lower() == "cache-control" and "no-store" in value for key, value in headers.items()),
                    "MCP responses cannot be stored by caches")
         self.check(self.rpc("ping", headers={"Origin": PUBLIC_URL})[0] == 200, "configured Origin is accepted")
