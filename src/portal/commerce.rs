@@ -38,6 +38,14 @@ impl Broker {
         let Some(commerce) = &self.portal.commerce else {
             return Ok(());
         };
+        if commerce.config.environment == "prod" {
+            let subjects = commerce.storage(|store| store.recharged_subjects()).await?;
+            for subject in subjects {
+                self.record_recharge(&subject)
+                    .await
+                    .map_err(|_| "could not restore a verified recharge benefit")?;
+            }
+        }
         let orders = commerce.storage(|store| store.pending_grants()).await?;
         for order in orders {
             grant(self, commerce, order)
@@ -377,10 +385,15 @@ async fn grant(broker: &Broker, commerce: &Commerce, order: Order) -> Result<(),
         .grant_paid_traffic(&order.subject, &order.period, &order.id, order.bytes)
         .await
     {
-        Ok(_) => commerce
-            .storage(move |store| store.mark_granted(&order.id))
-            .await
-            .map_err(|_| Problem::Storage),
+        Ok(_) => {
+            if commerce.config.environment == "prod" {
+                broker.record_recharge(&order.subject).await?;
+            }
+            commerce
+                .storage(move |store| store.mark_granted(&order.id))
+                .await
+                .map_err(|_| Problem::Storage)
+        }
         Err(Problem::TrafficPeriodMismatch) => commerce
             .storage(move |store| store.mark_expired(&order.id))
             .await
@@ -407,7 +420,7 @@ async fn webhook(State(broker): State<Arc<Broker>>, request: Request) -> Respons
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
     match commerce.accept_webhook(&body, &signature).await {
-        Ok(Settlement::Grant(order)) => match grant(&broker, commerce, order).await {
+        Ok(Settlement::Grant(order)) => match grant(&broker, commerce, *order).await {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },

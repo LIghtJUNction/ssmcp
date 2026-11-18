@@ -364,6 +364,17 @@ impl Runtime {
     pub(crate) fn local_registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }
+    /// Local frontend methods, deliberately absent from the remote tool registry.
+    pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
+        self.computer.handoff_host_input_local(seconds)
+    }
+    pub(crate) fn revoke_host_input(&self) -> bool {
+        self.computer.revoke_host_input()
+    }
+    pub(crate) fn host_input_status(&self) -> Value {
+        self.computer.host_input_status()
+    }
+
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }

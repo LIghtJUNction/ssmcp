@@ -92,7 +92,7 @@ impl From<&CommerceConfig> for GatewayScope {
 pub(crate) enum Settlement {
     Ignored,
     AlreadyGranted,
-    Grant(Order),
+    Grant(Box<Order>),
     Review,
 }
 pub(crate) struct OrderStore {
@@ -514,7 +514,7 @@ impl OrderStore {
             return Ok(Settlement::Review);
         }
         if order.state == OrderState::Paid {
-            return Ok(Settlement::Grant(order.clone()));
+            return Ok(Settlement::Grant(Box::new(order.clone())));
         }
         let (period, _) = month(timestamp, config.utc_offset_minutes)?;
         let mut next = self.database.clone();
@@ -531,7 +531,7 @@ impl OrderStore {
         let order = updated.clone();
         self.persist(next)?;
         if order.state == OrderState::Paid {
-            Ok(Settlement::Grant(order))
+            Ok(Settlement::Grant(Box::new(order)))
         } else {
             Ok(Settlement::Review)
         }
@@ -567,6 +567,16 @@ impl OrderStore {
         order.state = OrderState::Cancelled;
         order.gateway_order_id = Some(proof.remote_id);
         self.persist(next)
+    }
+    pub(crate) fn recharged_subjects(&self) -> Result<std::collections::BTreeSet<String>, Error> {
+        self.ensure()?;
+        Ok(self
+            .database
+            .orders
+            .values()
+            .filter(|order| order.state == OrderState::Granted)
+            .map(|order| order.subject.clone())
+            .collect())
     }
     pub(crate) fn pending_grants(&self) -> Result<Vec<Order>, Error> {
         self.ensure()?;

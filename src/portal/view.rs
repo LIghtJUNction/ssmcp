@@ -27,6 +27,7 @@ pub(super) fn page(title: &str, body: &str) -> String {
   <meta name="theme-color" content="#0b0d0f">
   <meta name="description" content="使用用户名连接本机工具。GitHub 自动登录绑定，HTTPS 接入，管理账户与在线连接。">
   <title>{} · ssmcp</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/portal.css">
   <link rel="stylesheet" href="/portal-refresh.css">
   <script defer src="/traffic-meter.js"></script>
@@ -35,7 +36,7 @@ pub(super) fn page(title: &str, body: &str) -> String {
 <a class="skip-link" href="#content">跳到主要内容</a>
 <header class="site-header">
   <nav class="site-nav container" aria-label="主导航">
-    <a class="brand" href="/" aria-label="ssmcp 首页"><span class="brand-mark" aria-hidden="true">&gt;_</span><span class="brand-name">ssmcp</span><span class="brand-label">WORKSPACE</span></a>
+    <a class="brand" href="/" aria-label="ssmcp 首页"><img class="brand-mark" src="/favicon.svg" width="36" height="36" alt="" aria-hidden="true"><span class="brand-name">ssmcp</span><span class="brand-label">WORKSPACE</span></a>
     <div class="nav-links"><a href="/#guide">连接指南 <span class="arrow" aria-hidden="true">↓</span></a><a href="https://github.com/LIghtJUNction/ssmcp">GitHub <span class="arrow" aria-hidden="true">↗</span></a></div>
   </nav>
 </header>
@@ -122,6 +123,7 @@ fn account_panel(
     csrf: &str,
     enabled: bool,
     management_enabled: bool,
+    traffic: Option<&TrafficQuota>,
 ) -> String {
     let (status_class, status) = if account.is_some() {
         ("status signed-in", "已登录")
@@ -151,7 +153,11 @@ fn account_panel(
             escape(&a.github_login),
         ));
         if management_enabled {
-            html.push_str(r#"<div class="account-shortcuts"><a class="text-link" href="/account/sessions">我的会话 <span aria-hidden="true">↗</span></a><a class="text-link" href="/account/history">历史记录 <span aria-hidden="true">↗</span></a></div>"#);
+            html.push_str(r#"<div class="account-shortcuts"><a class="text-link" href="/account/sessions">我的会话 <span aria-hidden="true">↗</span></a><a class="text-link" href="/account/history">历史记录 <span aria-hidden="true">↗</span></a>"#);
+            if traffic.is_some_and(|quota| quota.limit_bytes.is_none()) {
+                html.push_str(r#"<a class="text-link" href="/account/admin#registered-users">用户管理 <span aria-hidden="true">↗</span></a>"#);
+            }
+            html.push_str("</div>");
         }
         html.push_str(&format!(
             r#"<div class="account-footer"><small class="account-note">用户名与 GitHub 账号绑定。</small><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="quiet" type="submit">退出登录</button></form></div>"#
@@ -272,7 +278,13 @@ pub(super) fn home(
     let mut body = String::from(
         r#"<div class="portal-home"><section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">YOUR MACHINE. YOUR WORKSPACE.</p><h1 id="hero-title">本机工具，<br><span>连接你的 AI。</span></h1><p class="hero-description">用一个用户名，把本机工具接入 ChatGPT。<br>在熟悉的环境工作，让想法继续向前。</p><div class="protocol" aria-label="本机通过 HTTPS 和 MCP 连接 ChatGPT"><span>YOUR MACHINE</span><span class="arrow" aria-hidden="true">→</span><span>HTTPS / MCP</span><span class="arrow" aria-hidden="true">→</span><span>ChatGPT</span></div></div>"#,
     );
-    body.push_str(&account_panel(account, &csrf, enabled, management_enabled));
+    body.push_str(&account_panel(
+        account,
+        &csrf,
+        enabled,
+        management_enabled,
+        traffic,
+    ));
     body.push_str("</section>");
     if let Some(traffic) = traffic.filter(|_| account.is_some()) {
         body.push_str(
@@ -308,6 +320,7 @@ mod tests {
             handle: Some("developer".into()),
             banned: false,
             rate_limit_bps: None,
+            has_recharged: false,
         }
     }
 
@@ -348,6 +361,7 @@ mod tests {
         assert!(html.contains("服务器流量有限，经常使用请购买流量包。"));
         assert!(!html.contains("不自动重置"));
         assert!(!html.contains("checkout"));
+        assert!(!html.contains(r#"href="/account/admin#registered-users""#));
     }
 
     #[test]
@@ -369,6 +383,7 @@ mod tests {
         traffic.remaining_bytes = None;
         let html = logged_in_home(&traffic);
         assert!(html.contains("<dt>流量额度</dt><dd>无限</dd>"));
+        assert!(html.contains(r#"href="/account/admin#registered-users""#));
         assert!(html.contains(r#"title="2000000000 字节">2 GB</dd>"#));
         assert!(!html.contains("每月免费"));
         assert!(!html.contains("到期"));

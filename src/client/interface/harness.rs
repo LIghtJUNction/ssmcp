@@ -30,10 +30,17 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static NEXT_CALL: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn bind(runtime: &Arc<Runtime>) {
-    *BINDING
+    let mut binding = BINDING
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(Binding {
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(previous) = binding
+        .as_ref()
+        .and_then(|binding| binding.runtime.upgrade())
+    {
+        previous.revoke_host_input();
+    }
+    *binding = Some(Binding {
         runtime: Arc::downgrade(runtime),
         handle: tokio::runtime::Handle::try_current().ok(),
     });
