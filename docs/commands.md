@@ -52,7 +52,7 @@ return await exec.run(client.id, {
 });
 ```
 
-`run` 先启动，再等待，最后读取一次输出。返回 `job_id`、`running`、`exit_code`、`stdout`、`stderr`、两个字节游标和最新 `snapshot`。`running: false` 才说明任务收尾结束；`exit_code: 0` 表示进程正常成功退出。启动或参数错误会拒绝 JavaScript Promise，进程自身非零退出仍是一个有效结果，应由调用方检查退出码。
+`run` 先启动，再等待，最后读取一次输出。返回 `job_id`、`running`、`exit_code`、`stdout`、`stderr`、两个字节游标和最新 `snapshot`。`status/read/wait` 返回 `running: false` 时，该任务占用的执行槽已释放；观察器收尾可能继续，这一状态不表示所有 UI 资源都已释放。`exit_code: 0` 表示进程正常成功退出。启动或参数错误会拒绝 JavaScript Promise，进程自身非零退出仍是一个有效结果，应由调用方检查退出码。
 
 `command` 是 argv 数组，不经过隐式 Shell 展开。`["echo", "$HOME"]` 不会把 `$HOME` 替换为目录。需要管道、重定向或 Shell 内建命令时，显式选择本机 Shell，例如 Unix 的 `["sh", "-lc", "printf '%s\\n' hello | wc -l"]`，或 Windows 的 `["cmd.exe", "/d", "/s", "/c", "echo hello"]`。
 
@@ -125,6 +125,23 @@ return await exec.parallel(clientId, [
 
 `parallel` 默认每个流只读取 2048 字节，控制汇总大小；单项可用 `max_bytes` 覆盖。长输出按需分页，避免把多份完整构建日志放进一次响应。
 
+## RTK 的异步错误处理
+
+`rtk.start` 和 `rtk.run` 始终返回 Promise，本地参数错误也可由 `.catch(...)` 或混合的 `Promise.allSettled(...)` 处理。例如，下面的第二项用空命令演示本地参数错误：
+
+```javascript
+const results = await Promise.allSettled([
+  rtk.run(clientId, { command: ["git", "status", "--short"] }),
+  rtk.start(clientId, { command: [] }),
+  exec.run(clientId, { command: ["git", "diff", "--stat"] })
+]);
+return results.map(result => result.status === "fulfilled"
+  ? result
+  : { status: result.status, error: result.reason.message });
+```
+
+每项分别返回 fulfilled 或 rejected；已经启动的合法项保留独立结果，不因其他项的参数错误而丢失。助手不自动重试命令。
+
 ## 读取完整输出
 
 `read` 默认从偏移 0 开始，每个流最多返回 16384 字节，可设为 1–32768。两个流的游标分别推进：
@@ -149,6 +166,8 @@ return await outputs.read(clientId, {
   max_bytes: 16384
 });
 ```
+
+`outputs.read` 和 `outputs.stat` 均拒绝实际长度小于 manifest 记录值的归档；`complete: true` 时，实际长度必须与记录值相等。`outputs.stat` 还会核对完整归档的原始 SHA-256；`outputs.read` 仅校验长度与分页，并返回本页内容的哈希。活动归档可以继续增长，`complete: false` 的部分捕获在满足长度要求时仍可读取。Unix 上，归档路径若被替换成 FIFO，会作为非普通文件及时报错，无需等待管道另一端。
 
 继续沿用 `next_offset`。活动文件的 EOF 只表示当前已经读到文件末尾，仍可能产生后续内容。结束后结合任务状态与转储的 `complete`、`error` 检查捕获完整性。写入失败、单文件超过 256 MiB、收尾读取异常或超时都会明确记录，不应把不完整输出当作完整日志。[输出保留和清理规则](session-control.md)
 
