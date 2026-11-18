@@ -111,7 +111,7 @@ impl Session {
                     let handle = tokio::runtime::Handle::try_current().ok()?;
                     let display = Arc::downgrade(&shared);
                     Some(handle.spawn(async move {
-                        // Keep networking and QR encoding outside the compositor lock.
+                        // Keep guide route discovery outside the compositor lock.
                         let Some(guide) = guide::Guide::resolve(&url).await else {
                             return;
                         };
@@ -174,6 +174,18 @@ impl Drop for Session {
 
 pub(crate) fn active() -> bool {
     shared().is_some_and(|shared| shared.alive.load(Ordering::Acquire))
+}
+
+/// A local command requests normal frontend cleanup; it does not signal other processes.
+pub(crate) fn exit_requested() -> bool {
+    shared().is_some_and(|shared| {
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .conversation
+            .exit_requested
+    })
 }
 
 /// Wake the display after asynchronous local discovery without publishing a log.
@@ -470,10 +482,11 @@ pub(crate) fn snapshot() -> serde_json::Value {
     let conversation = state.conversation.snapshot();
     serde_json::json!({
         "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
-        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.view == conversation::View::Activity},
-            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":g.pty_rows,"cols":g.left,"visible":if chat {state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.log_rows},"cols":g.left,"visible":!chat || state.conversation.logs_open},
+            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+            "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":conversation::body_rows(g.rows),"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
             "input":{"row":conversation::prompt_top(g.rows)+1,"col":0,"rows":conversation::prompt_rows(g.rows),"cols":g.left,"visible":chat && conversation::prompt_rows(g.rows)>0}},
-        "focus":if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
+        "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
@@ -485,9 +498,9 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
     state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
-    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
+    state.log_message("user", "Improve the client experience\nKeep commands, results and the original code easy to inspect.", "\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"17","exit_code":0}), "[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
-    state.log("[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
+    state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"preview-diff","exit_code":0}), "[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
     state.log("[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
@@ -697,6 +710,8 @@ enum Key {
     Newline,
     HistoryStart,
     HistoryEnd,
+    CanvasLeft,
+    CanvasRight,
     Mouse {
         button: u16,
         x: u16,
@@ -707,6 +722,10 @@ enum Key {
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[1;3D", Key::CanvasLeft),
+    (b"\x1b[1;3C", Key::CanvasRight),
+    (b"\x1b[57350;3u", Key::CanvasLeft),
+    (b"\x1b[57351;3u", Key::CanvasRight),
     (b"\x1b[1;2A", Key::Questions),
     (b"\x1b[18~", Key::Select),
     (b"\x1b[Z", Key::FocusBack),
@@ -807,6 +826,8 @@ impl Keyboard {
             | Key::Newline
             | Key::HistoryStart
             | Key::HistoryEnd
+            | Key::CanvasLeft
+            | Key::CanvasRight
             | Key::Mouse { .. } => true,
             Key::Toggle => allow_logs,
             Key::Up | Key::Down | Key::Home | Key::End => true,
@@ -1057,7 +1078,8 @@ struct State {
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let geometry = Geometry::new(rows, cols, ui);
-        Self {
+        let conversation = conversation::Conversation::default();
+        let mut state = Self {
             events: events::EventView::new(),
             context_label: String::new(),
             guide: None,
@@ -1099,8 +1121,12 @@ impl State {
                 logs: ui.layout == Layout::Logs,
                 ..Keyboard::default()
             },
-            conversation: conversation::Conversation::default(),
+            conversation,
+        };
+        if ui.log_format == LogFormat::PrettyVerbose || ui.show_raw_json {
+            state.chat_initial_logs();
         }
+        state
     }
     fn set_context(&mut self, cwd: &str, title: Option<&str>) {
         let project = std::path::Path::new(cwd)
@@ -1202,6 +1228,13 @@ impl State {
     fn log(&mut self, bytes: &[u8]) {
         self.events.ingest(bytes);
         self.log_raw(bytes);
+    }
+    fn log_message(&mut self, role: &str, text: &str, bytes: &[u8]) {
+        self.log_event(
+            "message",
+            &serde_json::json!({"type":"ssmcp.message", "role":role, "text":text}),
+            bytes,
+        );
     }
     fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
         self.events.ingest_event(label, value, bytes);
@@ -1397,9 +1430,6 @@ impl State {
         let filtered = self.graphics.input(bytes, now, flush);
         for id in self.graphics.take_rejected_images() {
             self.events.reject_image(id);
-            if let Some(guide) = &self.guide {
-                guide.reject_image(id);
-            }
         }
         self.dirty |= self.graphics.take_changed();
         let bytes = filtered.as_slice();
@@ -1814,16 +1844,8 @@ impl State {
             mouse_capture: !self.selection,
         }
     }
-    fn guide_rows(&mut self, width: u16, height: u16, row: u16, col: u16) -> Vec<String> {
-        let Some(guide) = self.guide.as_ref() else {
-            return Vec::new();
-        };
-        let (rows, placement) =
-            guide.rows(width, height, &self.ui, self.graphics.cell(), (row, col));
-        if let Some(placement) = placement {
-            self.media.push(placement);
-        }
-        rows
+    fn guide_rows(&mut self, width: u16, height: u16, _row: u16, _col: u16) -> Vec<String> {
+        guide::pet_rows(width, height, &self.ui)
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
         if !self.ui.color {
@@ -2382,8 +2404,14 @@ mod tests {
         let rejected = images::decode(&block, state.graphics.prepare_native()).unwrap();
         let rejected_id = rejected.native.as_ref().unwrap().id();
         state.image(rejected, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
         state.image(retained, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         let before = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let mut media = images::Renderer::default();
@@ -2408,7 +2436,7 @@ mod tests {
             physical(&after)
                 .screen()
                 .contents()
-                .contains("Low-resolution thumbnail")
+                .contains("Image attachment")
         );
         let (delete, _) =
             media.update(std::mem::take(&mut state.media), after.cursor, after.hidden);
@@ -2418,6 +2446,9 @@ mod tests {
         assert!(next.native.is_some());
         let next_id = next.native.as_ref().unwrap().id();
         state.image(next, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         let final_frame = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let (_, upload) = media.update(
@@ -2431,6 +2462,7 @@ mod tests {
 
     #[test]
     fn selection_freeze_releases_native_placements_when_cell_measurement_expires() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
         let ui = Ui {
             layout: Layout::Chat,
             color: true,
@@ -2440,16 +2472,32 @@ mod tests {
             ..Ui::default()
         };
         let mut state = State::new(30, 120, &ui);
-        state.guide = guide::Guide::from_endpoint("https://ssmcp.lmm.best/mcp");
-        state.guide.as_ref().unwrap().prepare_for_test();
         state.graphics = images::Graphics::probe_for_test();
         let now = Instant::now();
         assert!(
             state
                 .graphics
-                .input(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false,)
+                .input(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false)
                 .is_empty()
         );
+        let source = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            16,
+            16,
+            image::Rgba([30, 120, 210, 255]),
+        ));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let block = serde_json::json!({
+            "type":"image", "mimeType":"image/png",
+            "data":STANDARD.encode(bytes.into_inner()),
+        });
+        let image = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        state.image(image, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         state.selection = true;
         let before = state.frame(now);
         let previous_cell = state.graphics.cell();
@@ -2462,10 +2510,9 @@ mod tests {
         );
         assert!(
             upload.contains("a=p"),
-            "the frame has an actual native QR placement"
+            "the frame has an actual user image placement"
         );
         media.complete();
-        assert!(screen.screen().contents().contains("Scan for the guide"));
         state.dirty = true;
         assert!(
             !state.should_redraw(Some(&before), previous_cell),
@@ -2485,14 +2532,12 @@ mod tests {
         );
         assert!(!output.contains("a=p"));
         screen.process(&after.diff(Some(&before)));
-        assert!(screen.screen().contents().contains("Online guide"));
         assert!(
             screen
                 .screen()
                 .contents()
-                .contains("https://ssmcp.lmm.best/guide/")
+                .contains("Image attachment")
         );
-        assert!(!screen.screen().contents().contains("Scan for the guide"));
     }
 
     #[test]

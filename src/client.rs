@@ -1420,7 +1420,11 @@ pub async fn run() -> crate::Result<()> {
             std::env::current_dir()?,
             options.context_roots.clone(),
             management,
-        ) {
+        )
+        .and_then(|runtime| {
+            runtime.enable_default_skill_sources()?;
+            Ok(runtime)
+        }) {
             Ok(runtime) => runtime,
             Err(error) => {
                 backend.shutdown().await;
@@ -1968,7 +1972,11 @@ async fn connect(
         PathBuf::from(&metadata.cwd),
         options.context_roots.clone(),
         management,
-    ) {
+    )
+    .and_then(|runtime| {
+        runtime.enable_default_skill_sources()?;
+        Ok(runtime)
+    }) {
         Ok(runtime) => runtime,
         Err(error) => {
             let _ = ssh.start_kill();
@@ -2123,6 +2131,10 @@ async fn connect(
                 }
             },
             _ = ui_updates.tick(), if git_status.is_some() => {
+                if terminal::exit_requested() {
+                    intentionally_stopped = true;
+                    break Ok(());
+                }
                 if let Some(observer) = &git_status {
                     render::set_git_status(observer.snapshot());
                 }

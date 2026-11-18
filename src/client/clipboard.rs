@@ -260,10 +260,10 @@ async fn write_using(program: &str, arguments: &[&str], text: &str) -> Result<()
 
 pub(super) async fn write_text(value: &str) -> Result<(), String> {
     if value.is_empty() {
-        return Err("The latest agent message is empty".into());
+        return Err("The text to copy is empty".into());
     }
     if value.len() > MAX_COPY_BYTES {
-        return Err("The latest agent message exceeds the 1 MiB clipboard limit".into());
+        return Err("The text exceeds the 1 MiB clipboard limit".into());
     }
     write_platform(value).await
 }
@@ -289,10 +289,10 @@ async fn write_platform(value: &str) -> Result<(), String> {
         }
     }
     Err(if failures.is_empty() {
-        "No desktop clipboard is available for /copy".into()
+        "No desktop clipboard is available".into()
     } else {
         format!(
-            "Cannot copy the agent message; install wl-clipboard (Wayland) or xclip (X11). {}",
+            "Cannot copy text; install wl-clipboard (Wayland) or xclip (X11). {}",
             failures.join("; ")
         )
     })
