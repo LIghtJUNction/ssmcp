@@ -209,6 +209,35 @@ def main():
                   "preview sidebar labels its two sample agents")
             save_shot(args.out, "chat", initial)
 
+            check("▸ [exit=0]" in body_text(initial)
+                  and "test client::ui::custom_colors" not in body_text(initial),
+                  "commands default to a compact row with the real exit status")
+            check("- let expanded = true" in body_text(initial)
+                  and "+ let expanded = false" in body_text(initial),
+                  "editing diff remains expanded in compact activity")
+            command_row = next(index for index, row in enumerate(initial["rows"])
+                               if "▸ [exit=0]" in row)
+            preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
+            expanded = preview.until(lambda s: "test client::ui::custom_colors" in body_text(s),
+                                     "click-expanded command output")
+            check("▾ [exit=0]" in body_text(expanded), "expanded commands retain their status")
+            save_shot(args.out, "command-expanded", expanded)
+            preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
+            preview.until(lambda s: "test client::ui::custom_colors" not in body_text(s),
+                          "click-collapsed command output")
+            preview.send(b"\x1b")
+            preview.until(lambda s: not s["hide_cursor"], "input focus after compact navigation")
+            slash(preview, "/raw")
+            raw = preview.until(lambda s: "raw activity" in s["rows"][0]
+                                and "test client::ui::custom_colors" in body_text(s),
+                                "original unfolded transcript")
+            save_shot(args.out, "raw-activity", raw)
+            slash(preview, "/raw")
+            preview.until(lambda s: "raw activity" not in s["rows"][0]
+                          and "▸ [exit=0]" in body_text(s),
+                          "raw toggle returning to compact activity")
+            check(True, "/raw toggles the original transcript and compact display")
+
             preview.send(b"q")
             typed = preview.until(lambda s: "❯ q" in prompt_text(s), "q as draft text")
             check(preview.process.poll() is None and not typed["hide_cursor"], "q types text instead of exiting")
@@ -239,9 +268,9 @@ def main():
             check(preview.process.poll() is None, "slash completion never restarts a real session in preview")
             clear_draft(preview)
 
-            preview.send(b"\x0f")
+            preview.send(b"\x0f\r")
             audit = preview.until(lambda s: "code audit" in s["rows"][0]
-                                  and "#example-01" in text(s), "Ctrl+O source details")
+                                  and "#example-01" in text(s) and "command:" in text(s), "Ctrl+O and Enter source details")
             code_rows = [index for index, row in enumerate(left_rows(audit))
                          if any(token in row for token in ["const ", "command:", "print("])]
             left_width = audit["rows"][0].find("│")
@@ -264,17 +293,19 @@ def main():
             preview.until(lambda s: "activity" in s["rows"][0] and not s["hide_cursor"], "Ctrl+O returning to input")
 
             slash(preview, "/filter cargo")
-            filtered = preview.until(lambda s: "activity · all /cargo" in s["rows"][0], "text filter")
+            filtered = preview.until(lambda s: "activity" in s["rows"][0] and "· all /cargo" in s["rows"][0], "text filter")
             check("cargo test --lib" in text(filtered) and "exit=0" in text(filtered),
                   "matching commands retain their result during filtering")
             slash(preview, "/filter")
             preview.until(lambda s: "/cargo" not in s["rows"][0], "cleared filter")
             preview.send(b"\x1b[20~\x1b[20~")
-            preview.until(lambda s: "activity · errors /" in s["rows"][0], "error category filter")
+            preview.until(lambda s: "activity" in s["rows"][0] and "· errors /" in s["rows"][0], "error category filter")
             check(True, "F9 selects command and error categories")
             slash(preview, "/filter --all")
             preview.until(lambda s: "errors /" not in s["rows"][0], "category clear")
 
+            slash(preview, "/raw")
+            preview.until(lambda s: "raw activity" in s["rows"][0], "raw scrolling fixture")
             preview.resize(18, 120)
             live = preview.until(lambda s: "Write a requirement below" in body_text(s)
                                  and prompt_start(s) == 13, "compact live activity")
@@ -290,6 +321,7 @@ def main():
             preview.send(b"\x1b[1;5F")
             preview.until(lambda s: "Write a requirement below" in body_text(s), "Ctrl+End following live output")
             clear_draft(preview)
+            slash(preview, "/logs")
             preview.resize(30, 120)
             preview.until(lambda s: prompt_start(s) == 25, "restored full-height composer")
 
