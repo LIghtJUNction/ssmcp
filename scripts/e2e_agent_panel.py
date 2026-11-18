@@ -102,6 +102,10 @@ class AgentPanel(Composer):
 
     def choose_member(self, front, member):
         self.agents(front)
+        front.until(
+            lambda shot: "…" + member["agent_id"][-8:] in "\n".join(list_rows(shot)),
+            "the authenticated member arriving in the asynchronous roster",
+        )
         roster = self.queue()["agents"]
         index = 1 + next(index for index, value in enumerate(roster)
                          if value["agent_id"] == member["agent_id"])
