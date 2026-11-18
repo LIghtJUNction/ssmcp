@@ -79,6 +79,8 @@ jobs:
           python3 scripts/test_setup_server.py
           python3 scripts/test_portal_ssh.py
           python3 scripts/test_installer_download_bounds.py
+      - name: Check JavaScript orchestration helpers
+        run: make test-code-mode
       - run: cargo clippy --locked --all-targets -- -D warnings
       - name: Render terminal transcript fixture
         if: matrix.runner == 'ubuntu-24.04'
