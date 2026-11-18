@@ -389,7 +389,9 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .await
         .unwrap();
     assert!(html.contains("<h2 id=\"account-title\">alice</h2>"));
-    assert!(html.contains("尚未选择 · 在终端命令中填写"));
+    assert!(html.contains("尚未注册"));
+    assert!(html.contains("action=\"/account/username\""));
+    assert!(html.contains("复制命令"));
     assert!(html.contains("ssmcp myname@ssmcp.test"));
     assert!(!html.contains("bob key"));
     let csrf = html
@@ -399,6 +401,36 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .split('"')
         .next()
         .unwrap();
+    let register = format!("{base}/account/username");
+    let unauthorized_origin = client
+        .post(&register)
+        .header("cookie", &new_cookie)
+        .header("origin", "https://other.test")
+        .form(&[("csrf", csrf), ("username", "alice-dev")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized_origin.status(), 403);
+    let registered = client
+        .post(&register)
+        .header("cookie", &new_cookie)
+        .header("origin", "https://ssmcp.test")
+        .form(&[("csrf", csrf), ("username", "alice-dev")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 303);
+    let registered_home = client
+        .get(&base)
+        .header("cookie", &new_cookie)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(registered_home.contains("ssmcp alice-dev@ssmcp.test"));
+    assert!(!registered_home.contains("注册用户名"));
     let fingerprint = parse_key(&key(), "").unwrap().fingerprint;
     let denied = client
         .post(format!("{base}/account/keys/delete"))

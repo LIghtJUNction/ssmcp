@@ -445,8 +445,18 @@ pub fn routes() -> Router<Arc<Broker>> {
                 )
             }),
         )
+        .route(
+            "/copy-command.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("portal/copy-command.js"),
+                )
+            }),
+        )
         .route("/account/login", post(login))
         .route("/account/logout", post(logout))
+        .route("/account/username", post(register_username))
         .route("/account/keys", post(add_key))
         .route("/account/keys/delete", post(delete_key))
         .merge(guide::routes())
@@ -466,7 +476,7 @@ async fn security_headers(mut response: Response) -> Response {
         HeaderValue::from_static("nosniff"),
     );
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
+    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
     h.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -901,6 +911,30 @@ async fn logout_inner(
     set_cookie(&mut response, "", 0);
     Ok(response)
 }
+async fn register_username(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
+    let (headers, values) = form(request).await?;
+    only(&values, &["csrf", "username"])?;
+    let (_, subject) = broker
+        .portal
+        .verify(&headers, &values, &broker.public_url)?;
+    let subject = subject.ok_or(Problem::Unauthorized)?;
+    broker
+        .portal
+        .browser
+        .lock()
+        .map_err(|_| Problem::Storage)?
+        .charge(format!("username:{subject}"), 20)?;
+    let username = values["username"].clone();
+    broker
+        .portal
+        .storage(move |store| store.claim_handle(&subject, &username))
+        .await?;
+    Ok(Redirect::to("/#account").into_response())
+}
+
 async fn key_action(
     broker: &Broker,
     headers: &HeaderMap,

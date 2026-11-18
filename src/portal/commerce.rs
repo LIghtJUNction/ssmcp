@@ -125,13 +125,9 @@ async fn traffic(
 ) -> Result<Response, Problem> {
     let (subject, csrf) = authenticate(&broker.portal, &headers).await?;
     let quota = broker.traffic_quota(&subject).await?;
-    let remaining = quota
-        .remaining_bytes
-        .map(|n| format!("{:.3} GB", n as f64 / commerce::GB as f64))
-        .unwrap_or("无限".into());
     let mut body = format!(
-        "<section class=card><h1>流量与订单</h1><p>本月剩余流量：<strong>{}</strong></p><p>1 GB = 1,000,000,000 字节。购买流量仅限当前自然月使用，下月不结转。上下行合计，按 ssmcp 序列化数据帧字节计量，包含协议封装与重试。</p></section>",
-        view::escape(&remaining)
+        "<section class=card><h1>流量与订单</h1>{}<p>1 GB = 1,000,000,000 字节。</p></section>",
+        view::traffic_panel(&quota)
     );
     let Some(commerce) = &broker.portal.commerce else {
         body.push_str("<section class=card><h2>购买流量</h2><p>暂未开放购买。</p></section>");
