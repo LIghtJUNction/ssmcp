@@ -97,6 +97,32 @@ class SetupTests(unittest.TestCase):
 
 
 class StageIsolationTests(unittest.TestCase):
+    def test_stage_checks_runtime_as_service_user_before_starting_gateway(self):
+        import deploy_server
+        binary = Path('/opt/ssmcp/releases') / ('a' * 40) / 'usr/bin/ssmcpd'
+        command = deploy_server.stage_service_command(
+            'ssmcp-stage-test', 'ssmcp-stage-test', binary, Path('/private/config.toml'))
+        self.assertIn('--uid=ssmcpd', command)
+        self.assertIn('--gid=ssmcp', command)
+        self.assertIn('--setenv=PATH=/usr/bin:/bin', command)
+        self.assertIn('--property=ExecStartPre='+str(binary)+' check-runtime', command)
+        self.assertEqual(command[command.index(str(binary))+1], 'serve')
+        self.assertIn('/run/ssmcp-stage-test/control.sock', command)
+        self.assertIn('/var/lib/ssmcp-stage-test/oauth-clients.toml', command)
+
+    def test_stage_preserves_packaged_service_runtime_restrictions(self):
+        import deploy_server
+        service = Path(__file__).resolve().parents[1] / 'packaging/ssmcpd.service'
+        restrictions = {'NoNewPrivileges', 'PrivateTmp', 'PrivateDevices', 'ProtectSystem',
+                        'ProtectHome', 'ProtectKernelTunables', 'ProtectControlGroups',
+                        'RestrictAddressFamilies', 'ReadWritePaths', 'UMask'}
+        command = deploy_server.stage_service_command(
+            'ssmcp-stage-test', 'ssmcp-stage-test', Path('/usr/bin/ssmcpd'), Path('/config'))
+        for line in service.read_text().splitlines():
+            if line.partition('=')[0] in restrictions:
+                self.assertIn('--property='+line, command)
+        self.assertIn('ExecStartPre=/usr/local/bin/ssmcpd check-runtime', service.read_text())
+
     def test_staging_moves_accounts_audit_and_management_into_its_own_lease(self):
         import deploy_server
         text = CONFIG + 'state_dir = "/production/accounts"\naudit_dir = "/production/audit"\n'

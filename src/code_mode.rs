@@ -10,7 +10,10 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -432,14 +435,12 @@ fn runner_path() -> Result<PathBuf, String> {
         }
         return path.canonicalize().map_err(|e| e.to_string());
     }
-    if let Some(prefix) = std::env::current_exe()
+    let installed = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent()?.parent().map(Path::to_path_buf))
-    {
-        let path = prefix.join("libexec/ssmcp/code-mode.js");
-        if path.is_file() {
-            return path.canonicalize().map_err(|e| e.to_string());
-        }
+        .map(|prefix| prefix.join("libexec/ssmcp/code-mode.js"));
+    if let Some(path) = installed.as_ref().filter(|path| path.is_file()) {
+        return path.canonicalize().map_err(|e| e.to_string());
     }
     #[cfg(debug_assertions)]
     {
@@ -448,7 +449,12 @@ fn runner_path() -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    Err("code_mode runner is missing; run make install-server or set SSMCP_CODE_MODE_RUNNER to its installed absolute path".into())
+    let location = installed
+        .map(|path| format!(" at {}", path.display()))
+        .unwrap_or_else(|| " (cannot determine the executable's installation prefix)".into());
+    Err(format!(
+        "code_mode runner is missing{location}; run make install-server or set SSMCP_CODE_MODE_RUNNER to its installed absolute path"
+    ))
 }
 
 fn node_arguments(command: &mut Command) {
@@ -566,6 +572,37 @@ pub async fn execute(
 ) -> Result<Value, String> {
     let command = prepare_command(sandbox_command).await?;
     execute_process(command, code, timeout_ms, clients, host).await
+}
+
+const RUNTIME_CHECK_CODE: &str =
+    "return await Promise.resolve({ssmcp_runtime_check: 1, clients: clients.length});";
+
+fn runtime_check_host() -> (Host, Arc<AtomicBool>) {
+    let called = Arc::new(AtomicBool::new(false));
+    let observed = called.clone();
+    let host: Host = Arc::new(move |_| {
+        observed.store(true, Ordering::Relaxed);
+        Box::pin(async { Err("native calls are disabled during the runtime check".into()) })
+    });
+    (host, called)
+}
+
+fn validate_runtime_check(output: Value, host_called: bool) -> Result<(), String> {
+    if host_called {
+        return Err("code_mode runtime check attempted a disabled native call".into());
+    }
+    if output != json!({"result":{"ssmcp_runtime_check":1,"clients":0},"logs":[]}) {
+        return Err("code_mode runtime check returned an unexpected result".into());
+    }
+    Ok(())
+}
+
+/// Verify the installed runner through the mandatory sandbox without connecting
+/// clients, reading gateway configuration, or permitting native host operations.
+pub async fn check_runtime() -> Result<(), String> {
+    let (host, called) = runtime_check_host();
+    let output = execute(RUNTIME_CHECK_CODE.into(), 10_000, json!([]), host).await?;
+    validate_runtime_check(output, called.load(Ordering::Relaxed))
 }
 
 async fn prepare_command(
@@ -1082,6 +1119,89 @@ mod tests {
         })
         .await?;
         execute_process(command, code, timeout_ms, clients, host).await
+    }
+
+    #[test]
+    fn runtime_check_rejects_missing_wrong_and_error_results() {
+        let expected = json!({"result":{"ssmcp_runtime_check":1,"clients":0},"logs":[]});
+        validate_runtime_check(expected.clone(), false).unwrap();
+        for output in [
+            Value::Null,
+            json!({"result":true,"logs":[]}),
+            json!({"result":{"ssmcp_runtime_check":1,"clients":1},"logs":[]}),
+            json!({"result":{"ssmcp_runtime_check":1,"clients":0},"logs":["error"]}),
+            json!({"result":{"ssmcp_runtime_check":1,"clients":0},"logs":[],"isError":true}),
+        ] {
+            assert_eq!(
+                validate_runtime_check(output, false).unwrap_err(),
+                "code_mode runtime check returned an unexpected result"
+            );
+        }
+        assert_eq!(
+            validate_runtime_check(expected, true).unwrap_err(),
+            "code_mode runtime check attempted a disabled native call"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_check_denies_every_host_operation_and_records_the_attempt() {
+        for request in [
+            HostRequest::Builtin {
+                name: "resources.read".into(),
+                arguments: json!({}),
+            },
+            HostRequest::Call {
+                client_id: "unavailable".into(),
+                name: "ssmcp.exec.run".into(),
+                arguments: json!({}),
+            },
+            HostRequest::Tools {
+                client_id: "unavailable".into(),
+                cursor: None,
+            },
+        ] {
+            let (host, called) = runtime_check_host();
+            assert!(!called.load(Ordering::Relaxed));
+            assert_eq!(
+                host(request).await.unwrap_err(),
+                "native calls are disabled during the runtime check"
+            );
+            assert!(called.load(Ordering::Relaxed));
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_check_program_uses_the_runner_protocol_without_clients_or_host_calls() {
+        let _guard = TESTS.lock().await;
+        let (host, called) = runtime_check_host();
+        let output = trusted_execute(RUNTIME_CHECK_CODE.into(), 2_000, json!([]), host)
+            .await
+            .unwrap();
+        validate_runtime_check(output, called.load(Ordering::Relaxed)).unwrap();
+
+        // A runner must not turn a swallowed host rejection into a successful check.
+        let (host, called) = runtime_check_host();
+        let output = trusted_execute(
+            format!(
+                "try {{ await call('unavailable','echo',{{}}); }} catch {{}} {RUNTIME_CHECK_CODE}"
+            ),
+            2_000,
+            json!([]),
+            host,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            validate_runtime_check(output, called.load(Ordering::Relaxed)).unwrap_err(),
+            "code_mode runtime check attempted a disabled native call"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires system Node.js and bubblewrap namespace support; CI runs --include-ignored"]
+    async fn runtime_check_uses_the_mandatory_system_sandbox() {
+        let _guard = TESTS.lock().await;
+        check_runtime().await.unwrap();
     }
 
     #[tokio::test]
