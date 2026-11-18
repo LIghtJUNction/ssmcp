@@ -98,6 +98,26 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Resume saved local conversation history",
     },
     SlashCommand {
+        name: "/context",
+        description: "Show local context branch, checkpoints and recent history",
+    },
+    SlashCommand {
+        name: "/memory",
+        description: "Show restored local memory and recent context",
+    },
+    SlashCommand {
+        name: "/compact",
+        description: "Save a local extractive checkpoint; no model is invoked",
+    },
+    SlashCommand {
+        name: "/fork",
+        description: "Create and switch to a local context branch: /fork [name]",
+    },
+    SlashCommand {
+        name: "/switch",
+        description: "Switch local context branch: /switch BRANCH_ID",
+    },
+    SlashCommand {
         name: "/pi",
         description: "Inspect or call the installed Pi harness",
     },

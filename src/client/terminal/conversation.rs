@@ -736,6 +736,34 @@ impl State {
         Ok(())
     }
 
+    fn chat_accept_file_paste(
+        &mut self,
+        text: &str,
+        images: Vec<UserImage>,
+    ) -> Result<usize, String> {
+        let mut composer = self.conversation.composer.clone();
+        if !composer.finish_external_paste(text) {
+            return Err("File references do not fit in the draft; the draft was preserved".into());
+        }
+        let mut combined = self.conversation.images.clone();
+        let mut added = 0;
+        for image in images {
+            if !combined.iter().any(|old| old.id == image.id) {
+                combined.push(image);
+                added += 1;
+            }
+        }
+        crate::wire::validate_user_images(&combined)?;
+        if !self.preview {
+            steering::set_draft_with_images(composer.text(), composer.cursor(), combined.clone())?;
+        }
+        self.conversation.composer = composer;
+        self.conversation.images = combined;
+        self.conversation.images_changed = false;
+        self.dirty = true;
+        Ok(added)
+    }
+
     fn chat_start_image(
         &mut self,
         source: attachments::Source,
@@ -824,6 +852,41 @@ impl State {
                 } else {
                     "Clipboard text pasted".into()
                 });
+            }
+            Ok(attachments::Loaded::Files {
+                text,
+                images,
+                mut files,
+            }) => {
+                match self.chat_accept_file_paste(&text, images) {
+                    Ok(added) => {
+                        files.keep();
+                        let bytes = files.entries.iter().map(|file| file.bytes).sum::<u64>();
+                        let names = files
+                            .entries
+                            .iter()
+                            .take(3)
+                            .map(|file| panel::safe_text(&file.name))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        self.notice = Some(format!(
+                            "Imported {} file(s) · {bytes} bytes · {}{}{} · @ references saved in draft",
+                            files.entries.len(),
+                            panel::fit(&names, 64),
+                            if files.entries.len() > 3 { " …" } else { "" },
+                            if added == 0 {
+                                String::new()
+                            } else {
+                                format!(" · {added} image(s)")
+                            },
+                        ));
+                    }
+                    Err(error) => {
+                        self.conversation.composer.cancel_external_paste();
+                        self.notice = Some(error);
+                        // The uncommitted import guard removes only its own copies.
+                    }
+                }
             }
             Ok(attachments::Loaded::Images(images)) => {
                 self.conversation.composer.cancel_external_paste();
@@ -993,6 +1056,25 @@ impl State {
                 }
                 self.chat_questions();
             }
+            "/context" | "/memory" | "/compact" | "/fork" | "/switch" => {
+                if self.preview {
+                    return Err(
+                        "Preview only · local context commands are available in a client workspace"
+                            .into(),
+                    );
+                }
+                let result =
+                    crate::client::context_memory::command(command.trim_start_matches('/'), rest)?;
+                let mut output = format!("\n[CONTEXT] {command}\n");
+                for row in markdown::rows(&result, self.geometry.left, &self.ui) {
+                    let _ = writeln!(output, "{row}");
+                }
+                output.push('\n');
+                self.log(output.as_bytes());
+                self.chat_change_view(View::Activity);
+                self.notice =
+                    Some("Local context · draft, attachments and target preserved".into());
+            }
             "/resume" => {
                 if !rest.is_empty() {
                     return Err("Use /resume to choose a saved conversation".into());
@@ -1153,7 +1235,18 @@ impl State {
         if self.conversation.editing.is_none()
             || matches!(
                 text.split_whitespace().next(),
-                Some("/paste" | "/attach" | "/images" | "/detach" | "/copy")
+                Some(
+                    "/paste"
+                        | "/attach"
+                        | "/images"
+                        | "/detach"
+                        | "/copy"
+                        | "/context"
+                        | "/memory"
+                        | "/compact"
+                        | "/fork"
+                        | "/switch"
+                )
             )
         {
             match self.chat_command(&text) {
@@ -1918,9 +2011,11 @@ impl State {
     fn chat_paste_text(&mut self, text: &str) -> Result<(), String> {
         if self.conversation.view != View::Questions
             && self.conversation.image_task.is_none()
-            && let Some(paths) = attachments::pasted_paths(text)
+            && let Some(source) = attachments::pasted_paths(text)
+                .map(attachments::Source::Paths)
+                .or_else(|| attachments::pasted_file_paths(text).map(attachments::Source::Files))
         {
-            match self.chat_start_image(attachments::Source::Paths(paths), Some(text.to_owned())) {
+            match self.chat_start_image(source, Some(text.to_owned())) {
                 Ok(()) => return Ok(()),
                 Err(error) => {
                     // A failed image load must not eat an ordinary path paste.
@@ -3067,6 +3162,40 @@ mod tests {
     }
 
     #[test]
+    fn local_context_commands_preserve_requirement_and_attachment_drafts() {
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("正在写的需求");
+        state.conversation.composer.left();
+        state.conversation.target = Some("example-reviewer".into());
+        state.conversation.images = vec![test_image("context-draft.png", 32)];
+        let draft = state.chat_saved_draft();
+        state.conversation.parked = Some(draft.clone());
+        for command in [
+            "/context",
+            "/memory",
+            "/compact",
+            "/fork experiment",
+            "/switch branch-1",
+        ] {
+            // Preview must recognize these commands without reading or mutating
+            // the user's on-disk workspace memory.
+            let error = state.chat_command(command).unwrap_err();
+            assert!(error.starts_with("Preview only"), "{command}: {error}");
+            assert_eq!(state.chat_saved_draft(), draft);
+            assert_eq!(state.conversation.parked.as_ref(), Some(&draft));
+            assert!(state.conversation.submitting.is_none());
+            assert!(state.actions.is_empty());
+        }
+        for name in ["/context", "/memory", "/compact", "/fork", "/switch"] {
+            assert!(
+                crate::client::composer::SLASH_COMMANDS
+                    .iter()
+                    .any(|item| item.name == name)
+            );
+        }
+    }
+
+    #[test]
     fn agent_panel_adapts_to_small_screens_and_shows_how_to_return() {
         for rows in [1, 3, 6, 10, 18, 36] {
             for cols in [1, 4, 20, 60, 80, 120, 160] {
@@ -3821,6 +3950,62 @@ mod tests {
         .write_to(&mut bytes, image::ImageFormat::Png)
         .unwrap();
         UserImage::from_bytes(name, "image/png", &bytes.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn imported_file_references_and_images_commit_together_at_the_paste_anchor() {
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("before");
+        state.conversation.composer.begin_external_paste();
+        state.conversation.composer.insert(" after");
+        let image = test_image("imported.png", 24);
+        let text = "\n@\"imports/report with spaces.txt\"\n";
+        assert_eq!(
+            state
+                .chat_accept_file_paste(text, vec![image.clone()])
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            state.conversation.composer.text(),
+            format!("before{text} after")
+        );
+        assert_eq!(
+            state.conversation.composer.cursor(),
+            state.conversation.composer.text().len()
+        );
+        assert_eq!(state.conversation.images, vec![image]);
+    }
+
+    #[test]
+    fn failed_file_pastes_cannot_partially_insert_references_or_images() {
+        let mut state = preview(28, 120);
+        state
+            .conversation
+            .composer
+            .set_text(&"x".repeat(crate::client::composer::MAX_DRAFT_BYTES));
+        state.conversation.images = vec![test_image("original.png", 16)];
+        state.conversation.composer.begin_external_paste();
+        let before = state.chat_saved_draft();
+        assert!(
+            state
+                .chat_accept_file_paste("\n@imports/report.txt\n", vec![test_image("new.png", 32)])
+                .is_err()
+        );
+        assert_eq!(state.chat_saved_draft(), before);
+
+        state.conversation.composer.set_text("small draft");
+        state.conversation.composer.begin_external_paste();
+        let before = state.chat_saved_draft();
+        let images = (0..crate::wire::MAX_USER_IMAGES)
+            .map(|index| test_image(&format!("new-{index}.png"), index as u8 + 32))
+            .collect();
+        assert!(
+            state
+                .chat_accept_file_paste("\n@imports/report.txt\n", images)
+                .is_err()
+        );
+        assert_eq!(state.chat_saved_draft(), before);
     }
 
     #[test]

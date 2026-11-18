@@ -39,7 +39,7 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 默认目标为 `Next caller`，即下一次实际访问本客户端、且仍有授权的 `code_mode` 调用方；也可以在输入框为空或光标位于整份草稿开头时按 ←，从 Agent 面板选择成员。要求只附加到符合目标的响应，不广播给全部成员。
 
-自定义界面刷新 `ssmcp.ui.*`（发送 Agent 消息的 `ssmcp.ui.message` 除外）、查询工具目录，或调用 `capabilities(clientId)` 与 `resources.forClient(clientId)` 的 `list/templates/read` 时，默认不领取这些要求，避免界面轮询抢先消耗队列。后两者对应 `ssmcp.client.capabilities` 和 `ssmcp.resources.list/templates/read` 四个观测原语，原生调用仍记录源码审计。显式通过 `collab.bind` 绑定成员的编排仍可领取符合目标的要求。
+自定义界面刷新 `ssmcp.ui.*`（发送 Agent 消息的 `ssmcp.ui.message`、`ssmcp.ui.present` 除外）、查询工具目录，或调用 `capabilities(clientId)` 与 `resources.forClient(clientId)` 的 `list/templates/read` 时，默认不领取这些要求，避免界面轮询抢先消耗队列。后两者对应 `ssmcp.client.capabilities` 和 `ssmcp.resources.list/templates/read` 四个观测原语，原生调用仍记录源码审计。显式通过 `collab.bind` 绑定成员的编排仍可领取符合目标的要求。
 
 `/queue` 打开队列。内容区中 ↑/↓ 选择记录，Enter 请求取回尚未交付的要求，→ 只读查看详情，← 返回列表，Delete 取消可撤回的待交付项。取回获得服务器确认后，文字与图片一起进入输入框，修改后按 Enter 重新提交同一条要求。输入框与内容区通过 Tab 或 Shift-Tab 切换。 Shift+↑ 可在输入框或内容区直接请求取回最新待交付项；服务器确认前保留当前草稿，已交付内容不能撤回，发送确认或取回正在进行时会提示稍后重试。当前草稿的文字、图片、收件人和光标会一起暂存。取回后尚未修改时按 Esc 可恢复原草稿，取回项仍保留在队列的 Editing 状态；若已修改正文、图片或收件人，Esc 会保留两份内容并提示先完成或取消当前编辑，提交后自动恢复原草稿。
 
@@ -69,7 +69,7 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 ## 图片与剪贴板
 
-在输入框按 Ctrl+V，可粘贴系统剪贴板中的图片或普通文本。如果终端把 Ctrl+V 用作自己的快捷键，输入 `/paste` 可调用同一功能；终端通常的粘贴快捷键仍可粘贴文字。粘贴完整的图片文件路径也会尝试读取图片，支持引号、转义空格和 `file://` URI；`/attach "/path/screenshot.png"` 可显式指定文件。路径不会作为 shell 命令执行。读取或解码失败时显示错误，自动识别路径失败时将原文保留为文字，并注明没有附图。
+在输入框按 Ctrl+V，可粘贴系统剪贴板中的图片或普通文本；Linux 还支持从文件管理器复制的文件列表。如果终端把 Ctrl+V 用作自己的快捷键，输入 `/paste` 可调用同一功能；终端通常的粘贴快捷键仍可粘贴文字。粘贴完整的图片文件路径也会尝试读取图片，支持引号、转义空格和 `file://` URI；`/attach "/path/screenshot.png"` 可显式指定文件。路径不会作为 shell 命令执行。读取或解码失败时显示错误，自动识别路径失败时将原文保留为文字，并注明没有附图。
 
 图片完成载入后显示 `[Image N]`、文件名、实际尺寸、格式与大小。输入框较满时仍显示附件数量，`/images` 可查看完整信息；`/detach N` 移除指定图片，`/detach all` 移除全部图片。读取剪贴板和处理图片在后台进行，可以继续输入文字；Esc 取消尚未完成的操作。载入期间按 Enter 会提示等待，完成后再按 Enter 提交。普通文本会插入调用粘贴时的光标位置，等待期间输入的文字继续保留。
 
@@ -107,6 +107,12 @@ return await say(clientId, {
 
 支持整段粘贴事件的 Unix 终端中，超过 8 KiB 的粘贴会保存到私有的 `.ssmcp/inputs/paste-<随机ID>.txt`，插入带引号的 `@file` 后可继续追加要求。单次最多 4 MiB UTF-8；Windows 可手动保存工作区文件再引用。输入文件不会自动删除，请在确认后续读取结束后自行管理。[完整语法、读取边界与示例](client-input.md)
 
+普通文件粘贴支持 Linux `text/uri-list` 与 GNOME 文件列表。选中的普通文件复制进当前工作区 `.ssmcp/inputs/`，输入框插入带引号的 `@file`；同一次选择中的图片仍以图片附件显示。剪切列表也只执行复制，源文件保持原样。最多 8 个文件，每个 16 MiB、合计 32 MiB；目录、符号链接与网络 URI 会被拒绝。导入在后台进行，全部成功后才更新草稿，失败时保留原草稿并撤销本次临时副本。成功导入的文件供后续 agent 读取，沿用输入文件的保留规则。macOS 与 Windows 的文件管理器列表未覆盖此入口，可继续使用各平台已支持的文字和图片粘贴。
+
+## 上下文与分支记忆
+
+`/context` 查看分支，`/memory` 阅读当前记忆，`/compact` 保存本地摘录检查点，`/fork 名称` 创建并进入分支，`/switch ID` 切回已有分支。重新启动时恢复上次分支；下一次实际原生工具调用把有界记忆附到响应，agent 可以继续读取。压缩方式和来源均明确标记，待交付或定向要求不会进入共享记忆。[完整规则与原生 API](context-memory.md)
+
 ## 用方向键切换 Agent
 
 输入框为空或光标已在整份草稿开头时，按 ← 打开 Agent 面板。输入文字中间的 ← 继续移动光标。面板定位当前收件人，● 标记当前目标，↑/↓ 移动选择；对已登记成员按 Enter 或 → 后，直接返回默认会话页，底部 `To` 标签显示新收件人。Esc 或 ← 关闭面板，保留原收件人、草稿文字、光标和正在编辑的要求。切换目标本身不发送消息，仍需在输入框按 Enter。
@@ -130,6 +136,9 @@ return await say(clientId, {
 | `/copy` | 复制最近一条 agent 消息正文 |
 | `/reload` / `/restart` | 请求重新启动客户端；两个命令等价 |
 | `/queue` | 查看、取回或取消待交付要求 |
+| `/context` / `/memory` | 查看记忆分支 / 当前摘要及来源 |
+| `/compact [摘要]` | 保存本地摘录或自己输入的摘要检查点 |
+| `/fork [名称]` / `/switch ID` | 新建并进入记忆分支 / 切回已有分支 |
 | `/tasks` / `/tasks cancel JOB_ID` | 查看实际本地执行任务；仅显式 `cancel` 才取消指定任务 |
 | `/audit` | 浏览 `code_mode` 源码与调用记录 |
 | `/logs` | 返回活动与日志流 |

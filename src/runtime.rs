@@ -664,16 +664,22 @@ impl Runtime {
         // them again would recursively archive the artifact-read response itself.
         // Context already enforces a 1 MiB response and 256 KiB full-document limit.
         // Keep structured contents available to resources/read instead of spilling them.
-        if matches!(tool.provider, Provider::Context | Provider::Client)
+        let value = if matches!(tool.provider, Provider::Context | Provider::Client)
             || matches!(
                 name.as_str(),
                 "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
-            )
-        {
-            Ok(value)
+            ) {
+            value
         } else {
-            Ok(self.output.guard_result(value))
-        }
+            self.output.guard_result(value)
+        };
+        // Only an actually dispatched, authorized operation reaches this boundary.
+        // Add local history after spill handling so the metadata stays available
+        // even when the original native output is an artifact reference.
+        Ok(attach_context_metadata(
+            value,
+            crate::client::context_memory::snapshot_for_tool(),
+        ))
     }
     pub async fn shutdown(&self) {
         self.registry.close();
@@ -703,10 +709,108 @@ impl Runtime {
     }
 }
 
+/// Preserve every native field, including opaque provider metadata. Memory is
+/// reference data in its own namespace, never a user requirement or tool output.
+fn attach_context_metadata(mut result: Value, context: Option<Value>) -> Value {
+    let Some(mut context) = context else {
+        return result;
+    };
+    if !result.is_object()
+        || result
+            .get("_meta")
+            .is_some_and(|meta| !meta.is_object() || meta.get("ssmcp.context").is_some())
+    {
+        return result;
+    }
+    let base = result.to_string().len();
+    let limit = crate::wire::MAX_FRAME.saturating_sub(8192);
+    if context.to_string().len() > crate::code_mode::MAX_CONTEXT_ENTRY_BYTES
+        || base
+            .saturating_add(context.to_string().len())
+            .saturating_add(64)
+            > limit
+    {
+        context = json!({
+            "workspace":{"id":context["workspace"]["id"]},
+            "revision":context["revision"],
+            "snapshot":{"context_omitted":true,"full_read":"ssmcp.context.read"},
+            "provenance":"Saved local workspace history; omitted at the native result budget. Read ssmcp.context.read for the complete context."
+        });
+        if base
+            .saturating_add(context.to_string().len())
+            .saturating_add(64)
+            > limit
+        {
+            return result;
+        }
+    }
+    let object = result.as_object_mut().expect("object checked");
+    object
+        .entry("_meta")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("metadata checked")
+        .insert("ssmcp.context".into(), context);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn memory_metadata_preserves_native_output_errors_and_vendor_metadata() {
+        let context =
+            json!({"workspace":{"id":"a".repeat(64)},"revision":4,"summary":"earlier work"});
+        for failed in [false, true] {
+            let original = json!({
+                "content":[{"type":"text","text":"stdout"},{"type":"image","mimeType":"image/png","data":"opaque-image"}],
+                "structuredContent":{"exit_code":7},"isError":failed,
+                "_meta":{"vendor/result":{"unchanged":true}}
+            });
+            let mut result = attach_context_metadata(original.clone(), Some(context.clone()));
+            assert_eq!(result["_meta"]["ssmcp.context"], context);
+            result["_meta"]
+                .as_object_mut()
+                .unwrap()
+                .remove("ssmcp.context");
+            assert_eq!(result, original);
+        }
+        for original in [
+            json!({"content":[],"_meta":"opaque"}),
+            json!({"content":[],"_meta":{"ssmcp.context":{"provider":"reserved"}}}),
+            json!(["native-array"]),
+        ] {
+            assert_eq!(
+                attach_context_metadata(original.clone(), Some(context.clone())),
+                original
+            );
+        }
+    }
+
+    #[test]
+    fn native_memory_budget_returns_an_explicit_read_reference_without_changing_output() {
+        let original = json!({"content":[{"type":"text","text":"original"}],"isError":false});
+        let result = attach_context_metadata(
+            original.clone(),
+            Some(json!({
+                "workspace":{"id":"b".repeat(64)},"revision":5,
+                "summary":"x".repeat(crate::code_mode::MAX_CONTEXT_ENTRY_BYTES)
+            })),
+        );
+        assert_eq!(result["content"], original["content"]);
+        assert_eq!(result["isError"], original["isError"]);
+        assert_eq!(
+            result["_meta"]["ssmcp.context"]["snapshot"]["context_omitted"],
+            true
+        );
+        assert_eq!(
+            result["_meta"]["ssmcp.context"]["snapshot"]["full_read"],
+            "ssmcp.context.read"
+        );
+        assert_eq!(result["_meta"]["ssmcp.context"]["revision"], 5);
+    }
 
     fn code_context(code: &str) -> crate::wire::CodeContext {
         crate::wire::CodeContext {

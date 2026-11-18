@@ -73,7 +73,7 @@ impl Context {
         });
         let read = json!({"root":root,"path":path,"max_bytes":{"type":"integer","minimum":1,"maximum":MAX_DOCUMENT_BYTES,"default":MAX_DOCUMENT_BYTES}});
         let target = json!({"root":root,"path":{"type":"string","maxLength":MAX_PATH,"default":".","description":"Existing directory, file, or a not-yet-created file. Only existing ancestors inside the selected root contribute instructions."}});
-        vec![
+        let mut tools = vec![
             tool(
                 "ssmcp.context.roots",
                 "List explicitly granted read-only context roots; this is not a view of all context loaded by a native agent.",
@@ -116,11 +116,19 @@ impl Context {
                 read,
                 &["path"],
             ),
-        ]
+        ];
+        tools.extend(crate::client::context_memory::tools());
+        tools
     }
 
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
         let value = match name {
+            "ssmcp.context.status"
+            | "ssmcp.context.read"
+            | "ssmcp.context.list"
+            | "ssmcp.context.compact"
+            | "ssmcp.context.fork"
+            | "ssmcp.context.switch" => return crate::client::context_memory::call(name, args),
             "ssmcp.context.roots" => {
                 let _: Empty = parse(args)?;
                 json!({"roots":self.roots.iter().map(|root| json!({

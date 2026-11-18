@@ -36,34 +36,41 @@ pub(crate) fn store_at(root: &Path, text: &str) -> Result<String, String> {
 }
 
 #[cfg(unix)]
-fn save(root: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+pub(super) fn open_at(
+    parent: &std::fs::File,
+    name: &std::ffi::CString,
+    flags: i32,
+    mode: libc::mode_t,
+) -> io::Result<std::fs::File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    // SAFETY: the parent fd and NUL-terminated name remain valid for this call.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            mode,
+        )
+    };
+    if fd < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        // SAFETY: openat returned a new owned file descriptor.
+        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    }
+}
+
+/// Shared fd-anchored, private destination for explicit local paste imports.
+#[cfg(unix)]
+pub(super) fn input_directory(root: &Path) -> io::Result<std::fs::File> {
     use std::{
         ffi::CString,
         fs::{File, OpenOptions},
-        io::Write,
         os::{
-            fd::{AsRawFd, FromRawFd},
+            fd::AsRawFd,
             unix::fs::{MetadataExt, OpenOptionsExt},
         },
     };
-
-    fn open_at(parent: &File, name: &CString, flags: i32, mode: libc::mode_t) -> io::Result<File> {
-        // SAFETY: the parent fd and NUL-terminated name remain valid for this call.
-        let fd = unsafe {
-            libc::openat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-                mode,
-            )
-        };
-        if fd < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            // SAFETY: openat returned a new owned file descriptor.
-            Ok(unsafe { File::from_raw_fd(fd) })
-        }
-    }
 
     fn directory(parent: &File, name: &str, private: bool) -> io::Result<File> {
         let component = CString::new(name).expect("fixed directory name");
@@ -106,7 +113,13 @@ fn save(root: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(root)?;
     let state = directory(&root, ".ssmcp", false)?;
-    let inputs = directory(&state, "inputs", true)?;
+    directory(&state, "inputs", true)
+}
+
+#[cfg(unix)]
+fn save(root: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    use std::{ffi::CString, io::Write, os::fd::AsRawFd};
+    let inputs = input_directory(root)?;
     let name = CString::new(name).expect("generated ASCII filename");
     let mut file = open_at(
         &inputs,

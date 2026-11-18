@@ -100,6 +100,8 @@ Agent 发送普通文字使用 `say(clientId,{text,kind:"progress"})`，最终�
 
 [完整界面与图片操作](docs/client-ui.md) · [Intelligence UI 数据格式](docs/intelligence-ui.md)
 
+Linux 可以直接粘贴文件管理器复制的文件，普通文件转为工作区中的 `@file` 引用，截图仍作为图片附件。超长粘贴可转成私有输入文件。`/context`、`/memory`、`/compact`、`/fork` 与 `/switch` 管理本地分支记忆；再次连接后，工具响应自动附上当前记忆与来源。共享记忆排除仍在排队及发给指定 agent 的要求。[上下文与分支记忆](docs/context-memory.md)
+
 ## 终端就是工作会话
 
 客户端采用持续事件流和独立输入框。你可以在工具运行期间补充要求，也可以指定某个已登记的 Agent 接收。
