@@ -258,7 +258,7 @@ const bootstrap = `(() => {
     }
   };
   const browser = freeze(Object.fromEntries(
-    ['discover','status','launch','connect','tabs','open','navigate','snapshot','wait_for','click','fill','key','scroll','evaluate','screenshot','close','disconnect']
+    ['discover','status','launch','connect','tabs','open','navigate','snapshot','wait_for','click','fill','key','scroll','act','wait','evaluate','screenshot','close','disconnect']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.browser.' + name, args)])
   ));
   const computer = freeze(Object.fromEntries(

@@ -67,6 +67,8 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.browser.click",
     "ssmcp.browser.fill",
     "ssmcp.browser.key",
+    "ssmcp.browser.act",
+    "ssmcp.browser.wait",
     "ssmcp.browser.scroll",
     "ssmcp.browser.evaluate",
     "ssmcp.browser.screenshot",

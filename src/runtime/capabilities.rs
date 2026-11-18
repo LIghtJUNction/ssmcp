@@ -164,6 +164,10 @@ fn native_limits() -> Value {
             "input_scope":"isolated desktop by default; explicit desktop:host for shared host input",
             "desktop_coordinates":"read coordinate_space: Linux/macOS logical, Windows physical virtual-desktop pixels; use image_to_desktop mapping",
             "browser_transport":"native Chromium CDP at explicit loopback endpoints; optional installed Playwright MCP in --extension mode",
+            "browser_batch":{"tool":"ssmcp.browser.act","max_actions":16,"deadline_ms":25000,
+                "failure":"stops at first error; reports acknowledged steps; no automatic replay"},
+            "browser_wait":{"tool":"ssmcp.browser.wait","timeout_ms":[1,10000],
+                "states":["visible","hidden","attached","detached"],"includes_target_queue":true},
             "image_max_decoded_bytes":400*1024,
             "image_formats":["image/png","image/jpeg","image/gif","image/webp"],
             "lifetime":"client connection; owned browser processes stop on disconnect; attached browsers remain running"
@@ -447,14 +451,14 @@ Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized back
 For web apps, prefer scoped browser CDP or a discovered Playwright extension provider: page input does not move the system mouse. For native apps, computer.desktop_start(clientId) starts an isolated desktop; use computer.app_launch on that desktop, and desktop_status/desktop_stop to inspect or release it. Native input defaults to the running isolated desktop. Without one, host input requires an explicit desktop: 'host'; read-only host inspection remains available. New operations are also callable through native(clientId).ssmcp.computer after schema discovery.\n\n\
 Use cua.status(clientId) to inspect native desktop capabilities. cua aliases computer and cua.browser aliases browser. computer.screenshot, \
 move/click/drag/key/type/scroll and windows/focus operate the client desktop. Browser control \
-uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/\
+uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/wait_for/\
 evaluate/screenshot/close/disconnect. Neither provider invokes a model. Both convenience \
 namespaces return complete native MCP results; inspect isError and structuredContent. \
 Use image(await computer.screenshot(clientId)) or image(await browser.screenshot(clientId,\
 {target_id})) for visible MCP image content, then return only metadata. Do not print image \
 base64. Use screenshot image_to_desktop mapping for scaled desktop coordinates. Browser \
 element refs come from the current snapshot and expire on navigation or replacement.\n\n\
-For the operator's existing Chrome, first call ssmcp.browser.discover for read-only browser and extension metadata, and ssmcp.harnesses.list for provider readiness. Extension files alone do not prove an active connection. Installed Playwright MCP starts in its native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered. Use browser.wait_for for page text to appear or disappear, and keep snapshot references scoped to their target and generation; opening a target defaults to the background.\n\n\
+For the operator's existing Chrome, first call ssmcp.browser.discover for read-only browser and extension metadata, and ssmcp.harnesses.list for provider readiness. Extension files alone do not prove an active connection. Installed Playwright MCP starts in its native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered. Use browser.wait_for for page text to appear or disappear, and keep snapshot references scoped to their target and generation; opening a target defaults to the background. browser.act holds one target lock for up to 16 ordered actions and an optional final snapshot within 25 seconds; inspect completed_count, phase and failed_index on error before continuing, and do not replay the whole batch. browser.wait polls an observed selector and/or literal text for visible, hidden, attached or detached content with a 1–10000 ms deadline including the target queue.\n\n\
 Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
 command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
 incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \
