@@ -19,6 +19,7 @@ pub(crate) struct Keyboard {
     platform: platform::Keyboard,
     decoder: Decoder,
     events: VecDeque<Event>,
+    escape_deadline: Option<tokio::time::Instant>,
 }
 
 impl Keyboard {
@@ -32,7 +33,18 @@ impl Keyboard {
             platform,
             decoder: Decoder::default(),
             events,
+            escape_deadline: None,
         })
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        self.events.extend(self.decoder.feed(bytes, false));
+        // Actual input progress starts a new inter-byte window. Cancelling next()
+        // or receiving a resize leaves this deadline intact.
+        self.escape_deadline = self
+            .decoder
+            .pending_escape()
+            .then(|| tokio::time::Instant::now() + Duration::from_millis(35));
     }
 
     pub(crate) async fn next(&mut self) -> Result<Event> {
@@ -41,21 +53,30 @@ impl Keyboard {
                 return Ok(event);
             }
             let raw = if self.decoder.pending_escape() {
-                match tokio::time::timeout(Duration::from_millis(35), self.platform.next()).await {
+                // The caller cancels this future when output or a tick wins select!.
+                // Retain the deadline so continuous output cannot postpone Escape.
+                let deadline = *self
+                    .escape_deadline
+                    .get_or_insert_with(|| tokio::time::Instant::now() + Duration::from_millis(35));
+                match tokio::time::timeout_at(deadline, self.platform.next()).await {
                     Ok(result) => Some(result?),
                     Err(_) => None,
                 }
             } else {
+                self.escape_deadline = None;
                 Some(self.platform.next().await?)
             };
             match raw {
-                Some(Raw::Bytes(bytes)) => self.events.extend(self.decoder.feed(&bytes, false)),
+                Some(Raw::Bytes(bytes)) => self.feed(&bytes),
                 Some(Raw::Resize(rows, cols)) => return Ok(Event::Resize(rows, cols)),
                 Some(Raw::End) => {
                     self.events.extend(self.decoder.feed(&[], true));
                     self.events.push_back(Event::End);
                 }
                 None => self.events.extend(self.decoder.flush_escape()),
+            }
+            if !self.decoder.pending_escape() {
+                self.escape_deadline = None;
             }
         }
     }
@@ -188,6 +209,14 @@ mod platform {
         resized: Signal,
     }
     impl Keyboard {
+        #[cfg(test)]
+        pub(super) fn idle() -> Result<Self> {
+            Ok(Self {
+                mode: None,
+                resized: signal(SignalKind::window_change())?,
+            })
+        }
+
         pub(super) fn open() -> Result<Self> {
             let resized = signal(SignalKind::window_change())?;
             // SAFETY: these inspect the borrowed standard descriptor and process group.
@@ -509,6 +538,93 @@ mod tests {
             })
             .collect()
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn escape_deadline_survives_cancelled_keyboard_reads() {
+        use std::{future::Future, task::Poll};
+
+        let mut keyboard = Keyboard {
+            platform: platform::Keyboard::idle().unwrap(),
+            decoder: Decoder::default(),
+            events: VecDeque::new(),
+            escape_deadline: None,
+        };
+        keyboard.feed(b"\x1b");
+        assert!(keyboard.events.is_empty());
+
+        // Poll and drop the actual input future, as select! does whenever output
+        // arrives. A fresh relative timeout would never be ready on any poll.
+        let mut received = None;
+        for _ in 0..20 {
+            let result = {
+                let mut next = std::pin::pin!(keyboard.next());
+                std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx))).await
+            };
+            if let Poll::Ready(event) = result {
+                received = Some(event.unwrap());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(matches!(received, Some(Event::Text(ref value)) if value == "\x1b"));
+        assert!(keyboard.escape_deadline.is_none());
+
+        // A later Escape receives a new waiting window, not an expired deadline.
+        keyboard.feed(b"\x1b");
+        assert!(keyboard.events.is_empty());
+        {
+            let mut next = std::pin::pin!(keyboard.next());
+            assert!(
+                std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn input_progress_and_new_prefixes_get_fresh_escape_windows() {
+        use std::{future::Future, task::Poll};
+
+        let mut keyboard = Keyboard {
+            platform: platform::Keyboard::idle().unwrap(),
+            decoder: Decoder::default(),
+            events: VecDeque::new(),
+            escape_deadline: None,
+        };
+        keyboard.feed(b"\x1b");
+        keyboard.escape_deadline = Some(tokio::time::Instant::now() - Duration::from_secs(1));
+        keyboard.feed(b"[");
+        {
+            let mut next = std::pin::pin!(keyboard.next());
+            assert!(
+                std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+        }
+
+        // Finish one marker and begin another in the same read. The new prefix
+        // must not inherit the completed marker's elapsed waiting window.
+        keyboard.escape_deadline = Some(tokio::time::Instant::now() - Duration::from_secs(1));
+        keyboard.feed(b"200~\x1b");
+        assert!(matches!(keyboard.next().await.unwrap(),
+            Event::Text(value) if value == "\x1b[200~"));
+        {
+            let mut next = std::pin::pin!(keyboard.next());
+            assert!(
+                std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+        }
+        keyboard.feed(b"[201~");
+        assert!(matches!(keyboard.next().await.unwrap(),
+            Event::Text(value) if value == "\x1b[201~"));
+        assert!(keyboard.escape_deadline.is_none());
+    }
+
     #[test]
     fn utf8_is_preserved_at_every_byte_boundary() {
         let source = "中文 λ shell\n";
