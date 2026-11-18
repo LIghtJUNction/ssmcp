@@ -1,0 +1,14 @@
+{
+  "schema": "ssmcp.client-install.v1",
+  "status": "installed",
+  "source_commit": "3c51ad96e4ed6e0edffb932e42414bf009e22f98",
+  "version": "ssmcp 0.9.4",
+  "previous_sha256": "4f3862f9d2c809ce849bfcc63af80deb78ffbcbbdfd4afc6bb11217ca767fd50",
+  "installed_sha256": "16d79b87d92939be94c6854fc9361ca25a68bd3193c8f08fe7b1f0aca726d08d",
+  "backup_verified": true,
+  "atomic_replace": true,
+  "observed_process_count": 46,
+  "all_observed_processes_preserved": true,
+  "running_sessions_restarted": false,
+  "finished_utc": "2026-11-18T19:13:23.361306+00:00"
+}
