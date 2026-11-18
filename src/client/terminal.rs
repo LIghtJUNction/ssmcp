@@ -1190,16 +1190,10 @@ impl State {
         replies
     }
     fn image(&mut self, preview: images::Preview, mime: &str) {
-        let width = usize::from(self.geometry.left.saturating_sub(4).max(1));
-        let height = usize::from(self.geometry.log_rows.saturating_sub(3).max(1));
-        let mut text = format!(
-            "\n[IMAGE] {} × {} · {}\n  Low-resolution thumbnail\n",
+        let text = format!(
+            "\n[IMAGE] {} × {} · {}\n  Image attachment\n\n",
             preview.width, preview.height, mime
         );
-        for row in preview.render(width, height, &self.ui) {
-            let _ = writeln!(text, "  {row}");
-        }
-        text.push('\n');
         self.log(text.as_bytes());
         self.events.attach_image(preview);
     }
