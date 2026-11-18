@@ -18,6 +18,7 @@ use std::{
 use tokio::process::Command;
 
 pub(super) mod login;
+pub(super) mod status;
 
 pub(super) const DEFAULT_SERVER: &str = "https://ssmcp.lmm.best";
 const STORE_LIMIT: usize = 32 * 1024;
