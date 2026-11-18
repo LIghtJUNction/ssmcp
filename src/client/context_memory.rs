@@ -1452,10 +1452,11 @@ mod tests {
         assert_eq!(context["recent"][0]["delivery"]["target"], "next");
         let mut invalid = delivered;
         invalid.active_mut().recent[0].delivery = None;
-        assert!(
+        assert_eq!(
             invalid
                 .validate(&temporary.workspace_path("/fixture/delivery-boundary"))
-                .is_err()
+                .unwrap_err(),
+            "unconfirmed or targeted user text cannot enter shared context memory"
         );
     }
 
@@ -1463,6 +1464,7 @@ mod tests {
     fn recovery_rejects_conflicting_or_duplicate_checkpoint_source_identities() {
         let temporary = Temporary::new();
         let workspace = "/fixture/source-integrity";
+        let workspace_path = temporary.workspace_path(workspace);
         let store = temporary.store(workspace);
         store
             .record(
@@ -1472,9 +1474,7 @@ mod tests {
             .unwrap();
         let mut document = store.compact(None, None).unwrap();
         assert!(
-            document
-                .validate(&temporary.workspace_path(workspace))
-                .is_ok(),
+            document.validate(&workspace_path).is_ok(),
             "same source may appear in checkpoint and recent"
         );
         document.active_mut().checkpoint.as_mut().unwrap().sources[0].sha256 = "0".repeat(64);
@@ -1499,7 +1499,7 @@ mod tests {
         branch.checkpoint.as_mut().unwrap().sources.push(source);
         assert!(
             document
-                .validate(&temporary.workspace_path(workspace))
+                .validate(&workspace_path)
                 .unwrap_err()
                 .contains("duplicate context checkpoint source")
         );

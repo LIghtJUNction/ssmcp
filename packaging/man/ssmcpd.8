@@ -15,6 +15,8 @@ ssmcpd \- GitHub-authorized HTTPS and SSH gateway for local tools
 .PP
 .B ssmcpd attach
 .RB [ \-\-socket " path" ]
+.PP
+.B ssmcpd check-runtime
 .SH DESCRIPTION
 The serve command listens for MCP HTTP requests and authenticated local bridge
 connections. A reverse proxy supplies public HTTPS. GitHub client accounts can
@@ -29,6 +31,15 @@ The attach command is run by OpenSSH as a ForceCommand. It forwards standard inp
 and output to the daemon's Unix socket. The daemon obtains the account identity
 from kernel peer credentials. Client names, hostnames, working directories and
 backend types are discovery metadata, not authentication fields.
+.PP
+The check-runtime command executes a fixed JavaScript program through the
+mandatory Node.js and bubblewrap sandbox. It reads no gateway configuration,
+connects no clients, and rejects all native tool calls. Success prints
+{"code_mode":"ok"} and exits zero. Missing dependencies, an unavailable runner,
+sandbox failures, and unexpected execution results produce a diagnostic on
+standard error and a nonzero exit status. The command accepts no options.
+The packaged systemd service runs this check before starting the gateway,
+under the same service user, environment, and runtime restrictions.
 .PP
 The external MCP tool catalog contains exactly list and code_mode. The native
 capability names for shell, codex, cc, pi and opencode remain accessible inside

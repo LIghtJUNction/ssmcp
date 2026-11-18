@@ -99,6 +99,7 @@ jobs:
       - name: Exercise system Node.js and bubblewrap
         run: |
           cargo test --locked --lib code_mode::tests -- --include-ignored
+          cargo test --locked --test server_runtime -- --include-ignored
           cargo test --locked --test two_tools -- --include-ignored
           cargo test --locked --test workspace_bridge -- --ignored --test-threads=1
           cargo test --locked --test context_helpers -- --ignored --test-threads=1

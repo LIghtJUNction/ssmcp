@@ -49,6 +49,20 @@ sudo useradd --system --gid ssmcp --no-create-home \
 
 守护进程以独立的 `ssmcpd` 用户运行。systemd 创建 `/run/ssmcpd`，权限为 `0750`；控制 socket 使用 `0660` 和 `ssmcp` 组。该组中的账户可以通过 SSH 注册自己的 MCP endpoint。[服务配置](../packaging/ssmcpd.service)
 
+### 验证 JavaScript 执行环境
+
+`ssmcpd check-runtime` 使用已安装的 Node.js、bubblewrap、prlimit 和 JavaScript runner 执行固定检查程序。检查通过真实的 `code_mode` 沙箱与进程通信路径运行；客户端列表为空，所有原生工具调用都被拒绝。它无需网关 TOML、OAuth 凭据或在线客户端，也不连接外部网络。
+
+```sh
+/usr/local/bin/ssmcpd check-runtime
+```
+
+成功时输出 `{"code_mode":"ok"}` 并退出 `0`；依赖缺失、runner 路径错误、沙箱启动失败或执行结果异常时退出非零，并向 stderr 输出具体原因。以 `/usr` 为安装前缀时使用 `/usr/bin/ssmcpd`。
+
+安装的 `ssmcpd.service` 在每次启动前通过 `ExecStartPre` 执行这项检查，沿用服务的用户、环境变量和 systemd 限制；检查失败时网关不会启动。`scripts/deploy_server.py` 的隔离试运行使用相同的执行检查与运行限制，失败时不会生成通过的部署凭据。`/healthz` 继续用于检查 HTTP 进程是否响应。
+
+release 二进制从自身安装前缀查找 `libexec/ssmcp/code-mode.js`。缺少 runner 时，错误会显示预期路径。使用 `make install-server` 安装完整文件，或将 `SSMCP_CODE_MODE_RUNNER` 设为现有 runner 的绝对路径；直接复制 Cargo 构建目录中的二进制不会安装 runner。
+
 <a id="github-oauth"></a>
 
 ### 配置 GitHub OAuth 与 TOML
