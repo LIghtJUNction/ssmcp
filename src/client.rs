@@ -1933,7 +1933,7 @@ async fn connect(
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
     let display_session =
-        match terminal::Session::start(ui, &metadata.cwd, metadata.title.as_deref()) {
+        match terminal::Session::start(ui, &metadata.cwd, metadata.title.as_deref(), Some(&url)) {
             Ok(session) => session,
             Err(error) => {
                 render::status(

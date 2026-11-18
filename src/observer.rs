@@ -866,7 +866,7 @@ pub(crate) mod pty {
     impl Output {
         pub(crate) fn open(lease: &Lease) -> io::Result<(Self, Stdio, Stdio)> {
             let (rows, cols) = lease.dimensions();
-            let size = libc::winsize {
+            let mut size = libc::winsize {
                 ws_row: rows,
                 ws_col: cols,
                 ws_xpixel: 0,
@@ -879,8 +879,8 @@ pub(crate) mod pty {
                     &mut master,
                     &mut slave,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    &size,
+                    std::ptr::null_mut(),
+                    &mut size,
                 )
             } < 0
             {

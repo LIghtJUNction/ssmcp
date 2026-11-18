@@ -106,6 +106,9 @@ impl State {
     }
 
     fn question_finish(&mut self, skip: bool) {
+        if !skip && self.chat_wait_for_input() {
+            return;
+        }
         let pending = queue::pending();
         let id = if self.conversation.detail {
             self.conversation.question_id.clone()

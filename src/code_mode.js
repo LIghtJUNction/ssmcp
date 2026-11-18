@@ -497,7 +497,7 @@ const bootstrap = `(() => {
   const say = (id, message) => workspaceResult(id, 'ssmcp.ui.message',
     typeof message === 'string' ? {text: message} : message);
   const ui = freeze(Object.fromEntries(
-    ['get', 'set', 'action', 'filter', 'message', 'present'].map(name =>
+    ['get', 'set', 'action', 'filter', 'queue', 'message', 'present', 'ask', 'questions', 'history', 'harness'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.ui.' + name, args)])
   ));
   const sessions = freeze(Object.fromEntries(

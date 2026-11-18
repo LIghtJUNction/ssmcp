@@ -20,6 +20,7 @@ pub(crate) enum Source {
     Path(String),
     Files(Vec<PathBuf>),
     Text(String),
+    Image(Vec<u8>),
     Copy(String),
     Handoff(String),
     Context { command: String, arguments: String },
@@ -54,6 +55,13 @@ impl Task {
         });
         Ok(Self { receiver, handle })
     }
+    #[cfg(test)]
+    pub(super) fn pending_for_test() -> (Self, oneshot::Sender<Result<Loaded, String>>) {
+        let (sender, receiver) = oneshot::channel();
+        let handle = tokio::spawn(std::future::pending::<()>());
+        (Self { receiver, handle }, sender)
+    }
+
     pub(super) fn poll(&mut self) -> Option<Result<Loaded, String>> {
         match self.receiver.try_recv() {
             Ok(value) => Some(value),
@@ -77,6 +85,28 @@ pub(super) fn source_argument(text: &str) -> Result<Source, String> {
         return Ok(Source::Files(paths));
     }
     path_argument(text).map(Source::Path)
+}
+
+/// Apply the image budget only after its signature is available. Text keeps
+/// the existing 4 MiB limit; both paths stay bounded while reads are fragmented.
+pub(super) fn paste_limit(bytes: &[u8]) -> usize {
+    if crate::output::image_mime_type(bytes).is_some() {
+        MAX_SOURCE_BYTES
+    } else {
+        super::references::paste::MAX_PASTE_BYTES
+    }
+}
+
+pub(super) fn paste_source(bytes: Vec<u8>) -> Result<Source, String> {
+    if bytes.len() > paste_limit(&bytes) {
+        return Err("Paste exceeds its input limit; save it as a file and use @path".into());
+    }
+    if crate::output::image_mime_type(&bytes).is_some() {
+        return Ok(Source::Image(bytes));
+    }
+    String::from_utf8(bytes)
+        .map(Source::Text)
+        .map_err(|_| "Paste is not UTF-8 text or a supported image; use /attach PATH".into())
 }
 
 /// Parse one explicit path, with quotes/escaped spaces, without shell expansion.
@@ -156,6 +186,15 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
         Source::Path(path) => load_path(workspace, &path).await,
         Source::Files(paths) => load_files(workspace.root().to_path_buf(), paths).await,
         Source::Text(text) => store_text(workspace.root().to_path_buf(), text).await,
+        Source::Image(bytes) => {
+            store_image(
+                workspace.root().to_path_buf(),
+                "pasted-image".into(),
+                String::new(),
+                bytes,
+            )
+            .await
+        }
         Source::Context { command, arguments } => tokio::task::spawn_blocking(move || {
             super::context_memory::command(&command, &arguments).map(Loaded::Context)
         })
@@ -626,6 +665,82 @@ mod tests {
         drop(files);
         assert_eq!(std::fs::read_to_string(&source).unwrap(), text);
         assert_eq!(std::fs::read(&picture).unwrap(), image_bytes);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn binary_paste_stores_original_png_and_reads_native_image_content() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = FileFixture::new();
+        let workspace = Workspace::new(temp.0.clone()).unwrap();
+        let bytes = png(8, 8);
+        let source = paste_source(bytes.clone()).unwrap();
+        let Loaded::Reference { reference, .. } = load(source, &workspace).await.unwrap() else {
+            panic!("binary image must become a private image reference");
+        };
+        let path = reference
+            .strip_prefix("@\"")
+            .unwrap()
+            .strip_suffix('"')
+            .unwrap();
+        assert_eq!(std::fs::read(temp.0.join(path)).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(temp.0.join(path))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let reply = workspace
+            .perform("ssmcp.fs.read_image", json!({"path": path}))
+            .await
+            .unwrap();
+        let block = reply["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|block| block["type"] == "image")
+            .unwrap();
+        assert_eq!(block["mimeType"], "image/png");
+        assert_eq!(
+            STANDARD.decode(block["data"].as_str().unwrap()).unwrap(),
+            bytes
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn malformed_binary_paste_creates_no_private_image() {
+        let temp = FileFixture::new();
+        let workspace = Workspace::new(temp.0.clone()).unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\ninvalid".to_vec();
+        assert!(
+            load(paste_source(bytes).unwrap(), &workspace)
+                .await
+                .is_err()
+        );
+        assert!(!temp.0.join(".ssmcp").exists());
+    }
+
+    #[test]
+    fn paste_classification_preserves_text_and_rejects_unknown_binary_or_overflow() {
+        let text = "原稿\n/paste\t保持";
+        assert!(matches!(
+            paste_source(text.as_bytes().to_vec()).unwrap(),
+            Source::Text(value) if value == text
+        ));
+        assert!(paste_source(vec![0xff, 0x00, 0x03]).is_err());
+        assert!(
+            paste_source(vec![
+                b'x';
+                super::super::references::paste::MAX_PASTE_BYTES + 1
+            ])
+            .is_err()
+        );
+        let mut image = vec![0; MAX_SOURCE_BYTES + 1];
+        image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        assert!(paste_source(image).is_err());
     }
 
     #[cfg(unix)]

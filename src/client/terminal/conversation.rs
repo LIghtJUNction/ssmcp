@@ -165,7 +165,7 @@ impl State {
         self.conversation.target = draft.target;
     }
 
-    fn chat_data(&self) -> Value {
+    pub(super) fn chat_data(&self) -> Value {
         if self.preview {
             json!({"connected":false,"supported":true,"preview":true,
                 "agents":[
@@ -450,7 +450,20 @@ impl State {
             }
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
-            "/logs" => self.chat_change_view(View::Activity),
+            "/logs" => {
+                self.raw_logs = false;
+                self.chat_change_view(View::Activity);
+            }
+            "/raw" => {
+                if !rest.is_empty() {
+                    return Err(
+                        "Use /raw without arguments to toggle the original transcript".into(),
+                    );
+                }
+                self.raw_logs = !self.raw_logs;
+                self.chat_change_view(View::Activity);
+            }
+            "/questions" => self.chat_questions(),
             "/sidebar" => self.actions.push("sidebar.toggle"),
             "/theme" => {
                 if rest.is_empty() {
@@ -543,7 +556,19 @@ impl State {
                 .menu_visible(self.geometry.left, prompt_rows(self.geometry.rows))
     }
 
+    fn chat_wait_for_input(&mut self) -> bool {
+        if self.conversation.input_task.is_none() {
+            return false;
+        }
+        self.notice = Some("Preparing local input… · wait for it to finish before sending".into());
+        self.dirty = true;
+        true
+    }
+
     fn chat_submit(&mut self) {
+        if self.chat_wait_for_input() {
+            return;
+        }
         self.chat_refresh_completions();
         if self.conversation.composer.completion_loading() {
             self.notice = Some("Loading reference suggestions · your draft is preserved".into());
@@ -685,8 +710,8 @@ impl State {
             }
             View::History => self.chat_resume_selected(),
             View::Activity => {
-                if !self.log_query.is_empty() || self.log_level != 0 {
-                    self.notice = Some("Clear the log filter to expand individual events".into());
+                if self.raw_logs {
+                    self.notice = Some("Raw transcript · /logs returns to tool details".into());
                     return;
                 }
                 if edit {
@@ -747,6 +772,10 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        if matches!(key, Key::Interrupt) {
+            request_interrupt();
+            return;
+        }
         self.chat_refresh_completions();
         if matches!(key, Key::Select) || (self.selection && matches!(key, Key::Escape)) {
             self.selection = !self.selection;
@@ -847,18 +876,12 @@ impl State {
                 self.chat_change_view(View::Activity);
             }
             Key::AuditUp
-                if content
-                    && self.conversation.view == View::Activity
-                    && self.log_query.is_empty()
-                    && self.log_level == 0 =>
+                if content && self.conversation.view == View::Activity && !self.raw_logs =>
             {
                 self.events.select(-1)
             }
             Key::AuditDown
-                if content
-                    && self.conversation.view == View::Activity
-                    && self.log_query.is_empty()
-                    && self.log_level == 0 =>
+                if content && self.conversation.view == View::Activity && !self.raw_logs =>
             {
                 self.events.select(1)
             }
@@ -917,8 +940,8 @@ impl State {
                 self.chat_escape();
             }
             Key::Back if self.conversation.view == View::Activity && content => {
-                if !self.log_query.is_empty() || self.log_level != 0 {
-                    self.notice = Some("Clear the log filter to fold individual events".into());
+                if self.raw_logs {
+                    self.notice = Some("Raw transcript · /logs returns to tool details".into());
                 } else if !self.events.back() {
                     self.chat_agents();
                 }
@@ -971,8 +994,8 @@ impl State {
                 } else {
                     self.conversation.content_focus = true;
                     if self.conversation.view == View::Activity
-                        && self.log_query.is_empty()
-                        && self.log_level == 0
+                        && !self.raw_logs
+                        && !self.events.is_empty()
                     {
                         if let Some(row) = y.checked_sub(body_top(self.geometry.rows))
                             && self.events.mouse_select(row)
@@ -1465,13 +1488,15 @@ impl State {
                 let result = if self.selection {
                     Err("Leave copy mode before pasting".into())
                 } else if self.conversation.paste_overflow {
-                    Err("Paste exceeds 4 MiB; save it as a file and use @path".into())
+                    Err(format!(
+                        "Paste exceeds {} MiB; save it as a file and use @path",
+                        attachments::paste_limit(&paste) / (1024 * 1024)
+                    ))
                 } else {
-                    match std::str::from_utf8(&paste) {
-                        Ok(text) => self.chat_paste_text(text),
-                        Err(_) => {
-                            Err("Paste is not UTF-8 text; save it as a file and use @path".into())
-                        }
+                    match attachments::paste_source(paste) {
+                        Ok(attachments::Source::Text(text)) => self.chat_paste_text(&text),
+                        Ok(source) => self.chat_start_input(source, false),
+                        Err(error) => Err(error),
                     }
                 };
                 if let Err(error) = result {
@@ -1482,7 +1507,7 @@ impl State {
             return;
         }
         if let Some(paste) = &mut self.conversation.paste {
-            if paste.len().saturating_add(output.len()) <= references::paste::MAX_PASTE_BYTES {
+            if paste.len().saturating_add(output.len()) <= attachments::paste_limit(paste) {
                 paste.extend_from_slice(output);
             } else {
                 self.conversation.paste_overflow = true;
@@ -1539,13 +1564,12 @@ impl State {
 
     fn chat_line(&self, text: &str, tone: PanelTone, width: u16) -> String {
         let plain = fit(text, width);
-        self.tone(
-            tone,
-            &format!(
-                "{plain}{}",
-                " ".repeat(usize::from(width).saturating_sub(plain.width()))
-            ),
-        )
+        let row = ztui::Row::measured(&plain, |text| text.width());
+        let mut padded =
+            String::with_capacity(plain.len() + usize::from(width).saturating_sub(row.columns()));
+        row.write_padded(&mut padded, width)
+            .expect("fit bounds the row and writing into String cannot fail");
+        self.tone(tone, &padded)
     }
 
     fn chat_list_window(&mut self, count: usize, height: u16) -> std::ops::Range<usize> {
@@ -1893,6 +1917,31 @@ impl State {
         (index < self.conversation.list_count).then_some(self.conversation.list_start + index)
     }
 
+    fn chat_scroll_hint(&self) -> Option<String> {
+        if self.help || self.conversation.view != View::Activity {
+            return None;
+        }
+        if self.raw_logs || self.events.is_empty() {
+            let below = if self.log_query.is_empty() && self.log_level == 0 {
+                self.logs.screen().scrollback()
+            } else {
+                self.filter_offset
+            };
+            return (below > 0)
+                .then(|| format!("↓ {below} rows below · Ctrl+End to return to latest"));
+        }
+        let below = self.events.rows_below();
+        if below > 0 {
+            Some(format!(
+                "↓ {below} rows below · Ctrl+End to return to latest"
+            ))
+        } else if !self.events.is_following() {
+            Some("Paused · Ctrl+End to follow new activity".into())
+        } else {
+            None
+        }
+    }
+
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.chat_updates();
         self.chat_refresh_completions();
@@ -1900,6 +1949,7 @@ impl State {
         let data = self.chat_data();
         let agents = items(&data, "agents");
         let observed = self.audit.observed_controllers();
+        let grouped_callers = self.caller_tracker.groups(&observed, &data);
         let queue = items(&data, "queue");
         let pending = queue
             .iter()
@@ -1908,16 +1958,19 @@ impl State {
         let top = body_top(g.rows);
         let height = body_rows(g.rows);
         let mut body = match self.conversation.view {
-            View::Activity => self.filtered_logs().unwrap_or_else(|| {
-                if self.events.is_empty() {
-                    (0..height)
-                        .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
-                        .collect()
+            View::Activity => {
+                if self.raw_logs || self.events.is_empty() {
+                    self.filtered_logs().unwrap_or_else(|| {
+                        (0..height)
+                            .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
+                            .collect()
+                    })
                 } else {
+                    self.events.filter(&self.log_query, self.log_level);
                     self.events
                         .render(g.left, height, &self.ui, self.conversation.content_focus)
                 }
-            }),
+            }
             View::History => self.chat_history_rows(height),
             View::Questions => self.question_rows(height),
             View::Audit => self.audit.render(g.left, height, &self.ui),
@@ -1987,7 +2040,13 @@ impl State {
                 } else {
                     "connected"
                 };
-                let hint = self.notice.clone().unwrap_or_else(|| {
+                let scroll_hint = self.chat_scroll_hint();
+                let hint_tone = if scroll_hint.is_some() {
+                    PanelTone::Accent
+                } else {
+                    PanelTone::Muted
+                };
+                let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::History {
                         return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
@@ -2007,6 +2066,11 @@ impl State {
                             "↑↓ select · Enter/→ choose · Esc back · ● current recipient".into()
                         };
                     }
+                    if let Some(guide) = self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18) {
+                        let link = format!("{status} · {}", guide.url());
+                        return if link.width() < usize::from(g.cols) { link }
+                            else { "F1 · full online guide link".into() };
+                    }
                     format!(
                         "{} · {status} · {} members / {} calls · {pending} queued · ← agents · /help",
                         if self.conversation.content_focus {
@@ -2018,7 +2082,7 @@ impl State {
                         observed.len()
                     )
                 });
-                rows.push(self.chat_line(&format!(" {hint}"), PanelTone::Muted, g.cols));
+                rows.push(self.chat_line(&format!(" {hint}"), hint_tone, g.cols));
                 continue;
             } else if top > 0 && index == 0 {
                 let suffix = if !self.log_query.is_empty() || self.log_level != 0 {
@@ -2033,7 +2097,11 @@ impl State {
                 self.chat_line(
                     &format!(
                         "  ssmcp  /  {}{}{suffix}",
-                        self.conversation.view.name(),
+                        if self.conversation.view == View::Activity && self.raw_logs {
+                            "raw transcript"
+                        } else {
+                            self.conversation.view.name()
+                        },
                         self.context_label,
                     ),
                     PanelTone::Heading,
@@ -2073,6 +2141,8 @@ impl State {
         );
         if let Some(rect) = layout.sidebar {
             let limit = usize::from(g.rows.saturating_sub(1));
+            let footer = self.guide_rows(rect.width, limit as u16);
+            let footer_start = limit.saturating_sub(footer.len());
             let mut sidebar = Vec::new();
             for kind in &self.ui.panels {
                 let mut section = match kind {
@@ -2087,23 +2157,26 @@ impl State {
                                 PanelTone::Muted,
                             ));
                         }
-                        if !observed.is_empty() {
+                        if !grouped_callers.is_empty() {
                             section.push((
-                                format!(" Observed calls · {}", observed.len()),
+                                format!(" Observed callers · {}", grouped_callers.len()),
                                 PanelTone::Heading,
                             ));
-                            for controller in observed.iter().take(3) {
-                                section.push((
-                                    format!(" ↳ {}", field(controller, "name")),
-                                    PanelTone::Accent,
-                                ));
+                            for controller in grouped_callers.iter().take(3) {
+                                let tone = if controller.running > 0 {
+                                    PanelTone::Accent
+                                } else if controller.unknown {
+                                    PanelTone::Warning
+                                } else {
+                                    PanelTone::Muted
+                                };
+                                section.push((format!(" ↳ {}", controller.name), tone));
                                 section.push((
                                     format!(
-                                        "   {} · {}",
-                                        field(controller, "model"),
-                                        field(controller, "status")
+                                        "   {} · {} calls · {}",
+                                        controller.model, controller.calls, controller.status
                                     ),
-                                    PanelTone::Muted,
+                                    tone,
                                 ));
                             }
                         }
@@ -2146,12 +2219,16 @@ impl State {
                 }
             }
             for (index, line) in rows.iter_mut().enumerate().take(limit) {
-                let (text, tone) = sidebar
-                    .get(index)
-                    .cloned()
-                    .unwrap_or((String::new(), PanelTone::Normal));
                 line.push_str(&self.tone(PanelTone::Muted, "│"));
-                line.push_str(&self.chat_line(&text, tone, rect.width));
+                if index >= footer_start {
+                    line.push_str(&footer[index - footer_start]);
+                } else {
+                    let (text, tone) = sidebar
+                        .get(index)
+                        .cloned()
+                        .unwrap_or((String::new(), PanelTone::Normal));
+                    line.push_str(&self.chat_line(&text, tone, rect.width));
+                }
             }
         }
         let cursor = (
@@ -2833,6 +2910,33 @@ mod tests {
     }
 
     #[test]
+    fn binary_bracketed_paste_preserves_every_byte_across_read_boundaries() {
+        let png = b"\x89PNG\r\n\x1a\n\x00\x03\x11\x13\xff\x1b[18~";
+        let mut bytes = b"\x1b[200~".to_vec();
+        bytes.extend_from_slice(png);
+        for chunk in 1..=bytes.len() {
+            let mut state = preview(28, 120);
+            state.conversation.composer.set_text("保留原稿");
+            for part in bytes.chunks(chunk) {
+                input(&mut state, part);
+            }
+            assert_eq!(state.conversation.paste.as_deref(), Some(png.as_slice()));
+            assert_eq!(state.conversation.composer.text(), "保留原稿");
+            input(&mut state, b"\x1b[201~");
+            assert!(state.conversation.paste.is_none());
+            assert_eq!(state.conversation.composer.text(), "保留原稿");
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("Preview cannot"),
+                "recognized images must reach the guarded import path before UTF-8 decoding"
+            );
+        }
+    }
+
+    #[test]
     fn coalesced_utf8_navigation_and_multiline_paste_keep_input_local() {
         let mut state = preview(36, 120);
         input(&mut state, "修复界面".as_bytes());
@@ -3058,12 +3162,15 @@ mod tests {
         input(&mut state, b"/filter cargo test --lib\r");
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("cargo test --lib"));
+        assert!(!screen.contains("A quieter workspace"));
+        state.events.open();
+        let screen = display(&mut state).screen().contents();
         assert!(screen.contains("exit=0"));
         assert!(screen.contains("custom_colors ... ok"));
         assert!(!screen.contains("A quieter workspace"));
         assert!(
-            !screen.contains("[RUN]"),
-            "conversation presentation uses quiet headings"
+            screen.contains("[RUN]"),
+            "filtered activity keeps the same semantic command heading"
         );
     }
     #[test]
@@ -3123,6 +3230,98 @@ mod tests {
         state.chat_move(1);
         assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
     }
+    #[tokio::test]
+    async fn enter_waits_for_input_without_changing_draft_recipient_or_edit_revision() {
+        for editing in [None, Some("editable-request".to_owned())] {
+            let mut state = preview(24, 100);
+            state.conversation.composer.set_text("说明：请检查界");
+            state.conversation.composer.left();
+            state.conversation.target = Some("chosen-agent".into());
+            state.conversation.editing = editing.clone();
+            let stamp = state.chat_input_stamp().unwrap();
+            let (task, sender) = attachments::Task::pending_for_test();
+            state.conversation.input_task = Some(task);
+            state.conversation.input_stamp = Some(stamp.clone());
+            state.dirty = false;
+
+            input(&mut state, b"\r");
+
+            assert_eq!(state.chat_input_stamp().as_ref(), Some(&stamp));
+            assert!(state.conversation.submitting.is_none());
+            assert!(state.actions.is_empty());
+            assert!(state.dirty);
+            assert_eq!(
+                state.notice.as_deref(),
+                Some("Preparing local input… · wait for it to finish before sending")
+            );
+            assert!(state.conversation.input_task.is_some());
+
+            sender
+                .send(Ok(attachments::Loaded::Reference {
+                    reference: "@\".ssmcp/inputs/image-fixture.png\"".into(),
+                    description: "Prepared local image".into(),
+                }))
+                .unwrap();
+            state.chat_poll_input();
+            assert_eq!(
+                state.conversation.composer.text(),
+                "说明：请检查\n@\".ssmcp/inputs/image-fixture.png\"\n界"
+            );
+            assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+            assert_eq!(state.conversation.editing, editing);
+            assert!(state.conversation.submitting.is_none());
+            assert!(!state.chat_wait_for_input());
+        }
+    }
+
+    #[tokio::test]
+    async fn enter_waits_for_attachment_before_submitting_a_question_answer() {
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("保留普通草稿");
+        state.conversation.view = View::Questions;
+        state.conversation.detail = true;
+        state.conversation.question_id = Some("pending-image-question".into());
+        let mut answer = Composer::default();
+        answer.set_text("回答界");
+        answer.left();
+        state
+            .conversation
+            .answers
+            .insert("pending-image-question".into(), answer);
+        let stamp = state.chat_input_stamp().unwrap();
+        let (task, sender) = attachments::Task::pending_for_test();
+        state.conversation.input_task = Some(task);
+        state.conversation.input_stamp = Some(stamp.clone());
+
+        input(&mut state, b"\r");
+
+        assert_eq!(state.chat_input_stamp().as_ref(), Some(&stamp));
+        assert_eq!(state.conversation.composer.text(), "保留普通草稿");
+        assert_eq!(
+            state.notice.as_deref(),
+            Some("Preparing local input… · wait for it to finish before sending")
+        );
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+        sender
+            .send(Ok(attachments::Loaded::Reference {
+                reference: "@\".ssmcp/inputs/answer-fixture.png\"".into(),
+                description: "Prepared answer image".into(),
+            }))
+            .unwrap();
+        state.chat_poll_input();
+        assert_eq!(
+            state.question_editor().unwrap().text(),
+            "回答\n@\".ssmcp/inputs/answer-fixture.png\"\n界"
+        );
+        assert_eq!(state.conversation.composer.text(), "保留普通草稿");
+        assert_eq!(
+            state.conversation.question_id.as_deref(),
+            Some("pending-image-question")
+        );
+        assert!(!state.chat_wait_for_input());
+    }
+
     #[test]
     fn async_local_reference_stays_editable_and_keeps_recipient() {
         let mut state = preview(24, 100);
@@ -3238,5 +3437,72 @@ mod tests {
             Err("File not found".into()),
         );
         assert_eq!(state.conversation.composer.text(), "新的要求");
+    }
+    #[test]
+    fn scrolling_shows_return_hint_and_control_end_preserves_the_draft() {
+        for end in [b"\x1b[1;5F".as_slice(), b"\x1b[4;5~", b"\x1b[8;5~"] {
+            let mut state = preview(30, 120);
+            state.conversation.composer.set_text("keep this draft");
+            for index in 0..80 {
+                state.log(format!("\n[INFO] retained event {index}\n").as_bytes());
+            }
+            display(&mut state);
+            input(&mut state, b"\x1b[1;5H");
+            let scrolled = display(&mut state);
+            assert!(scrolled.screen().contents().contains("Ctrl+End"));
+            assert!(state.events.rows_below() > 0);
+            input(&mut state, end);
+            display(&mut state);
+            assert!(state.events.is_following());
+            assert_eq!(state.events.rows_below(), 0);
+            assert!(state.chat_scroll_hint().is_none());
+            assert_eq!(state.conversation.composer.text(), "keep this draft");
+        }
+    }
+
+    #[test]
+    fn explicit_diagnostics_open_original_output_and_allow_compact_navigation() {
+        for ui in [
+            Ui {
+                log_format: super::super::LogFormat::PrettyVerbose,
+                ..Ui::default()
+            },
+            Ui {
+                show_raw_json: true,
+                ..Ui::default()
+            },
+        ] {
+            let mut state = super::super::preview_state(40, 120, &ui);
+            let original = display(&mut state).screen().contents();
+            assert!(original.contains("raw transcript"));
+            assert!(original.contains("Command completed successfully."));
+            state.chat_command("/logs").unwrap();
+            assert!(
+                !display(&mut state)
+                    .screen()
+                    .contents()
+                    .contains("raw transcript")
+            );
+        }
+    }
+
+    #[test]
+    fn raw_transcript_toggle_keeps_draft_and_returns_to_compact_activity() {
+        let mut state = preview(30, 120);
+        state.conversation.composer.set_text("unsent request");
+        assert!(state.chat_command("/raw").unwrap());
+        assert!(state.raw_logs);
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("raw transcript")
+        );
+        assert_eq!(state.conversation.composer.text(), "unsent request");
+        assert!(state.chat_command("/raw unexpected").is_err());
+        assert!(state.raw_logs);
+        assert!(state.chat_command("/logs").unwrap());
+        assert!(!state.raw_logs);
+        assert_eq!(state.conversation.composer.text(), "unsent request");
     }
 }

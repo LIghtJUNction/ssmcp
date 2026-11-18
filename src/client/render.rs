@@ -15,6 +15,7 @@ mod command_process_tests;
 #[cfg(test)]
 #[path = "readable_log_fixture.rs"]
 mod readable_log_fixture;
+pub(crate) use activity::CallerTracker;
 use activity::{Activities, key as activity_key, short_id};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -272,7 +273,7 @@ pub(crate) fn event(label: &str, value: &Value) {
             .dashboard_active
             .then(|| renderer.panel_snapshot(Instant::now()))
     };
-    publish(&bytes, snapshot);
+    publish_event(label, value, &bytes, snapshot);
 }
 
 /// Held by the individual native request, including while it awaits I/O.
@@ -327,6 +328,17 @@ pub(super) fn set_git_status(snapshot: Arc<GitSnapshot>) {
     };
     if let Some(panel) = panel {
         super::terminal::set_panel(panel);
+    }
+}
+
+fn publish_event(label: &str, value: &Value, bytes: &[u8], snapshot: Option<PanelSnapshot>) {
+    if !super::terminal::log_event(label, value, bytes) && !bytes.is_empty() {
+        let mut out = io::stderr().lock();
+        let _ = out.write_all(bytes);
+        let _ = out.flush();
+    }
+    if let Some(snapshot) = snapshot {
+        super::terminal::set_panel(snapshot);
     }
 }
 
