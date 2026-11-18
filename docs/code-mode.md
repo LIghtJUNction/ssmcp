@@ -120,6 +120,16 @@ Use say(clientId,{text,kind:'progress'}) for human progress and kind:'answer' fo
 
 The UI helpers are get, set, action, filter, queue, message, present, ask, questions, history and harness. Discover their registered schemas on the selected client. /copy copies the latest agent message.
 
+`history.list(clientId, {limit, offset})`, `history.metadata(clientId, {id})`,
+`history.read(clientId, {id, limit, offset})` and
+`history.search(clientId, {query, id?, role?, case_sensitive?, limit?, offset?})`
+provide direct access to the same native conversation store. Search uses literal
+text, returns source IDs and message positions, and defaults to case-insensitive
+matching. Follow `next_offset`; `scan_truncated` reports a bounded scan. These
+helpers require a client with the corresponding `ssmcp.ui.history` actions. The
+generic `ui.history` and `call` routes remain available. See
+[conversation history](conversation-history.md) for metadata and search fields.
+
 The wire-v7 text queue keeps editable @references. Local /paste and /attach import images or files into private workspace inputs and insert references in the draft. Preserve those reference tokens when editing or queuing text; use the discovered ssmcp.fs.read_image tool to retrieve an image as native MCP image content.
 
 ### Requirements and context
