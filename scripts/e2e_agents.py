@@ -250,8 +250,8 @@ def catalog(harness, mode, label):
                       for row in diagnostics if row["provider"] not in expected),
                   f"{mode}: unrelated providers remain unprobed after explicit loading")
     status, value, _ = harness.rpc("tools/list", modern=True)
-    harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode"],
-                  f"{mode}: public MCP catalog contains exactly list and code_mode")
+    harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
+                  f"{mode}: public MCP catalog contains exactly list, code_mode, collab and invite")
     inventory = harness.public_call("list")
     harness.check(len(inventory["clients"]) == 1
                   and inventory["clients"][0]["id"] == harness.client_id
@@ -426,7 +426,16 @@ def check_cc(harness, label, tools, directory):
                   "cc: native schema, annotations and vendor catalog fields are unchanged")
     arguments = {"nested": [3, 5, 8], "spawn_child": True}
     result = full_call(harness, "claude.NativeFutureTool", arguments)
-    harness.check(result == {
+    context = result.get("_meta", {}).get("ssmcp.context")
+    workspace = context.get("workspace") if isinstance(context, dict) else None
+    harness.check(isinstance(context, dict) and context.get("schema_version") == 1
+                   and type(context.get("revision")) is int and context["revision"] >= 1
+                   and isinstance(workspace, dict) and workspace.get("path") == str(directory.resolve())
+                   and isinstance(workspace.get("id"), str) and re.fullmatch(r"[0-9a-f]{64}", workspace["id"]),
+                   "cc: the native result includes versioned context for this fixture workspace")
+    native_result = {**result, "_meta": dict(result["_meta"])}
+    del native_result["_meta"]["ssmcp.context"]
+    harness.check(native_result == {
         "content": [
             {"type": "text", "text": "native result"},
             {"type": "image", "mimeType": "image/png", "data": "AAEC"},
