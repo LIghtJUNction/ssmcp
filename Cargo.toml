@@ -72,6 +72,7 @@ include = [
     "/scripts/e2e_input_history.py",
     "/scripts/e2e_presentations.py",
     "/scripts/e2e_context_memory.py",
+    "/scripts/e2e_file_paste.py",
     "/docs/reports/client-experience-20261118/**",
     "/docs/reports/client-experience-0.8.0-20261118/**",
     "/docs/validation-client-accounts.md",
