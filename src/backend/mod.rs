@@ -136,6 +136,7 @@ impl Backend {
             terminal_tools().as_array().unwrap().clone(),
         )?;
         registry.replace(Provider::Exec, shell::Shell::tools())?;
+        registry.replace(Provider::Ui, crate::client::interface::tools())?;
         registry.replace(Provider::Harnesses,vec![json!({
             "name":"ssmcp.harnesses.list",
             "description":"Inspect actual discovery status, installed version, protocol scope and diagnostics for each native provider. A ready RPC bridge does not imply enumerable model tools.",
@@ -352,6 +353,11 @@ impl Backend {
     pub async fn dispatch(&self, tool: &RegisteredTool, arguments: Value) -> Result<Value, String> {
         self.registry.validate(tool)?;
         match tool.provider {
+            Provider::Ui => {
+                crate::client::interface::call(&tool.native_name, arguments, &self.terminal)
+                    .await
+                    .map(result)
+            }
             Provider::Terminal => self
                 .terminal
                 .call(&tool.native_name, arguments)

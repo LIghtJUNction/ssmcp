@@ -1,9 +1,10 @@
-//! Compose independent log/PTY VT screens with an observational sidebar.
+//! Compose logs and source audit with a configurable observational sidebar.
 //! Only this module writes the physical terminal while a Session is active.
 use super::{
+    audit_view::AuditView,
     panel::{self, PanelLayout, PanelSnapshot, PanelTone},
     render::LogFormat,
-    ui::Ui,
+    ui::{Layout, Ui},
 };
 use std::{
     collections::BTreeMap,
@@ -19,14 +20,16 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod conversation;
+
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
 const MAX_SESSIONS: usize = 16;
 // Rendered cells cost much more than UTF-8 output. Keep a short interactive
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
-const ENTER: &[u8] = b"\x1b[?1;6;25;66;2004s\x1b[?1049h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
-const LEAVE: &[u8] = b"\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[?1;6;25;66;2004r";
+const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
+const LEAVE: &[u8] = b"\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
 fn nonzero(value: u16) -> NonZeroU16 {
@@ -189,7 +192,9 @@ pub(crate) fn close_session(id: &str) {
 pub(super) fn set_panel(snapshot: PanelSnapshot) {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.panel = snapshot;
+        if !state.preview {
+            state.panel = snapshot;
+        }
         state.dirty = true;
     }
 }
@@ -207,6 +212,167 @@ pub(crate) fn physical_resize(rows: u16, cols: u16) -> (u16, u16) {
         return (state.geometry.pty_rows, state.geometry.left);
     }
     (rows, cols)
+}
+
+/// Apply visual settings without restarting the connection or losing VT history.
+pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
+    let shared = shared()?;
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.ui = ui.clone();
+    state.ui.color &= std::env::var_os("NO_COLOR").is_none();
+    let (rows, cols) = (state.geometry.rows, state.geometry.cols);
+    state.resize(rows, cols);
+    state.keyboard.logs = ui.layout == Layout::Logs;
+    state.notice = None;
+    state.dirty = true;
+    Some((state.geometry.pty_rows, state.geometry.left))
+}
+
+pub(crate) fn audit(value: &serde_json::Value) {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.audit.ingest(value) {
+            state.dirty = true;
+        }
+    }
+}
+
+pub(crate) fn filter_logs(text: Option<&str>, level: Option<&str>) -> Result<(), String> {
+    if text.is_some_and(|text| text.len() > 256 || text.chars().any(char::is_control)) {
+        return Err("log filter must contain at most 256 bytes of plain text".into());
+    }
+    let level = match level {
+        None => None,
+        Some("all") => Some(0),
+        Some("commands") => Some(1),
+        Some("errors") => Some(2),
+        _ => return Err("log level must be all, commands, or errors".into()),
+    };
+    let shared = shared()
+        .ok_or("built-in display is inactive; filter ssmcp.audit.events in your frontend")?;
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(text) = text {
+        state.log_query = text.into();
+    }
+    if let Some(level) = level {
+        state.log_level = level;
+    }
+    state.filter_offset = 0;
+    state.notice = None;
+    state.dirty = true;
+    Ok(())
+}
+
+pub(crate) fn browse(action: &str) -> Result<(), String> {
+    let shared = shared().ok_or("built-in display is inactive")?;
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    let page = isize::try_from(state.geometry.log_rows.saturating_sub(1).max(1)).unwrap_or(1);
+    if state.ui.layout == Layout::Chat {
+        if action.starts_with("audit.") {
+            state.conversation.view = conversation::View::Audit;
+            state.conversation.content_focus = true;
+        } else if action.starts_with("logs.") {
+            state.conversation.view = conversation::View::Activity;
+        }
+    }
+    match action {
+        "audit.up" => state.audit.up(),
+        "audit.down" => state.audit.down(),
+        "audit.open" => state.audit.open(),
+        "audit.back" => state.audit.back(),
+        "logs.page-up" => state.scroll_logs(page),
+        "logs.page-down" => state.scroll_logs(-page),
+        "logs.end" => state.scroll_logs(isize::MIN),
+        _ => return Err("unknown display browsing action".into()),
+    }
+    state.dirty = true;
+    Ok(())
+}
+
+pub(crate) fn take_actions() -> Vec<&'static str> {
+    let Some(shared) = shared() else {
+        return Vec::new();
+    };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    std::mem::take(&mut state.actions)
+}
+
+pub(crate) fn notice(message: &str) {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.notice = Some(panel::safe_text(message).chars().take(240).collect());
+        state.dirty = true;
+    }
+}
+
+pub(crate) fn clear_logs() {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.logs = vt100::Parser::new(
+            nonzero(state.geometry.log_rows),
+            nonzero(state.geometry.left),
+            SCROLLBACK_ROWS,
+        );
+        state.previous_cr = false;
+        state.dirty = true;
+    }
+}
+
+pub(crate) fn snapshot() -> serde_json::Value {
+    let Some(shared) = shared() else {
+        return serde_json::json!({"active": false});
+    };
+    let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    let g = state.geometry;
+    let chat = state.ui.layout == Layout::Chat;
+    let conversation = state.conversation.snapshot();
+    serde_json::json!({
+        "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
+        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.view == conversation::View::Activity},
+            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":g.pty_rows,"cols":g.left,"visible":if chat {state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+            "input":{"row":conversation::prompt_top(g.rows)+1,"col":0,"rows":conversation::prompt_rows(g.rows),"cols":g.left,"visible":chat && conversation::prompt_rows(g.rows)>0}},
+        "focus":if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
+        "active_terminal":state.active_session,
+        "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
+        "conversation":conversation,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
+    })
+}
+
+/// A fixture rendered through the production compositor; no commands execute.
+fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
+    let mut state = State::new(rows, cols, ui);
+    state.preview = true;
+    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · /agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
+    state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
+    state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
+    state.audit.open();
+    state.panel.tasks.push(panel::TaskView {
+        id: "example".into(),
+        description: "Example task · custom frontend".into(),
+        cwd: Some("~/project".into()),
+        started: Instant::now(),
+    });
+    state.panel.progress.push(panel::ProgressView {
+        source: "Example".into(),
+        message: Some("Preparing workspace".into()),
+        value: Some(3.0),
+        total: Some(4.0),
+        updated: Instant::now(),
+    });
+    state
+}
+
+pub(crate) fn preview_bytes(ui: &Ui, rows: u16, cols: u16) -> Vec<u8> {
+    preview_state(rows, cols, ui)
+        .frame(Instant::now())
+        .diff(None)
+}
+
+pub(crate) fn seed_preview() {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        *state = preview_state(state.geometry.rows, state.geometry.cols, &state.ui);
+    }
 }
 
 /// Used by live PTY creation before its first prompt is generated.
@@ -231,8 +397,8 @@ pub(crate) fn take_session_replies() -> Vec<(String, Vec<u8>)> {
     state.take_session_replies()
 }
 
-/// F6 selects the scrollable audit pane. All other shell input, including
-/// fragmented escape sequences and bracketed-paste payloads, stays native.
+/// The display consumes browsing and filter input while it is active.
+/// A headless connection keeps the existing native terminal input path.
 pub(crate) fn keyboard(text: &str) -> String {
     let Some(shared) = shared() else {
         return text.into();
@@ -245,7 +411,7 @@ pub(crate) fn keyboard(text: &str) -> String {
 }
 
 /// Called by the input pump so a lone Escape never waits indefinitely for a
-/// possible shortcut suffix. Escape in log focus returns to the shell.
+/// possible shortcut suffix. Escape cancels filtering or returns to the list.
 pub(crate) fn take_keyboard() -> String {
     let Some(shared) = shared() else {
         return String::new();
@@ -280,24 +446,35 @@ struct Geometry {
 }
 
 impl Geometry {
-    fn new(rows: u16, cols: u16) -> Self {
+    fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let rows = rows.clamp(1, 1000);
         let cols = cols.clamp(1, 1000);
-        let layout = PanelLayout::new(cols, rows, true);
+        let layout = PanelLayout::configured(
+            cols,
+            rows,
+            ui.sidebar && !ui.panels.is_empty(),
+            ui.sidebar_width,
+        );
         let available = if rows >= 3 { rows - 1 } else { rows };
-        let pty_rows = if rows >= 18 {
-            ((available - 1) / 3).max(8)
-        } else if rows >= 5 {
-            ((available - 1) / 2).max(1)
-        } else {
-            available
+        let log_rows = match ui.layout {
+            Layout::Chat => conversation::body_rows(rows),
+            Layout::Logs => available,
+            Layout::Split if rows >= 5 => {
+                ((u32::from(available - 1) * u32::from(ui.log_height_percent) / 100) as u16)
+                    .clamp(1, available - 2)
+            }
+            _ => 0,
         };
-        let log_rows = if rows >= 5 {
-            available - pty_rows - 1
+        let pty_top = if ui.layout == Layout::Split && log_rows > 0 {
+            log_rows + 1
         } else {
             0
         };
-        let pty_top = if log_rows > 0 { log_rows + 1 } else { 0 };
+        let pty_rows = if ui.layout == Layout::Chat {
+            log_rows.max(1)
+        } else {
+            available.saturating_sub(pty_top).max(1)
+        };
         Self {
             rows,
             cols,
@@ -311,15 +488,63 @@ impl Geometry {
 
 #[derive(Clone, Copy)]
 enum Key {
+    Help,
+    Layout,
+    Sidebar,
+    Theme,
+    Reload,
+    Save,
     Toggle,
     Up,
     Down,
     Home,
     End,
+    Escape,
+    AuditUp,
+    AuditDown,
+    Open,
+    Back,
+    Filter,
+    FocusBack,
+    Delete,
+    Newline,
+    HistoryStart,
+    HistoryEnd,
+    Mouse {
+        button: u16,
+        x: u16,
+        y: u16,
+        release: bool,
+    },
     PasteStart,
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[Z", Key::FocusBack),
+    (b"\x1b[3~", Key::Delete),
+    (b"\x1b[13;2u", Key::Newline),
+    (b"\x1b[27;2;13~", Key::Newline),
+    (b"\x1b[1;5H", Key::HistoryStart),
+    (b"\x1b[1;5F", Key::HistoryEnd),
+    (b"\x1b[A", Key::AuditUp),
+    (b"\x1bOA", Key::AuditUp),
+    (b"\x1b[B", Key::AuditDown),
+    (b"\x1bOB", Key::AuditDown),
+    (b"\x1b[C", Key::Open),
+    (b"\x1bOC", Key::Open),
+    (b"\x1b[D", Key::Back),
+    (b"\x1bOD", Key::Back),
+    (b"\x1b[20~", Key::Filter),
+    (b"\x1bOP", Key::Help),
+    (b"\x1b[11~", Key::Help),
+    (b"\x1bOQ", Key::Layout),
+    (b"\x1b[12~", Key::Layout),
+    (b"\x1bOR", Key::Sidebar),
+    (b"\x1b[13~", Key::Sidebar),
+    (b"\x1bOS", Key::Theme),
+    (b"\x1b[14~", Key::Theme),
+    (b"\x1b[15~", Key::Reload),
+    (b"\x1b[19~", Key::Save),
     (b"\x1b[17~", Key::Toggle),
     (b"\x1b[5~", Key::Up),
     (b"\x1b[6~", Key::Down),
@@ -347,10 +572,27 @@ impl Keyboard {
             return matches!(key, Key::PasteEnd);
         }
         match key {
+            Key::Help
+            | Key::Layout
+            | Key::Sidebar
+            | Key::Theme
+            | Key::Reload
+            | Key::Save
+            | Key::AuditUp
+            | Key::AuditDown
+            | Key::Open
+            | Key::Back
+            | Key::Filter
+            | Key::FocusBack
+            | Key::Delete
+            | Key::Newline
+            | Key::HistoryStart
+            | Key::HistoryEnd
+            | Key::Mouse { .. } => true,
             Key::Toggle => allow_logs,
-            Key::Up | Key::Down | Key::Home | Key::End => self.logs,
+            Key::Up | Key::Down | Key::Home | Key::End => true,
             Key::PasteStart => true,
-            Key::PasteEnd => false,
+            Key::PasteEnd | Key::Escape => false,
         }
     }
     fn feed(
@@ -359,28 +601,58 @@ impl Keyboard {
         now: Instant,
         flush: bool,
         allow_logs: bool,
+        force_logs: bool,
     ) -> (Vec<u8>, Vec<Key>) {
+        self.logs |= force_logs;
         let mut output = Vec::new();
         let mut actions = Vec::new();
         for &byte in bytes {
             if self.pending.is_empty() && byte != 0x1b {
                 if !self.pasting {
-                    self.logs = false;
+                    self.logs = force_logs;
                 }
                 output.push(byte);
                 continue;
             }
             self.pending.push(byte);
+            if !self.pasting && self.pending.starts_with(b"\x1b[<") {
+                if matches!(byte, b'M' | b'm') {
+                    let values = std::str::from_utf8(&self.pending[3..self.pending.len() - 1])
+                        .ok()
+                        .map(|text| {
+                            text.split(';')
+                                .filter_map(|value| value.parse::<u16>().ok())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if values.len() == 3 {
+                        actions.push(Key::Mouse {
+                            button: values[0],
+                            x: values[1].saturating_sub(1),
+                            y: values[2].saturating_sub(1),
+                            release: byte == b'm',
+                        });
+                    }
+                    self.pending.clear();
+                    self.since = None;
+                } else if self.pending.len() > 64 {
+                    self.pending.clear();
+                    self.since = None;
+                } else {
+                    self.since.get_or_insert(now);
+                }
+                continue;
+            }
             if let Some((sequence, key)) = KEYS.iter().find(|(sequence, key)| {
                 self.accepts(*key, allow_logs) && *sequence == self.pending.as_slice()
             }) {
                 match key {
                     Key::Toggle => {
-                        self.logs = !self.logs;
+                        self.logs = force_logs || !self.logs;
                         actions.push(*key);
                     }
                     Key::PasteStart => {
-                        self.logs = false;
+                        self.logs = force_logs;
                         self.pasting = true;
                         output.extend_from_slice(sequence);
                     }
@@ -398,7 +670,7 @@ impl Keyboard {
                 self.since.get_or_insert(now);
             } else {
                 if !self.pasting {
-                    self.logs = false;
+                    self.logs = force_logs;
                 }
                 output.append(&mut self.pending);
                 self.since = None;
@@ -410,11 +682,12 @@ impl Keyboard {
             })
         {
             if self.logs && self.pending == b"\x1b" {
-                self.logs = false;
+                self.logs = force_logs;
                 self.pending.clear();
+                actions.push(Key::Escape);
             } else {
                 if !self.pasting {
-                    self.logs = false;
+                    self.logs = force_logs;
                 }
                 output.append(&mut self.pending);
             }
@@ -500,15 +773,25 @@ struct State {
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
     session_titles: BTreeMap<String, String>,
     panel: PanelSnapshot,
-    theme: super::ui::Theme,
-    color: bool,
+    ui: Ui,
+    help: bool,
+    audit: AuditView,
+    log_query: String,
+    log_level: u8,
+    filter_editing: bool,
+    filter_draft: String,
+    filter_offset: usize,
+    preview: bool,
+    notice: Option<String>,
+    actions: Vec<&'static str>,
     previous_cr: bool,
     dirty: bool,
     keyboard: Keyboard,
+    conversation: conversation::Conversation,
 }
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
-        let geometry = Geometry::new(rows, cols);
+        let geometry = Geometry::new(rows, cols, ui);
         Self {
             logs: vt100::Parser::new(
                 nonzero(geometry.log_rows),
@@ -526,11 +809,24 @@ impl State {
             session_titles: BTreeMap::from([("main".into(), "main".into())]),
             geometry,
             panel: PanelSnapshot::default(),
-            theme: ui.theme,
-            color: ui.color,
+            ui: ui.clone(),
+            help: false,
+            audit: AuditView::default(),
+            log_query: String::new(),
+            log_level: 0,
+            filter_editing: false,
+            filter_draft: String::new(),
+            filter_offset: 0,
+            preview: false,
+            notice: None,
+            actions: Vec::new(),
             previous_cr: false,
             dirty: true,
-            keyboard: Keyboard::default(),
+            keyboard: Keyboard {
+                logs: ui.layout == Layout::Logs,
+                ..Keyboard::default()
+            },
+            conversation: conversation::Conversation::default(),
         }
     }
     fn register_session(&mut self, id: &str, title: &str) {
@@ -567,7 +863,7 @@ impl State {
             std::mem::replace(&mut self.active_session, id.into()),
             previous,
         );
-        self.keyboard.logs = false;
+        self.keyboard.logs = self.ui.layout == Layout::Logs;
         self.logs.screen_mut().set_scrollback(0);
         self.dirty = true;
     }
@@ -604,19 +900,6 @@ impl State {
         }
         replies
     }
-    fn session_label(&self) -> String {
-        let index = self
-            .session_titles
-            .keys()
-            .position(|id| id == &self.active_session)
-            .unwrap_or(0)
-            + 1;
-        let title = self
-            .session_titles
-            .get(&self.active_session)
-            .map_or(self.active_session.as_str(), String::as_str);
-        format!("{index}/{} · {title}", self.session_titles.len())
-    }
     fn log(&mut self, bytes: &[u8]) {
         let mut normalized = Vec::with_capacity(bytes.len());
         for &byte in bytes {
@@ -630,7 +913,7 @@ impl State {
         self.dirty = true;
     }
     fn resize(&mut self, rows: u16, cols: u16) {
-        let geometry = Geometry::new(rows, cols);
+        let geometry = Geometry::new(rows, cols, &self.ui);
         if self.geometry != geometry {
             self.logs
                 .set_size(nonzero(geometry.log_rows), nonzero(geometry.left));
@@ -647,58 +930,369 @@ impl State {
             self.dirty = true;
         }
     }
-    fn keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
-        let old_focus = self.keyboard.logs;
-        let (output, actions) = self
-            .keyboard
-            .feed(bytes, now, flush, self.geometry.log_rows > 0);
-        for action in actions {
-            let screen = self.logs.screen_mut();
-            let current = screen.scrollback();
-            let page = usize::from(self.geometry.log_rows).saturating_sub(1).max(1);
-            let position = match action {
-                Key::Up => current.saturating_add(page),
-                Key::Down => current.saturating_sub(page),
-                Key::Home => screen.scrollback_len(),
-                Key::End => 0,
-                Key::Toggle | Key::PasteStart | Key::PasteEnd => current,
+    fn scroll_logs(&mut self, lines: isize) {
+        if !self.log_query.is_empty() || self.log_level != 0 {
+            let max = self.logs.screen().scrollback_len() + usize::from(self.geometry.log_rows);
+            self.filter_offset = if lines >= 0 {
+                self.filter_offset
+                    .saturating_add(lines.unsigned_abs())
+                    .min(max)
+            } else {
+                self.filter_offset.saturating_sub(lines.unsigned_abs())
             };
-            screen.set_scrollback(position);
+        } else {
+            let screen = self.logs.screen_mut();
+            let next = if lines >= 0 {
+                screen.scrollback().saturating_add(lines.unsigned_abs())
+            } else {
+                screen.scrollback().saturating_sub(lines.unsigned_abs())
+            };
+            screen.set_scrollback(next);
+        }
+        self.notice = None;
+        self.dirty = true;
+    }
+
+    /// Filter whole retained display blocks so the matching command keeps its output.
+    fn filtered_logs(&mut self) -> Option<Vec<String>> {
+        if self.log_query.is_empty() && self.log_level == 0 {
+            return None;
+        }
+        let g = self.geometry;
+        let current = self.logs.screen().scrollback();
+        let history = self.logs.screen().scrollback_len();
+        let visible = usize::from(self.logs.screen().size().0.get());
+        let query = self.log_query.to_lowercase();
+        let mut groups: Vec<(String, Vec<String>, Option<String>)> = Vec::new();
+        let mut group_index = 0usize;
+        for index in 0..history + visible {
+            self.logs
+                .screen_mut()
+                .set_scrollback(history.saturating_sub(index));
+            let row = index.saturating_sub(history) as u16;
+            let plain = self
+                .logs
+                .screen()
+                .rows(0, g.left)
+                .nth(usize::from(row))
+                .unwrap_or_default();
+            let ansi = screen_row(self.logs.screen(), row, g.left, &self.ui);
+            let trimmed = plain.trim_start();
+            let heading = trimmed.starts_with('[');
+            let id = if heading {
+                trimmed
+                    .split_once('#')
+                    .map(|(_, tail)| {
+                        tail.chars()
+                            .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+                            .collect::<String>()
+                    })
+                    .filter(|id| !id.is_empty())
+            } else {
+                None
+            };
+            let lower = trimmed.to_lowercase();
+            let start = ["[run", "[exec", "[cmd"]
+                .iter()
+                .any(|tag| lower.starts_with(tag));
+            if let Some(index) = id
+                .as_ref()
+                .and_then(|id| groups.iter().position(|group| group.2.as_ref() == Some(id)))
+            {
+                group_index = index;
+            } else if groups.is_empty()
+                || start
+                || (heading && id.is_some())
+                || (heading
+                    && !["[out", "[stdout", "[stderr", "[ok", "[err", "[result"]
+                        .iter()
+                        .any(|tag| lower.starts_with(tag)))
+            {
+                group_index = groups.len();
+                groups.push((String::new(), Vec::new(), id));
+            }
+            let (text, rows, _) = &mut groups[group_index];
+            text.push_str(&plain);
+            text.push('\n');
+            rows.push(ansi);
+        }
+        self.logs.screen_mut().set_scrollback(current);
+        let mut rows = Vec::new();
+        for (text, lines, _) in groups {
+            let lower = text.to_lowercase();
+            let level_matches = match self.log_level {
+                1 => [
+                    "[run", "[exec", "[cmd", "[ok", "[err", "[out", "[stdout", "[stderr", "[result",
+                ]
+                .iter()
+                .any(|tag| lower.trim_start().starts_with(tag)),
+                2 => {
+                    ["[err", "[warn", "[stderr"]
+                        .iter()
+                        .any(|tag| lower.contains(tag))
+                        || lower.contains("exit=1")
+                        || lower.contains("failed")
+                }
+                _ => true,
+            };
+            if level_matches && lower.contains(&query) {
+                rows.extend(lines);
+            }
+        }
+        let height = usize::from(g.log_rows);
+        self.filter_offset = self.filter_offset.min(rows.len().saturating_sub(height));
+        let end = rows.len().saturating_sub(self.filter_offset);
+        let start = end.saturating_sub(height);
+        let mut result = rows[start..end].to_vec();
+        if result.is_empty() && height > 0 {
+            result.push(self.tone(
+                PanelTone::Muted,
+                &panel::fit(
+                    "No matching log entries · / Edit filter · Esc Clear",
+                    usize::from(g.left),
+                ),
+            ));
+        }
+        result.resize_with(height, || {
+            self.tone(PanelTone::Normal, &" ".repeat(usize::from(g.left)))
+        });
+        Some(result)
+    }
+
+    fn keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        if self.ui.layout == Layout::Chat {
+            return self.chat_keyboard(bytes, now, flush);
+        }
+        let old_focus = self.keyboard.logs;
+        let showing_help = self.help;
+        let (output, actions) = self.keyboard.feed(
+            bytes,
+            now,
+            flush,
+            self.geometry.log_rows > 0,
+            self.ui.layout == Layout::Logs,
+        );
+        let mut layout_changed = false;
+        for action in actions {
+            if matches!(action, Key::Escape) && showing_help {
+                self.help = false;
+                self.keyboard.logs = old_focus;
+                self.dirty = true;
+                continue;
+            }
+            if matches!(action, Key::Help) {
+                self.help = !self.help;
+                self.dirty = true;
+                continue;
+            }
+            let ui_action = match action {
+                Key::Layout => Some("layout.next"),
+                Key::Sidebar => Some("sidebar.toggle"),
+                Key::Theme => Some("theme.next"),
+                Key::Reload => Some("reload"),
+                Key::Save => Some("save"),
+                _ => None,
+            };
+            if let Some(action) = ui_action {
+                // Display actions are applied after this input read. Never send
+                // coalesced text to a shell that may have just become hidden.
+                layout_changed |= matches!(action, "layout.next" | "reload");
+                if self.actions.len() < 64 {
+                    self.actions.push(action);
+                }
+                continue;
+            }
+            match action {
+                Key::Mouse {
+                    button,
+                    x,
+                    y,
+                    release,
+                } => {
+                    if !release && x < self.geometry.left && !self.help {
+                        if y < self.geometry.log_rows {
+                            if button & 64 != 0 {
+                                self.scroll_logs(if button & 1 == 0 { 3 } else { -3 });
+                            }
+                        } else {
+                            match button {
+                                64 => self.audit.scroll_by(-3),
+                                65 => self.audit.scroll_by(3),
+                                0 => self.audit.back(),
+                                2 => self.audit.open(),
+                                _ => {}
+                            }
+                        }
+                        self.dirty = true;
+                    }
+                    continue;
+                }
+                Key::AuditUp if self.ui.layout != Layout::Logs => {
+                    self.audit.up();
+                    self.dirty = true;
+                    continue;
+                }
+                Key::AuditDown if self.ui.layout != Layout::Logs => {
+                    self.audit.down();
+                    self.dirty = true;
+                    continue;
+                }
+                Key::AuditUp => {
+                    self.scroll_logs(1);
+                    continue;
+                }
+                Key::AuditDown => {
+                    self.scroll_logs(-1);
+                    continue;
+                }
+                Key::Open => {
+                    self.audit.open();
+                    self.dirty = true;
+                    continue;
+                }
+                Key::Back => {
+                    self.audit.back();
+                    self.dirty = true;
+                    continue;
+                }
+                Key::Filter => {
+                    self.log_level = (self.log_level + 1) % 3;
+                    self.filter_offset = 0;
+                    self.notice = None;
+                    self.dirty = true;
+                    continue;
+                }
+                Key::Escape if self.filter_editing => {
+                    self.filter_editing = false;
+                    self.dirty = true;
+                    continue;
+                }
+                Key::Escape => {
+                    self.audit.back();
+                    self.log_query.clear();
+                    self.log_level = 0;
+                    self.filter_offset = 0;
+                    self.dirty = true;
+                    continue;
+                }
+                _ => {}
+            }
+            if matches!(action, Key::Up | Key::Down | Key::Home | Key::End) {
+                if self.ui.layout == Layout::Audit {
+                    let height = usize::from(self.geometry.pty_rows).saturating_sub(1);
+                    match action {
+                        Key::Up => self.audit.page_up(height),
+                        Key::Down => self.audit.page_down(height),
+                        Key::Home => self.audit.scroll_by(isize::MIN),
+                        Key::End => self.audit.scroll_by(isize::MAX),
+                        _ => {}
+                    }
+                    self.dirty = true;
+                    continue;
+                }
+                let page = self.geometry.log_rows.saturating_sub(1).max(1) as isize;
+                match action {
+                    Key::Up => self.scroll_logs(page),
+                    Key::Down => self.scroll_logs(-page),
+                    Key::Home => self.scroll_logs(isize::MAX),
+                    Key::End => self.scroll_logs(isize::MIN),
+                    _ => {}
+                }
+                continue;
+            }
             self.dirty = true;
         }
-        if !self.keyboard.logs && self.logs.screen().scrollback() > 0 {
-            self.logs.screen_mut().set_scrollback(0);
-            self.dirty = true;
-        }
+
         if old_focus != self.keyboard.logs {
             self.dirty = true;
         }
-        output
+        if showing_help && output == b"\x1b" {
+            self.help = false;
+            self.dirty = true;
+        }
+        if !showing_help && !self.help && !layout_changed {
+            for character in String::from_utf8_lossy(&output).chars() {
+                if self.filter_editing {
+                    match character {
+                        '\r' | '\n' => {
+                            self.log_query = self.filter_draft.clone();
+                            self.filter_editing = false;
+                            self.filter_offset = 0;
+                        }
+                        '\u{1b}' => self.filter_editing = false,
+                        '\u{7f}' | '\u{8}' => {
+                            self.filter_draft.pop();
+                        }
+                        c if !c.is_control() && self.filter_draft.len() < 256 => {
+                            self.filter_draft.push(c)
+                        }
+                        _ => {}
+                    }
+                    self.dirty = true;
+                } else {
+                    match character {
+                        '/' => {
+                            self.filter_editing = true;
+                            self.filter_draft = self.log_query.clone();
+                            self.notice = None;
+                            self.dirty = true;
+                        }
+                        '\r' | '\n' => {
+                            self.audit.open();
+                            self.dirty = true;
+                        }
+                        '\u{1b}' => {
+                            self.audit.back();
+                            self.log_query.clear();
+                            self.log_level = 0;
+                            self.filter_offset = 0;
+                            self.dirty = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Vec::new()
     }
-    fn frame(&self, now: Instant) -> Frame {
+
+    fn frame(&mut self, now: Instant) -> Frame {
+        if self.ui.layout == Layout::Chat {
+            return self.chat_frame(now);
+        }
         let g = self.geometry;
-        let layout = PanelLayout::new(g.cols, g.rows, true);
+        let filtered = self.filtered_logs();
+        let audit_rows = self.audit.render(g.left, g.pty_rows, &self.ui);
+        let layout = PanelLayout::configured(
+            g.cols,
+            g.rows,
+            self.ui.sidebar && !self.ui.panels.is_empty(),
+            self.ui.sidebar_width,
+        );
         let sidebar = layout.sidebar.map(|rect| {
             let height = rect.height.saturating_sub(u16::from(g.rows >= 3));
-            (rect, panel::render(&self.panel, rect.width, height, now))
+            (
+                rect,
+                panel::render_configured(&self.panel, rect.width, height, now, &self.ui),
+            )
         });
         let mut rows = Vec::with_capacity(usize::from(g.rows));
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
-                let hint = if g.log_rows == 0 {
+                let level = ["all", "commands", "errors"][usize::from(self.log_level)];
+                let hint = if self.filter_editing {
+                    format!(" / {}_   Enter Apply · Esc Cancel ", self.filter_draft)
+                } else if let Some(notice) = &self.notice {
+                    format!(" {notice} · F1 Help ")
+                } else if !self.log_query.is_empty() || self.log_level != 0 {
                     format!(
-                        " Shell · {} · F7 Next · compact view ",
-                        self.session_label()
+                        " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
+                        self.log_query
                     )
-                } else if self.keyboard.logs {
-                    format!(
-                        " Logs · PgUp/PgDn · Home/End · F6/Esc Shell · F7 Next · history {}/{} ",
-                        self.logs.screen().scrollback(),
-                        self.logs.screen().scrollback_len()
-                    )
+                } else if g.cols < 100 {
+                    " Wheel Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F1 Help ".into()
                 } else {
-                    " Shell · F6 Logs · F7 Next terminal · keyboard input goes to this shell "
-                        .into()
+                    " Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help · F4 Theme ".into()
                 };
                 let text = fit(&hint, g.cols);
                 let padded = format!(
@@ -716,24 +1310,23 @@ impl State {
                 continue;
             }
             let mut line = if row < g.log_rows {
-                screen_row(self.logs.screen(), row, g.left, self.color)
+                filtered
+                    .as_ref()
+                    .and_then(|lines| lines.get(usize::from(row)))
+                    .cloned()
+                    .unwrap_or_else(|| screen_row(self.logs.screen(), row, g.left, &self.ui))
             } else if row == g.log_rows && g.log_rows > 0 {
-                let title = format!(
-                    " Shell · {} · F7 Next · {}×{} ",
-                    self.session_label(),
-                    g.left,
-                    g.pty_rows
-                );
-                let text = fit(&title, g.left);
+                let title = " CODE_MODE  ·  ↑↓ Browse  ·  Enter/→ Details  ·  ← Back ";
+                let text = fit(title, g.left);
                 let padding = usize::from(g.left).saturating_sub(text.width());
                 self.tone(PanelTone::Muted, &format!("{text}{}", "─".repeat(padding)))
             } else {
-                screen_row(
-                    self.pty.screen(),
-                    row.saturating_sub(g.pty_top),
-                    g.left,
-                    self.color,
-                )
+                audit_rows
+                    .get(usize::from(row.saturating_sub(g.pty_top)))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        self.tone(PanelTone::Normal, &" ".repeat(usize::from(g.left)))
+                    })
             };
             if let Some((rect, panel)) = &sidebar {
                 line.push_str(&self.tone(PanelTone::Muted, "│"));
@@ -747,32 +1340,91 @@ impl State {
             }
             rows.push(line);
         }
+        if self.help {
+            let lines = [
+                "SSMCP  /  Help & appearance".to_string(),
+                String::new(),
+                format!(
+                    "Theme  {}     View  {}",
+                    self.ui.theme.name(),
+                    self.ui.layout.name()
+                ),
+                format!(
+                    "Logs  {}%     Sidebar  {} · {} columns",
+                    self.ui.log_height_percent,
+                    if self.ui.sidebar { "shown" } else { "hidden" },
+                    self.ui.sidebar_width
+                ),
+                String::new(),
+                "F1 / Esc   Close this view".into(),
+                "F2         Switch split / audit / logs".into(),
+                "F3         Show or hide the sidebar".into(),
+                "F4         Cycle color themes".into(),
+                "F5         Reload your configuration".into(),
+                "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
+                "Up / Down  Select a code_mode call; Enter / Right opens".into(),
+                "Left       Return to the audit list".into(),
+                "/          Filter logs by text; F9 cycles all / commands / errors".into(),
+                "F8         Save the current appearance".into(),
+                String::new(),
+                "Edit colors, panel order and sizes in your TOML file.".into(),
+                "ssmcp ui show     ssmcp ui check     ssmcp ui preview".into(),
+                String::new(),
+                self.notice.clone().unwrap_or_else(|| {
+                    "Appearance changes keep running tasks and audit history.".into()
+                }),
+            ];
+            for (row, line) in rows.iter_mut().enumerate() {
+                let content = lines
+                    .get(row.saturating_sub(1))
+                    .filter(|_| row > 0)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let text = fit(&format!("  {content}"), g.cols);
+                let padded = format!(
+                    "{text}{}",
+                    " ".repeat(usize::from(g.cols).saturating_sub(text.width()))
+                );
+                *line = self.tone(
+                    if row == 1 {
+                        PanelTone::Heading
+                    } else {
+                        PanelTone::Normal
+                    },
+                    &padded,
+                );
+            }
+        }
         let screen = self.pty.screen();
         let (row, col) = screen.cursor_position();
         Frame {
             geometry: g,
             rows,
             cursor: (g.pty_top + row.min(g.pty_rows - 1), col.min(g.left - 1)),
-            hidden: screen.hide_cursor() || self.keyboard.logs,
-            application_cursor: screen.application_cursor(),
-            application_keypad: screen.application_keypad(),
-            bracketed_paste: screen.bracketed_paste(),
+            hidden: true,
+            application_cursor: false,
+            application_keypad: false,
+            bracketed_paste: true,
         }
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
-        if !self.color {
+        if !self.ui.color {
             return text.into();
         }
-        let code = match tone {
-            PanelTone::Normal => "0",
-            PanelTone::Muted => self.theme.color("gray"),
-            PanelTone::Heading => "1",
-            PanelTone::Accent => self.theme.color("cyan"),
-            PanelTone::Success => self.theme.color("green"),
-            PanelTone::Warning => self.theme.color("yellow"),
-            PanelTone::Error => self.theme.color("red"),
+        let semantic = match tone {
+            PanelTone::Normal => "foreground",
+            PanelTone::Muted => "muted",
+            PanelTone::Heading => "heading",
+            PanelTone::Accent => "accent",
+            PanelTone::Success => "success",
+            PanelTone::Warning => "warning",
+            PanelTone::Error => "error",
         };
-        format!("\x1b[{code}m{text}\x1b[0m")
+        format!(
+            "\x1b[{};{}m{text}\x1b[0m",
+            self.ui.background(),
+            self.ui.color(semantic)
+        )
     }
 }
 
@@ -840,19 +1492,65 @@ impl Style {
 
 // Serialize cells ourselves. rows_formatted may include cursor/erase sequences
 // relative to its own screen; forwarding those would escape the pane.
-fn screen_row(screen: &vt100::Screen, row: u16, width: u16, color: bool) -> String {
+fn screen_row(screen: &vt100::Screen, row: u16, width: u16, ui: &Ui) -> String {
     let mut text = String::from("\x1b[0m");
+    if ui.color {
+        let _ = write!(text, "\x1b[{};{}m", ui.background(), ui.color("foreground"));
+    }
     let mut style = Style::default();
     let mut col = 0;
+    let mut padding = 0;
+    if ui.layout == Layout::Chat {
+        let prefix: String = (0..width.min(12))
+            .filter_map(|index| screen.cell(row, index))
+            .map(|cell| cell.contents())
+            .collect();
+        if let Some(close) = prefix.find(']') {
+            let replacement = match prefix[..=close].trim_matches(['[', ']']).trim() {
+                "RUN" | "CALL" => Some(("  ●", "accent")),
+                "OK" | "READY" => Some(("  ●", "success")),
+                "ERR" | "ERROR" | "FAIL" => Some(("  ●", "error")),
+                "USER" => Some(("  ❯", "foreground")),
+                "STDOUT" => Some(("  stdout", "muted")),
+                "STDERR" => Some(("  stderr", "warning")),
+                _ => None,
+            };
+            if prefix.starts_with('[')
+                && let Some((label, semantic)) = replacement
+                && label.width() <= close + 1
+            {
+                if ui.color {
+                    let _ = write!(
+                        text,
+                        "\x1b[{}m{label}\x1b[{}m",
+                        ui.color(semantic),
+                        ui.color("foreground")
+                    );
+                } else {
+                    text.push_str(label);
+                }
+                col = u16::try_from(close + 1).unwrap_or(0);
+                padding = close + 1 - label.width();
+            }
+        }
+    }
     while col < width {
         let Some(cell) = screen.cell(row, col) else {
             text.push(' ');
             col += 1;
             continue;
         };
-        let next_style = Style::of(cell, color);
+        let next_style = Style::of(cell, ui.color);
         if next_style != style {
             next_style.append(&mut text);
+            if ui.color {
+                if next_style.fg == vt100::Color::Default {
+                    let _ = write!(text, "\x1b[{}m", ui.color("foreground"));
+                }
+                if next_style.bg == vt100::Color::Default {
+                    let _ = write!(text, "\x1b[{}m", ui.background());
+                }
+            }
             style = next_style;
         }
         if cell.is_wide_continuation()
@@ -867,6 +1565,18 @@ fn screen_row(screen: &vt100::Screen, row: u16, width: u16, color: bool) -> Stri
             text.push(character);
         }
         col += if cell.is_wide() { 2 } else { 1 };
+    }
+    if padding > 0 {
+        let _ = write!(
+            text,
+            "\x1b[0m\x1b[{}m{}",
+            if ui.color {
+                ui.background()
+            } else {
+                "49".into()
+            },
+            " ".repeat(padding)
+        );
     }
     text.push_str("\x1b[0m");
     text
@@ -1176,6 +1886,13 @@ impl Drop for PhysicalOutput {
 mod tests {
     use super::*;
 
+    fn split_ui() -> Ui {
+        Ui {
+            layout: Layout::Split,
+            ..Ui::default()
+        }
+    }
+
     fn physical(frame: &Frame) -> vt100::Parser {
         let mut parser = vt100::Parser::new(
             nonzero(frame.geometry.rows),
@@ -1187,25 +1904,50 @@ mod tests {
     }
     #[test]
     fn geometry_reserves_real_panes_and_survives_narrow_resize() {
-        let mut state = State::new(58, 106, &Ui::default());
-        assert_eq!(state.geometry.left, 77);
-        assert_eq!(state.geometry.pty_rows, 18);
-        assert_eq!(state.geometry.log_rows, 38);
+        let mut state = State::new(58, 106, &split_ui());
+        assert_eq!(state.geometry.left, 75);
+        assert_eq!(state.geometry.pty_rows, 23);
+        assert_eq!(state.geometry.log_rows, 33);
         state.resize(30, 80);
         assert_eq!(state.geometry.left, 80);
         state.resize(58, 160);
-        assert_eq!(state.geometry.left, 123);
-        assert_eq!(state.pty.screen().size(), (nonzero(18), nonzero(123)));
+        assert_eq!(state.geometry.left, 129);
+        assert_eq!(state.pty.screen().size(), (nonzero(23), nonzero(129)));
         state.resize(18, 96);
-        assert_eq!(state.geometry.pty_rows, 8);
+        assert_eq!(state.geometry.pty_rows, 7);
         state.resize(1, 1);
         assert_eq!(state.geometry.pty_rows, 1);
         assert_eq!(state.geometry.log_rows, 0);
         assert_eq!(state.frame(Instant::now()).rows.len(), 1);
     }
     #[test]
+    fn appearance_resizes_preserve_history_and_render_rgb_defaults() {
+        let ui = Ui::parse("[ui]\nlayout='split'\nlog_height_percent=80\nsidebar=false\n[ui.colors]\nbackground='#000000'\nforeground='#abcdef'").unwrap();
+        let mut state = State::new(1000, 120, &ui);
+        assert_eq!(state.geometry.log_rows, 798);
+        state.pty_session("main", b"retained shell");
+        state.log(b"retained log");
+        state.ui.layout = Layout::Audit;
+        state.resize(36, 120);
+        assert_eq!(state.geometry.log_rows, 0);
+        assert!(state.pty.screen().contents().contains("retained shell"));
+        let frame = physical(&state.frame(Instant::now()));
+        assert_eq!(
+            frame.screen().cell(0, 0).unwrap().fgcolor(),
+            vt100::Color::Rgb(171, 205, 239)
+        );
+        assert_eq!(
+            frame.screen().cell(0, 0).unwrap().bgcolor(),
+            vt100::Color::Rgb(0, 0, 0)
+        );
+        state.ui.layout = Layout::Split;
+        state.resize(36, 120);
+        assert!(state.logs.screen().contents().contains("retained log"));
+    }
+
+    #[test]
     fn terminal_switches_keep_independent_screens_cursors_and_input_modes() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         state.register_session("pty-0001", "build");
         state.pty_session("main", b"MAIN\x1b[2;4H");
         state.pty_session("pty-0001", b"\x1b[?1049h\x1b[?1h\x1b[?2004hBUILD\x1b[4;7H");
@@ -1217,12 +1959,12 @@ mod tests {
         assert_eq!(state.pty.screen().cursor_position(), (3, 6));
         assert!(state.pty.screen().application_cursor());
         assert!(state.pty.screen().bracketed_paste());
-        assert!(
-            physical(&state.frame(Instant::now()))
-                .screen()
-                .contents()
-                .contains("2/2 · build · F7")
-        );
+        let display = physical(&state.frame(Instant::now()));
+        assert!(display.screen().contents().contains("Code mode"));
+        assert!(!display.screen().contents().contains("BUILD"));
+        assert!(!display.screen().contents().contains("MAIN"));
+        assert!(display.screen().hide_cursor());
+        assert!(!display.screen().application_cursor());
         state.pty_session("main", b"\x1b[3;1HLATER");
         assert!(!state.pty.screen().contents().contains("LATER"));
         state.select_session("main");
@@ -1233,7 +1975,7 @@ mod tests {
     }
     #[test]
     fn device_replies_remain_with_the_requesting_terminal_across_selection_and_resize() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         state.register_session("pty-0001", "queries");
         state.pty_session("main", b"\x1b[2;3H\x1b[6n");
         state.pty_session("pty-0001", b"\x1b[4;5H\x1b[6n");
@@ -1261,7 +2003,7 @@ mod tests {
     }
     #[test]
     fn closing_selected_terminal_restores_main_and_ignores_late_output() {
-        let mut state = State::new(30, 110, &Ui::default());
+        let mut state = State::new(30, 110, &split_ui());
         state.register_session("pty-0001", "worker");
         state.pty_session("main", b"main remains");
         state.select_session("pty-0001");
@@ -1282,8 +2024,8 @@ mod tests {
         assert_eq!(state.inactive.len(), MAX_SESSIONS - 1);
     }
     #[test]
-    fn pty_clear_absolute_cursor_alternate_and_wide_cells_cannot_escape() {
-        let mut state = State::new(30, 110, &Ui::default());
+    fn hidden_pty_escape_sequences_cannot_change_audit_layout() {
+        let mut state = State::new(30, 110, &split_ui());
         state.log(b"retained audit\n");
         state.pty.process(b"\x1b[?1049h\x1b[2J\x1b[H\x1b[31m");
         state.pty.process("界 e\u{301}".as_bytes());
@@ -1291,11 +2033,19 @@ mod tests {
         let frame = state.frame(Instant::now());
         let view = physical(&frame);
         assert!(view.screen().contents().contains("retained audit"));
-        let top = state.geometry.pty_top;
-        assert_eq!(view.screen().cell(top, 0).unwrap().contents(), "界");
-        assert!(view.screen().cell(top, 1).unwrap().is_wide_continuation());
+        assert!(view.screen().contents().contains("Code mode"));
+        assert!(!view.screen().contents().contains("界"));
+        assert_eq!(state.pty.screen().cell(0, 0).unwrap().contents(), "界");
+        assert!(
+            state
+                .pty
+                .screen()
+                .cell(0, 1)
+                .unwrap()
+                .is_wide_continuation()
+        );
         assert_eq!(
-            view.screen().cell(top, 0).unwrap().fgcolor(),
+            state.pty.screen().cell(0, 0).unwrap().fgcolor(),
             vt100::Color::Idx(1)
         );
         for row in 0..state.geometry.rows - 1 {
@@ -1307,13 +2057,13 @@ mod tests {
                 "│"
             );
         }
-        assert_eq!(view.screen().cursor_position(), frame.cursor);
+        assert!(view.screen().hide_cursor());
         state.pty.process(b"\x1b[?1049l");
         assert!(state.logs.screen().contents().contains("retained audit"));
     }
     #[test]
     fn native_queries_reply_with_virtual_coordinates_and_a_bounded_queue() {
-        let mut state = State::new(58, 106, &Ui::default());
+        let mut state = State::new(58, 106, &split_ui());
         state
             .pty
             .process(b"\x1b[3;5H\x1b[6n\x1b[5n\x1b[c\x1b[>c\x1b[18t");
@@ -1323,7 +2073,7 @@ mod tests {
         assert!(replies.contains("\x1b[0n"), "{replies:?}");
         assert!(replies.contains("\x1b[?1;2c"), "{replies:?}");
         assert!(replies.contains("\x1b[>0;0;0c"), "{replies:?}");
-        assert!(replies.contains("\x1b[8;18;77t"), "{replies:?}");
+        assert!(replies.contains("\x1b[8;23;75t"), "{replies:?}");
         for _ in 0..2000 {
             state.pty.process(b"\x1b[6n");
         }
@@ -1331,11 +2081,14 @@ mod tests {
         assert!(state.pty.callbacks().dropped > 0);
     }
     #[test]
-    fn line_diff_and_input_modes_preserve_the_pty_cursor() {
-        let mut state = State::new(30, 110, &Ui::default());
+    fn visible_log_diff_keeps_hidden_terminal_modes_out_of_the_client() {
+        let mut state = State::new(30, 110, &split_ui());
         let a = state.frame(Instant::now());
         assert!(a.diff(Some(&a)).is_empty());
-        state.pty.process(b"\x1b[?1h\x1b=\x1b[?2004hhello");
+        state
+            .pty
+            .process(b"\x1b[?1h\x1b=\x1b[?2004hhidden command output");
+        state.log(b"visible log update");
         let b = state.frame(Instant::now());
         let diff = b.diff(Some(&a));
         assert!(!diff.windows(4).any(|bytes| bytes == b"\x1b[2J"));
@@ -1343,16 +2096,20 @@ mod tests {
         let mut parser = physical(&a);
         parser.process(&diff);
         assert_eq!(parser.screen().cursor_position(), b.cursor);
-        assert!(parser.screen().application_cursor());
-        assert!(parser.screen().application_keypad());
+        assert!(!parser.screen().application_cursor());
+        assert!(!parser.screen().application_keypad());
         assert!(parser.screen().bracketed_paste());
-        assert!(parser.screen().contents().contains("hello"));
+        assert!(parser.screen().hide_cursor());
+        assert!(parser.screen().contents().contains("visible log update"));
+        assert!(!parser.screen().contents().contains("hidden command output"));
+        assert!(state.pty.screen().application_cursor());
+        assert!(state.pty.screen().application_keypad());
     }
     #[test]
     fn no_color_does_not_disable_layout_and_log_lf_is_normalized() {
         let ui = Ui {
             color: false,
-            ..Ui::default()
+            ..split_ui()
         };
         let mut state = State::new(30, 110, &ui);
         state.log(b"a\n");
@@ -1415,16 +2172,18 @@ mod tests {
         assert_eq!(offset, 6);
     }
     #[test]
-    fn log_focus_pages_history_and_escape_returns_without_losing_native_keys() {
-        let mut state = State::new(58, 106, &Ui::default());
+    fn wheel_and_page_keys_scroll_logs_without_a_focus_shortcut() {
+        let mut state = State::new(58, 106, &split_ui());
         for index in 0..200 {
             state.log(format!("audit record {index:03}\n").as_bytes());
         }
         let now = Instant::now();
-        for byte in b"\x1b[17~" {
+        for byte in b"\x1b[<64;5;5M" {
             assert!(state.keyboard(&[*byte], now, false).is_empty());
         }
-        assert!(state.keyboard.logs);
+        assert_eq!(state.logs.screen().scrollback(), 3);
+        assert!(state.keyboard(b"\x1b[<65;5;5M", now, false).is_empty());
+        assert_eq!(state.logs.screen().scrollback(), 0);
         assert!(state.keyboard(b"\x1b[5~", now, false).is_empty());
         assert!(state.logs.screen().scrollback() > 0);
         state.keyboard(b"\x1b[H", now, false);
@@ -1434,55 +2193,132 @@ mod tests {
         state.keyboard(b"\x1b[F", now, false);
         assert_eq!(state.logs.screen().scrollback(), 0);
         assert!(state.logs.screen().contents().contains("audit record 199"));
+        let sidebar_mouse = format!("\x1b[<64;{};5M", state.geometry.left + 2);
+        state.keyboard(sidebar_mouse.as_bytes(), now, false);
+        assert_eq!(state.logs.screen().scrollback(), 0);
+        for id in ["first", "second"] {
+            state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","run_id":id,"phase":"started","code":"return 1;"}));
+        }
+        let audit_mouse = format!("\x1b[<65;2;{}M", state.geometry.pty_top + 2);
+        state.keyboard(audit_mouse.as_bytes(), now, false);
+        assert_eq!(state.audit.snapshot()["selected_index"], 1);
+        assert_eq!(state.logs.screen().scrollback(), 0);
+    }
+    #[test]
+    fn full_screen_logs_remain_scrollable_and_never_forward_input() {
+        let ui = Ui {
+            layout: Layout::Logs,
+            ..split_ui()
+        };
+        let mut state = State::new(30, 110, &ui);
+        for index in 0..200 {
+            state.log(format!("audit record {index:03}\n").as_bytes());
+        }
+        let now = Instant::now();
+        assert!(state.keyboard(b"\x1b[5~", now, false).is_empty());
+        assert!(state.logs.screen().scrollback() > 0);
+        state.keyboard(b"\x1b[F", now, false);
+        assert_eq!(state.logs.screen().scrollback(), 0);
+        assert!(
+            state
+                .keyboard(b"ignored text\x1b[5~", now, false)
+                .is_empty()
+        );
+        assert!(state.logs.screen().scrollback() > 0);
+        state.register_session("pty-next", "next");
+        state.select_session("pty-next");
+        assert!(state.keyboard(b"\x1b[5~", now, false).is_empty());
+        assert!(state.logs.screen().scrollback() > 0);
+        assert!(state.keyboard(b"echo hidden\r", now, false).is_empty());
+        assert!(!state.pty.screen().contents().contains("echo hidden"));
+    }
+    #[test]
+    fn escape_closes_help_opened_from_scrolled_logs() {
+        let mut state = State::new(30, 110, &split_ui());
+        for index in 0..100 {
+            state.log(format!("audit record {index:03}\n").as_bytes());
+        }
+        let now = Instant::now();
+        state.keyboard(b"\x1b[5~", now, false);
+        let scrollback = state.logs.screen().scrollback();
+        assert!(scrollback > 0);
+        state.keyboard(b"\x1bOP", now, false);
+        assert!(state.help);
         assert!(state.keyboard(b"\x1b", now, false).is_empty());
         assert!(
             state
                 .keyboard(&[], now + Duration::from_millis(100), true)
                 .is_empty()
         );
-        assert!(!state.keyboard.logs);
-        let mut forwarded = Vec::new();
-        for byte in b"\x1b[A\x1b[5~\x1bOP\x1b[1;5C" {
-            forwarded.extend(state.keyboard(&[*byte], now, false));
-        }
-        assert_eq!(forwarded, b"\x1b[A\x1b[5~\x1bOP\x1b[1;5C");
-        state.keyboard(b"\x1b", now, false);
-        assert_eq!(
-            state.keyboard(&[], now + Duration::from_millis(100), true),
-            b"\x1b"
-        );
+        assert!(!state.help);
+        assert_eq!(state.logs.screen().scrollback(), scrollback);
     }
+
     #[test]
-    fn bracketed_paste_and_incomplete_shortcuts_round_trip_byte_for_byte() {
-        let mut state = State::new(58, 106, &Ui::default());
+    fn layout_shortcut_never_forwards_coalesced_text_to_a_hidden_shell() {
+        let ui = Ui {
+            layout: Layout::Audit,
+            ..split_ui()
+        };
+        let mut state = State::new(30, 110, &ui);
         let now = Instant::now();
-        let pasted = b"\x1b[200~literal \x1b[17~ \x1b[5~ \x1b[201~";
-        let mut forwarded = Vec::new();
+        assert!(
+            state
+                .keyboard(b"\x1bOQecho hidden\n", now, false)
+                .is_empty()
+        );
+        assert_eq!(state.actions, vec!["layout.next"]);
+        state.actions.clear();
+        assert!(
+            state
+                .keyboard(b"\x1b[15~echo hidden\n", now, false)
+                .is_empty()
+        );
+        assert_eq!(state.actions, vec!["reload"]);
+        assert!(state.keyboard(b"ordinary text", now, false).is_empty());
+    }
+
+    #[test]
+    fn pasted_and_incomplete_keys_never_reach_a_hidden_shell() {
+        let mut state = State::new(58, 106, &split_ui());
+        let now = Instant::now();
+        let pasted = b"\x1b[200~literal \x1b[14~ \x1b[5~ \x1b[201~";
         for byte in pasted {
-            forwarded.extend(state.keyboard(&[*byte], now, false));
+            assert!(state.keyboard(&[*byte], now, false).is_empty());
         }
-        assert_eq!(forwarded, pasted);
-        assert!(!state.keyboard.logs);
+        assert!(state.actions.is_empty());
+        assert_eq!(state.logs.screen().scrollback(), 0);
         assert!(!state.keyboard.pasting);
         assert!(state.keyboard(b"\x1b[17", now, false).is_empty());
-        assert_eq!(
-            state.keyboard(&[], now + Duration::from_millis(100), true),
-            b"\x1b[17"
+        assert!(
+            state
+                .keyboard(&[], now + Duration::from_millis(100), true)
+                .is_empty()
         );
-        assert_eq!(
-            state.keyboard(b"~", now + Duration::from_millis(101), false),
-            b"~"
+        assert!(
+            state
+                .keyboard(b"~", now + Duration::from_millis(101), false)
+                .is_empty()
         );
+        assert!(
+            state
+                .keyboard(b"\x1b[1;5Cecho hidden", now, false)
+                .is_empty()
+        );
+        assert!(!state.pty.screen().contents().contains("echo hidden"));
     }
     #[test]
-    fn split_unicode_in_pty_and_log_views_uses_streaming_parser() {
-        let mut state = State::new(30, 110, &Ui::default());
+    fn split_unicode_is_preserved_in_logs_and_hidden_native_terminal() {
+        let mut state = State::new(30, 110, &split_ui());
         for byte in "界e\u{301}".as_bytes() {
             state.pty.process(&[*byte]);
             state.log(&[*byte]);
         }
         let screen = physical(&state.frame(Instant::now()));
-        assert_eq!(
+        assert_eq!(state.pty.screen().cell(0, 0).unwrap().contents(), "界");
+        assert_eq!(screen.screen().cell(0, 0).unwrap().contents(), "界");
+        assert_eq!(screen.screen().cell(0, 2).unwrap().contents(), "e\u{301}");
+        assert_ne!(
             screen
                 .screen()
                 .cell(state.geometry.pty_top, 0)
@@ -1490,13 +2326,12 @@ mod tests {
                 .contents(),
             "界"
         );
-        assert_eq!(screen.screen().cell(0, 2).unwrap().contents(), "e\u{301}");
     }
     #[test]
     fn jsonl_and_disabled_ui_never_initialize_a_physical_display() {
         let mut ui = Ui {
             log_format: LogFormat::Jsonl,
-            ..Ui::default()
+            ..split_ui()
         };
         assert!(Session::start(&ui).unwrap().is_none());
         ui.log_format = LogFormat::Pretty;
@@ -1547,7 +2382,7 @@ mod tests {
         // closing the last slave can discard unread bytes on Darwin.
         let keep_slave = slave.try_clone().unwrap();
         let shared = Arc::new(Shared {
-            state: Mutex::new(State::new(30, 110, &Ui::default())),
+            state: Mutex::new(State::new(30, 110, &split_ui())),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
         });
@@ -1622,35 +2457,98 @@ mod tests {
     }
 
     #[test]
-    fn combined_keys_and_small_resize_return_visible_shell_to_live_logs() {
-        let mut state = State::new(58, 106, &Ui::default());
+    fn typing_keeps_log_scrollback_and_compact_audit_never_exposes_shell() {
+        let mut state = State::new(58, 106, &split_ui());
         for index in 0..100 {
             state.log(format!("combined audit {index:03}\n").as_bytes());
         }
         let now = Instant::now();
-        assert_eq!(state.keyboard(b"\x1b[17~\x1b[5~x", now, false), b"x");
-        assert!(!state.keyboard.logs);
-        assert_eq!(state.logs.screen().scrollback(), 0);
-        assert!(
-            state
-                .logs
-                .screen()
-                .contents()
-                .contains("combined audit 099")
-        );
-        assert!(state.keyboard(b"\x1b[17~\x1b[5~", now, false).is_empty());
-        assert!(state.keyboard.logs);
-        assert!(state.logs.screen().scrollback() > 0);
+        assert!(state.keyboard(b"\x1b[5~x", now, false).is_empty());
+        let position = state.logs.screen().scrollback();
+        assert!(position > 0);
+        assert!(state.keyboard(b"ordinary text", now, false).is_empty());
+        assert_eq!(state.logs.screen().scrollback(), position);
         state.resize(4, 106);
         let compact = state.frame(now);
         assert_eq!(state.geometry.log_rows, 0);
-        assert!(!state.keyboard.logs);
         assert_eq!(state.logs.screen().scrollback(), 0);
-        assert!(!compact.hidden);
-        assert!(compact.rows.last().unwrap().contains("compact view"));
+        assert!(compact.hidden);
         assert!(!compact.rows.last().unwrap().contains("F6"));
+        assert!(!compact.rows.last().unwrap().contains("Shell"));
         state.resize(58, 106);
-        assert!(!state.frame(now).hidden);
+        assert!(state.frame(now).hidden);
         assert_eq!(state.logs.screen().scrollback(), 0);
+    }
+
+    #[test]
+    fn text_filter_keeps_matched_command_output_and_completion() {
+        let mut state = State::new(58, 106, &split_ui());
+        state.log(b"[RUN ] shell #41 cargo test\n[OUT ] shell #41\n  unit tests passed\n[OK  ] shell #41 completed exit=0\n[READY] Standalone observer status\n  unrelated background activity\n[RUN ] shell #42 npm run lint\n[OUT ] shell #42\n  unrelated lint output\n[OK  ] shell #42 completed exit=0\n");
+        let now = Instant::now();
+        assert!(state.keyboard(b"/cargo test\r", now, false).is_empty());
+        assert_eq!(state.log_query, "cargo test");
+        assert!(!state.filter_editing);
+        let text = physical(&state.frame(now)).screen().contents();
+        assert!(text.contains("cargo test"), "{text}");
+        assert!(text.contains("unit tests passed"), "{text}");
+        assert!(text.contains("#41 completed exit=0"), "{text}");
+        assert!(!text.contains("npm run lint"), "{text}");
+        assert!(!text.contains("unrelated lint output"), "{text}");
+        assert!(!text.contains("Standalone observer status"), "{text}");
+        assert!(!text.contains("unrelated background activity"), "{text}");
+        state.log_query = "standalone".into();
+        let standalone = physical(&state.frame(now)).screen().contents();
+        assert!(
+            standalone.contains("Standalone observer status"),
+            "{standalone}"
+        );
+        assert!(
+            standalone.contains("unrelated background activity"),
+            "{standalone}"
+        );
+        assert!(!standalone.contains("cargo test"), "{standalone}");
+        assert!(!standalone.contains("unit tests passed"), "{standalone}");
+        assert!(!standalone.contains("npm run lint"), "{standalone}");
+        state.keyboard(b"\x1b", now, false);
+        state.keyboard(&[], now + Duration::from_millis(100), true);
+        assert!(state.log_query.is_empty());
+        assert!(
+            physical(&state.frame(now))
+                .screen()
+                .contents()
+                .contains("npm run lint")
+        );
+    }
+
+    #[test]
+    fn audit_navigation_opens_highlighted_source_and_keeps_final_result() {
+        let ui = Ui {
+            sidebar: false,
+            ..split_ui()
+        };
+        let mut state = State::new(40, 100, &ui);
+        state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","run_id":"source-1","phase":"started","code":"const total = 42;\nreturn total;","timestamp_ms":0}));
+        state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","run_id":"source-1","phase":"finished","success":false,"error":"sample failure","duration_ms":12}));
+        state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","run_id":"source-2","phase":"started","code":"return 'next';","timestamp_ms":1}));
+        let now = Instant::now();
+        assert!(state.keyboard(b"\x1b[B\r", now, false).is_empty());
+        assert_eq!(state.audit.snapshot()["selected"]["run_id"], "source-1");
+        assert_eq!(state.audit.snapshot()["detail"], true);
+        let frame = state.frame(now);
+        let text = physical(&frame).screen().contents();
+        assert!(text.contains("const total = 42;"), "{text}");
+        assert!(text.contains("return total;"), "{text}");
+        assert!(text.contains("sample failure"), "{text}");
+        assert!(
+            frame
+                .rows
+                .iter()
+                .any(|row| row.contains(&state.ui.color("accent")) && row.contains("const"))
+        );
+        assert!(state.keyboard(b"\x1b[D", now, false).is_empty());
+        assert_eq!(state.audit.snapshot()["detail"], false);
+        assert!(state.keyboard(b"\x1b[A\x1b[C", now, false).is_empty());
+        assert_eq!(state.audit.snapshot()["selected"]["run_id"], "source-2");
+        assert_eq!(state.audit.snapshot()["detail"], true);
     }
 }

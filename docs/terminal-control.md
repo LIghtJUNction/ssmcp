@@ -10,6 +10,14 @@
 | 运行交互程序，保留 shell 环境 | `terminal.open/write/read` | 每个 terminal 保留自己的 shell 和画面 |
 | 操作电脑或浏览器 | `cua.*` / `cua.browser.*` | 使用客户端的原生桌面与 CDP 接口 |
 
+## 前台观察与终端输入
+
+默认 `chat` 布局连续显示执行记录，底部输入框用于追加用户要求；`/queue` 管理队列，`/agents` 选择接收者，`/audit` 浏览源码。Tab 切换输入与内容焦点，内容区中的 ↑/↓ 用于选择，Enter 或 → 展开审计，← 返回列表。滚轮和 PgUp/PgDn 直接滚动当前内容，Ctrl-End 返回最新日志；`/filter 文本` 搜索，F9 切换类别。[客户端 UI](client-ui.md)
+
+仪表盘中的用户要求与本地命令不会写入后台 PTY。要求队列由支持协议 v7 的连接交付给符合目标的 `code_mode` 响应；交互式终端仍由 `terminal.*` 管理。自己的前端可以读取输出、写入键盘字节和调整尺寸。在另一个本地终端运行 `ssmcp -i`，可以选择已授权设备并直接使用它的 PTY；Ctrl-] 离开，Ctrl-C 交给远端程序。
+
+`ssmcp attach NAME` 用于观察本机保存的后台会话，目前不转发 attach 自己的输入框队列。启用仪表盘时它不会把普通输入交给隐藏终端；需要直接交互时使用 `ssmcp -i`，或为 attach 使用 `dashboard = false` 的配置。后台要求可通过该连接的 `ssmcp.ui.queue` 管理。退出 attach 不会停止后台会话。
+
 ## 并行命令
 
 每条命令使用独立进程和 stdout/stderr 管道。命令之间互不共享交互式 shell 的当前目录或环境变量；工作目录默认是客户端共享根目录。需要管道、通配符或重定向时，显式执行本机 shell。
@@ -53,7 +61,7 @@ exec.read 的 stdout_cursor 和 stderr_cursor 分别推进；完整长输出保�
 
 ## 多个独立终端
 
-每条连接保留 main 终端，并可创建其他交互式终端，总计最多 16 个。每个终端拥有独立 shell、输入、输出游标、工作目录和 VT 画面。切换显示不会暂停后台终端。
+每条连接保留 main 终端，并可创建其他交互式终端，总计最多 16 个。每个终端拥有独立 shell、输入、输出游标和启动目录。它们在后台保留状态，不占据默认仪表盘的显示区域；选择其他终端不会暂停已有进程。
 
 ```javascript
 const [build, logs] = await Promise.all([
@@ -65,23 +73,39 @@ await terminal.write(clientId, {
   data: "pwd\n"
 });
 await terminal.select(clientId, {terminal_id: build.terminal_id});
-return await terminal.list(clientId);
+return {
+  terminals: await terminal.list(clientId),
+  output: await terminal.read(clientId, {
+    terminal_id: build.terminal_id,
+    cursor: 0,
+    max_bytes: 16384,
+    wait_ms: 1000
+  })
+};
 ```
 
-本机按 F7 在终端之间切换，分隔行显示终端名字和序号；F6 仍切换到审计日志。输入始终发送到当前显示的终端。括号粘贴里的 F7 字节保留为输入，终端设备查询的回复发回原终端。
+`terminal.select` 更新所选终端状态，默认审计界面保持原有布局。自定义前端根据 `terminal.list` 的 ID 选择要呈现的终端，显式把同一个 `terminal_id` 传给 read、write 和 resize；终端字节交给终端解析器处理，不能直接当作普通日志文本。
 
 | 方法 | 参数与行为 |
 | --- | --- |
 | terminal.open | name、cwd、select 均可省略；cwd 必须在共享根目录内 |
 | terminal.list | 返回全部终端、selected、default_terminal_id 和上限 |
-| terminal.select | 指定 terminal_id，切换本机显示与键盘目标 |
+| terminal.select | 指定 terminal_id，更新所选 PTY；不会打开默认仪表盘中的 Shell 区域 |
 | terminal.write | 指定 terminal_id、data；追加换行执行命令 |
 | terminal.read | 指定 terminal_id、cursor、max_bytes、wait_ms；沿用返回的 next_cursor |
 | terminal.resize | 指定 terminal_id、rows、cols |
 | terminal.status | 返回指定终端的进程与输出状态 |
 | terminal.close | 停止并释放额外终端，重复关闭安全；关闭当前终端后回到 main |
 
-省略 terminal_id 的旧 read/write/status/resize 调用始终操作 main，界面切换不会改变旧脚本的目标。main 随客户端连接结束。列表中的 cwd 是启动目录；在 shell 内执行 cd 后，使用 pwd 获取动态位置。
+省略 terminal_id 的旧 read/write/status/resize 调用始终操作 main，选择其他终端不会改变旧脚本的目标。main 随客户端连接结束。列表中的 cwd 是启动目录；在 shell 内执行 cd 后，使用 pwd 获取动态位置。
+
+## 源码审计与执行结果
+
+客户端与服务器都支持协议 v6 或更新版本时，审计区和 `ssmcp.audit.events` 可以读取调用方提交的 `code_mode.code`、运行 ID、原生调用及编排结束状态。源码先经过审计脱敏，仅发送给本次编排实际访问的客户端；未被访问的在线设备不会收到。界面中的源码高亮和浏览不执行源码。
+
+编排结束不代表命令进程已经退出。例如 `exec.start` 返回 job_id 后，`code_mode` 可以立即返回；后台命令继续由 `exec.status/read/wait` 观察。stdout、stderr、进程退出码和耗时分别显示，源码中的某个赋值表达式或输出 JSON 的 `exit_code` 字段不会替代真实退出状态。
+
+`ssmcp.audit.events` 与 `exec.events` 是独立事件流，需要分别保存 `next_cursor`。屏幕审计区最多保留 128 次运行、合计 2 MiB 的数据，单段源码上限 64 KiB；读取事件时检查 `truncated` 与归档状态。v4/v5 连接仍可使用其已有能力，但原始源码不会出现在本地事件中；先升级两端并重新连接，再观察新调用。[日志与输出保留](logging.md) · [构建自己的界面](client-ui.md#构建自己的界面)
 
 ## 显示当前控制者与模型
 
@@ -102,7 +126,7 @@ return await terminal.list(clientId);
 
 模型名称来自调用方声明，界面标记 caller-reported。MCP clientInfo 只提供应用名称；未传模型时显示 Model unknown，不从应用名或历史请求推断。controller.name/model 至少提供一个，拒绝控制字符和超长字段；source 由服务端生成，不接受调用方指定。
 
-该元数据使用 SSH 协议 v5。新版服务端继续接收 v4 客户端，并省略旧端无法识别的新字段；list 中的 controller_metadata 表明连接是否支持身份显示。先升级服务端，再升级客户端；随后新建或重载连接即可使用完整接口。以新连接实际返回的工具目录为准，仅更新仓库文件不会替换正在运行的进程。
+控制者元数据自协议 v5 开始提供，源码审计从 v6 开始提供，用户要求队列和本地登记成员快照使用 v7。新版服务端继续接收旧版本客户端，并省略旧端无法识别的字段；list 中的 controller_metadata 表明连接是否支持身份显示。先升级服务端，再升级客户端，随后新建或重载连接。以新连接实际返回的工具目录为准，仅更新仓库文件不会替换正在运行的进程。
 
 ## 原生 CUA 与 Codex 工具
 
@@ -122,7 +146,8 @@ Codex 已连接的 CUA MCP 工具通过真实目录中返回的 codex.mcp.* 名�
 
 - 原生后台输入与取消：src/backend/shell.rs 的进程测试。
 - 多终端隔离、关闭和容量：tests/terminals.rs。
-- F7 输入顺序、设备回复和独立画面：src/client/input.rs、src/client/terminal.rs。
+- 浏览输入分派、设备回复与独立终端状态：src/client/input.rs、src/client/terminal.rs。
+- 源码浏览、日志筛选与布局：src/client/audit_view.rs、scripts/e2e_client_ui.py。
 - 并发、调用预算、stdin/terminal helper：scripts/test_execution_helpers.mjs。
 - CUA 图片及错误透传：scripts/test_cua_facade.mjs。
 - 真实 SSH、MCP 与客户端画面：scripts/e2e_terminal_control.py。

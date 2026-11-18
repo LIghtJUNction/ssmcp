@@ -52,8 +52,13 @@ if scenario == "wrong-frame":
 if scenario == "timeout":
     time.sleep(60)
     raise SystemExit(2)
-if scenario == "reject-all" or (scenario.startswith("legacy") and hello["version"] == 5):
+if scenario == "reject-all" or (scenario.startswith("legacy") and hello["version"] != 4):
     reject(unsupported)
+
+if scenario == "code-only" and hello["version"] > 6:
+    reject(unsupported)
+if scenario == "controller-only" and hello["version"] > 5:
+    reject(unsupported + "; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)")
 
 if hello["version"] == 4:
     assert set(hello["metadata"]) <= {"name", "cwd", "hostname", "allow"}
@@ -210,7 +215,7 @@ async fn current_protocol_is_preferred_without_changing_metadata() {
 }
 
 #[tokio::test]
-async fn explicit_rejection_uses_one_fresh_legacy_transport_and_remembers_it() {
+async fn explicit_rejections_use_fresh_transports_and_remember_the_legacy_version() {
     let fixture = Fixture::new();
     let metadata = metadata(true);
     let original = metadata.clone();
@@ -226,7 +231,7 @@ async fn explicit_rejection_uses_one_fresh_legacy_transport_and_remembers_it() {
         )
         .await;
     let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(attempts, 2);
+    assert_eq!(attempts, 4);
     assert_eq!(protocol, LEGACY_VERSION);
     assert!(registered);
     assert!(registration.ready.1.is_empty());
@@ -241,10 +246,16 @@ async fn explicit_rejection_uses_one_fresh_legacy_transport_and_remembers_it() {
         hellos[0]["metadata"]["title"],
         original.title.as_ref().unwrap().as_str()
     );
-    assert_eq!(hellos[1]["version"], LEGACY_VERSION);
-    assert!(hellos[1]["metadata"].get("title").is_none());
+    assert_eq!(hellos[1]["version"], CODE_VERSION);
     assert_eq!(
-        hellos[1]["metadata"]["allow"],
+        hellos[1]["metadata"]["title"],
+        original.title.as_ref().unwrap().as_str()
+    );
+    assert_eq!(hellos[2]["version"], CONTROLLER_VERSION);
+    assert_eq!(hellos[3]["version"], LEGACY_VERSION);
+    assert!(hellos[3]["metadata"].get("title").is_none());
+    assert_eq!(
+        hellos[3]["metadata"]["allow"],
         serde_json::to_value(&original.allow).unwrap()
     );
     close(registration).await;
@@ -267,13 +278,69 @@ async fn explicit_rejection_uses_one_fresh_legacy_transport_and_remembers_it() {
             .iter()
             .map(|value| value["version"].as_u64().unwrap())
             .collect::<Vec<_>>(),
-        [5, 4, 4]
+        [7, 6, 5, 4, 4]
     );
     close(registration).await;
 }
 
 #[tokio::test]
-async fn explicit_legacy_rejection_is_terminal_without_a_third_transport() {
+async fn version_six_gateway_keeps_code_audit_without_sending_steering_frames() {
+    let fixture = Fixture::new();
+    let metadata = metadata(true);
+    let mut protocol = VERSION;
+    let mut registered = false;
+    let (result, attempts) = fixture
+        .register(
+            "code-only",
+            &metadata,
+            &mut protocol,
+            &mut registered,
+            READY_LIMIT,
+        )
+        .await;
+    let registration = result.unwrap().expect("registration was cancelled");
+    assert_eq!(attempts, 2);
+    assert_eq!(protocol, CODE_VERSION);
+    assert!(registered);
+    assert_eq!(
+        fixture.hellos()[1]["metadata"],
+        serde_json::to_value(&metadata).unwrap()
+    );
+    close(registration).await;
+}
+
+#[tokio::test]
+async fn known_version_five_gateway_rejection_preserves_controller_protocol_and_title() {
+    let fixture = Fixture::new();
+    let metadata = metadata(true);
+    let mut protocol = VERSION;
+    let mut registered = false;
+    let (result, attempts) = fixture
+        .register(
+            "controller-only",
+            &metadata,
+            &mut protocol,
+            &mut registered,
+            READY_LIMIT,
+        )
+        .await;
+    let registration = result.unwrap().expect("registration was cancelled");
+    assert_eq!(attempts, 3);
+    assert_eq!(protocol, CONTROLLER_VERSION);
+    assert!(registered);
+    let hellos = fixture.hellos();
+    assert_eq!(hellos[0]["version"], VERSION);
+    assert_eq!(hellos[1]["version"], CODE_VERSION);
+    assert_eq!(hellos[2]["version"], CONTROLLER_VERSION);
+    assert_eq!(
+        hellos[2]["metadata"]["title"],
+        metadata.title.as_ref().unwrap().as_str()
+    );
+    close(registration).await;
+}
+
+#[tokio::test]
+async fn explicit_legacy_rejection_is_terminal_after_all_supported_versions() {
     let fixture = Fixture::new();
     let mut protocol = VERSION;
     let mut registered = false;
@@ -288,10 +355,10 @@ async fn explicit_legacy_rejection_is_terminal_without_a_third_transport() {
         .await;
     let error = registration_error(result);
     assert!(error.downcast_ref::<UnsupportedWireProtocol>().is_some());
-    assert_eq!(attempts, 2);
+    assert_eq!(attempts, 4);
     assert_eq!(protocol, LEGACY_VERSION);
     assert!(!registered);
-    assert_eq!(fixture.hellos().len(), 2);
+    assert_eq!(fixture.hellos().len(), 4);
 }
 
 #[tokio::test]
@@ -359,7 +426,7 @@ async fn compatibility_preserves_both_allow_checks_and_login_code_requirement() 
             .await;
         let error = registration_error(result);
         assert!(error.to_string().contains(expected), "{scenario}: {error}");
-        assert_eq!(attempts, 2);
+        assert_eq!(attempts, 4);
         assert_eq!(protocol, LEGACY_VERSION);
         assert!(
             registered,

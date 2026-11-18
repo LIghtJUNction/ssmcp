@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "checks": 37,
+  "transport": "loopback WebSocket",
+  "oauth": "synthetic GitHub provider",
+  "ssh": false,
+  "models_started": false,
+  "source_commit": "8d8172765644bfecdf881a5a62262bde93415e53",
+  "exit_code": 0,
+  "duration_seconds": 6.077,
+  "binaries": {
+    "ssmcp": "e0510216d7125eb0ea511e66596e11227ec91aaa52acfa6a6742956d2c402b7f",
+    "ssmcpd": "a6ffed46b6261ec37e87abc3a34b507277422a2fe93c8a684dd12c585bbf86ed",
+    "vt_snapshot": "4569bc6bb436b103a2c9ea8e9d5f2a72a63dea5badad9ed292c674c0c4159fb7",
+    "router_test_fixture": "d4ee3f9cc023567cc4c0b283da031cd9cdee5a1cf544f50b34784c616c948518"
+  },
+  "sources": {
+    "scripts/e2e_account_relay.py": "93c84978426608e15783014e7bb457578742f8d982efdb993f96caec90c49adf"
+  }
+}

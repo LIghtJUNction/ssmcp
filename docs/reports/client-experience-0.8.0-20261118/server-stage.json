@@ -1,0 +1,52 @@
+{
+  "source_commit": "12e1d57e6c39af4f1a5a66282752cb1b06bd6225",
+  "package_sha256": "1c3d156faa29eccb47e4f0c2aa70f6526f409519e223f3aa029023f9910ade02",
+  "stage_script_sha256": "3918ce063baec726dc628ba1bf0cfef0d4b164a4505be2c8d73faec32fe81b2e",
+  "phase": "stage",
+  "production_apply": false,
+  "started_utc": "2026-11-17T21:23:44Z",
+  "before": {
+    "pid": 10549,
+    "binary_sha256": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28",
+    "running_sha256": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28",
+    "package": "ssmcp-git 0.7.2.r182.g13a0ac7-1",
+    "active": "active"
+  },
+  "status": "passed",
+  "stage": {
+    "checks": {
+      "github_configured": true,
+      "issuer_https": true,
+      "package_name": true,
+      "package_sha256": true,
+      "package_version": true,
+      "production_not_changed": true,
+      "stage_unit_unused": true,
+      "staged_DCR_survives_restart": true,
+      "staged_authorization_before_restart": true,
+      "staged_binary_version": true,
+      "staged_health_and_discovery": true,
+      "staged_private_registry": true
+    },
+    "commit": "12e1d57e6c39af4f1a5a66282752cb1b06bd6225",
+    "expected_version": "0.8.0",
+    "finished_unix": 1794950633,
+    "phase": "stage",
+    "started_unix": 1794950631,
+    "state": "prepared"
+  },
+  "after": {
+    "pid": 10549,
+    "binary_sha256": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28",
+    "running_sha256": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28",
+    "package": "ssmcp-git 0.7.2.r182.g13a0ac7-1",
+    "active": "active"
+  },
+  "production_unchanged": true,
+  "stage_receipt_expires_after_seconds": 3600,
+  "server_candidate_package": "${CANDIDATE_DIRECTORY}/ssmcp-git-0.8.0.r227.g12e1d57-1-x86_64.pkg.tar.zst",
+  "server_stage_report": "${ROLLOUT_DIRECTORY}/stage.json",
+  "finished_utc": "2026-11-17T21:23:53Z",
+  "production_config_unchanged": true,
+  "publication_note": "Derived from the recorded operation; private filesystem paths normalized or omitted. Server configuration fingerprints are omitted; their equality is recorded separately. Numeric results, binary hashes, and package hashes are unchanged."
+}

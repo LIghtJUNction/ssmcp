@@ -1,0 +1,202 @@
+{
+  "source_commit": "8d8172765644bfecdf881a5a62262bde93415e53",
+  "results": [
+    {
+      "stage": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.61,
+      "summary": [],
+      "tail": []
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "-j1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 65.65,
+      "summary": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 05s"
+      ],
+      "tail": []
+    },
+    {
+      "stage": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bins",
+        "--example",
+        "vt_snapshot",
+        "-j1"
+      ],
+      "exit_code": 0,
+      "seconds": 121.85,
+      "summary": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 01s"
+      ],
+      "tail": []
+    },
+    {
+      "stage": "fixture",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--message-format=json",
+        "-j1"
+      ],
+      "exit_code": 0,
+      "seconds": 139.09,
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 18s"
+      ],
+      "tail": [],
+      "fixture_binary": "${BUILD_ROOT}/debug/build/ssmcp/d5e38e70f94c9cb7/out/ssmcp-d5e38e70f94c9cb7"
+    },
+    {
+      "stage": "rust",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 115.79,
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.40s",
+        "     Running unittests src/lib.rs (${BUILD_ROOT}/debug/build/ssmcp/d5e38e70f94c9cb7/out/ssmcp-d5e38e70f94c9cb7)",
+        "test result: ok. 715 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 34.45s",
+        "     Running unittests src/bin/ssmcp.rs (${BUILD_ROOT}/debug/build/ssmcp/91d23d1f9fd5b9bc/out/ssmcp-91d23d1f9fd5b9bc)",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "     Running unittests src/bin/ssmcpd.rs (${BUILD_ROOT}/debug/build/ssmcp/4e67e1b22977d993/out/ssmcpd-4e67e1b22977d993)",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "     Running tests/cc_backend.rs (${BUILD_ROOT}/debug/build/ssmcp/055894d4a6335b6f/out/cc_backend-055894d4a6335b6f)",
+        "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.59s",
+        "     Running tests/client_reload.rs (${BUILD_ROOT}/debug/build/ssmcp/ace43c80addddbab/out/client_reload-ace43c80addddbab)",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.39s",
+        "     Running tests/client_server_config.rs (${BUILD_ROOT}/debug/build/ssmcp/7dc08a0c04ccb154/out/client_server_config-7dc08a0c04ccb154)",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+        "     Running tests/client_startup.rs (${BUILD_ROOT}/debug/build/ssmcp/ad022efd63e0d722/out/client_startup-ad022efd63e0d722)",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.25s",
+        "     Running tests/codex_backend.rs (${BUILD_ROOT}/debug/build/ssmcp/77cc178f5e39b29b/out/codex_backend-77cc178f5e39b29b)",
+        "test result: ok. 14 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 21.60s",
+        "     Running tests/collaboration.rs (${BUILD_ROOT}/debug/build/ssmcp/e7607bcc2d0a706b/out/collaboration-e7607bcc2d0a706b)",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
+        "     Running tests/context.rs (${BUILD_ROOT}/debug/build/ssmcp/e401d5d109281d84/out/context-e401d5d109281d84)",
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s",
+        "     Running tests/context_helpers.rs (${BUILD_ROOT}/debug/build/ssmcp/9b6d294b72c37de2/out/context_helpers-9b6d294b72c37de2)",
+        "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "     Running tests/context_runtime.rs (${BUILD_ROOT}/debug/build/ssmcp/f01e9a0aca6ca4e8/out/context_runtime-f01e9a0aca6ca4e8)",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s",
+        "     Running tests/oauth_security.rs (${BUILD_ROOT}/debug/build/ssmcp/c18b8a4e0e8b0690/out/oauth_security-c18b8a4e0e8b0690)",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s",
+        "     Running tests/pi_backend.rs (${BUILD_ROOT}/debug/build/ssmcp/848d4451a83d6d22/out/pi_backend-848d4451a83d6d22)",
+        "test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.60s",
+        "     Running tests/release_client.rs (${BUILD_ROOT}/debug/build/ssmcp/51e88af06d9c8e72/out/release_client-51e88af06d9c8e72)",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s",
+        "     Running tests/resources.rs (${BUILD_ROOT}/debug/build/ssmcp/c16a523bc5fe3708/out/resources-c16a523bc5fe3708)",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s",
+        "     Running tests/rsync.rs (${BUILD_ROOT}/debug/build/ssmcp/730caa834749a1d2/out/rsync-730caa834749a1d2)",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "     Running tests/terminals.rs (${BUILD_ROOT}/debug/build/ssmcp/df70acc6052309c6/out/terminals-df70acc6052309c6)",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.74s",
+        "     Running tests/two_tools.rs (${BUILD_ROOT}/debug/build/ssmcp/35556b7684cd5b56/out/two_tools-35556b7684cd5b56)",
+        "test result: ok. 2 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+        "     Running tests/watchdog.rs (${BUILD_ROOT}/debug/build/ssmcp/d4ae5d537ab2f7a5/out/watchdog-d4ae5d537ab2f7a5)",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s",
+        "     Running tests/workspace_bridge.rs (${BUILD_ROOT}/debug/build/ssmcp/82f7aa5e3072ca3e/out/workspace_bridge-82f7aa5e3072ca3e)",
+        "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "   Doc-tests ssmcp",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "tail": []
+    },
+    {
+      "stage": "http",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "two_tools",
+        "-j1",
+        "--",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 2.77,
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s",
+        "     Running tests/two_tools.rs (${BUILD_ROOT}/debug/build/ssmcp/35556b7684cd5b56/out/two_tools-35556b7684cd5b56)",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.09s"
+      ],
+      "tail": []
+    },
+    {
+      "stage": "code_mode",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "code_mode::tests",
+        "-j1",
+        "--",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 4.07,
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s",
+        "     Running unittests src/lib.rs (${BUILD_ROOT}/debug/build/ssmcp/d5e38e70f94c9cb7/out/ssmcp-d5e38e70f94c9cb7)",
+        "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 701 filtered out; finished in 3.81s"
+      ],
+      "tail": []
+    },
+    {
+      "stage": "context_helpers",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "context_helpers",
+        "-j1",
+        "--",
+        "--ignored",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 1.03,
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s",
+        "     Running tests/context_helpers.rs (${BUILD_ROOT}/debug/build/ssmcp/9b6d294b72c37de2/out/context_helpers-9b6d294b72c37de2)",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s"
+      ],
+      "tail": []
+    }
+  ]
+}

@@ -4,7 +4,7 @@ mod install;
 use super::{account, trust};
 use crate::{
     Result,
-    wire::{ClientMetadata, Frame, Mode, Operation, VERSION},
+    wire::{CONTROLLER_VERSION, ClientMetadata, Frame, Mode, Operation},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -548,7 +548,10 @@ async fn connect(control: Arc<Control>) -> Result<()> {
     send(
         &mut socket,
         Frame::Hello {
-            version: VERSION,
+            // Recovery implements calls and controller metadata, not v6 source
+            // audit or v7 steering. Advertising the full client's version would
+            // make the broker send completion frames this small loop cannot use.
+            version: CONTROLLER_VERSION,
             mode: Mode::Shell,
             metadata: control.config.metadata()?,
         },
