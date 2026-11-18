@@ -117,9 +117,9 @@ def main():
         window = None
         ready = False
         try:
-            # The anonymous discovery request must reach this fixture's actual
-            # gateway, rather than the shared harness's reserved example domain.
-            e2e.PUBLIC_URL = f"http://127.0.0.1:{h.http_port}"
+            # This gateway advertises a reserved HTTPS origin. Its real guide
+            # pages are tested via loopback below; the live QR must select the
+            # exact same-origin portal fallback when discovery is unavailable.
             h.prepare()
             routes = []
             for path, title, language in [
@@ -174,7 +174,11 @@ def main():
             window.wait(lambda: h.ui("/display/rows") == 30 and h.ui("/display/cols") == 120, "120x30 terminal")
             endpoint = urlsplit(credentials["url"])
             assert endpoint.username is None and endpoint.password is None
-            expected = endpoint.scheme + "://" + endpoint.netloc + "/guide/"
+            expected = endpoint.scheme + "://" + endpoint.netloc + "/"
+            h.check(expected == e2e.PUBLIC_URL + "/", "the owned HTTPS fixture has the expected public origin")
+            # Wait beyond the two-second anonymous discovery budget so an
+            # initial portal placeholder cannot count as settled fallback.
+            discovery_settled = time.monotonic() + 2.1
             zbar = shutil.which("zbarimg")
             if not zbar:
                 raise RuntimeError("zbarimg is required for a real QR decode")
@@ -185,14 +189,16 @@ def main():
                 window.image().save(shot)
                 r = subprocess.run([zbar, "--quiet", "--raw", str(shot)], capture_output=True, text=True, timeout=4)
                 last_decoded = r.stdout.strip() if r.returncode == 0 else None
-                return last_decoded if last_decoded == expected else None
+                return last_decoded if last_decoded == expected and time.monotonic() >= discovery_settled else None
             try:
-                value = window.wait(decoded, "QR decoder reads the available guide URL", 10)
+                value = window.wait(decoded, "QR decoder reads the settled same-origin portal fallback", 10)
             except AssertionError as error:
                 raise AssertionError(f"{error}; expected={expected!r}; last decoded={last_decoded!r}") from error
-            h.check(value == expected, "actual 120x30 sidebar QR decodes exactly to the credential-free gateway guide URL")
+            h.check(value == expected, "actual 120x30 sidebar QR decodes exactly to the credential-free same-origin portal fallback")
             (output / "qr-decoded.txt").write_text(value + "\n")
             report["qr_url"] = value
+            report["qr_route"] = {"selection": "portal_fallback", "reason": "advertised reserved HTTPS origin is unavailable",
+                                  "expected_url": expected, "discovery_budget_seconds": 2}
             report["cell_pixels"] = [window.cw, window.ch]
             window.resize(16, 60)
             window.wait(lambda: h.ui("/display/rows") == 16 and h.ui("/display/cols") == 60, "small terminal")

@@ -624,7 +624,12 @@ class FilePaste(InputHistory):
         self.oauth_login(front.credentials)
         front.until(lambda shot: shot["alternate_screen"] and "ssmcp" in text(shot),
                     "the isolated logs layout")
-        self.send_stream(front, b"\x1b[200~\x89PNG\r\n\x1a\n\x00\x03\xff\x1b[201~")
+        image = png_fixture()
+        kind, controls = b"raWp", b"\x03\x1d\xff"
+        chunk = (struct.pack(">I", len(controls)) + kind + controls
+                 + struct.pack(">I", zlib.crc32(kind + controls) & 0xFFFFFFFF))
+        complete = image[:-12] + chunk + image[-12:]
+        self.send_stream(front, b"\x1b[200~" + complete + b"\x1b[201~")
         front.pump(0.15)
         self.check(front.process.poll() is None,
                    "logs-layout bracketed paste retains literal control bytes without disconnecting")
