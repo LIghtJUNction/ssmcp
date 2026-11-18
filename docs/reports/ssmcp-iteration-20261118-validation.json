@@ -2,7 +2,7 @@
   "schema": "ssmcp.iteration-validation.v1",
   "date": "2026-11-18",
   "timezone": "Asia/Taipei",
-  "status": "late_pr26_integration_ready_for_validation",
+  "status": "installed_checkpoint_with_live_layout_fix_pending",
   "baseline_validation": {
     "scope": "Shared client workflows before late PR26 presentation, branch-memory and transactional file-list import increments.",
     "committed_base": "5b6deb54a0ecdadcba120cdef018ea407a6a0998",
@@ -229,5 +229,138 @@
     "Browser acceptance uses isolated Chromium, not the user's personal browser profile.",
     "No model or ssmcp-managed agent was started.",
     "Chinese display language remains planned for the version after 0.9.0."
+  ],
+  "installed_checkpoint": {
+    "recorded_at_utc": "2026-11-18T11:37:13.722736+00:00",
+    "source_commit": "97c026c7ce28d60cb1766074d245c0ea18a949e9",
+    "status": "installed; live full-width row rendering hotfix pending",
+    "unit": {
+      "passed": 1044,
+      "failed": 0,
+      "ignored": 25,
+      "explicit_code_mode_passed": 28,
+      "node_passed": 56,
+      "fmt": "passed",
+      "clippy_all_targets_D_warnings": "passed",
+      "results": "final-integration-r10/results.json"
+    },
+    "pty": {
+      "passed_checks": 642,
+      "reports": [
+        {
+          "suite": "composer",
+          "checks": 96,
+          "report": "pty/final-r4/review/composer.json",
+          "sha256": "9c9504f86459ec95fc37bf9144f55dbfc452ca23fc3eeb3044ae3b4053060b18"
+        },
+        {
+          "suite": "questions",
+          "checks": 43,
+          "report": "pty/final-r4/review/questions.json",
+          "sha256": "169612a4277488cb754387b50822ac07c28e4ae8be045484b36b26cac6aa9f8c"
+        },
+        {
+          "suite": "relay_composer",
+          "checks": 45,
+          "report": "pty/final-r4/root/relay-composer.json",
+          "sha256": "c7e991d30c0c469e5848fb592420630fbed5fbbf0ed91936915ddcd0af7bd039"
+        },
+        {
+          "suite": "client_ui",
+          "checks": 41,
+          "report": "pty/final-r4/panel/client-ui/ui-smoke.json",
+          "sha256": "1b80b246fc0891426199297ed1fc9a7f34a2e6b3bcbb91685fa710c4fbf761a6"
+        },
+        {
+          "suite": "browser_owned",
+          "checks": 69,
+          "report": "pty/final-r4/root/browser-owned/report.json",
+          "sha256": "f8a9074f937a05da93e8dd713060c6d5f77f5a32a3c032d2ac562acd63f9bf20"
+        },
+        {
+          "suite": "input_history",
+          "checks": 122,
+          "report": "pty/final-r4/input-history.json",
+          "sha256": "7aff51eb339bbd43f55d0e2e83a2527b3e3b8929aa961c7b937629f4d3668fc7"
+        },
+        {
+          "suite": "presentations",
+          "checks": 58,
+          "report": "pty/final-r4/panel/presentations-final/report.json",
+          "sha256": "e414f06d769c1acc07d2c441943b6ed0f1732bcb8328f0b79db8190822208af1"
+        },
+        {
+          "suite": "context_memory",
+          "checks": 87,
+          "report": "pty/final-r4/context-memory.json",
+          "sha256": "86bd7cb39c75e9da9879422b50b3d0c598df2e83690e92433664d930a0ffe499"
+        },
+        {
+          "suite": "file_paste_image",
+          "checks": 81,
+          "report": "pty/final-r4/file-paste-image.json",
+          "sha256": "424df3cc62dd06cdb01b38c54128f0f1a154ee711052b1d1ef5f29885a5f867e"
+        }
+      ]
+    },
+    "candidate_binary_sha256": {
+      "ssmcp": "209d5a16d3113e9261fe0efe439fe6273af6512dff7eaad2827fbed7a4eec6d7",
+      "ssmcpd": "5a5078c0452ecd7b20ee90a7ca26d134ec833e4efd4611a946b8042dec6a83d0",
+      "examples/vt_snapshot": "b1e3cb664926fcf4c6ea51e6e1429e49393fcab8a954bd6c44b53f7c021ddaac",
+      "lib-fixture": "8851ab5d8f92d9fe0e4062857bd85aa7907ee7ad538523cf0093430453186cab"
+    },
+    "installation": {
+      "pacman": "ssmcp-git 0.9.0.r339.g97c026c-1",
+      "source_commit": "97c026c7ce28d60cb1766074d245c0ea18a949e9",
+      "installed": [
+        {
+          "path": "/usr/bin/ssmcp",
+          "version": "ssmcp 0.9.0",
+          "sha256": "0407c2c4eae7bf1b355e7fc7152066297ec88013340a33a3e186740caff5fed3",
+          "bytes": 9830232
+        },
+        {
+          "path": "/usr/bin/ssmcpd",
+          "version": "ssmcpd 0.9.0",
+          "sha256": "97109668fdb5cdd15412c29882f7abc08676d5b2f02fc5ca47055ad37c274869",
+          "bytes": 5508592
+        },
+        {
+          "path": "/home/lightjunction/.cargo/bin/ssmcp",
+          "version": "ssmcp 0.9.0",
+          "sha256": "4a10f901146dd6b0b9621b31a06670d5e48a4e7eb793c8cb744b75991690368d",
+          "bytes": 9719184
+        },
+        {
+          "path": "/home/lightjunction/.cargo/bin/ssmcpd",
+          "version": "ssmcpd 0.9.0",
+          "sha256": "7e254a60cc1e26fa3a496b5641ea7e97319f3bab6574f545c78061a4619e8544",
+          "bytes": 5397416
+        }
+      ],
+      "local_ssmcpd_active": "inactive"
+    },
+    "live_observation": {
+      "pid": 2013166,
+      "binary_sha256": "4a10f901146dd6b0b9621b31a06670d5e48a4e7eb793c8cb744b75991690368d",
+      "native_message_accepted": true,
+      "native_message_history_saved": true,
+      "explicit_image_reference_read": true,
+      "reload_acknowledged_by_this_controller": false
+    },
+    "limits": [
+      "Actual user screenshot exposed a missing fixed-width body contract; standard PTY tests did not assert sidebar body columns. A focused hotfix and VT test are required.",
+      "External hidden Chromium tab screenshot returned its documented timeout without activation; the isolated owned-browser acceptance passed 69 checks.",
+      "No production relay deployment, real OS matrix acceptance, or public release publication was performed."
+    ]
+  },
+  "followup_scope": [
+    "fixed-width live terminal layout",
+    "native Kitty image output for capable terminals",
+    "zero-dependency Project Z ztui crate",
+    "persistent same-origin bootstrap and MCP OAuth invitation issuer",
+    "QR sidebar and English/Chinese public gateway guide",
+    "computer use defaults to private desktop",
+    "remaining PR integration"
   ]
 }
