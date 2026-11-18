@@ -1048,7 +1048,7 @@ fn append_user_messages(mut response: Value, mut messages: Vec<Value>) -> Value 
             message["revision"],
             message["text"].as_str().unwrap_or("")
         ));
-        if let Some(attachments) = message["images"].as_array_mut() {
+        if let Some(attachments) = message.get_mut("images").and_then(Value::as_array_mut) {
             for attachment in attachments {
                 let Some(object) = attachment.as_object_mut() else {
                     continue;
