@@ -1394,7 +1394,13 @@ mod tests {
         fs::remove_file(&path).unwrap();
         symlink(&linked, &path).unwrap();
         assert!(store.read().is_err());
-        assert!(Store::at(temporary.0.join("memory"), workspace.into()).is_err());
+        assert!(
+            Store::at(
+                temporary.0.join("memory"),
+                temporary.workspace_path(workspace)
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(&linked).unwrap(), original);
     }
 
@@ -1446,7 +1452,11 @@ mod tests {
         assert_eq!(context["recent"][0]["delivery"]["target"], "next");
         let mut invalid = delivered;
         invalid.active_mut().recent[0].delivery = None;
-        assert!(invalid.validate("/fixture/delivery-boundary").is_err());
+        assert!(
+            invalid
+                .validate(&temporary.workspace_path("/fixture/delivery-boundary"))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1462,7 +1472,9 @@ mod tests {
             .unwrap();
         let mut document = store.compact(None, None).unwrap();
         assert!(
-            document.validate(workspace).is_ok(),
+            document
+                .validate(&temporary.workspace_path(workspace))
+                .is_ok(),
             "same source may appear in checkpoint and recent"
         );
         document.active_mut().checkpoint.as_mut().unwrap().sources[0].sha256 = "0".repeat(64);
@@ -1487,7 +1499,7 @@ mod tests {
         branch.checkpoint.as_mut().unwrap().sources.push(source);
         assert!(
             document
-                .validate(workspace)
+                .validate(&temporary.workspace_path(workspace))
                 .unwrap_err()
                 .contains("duplicate context checkpoint source")
         );
