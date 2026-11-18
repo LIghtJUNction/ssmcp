@@ -139,6 +139,9 @@ impl State {
             if column.view == View::History {
                 self.conversation.history = None;
             }
+            if column.view == View::Agents {
+                self.chat_select_target();
+            }
         }
         self.conversation.history_width = 0;
         self.conversation.history_rows.clear();
@@ -342,18 +345,30 @@ mod tests {
         let mut state = state();
         assert!(state.conversation.composer.set_text("保留 draft"));
         assert!(state.conversation.composer.left());
-        state.conversation.target = Some("recipient-kept".into());
-        state.conversation.editing = Some("request-kept".into());
-        state.preview_data = json!({
-            "client_id":"session-kept",
-            "queue":[{"id":"request-kept","text":"queued request","status":"queued"}],
-        });
+        state.conversation.target = Some("example-builder".into());
+        state.conversation.editing = Some("example-request".into());
+        state
+            .conversation
+            .sessions
+            .push(crate::client::interface::history::SessionSummary {
+                id: "session-kept".into(),
+                workspace: "/fixture".into(),
+                title: "Retained conversation".into(),
+                created_at_ms: 1,
+                updated_at_ms: 2,
+                message_count: 1,
+                truncated_messages: 0,
+                current: true,
+            });
+        let sessions = state.conversation.sessions.clone();
         state.events.ingest_event(
             "agent",
             &json!({"type":"ssmcp.message","text":"A retained reply."}),
             b"",
         );
-        let data = state.preview_data.clone();
+        let data = state.chat_data();
+        assert_eq!(data["queue"][0]["id"], "example-request");
+        assert_eq!(data["agents"][0]["agent_id"], "example-builder");
         let draft = (
             state.conversation.composer.text().to_owned(),
             state.conversation.composer.cursor(),
@@ -372,7 +387,8 @@ mod tests {
         }
         assert!(state.chat_command("/close").unwrap());
         assert_eq!(state.conversation.canvas.columns.len(), 1);
-        assert_eq!(state.preview_data, data);
+        assert_eq!(state.chat_data(), data);
+        assert_eq!(state.conversation.sessions, sessions);
         assert_eq!(state.events.snapshot()["retained_events"], 1);
         assert_eq!(
             (
@@ -389,16 +405,13 @@ mod tests {
     fn right_click_logs_and_escape_preserve_the_underlying_column() {
         let mut state = state();
         state.canvas_focus(View::Queue);
-        state.preview_data = json!({"queue":[
-            {"id":"q0","text":"first","status":"queued"},
-            {"id":"q1","text":"second","status":"queued"},
-            {"id":"q2","text":"third","status":"queued"}
-        ]});
+        let data = state.chat_data();
+        assert_eq!(data["queue"][0]["id"], "example-request");
         for index in 0..30 {
             state.log(format!("background diagnostic {index}\n").as_bytes());
         }
         state.conversation.content_focus = true;
-        state.conversation.selected = 2;
+        state.conversation.selected = data["queue"].as_array().unwrap().len() - 1;
         state.conversation.detail = true;
         state.conversation.detail_scroll = 11;
         state.conversation.target = Some("recipient-kept".into());
@@ -423,6 +436,7 @@ mod tests {
         state.chat_key(Key::Escape);
         assert!(!state.conversation.logs_open && !state.raw_logs);
         assert_eq!(state.conversation.view, View::Queue);
+        assert_eq!(state.chat_data(), data);
         assert_eq!(
             (
                 state.conversation.canvas.active,

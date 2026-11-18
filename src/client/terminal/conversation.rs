@@ -4,6 +4,7 @@ use crate::client::{attachments, composer::Composer, references, steering};
 use serde_json::{Value, json};
 mod canvas;
 mod history;
+mod login;
 mod questions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -72,6 +73,7 @@ pub(super) struct Conversation {
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
     input_task: Option<attachments::Task>,
+    login_task: Option<crate::client::account::login::Task>,
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
@@ -288,6 +290,7 @@ impl State {
             return;
         }
         self.chat_poll_input();
+        self.chat_poll_login();
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
@@ -375,6 +378,10 @@ impl State {
     #[cfg(test)]
     fn chat_agents(&mut self) {
         self.chat_change_view(View::Agents);
+        self.chat_select_target();
+    }
+
+    fn chat_select_target(&mut self) {
         let data = self.chat_data();
         let entries = self.chat_recipients(&data);
         let target = self.conversation.target.as_deref().unwrap_or("next");
@@ -424,6 +431,7 @@ impl State {
                     .ok_or("No agent message is available to copy")?;
                 self.chat_start_input(attachments::Source::Copy(text), true)?;
             }
+            "/login" => self.chat_login(rest)?,
             "/handoff" => {
                 if self.preview {
                     return Err("Preview cannot export a live conversation".into());
@@ -464,6 +472,21 @@ impl State {
             }
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
+            "/diff" => {
+                if !rest.is_empty() {
+                    self.events.set_diff_mode(events::DiffMode::parse(rest)?);
+                    self.dirty = true;
+                }
+                self.notice = Some(format!(
+                    "Diff layout · {}{}",
+                    self.events.diff_mode().name(),
+                    if self.events.diff_mode() == events::DiffMode::Split {
+                        " · narrow screens use single"
+                    } else {
+                        ""
+                    }
+                ));
+            }
             "/logs" => {
                 self.conversation.logs_open = true;
                 self.raw_logs = true;
@@ -710,9 +733,8 @@ impl State {
                         if self.audit.open_run(field(&agent, "run_id")) {
                             self.conversation.detail = true;
                             self.conversation.content_focus = true;
-                            self.notice = Some(
-                                "Observed call · ← / Esc / left click returns to agents".into(),
-                            );
+                            self.notice =
+                                Some("Observed call · Esc / left click returns to agents".into());
                         } else {
                             self.notice =
                                 Some("This call is no longer in the retained audit history".into());
@@ -2272,19 +2294,20 @@ impl State {
                 } else {
                     String::new()
                 };
-                self.chat_line(
-                    &format!(
+                let label = if self.conversation.logs_open {
+                    "Logs".into()
+                } else {
+                    self.conversation.canvas.label(g.left)
+                };
+                let mut heading = format!("  ssmcp  /  {label}{}{suffix}", self.context_label);
+                if !self.conversation.logs_open && heading.width() > usize::from(g.left) {
+                    heading = format!(
                         "  ssmcp  /  {}{}{suffix}",
-                        if self.conversation.logs_open {
-                            "Logs".into()
-                        } else {
-                            self.conversation.canvas.label(g.left)
-                        },
+                        self.conversation.canvas.label(0),
                         self.context_label,
-                    ),
-                    PanelTone::Heading,
-                    g.left,
-                )
+                    );
+                }
+                self.chat_line(&heading, PanelTone::Heading, g.left)
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g.rows) && prompt_rows(g.rows) > 0 {
@@ -2636,11 +2659,11 @@ mod tests {
     }
 
     #[test]
-    fn quick_escape_then_arrow_opens_agents_without_inserting_csi_text() {
+    fn quick_escape_then_arrow_moves_columns_without_inserting_csi_text() {
         let mut state = preview(28, 120);
         state.chat_change_view(View::Queue);
         input(&mut state, b"\x1b\x1b[D");
-        assert_eq!(state.conversation.view, View::Agents);
+        assert_eq!(state.conversation.view, View::Audit);
         assert!(state.conversation.composer.is_empty());
     }
 
@@ -2669,7 +2692,7 @@ mod tests {
                 }
                 state.keyboard(&[], now + Duration::from_millis(200), true);
                 if sequence.ends_with("[D") {
-                    assert_eq!(state.conversation.view, View::Agents);
+                    assert_eq!(state.conversation.view, View::Audit);
                     assert!(state.conversation.composer.is_empty());
                 } else {
                     assert_eq!(state.conversation.composer.text(), "literal draft");
@@ -2851,11 +2874,16 @@ mod tests {
             state.conversation.selected_agent.as_deref(),
             Some("member:example-builder")
         );
-        input(&mut state, b"\x1b[B\x1b[C");
+        input(&mut state, b"\x1b[B\r");
         assert_eq!(state.conversation.view, View::Activity);
         assert_eq!(
             state.conversation.target.as_deref(),
             Some("example-reviewer")
+        );
+        assert_eq!(state.conversation.composer.text(), "draft under review");
+        assert_eq!(
+            state.conversation.editing.as_deref(),
+            Some("existing-request")
         );
         assert_eq!(state.conversation.composer.cursor(), 0);
     }
@@ -3540,7 +3568,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_body_keeps_sidebar_columns_and_theme_background_with_short_unicode_rows() {
+    fn diagnostic_log_body_keeps_sidebar_columns_and_theme_background_with_short_unicode_rows() {
         for sidebar in [false, true] {
             let ui = Ui {
                 color: true,
@@ -3548,11 +3576,13 @@ mod tests {
                 panels: vec![crate::client::ui::Panel::Agents],
                 ..Ui::default()
             };
-            let mut state = super::super::preview_state(18, 120, &ui);
-            state.events.clear();
-            state.log(b"\x1b[38;2;20;40;60mshort\x1b[0m\n");
-            state.log("中文界\n".as_bytes());
-            state.log(b"\x1b[38;2;255;0;0;48;2;0;0;255m\xe2\x96\x80\x1b[0m\n");
+            let mut state = State::new(18, 120, &ui);
+            state.preview = true;
+            state.log(b"    \x1b[38;2;20;40;60mshort\x1b[0m\n");
+            state.log("    中文界\n".as_bytes());
+            state.log(b"    \x1b[38;2;255;0;0;48;2;0;0;255m\xe2\x96\x80\x1b[0m\n");
+            state.logs_toggle();
+            assert!(state.conversation.logs_open);
             let g = state.geometry;
             let screen = display(&mut state);
             let screen = screen.screen();
@@ -3614,15 +3644,24 @@ mod tests {
         assert!(!screen.contains("Members · 2"));
         input(&mut state, b"/filter cargo test --lib\r");
         assert!(state.conversation.logs_open);
-        let screen = display(&mut state).screen().contents();
-        assert!(screen.contains("cargo test --lib"));
-        assert!(screen.contains("exit=0"));
-        assert!(screen.contains("custom_colors ... ok"));
-        assert!(!screen.contains("A quieter workspace"));
+        state.chat_key(Key::HistoryStart);
+        let start = display(&mut state).screen().contents();
         assert!(
-            screen.contains("[RUN]"),
-            "filtered diagnostics retain the original command heading"
+            start.lines().skip(1).any(|row| row
+                .trim_start()
+                .starts_with("● #17  cargo test --lib")),
+            "filtered diagnostics retain the command heading at Home:\n{start}"
         );
+        assert!(
+            state.logs.screen().contents().contains("[RUN] #17  cargo test --lib"),
+            "semantic log labels must not rewrite the retained raw transcript"
+        );
+        assert!(!start.contains("A quieter workspace"));
+        state.chat_key(Key::HistoryEnd);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("exit=0"), "{screen}");
+        assert!(screen.contains("custom_colors ... ok"), "{screen}");
+        assert!(!screen.contains("A quieter workspace"));
         state.chat_key(Key::Escape);
         assert!(!state.conversation.logs_open);
         assert_eq!(state.log_query, "cargo test --lib");
@@ -3667,7 +3706,7 @@ mod tests {
                 .contents()
                 .contains("Declared model")
         );
-        state.chat_key(Key::Back);
+        state.chat_key(Key::Escape);
         assert_eq!(state.conversation.view, View::Agents);
         assert!(!state.conversation.detail);
         state.chat_open(false);
@@ -3903,7 +3942,8 @@ mod tests {
             let mut state = preview(30, 120);
             state.conversation.composer.set_text("keep this draft");
             for index in 0..80 {
-                state.log(format!("\n[USER] retained event {index}\n").as_bytes());
+                let text = format!("retained event {index}");
+                state.log_message("user", &text, format!("\n[USER] {text}\n").as_bytes());
             }
             display(&mut state);
             input(&mut state, b"\x1b[1;5H");
