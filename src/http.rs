@@ -985,8 +985,7 @@ async fn execute(
     audit_report.finish(&result).await;
     let response =
         append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
-    let messages = claim_user_messages(&audit_report, &response).await;
-    Ok(append_user_messages(response, messages))
+    Ok(finish_user_response(&audit_report, response).await)
 }
 
 fn context_memory_addition(memories: &[Value], deferred: bool) -> Value {
@@ -1084,21 +1083,23 @@ fn delivery_budget(response: &Value) -> usize {
     (crate::wire::MAX_FRAME
         .saturating_sub(response.to_string().len())
         .saturating_sub(16 * 1024)
+        .saturating_sub(code_mode::reminders::MAX_NOTICE_BYTES)
         / 2)
     .min(crate::steering::MAX_DELIVERY_BYTES)
 }
 
-async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Value> {
+async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
     let mut eligible = Vec::new();
-    // Finish all asynchronous authorization lookups before claiming anything.
-    // Cancellation while validating leaves every pending record editable.
-    for client_id in report.run.steering_targets() {
+    let steering_targets = report.run.steering_targets();
+    // Finish every asynchronous authorization lookup before mutating a queue.
+    // Cancellation during validation leaves pending requirements editable.
+    for client_id in report.run.targets() {
         let Some(authorization) = report
             .broker
             .authenticate(&report.user, &report.access_token)
             .await
         else {
-            return Vec::new();
+            return response;
         };
         let Ok(session) = report
             .broker
@@ -1107,10 +1108,10 @@ async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Va
         else {
             continue;
         };
+        let Ok(owner) = crate::bridge::owner(&report.user, &authorization) else {
+            continue;
+        };
         let agent_id = if let Some(binding) = report.run.binding(&client_id) {
-            let Ok(owner) = crate::bridge::owner(&report.user, &authorization) else {
-                continue;
-            };
             if owner != binding.owner
                 || session
                     .collaboration
@@ -1123,20 +1124,39 @@ async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Va
         } else {
             None
         };
-        eligible.push((session, agent_id));
+        let may_claim = steering_targets.contains(&client_id);
+        eligible.push((session, owner, agent_id, may_claim));
     }
     let mut messages = Vec::new();
+    let mut notices = Vec::new();
     let mut bytes = 0usize;
-    let budget = delivery_budget(response);
-    for (session, agent_id) in eligible {
+    let budget = delivery_budget(&response);
+    let mut notice_budget = conversation_notice_budget(&response);
+    // No await after the first claim: each recipient's receipts, age and new
+    // delivery are finalized under the existing session Queue lock exactly once.
+    for (session, owner, agent_id, may_claim) in eligible {
         if !session.is_alive() {
             continue;
         }
-        let claimed = session.steering.claim(
-            session.client_id(),
-            &report.run.context.run_id,
-            agent_id.as_deref(),
-            crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len()),
+        let replies = report.run.accepted_replies(session.client_id());
+        let (claimed, notice) = session.steering.finish_response(
+            code_mode::reminders::Response {
+                client_id: session.client_id(),
+                run_id: &report.run.context.run_id,
+                owner: &owner,
+                agent_id: agent_id.as_deref(),
+                replies: &replies,
+                notice_budget: if notices.len() < code_mode::reminders::MAX_NOTICES {
+                    notice_budget
+                } else {
+                    0
+                },
+            },
+            if may_claim {
+                crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len())
+            } else {
+                0
+            },
             budget.saturating_sub(bytes),
         );
         bytes += claimed
@@ -1144,8 +1164,41 @@ async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Va
             .map(|message| message.to_string().len())
             .sum::<usize>();
         messages.extend(claimed);
+        if let Some(notice) = notice {
+            notice_budget = notice_budget.saturating_sub(notice.bytes);
+            notices.push(notice);
+        }
     }
-    messages
+    append_conversation_reminders(append_user_messages(response, messages), notices)
+}
+
+fn conversation_notice_budget(response: &Value) -> usize {
+    crate::wire::MAX_FRAME
+        .saturating_sub(response.to_string().len())
+        .saturating_sub(16 * 1024)
+        .min(code_mode::reminders::MAX_NOTICE_BYTES)
+        .saturating_sub(code_mode::reminders::NOTICE_ENVELOPE_BYTES)
+}
+
+fn append_conversation_reminders(
+    mut response: Value,
+    notices: Vec<code_mode::reminders::Notice>,
+) -> Value {
+    if notices.is_empty() {
+        return response;
+    }
+    if !response["structuredContent"].is_object() {
+        response["structuredContent"] = json!({});
+    }
+    let mut entries = Vec::with_capacity(notices.len());
+    for notice in notices {
+        entries.push(notice.value);
+        if let Some(content) = response["content"].as_array_mut() {
+            content.push(notice.content);
+        }
+    }
+    response["structuredContent"]["conversation_reminders"] = json!(entries);
+    response
 }
 
 fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
@@ -1503,6 +1556,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn conversation_reminders_preserve_results_and_reserve_space_before_claiming() {
+        use code_mode::reminders;
+        let before = json!({
+            "content":[{"type":"text","text":"native output"}],
+            "structuredContent":{"result":"x".repeat(crate::wire::MAX_FRAME - 32 * 1024)},
+            "isError":false,
+        });
+        let budget = delivery_budget(&before);
+        assert!(budget > 1024);
+        let messages = vec![json!({
+            "source":"client_user","client_id":"room","message_id":"m",
+            "revision":2,"text":"x".repeat(budget - 512)
+        })];
+        assert!(messages[0].to_string().len() <= budget);
+        let mut notices = Vec::new();
+        let now = std::time::Instant::now();
+        for index in 0..reminders::MAX_NOTICES {
+            let mut state = reminders::State::default();
+            let client_id = format!("client_{index}");
+            let mut response = reminders::Response {
+                client_id: &client_id,
+                run_id: "n",
+                owner: "owner",
+                agent_id: None,
+                replies: &[],
+                notice_budget: reminders::MAX_NOTICE_BYTES,
+            };
+            let _ = state.finish(&response, true, now);
+            response.run_id = "n1";
+            let _ = state.finish(&response, false, now);
+            response.run_id = "n2";
+            notices.push(state.finish(&response, false, now).unwrap());
+        }
+        let added = notices.iter().map(|notice| notice.bytes).sum::<usize>();
+        assert!(added <= conversation_notice_budget(&before));
+        let after =
+            append_conversation_reminders(append_user_messages(before.clone(), messages), notices);
+        assert_eq!(
+            after["structuredContent"]["result"],
+            before["structuredContent"]["result"]
+        );
+        assert_eq!(after["content"][0], before["content"][0]);
+        assert_eq!(after["isError"], false);
+        assert_eq!(
+            after["structuredContent"]["conversation_reminders"]
+                .as_array()
+                .unwrap()
+                .len(),
+            8
+        );
+        assert!(after.to_string().len() <= crate::wire::MAX_FRAME);
+        assert_eq!(
+            conversation_notice_budget(&json!({"content":"x".repeat(crate::wire::MAX_FRAME)})),
+            0
+        );
+        let error = append_conversation_reminders(
+            crate::code_mode::tool_result(Err("failed".into())),
+            Vec::new(),
+        );
+        assert_eq!(error["isError"], true);
+    }
+
+    #[test]
     fn user_requirements_preserve_native_success_and_error_envelopes() {
         let messages = vec![
             json!({"client_id":"room","message_id":"m","revision":2,"text":"Run the focused tests.","source":"client_user"}),
@@ -1532,6 +1648,240 @@ mod tests {
                 .contains("native execution failed")
         );
         assert!(failure["structuredContent"]["user_messages"].is_array());
+    }
+
+    #[tokio::test]
+    async fn conversation_reminders_finalize_real_deliveries_and_ignore_failed_authorization() {
+        use crate::wire::{self, Frame, SteeringCommand, SteeringState};
+        use tokio::{
+            io::BufReader,
+            net::{TcpListener, UnixStream},
+            time::timeout,
+        };
+
+        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let routes = router(broker.clone());
+        let http_server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+        let (server, client) = UnixStream::pair().unwrap();
+        let attachment = tokio::spawn(broker.clone().attach(server));
+        let (reader, mut writer) = client.into_split();
+        let mut reader = BufReader::new(reader);
+        wire::write_frame(
+            &mut writer,
+            &Frame::Hello {
+                version: wire::VERSION,
+                mode: wire::Mode::Shell,
+                metadata: wire::ClientMetadata {
+                    name: "reminder-fixture".into(),
+                    title: None,
+                    cwd: "/tmp".into(),
+                    hostname: "fixture".into(),
+                    allow: Vec::new(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::Ready {
+            url,
+            login_code,
+            client_id,
+            ..
+        }) = wire::read_frame(&mut reader).await.unwrap()
+        else {
+            panic!("missing ready frame");
+        };
+        let user = url.rsplit('/').next().unwrap().to_owned();
+        let access_token = cancellation_test_token(&base, &url, &login_code).await;
+        let authorization = broker.authenticate(&user, &access_token).await.unwrap();
+        let session = broker
+            .client(&user, &authorization, &client_id)
+            .await
+            .unwrap();
+
+        let report = |run, token: &str| CodeRunReport {
+            broker: broker.clone(),
+            user: user.clone(),
+            access_token: token.into(),
+            run,
+            // This test calls only response finalization; it does not run a worker.
+            delivered: true,
+        };
+        let run = |tool| {
+            let run = code_mode::AuditRun::new("return null;", None).unwrap();
+            run.native_dispatched(&client_id, Some(tool));
+            run
+        };
+        let publish = |id: &str| {
+            session
+                .steering
+                .command(
+                    &client_id,
+                    Vec::new(),
+                    SteeringCommand::Publish {
+                        command_id: format!("publish-{id}"),
+                        message_id: id.into(),
+                        expected_revision: 0,
+                        text: format!("requirement {id}"),
+                        target: "next".into(),
+                    },
+                )
+                .unwrap();
+        };
+        let snapshot = || {
+            session
+                .steering
+                .command(&client_id, Vec::new(), SteeringCommand::Snapshot {})
+                .unwrap()
+        };
+        let original = json!({
+            "content":[{"type":"text","text":"native output"}],
+            "structuredContent":{"result":"kept"},
+            "isError":false,
+        });
+
+        publish("first");
+        let unauthorized = report(run("ssmcp.exec.run"), "invalid-token");
+        assert_eq!(
+            finish_user_response(&unauthorized, original.clone()).await,
+            original
+        );
+        assert_eq!(snapshot().messages[0].state, SteeringState::Queued);
+
+        let first = report(run("ssmcp.exec.run"), &access_token);
+        let first_run_id = first.run.context.run_id.clone();
+        let response = finish_user_response(&first, original.clone()).await;
+        assert_eq!(
+            response["structuredContent"]["user_messages"][0]["message_id"],
+            "first"
+        );
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+        assert_eq!(snapshot().messages[0].state, SteeringState::Delivered);
+
+        // Failed authorization must neither consume another request nor age the
+        // recipient's pending episode. Observation can age it but cannot claim.
+        publish("second");
+        for _ in 0..2 {
+            let unauthorized = report(run("ssmcp.exec.run"), "invalid-token");
+            assert_eq!(
+                finish_user_response(&unauthorized, original.clone()).await,
+                original
+            );
+        }
+        let next = report(run("ssmcp.ui.get"), &access_token);
+        let response = finish_user_response(&next, original.clone()).await;
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+        assert!(response["structuredContent"].get("user_messages").is_none());
+        assert_eq!(snapshot().messages[1].state, SteeringState::Queued);
+
+        let second = report(run("ssmcp.ui.get"), &access_token);
+        let native_error = code_mode::tool_result(Err("native execution failed".into()));
+        let response = finish_user_response(&second, native_error.clone()).await;
+        assert_eq!(response["isError"], true);
+        assert_eq!(response["content"][0], native_error["content"][0]);
+        assert_eq!(
+            response["structuredContent"]["conversation_reminders"][0]["after_run_id"],
+            first_run_id
+        );
+        assert_eq!(
+            response["structuredContent"]["conversation_reminders"][0]["responses_without_reply"],
+            2
+        );
+        assert_eq!(snapshot().messages[1].state, SteeringState::Queued);
+        let later = report(run("ssmcp.ui.get"), &access_token);
+        let response = finish_user_response(&later, original.clone()).await;
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+
+        // A real broker-dispatched native ACK clears the old episode before this
+        // same response claims "second". No returned JavaScript JSON is involved.
+        let reply_run =
+            code_mode::AuditRun::new("await ui.message(client, {text:'reply'});", None).unwrap();
+        let reply_target = session.clone();
+        let native_run = reply_run.clone();
+        let request = tokio::spawn(code_mode::AUDIT_RUN.scope(native_run, async move {
+            reply_target
+                .call_with_authorization(
+                    Operation::CallTool {
+                        name: "ssmcp.ui.message".into(),
+                        arguments: json!({"text":"reply","kind":"progress"}),
+                    },
+                    None,
+                    &authorization,
+                )
+                .await
+        }));
+        let Some(Frame::Call { id, .. }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing native dialogue call");
+        };
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(json!({
+                    "structuredContent":{"accepted":true,"duplicate":false,"message_id":"reply_1"}
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        request.await.unwrap().unwrap();
+        assert_eq!(reply_run.accepted_replies(&client_id).len(), 1);
+        let reply_run_id = reply_run.context.run_id.clone();
+        let reply = report(reply_run, &access_token);
+        let response = finish_user_response(&reply, original.clone()).await;
+        assert_eq!(
+            response["structuredContent"]["user_messages"][0]["message_id"],
+            "second"
+        );
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+        assert_eq!(snapshot().messages[1].state, SteeringState::Delivered);
+
+        let next = report(run("ssmcp.ui.get"), &access_token);
+        let response = finish_user_response(&next, original.clone()).await;
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+        let second = report(run("ssmcp.ui.get"), &access_token);
+        let response = finish_user_response(&second, original).await;
+        assert_eq!(
+            response["structuredContent"]["conversation_reminders"][0]["after_run_id"],
+            reply_run_id
+        );
+        assert_eq!(snapshot().messages.len(), 2);
+
+        drop(reader);
+        drop(writer);
+        timeout(Duration::from_secs(2), attachment)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        http_server.abort();
     }
 
     #[tokio::test]

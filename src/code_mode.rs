@@ -1,4 +1,5 @@
 //! JavaScript orchestration through system Node.js inside mandatory bubblewrap isolation.
+pub(crate) mod reminders;
 use crate::backend::process::Managed;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -47,6 +48,7 @@ pub(crate) struct AuditRun {
     finished: Arc<Mutex<Option<crate::wire::CodeCompletion>>>,
     bindings: Arc<Mutex<HashMap<String, RunBinding>>>,
     memories: Arc<Mutex<ContextMemories>>,
+    accepted_replies: Arc<Mutex<reminders::Receipts>>,
     started: Instant,
 }
 
@@ -103,6 +105,7 @@ impl AuditRun {
             finished: Arc::new(Mutex::new(None)),
             bindings: Arc::new(Mutex::new(HashMap::new())),
             memories: Arc::new(Mutex::new(ContextMemories::default())),
+            accepted_replies: Arc::new(Mutex::new(reminders::Receipts::default())),
             started: Instant::now(),
         })
     }
@@ -168,6 +171,29 @@ impl AuditRun {
             .collect::<Vec<_>>();
         targets.sort();
         targets
+    }
+
+    /// The broker calls this with a real native result and the binding captured
+    /// before dispatch. Returned JavaScript JSON cannot acknowledge a dialogue.
+    pub(crate) fn native_reply(
+        &self,
+        client_id: &str,
+        agent_id: Option<&str>,
+        tool: Option<&str>,
+        result: &Value,
+        received_at: Instant,
+    ) {
+        self.accepted_replies
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .observe(client_id, agent_id, tool, result, received_at);
+    }
+
+    pub(crate) fn accepted_replies(&self, client_id: &str) -> Vec<reminders::AcceptedReply> {
+        self.accepted_replies
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .for_client(client_id)
     }
 
     /// Called only after the host has reauthorized a completed native call.

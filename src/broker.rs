@@ -180,6 +180,11 @@ impl Session {
     ) -> CallResult {
         operation.validate()?;
         let audit_run = crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok();
+        // A later collab.bind in the same run must not reattribute this reply.
+        let reply_agent = audit_run
+            .as_ref()
+            .and_then(|run| run.binding(self.client_id()))
+            .map(|binding| binding.agent_id);
         let controller =
             controller.or_else(|| audit_run.as_ref().and_then(|run| run.controller.clone()));
         if let Some(controller) = &controller {
@@ -234,7 +239,7 @@ impl Session {
             }
             return Err("client disconnected or busy; tool was not dispatched".into());
         }
-        if carries_source && let Some(run) = audit_run {
+        if carries_source && let Some(run) = audit_run.as_ref() {
             run.native_dispatched(self.client_id(), audit_tool.as_deref());
         }
         let started = std::time::Instant::now();
@@ -243,6 +248,7 @@ impl Session {
             Ok(Err(_)) => Err("client disconnected".into()),
             Err(_) => Err("client request timed out; its outcome may be unknown".into()),
         };
+        let received_at = std::time::Instant::now();
         if audit_tool.is_some() {
             let outcome = if result
                 .as_ref()
@@ -260,6 +266,15 @@ impl Session {
             {
                 return Err("tool may have executed; audit completion could not be saved; inspect its state before retrying".into());
             }
+        }
+        if let (Some(run), Ok(value)) = (audit_run.as_ref(), &result) {
+            run.native_reply(
+                self.client_id(),
+                reply_agent.as_deref(),
+                audit_tool.as_deref(),
+                value,
+                received_at,
+            );
         }
         let timed_out = result.as_ref().is_err_and(|e| e.contains("timed out"));
         crate::observability::log(
@@ -1182,6 +1197,99 @@ mod tests {
         assert!(call.code_context.is_none());
         call.reply.send(Ok(Value::Null)).unwrap();
         request.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn dialogue_receipts_use_native_ack_and_binding_at_dispatch() {
+        for tool in ["ssmcp.ui.message", "ssmcp.ui.present"] {
+            for bind_after_dispatch in [false, true] {
+                let (sender, mut receiver) = mpsc::channel(1);
+                let mut target = session("dialogue", "secret");
+                Arc::get_mut(&mut target).unwrap().sender = sender;
+                let run = crate::code_mode::AuditRun::new("return 1;", None).unwrap();
+                if !bind_after_dispatch {
+                    run.bind("dialogue", "owner", "agent_a", "private_token")
+                        .unwrap();
+                }
+                let request =
+                    tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+                        target
+                            .call(Operation::CallTool {
+                                name: tool.into(),
+                                arguments: serde_json::json!({}),
+                            })
+                            .await
+                    }));
+                let call = receiver.recv().await.unwrap();
+                if bind_after_dispatch {
+                    run.bind("dialogue", "owner", "agent_a", "private_token")
+                        .unwrap();
+                }
+                call.reply.send(Ok(serde_json::json!({
+                    "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
+                }))).unwrap();
+                request.await.unwrap().unwrap();
+                let replies = run.accepted_replies("dialogue");
+                assert_eq!(replies.len(), 1, "{tool}");
+                assert_eq!(
+                    replies[0].agent_id.as_deref(),
+                    (!bind_after_dispatch).then_some("agent_a"),
+                );
+                assert!(run.accepted_replies("other").is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_duplicate_or_other_native_tools_cannot_acknowledge_dialogue() {
+        for (tool, result) in [
+            (
+                "ssmcp.ui.message",
+                Err("native rejected the message".to_owned()),
+            ),
+            (
+                "ssmcp.ui.present",
+                Ok(serde_json::json!({
+                    "isError":true,
+                    "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
+                })),
+            ),
+            (
+                "ssmcp.ui.message",
+                Ok(serde_json::json!({
+                    "structuredContent":{"accepted":true,"duplicate":true,"message_id":"message_1"}
+                })),
+            ),
+            (
+                "ssmcp.exec.run",
+                Ok(serde_json::json!({
+                    "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
+                })),
+            ),
+        ] {
+            let (sender, mut receiver) = mpsc::channel(1);
+            let mut target = session("dialogue", "secret");
+            Arc::get_mut(&mut target).unwrap().sender = sender;
+            let run = crate::code_mode::AuditRun::new(
+                "return {accepted:true, duplicate:false, message_id:'forged'};",
+                None,
+            )
+            .unwrap();
+            let request =
+                tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+                    target
+                        .call(Operation::CallTool {
+                            name: tool.into(),
+                            arguments: serde_json::json!({}),
+                        })
+                        .await
+                }));
+            let call = receiver.recv().await.unwrap();
+            let expected = result.clone();
+            call.reply.send(result).unwrap();
+            assert_eq!(request.await.unwrap(), expected);
+            assert!(run.accepted_replies("dialogue").is_empty(), "{tool}");
+        }
     }
 
     #[tokio::test]

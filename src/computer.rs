@@ -1827,10 +1827,35 @@ if root.exists():
     #[cfg(unix)]
     #[tokio::test]
     async fn release_wait_deadlines_preserve_tracking_and_order_later_input() {
+        use std::{
+            future::{Future, poll_fn},
+            task::Poll,
+        };
+
         let fixture = ReleaseFixture::new();
         let computer = Arc::new(Computer::new(fixture.0.clone()).unwrap());
-        drop(fixture.guard(&computer, WAITING_RELEASE));
-        fixture.started().await;
+        let released = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let task = std::thread::spawn({
+            let released = released.clone();
+            move || {
+                let _ = started_tx.send(());
+                release_rx
+                    .recv()
+                    .map_err(|_| "release fixture was cancelled".to_owned())?;
+                released.store(true, Ordering::Release);
+                Ok(())
+            }
+        });
+        computer.releases.state.lock().unwrap().tasks.push(task);
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // The release cannot finish until this test opens the channel, even if
+        // the executor is delayed beyond the requested wait deadline.
         let error = computer
             .releases
             .wait(Duration::from_millis(20))
@@ -1838,37 +1863,36 @@ if root.exists():
             .unwrap_err();
         assert!(error.contains("remain tracked"), "{error}");
         assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
+
+        // Cancelling a polled waiter must not remove the still-owned cleanup.
+        let mut waiting = Box::pin(computer.releases.wait(RELEASE_WAIT_TIMEOUT));
         assert!(
-            tokio::time::timeout(
-                Duration::from_millis(20),
-                computer.releases.wait(RELEASE_WAIT_TIMEOUT)
-            )
-            .await
-            .is_err()
+            poll_fn(|cx| Poll::Ready(waiting.as_mut().poll(cx)))
+                .await
+                .is_pending()
         );
+        drop(waiting);
         assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
 
-        let mut next = tokio::spawn({
-            let computer = computer.clone();
-            async move {
-                // Cleanup is tracked on this host Computer. An omitted
-                // desktop now routes to a separate private-desktop adapter.
-                computer
-                    .perform("ssmcp.computer.not_a_tool", json!({"desktop":"host"}))
-                    .await
-            }
-        });
+        // Test local input serialization directly: the public dispatcher now
+        // defaults to an isolated desktop and may reject before this queue.
+        // An unknown operation cannot send input to any host desktop.
+        let mut next = Box::pin(computer.perform_local("ssmcp.computer.not_a_tool", json!({})));
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut next)
+            poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx)))
                 .await
-                .is_err()
+                .is_pending()
         );
-        fixture.release();
+        assert!(!released.load(Ordering::Acquire));
+        assert!(computer.serial.try_lock().is_err());
+        assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
+
+        release_tx.send(()).unwrap();
         let error = tokio::time::timeout(Duration::from_secs(5), next)
             .await
             .unwrap()
-            .unwrap()
             .unwrap_err();
+        assert!(released.load(Ordering::Acquire));
         assert!(error.contains("unknown computer tool"), "{error}");
         computer.shutdown().await.unwrap();
         assert!(computer.releases.state.lock().unwrap().tasks.is_empty());

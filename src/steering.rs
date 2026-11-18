@@ -28,6 +28,7 @@ struct State {
     revision: u64,
     messages: VecDeque<SteeringMessage>,
     commands: VecDeque<(String, [u8; 32])>,
+    reminders: crate::code_mode::reminders::State,
 }
 
 fn pending(message: &SteeringMessage) -> bool {
@@ -73,6 +74,52 @@ fn now_ms() -> u64 {
 }
 
 impl State {
+    fn claim(
+        &mut self,
+        client_id: &str,
+        run_id: &str,
+        agent_id: Option<&str>,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> Vec<Value> {
+        let mut claimed = Vec::new();
+        let mut used = 0usize;
+        for message in &mut self.messages {
+            if message.state != SteeringState::Queued
+                || (message.target != "next" && Some(message.target.as_str()) != agent_id)
+            {
+                continue;
+            }
+            if claimed.len() >= max_messages {
+                break;
+            }
+            let Ok(revision) = next(message.revision) else {
+                break;
+            };
+            let value = json!({"source":"client_user","client_id":client_id,"message_id":message.id,
+                "revision":revision,"text":message.text,"target":message.target,"agent_id":agent_id});
+            let bytes = value.to_string().len();
+            if used.saturating_add(bytes) > max_bytes {
+                break;
+            }
+            used += bytes;
+            message.state = SteeringState::Delivered;
+            message.revision = revision;
+            message.updated_at_ms = now_ms();
+            message.delivery = Some(SteeringDelivery {
+                run_id: run_id.into(),
+                agent_id: agent_id.map(str::to_owned),
+                included_at_ms: message.updated_at_ms,
+            });
+            claimed.push(value);
+        }
+        if !claimed.is_empty() {
+            self.revision = self.revision.saturating_add(1).min(MAX_SEQUENCE);
+            self.trim();
+        }
+        claimed
+    }
+
     fn trim(&mut self) {
         while self
             .messages
@@ -248,8 +295,31 @@ impl Queue {
         Ok(state.snapshot(client_id, agents))
     }
 
-    /// Claim and CAS edits share one lock. Once text is returned here no later
-    /// successful takeback can claim to have withdrawn that same revision.
+    /// Claims, CAS edits and reminder lifecycle share one lock after HTTP
+    /// authorization. A later takeback cannot withdraw the returned revision.
+    /// Zero message budget observes a response without consuming a requirement.
+    pub(crate) fn finish_response(
+        &self,
+        response: crate::code_mode::reminders::Response<'_>,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> (Vec<Value>, Option<crate::code_mode::reminders::Notice>) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let claimed = state.claim(
+            response.client_id,
+            response.run_id,
+            response.agent_id,
+            max_messages,
+            max_bytes,
+        );
+        let notice =
+            state
+                .reminders
+                .finish(&response, !claimed.is_empty(), std::time::Instant::now());
+        (claimed, notice)
+    }
+
+    #[cfg(test)]
     pub(crate) fn claim(
         &self,
         client_id: &str,
@@ -258,43 +328,10 @@ impl Queue {
         max_messages: usize,
         max_bytes: usize,
     ) -> Vec<Value> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let mut claimed = Vec::new();
-        let mut used = 0usize;
-        for message in &mut state.messages {
-            if message.state != SteeringState::Queued
-                || (message.target != "next" && Some(message.target.as_str()) != agent_id)
-            {
-                continue;
-            }
-            if claimed.len() >= max_messages {
-                break;
-            }
-            let Ok(revision) = next(message.revision) else {
-                break;
-            };
-            let value = json!({"source":"client_user","client_id":client_id,"message_id":message.id,
-                "revision":revision,"text":message.text,"target":message.target,"agent_id":agent_id});
-            let bytes = value.to_string().len();
-            if used.saturating_add(bytes) > max_bytes {
-                break;
-            }
-            used += bytes;
-            message.state = SteeringState::Delivered;
-            message.revision = revision;
-            message.updated_at_ms = now_ms();
-            message.delivery = Some(SteeringDelivery {
-                run_id: run_id.into(),
-                agent_id: agent_id.map(str::to_owned),
-                included_at_ms: message.updated_at_ms,
-            });
-            claimed.push(value);
-        }
-        if !claimed.is_empty() {
-            state.revision = state.revision.saturating_add(1).min(MAX_SEQUENCE);
-            state.trim();
-        }
-        claimed
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .claim(client_id, run_id, agent_id, max_messages, max_bytes)
     }
 }
 
@@ -320,6 +357,44 @@ mod tests {
         queue
             .command("room", vec![], SteeringCommand::Snapshot {})
             .unwrap()
+    }
+
+    #[test]
+    fn response_reminders_follow_actual_claims_without_adding_queue_records() {
+        use crate::code_mode::reminders;
+        let queue = Queue::default();
+        queue
+            .command("room", vec![], publish("one", "m", 0, "用户需求", "next"))
+            .unwrap();
+        let finish = |run_id, max_bytes| {
+            queue.finish_response(
+                reminders::Response {
+                    client_id: "room",
+                    run_id,
+                    owner: "owner",
+                    agent_id: None,
+                    replies: &[],
+                    notice_budget: reminders::MAX_NOTICE_BYTES,
+                },
+                8,
+                max_bytes,
+            )
+        };
+        for run in ["blocked", "blocked1", "blocked2"] {
+            let (messages, notice) = finish(run, 0);
+            assert!(messages.is_empty());
+            assert!(notice.is_none());
+        }
+        assert_eq!(snapshot(&queue).messages[0].state, SteeringState::Queued);
+        let (messages, notice) = finish("n", MAX_DELIVERY_BYTES);
+        assert_eq!(messages.len(), 1);
+        assert!(notice.is_none());
+        assert!(finish("n1", MAX_DELIVERY_BYTES).1.is_none());
+        assert!(finish("n2", MAX_DELIVERY_BYTES).1.is_some());
+        let snapshot = snapshot(&queue);
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].text, "用户需求");
+        assert_eq!(snapshot.messages[0].state, SteeringState::Delivered);
     }
 
     #[test]
