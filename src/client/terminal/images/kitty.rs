@@ -90,7 +90,10 @@ impl Native {
         let mut encoder = png::Encoder::new(&mut buffer, width, height);
         encoder.set_color(color);
         encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Fast);
+        // png's Fast streaming mode can substantially expand incompressible
+        // data. Level 1 retains a small streaming buffer while allowing even
+        // a noisy 1024-square RGBA fallback to fit the existing PNG budget.
+        encoder.set_deflate_compression(png::DeflateCompression::Level(1));
         encoder.set_filter(png::Filter::Adaptive);
         let mut writer = encoder.write_header().ok()?;
         {
@@ -1143,29 +1146,33 @@ mod tests {
 
     #[test]
     fn noisy_native_images_fall_back_without_increasing_the_payload_budget() {
-        let mut state = 0x3141_5926u32;
-        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1200, 1000, |_, _| {
-            image::Rgba(std::array::from_fn(|_| {
-                state ^= state << 13;
-                state ^= state >> 17;
-                state ^= state << 5;
-                state as u8
-            }))
-        }));
-        assert!(Native::encode(&source).is_none());
-        let native = Native::prepare(&source).unwrap();
-        assert!(native.width <= FALLBACK_SIDE && native.height <= FALLBACK_SIDE);
-        assert!(native.width < source.width() && native.height < source.height());
-        let png = STANDARD.decode(&native.encoded).unwrap();
-        assert!(png.len() <= PNG_BYTES);
-        assert!(native.bytes() <= PNG_BYTES.div_ceil(3) * 4);
-        assert_eq!(
-            image::load_from_memory(&png)
-                .unwrap()
-                .into_rgba8()
-                .dimensions(),
-            (native.width, native.height)
-        );
+        // Cover the observed wide-image failure and the maximum-area fallback.
+        for (width, height) in [(1200, 1000), (1200, 1200)] {
+            let mut state = 0x3141_5926u32;
+            let source =
+                DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |_, _| {
+                    image::Rgba(std::array::from_fn(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 17;
+                        state ^= state << 5;
+                        state as u8
+                    }))
+                }));
+            assert!(Native::encode(&source).is_none());
+            let native = Native::prepare(&source).unwrap();
+            assert!(native.width <= FALLBACK_SIDE && native.height <= FALLBACK_SIDE);
+            assert!(native.width < source.width() && native.height < source.height());
+            let png = STANDARD.decode(&native.encoded).unwrap();
+            assert!(png.len() <= PNG_BYTES);
+            assert!(native.bytes() <= PNG_BYTES.div_ceil(3) * 4);
+            assert_eq!(
+                image::load_from_memory(&png)
+                    .unwrap()
+                    .into_rgba8()
+                    .dimensions(),
+                (native.width, native.height)
+            );
+        }
     }
 
     #[test]
