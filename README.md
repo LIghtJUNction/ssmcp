@@ -147,6 +147,10 @@ ssmcp 默认启用内置命令、文件、浏览器和会话工具，不要求�
 
 ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行连接的扩展端口。客户端浏览器扩展的安装记录、MCP 握手和浏览器配对分别确认；使用 `ssmcp.browser.discover`、`ssmcp.harnesses.list` 和实际工具目录选择可用路线，再调用原生接口。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/client-input.md)
 
+## 独立核心库
+
+[ztui](https://github.com/LIghtJUNction/ztui)、[zharness](https://github.com/LIghtJUNction/zharness) 和 [zplugin](https://github.com/LIghtJUNction/zplugin) 作为固定 Git 子模块和实际 Rust 依赖参与构建，分别承担终端帧、扩展接口和本机动态库加载。它们独立维护版本，不启动模型或外部 harness。源码构建请使用 `git clone --recurse-submodules`；已有 checkout 使用 `git submodule update --init --recursive`。[依赖与协同开发](docs/dependencies.md)
+
 ## 客户端掌握能力，服务端负责连接
 
 服务端负责身份、会话路由、成员通信与受限 JavaScript 编排。客户端负责执行工具、组织上下文、保存输出和绘制界面。增加客户端原语后，调用方可以通过实时目录发现它，并继续使用通用 `call(clientId, name, arguments)`。
