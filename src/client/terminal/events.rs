@@ -72,6 +72,7 @@ pub(crate) struct EventView {
     page_rows: usize,
     image_cells: Option<images::CellSize>,
     placements: Vec<images::Placement>,
+    new_image: Option<u64>,
     query: String,
     level: u8,
 }
@@ -316,6 +317,7 @@ impl EventView {
         }
         self.query = query;
         self.level = level;
+        self.new_image = None;
         if !self
             .events
             .iter()
@@ -345,6 +347,9 @@ impl EventView {
     pub(crate) fn attach_image(&mut self, preview: images::Preview) {
         if let Some(event) = self.events.back_mut() {
             event.image = Some(preview);
+            if self.follow {
+                self.new_image.get_or_insert(event.id);
+            }
         }
         let mut bytes = self.image_bytes();
         for event in &mut self.events {
@@ -384,6 +389,7 @@ impl EventView {
 
     /// Negative selects an earlier event; positive selects a later event.
     pub(crate) fn select(&mut self, delta: isize) {
+        self.new_image = None;
         let visible = self
             .events
             .iter()
@@ -405,6 +411,7 @@ impl EventView {
 
     /// Scroll within expanded events without changing the selected event.
     pub(crate) fn scroll_by(&mut self, delta: isize) {
+        self.new_image = None;
         self.follow = false;
         self.reveal = false;
         self.scroll = self
@@ -415,6 +422,7 @@ impl EventView {
     }
 
     pub(crate) fn latest(&mut self) {
+        self.new_image = None;
         self.follow = true;
         self.reveal = false;
         self.selected = self
@@ -426,6 +434,7 @@ impl EventView {
     }
 
     pub(crate) fn toggle(&mut self) -> bool {
+        self.new_image = None;
         if let Some(event) = self
             .events
             .iter_mut()
@@ -452,6 +461,7 @@ impl EventView {
     }
 
     fn set_expanded(&mut self, expanded: bool) -> bool {
+        self.new_image = None;
         let Some(event) = self
             .events
             .iter_mut()
@@ -478,6 +488,7 @@ impl EventView {
             return false;
         }
         self.selected = Some(id);
+        self.new_image = None;
         self.follow = false;
         // Preserve the clicked row, even when it belongs to a long body.
         self.reveal = false;
@@ -496,6 +507,7 @@ impl EventView {
         self.total_rows = 0;
         self.page_rows = 0;
         self.placements.clear();
+        self.new_image = None;
         self.query.clear();
         self.level = 0;
     }
@@ -540,8 +552,12 @@ impl EventView {
         let mut rows: Vec<(u64, String)> = Vec::new();
         let mut selected_row = None;
         let mut image_spans = Vec::new();
+        let new_image = self.new_image.take();
+        let mut new_images = false;
+        let mut image_anchor = None;
         let palette = palette_key(ui);
         for event in &mut self.events {
+            new_images |= new_image == Some(event.id);
             if !event.matches(&self.query, self.level) {
                 continue;
             }
@@ -559,6 +575,7 @@ impl EventView {
             };
             if event.expanded || !self.query.is_empty() {
                 if let Some(image) = &event.image {
+                    let image_start = rows.len();
                     rows.push((
                         event.id,
                         format!(
@@ -574,15 +591,50 @@ impl EventView {
                     ));
                     let inset = 2.min(body_width.saturating_sub(1));
                     let image_width = body_width.saturating_sub(inset).max(1) as u16;
-                    let image_height = page.saturating_sub(2).clamp(1, 18) as u16;
+                    let image_height = page.saturating_sub(2).max(1) as u16;
                     let native = self.image_cells.filter(|_| ui.color).and_then(|cell| {
                         let native = image.native.as_ref()?;
-                        Some((
-                            native.clone(),
-                            native.layout(image_width, image_height, cell)?,
-                        ))
+                        Some((native.clone(), native.layout_width(image_width, cell)?))
                     });
+                    let detail = match &native {
+                        Some((native, area)) => {
+                            let dimensions =
+                                if (native.width, native.height) == (image.width, image.height) {
+                                    format!("{} × {}", image.width, image.height)
+                                } else {
+                                    format!(
+                                        "{} × {} preview · {} × {} source",
+                                        native.width, native.height, image.width, image.height
+                                    )
+                                };
+                            if usize::from(area.rows) > page.saturating_sub(2) {
+                                format!("{dimensions} · scroll to inspect")
+                            } else {
+                                dimensions
+                            }
+                        }
+                        None => "Low-resolution thumbnail · text may be unreadable".into(),
+                    };
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            " ".repeat(indent + inset),
+                            paint(
+                                &clip_plain(&detail, usize::from(image_width)),
+                                "muted",
+                                ui,
+                                false
+                            )
+                        ),
+                    ));
                     if let Some((native, area)) = native {
+                        if new_images
+                            && image_anchor.is_none()
+                            && usize::from(area.rows) > page.saturating_sub(2)
+                        {
+                            image_anchor = Some((event.id, image_start));
+                        }
                         image_spans.push((rows.len(), (indent + inset) as u16, native, area));
                         rows.extend((0..area.rows).map(|_| (event.id, String::new())));
                     } else {
@@ -679,7 +731,17 @@ impl EventView {
         self.total_rows = rows.len();
         self.page_rows = page;
         let max_scroll = rows.len().saturating_sub(page);
-        if self.follow {
+        if self.follow
+            && let Some((id, start)) = image_anchor
+        {
+            // A new tall image starts at its heading, rather than silently
+            // showing only its bottom. The existing Ctrl+End action resumes
+            // following; later tool output cannot pull the reader away.
+            self.selected = Some(id);
+            self.scroll = start;
+            self.follow = false;
+            self.reveal = false;
+        } else if self.follow {
             self.scroll = max_scroll;
         } else if self.reveal {
             if let Some(selected_row) = selected_row
@@ -1134,6 +1196,140 @@ mod tests {
         Ui {
             color: false,
             ..Ui::default()
+        }
+    }
+
+    fn image_preview(width: u32, height: u32, native: bool) -> images::Preview {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::new(width, height));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        images::decode(
+            &json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(png.into_inner())}),
+            native,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tall_native_images_keep_readable_width_and_scroll_through_the_source() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        assert!(view.is_following());
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        let rows = view.render(66, 20, &ui, true);
+        assert_eq!(rows.len(), 20);
+        assert!(unstyled(&rows.join("\n")).contains("screenshot.png"));
+        assert!(unstyled(&rows.join("\n")).contains("scroll to inspect"));
+        assert!(
+            !view.is_following(),
+            "start a new tall image at its heading"
+        );
+        assert_eq!(
+            view.total_rows, 122,
+            "retain the full 120-row image, plus its heading"
+        );
+        assert!(view.rows_below() > 0);
+        let mut renderer = images::Renderer::default();
+        let (_, head) = renderer.update(view.image_placements(0), (19, 0), false);
+        assert!(head.contains("y=0,w=400,h=340"));
+        view.scroll_by(25);
+        view.render(66, 20, &ui, true);
+        let (_, middle) = renderer.update(view.image_placements(0), (19, 0), false);
+        assert!(middle.contains("y=460,w=400,h=380"));
+        assert!(
+            !middle.contains("a=t"),
+            "scrolling reuses the original uploaded pixels"
+        );
+        assert!(
+            !middle.contains(",c="),
+            "a fitting source stays at its natural pixel size"
+        );
+        view.ingest(b"[AGENT] Later progress\n");
+        view.render(66, 20, &ui, true);
+        assert_eq!(
+            view.scroll, 25,
+            "new output must not interrupt image inspection"
+        );
+        view.latest();
+        let latest = view.render(66, 20, &ui, true).join("\n");
+        assert!(view.is_following());
+        assert!(unstyled(&latest).contains("Later progress"));
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn explicit_latest_before_the_first_image_frame_keeps_following() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        view.latest();
+        view.render(
+            66,
+            20,
+            &Ui {
+                color: true,
+                ..Ui::default()
+            },
+            true,
+        );
+        assert!(view.is_following());
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn batched_images_reveal_the_first_tall_image_after_a_small_preview() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] small.png\n");
+        view.attach_image(image_preview(32, 32, true));
+        view.ingest(b"[IMAGE] tall.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        let rows = view.render(
+            66,
+            20,
+            &Ui {
+                color: true,
+                ..Ui::default()
+            },
+            true,
+        );
+        assert!(unstyled(&rows.join("\n")).contains("tall.png"));
+        assert_eq!(view.scroll, 4);
+        assert!(!view.is_following());
+    }
+
+    #[test]
+    fn fallback_images_disclose_low_resolution_and_use_the_available_height() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.attach_image(image_preview(128, 128, false));
+        let rows = view.render(134, 80, &plain_ui(), true);
+        assert!(rows.join("\n").contains("Low-resolution thumbnail"));
+        assert_eq!(
+            view.total_rows, 66,
+            "the old 18-row cap must not shrink a larger viewport"
+        );
+        assert!(view.image_placements(0).is_empty());
+        for width in [1, 10, 40] {
+            for row in view.render(width, 8, &plain_ui(), true) {
+                assert!(row.width() <= usize::from(width));
+            }
         }
     }
 

@@ -1435,6 +1435,7 @@ dependencies = [
  "image",
  "libc",
  "miniz_oxide 0.9.1",
+ "png",
  "portable-pty",
  "qrcodegen",
  "reqwest",

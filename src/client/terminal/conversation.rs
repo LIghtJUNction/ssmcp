@@ -56,6 +56,7 @@ pub(super) struct Conversation {
     pub(super) content_focus: bool,
     selected: usize,
     selected_agent: Option<String>,
+    drawn_agents: Vec<String>,
     list_start: usize,
     list_count: usize,
     detail: bool,
@@ -131,24 +132,37 @@ fn items(value: &Value, key: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn recipients(value: &Value, observed: Vec<Value>) -> Vec<Value> {
+fn recipients(value: &Value, observed: &[crate::client::render::CallerGroup]) -> Vec<Value> {
     let mut entries = vec![
         json!({"agent_id":"next","name":"Next caller","role":"default recipient","status":"first eligible tool response"}),
     ];
     entries.extend(items(value, "agents"));
-    entries.extend(observed);
+    entries.extend(observed.iter().map(|caller| {
+        json!({
+            "kind":"observed", "targetable":false, "key":caller.key,
+            "name":caller.name, "model":caller.model, "source":caller.source,
+            "run_id":caller.run_id, "tool":caller.tool, "calls":caller.calls,
+            "running":caller.running, "unknown":caller.unknown,
+            "active":caller.running > 0, "status":caller.status,
+        })
+    }));
     entries
 }
 
 fn agent_key(value: &Value) -> String {
     if field(value, "kind") == "observed" {
-        format!("run:{}", field(value, "run_id"))
+        format!("caller:{}", field(value, "key"))
     } else {
         format!("member:{}", field(value, "agent_id"))
     }
 }
 
 impl State {
+    fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
+        let observed = self.audit.observed_controllers();
+        recipients(data, &self.caller_tracker.groups(&observed, data))
+    }
+
     fn chat_saved_draft(&self) -> steering::SavedDraft {
         steering::SavedDraft {
             text: self.conversation.composer.text().into(),
@@ -350,6 +364,7 @@ impl State {
         self.conversation.content_focus = view != View::Activity;
         self.conversation.selected = 0;
         self.conversation.selected_agent = None;
+        self.conversation.drawn_agents.clear();
         self.conversation.list_start = 0;
         self.conversation.list_count = 0;
         self.conversation.detail = false;
@@ -362,7 +377,7 @@ impl State {
     fn chat_agents(&mut self) {
         self.chat_change_view(View::Agents);
         let data = self.chat_data();
-        let entries = recipients(&data, self.audit.observed_controllers());
+        let entries = self.chat_recipients(&data);
         let target = self.conversation.target.as_deref().unwrap_or("next");
         self.conversation.selected = entries
             .iter()
@@ -638,10 +653,10 @@ impl State {
         }
     }
 
-    fn chat_selected(&self) -> Option<Value> {
+    fn chat_selected(&mut self) -> Option<Value> {
         let data = self.chat_data();
         let entries = if self.conversation.view == View::Agents {
-            recipients(&data, self.audit.observed_controllers())
+            self.chat_recipients(&data)
         } else {
             items(&data, "queue")
         };
@@ -746,7 +761,7 @@ impl State {
             view => {
                 let data = self.chat_data();
                 let entries = if view == View::Agents {
-                    recipients(&data, self.audit.observed_controllers())
+                    self.chat_recipients(&data)
                 } else {
                     items(&data, "queue")
                 };
@@ -1024,7 +1039,15 @@ impl State {
                             return;
                         };
                         self.conversation.selected = index;
-                        self.conversation.selected_agent = None;
+                        self.conversation.selected_agent = if self.conversation.view == View::Agents
+                        {
+                            let Some(key) = self.conversation.drawn_agents.get(index) else {
+                                return;
+                            };
+                            Some(key.clone())
+                        } else {
+                            None
+                        };
                     }
                     if button == 2 {
                         self.chat_open(false);
@@ -1614,20 +1637,156 @@ impl State {
 
     fn chat_agent_list_width(&self) -> u16 {
         let width = self.geometry.left;
-        if width >= 76 {
+        let sidebar = PanelLayout::configured(
+            self.geometry.cols,
+            self.geometry.rows,
+            self.ui.sidebar && !self.ui.panels.is_empty(),
+            self.ui.sidebar_width,
+        )
+        .sidebar
+        .is_some();
+        if !sidebar && width >= 76 {
             (width.saturating_mul(2) / 5).min(40)
         } else {
             width
         }
     }
 
+    fn chat_agent_details(
+        &self,
+        selected: Option<&Value>,
+        data: &Value,
+    ) -> Vec<(String, PanelTone)> {
+        let Some(selected) = selected else {
+            return vec![
+                ("Selection unavailable".into(), PanelTone::Heading),
+                ("".into(), PanelTone::Normal),
+                ("The selected entry left".into(), PanelTone::Normal),
+                ("Your recipient has not changed".into(), PanelTone::Muted),
+                ("↑ / ↓ choose another entry".into(), PanelTone::Muted),
+            ];
+        };
+        let observed = field(selected, "kind") == "observed";
+        let next = field(selected, "agent_id") == "next";
+        let mut details = vec![
+            (
+                (if observed {
+                    "Observed caller"
+                } else if next {
+                    "Message delivery"
+                } else {
+                    "Agent"
+                })
+                .into(),
+                PanelTone::Heading,
+            ),
+            ("".into(), PanelTone::Normal),
+            (field(selected, "name").into(), PanelTone::Accent),
+        ];
+        if observed {
+            let running = selected["running"].as_u64().unwrap_or(0);
+            let calls = selected["calls"].as_u64().unwrap_or(0);
+            let tone = if running > 0 {
+                PanelTone::Accent
+            } else if selected["unknown"] == true {
+                PanelTone::Warning
+            } else {
+                PanelTone::Muted
+            };
+            details.extend([
+                (field(selected, "model").into(), PanelTone::Normal),
+                (
+                    format!("{calls} calls in retained history"),
+                    PanelTone::Muted,
+                ),
+                (
+                    format!("{running} running · {}", field(selected, "status")),
+                    tone,
+                ),
+                ("".into(), PanelTone::Normal),
+                ("Latest tool".into(), PanelTone::Heading),
+                (field(selected, "tool").into(), PanelTone::Normal),
+                ("Enter / → inspect latest call".into(), PanelTone::Muted),
+                ("".into(), PanelTone::Normal),
+                ("Messages".into(), PanelTone::Heading),
+                ("No direct message address".into(), PanelTone::Normal),
+                ("Choose Next caller to queue".into(), PanelTone::Muted),
+                ("for the next eligible response".into(), PanelTone::Muted),
+                ("".into(), PanelTone::Normal),
+                ("Name and model are display labels".into(), PanelTone::Muted),
+            ]);
+        } else {
+            let target = self.conversation.target.as_deref().unwrap_or("next");
+            let id = field(selected, "agent_id");
+            let pending = items(data, "queue")
+                .iter()
+                .filter(|item| {
+                    field(item, "target") == id
+                        && matches!(field(item, "status"), "queued" | "sending" | "editing")
+                })
+                .count();
+            details.extend([
+                (
+                    (if next {
+                        "Automatic delivery"
+                    } else {
+                        field(selected, "role")
+                    })
+                    .into(),
+                    PanelTone::Muted,
+                ),
+                (
+                    (if next {
+                        "Next eligible response"
+                    } else {
+                        field(selected, "status")
+                    })
+                    .into(),
+                    PanelTone::Normal,
+                ),
+                ("".into(), PanelTone::Normal),
+                ("Messages".into(), PanelTone::Heading),
+                (
+                    format!("{pending} pending for this recipient"),
+                    PanelTone::Normal,
+                ),
+            ]);
+            if id == target {
+                details.push(("● Current recipient".into(), PanelTone::Accent));
+            }
+            details.extend([
+                ("Enter / → choose and return".into(), PanelTone::Normal),
+                ("Your draft stays in place".into(), PanelTone::Muted),
+                ("".into(), PanelTone::Normal),
+                (
+                    (if next {
+                        "Any eligible caller may receive it"
+                    } else {
+                        "Only this member receives it"
+                    })
+                    .into(),
+                    PanelTone::Muted,
+                ),
+            ]);
+            if !next {
+                details.push((id.into(), PanelTone::Muted));
+            } else if items(data, "agents").is_empty() {
+                details.extend([
+                    ("".into(), PanelTone::Normal),
+                    ("No registered agents yet".into(), PanelTone::Normal),
+                    (
+                        "Observed callers can still receive".into(),
+                        PanelTone::Muted,
+                    ),
+                    ("requests through Next caller".into(), PanelTone::Muted),
+                ]);
+            }
+        }
+        details
+    }
+
     fn chat_agent_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
-        let observed_calls = self.audit.observed_controllers();
-        let running = observed_calls
-            .iter()
-            .filter(|entry| entry["active"] == true)
-            .count();
-        let entries = recipients(data, observed_calls);
+        let entries = self.chat_recipients(data);
         if let Some(selected) = &self.conversation.selected_agent {
             if let Some(index) = entries
                 .iter()
@@ -1636,7 +1795,7 @@ impl State {
                 self.conversation.selected = index;
             } else {
                 self.conversation.selected = 0;
-                self.notice = Some("Selected member or call left · choose a recipient".into());
+                self.notice = Some("Selected member or caller left · choose a recipient".into());
             }
         }
         let missing = self
@@ -1645,6 +1804,7 @@ impl State {
             .as_ref()
             .is_some_and(|key| !entries.iter().any(|entry| agent_key(entry) == *key));
         let window = self.chat_list_window(entries.len(), height);
+        self.conversation.drawn_agents = entries.iter().map(agent_key).collect();
         let selected = &entries[self.conversation.selected];
         if !missing {
             self.conversation.selected_agent = Some(agent_key(selected));
@@ -1652,9 +1812,13 @@ impl State {
         let width = self.geometry.left;
         let list_width = self.chat_agent_list_width();
         let target = self.conversation.target.as_deref().unwrap_or("next");
+        let callers = entries
+            .iter()
+            .filter(|entry| field(entry, "kind") == "observed")
+            .count();
         let mut rows = vec![self.chat_line(
             &format!(
-                "  Agents · {} · {running} active calls",
+                "  Agents · {} members · {callers} callers",
                 items(data, "agents").len()
             ),
             PanelTone::Heading,
@@ -1676,22 +1840,17 @@ impl State {
             } else {
                 ""
             };
-            let title = format!(" {marker} {symbol}{}", field(entry, "name"));
-            let subtitle = if observed {
-                let model = field(entry, "model");
+            let title = if observed && !field(entry, "model").is_empty() {
                 format!(
-                    "     {} · {}",
-                    if entry["active"] == true {
-                        "Running"
-                    } else {
-                        "Recent call"
-                    },
-                    if model.is_empty() {
-                        "Model unknown"
-                    } else {
-                        model
-                    }
+                    " {marker} {symbol}{} · {}",
+                    field(entry, "name"),
+                    field(entry, "model")
                 )
+            } else {
+                format!(" {marker} {symbol}{}", field(entry, "name"))
+            };
+            let subtitle = if observed {
+                format!("     {} calls · {}", entry["calls"], field(entry, "status"))
             } else if field(entry, "agent_id") == "next" {
                 "     Next eligible response".into()
             } else {
@@ -1735,116 +1894,7 @@ impl State {
             rows.push(self.chat_line(&subtitle, PanelTone::Muted, list_width));
         }
         if list_width < width {
-            let observed = field(selected, "kind") == "observed";
-            let next = field(selected, "agent_id") == "next";
-            let selected_target = !observed && field(selected, "agent_id") == target;
-            let mut details: Vec<(String, PanelTone)> = vec![
-                (
-                    (if observed {
-                        "Observed call"
-                    } else {
-                        "Message recipient"
-                    })
-                    .into(),
-                    PanelTone::Heading,
-                ),
-                ("".into(), PanelTone::Normal),
-                (field(selected, "name").into(), PanelTone::Accent),
-            ];
-            if missing {
-                details.clear();
-                details.extend([
-                    ("Selection unavailable".into(), PanelTone::Heading),
-                    ("".into(), PanelTone::Normal),
-                    ("The selected member or call left".into(), PanelTone::Normal),
-                    ("Your recipient has not changed".into(), PanelTone::Muted),
-                    ("".into(), PanelTone::Normal),
-                    ("↑ / ↓      choose another entry".into(), PanelTone::Normal),
-                    ("Esc / ←    return to your draft".into(), PanelTone::Muted),
-                ]);
-            } else if observed {
-                details.extend([
-                    (
-                        format!("Model · {}", field(selected, "model")),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        format!("Tool  · {}", field(selected, "tool")),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        (if selected["active"] == true {
-                            "Running now"
-                        } else {
-                            "Retained activity"
-                        })
-                        .into(),
-                        PanelTone::Normal,
-                    ),
-                    ("".into(), PanelTone::Normal),
-                    ("Enter / →  inspect this call".into(), PanelTone::Normal),
-                    ("Esc / ←    back to conversation".into(), PanelTone::Muted),
-                    ("".into(), PanelTone::Normal),
-                    (
-                        "View only · does not change recipient".into(),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        "Name and model are caller reported".into(),
-                        PanelTone::Muted,
-                    ),
-                ]);
-            } else {
-                details.extend([
-                    (
-                        (if next {
-                            "Automatic delivery"
-                        } else {
-                            field(selected, "role")
-                        })
-                        .into(),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        (if selected_target {
-                            "● Current recipient".into()
-                        } else {
-                            format!("Presence · {}", field(selected, "status"))
-                        }),
-                        PanelTone::Normal,
-                    ),
-                    ("".into(), PanelTone::Normal),
-                    ("Enter / →  choose and return".into(), PanelTone::Normal),
-                    ("Esc / ←    back to conversation".into(), PanelTone::Muted),
-                    ("".into(), PanelTone::Normal),
-                    (
-                        (if next {
-                            "Delivered to the next eligible caller"
-                        } else {
-                            "Delivered only to this member ID"
-                        })
-                        .into(),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        (if next {
-                            ""
-                        } else {
-                            field(selected, "agent_id")
-                        })
-                        .into(),
-                        PanelTone::Muted,
-                    ),
-                    ("".into(), PanelTone::Normal),
-                    (
-                        "Your draft and cursor stay in place".into(),
-                        PanelTone::Muted,
-                    ),
-                ]);
-                if next && items(data, "agents").is_empty() {
-                    details.push(("No connected members yet".into(), PanelTone::Muted));
-                }
-            }
+            let details = self.chat_agent_details((!missing).then_some(selected), data);
             rows.resize_with(usize::from(height), || {
                 self.chat_line("", PanelTone::Normal, list_width)
             });
@@ -2010,6 +2060,11 @@ impl State {
             self.chat_line("", PanelTone::Normal, g.left)
         });
         body.truncate(usize::from(height));
+        let selected_agent = if self.conversation.view == View::Agents {
+            self.chat_selected()
+        } else {
+            None
+        };
         self.chat_fill_body(&mut body, g.left);
         let empty = Composer::default();
         let input = if self.conversation.view == View::Questions {
@@ -2089,7 +2144,11 @@ impl State {
                         return if self.conversation.detail {
                             "← / Esc  back to agents".into()
                         } else {
-                            "↑↓ select · Enter/→ choose · Esc back · ● current recipient".into()
+                            if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
+                                "↑↓ select · Enter latest call · Esc back · view only".into()
+                            } else {
+                                "↑↓ select · Enter/→ message · Esc back · ● current recipient".into()
+                            }
                         };
                     }
                     if let Some(guide) = self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18) {
@@ -2098,14 +2157,14 @@ impl State {
                             else { "F1 · full online guide link".into() };
                     }
                     format!(
-                        "{} · {status} · {} members / {} calls · {pending} queued · ← agents · /help",
+                        "{} · {status} · {} members / {} callers · {pending} queued · ← agents · /help",
                         if self.conversation.content_focus {
                             "browse"
                         } else {
                             "input"
                         },
                         agents.len(),
-                        observed.len()
+                        grouped_callers.len()
                     )
                 });
                 rows.push(self.chat_line(&format!(" {hint}"), hint_tone, g.cols));
@@ -2169,8 +2228,16 @@ impl State {
             let limit = usize::from(g.rows.saturating_sub(1));
             let footer = self.guide_rows(rect.width, limit as u16, 0, rect.col);
             let footer_start = limit.saturating_sub(footer.len());
-            let mut sidebar = Vec::new();
-            for kind in &self.ui.panels {
+            let agent_view = self.conversation.view == View::Agents;
+            let mut sidebar = if agent_view {
+                self.chat_agent_details(selected_agent.as_ref(), &data)
+                    .into_iter()
+                    .map(|(text, tone)| (format!(" {text}"), tone))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            for kind in self.ui.panels.iter().filter(|_| !agent_view) {
                 let mut section = match kind {
                     crate::client::ui::Panel::Agents => {
                         let mut section =
@@ -2550,6 +2617,112 @@ mod tests {
         let rows = state.chat_agent_rows(&data, 18).join("\n");
         assert!(rows.contains("…11111111"));
         assert!(rows.contains("…22222222"));
+    }
+
+    #[test]
+    fn agent_roster_groups_calls_and_preserves_selection_when_another_call_arrives() {
+        let mut state = preview(32, 120);
+        state.audit = Default::default();
+        for id in ["one", "two", "three"] {
+            state.audit.ingest(&json!({
+                "type":"ssmcp.code_mode", "run_id":id, "phase":"started",
+                "controller":{"name":"Repeated caller","model":"Model","source":"caller-reported"}
+            }));
+        }
+        state.chat_agents();
+        let data = state.chat_data();
+        let entries = state.chat_recipients(&data);
+        assert_eq!(entries.len(), 4, "next + two members + one observed caller");
+        let caller = entries
+            .iter()
+            .position(|entry| field(entry, "kind") == "observed")
+            .unwrap();
+        assert_eq!(entries[caller]["calls"], 3);
+        state.chat_move(caller as isize);
+        let selected = state.conversation.selected_agent.clone();
+        state.audit.ingest(&json!({
+            "type":"ssmcp.code_mode", "run_id":"four", "phase":"started",
+            "controller":{"name":"Repeated caller","model":"Model","source":"caller-reported"}
+        }));
+        let rows = state.chat_agent_rows(&data, 24).join("\n");
+        assert_eq!(rows.matches("Repeated caller").count(), 1);
+        assert!(rows.contains("4 calls"));
+        assert_eq!(state.conversation.selected_agent, selected);
+        assert_eq!(state.chat_selected().unwrap()["calls"], 4);
+        assert_eq!(state.chat_selected().unwrap()["run_id"], "four");
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("No direct message address"));
+        assert!(!screen.contains("Recent commits"));
+        assert!(!screen.contains("Last controller"));
+    }
+
+    #[test]
+    fn sidebar_inspects_selected_member_and_keeps_its_message_count_scoped() {
+        let mut state = preview(32, 120);
+        state.chat_agents();
+        state.chat_move(1);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("Only this member receives it"));
+        assert!(screen.contains("example-builder"));
+        assert!(!screen.contains("Recent commits"));
+        let data = json!({"queue":[
+            {"target":"example-builder","status":"queued"},
+            {"target":"example-builder","status":"delivered"},
+            {"target":"example-reviewer","status":"queued"}
+        ]});
+        let entry = state.chat_selected().unwrap();
+        let details = state.chat_agent_details(Some(&entry), &data);
+        assert!(
+            details
+                .iter()
+                .any(|(text, _)| text == "1 pending for this recipient")
+        );
+    }
+
+    #[test]
+    fn mouse_uses_the_drawn_caller_identity_when_new_activity_reorders_the_list() {
+        let mut state = preview(32, 120);
+        state.audit = Default::default();
+        state.audit.ingest(&json!({
+            "type":"ssmcp.code_mode", "run_id":"drawn", "phase":"started",
+            "controller":{"name":"Original caller","model":"A","source":"caller-reported"}
+        }));
+        state.chat_agents();
+        let data = state.chat_data();
+        state.chat_agent_rows(&data, 24);
+        let index = state
+            .chat_recipients(&data)
+            .iter()
+            .position(|entry| field(entry, "run_id") == "drawn")
+            .unwrap();
+        state.audit.ingest(&json!({
+            "type":"ssmcp.code_mode", "run_id":"new-first-row", "phase":"started",
+            "controller":{"name":"Another caller","model":"B","source":"caller-reported"}
+        }));
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 2,
+            y: body_top(state.geometry.rows) + 1 + index as u16 * 2,
+            release: false,
+        });
+        assert_eq!(state.audit.snapshot()["selected"]["run_id"], "drawn");
+        assert!(state.conversation.target.is_none());
+    }
+
+    #[test]
+    fn narrow_agent_list_keeps_different_models_visible() {
+        let mut state = preview(24, 70);
+        state.audit = Default::default();
+        for model in ["Model A", "Model B"] {
+            state.audit.ingest(&json!({
+                "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
+                "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
+            }));
+        }
+        state.chat_agents();
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("ChatGPT · Model A"));
+        assert!(screen.contains("ChatGPT · Model B"));
     }
 
     #[test]
@@ -3331,7 +3504,8 @@ mod tests {
         state.conversation.composer.insert("draft stays here");
         state.chat_change_view(View::Agents);
         let data = state.chat_data();
-        let first_observed = recipients(&data, state.audit.observed_controllers())
+        let first_observed = state
+            .chat_recipients(&data)
             .iter()
             .position(|entry| field(entry, "kind") == "observed")
             .unwrap();
@@ -3370,7 +3544,7 @@ mod tests {
         state.audit.ingest(&json!({"type":"ssmcp.code_mode","run_id":"new-call","phase":"started","code":"return 3;"}));
         state.chat_list_rows(&data, body_rows(state.geometry.rows));
         assert_eq!(field(&state.chat_selected().unwrap(), "run_id"), selected);
-        state.chat_move(1);
+        state.chat_move(-1);
         assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
     }
     #[tokio::test]

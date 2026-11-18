@@ -162,12 +162,17 @@ pub(crate) struct CallerTracker {
 
 #[derive(Debug)]
 pub(crate) struct CallerGroup {
+    pub key: String,
     pub name: String,
     pub model: String,
+    pub source: String,
+    pub run_id: String,
+    pub tool: String,
     pub calls: usize,
     pub running: usize,
     pub unknown: bool,
     pub status: String,
+    representative: (u8, std::cmp::Reverse<u64>),
 }
 
 impl CallerTracker {
@@ -220,14 +225,21 @@ impl CallerTracker {
             } else {
                 (String::new(), run.into(), String::new())
             };
+            // This is a stable display key, not an authenticated recipient ID.
+            // Encoding the tuple avoids collisions between untrusted labels.
+            let display_key = serde_json::json!(key).to_string();
             let index = *indexes.entry(key).or_insert_with(|| {
                 groups.push(CallerGroup {
+                    key: display_key,
                     name: if known {
                         super::super::panel::safe_text(name)
                     } else {
                         format!("Unknown #{}", run.chars().take(6).collect::<String>())
                     },
                     model: super::super::panel::safe_text(model),
+                    source: source.into(),
+                    run_id: run.into(),
+                    tool: super::super::panel::safe_text(field(entry, "tool")),
                     calls: 0,
                     running: 0,
                     unknown: false,
@@ -236,6 +248,7 @@ impl CallerTracker {
                     } else {
                         "offline".into()
                     },
+                    representative: (0, std::cmp::Reverse(u64::MAX)),
                 });
                 groups.len() - 1
             });
@@ -248,7 +261,19 @@ impl CallerTracker {
                             .any(|(id, room)| id == run && room == field(data, "room_id"))));
             let group = &mut groups[index];
             group.calls += 1;
-            if entry["active"].as_bool().unwrap_or(false) {
+            let active = entry["active"].as_bool().unwrap_or(false);
+            // Audit display sorts unfinished calls first. Its original order
+            // still identifies the newest call after a reconnect or timeout.
+            let priority = (
+                if current { 1 + u8::from(active) } else { 0 },
+                std::cmp::Reverse(entry["order"].as_u64().unwrap_or(u64::MAX)),
+            );
+            if priority > group.representative {
+                group.run_id = run.into();
+                group.tool = super::super::panel::safe_text(field(entry, "tool"));
+                group.representative = priority;
+            }
+            if active {
                 group.running += usize::from(current);
                 group.unknown |= connected && !current;
             }
@@ -392,6 +417,54 @@ mod caller_tests {
             &json!({"preview":true}),
         );
         assert_eq!(groups.len(), 4);
+    }
+
+    #[test]
+    fn caller_selection_key_survives_new_calls_but_separates_ambiguous_labels() {
+        let mut tracker = CallerTracker::default();
+        let data = json!({"preview":true});
+        let first = tracker.groups(&[call("a", false)], &data).remove(0);
+        let updated = tracker
+            .groups(&[call("b", true), call("a", false)], &data)
+            .remove(0);
+        assert_eq!(first.key, updated.key);
+        assert_eq!(updated.calls, 2);
+        assert_eq!(updated.run_id, "b");
+        let mut different_source = call("c", false);
+        different_source["source"] = json!("MCP clientInfo");
+        assert_ne!(first.key, tracker.groups(&[different_source], &data)[0].key);
+        let unknown = |id| json!({"run_id":id,"source":"metadata missing"});
+        let groups = tracker.groups(&[unknown("u1"), unknown("u2")], &data);
+        assert_ne!(groups[0].key, groups[1].key);
+    }
+
+    #[test]
+    fn audit_representative_prefers_current_activity_over_stale_starts() {
+        let mut tracker = CallerTracker::default();
+        let data = json!({"connected":true,"room_id":"current"});
+        tracker.observe(&json!({"run_id":"live","phase":"started"}), &data);
+        let group = tracker
+            .groups(&[call("old", true), call("live", true)], &data)
+            .remove(0);
+        assert_eq!(group.run_id, "live");
+        assert_eq!(group.running, 1);
+        assert!(group.unknown);
+        let group = tracker
+            .groups(&[call("old", true), call("live", false)], &data)
+            .remove(0);
+        assert_eq!(
+            group.run_id, "live",
+            "a completed current call replaces the stale one"
+        );
+        let mut newest = call("newest", false);
+        newest["order"] = json!(0);
+        let group = tracker
+            .groups(&[call("old", true), newest], &json!({"connected":false}))
+            .remove(0);
+        assert_eq!(
+            group.run_id, "newest",
+            "offline inspection still opens the newest retained call"
+        );
     }
 }
 
