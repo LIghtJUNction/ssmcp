@@ -2895,7 +2895,10 @@ mod tests {
         // This is the same Editable event emitted only after successful CAS.
         state.chat_editable("latest".into(), "待发送".into(), None, vec![taken.clone()]);
         assert_eq!(state.conversation.parked.as_ref(), Some(&original));
-        assert_eq!(state.conversation.images, [taken.clone()]);
+        assert_eq!(
+            state.conversation.images.as_slice(),
+            std::slice::from_ref(&taken)
+        );
         let held = json!({"queue":[{"id":"latest","status":"editing","text":"待发送",
             "target":"next","images":attachments::metadata(std::slice::from_ref(&taken))}]});
         state.conversation.composer.set_text("修改后的需求");
