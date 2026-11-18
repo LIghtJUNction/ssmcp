@@ -16,12 +16,16 @@ use tokio::{io::AsyncReadExt, process::Command};
 
 const PLAYWRIGHT_VERSION: &str = "0.0.85";
 const HELP: &str = "\
+ssmcp setup browser --native [--check] [--json]
 ssmcp setup browser [--check] [--json]
 ssmcp setup browser --install [--json]
 ssmcp setup browser --playwright-mcp /absolute/path/to/cli.js [--json]
                     [--background | --foreground]
 
-Discover existing Chrome/Chromium/Edge extensions and installed browser tools.
+--native checks only the Node.js and Chromium dependencies used by native tools.
+It never installs, discovers or registers an external harness.
+
+The following explicit integration options discover browser extensions and tools.
 The default saves an available Playwright MCP CLI and enables background control.
 --check reports the environment without installing or changing settings.
 --install installs @playwright/mcp@0.0.85 in the ssmcp user directory using npm.
@@ -30,10 +34,12 @@ The default saves an available Playwright MCP CLI and enables background control
 
 Enable Playwright MCP Bridge and approve its first connection in the browser.
 A ChatGPT or Claude extension manifest alone exposes no supported ssmcp API.
-SSMCP_PLAYWRIGHT_MCP overrides the saved CLI path.";
+SSMCP_PLAYWRIGHT_MCP overrides the saved CLI path.
+SSMCP_NODE and SSMCP_BROWSER_EXECUTABLE select absolute native runtime paths.";
 
 #[derive(Default, Debug)]
 struct Options {
+    native: bool,
     check: bool,
     install: bool,
     entry: Option<PathBuf>,
@@ -47,6 +53,7 @@ fn parse(args: &[OsString]) -> Result<Options> {
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--native") => options.native = true,
             Some("--check") => options.check = true,
             Some("--install") => options.install = true,
             Some("--json") => options.json = true,
@@ -81,6 +88,14 @@ fn parse(args: &[OsString]) -> Result<Options> {
     {
         return Err("--check cannot be combined with options that change browser settings".into());
     }
+    if options.native
+        && (options.install || options.entry.is_some() || options.background.is_some())
+    {
+        return Err(
+            "--native is read-only and cannot be combined with external harness setup options"
+                .into(),
+        );
+    }
     if options.install && options.entry.is_some() {
         return Err("--install and --playwright-mcp cannot be combined".into());
     }
@@ -97,6 +112,39 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
         println!("{HELP}");
         return Ok(true);
     }
+    if options.native {
+        let report = native_report().await?;
+        if options.json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!(
+                "Native browser: {}",
+                if report["ready"] == true {
+                    "ready"
+                } else {
+                    "unavailable"
+                }
+            );
+            println!(
+                "Node.js: {}",
+                report["runtime"]["node"].as_str().unwrap_or("unavailable")
+            );
+            println!(
+                "Chromium: {}",
+                report["runtime"]["browser_executable"]
+                    .as_str()
+                    .unwrap_or("unavailable")
+            );
+        }
+        if report["ready"] != true {
+            return Err(format!(
+                "Native browser dependency check failed: {}",
+                report["runtime"]
+            )
+            .into());
+        }
+        return Ok(true);
+    }
     let report = configure(&options).await?;
     if options.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -104,6 +152,21 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
         print_report(&report);
     }
     Ok(true)
+}
+
+async fn native_report() -> Result<Value> {
+    // No discovery, configuration writes, extension registration or harness process.
+    Ok(tokio::task::spawn_blocking(|| {
+        let node = crate::program::node();
+        let browser = crate::browser::installed_browser(None);
+        json!({
+            "mode": "native", "ready": node.is_ok() && browser.is_ok(),
+            "runtime": {
+                "node": node.as_ref().ok(), "node_error": node.as_ref().err(),
+                "browser_executable": browser.as_ref().ok(), "browser_error": browser.as_ref().err(),
+            },
+        })
+    }).await?)
 }
 
 /// SSH setup configures existing browser tools without installing dependencies.
@@ -206,7 +269,23 @@ async fn validate_entry(path: &Path, background: bool) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn npm_for_node(node: PathBuf) -> Result<Command> {
+    let cli = node
+        .parent()
+        .ok_or("Node.js has no installation directory")?
+        .join("node_modules/npm/bin/npm-cli.js");
+    if !cli.is_file() {
+        return Err("SSMCP_NODE has no adjacent npm-cli.js; select an official Node.js distribution with npm".into());
+    }
+    let mut command = Command::new(node);
+    command.arg(cli);
+    Ok(command)
+}
+
 fn npm_command() -> Result<Command> {
+    if std::env::var_os("SSMCP_NODE").is_some() {
+        return npm_for_node(crate::program::node().map_err(io::Error::other)?);
+    }
     let npm = crate::program::executable("npm").map_err(
         |_| "npm was not found; install Node.js with npm, then retry ssmcp setup browser --install",
     )?;
@@ -442,6 +521,51 @@ fn print_report(report: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_browser_check_rejects_external_harness_mutations() {
+        let args = ["--native", "--check", "--json"].map(OsString::from);
+        let options = parse(&args).unwrap();
+        assert!(options.native && options.check && options.json);
+        for args in [
+            vec!["--native", "--install"],
+            vec!["--native", "--background"],
+            vec!["--native", "--foreground"],
+            vec!["--native", "--playwright-mcp", "/tmp/entry.js"],
+        ] {
+            assert!(parse(&args.into_iter().map(OsString::from).collect::<Vec<_>>()).is_err());
+        }
+    }
+
+    #[test]
+    fn selected_node_uses_its_adjacent_npm_instead_of_a_path_dispatcher() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmcp-npm-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let node = root.join("node.exe");
+        assert!(
+            npm_for_node(node.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("adjacent npm-cli.js")
+        );
+        let cli = root.join("node_modules/npm/bin/npm-cli.js");
+        std::fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        std::fs::write(&cli, b"// installed npm fixture").unwrap();
+        let command = npm_for_node(node.clone()).unwrap();
+        assert_eq!(command.as_std().get_program(), node.as_os_str());
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            vec![cli.as_os_str()]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
