@@ -104,41 +104,47 @@ async fn read_unix(program: &str, wayland: bool) -> Result<Content, String> {
 #[cfg(target_os = "macos")]
 pub(super) async fn read() -> Result<Content, String> {
     use base64::Engine as _;
-    const SCRIPT: &str = "ObjC.import('AppKit'); const im=$.NSImage.alloc.initWithPasteboard($.NSPasteboard.generalPasteboard); const rep=$.NSBitmapImageRep.imageRepWithData(im.TIFFRepresentation); ObjC.unwrap(rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG,$({})).base64EncodedStringWithOptions(0));";
-    let image = helper(
+    const TYPES: &str = "ObjC.import('AppKit'); (ObjC.deepUnwrap($.NSPasteboard.generalPasteboard.types)||[]).join('\\n');";
+    const IMAGE: &str = "ObjC.import('AppKit'); const im=$.NSImage.alloc.initWithPasteboard($.NSPasteboard.generalPasteboard); const rep=$.NSBitmapImageRep.imageRepWithData(im.TIFFRepresentation); ObjC.unwrap(rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG,$({})).base64EncodedStringWithOptions(0));";
+    let types = helper("osascript", &["-l", "JavaScript", "-e", TYPES], 16 * 1024).await?;
+    let types = String::from_utf8(types).map_err(|_| "Clipboard type list is not UTF-8")?;
+    let image_available = types.lines().any(|kind| {
+        matches!(
+            kind.trim(),
+            "public.png"
+                | "public.tiff"
+                | "public.jpeg"
+                | "com.compuserve.gif"
+                | "org.webmproject.webp"
+        )
+    });
+    if !image_available {
+        return text(
+            helper(
+                "pbpaste",
+                &["-Prefer", "txt"],
+                super::composer::MAX_DRAFT_BYTES,
+            )
+            .await?,
+        );
+    }
+    let encoded = helper(
         "osascript",
-        &["-l", "JavaScript", "-e", SCRIPT],
+        &["-l", "JavaScript", "-e", IMAGE],
         super::attachments::MAX_SOURCE_BYTES * 4 / 3 + 4,
     )
-    .await;
-    let image_error = match image {
-        Ok(encoded) if !encoded.trim_ascii().is_empty() => {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(encoded.trim_ascii())
-                .map_err(|_| "Cannot decode the clipboard image; use /attach PATH")?;
-            return Ok(Content::Image {
-                name: "clipboard.png".into(),
-                mime_type: "image/png".into(),
-                bytes,
-            });
-        }
-        Err(error) => Some(error),
-        _ => None,
-    };
-    let bytes = helper(
-        "pbpaste",
-        &["-Prefer", "txt"],
-        super::composer::MAX_DRAFT_BYTES,
-    )
     .await?;
-    if bytes.is_empty()
-        && let Some(error) = image_error
-    {
-        return Err(format!(
-            "No readable clipboard image or text; use /attach PATH. {error}"
-        ));
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim_ascii())
+        .map_err(|_| "Cannot decode the clipboard image; use /attach PATH")?;
+    if bytes.is_empty() {
+        return Err("The clipboard image is empty; use /attach PATH".into());
     }
-    text(bytes)
+    Ok(Content::Image {
+        name: "clipboard.png".into(),
+        mime_type: "image/png".into(),
+        bytes,
+    })
 }
 #[cfg(windows)]
 pub(super) async fn read() -> Result<Content, String> {
