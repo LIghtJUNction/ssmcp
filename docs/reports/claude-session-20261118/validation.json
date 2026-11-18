@@ -1,0 +1,21 @@
+{
+  "status": "passed",
+  "platform": "Linux x86_64",
+  "source_commit": "be3edcfe2bca58c0a7018ddbcd00d03c7caef6b7",
+  "runtime_source_commit": "9f1008e3966542a8f4d1134451573a605cf29e39",
+  "checks": {
+    "format": true,
+    "clippy_warnings_denied": true,
+    "client_rust_tests": 299,
+    "preview": 38,
+    "ssh_composer": 88,
+    "relay_composer": 45,
+    "dashboard": 84
+  },
+  "source_difference_after_release": "only an end-to-end test locator; runtime build inputs are unchanged",
+  "screenshots": [
+    "../../assets/client-ui.png",
+    "../../assets/client-ui-light.png",
+    "../../assets/client-audit.png"
+  ]
+}
