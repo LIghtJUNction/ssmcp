@@ -1,7 +1,9 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod account;
+pub(crate) mod attachments;
 mod audit_view;
 mod browser_setup;
+mod clipboard;
 pub(crate) mod completion;
 mod composer;
 mod config;
@@ -13,6 +15,8 @@ pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
     config::browser()
 }
 mod git_status;
+mod handoff;
+mod highlight;
 pub(crate) mod input;
 pub(crate) mod interface;
 mod onboarding;

@@ -682,6 +682,18 @@ impl Keyboard {
         let mut output = Vec::new();
         let mut actions = Vec::new();
         for &byte in bytes {
+            // A fresh ESC starts a new key. Resolve a preceding standalone ESC
+            // immediately, even when both keys arrive in one terminal read.
+            if byte == 0x1b && !self.pasting && !self.pending.is_empty() {
+                if self.logs && self.pending == b"\x1b" {
+                    self.logs = force_logs;
+                    self.pending.clear();
+                    actions.push(Key::Escape);
+                } else {
+                    output.append(&mut self.pending);
+                }
+                self.since = None;
+            }
             if self.pending.is_empty() && byte != 0x1b {
                 if !self.pasting {
                     self.logs = force_logs;
@@ -1702,7 +1714,7 @@ impl Frame {
         let resized = previous.is_none_or(|old| old.geometry != self.geometry);
         for (row, line) in self.rows.iter().enumerate() {
             if resized || previous.and_then(|old| old.rows.get(row)) != Some(line) {
-                let _ = write!(output, "\x1b[{};1H\x1b[0m{line}", row + 1);
+                let _ = write!(output, "\x1b[{};1H\x1b[0m\x1b[2K{line}", row + 1);
             }
         }
         if previous.is_none_or(|old| old.application_cursor != self.application_cursor) {
@@ -2016,6 +2028,40 @@ mod tests {
         parser.process(&frame.diff(None));
         parser
     }
+    #[test]
+    fn frame_diff_erases_old_text_when_a_row_shrinks_or_becomes_empty() {
+        let mut state = State::new(12, 40, &split_ui());
+        let mut before = state.frame(Instant::now());
+        before.rows[0] = "\x1b[31mold text including a wide 界 suffix".into();
+        before.rows[1] = "a row that disappears".into();
+        let mut screen = physical(&before);
+        let mut after = before.clone();
+        after.rows[0] = "new".into();
+        after.rows[1].clear();
+        screen.process(&after.diff(Some(&before)));
+        let rows: Vec<_> = screen.screen().rows(0, 40).collect();
+        assert_eq!(rows[0], "new");
+        assert_eq!(rows[1], "");
+        assert_eq!(screen.screen().cell(0, 8).unwrap().contents(), "");
+        assert!(after.diff(Some(&after)).is_empty());
+    }
+
+    #[test]
+    fn escape_followed_by_an_arrow_remains_two_keys_at_every_read_boundary() {
+        let bytes = b"\x1b\x1b[D";
+        for split in 0..=bytes.len() {
+            let mut keyboard = Keyboard::default();
+            let now = Instant::now();
+            let (mut output, mut keys) = keyboard.feed(&bytes[..split], now, false, true, false);
+            let (rest, more) = keyboard.feed(&bytes[split..], now, false, true, false);
+            output.extend(rest);
+            keys.extend(more);
+            assert_eq!(output, b"\x1b");
+            assert!(matches!(keys.as_slice(), [Key::Back]));
+            assert!(keyboard.pending.is_empty());
+        }
+    }
+
     #[test]
     fn geometry_reserves_real_panes_and_survives_narrow_resize() {
         let mut state = State::new(58, 106, &split_ui());

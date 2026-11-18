@@ -324,6 +324,91 @@ class InputHistory(Composer):
         self.check(read["text"].encode("utf-8") == pasted and read["eof"],
                    "the receiving agent can read the whole saved paste through its native action")
 
+    def attachment_handoff_scenario(self, front, member):
+        before = {item["id"] for item in self.queue()["queue"]}
+        target = self.ui("/display/conversation")["target"]
+        self.check(target == member["agent_id"], "attachment fixture starts with the exact selected recipient")
+        front.send('/attach "资料/红蓝.png"' + "\r")
+        state = self.wait_state(front, lambda state: re.fullmatch(
+            r'@\"\.ssmcp/inputs/image-[0-9a-f]{32}\.png\"\s*', state["draft"]["text"]) is not None,
+            "/attach did not prepare an editable private PNG reference")
+        image_draft = state["draft"]["text"]
+        image_path = re.fullmatch(r'@\"([^\"]+)\"\s*', image_draft).group(1)
+        saved_image = self.workspace / image_path
+        self.check(saved_image.read_bytes() == png_fixture()
+                   and saved_image.stat().st_mode & 0o777 == 0o600,
+                   "/attach preserves a small PNG in a private input file")
+        self.check(state["target"] == target
+                   and {item["id"] for item in self.queue()["queue"]} == before,
+                   "/attach keeps the selected recipient and never queues its reference automatically")
+        image = self.call("ssmcp.fs.read_image", {"path": image_path})
+        self.check(image["size"] == len(png_fixture())
+                   and image["sha256"] == hashlib.sha256(png_fixture()).hexdigest(),
+                   "the imported image remains readable through the existing rooted native image tool")
+        self.save_shot("attached-image", front)
+        front.send(b"\x01\x0b")
+        self.wait_state(front, lambda state: not state["draft"]["text"], "attachment test draft did not clear")
+
+        reply = "## HANDOFF_LATEST_REPLY\n\n刚核对最新上下文，界。"
+        request = {"text": reply, "kind": "answer", "idempotency_key": "handoff-reply-once"}
+        receipt = self.observe("ssmcp.ui.message", request)
+        duplicate = self.observe("ssmcp.ui.message", request)
+        self.check(receipt["accepted"] and receipt["history_saved"] and not receipt["duplicate"]
+                   and receipt["kind"] == "answer" and duplicate["duplicate"]
+                   and duplicate["message_id"] == receipt["message_id"],
+                   "an idempotent native reply preserves its ID and is saved only once")
+        pending_text = "HANDOFF_PENDING 界：尚未领取的用户要求"
+        pending = self.submit_source(front, pending_text)
+        self.check(pending["target"] == target, "the handoff pending fixture targets the selected real member")
+        question = self.observe("ssmcp.ui.ask", {
+            "question": "HANDOFF_QUESTION 界：下一步先检查哪里？",
+            "options": ["输入", "历史"], "idempotency_key": "handoff-question-once",
+        })
+        sessions = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
+        current = next(session for session in sessions if session["current"])
+        history_path = self.state_home / "ssmcp" / "conversations" / (current["id"] + ".jsonl")
+        history_before = history_path.read_bytes()
+        entries = [json.loads(line) for line in history_before.splitlines()]
+        self.check(sum(entry.get("id") == receipt["message_id"] for entry in entries) == 1,
+                   "the ui.message receipt identifies exactly one record in the shared JSONL history")
+
+        marker = self.workspace / "handoff-must-not-run.txt"
+        note = "HANDOFF_NOTE 界 $(touch handoff-must-not-run.txt)"
+        before = {item["id"] for item in self.queue()["queue"]}
+        front.send("/handoff " + note + "\r")
+        state = self.wait_state(front, lambda state: re.fullmatch(
+            r'@\"\.ssmcp/inputs/handoff-[0-9a-f]{32}\.md\"\s*', state["draft"]["text"]) is not None,
+            "/handoff did not produce a reviewable Markdown reference")
+        draft = state["draft"]["text"]
+        path = re.fullmatch(r'@\"([^\"]+)\"\s*', draft).group(1)
+        saved = self.workspace / path
+        exported = saved.read_text(encoding="utf-8")
+        self.check(saved.stat().st_mode & 0o777 == 0o600 and len(saved.read_bytes()) <= 2 * 1024 * 1024,
+                   "handoff writes one private bounded Markdown input file")
+        for expected in [current["id"], receipt["message_id"], reply, pending_text,
+                         question["id"], question["question"]["question"], note]:
+            self.check(expected in exported, "handoff contains the actual current context: " + expected[:48])
+        native = self.call("ssmcp.fs.read_text", {"path": path, "max_bytes": 65536})
+        self.check(native["text"] == exported and native["eof"],
+                   "the handoff reference is fully readable through the rooted native text tool")
+        after = self.queue()
+        self.check(state["target"] == target and {item["id"] for item in after["queue"]} == before
+                   and self.record(after, message_id=pending["id"])["status"] == "queued",
+                   "handoff preserves the recipient and pending delivery without submitting another request")
+        self.check(self.observe("ssmcp.ui.questions", {"id": question["id"]})["question"]["state"] == "pending"
+                   and history_path.read_bytes() == history_before and not marker.exists(),
+                   "handoff does not answer questions, duplicate history, or execute shell text from its note")
+        suffix = " 补充：继续核对。"
+        front.send(suffix)
+        self.wait_state(front, lambda state: state["draft"]["text"] == draft + suffix,
+                        "the generated handoff reference was not editable")
+        self.save_shot("handoff-editable", front)
+        front.send(b"\x01\x0b")
+        self.wait_state(front, lambda state: not state["draft"]["text"], "handoff test draft did not clear")
+        self.expect_delivery(self.work(member=member), pending, request_text=pending_text,
+                             agent_id=member["agent_id"])
+        self.check(not marker.exists(), "explicitly receiving the pending text does not execute handoff note contents")
+
     def copy_and_help(self, front):
         draft = "COPY_HELP_DRAFT 界后缀"
         front.send(draft)
@@ -477,6 +562,7 @@ class InputHistory(Composer):
                     and "ssmcp  /  activity" in text(shot), "the exact registered fixture recipient")
         first_source = self.reference_scenarios(front, member)
         self.paste_scenario(front, member)
+        self.attachment_handoff_scenario(front, member)
         self.copy_and_help(front)
         self.shell_scenario(front)
         self.history_scenario(front, first_source)
@@ -503,7 +589,7 @@ def main():
     report = {
         "status": "failed", "platform": platform.system(),
         "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
-        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, copy/help, local shell/tasks, automatic JSONL and resume; no models",
+        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, automatic JSONL and resume; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",
@@ -523,7 +609,7 @@ def main():
             print(description, flush=True)
             if harness.last_frontend and not harness.last_frontend.closed:
                 try:
-                    harness.save_shot("failure", harness.last_frontend)
+                    harness.save_shot("failure", harness.last_frontend, cells=True)
                 except (OSError, AssertionError) as snapshot_error:
                     report["snapshot_error"] = type(snapshot_error).__name__
             harness.diagnostics()

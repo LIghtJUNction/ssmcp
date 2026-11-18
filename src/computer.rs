@@ -1235,8 +1235,7 @@ fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Err("JPEG dimensions are missing".into())
 }
 
-#[cfg(any(test, target_os = "macos"))]
-async fn run_helper(
+pub(crate) async fn run_helper(
     root: &std::path::Path,
     program: &str,
     args: &[String],

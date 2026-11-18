@@ -1,0 +1,566 @@
+//! Local clipboard/import jobs produce ordinary @references, never a second wire queue.
+use crate::{output::MAX_IMAGE_BYTES, workspace::Workspace};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use image::{DynamicImage, ImageFormat, ImageReader};
+use serde_json::{Value, json};
+use std::{
+    io::{Cursor, Write},
+    path::Path,
+};
+use tokio::{sync::oneshot, task::JoinHandle};
+
+pub(super) const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PIXELS: u64 = 32 * 1024 * 1024;
+const MAX_DIMENSION: u32 = 16_384;
+pub(super) const REFERENCE_RESERVE: usize = 64;
+
+pub(crate) enum Source {
+    Clipboard,
+    Path(String),
+    Copy(String),
+    Handoff(String),
+}
+#[derive(Debug)]
+pub(crate) enum Loaded {
+    Text(String),
+    Reference {
+        reference: String,
+        description: String,
+    },
+    Copied,
+}
+pub(super) struct Task {
+    receiver: oneshot::Receiver<Result<Loaded, String>>,
+    handle: JoinHandle<()>,
+}
+impl Task {
+    pub(super) fn start(source: Source) -> Result<Self, String> {
+        let (runtime, handle) = super::interface::harness::local_runtime()?;
+        let (sender, receiver) = oneshot::channel();
+        let handle = handle.spawn(async move {
+            let result = runtime.import_input(source).await;
+            let _ = sender.send(result);
+            super::terminal::invalidate();
+        });
+        Ok(Self { receiver, handle })
+    }
+    pub(super) fn poll(&mut self) -> Option<Result<Loaded, String>> {
+        match self.receiver.try_recv() {
+            Ok(value) => Some(value),
+            Err(oneshot::error::TryRecvError::Empty) => None,
+            Err(oneshot::error::TryRecvError::Closed) => Some(Err(
+                "Local input loading stopped; the draft is preserved".into(),
+            )),
+        }
+    }
+}
+impl Drop for Task {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+/// Parse one explicit path, with quotes/escaped spaces, without shell expansion.
+pub(super) fn path_argument(text: &str) -> Result<String, String> {
+    let mut parts = Vec::new();
+    let mut part = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in text.trim().chars() {
+        if escaped {
+            part.push(ch);
+            escaped = false;
+        } else if ch == '\\' && quote != Some('\'') && cfg!(not(windows)) {
+            escaped = true;
+        } else if Some(ch) == quote {
+            quote = None;
+        } else if quote.is_none() && matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        } else if quote.is_none() && ch.is_whitespace() {
+            if !part.is_empty() {
+                parts.push(std::mem::take(&mut part));
+            }
+        } else {
+            part.push(ch);
+        }
+    }
+    if escaped || quote.is_some() {
+        return Err("Close the quoted path before using /attach".into());
+    }
+    if !part.is_empty() {
+        parts.push(part);
+    }
+    if parts.len() != 1 {
+        return Err(
+            "Use /attach PATH for one workspace file; quote paths containing spaces".into(),
+        );
+    }
+    let mut path = parts.pop().unwrap();
+    if path.starts_with("file://") {
+        path = reqwest::Url::parse(&path)
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+            .and_then(|path| path.into_os_string().into_string().ok())
+            .ok_or("Use a local UTF-8 file path")?;
+    }
+    if path.is_empty() || path.len() > 4096 || path.chars().any(char::is_control) {
+        return Err(
+            "Use a nonempty file path of at most 4096 bytes without control characters".into(),
+        );
+    }
+    Ok(path)
+}
+fn quoted(path: &str) -> String {
+    format!("@\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded, String> {
+    match source {
+        Source::Copy(text) => super::clipboard::write_text(&text)
+            .await
+            .map(|()| Loaded::Copied),
+        Source::Clipboard => match super::clipboard::read().await? {
+            super::clipboard::Content::Text(text) if text.len() > 8 * 1024 => {
+                let root = workspace.root().to_path_buf();
+                tokio::task::spawn_blocking(move || {
+                    super::references::paste::store_at(&root, &text).map(|reference| {
+                        Loaded::Reference {
+                            reference,
+                            description: format!("Saved clipboard text · {} bytes", text.len()),
+                        }
+                    })
+                })
+                .await
+                .map_err(|error| format!("Clipboard storage failed: {error}"))?
+            }
+            super::clipboard::Content::Text(text) => Ok(Loaded::Text(text)),
+            super::clipboard::Content::Image {
+                name,
+                mime_type,
+                bytes,
+            } => store_image(workspace.root().to_path_buf(), name, mime_type, bytes).await,
+        },
+        Source::Path(path) => load_path(workspace, &path).await,
+        Source::Handoff(note) => {
+            let root = workspace.root().to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                super::handoff::prepare(&root, &note).map(|reference| Loaded::Reference {
+                    reference,
+                    description: "Handoff prepared · review the reference before sending".into(),
+                })
+            })
+            .await
+            .map_err(|error| format!("Handoff preparation failed: {error}"))?
+        }
+    }
+}
+
+async fn load_path(workspace: &Workspace, supplied: &str) -> Result<Loaded, String> {
+    let path = super::references::relative_path(supplied, workspace.root())?;
+    let metadata = workspace
+        .perform("ssmcp.fs.stat", json!({"path":path}))
+        .await?;
+    if metadata["kind"] != "file" {
+        return Err("Attach a readable regular workspace file".into());
+    }
+    if metadata["size"].as_u64().unwrap_or(u64::MAX) > 64 * 1024 * 1024 {
+        return Err("File references are limited to 64 MiB".into());
+    }
+    if metadata["modified_ns"].is_null() {
+        return Err("The workspace could not verify this file's modification time".into());
+    }
+    let first = workspace
+        .perform("ssmcp.fs.read", json!({"path":path,"max_bytes":4096}))
+        .await?;
+    let mut bytes = decode_page(&first)?;
+    let image = crate::output::image_mime_type(&bytes).is_some()
+        || Path::new(&path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|ext| {
+                matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp"
+                )
+            });
+    if !image {
+        return Ok(Loaded::Reference {
+            reference: quoted(&path),
+            description: format!(
+                "File reference ready · {} bytes",
+                metadata["size"].as_u64().unwrap_or(0)
+            ),
+        });
+    }
+    if metadata["size"].as_u64().unwrap_or(u64::MAX) > MAX_SOURCE_BYTES as u64 {
+        return Err("Image sources are limited to 16 MiB before processing".into());
+    }
+    let mut eof = first["eof"] == true;
+    while !eof {
+        let page = workspace
+            .perform(
+                "ssmcp.fs.read",
+                json!({"path":path,"offset":bytes.len(),
+            "max_bytes":crate::workspace::MAX_FILE_BYTES}),
+            )
+            .await?;
+        let next = decode_page(&page)?;
+        if next.is_empty() || bytes.len().saturating_add(next.len()) > MAX_SOURCE_BYTES {
+            return Err("The image changed or exceeded its 16 MiB source limit".into());
+        }
+        bytes.extend_from_slice(&next);
+        eof = page["eof"] == true;
+    }
+    let current = workspace
+        .perform("ssmcp.fs.stat", json!({"path":path}))
+        .await?;
+    if current["kind"] != metadata["kind"]
+        || current["size"] != metadata["size"]
+        || current["modified_ns"] != metadata["modified_ns"]
+        || bytes.len() as u64 != metadata["size"].as_u64().unwrap_or(0)
+    {
+        return Err("The source image changed while reading it; retry /attach".into());
+    }
+    store_image(workspace.root().to_path_buf(), path, String::new(), bytes).await
+}
+fn decode_page(page: &Value) -> Result<Vec<u8>, String> {
+    STANDARD
+        .decode(
+            page["data_base64"]
+                .as_str()
+                .ok_or("File read returned no bytes")?,
+        )
+        .map_err(|_| "File read returned invalid base64".into())
+}
+#[derive(Debug)]
+struct PreparedImage {
+    label: String,
+    mime_type: &'static str,
+    bytes: Vec<u8>,
+}
+async fn store_image(
+    root: std::path::PathBuf,
+    name: String,
+    declared: String,
+    bytes: Vec<u8>,
+) -> Result<Loaded, String> {
+    tokio::task::spawn_blocking(move || {
+        let image = prepare(&name, &declared, bytes, MAX_IMAGE_BYTES)?;
+        let reference =
+            super::references::paste::store_image_at(&root, &image.bytes, image.mime_type)?;
+        Ok(Loaded::Reference {
+            reference,
+            description: format!(
+                "{} · {} bytes · {}",
+                image.label,
+                image.bytes.len(),
+                image.mime_type
+            ),
+        })
+    })
+    .await
+    .map_err(|error| format!("Image processing failed: {error}"))?
+}
+
+fn reader(bytes: &[u8]) -> Result<ImageReader<Cursor<&[u8]>>, String> {
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| format!("Cannot inspect image: {error}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DIMENSION);
+    limits.max_image_height = Some(MAX_DIMENSION);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    Ok(reader)
+}
+fn mime(format: ImageFormat) -> Option<&'static str> {
+    match format {
+        ImageFormat::Png => Some("image/png"),
+        ImageFormat::Jpeg => Some("image/jpeg"),
+        ImageFormat::Gif => Some("image/gif"),
+        ImageFormat::WebP => Some("image/webp"),
+        _ => None,
+    }
+}
+fn display_name(
+    name: &str,
+    dimensions: (u32, u32),
+    original: (u32, u32),
+    converted: bool,
+) -> String {
+    let mut base = String::new();
+    for ch in Path::new(name)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .chars()
+    {
+        if ch.is_control() {
+            continue;
+        }
+        if base.len() + ch.len_utf8() > 48 {
+            break;
+        }
+        base.push(ch);
+    }
+    if base.is_empty() {
+        base = "clipboard".into();
+    }
+    if dimensions != original {
+        format!(
+            "{base} [{}×{} ← {}×{}; resized]",
+            dimensions.0, dimensions.1, original.0, original.1
+        )
+    } else {
+        format!(
+            "{base} [{}×{}{}]",
+            dimensions.0,
+            dimensions.1,
+            if converted { "; re-encoded" } else { "" }
+        )
+    }
+}
+
+/// Retain small images; large PNGs keep alpha and PNG encoding. Changes are disclosed.
+fn prepare(
+    name: &str,
+    declared_mime: &str,
+    bytes: Vec<u8>,
+    budget: usize,
+) -> Result<PreparedImage, String> {
+    if bytes.is_empty() || bytes.len() > MAX_SOURCE_BYTES {
+        return Err("Image must contain 1 byte to 16 MiB".into());
+    }
+    let probe = reader(&bytes)?;
+    let format = probe
+        .format()
+        .ok_or("Clipboard does not contain a recognized image")?;
+    let input_mime = mime(format).ok_or("Supported images: PNG, JPEG, GIF and WebP")?;
+    if !declared_mime.is_empty() && declared_mime != input_mime {
+        return Err("Clipboard image type does not match its contents".into());
+    }
+    let original = probe
+        .into_dimensions()
+        .map_err(|error| format!("Cannot inspect image dimensions: {error}"))?;
+    if original.0 == 0
+        || original.1 == 0
+        || original.0 > MAX_DIMENSION
+        || original.1 > MAX_DIMENSION
+        || u64::from(original.0) * u64::from(original.1) > MAX_PIXELS
+    {
+        return Err(
+            "Image exceeds 32 megapixels or 16384 pixels on one side; crop it first".into(),
+        );
+    }
+    let limit = budget.min(MAX_IMAGE_BYTES);
+    if limit < 256 {
+        return Err("Image processing budget is too small".into());
+    }
+    let original_image = reader(&bytes)?
+        .decode()
+        .map_err(|error| format!("Cannot decode image within the memory limit: {error}"))?;
+    let largest = original.0.max(original.1);
+    let mut dimensions = if largest > 4096 {
+        (
+            (u64::from(original.0) * 4096 / u64::from(largest)).max(1) as u32,
+            (u64::from(original.1) * 4096 / u64::from(largest)).max(1) as u32,
+        )
+    } else {
+        original
+    };
+    if bytes.len() <= limit && dimensions == original {
+        return Ok(PreparedImage {
+            label: display_name(name, original, original, false),
+            mime_type: input_mime,
+            bytes,
+        });
+    }
+    let jpeg = matches!(format, ImageFormat::Jpeg | ImageFormat::WebP)
+        && !original_image.color().has_alpha();
+    let output_mime = if jpeg { "image/jpeg" } else { "image/png" };
+    for _ in 0..32 {
+        let resized;
+        let image = if dimensions == original {
+            &original_image
+        } else {
+            resized = original_image.resize_exact(
+                dimensions.0,
+                dimensions.1,
+                image::imageops::FilterType::Lanczos3,
+            );
+            &resized
+        };
+        if let Some(encoded) = encode(image, jpeg, limit)? {
+            let mut label = display_name(name, dimensions, original, true);
+            if matches!(format, ImageFormat::Gif | ImageFormat::WebP) {
+                label.push_str(" · static first frame");
+            }
+            return Ok(PreparedImage {
+                label,
+                mime_type: output_mime,
+                bytes: encoded,
+            });
+        }
+        if dimensions == (1, 1) {
+            break;
+        }
+        dimensions = ((dimensions.0 * 4 / 5).max(1), (dimensions.1 * 4 / 5).max(1));
+    }
+    Err("Cannot fit this image within 400 KiB; crop it before importing".into())
+}
+struct LimitedBuffer {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+impl Write for LimitedBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded = true;
+            return Err(std::io::Error::other("encoded image exceeds its budget"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn encode(image: &DynamicImage, jpeg: bool, limit: usize) -> Result<Option<Vec<u8>>, String> {
+    let mut output = LimitedBuffer {
+        bytes: Vec::new(),
+        limit,
+        exceeded: false,
+    };
+    let result = if jpeg {
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 90).encode_image(image)
+    } else {
+        image.write_with_encoder(image::codecs::png::PngEncoder::new_with_quality(
+            &mut output,
+            image::codecs::png::CompressionType::Best,
+            image::codecs::png::FilterType::Adaptive,
+        ))
+    };
+    if output.exceeded {
+        return Ok(None);
+    }
+    result.map_err(|error| format!("Cannot encode image: {error}"))?;
+    Ok(Some(output.bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let image = image::RgbaImage::from_fn(width, height, |x, y| {
+            let n = x
+                .wrapping_mul(1664525)
+                .wrapping_add(y.wrapping_mul(1013904223));
+            image::Rgba([
+                (n >> 8) as u8,
+                (n >> 16) as u8,
+                n as u8,
+                if x % 2 == 0 { 80 } else { 255 },
+            ])
+        });
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, ImageFormat::Png)
+            .unwrap();
+        bytes.into_inner()
+    }
+    #[test]
+    fn explicit_paths_preserve_quotes_without_shell_expansion() {
+        assert_eq!(
+            path_argument("'docs/设计 图.png'").unwrap(),
+            "docs/设计 图.png"
+        );
+        assert_eq!(
+            path_argument("file:///tmp/image%20one.png").unwrap(),
+            "/tmp/image one.png"
+        );
+        assert_eq!(
+            path_argument("'$(touch secret).png'").unwrap(),
+            "$(touch secret).png"
+        );
+        for bad in ["", "one.png two.png", "'unfinished", "path\nname"] {
+            assert!(path_argument(bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn small_images_are_preserved_and_mime_mismatches_fail() {
+        let bytes = png(8, 8);
+        let image = prepare("example.png", "image/png", bytes.clone(), MAX_IMAGE_BYTES).unwrap();
+        assert_eq!(image.bytes, bytes);
+        assert_eq!(image.mime_type, "image/png");
+        assert!(image.label.contains("8×8"));
+        assert!(prepare("bad.png", "image/jpeg", bytes, MAX_IMAGE_BYTES).is_err());
+        assert!(
+            prepare(
+                "bad.png",
+                "image/png",
+                b"not an image".to_vec(),
+                MAX_IMAGE_BYTES
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn oversize_png_preserves_alpha_and_discloses_resize_within_raw_budget() {
+        let image = prepare("screenshot.png", "image/png", png(320, 240), 9 * 1024).unwrap();
+        assert!(image.bytes.len() <= 9 * 1024);
+        assert_eq!(image.mime_type, "image/png");
+        let decoded = reader(&image.bytes).unwrap().decode().unwrap();
+        assert!(decoded.color().has_alpha());
+        assert!(decoded.width() < 320 && decoded.height() < 240);
+        assert!(image.label.contains("resized"));
+        assert!(
+            image
+                .label
+                .contains(&format!("{}×{}", decoded.width(), decoded.height()))
+        );
+        assert!(prepare("full.png", "image/png", png(1, 1), 0).is_err());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attachment_uses_private_inputs_and_rejects_workspace_escape() {
+        use std::fs;
+        struct Temporary(std::path::PathBuf);
+        impl Drop for Temporary {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = Temporary(std::env::temp_dir().join(
+            format!("ssmcp-attach-{}-{}",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()),
+        ));
+        fs::create_dir(&root.0).unwrap();
+        fs::write(root.0.join("图.png"), png(4, 4)).unwrap();
+        fs::write(root.0.join("note.txt"), "plain fixture").unwrap();
+        let workspace = Workspace::new(root.0.clone()).unwrap();
+        let Loaded::Reference { reference, .. } = load_path(&workspace, "图.png").await.unwrap()
+        else {
+            panic!()
+        };
+        let path = reference
+            .strip_prefix("@\"")
+            .unwrap()
+            .strip_suffix('"')
+            .unwrap();
+        assert!(path.starts_with(".ssmcp/inputs/image-"));
+        let image = workspace
+            .perform("ssmcp.fs.read_image", json!({"path":path}))
+            .await
+            .unwrap();
+        assert_eq!(image["structuredContent"]["mime_type"], "image/png");
+        let Loaded::Reference { reference, .. } = load_path(&workspace, "note.txt").await.unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(reference, "@\"note.txt\"");
+        assert!(load_path(&workspace, "../outside.png").await.is_err());
+        std::os::unix::fs::symlink(root.0.join("图.png"), root.0.join("link.png")).unwrap();
+        assert!(load_path(&workspace, "link.png").await.is_err());
+    }
+}

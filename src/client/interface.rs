@@ -14,6 +14,7 @@ use std::{
 
 pub(crate) mod harness;
 pub(crate) mod history;
+pub(crate) mod messages;
 pub(crate) mod questions;
 
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -485,11 +486,7 @@ pub(crate) async fn call(
             "ssmcp.ui.history" => return history::call(arguments),
             "ssmcp.ui.ask" => return questions::ask(arguments),
             "ssmcp.ui.questions" => return questions::read(arguments),
-            "ssmcp.ui.message" => {
-                let text = questions::parse_message(arguments)?;
-                super::terminal::message(&text)?;
-                return Ok(json!({"shown":true}));
-            }
+            "ssmcp.ui.message" => return messages::send(arguments),
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
             "ssmcp.ui.get" => {
                 let projection = parse_get(&arguments)?;
