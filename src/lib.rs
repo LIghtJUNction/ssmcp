@@ -61,3 +61,6 @@ mod ssh_public_key;
 #[cfg(target_os = "linux")]
 pub mod user_policy;
 pub(crate) mod username;
+
+#[cfg(target_os = "linux")]
+pub mod commerce;

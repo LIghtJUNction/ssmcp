@@ -57,6 +57,10 @@ impl ManagementPolicy {
         valid_identity(identity) && self.admin_subjects.contains(&identity.subject)
     }
 
+    pub(crate) fn is_admin_subject(&self, subject: &str) -> bool {
+        valid_subject(subject) && self.admin_subjects.contains(subject)
+    }
+
     /// Only the peer-credential-backed SSH username establishes ownership.
     /// An MCP --allow entry grants tool access, never ownership.
     pub fn owner_subject(&self, ssh_user: &str) -> Option<String> {
@@ -120,6 +124,8 @@ pub struct DashboardSnapshot {
     pub retention_days: u32,
     #[serde(default = "crate::user_policy::default_rate_limit")]
     pub default_rate_limit_bps: u64,
+    #[serde(default)]
+    pub traffic: Option<crate::user_policy::TrafficQuota>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
