@@ -457,12 +457,13 @@ class ReleaseTests(unittest.TestCase):
 
         def upload(args, **kwargs):
             package = args[-1]
-            self.assertEqual(args, ["cargo", "publish", "--locked", "--no-verify", "--package", package])
+            self.assertEqual(args, ["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io", "--package", package])
             if package == "ssmcp":
                 self.assertEqual(uploaded, ["ztui-core"])
             uploaded.append(package)
 
-        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
+        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token",
+                                           "CARGO_REGISTRY_DEFAULT": "unrelated-fixture"}, clear=True), \
              mock.patch.object(release, "registry_checksum", side_effect=registry), \
              mock.patch.object(release.subprocess, "run", side_effect=upload):
             release.publish(self.root)
@@ -486,7 +487,7 @@ class ReleaseTests(unittest.TestCase):
              mock.patch.object(release.subprocess, "run") as upload:
             release.publish(self.root)
         upload.assert_called_once_with(
-            ["cargo", "publish", "--locked", "--no-verify", "--package", "ssmcp"],
+            ["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io", "--package", "ssmcp"],
             cwd=self.root, check=True)
 
     def test_failed_core_upload_stops_before_application_upload(self):
