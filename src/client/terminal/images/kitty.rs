@@ -65,7 +65,7 @@ impl Native {
             )
             .ok()?;
         let id = NEXT_IMAGE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
                 id.checked_add(1).filter(|next| *next < QUERY_ID)
             })
             .ok()?;

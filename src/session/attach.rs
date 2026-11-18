@@ -528,7 +528,9 @@ async fn attached(
     let ui = Ui::load(None)?;
     crate::client::interface::initialize_path(None);
     render::configure(ui.clone());
-    let display = terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref())?;
+    // Attach IPC has no authenticated Ready.url; do not guess a guide origin.
+    let display =
+        terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref(), None)?;
     let mut terminal_ids = Vec::new();
     sync_terminals(open, &mut terminal_ids);
     let mut selected = 0usize;
@@ -766,6 +768,21 @@ async fn apply_keys(
                         generation,
                         ids.get(*selected).map(String::as_str).unwrap_or("main"),
                         text,
+                    )
+                    .await?;
+                }
+            }
+            #[cfg(unix)]
+            crate::client::input::InputEvent::Interrupt => {
+                // Attaching preserves the documented Ctrl-C-to-inner-terminal behavior.
+                // Ctrl-] detaches this frontend without stopping the background session.
+                if !read_only && let Some(generation) = backend_generation {
+                    send_input(
+                        directory,
+                        lease,
+                        generation,
+                        ids.get(*selected).map(String::as_str).unwrap_or("main"),
+                        "\u{3}".into(),
                     )
                     .await?;
                 }
