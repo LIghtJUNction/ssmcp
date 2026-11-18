@@ -193,7 +193,8 @@ async fn preview(ui: Ui, explicit: Option<&Path>) -> crate::Result<()> {
     use crate::session::attach::input::{Event, Keyboard};
     super::interface::initialize_path(explicit);
     super::render::configure(ui.clone());
-    let Some(_display) = super::terminal::Session::start(&ui)? else {
+    let cwd = std::env::current_dir()?;
+    let Some(_display) = super::terminal::Session::start(&ui, &cwd.to_string_lossy(), None)? else {
         return Err("interactive preview requires a foreground terminal with dashboard enabled and a pretty log format; use ssmcp ui preview --static for a single frame".into());
     };
     let mut keyboard = Keyboard::open()?;
