@@ -1514,9 +1514,10 @@ impl State {
                 && self.log_query.is_empty()
                 && self.log_level == 0
             {
-                self.media = self
-                    .events
-                    .image_placements(conversation::body_top(self.geometry.rows));
+                self.media.extend(
+                    self.events
+                        .image_placements(conversation::body_top(self.geometry.rows)),
+                );
             }
             return frame;
         }
@@ -1531,7 +1532,7 @@ impl State {
         );
         let sidebar = layout.sidebar.map(|rect| {
             let height = rect.height.saturating_sub(u16::from(g.rows >= 3));
-            let footer = self.guide_rows(rect.width, height);
+            let footer = self.guide_rows(rect.width, height, rect.row, rect.col);
             let mut panel: Vec<String> = panel::render_configured(
                 &self.panel,
                 rect.width,
@@ -1620,6 +1621,8 @@ impl State {
             rows.push(line);
         }
         if self.help {
+            // This legacy help view replaces the whole frame, including sidebar.
+            self.media.clear();
             let mut lines = vec![
                 "SSMCP  /  Help & appearance".to_string(),
                 String::new(),
@@ -1698,10 +1701,16 @@ impl State {
             mouse_capture: !self.selection,
         }
     }
-    fn guide_rows(&self, width: u16, height: u16) -> Vec<String> {
-        self.guide
-            .as_ref()
-            .map_or_else(Vec::new, |guide| guide.rows(width, height, &self.ui))
+    fn guide_rows(&mut self, width: u16, height: u16, row: u16, col: u16) -> Vec<String> {
+        let Some(guide) = &self.guide else {
+            return Vec::new();
+        };
+        let (rows, placement) =
+            guide.rows(width, height, &self.ui, self.graphics.cell(), (row, col));
+        if let Some(placement) = placement {
+            self.media.push(placement);
+        }
+        rows
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
         if !self.ui.color {

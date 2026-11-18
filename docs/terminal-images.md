@@ -32,6 +32,8 @@ A visible image belongs to one structured Activity event. Scrolling maps the vis
 
 PNG encoding and protocol payload construction happen outside the display-state lock. Text layout stays in the shared renderer; Kitty output is emitted before and after its ordinary frame diff. Image error replies disable native display for that session and restore the fallback. Query and image replies are consumed before the composer, while bracketed-paste bytes remain opaque.
 
+The sidebar guide QR uses this same compositor. Its cached black-and-white PNG has square 8-pixel modules and a four-module white border. It is shown only at its natural pixel size when the complete image fits; other terminals and smaller panes show the complete guide URL.
+
 ## Verification
 
 The Rust image tests cover envelope and decode limits, true-color fallback, tiny images, query replies split across reads, delayed reply fragments, binary bracketed paste, PNG transport chunk boundaries, source cropping, and scoped cleanup. The EventView tests exercise actual decoded images through scrolling, folding, and very narrow panes.
@@ -48,6 +50,17 @@ python3 scripts/e2e_native_images.py \
 ```
 
 The fixture starts its own loopback gateway, temporary home and state directories, and private display. It records binary hashes, JSON checks, and PNG screenshots, including clear, scroll, resize, and reload states. Keyboard events go only to that private ztty window.
+
+The guide fixture also checks the candidate gateway's public English and Chinese routes, renders the actual pages in private headless Chromium, and decodes the sidebar screenshot with zbar:
+
+```sh
+python3 scripts/e2e_guide.py \
+  --bin-dir /path/to/candidate-bins \
+  --ztty /path/to/ztty \
+  --out out/guide
+```
+
+A local candidate pass covers that candidate server. Check the public gateway's `/guide/` separately before treating its link as deployed.
 
 ## Protocol references
 
