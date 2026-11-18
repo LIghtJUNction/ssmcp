@@ -267,17 +267,27 @@ def main():
             preview.send(b"\x0f")
             preview.until(lambda s: "activity" in s["rows"][0] and not s["hide_cursor"], "Ctrl+O returning to input")
 
+            slash(preview, "/filter ssmcp-missing-filter-marker")
+            preview.until(lambda s: "No matching log entries" in body_text(s), "unmatched text filter")
+            check(True, "unmatched text filters show an empty-result state")
             slash(preview, "/filter cargo")
-            filtered = preview.until(lambda s: "activity · all /cargo" in s["rows"][0], "text filter")
-            check("cargo test --lib" in text(filtered) and "exit=0" in text(filtered),
+            filtered = preview.until(
+                lambda s: "cargo test --lib" in body_text(s) and "exit=0" in body_text(s)
+                and "Improve the client experience" not in body_text(s), "matching text filter")
+            check("cargo test --lib" in body_text(filtered) and "exit=0" in body_text(filtered),
                   "matching commands retain their result during filtering")
             slash(preview, "/filter")
-            preview.until(lambda s: "/cargo" not in s["rows"][0], "cleared filter")
-            preview.send(b"\x1b[20~\x1b[20~")
-            preview.until(lambda s: "activity · errors /" in s["rows"][0], "error category filter")
+            preview.until(lambda s: "Improve the client experience" in body_text(s), "cleared filter")
+            check(True, "clearing the text filter restores other log records")
+            preview.send(b"\x1b[20~")
+            preview.until(
+                lambda s: "cargo test --lib" in body_text(s) and "exit=0" in body_text(s)
+                and "Improve the client experience" not in body_text(s), "command category filter")
+            preview.send(b"\x1b[20~")
+            preview.until(lambda s: "No matching log entries" in body_text(s), "error category filter")
             check(True, "F9 selects command and error categories")
             slash(preview, "/filter --all")
-            preview.until(lambda s: "errors /" not in s["rows"][0], "category clear")
+            preview.until(lambda s: "Improve the client experience" in body_text(s), "category clear")
 
             preview.resize(18, 120)
             live = preview.until(lambda s: "Write a requirement below" in body_text(s)
