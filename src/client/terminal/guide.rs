@@ -103,6 +103,10 @@ impl Guide {
         &self.url
     }
 
+    pub(super) fn reject_image(&self, id: u32) {
+        self.codes.reject_image(id);
+    }
+
     #[cfg(test)]
     pub(super) fn prepare_for_test(&self) {
         self.codes.prepare_for_test();

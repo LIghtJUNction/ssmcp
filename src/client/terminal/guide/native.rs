@@ -18,6 +18,7 @@ struct Entry {
     code: QrCode,
     image: OnceLock<Option<Arc<Native>>>,
     started: AtomicBool,
+    rejected: AtomicBool,
 }
 
 impl Cache {
@@ -30,6 +31,7 @@ impl Cache {
                         code,
                         image: OnceLock::new(),
                         started: AtomicBool::new(false),
+                        rejected: AtomicBool::new(false),
                     })
                 })
                 .collect(),
@@ -39,7 +41,8 @@ impl Cache {
     pub(super) fn image(&self, columns: u16, rows: u16, cell: CellSize) -> Option<&Arc<Native>> {
         let entry = self.entries.iter().find(|entry| {
             let side = (entry.code.size() + 2 * super::QUIET) as u32 * MODULE_PIXELS;
-            side <= u32::from(columns) * u32::from(cell.width)
+            !entry.rejected.load(Ordering::Relaxed)
+                && side <= u32::from(columns) * u32::from(cell.width)
                 && side <= u32::from(rows) * u32::from(cell.height)
         })?;
         if entry.image.get().is_none() && !entry.started.swap(true, Ordering::AcqRel) {
@@ -57,6 +60,19 @@ impl Cache {
             }
         }
         entry.image.get()?.as_ref()
+    }
+
+    pub(super) fn reject_image(&self, id: u32) {
+        for entry in &self.entries {
+            if entry
+                .image
+                .get()
+                .and_then(Option::as_ref)
+                .is_some_and(|image| image.id() == id)
+            {
+                entry.rejected.store(true, Ordering::Relaxed);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -87,6 +103,27 @@ fn raster(code: &QrCode) -> RgbaImage {
 mod tests {
     use super::*;
     use qrcodegen::QrCodeEcc;
+
+    #[test]
+    fn rejected_qr_variants_fall_back_without_retrying_the_same_image() {
+        let guide = super::super::Guide::from_endpoint("https://ssmcp.lmm.best/mcp").unwrap();
+        guide.prepare_for_test();
+        let cell = CellSize {
+            width: 10,
+            height: 20,
+        };
+        let first = guide.codes.image(40, 40, cell).unwrap().id();
+        guide.reject_image(first);
+        let second = guide.codes.image(40, 40, cell).unwrap().id();
+        assert_ne!(first, second);
+        guide.reject_image(second);
+        assert!(guide.codes.image(40, 40, cell).is_none());
+        let (rows, placement) =
+            guide.rows(40, 40, &super::super::Ui::default(), Some(cell), (0, 0));
+        assert!(placement.is_none());
+        assert!(rows.join("\n").contains("Online guide"));
+        assert!(rows.join("\n").contains(guide.url()));
+    }
 
     #[test]
     fn unsupported_or_cramped_guide_does_not_request_native_encoding() {

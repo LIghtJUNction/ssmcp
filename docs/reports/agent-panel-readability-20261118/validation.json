@@ -1,0 +1,119 @@
+{
+  "commit": "01a012fa5559a6a9328e0ac0518be76bee3af151",
+  "steps": [
+    {
+      "name": "terminal-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "-j",
+        "4",
+        "client::terminal::",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 32.77,
+      "log": "terminal-tests.log",
+      "test_status": "ok",
+      "passed": 133,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "caller-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "-j",
+        "4",
+        "client::render::activity::caller_tests::"
+      ],
+      "exit_code": 0,
+      "seconds": 0.41,
+      "log": "caller-tests.log",
+      "test_status": "ok",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "audit-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "-j",
+        "4",
+        "client::audit_view::"
+      ],
+      "exit_code": 0,
+      "seconds": 0.2,
+      "log": "audit-tests.log",
+      "test_status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "ssmcp",
+        "--bin",
+        "ssmcpd",
+        "--example",
+        "vt_snapshot",
+        "-j",
+        "4"
+      ],
+      "exit_code": 0,
+      "seconds": 15.94,
+      "log": "build.log"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--lib",
+        "-j",
+        "4",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 6.72,
+      "log": "clippy.log"
+    },
+    {
+      "name": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.68,
+      "log": "format.log"
+    }
+  ],
+  "binaries": {
+    "ssmcp": "a8b76a1c650fcb3ea162d15dc81c20907f1e6194865b8d339ea1a23bc7f63450",
+    "ssmcpd": "eb64d08781a8708f84cca889d282ba85d6313e4371384e199894977745d6b593",
+    "vt_snapshot": "4d8191654adb5d9ae8e0f3b1637c751f68623e14ec06f13a1362c3377f21fade"
+  },
+  "scope": "Local developer-machine validation; ordinary remote CI was not requested.",
+  "status": "passed"
+}
+
