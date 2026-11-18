@@ -167,7 +167,7 @@ impl State {
         self.conversation.target = draft.target;
     }
 
-    fn chat_data(&self) -> Value {
+    pub(super) fn chat_data(&self) -> Value {
         if self.preview {
             json!({"connected":false,"supported":true,"preview":true,
                 "agents":[
@@ -1669,10 +1669,12 @@ impl State {
 
     fn chat_agent_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
         let observed_calls = self.audit.observed_controllers();
-        let running = observed_calls
+        let running: usize = self
+            .caller_tracker
+            .groups(&observed_calls, data)
             .iter()
-            .filter(|entry| entry["active"] == true)
-            .count();
+            .map(|group| group.running)
+            .sum();
         let entries = recipients(data, observed_calls);
         if let Some(selected) = &self.conversation.selected_agent {
             if let Some(index) = entries
@@ -1996,6 +1998,7 @@ impl State {
         let data = self.chat_data();
         let agents = items(&data, "agents");
         let observed = self.audit.observed_controllers();
+        let grouped_callers = self.caller_tracker.groups(&observed, &data);
         let queue = items(&data, "queue");
         let pending = queue
             .iter()
@@ -2194,23 +2197,26 @@ impl State {
                                 PanelTone::Muted,
                             ));
                         }
-                        if !observed.is_empty() {
+                        if !grouped_callers.is_empty() {
                             section.push((
-                                format!(" Observed calls · {}", observed.len()),
+                                format!(" Observed callers · {}", grouped_callers.len()),
                                 PanelTone::Heading,
                             ));
-                            for controller in observed.iter().take(3) {
-                                section.push((
-                                    format!(" ↳ {}", field(controller, "name")),
-                                    PanelTone::Accent,
-                                ));
+                            for controller in grouped_callers.iter().take(3) {
+                                let tone = if controller.unknown {
+                                    PanelTone::Warning
+                                } else if controller.running > 0 {
+                                    PanelTone::Accent
+                                } else {
+                                    PanelTone::Muted
+                                };
+                                section.push((format!(" ↳ {}", controller.name), tone));
                                 section.push((
                                     format!(
-                                        "   {} · {}",
-                                        field(controller, "model"),
-                                        field(controller, "status")
+                                        "   {} · {} calls · {}",
+                                        controller.model, controller.calls, controller.status
                                     ),
-                                    PanelTone::Muted,
+                                    tone,
                                 ));
                             }
                         }
@@ -2345,6 +2351,74 @@ mod tests {
                 .contents()
                 .contains("raw-only-detail-marker")
         );
+    }
+
+    #[test]
+    fn caller_groups_preserve_authenticated_recipients_and_each_exact_audit_run() {
+        let mut state = preview(24, 120);
+        state.audit = super::super::AuditView::default();
+        state.conversation.composer.set_text("保留用户草稿");
+        state.conversation.target = Some("example-builder".into());
+        let live = json!({"connected":true,"room_id":"fixture-room"});
+        for run in ["alpha", "beta"] {
+            let event = json!({
+                "type":"ssmcp.code_mode","phase":"started","run_id":run,
+                "code":format!("return '{run}';"),
+                "controller":{"name":"Builder","model":"Shared model","source":"caller-reported"}
+            });
+            assert!(state.audit.ingest(&event));
+            state.caller_tracker.observe(&event, &live);
+        }
+        let data = state.chat_data();
+        let observed = state.audit.observed_controllers();
+        let before = recipients(&data, observed.clone());
+        let audit_before = state.audit.snapshot();
+        let groups = state.caller_tracker.groups(&observed, &live);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].calls, 2);
+        assert_eq!(groups[0].running, 2);
+        state.chat_agents();
+        state.chat_agent_rows(&data, 20);
+        assert_eq!(
+            recipients(&data, state.audit.observed_controllers()),
+            before
+        );
+        assert_eq!(state.audit.snapshot(), audit_before);
+        assert_eq!(items(&data, "agents").len(), 2);
+        assert_eq!(observed.len(), 2);
+        assert!(
+            observed
+                .iter()
+                .all(|entry| entry["targetable"] == false && entry["agent_id"].is_null())
+        );
+        for run in ["alpha", "beta"] {
+            state.conversation.view = View::Agents;
+            state.conversation.selected_agent = Some(format!("run:{run}"));
+            state.chat_agent_rows(&data, 20);
+            assert_eq!(field(&state.chat_selected().unwrap(), "run_id"), run);
+            state.chat_open(false);
+            assert_eq!(state.audit.snapshot()["selected"]["run_id"], run);
+            assert_eq!(
+                state.audit.snapshot()["selected"]["code"],
+                format!("return '{run}';")
+            );
+            assert_eq!(
+                state.conversation.target.as_deref(),
+                Some("example-builder")
+            );
+            assert_eq!(state.conversation.composer.text(), "保留用户草稿");
+        }
+        state.conversation.detail = false;
+        state.conversation.view = View::Agents;
+        state.conversation.selected_agent = Some("member:example-reviewer".into());
+        state.chat_agent_rows(&data, 20);
+        state.chat_open(false);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-reviewer")
+        );
+        assert_eq!(state.conversation.composer.text(), "保留用户草稿");
+        assert_eq!(state.audit.observed_controllers(), observed);
     }
 
     #[test]

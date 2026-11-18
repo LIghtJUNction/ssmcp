@@ -293,10 +293,23 @@ pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
     Some((state.geometry.pty_rows, state.geometry.left))
 }
 
+/// Called after the steering lock is released; no recipient or run is rewritten.
+pub(super) fn callers_disconnected() {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.caller_tracker.disconnect();
+        state.dirty = true;
+    }
+}
+
 pub(crate) fn audit(value: &serde_json::Value) {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.audit.ingest(value) {
+            if value["phase"] == "started" {
+                let data = state.chat_data();
+                state.caller_tracker.observe(value, &data);
+            }
             state.dirty = true;
         }
     }
@@ -922,6 +935,7 @@ struct State {
     help: bool,
     selection: bool,
     audit: AuditView,
+    caller_tracker: super::render::CallerTracker,
     log_query: String,
     log_level: u8,
     filter_editing: bool,
@@ -965,6 +979,7 @@ impl State {
             help: false,
             selection: false,
             audit: AuditView::default(),
+            caller_tracker: super::render::CallerTracker::default(),
             log_query: String::new(),
             log_level: 0,
             filter_editing: false,

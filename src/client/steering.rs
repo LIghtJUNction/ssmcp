@@ -1281,6 +1281,8 @@ pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport>
 }
 pub(super) fn disconnect() {
     with(Manager::disconnect);
+    // Display invalidation happens only after releasing the request manager lock.
+    super::terminal::callers_disconnected();
 }
 pub(super) fn pending_command(id: u64) -> Option<SteeringCommand> {
     with(|manager| manager.pending_command(id))
