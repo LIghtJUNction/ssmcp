@@ -632,15 +632,34 @@ const bootstrap = `(() => {
     }
     return results;
   };
+  const executionJob = async (name, id, job, args) => {
+    if (typeof job === 'string') {
+      if (args === undefined) args = {};
+      if (!args || typeof args !== 'object' || isArray(args)) {
+        throw new Failure('exec.' + name + ' options must be a JSON object');
+      }
+      args = {...args, job_id:job};
+    } else {
+      if (args !== undefined) {
+        throw new Failure('exec.' + name + ' takes either a job options object or a job ID and options');
+      }
+      args = job;
+    }
+    if (!args || typeof args !== 'object' || isArray(args)
+        || typeof args.job_id !== 'string' || !args.job_id) {
+      throw new Failure('exec.' + name + ' requires a nonempty job ID or an options object with job_id');
+    }
+    return execution(name, id, args);
+  };
   const exec = freeze({
     start: (id, args) => execution('start', id, args),
     list: id => execution('list', id),
-    status: (id, job) => execution('status', id, {job_id:job}),
-    wait: (id, job, args = {}) => execution('wait', id, {...args, job_id:job}),
-    read: (id, job, args = {}) => execution('read', id, {...args, job_id:job}),
-    write: (id, job, args = {}) => execution('write', id, {...args, job_id:job}),
-    cancel: (id, job) => execution('cancel', id, {job_id:job}),
-    forget: (id, job) => execution('forget', id, {job_id:job}),
+    status: (id, job, args) => executionJob('status', id, job, args),
+    wait: (id, job, args) => executionJob('wait', id, job, args),
+    read: (id, job, args) => executionJob('read', id, job, args),
+    write: (id, job, args) => executionJob('write', id, job, args),
+    cancel: (id, job, args) => executionJob('cancel', id, job, args),
+    forget: (id, job, args) => executionJob('forget', id, job, args),
     events: (id, args) => execution('events', id, args),
     run: executeCommand,
     parallel: parallelCommands,
