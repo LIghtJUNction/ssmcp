@@ -26,6 +26,7 @@ import time
 import zlib
 
 from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT
+from e2e_client_ui import column
 from e2e_dashboard import sha256, text
 
 
@@ -539,10 +540,11 @@ class InputHistory(Composer):
         saved = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
         selected = next(index for index, item in enumerate(saved) if item["id"] == session_id)
         resumed.send("/resume\r")
-        resumed.until(lambda shot: "ssmcp  /  history" in text(shot) and session_id in text(shot),
+        resumed.until(lambda shot: column(shot) == ("history", 6, 8) and session_id in text(shot),
                       "the persisted conversation in the /resume picker")
         resumed.send(HOME + DOWN * selected + ENTER)
-        resumed.until(lambda shot: "HISTORY_REPLY_FIXTURE" in text(shot),
+        resumed.until(lambda shot: column(shot) == ("history", 6, 8)
+                      and "HISTORY_REPLY_FIXTURE" in text(shot) and not shot["hide_cursor"],
                       "the saved agent reply restored in the new process")
         self.save_shot("resumed", resumed)
         self.check(path.read_bytes() == raw, "viewing a saved conversation does not duplicate its JSONL records")
@@ -580,8 +582,17 @@ class InputHistory(Composer):
         self.save_shot("shell-command", front)
         front.send("/tasks")
         front.send(ENTER)
-        front.until(lambda shot: "Local tasks" in text(shot) and "exit 7" in text(shot),
-                    "the local task list includes the completed shell job")
+        tasks = front.until(lambda shot: column(shot) == ("tasks", 8, 8)
+                            and "Tasks ·" in text(shot) and "exit 7" in text(shot)
+                            and "SHELL_PREFIX" in text(shot),
+                            "the independent Tasks column includes the completed shell job")
+        task_state = self.ui("/display/conversation")["tasks"]
+        matching = [job for job in task_state["jobs"]
+                    if job.get("exit_code") == 7
+                    and "printf '%s_%s' SHELL_PREFIX OK; exit 7" in " ".join(job.get("command", []))]
+        self.check(task_state["source"] == "native" and len(matching) == 1
+                   and matching[0]["job_id"] in text(tasks),
+                   "Tasks renders the exact real job identity, command and exit status")
         self.check(len(self.queue()["queue"]) == before,
                    "/tasks remains a local command instead of an agent requirement")
         self.save_shot("tasks", front)
@@ -607,9 +618,10 @@ class InputHistory(Composer):
         roster = self.queue()["agents"]
         selected = 1 + next(index for index, item in enumerate(roster)
                             if item["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * selected + RIGHT)
+        front.send(HOME + DOWN * selected + ENTER)
         front.until(lambda shot: "To · Input fixture member" in text(shot)
-                    and "ssmcp  /  activity" in text(shot), "the exact registered fixture recipient")
+                    and column(shot) == ("conversation", 2, 8),
+                    "Enter selecting the exact registered fixture recipient")
         first_source = self.reference_scenarios(front, member)
         self.paste_scenario(front, member)
         self.attachment_handoff_scenario(front, member)
@@ -643,6 +655,7 @@ def main():
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",
+            "e2e_client_ui.py",
         )},
     }
     with tempfile.TemporaryDirectory(prefix="ssmcp-input-history-e2e-") as directory:
