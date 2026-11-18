@@ -138,13 +138,25 @@ def run(binary, decoder, output, checks):
             preview.until(logs_open, "logs reopened before editing")
             preview.send(mouse(2, release=True) + b"x")
             draft += "x"
+            # Logs is a canvas column with the shared composer, not an overlay.
+            # Editing stays here; only an explicit return restores its bookmark.
             editing = preview.until(
-                lambda shot: view(shot, "conversation") and not logs_open(shot)
-                and draft in prompt_text(shot) and not shot["hide_cursor"],
-                "typing closing logs and returning to the existing draft",
+                lambda shot: logs_open(shot) and draft in prompt_text(shot)
+                and not shot["hide_cursor"],
+                "typing in the shared draft while remaining in the Logs column",
             )
             cursor = editing["cursor"]
-            check(True, "typing in the log panel closes it before editing the original draft")
+            check(column(editing) == ("logs", 7, 8),
+                  "typing in Logs keeps its column active and focuses the shared draft")
+            save_shot(output, "canvas-logs-editor", editing)
+            preview.send(ESCAPE)
+            returned_from_logs = preview.until(
+                lambda shot: view(shot, "conversation") and not logs_open(shot)
+                and draft in prompt_text(shot) and not shot["hide_cursor"],
+                "Escape returning from Logs to the original conversation",
+            )
+            check(returned_from_logs["cursor"] == cursor,
+                  "Escape restores the bookmarked column with the edited draft and cursor")
 
             preview.send(RIGHT)
             audit = preview.until(lambda shot: view(shot, "code audit"),
