@@ -1,5 +1,6 @@
-//! Static, script-free account pages. All stored display data is escaped.
+//! Server-rendered account pages. All stored display data is escaped.
 use super::store::Account;
+use crate::user_policy::TrafficQuota;
 
 pub(super) const CSS: &str = include_str!("portal.css");
 
@@ -27,6 +28,8 @@ pub(super) fn page(title: &str, body: &str) -> String {
   <meta name="description" content="使用用户名连接本机工具。GitHub 自动登录绑定，HTTPS 接入，管理账户与在线连接。">
   <title>{} · ssmcp</title>
   <link rel="stylesheet" href="/portal.css">
+  <link rel="stylesheet" href="/portal-refresh.css">
+  <script defer src="/traffic-meter.js"></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到主要内容</a>
@@ -44,11 +47,82 @@ pub(super) fn page(title: &str, body: &str) -> String {
     )
 }
 
+// Use decimal units and truncate rather than round: a positive balance remains
+// visible and a balance just below 1 GB is never presented as a full 1 GB.
+fn traffic_bytes(bytes: u64) -> String {
+    for (scale, unit) in [(1_000_000_000, "GB"), (1_000_000, "MB"), (1_000, "KB")] {
+        if bytes >= scale {
+            let whole = bytes / scale;
+            let remainder = bytes % scale;
+            if remainder == 0 {
+                return format!("{whole} {unit}");
+            }
+            let hundredths = remainder * 100 / scale;
+            return format!("{whole}.{hundredths:02} {unit}");
+        }
+    }
+    format!("{bytes} 字节")
+}
+
+fn traffic_expiration(period: &str) -> Option<String> {
+    if !crate::user_policy::valid_traffic_period(period) {
+        return None;
+    }
+    let (year, month) = period.split_once('-')?;
+    let year = year.parse::<u32>().ok()?;
+    let month = month.parse::<u32>().ok()?;
+    let (year, month) = if month == 12 {
+        (year.checked_add(1)?, 1)
+    } else {
+        (year, month + 1)
+    };
+    Some(format!("{year:04}-{month:02}-01 00:00"))
+}
+
+/// Renders only the server's account quota; callers gate access by login.
+pub(super) fn traffic_panel(traffic: &TrafficQuota) -> String {
+    let used = traffic_bytes(traffic.used_bytes);
+    let offset = i64::from(traffic.utc_offset_minutes);
+    let sign = if offset < 0 { '-' } else { '+' };
+    let offset = offset.unsigned_abs();
+    let timezone = format!("UTC{sign}{:02}:{:02}", offset / 60, offset % 60);
+    let period = format!("{}（{timezone} 自然月）", escape(&traffic.period));
+    let Some(limit_bytes) = traffic.limit_bytes else {
+        return format!(
+            r#"<dl class="account-facts" aria-label="账户流量"><div><dt>流量额度</dt><dd>无限</dd></div><div><dt>本月已用</dt><dd title="{} 字节">{used}</dd></div></dl>
+<p class="dashboard-note">管理员账户，无总流量上限。<br>{period}。<br>上下行合计，包含应用协议封装；重试会重新计入。</p>"#,
+            traffic.used_bytes,
+        );
+    };
+    let expiration = traffic_expiration(&traffic.period)
+        .map(|date| format!(r#"<br>额度到期：<span class="mono">{date} {timezone}</span>。"#))
+        .unwrap_or_default();
+    let remaining_bytes = traffic
+        .remaining_bytes
+        .unwrap_or_else(|| limit_bytes.saturating_sub(traffic.used_bytes));
+    let remaining = traffic_bytes(remaining_bytes);
+    let limit = traffic_bytes(limit_bytes);
+    let free = traffic_bytes(traffic.free_bytes);
+    let paid = traffic_bytes(traffic.paid_bytes);
+    let exhausted = if remaining_bytes == 0 {
+        r#"<p class="dashboard-note">本月流量已用完。</p>"#
+    } else {
+        ""
+    };
+    format!(
+        r#"<dl class="account-facts" aria-label="账户流量"><div><dt>剩余流量</dt><dd title="{remaining_bytes} 字节">{remaining}</dd></div><div><dt>本月已用</dt><dd title="{} 字节">{used}</dd></div><div><dt>本月额度</dt><dd title="{limit_bytes} 字节">{limit}</dd></div></dl>
+<p class="dashboard-note">每月免费 <span title="{} 字节">{free}</span>，本月付费 <span title="{} 字节">{paid}</span>。<br>{period}，免费与付费流量月底到期，不滚存。{expiration}<br>上下行合计，包含应用协议封装；重试会重新计入。</p>
+{exhausted}<p class="dashboard-note">服务器流量有限，经常使用请购买流量包。</p>"#,
+        traffic.used_bytes, traffic.free_bytes, traffic.paid_bytes,
+    )
+}
+
 fn account_panel(
     account: Option<&Account>,
     csrf: &str,
     enabled: bool,
     management_enabled: bool,
+    traffic: Option<&TrafficQuota>,
 ) -> String {
     let (status_class, status) = if account.is_some() {
         ("status signed-in", "已登录")
@@ -62,19 +136,33 @@ fn account_panel(
 <div class="panel-bar"><span class="eyebrow">01 / ACCOUNT</span><span class="{status_class}">{status}</span></div><div class="account-body">"#
     );
     if let Some(a) = account {
+        let traffic_html = traffic.map(traffic_panel).unwrap_or_default();
+        let admin_link =
+            if management_enabled && traffic.is_some_and(|quota| quota.limit_bytes.is_none()) {
+                r#"<a class="button secondary" href="/account/admin#registered-users">用户管理</a>"#
+            } else {
+                ""
+            };
+        let username_form = if a.handle.is_none() {
+            format!(
+                r#"<form class="key-form" method="post" action="/account/username"><input type="hidden" name="csrf" value="{csrf}"><label for="account-username">服务器用户名<input id="account-username" name="username" required minlength="3" maxlength="32" autocapitalize="none" spellcheck="false" aria-describedby="username-help"></label><small id="username-help">3–32 个英文字母、数字、下划线或连字符。以字母开头，以字母或数字结尾。登记后绑定当前 GitHub 账号。</small><button type="submit">注册用户名</button></form>"#
+            )
+        } else {
+            String::new()
+        };
         html.push_str(&format!(
             r##"<h2 id="account-title">{}</h2><p class="account-description">在项目目录运行连接命令，即可使用已授权的工具。</p>
 <dl class="account-facts"><div><dt>服务器用户名</dt><dd class="mono">{}</dd></div><div><dt>GitHub 账户</dt><dd>{}</dd></div></dl>
-<div class="account-actions"><a class="button" href="#connect">连接这台电脑 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出门户</button></form></div>
+{username_form}{traffic_html}<div class="account-actions">{admin_link}<a class="button secondary" href="/account/traffic">流量与订单</a><a class="button" href="#connect">连接这台电脑 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出门户</button></form></div>
 <small class="account-note">用户名绑定 GitHub 账号编号，GitHub 改名后保持不变。</small>"##,
             escape(a.handle.as_deref().unwrap_or(&a.github_login)),
-            escape(a.handle.as_deref().unwrap_or("尚未选择 · 在终端命令中填写")),
+            escape(a.handle.as_deref().unwrap_or("尚未注册")),
             escape(&a.github_login),
         ));
     } else if enabled {
         html.push_str(&format!(
-            r#"<h2 id="account-title">一条命令，连接电脑。</h2><p class="account-description">在终端选择用户名，客户端会自动打开 GitHub 登录并完成绑定。已有凭据时直接连接。</p>
-<form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 管理账户<span class="arrow" aria-hidden="true">↗</span></button></form>
+            r#"<h2 id="account-title">一条命令，连接电脑。</h2><p class="account-description">使用 GitHub 登录后，可以在这里注册服务器用户名、查看流量和订单。</p>
+<form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 登录<span class="arrow" aria-hidden="true">↗</span></button></form>
 <small class="account-note">门户用于查看账户和连接；从终端开始即可完成首次接入。</small>"#
         ));
     } else {
@@ -158,8 +246,9 @@ fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
     };
     format!(
         r#"<section class="workspace-section" id="connect" aria-labelledby="connect-title"><div class="section-heading"><p class="eyebrow">02 / CONNECT</p><h2 id="connect-title">连接你的工作目录</h2><p class="section-description">安装客户端后，在需要操作的项目目录运行。</p></div>
-<div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code>{}</code></pre></div></div>
-<div class="connect-actions"><p class="command-hint">{hint}</p></div>
+<div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code id="client-command">{}</code></pre></div></div>
+<div class="connect-actions"><p class="command-hint">{hint}</p><button id="copy-client-command" class="secondary" type="button" hidden>复制命令</button><span id="copy-command-status" role="status"></span></div>
+<script src="/copy-command.js" defer></script>
 <p class="section-description">首次连接时，浏览器会引导 GitHub 登录。核对用户名和设备后允许连接；后续自动复用本机凭据。</p>
 <a class="text-link" href="https://github.com/LIghtJUNction/ssmcp#安装与升级">安装与升级 <span class="arrow" aria-hidden="true">↗</span></a>
 <details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>Shell 始终可用。客户端自动发现本机已安装的工具；工具需要的本机登录和授权仍由你管理。</p></details></section>"#,
@@ -183,15 +272,23 @@ pub(super) fn home(
     enabled: bool,
     management_enabled: bool,
     public_url: &str,
+    traffic: Option<&TrafficQuota>,
 ) -> String {
     let csrf = escape(csrf.unwrap_or(""));
     let mut body = String::from(
         r#"<section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">LOCAL TOOLS. OPEN POSSIBILITIES.</p><h1 id="hero-title">本机工具，<br><span>连接你的 AI。</span></h1><p class="hero-description">用一个用户名，把本机工具接入 ChatGPT。<br>工具在本机执行，访问权限由你掌控。</p><div class="protocol" aria-label="本机通过 HTTPS 和 MCP 连接 ChatGPT"><span>YOUR MACHINE</span><span class="arrow" aria-hidden="true">→</span><span>HTTPS / MCP</span><span class="arrow" aria-hidden="true">→</span><span>ChatGPT</span></div></div>"#,
     );
-    body.push_str(&account_panel(account, &csrf, enabled, management_enabled));
+    body.push_str(&account_panel(
+        account,
+        &csrf,
+        enabled,
+        management_enabled,
+        traffic,
+    ));
     body.push_str(
         r#"</section><div class="workspace-header"><p class="eyebrow">WORKSPACE / 接入配置</p><p>选择用户名，完成 GitHub 绑定，即可连接。</p></div><div class="workspace-flow">"#,
     );
+    body.push_str(include_str!("client-install.html"));
     body.push_str(&connect_panel(account, public_url));
     body.push_str("<details><summary>旧版 SSH 公钥管理</summary>");
     body.push_str(&keys_panel(account, &csrf, enabled));
@@ -200,4 +297,173 @@ pub(super) fn home(
     let mcp_url = format!("{}/mcp", public_url.trim_end_matches('/'));
     body.push_str(&GUIDE.replace("{mcp_url}", &escape(&mcp_url)));
     page("账号门户", &body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_account() -> Account {
+        Account {
+            subject: "123".into(),
+            username: "gh-123".into(),
+            github_login: "octocat".into(),
+            keys: vec![],
+            handle: Some("developer".into()),
+            banned: false,
+            rate_limit_bps: None,
+            has_recharged: false,
+        }
+    }
+
+    fn monthly_quota(used_bytes: u64) -> TrafficQuota {
+        TrafficQuota {
+            used_bytes,
+            limit_bytes: Some(1_000_000_000),
+            remaining_bytes: Some(1_000_000_000u64.saturating_sub(used_bytes)),
+            period: "2026-11".into(),
+            utc_offset_minutes: 480,
+            free_bytes: 1_000_000_000,
+            paid_bytes: 0,
+        }
+    }
+
+    fn logged_in_home(traffic: &TrafficQuota) -> String {
+        home(
+            Some(&sample_account()),
+            Some("csrf"),
+            true,
+            true,
+            "https://example.test",
+            Some(traffic),
+        )
+    }
+
+    #[test]
+    fn home_shows_monthly_quota_after_login() {
+        let html = logged_in_home(&monthly_quota(250_000_000));
+        assert!(html.contains(r#"title="750000000 字节">750 MB</dd>"#));
+        assert!(html.contains(r#"title="250000000 字节">250 MB</dd>"#));
+        assert!(html.contains(r#"title="1000000000 字节">1 GB</dd>"#));
+        assert!(html.contains("每月免费"));
+        assert!(html.contains("2026-11（UTC+08:00 自然月）"));
+        assert!(html.contains("月底到期，不滚存"));
+        assert!(html.contains("上下行合计，包含应用协议封装；重试会重新计入"));
+        assert!(html.contains("2026-12-01 00:00 UTC+08:00"));
+        assert!(html.contains("服务器流量有限，经常使用请购买流量包。"));
+        assert!(!html.contains("不自动重置"));
+        assert!(!html.contains("checkout"));
+    }
+
+    #[test]
+    fn home_includes_paid_traffic_in_monthly_display() {
+        let mut traffic = monthly_quota(250_000_000);
+        traffic.paid_bytes = 500_000_000;
+        traffic.limit_bytes = Some(1_500_000_000);
+        traffic.remaining_bytes = Some(1_250_000_000);
+        let html = logged_in_home(&traffic);
+        assert!(html.contains(r#"title="1250000000 字节">1.25 GB</dd>"#));
+        assert!(html.contains(r#"title="1500000000 字节">1.50 GB</dd>"#));
+        assert!(html.contains(r#"本月付费 <span title="500000000 字节">500 MB</span>"#));
+    }
+
+    #[test]
+    fn home_shows_admin_unlimited_quota_without_purchase_prompt() {
+        let mut traffic = monthly_quota(2_000_000_000);
+        traffic.limit_bytes = None;
+        traffic.remaining_bytes = None;
+        let html = logged_in_home(&traffic);
+        assert!(html.contains("<dt>流量额度</dt><dd>无限</dd>"));
+        assert!(html.contains(r#"title="2000000000 字节">2 GB</dd>"#));
+        assert!(!html.contains("每月免费"));
+        assert!(!html.contains("到期"));
+        assert!(!html.contains("购买流量包"));
+        assert!(!html.contains("本月流量已用完"));
+    }
+
+    #[test]
+    fn home_marks_exhaustion_and_preserves_a_one_byte_balance() {
+        let exhausted = logged_in_home(&monthly_quota(1_000_000_000));
+        assert!(exhausted.contains(r#"title="0 字节">0 字节</dd>"#));
+        assert!(exhausted.contains("本月流量已用完。"));
+        let available = logged_in_home(&monthly_quota(999_999_999));
+        assert!(available.contains(r#"title="1 字节">1 字节</dd>"#));
+        assert!(available.contains(r#"title="999999999 字节">999.99 MB</dd>"#));
+        assert!(!available.contains("本月流量已用完。"));
+    }
+
+    #[test]
+    fn home_hides_quota_before_login_even_when_supplied() {
+        for enabled in [true, false] {
+            let html = home(
+                None,
+                Some("csrf"),
+                enabled,
+                true,
+                "https://example.test",
+                Some(&monthly_quota(123_456_789)),
+            );
+            assert!(!html.contains(r#"aria-label="账户流量""#));
+            assert!(!html.contains("123456789 字节"));
+            assert!(!html.contains("购买流量包"));
+            assert!(!html.contains("2026-11"));
+        }
+    }
+
+    #[test]
+    fn traffic_period_is_escaped_and_uses_server_time_zone() {
+        let mut traffic = monthly_quota(0);
+        traffic.period = "<script>alert(1)</script>".into();
+        traffic.utc_offset_minutes = -330;
+        let html = traffic_panel(&traffic);
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(html.contains("UTC-05:30"));
+    }
+
+    #[test]
+    fn decimal_traffic_units_do_not_round_up_at_boundaries() {
+        for (bytes, expected) in [
+            (0, "0 字节"),
+            (1, "1 字节"),
+            (999, "999 字节"),
+            (1_000, "1 KB"),
+            (999_999, "999.99 KB"),
+            (999_999_999, "999.99 MB"),
+            (1_000_000_000, "1 GB"),
+            (u64::MAX, "18446744073.70 GB"),
+        ] {
+            assert_eq!(traffic_bytes(bytes), expected);
+        }
+    }
+
+    #[test]
+    fn traffic_expiration_shows_next_month_and_crosses_year_boundary() {
+        for (period, expected) in [
+            ("2026-11", "2026-12-01 00:00 UTC+08:00"),
+            ("2026-12", "2027-01-01 00:00 UTC+08:00"),
+            ("2028-02", "2028-03-01 00:00 UTC+08:00"),
+        ] {
+            let mut traffic = monthly_quota(0);
+            traffic.period = period.into();
+            let html = traffic_panel(&traffic);
+            assert!(html.contains("额度到期"));
+            assert!(html.contains(expected), "{period}");
+        }
+        let mut traffic = monthly_quota(0);
+        traffic.utc_offset_minutes = -330;
+        assert!(traffic_panel(&traffic).contains("2026-12-01 00:00 UTC-05:30"));
+    }
+
+    #[test]
+    fn invalid_month_is_escaped_without_inventing_an_expiration() {
+        for period in ["", "2026-00", "2026-13", "2026-1", "<script>"] {
+            let mut traffic = monthly_quota(0);
+            traffic.period = period.into();
+            let html = traffic_panel(&traffic);
+            assert!(!html.contains("额度到期"), "{period}");
+            assert!(!html.contains("<script>"));
+            assert!(html.contains(&escape(period)));
+        }
+    }
 }

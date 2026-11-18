@@ -1,4 +1,5 @@
 //! Per-account relay bandwidth shared by every connection in each direction.
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{
@@ -10,8 +11,101 @@ use std::{
 use tokio::{sync::Notify, time::Instant};
 
 pub const DEFAULT_RATE_LIMIT_BPS: u64 = 8 * 1024 * 1024;
+pub(crate) const RECHARGED_RATE_LIMIT_BPS: u64 = 64 * 1024 * 1024;
 pub const MAX_RATE_LIMIT_BPS: u64 = 1024 * 1024 * 1024;
 const MAX_BURST: u64 = 64 * 1024;
+
+pub const FREE_MONTHLY_TRAFFIC_BYTES: u64 = 1_000_000_000;
+pub const DEFAULT_TRAFFIC_UTC_OFFSET_MINUTES: i32 = 8 * 60;
+
+/// Server-authoritative monthly allowance. A missing limit means an administrator
+/// explicitly named by ManagementPolicy, never a role supplied by a client.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrafficQuota {
+    pub period: String,
+    pub utc_offset_minutes: i32,
+    pub free_bytes: u64,
+    pub paid_bytes: u64,
+    pub used_bytes: u64,
+    pub limit_bytes: Option<u64>,
+    pub remaining_bytes: Option<u64>,
+}
+
+impl TrafficQuota {
+    pub(crate) fn new(
+        period: String,
+        utc_offset_minutes: i32,
+        used_bytes: u64,
+        paid_bytes: u64,
+        unlimited: bool,
+    ) -> Self {
+        let limit = FREE_MONTHLY_TRAFFIC_BYTES.saturating_add(paid_bytes);
+        Self {
+            period,
+            utc_offset_minutes,
+            free_bytes: FREE_MONTHLY_TRAFFIC_BYTES,
+            paid_bytes,
+            used_bytes,
+            limit_bytes: (!unlimited).then_some(limit),
+            remaining_bytes: (!unlimited).then_some(limit.saturating_sub(used_bytes)),
+        }
+    }
+}
+
+pub fn valid_traffic_utc_offset(minutes: i32) -> bool {
+    (-12 * 60..=14 * 60).contains(&minutes)
+}
+
+pub(crate) fn valid_traffic_period(period: &str) -> bool {
+    period.is_ascii()
+        && period.len() == 7
+        && period.as_bytes()[4] == b'-'
+        && period[..4].bytes().all(|b| b.is_ascii_digit())
+        && period[5..].bytes().all(|b| b.is_ascii_digit())
+        && period[..4]
+            .parse::<u32>()
+            .is_ok_and(|year| (1..=9999).contains(&year))
+        && period[5..]
+            .parse::<u32>()
+            .is_ok_and(|month| (1..=12).contains(&month))
+}
+
+/// Gregorian calendar month for a fixed, explicit server offset. This avoids
+/// dependence on the process locale, host timezone, or a daylight-saving rule.
+pub fn traffic_period_at(unix_seconds: u64, utc_offset_minutes: i32) -> String {
+    let seconds = (unix_seconds.min(i64::MAX as u64) as i64)
+        .saturating_add(i64::from(utc_offset_minutes) * 60);
+    let days = seconds.div_euclid(86_400) + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_from_march = (5 * day_of_year + 2) / 153;
+    let month = month_from_march + if month_from_march < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    format!("{year:04}-{month:02}")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrafficError {
+    Banned,
+    Exhausted,
+    AccountRequired,
+    Storage,
+}
+impl std::fmt::Display for TrafficError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Banned => "account is banned",
+            Self::Exhausted => "traffic_quota_exceeded: monthly traffic allowance exhausted; purchase a traffic package or wait for the next month",
+            Self::AccountRequired => "account-backed relay required: run ssmcp client login or ask the administrator to configure portal.owner_mappings for a registered GitHub account",
+            Self::Storage => "traffic quota storage unavailable; message was not forwarded",
+        })
+    }
+}
+impl std::error::Error for TrafficError {}
 
 pub fn default_rate_limit() -> u64 {
     DEFAULT_RATE_LIMIT_BPS
@@ -168,6 +262,21 @@ impl UserPolicies {
             .get(subject)
             .is_some_and(|entry| entry.banned())
     }
+    pub(crate) fn apply_account(
+        &self,
+        subject: &str,
+        banned: bool,
+        rate: Option<u64>,
+        has_recharged: bool,
+    ) {
+        let default = if has_recharged {
+            self.default_rate().max(RECHARGED_RATE_LIMIT_BPS)
+        } else {
+            self.default_rate()
+        };
+        self.get(subject).configure(banned, rate.unwrap_or(default));
+    }
+    #[cfg(test)]
     pub(crate) fn set(&self, subject: &str, banned: bool, rate: Option<u64>) {
         self.get(subject)
             .configure(banned, rate.unwrap_or_else(|| self.default_rate()));
@@ -235,6 +344,31 @@ mod tests {
     }
 
     #[test]
+    fn recharge_updates_the_existing_bucket_and_preserves_explicit_rates() {
+        let policies = UserPolicies::default();
+        policies.set_default(16 * 1024 * 1024).unwrap();
+        let active = policies.get("123");
+        policies.apply_account("123", false, None, true);
+        assert_eq!(
+            active.settings.read().unwrap().rate,
+            RECHARGED_RATE_LIMIT_BPS
+        );
+        policies.apply_account("123", true, Some(1024), true);
+        assert_eq!(active.settings.read().unwrap().rate, 1024);
+        assert!(active.banned());
+        policies.apply_account("123", false, None, true);
+        assert_eq!(
+            active.settings.read().unwrap().rate,
+            RECHARGED_RATE_LIMIT_BPS
+        );
+        assert!(!active.banned());
+        assert_eq!(
+            policies.get("456").settings.read().unwrap().rate,
+            policies.default_rate()
+        );
+    }
+
+    #[test]
     fn rate_bounds_and_burst_are_bounded() {
         assert!(!valid_rate(0));
         assert!(!valid_rate(MAX_RATE_LIMIT_BPS + 1));
@@ -246,5 +380,35 @@ mod tests {
             None
         );
         assert!(bucket.take(now, DEFAULT_RATE_LIMIT_BPS, 1).is_some());
+    }
+    #[test]
+    fn traffic_months_observe_server_offset_leap_days_and_year_boundary() {
+        assert_eq!(traffic_period_at(1_796_054_399, 480), "2026-11");
+        assert_eq!(traffic_period_at(1_796_054_400, 480), "2026-12");
+        assert_eq!(traffic_period_at(1_796_054_400, 0), "2026-11");
+        assert_eq!(traffic_period_at(1_798_732_800, 480), "2027-01");
+        assert_eq!(traffic_period_at(1_835_452_799, 480), "2028-02");
+        assert_eq!(traffic_period_at(1_835_452_800, 480), "2028-03");
+        assert_eq!(traffic_period_at(0, -720), "1969-12");
+        assert_eq!(traffic_period_at(0, 840), "1970-01");
+    }
+
+    #[test]
+    fn traffic_period_validation_is_bounded_and_handles_non_ascii() {
+        for period in ["2026-11", "2000-02", "9999-12"] {
+            assert!(valid_traffic_period(period));
+        }
+        for period in [
+            "",
+            "2026-00",
+            "2026-13",
+            "0000-01",
+            "２０26-1",
+            "abcd-11",
+            "2026-1",
+            "2026-111",
+        ] {
+            assert!(!valid_traffic_period(period), "{period}");
+        }
     }
 }

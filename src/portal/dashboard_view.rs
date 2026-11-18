@@ -1,7 +1,7 @@
 //! Server-rendered account and administrator consoles; never trusts UI roles.
 use super::{
     store::AccountSummary,
-    view::{escape, page},
+    view::{escape, page, traffic_panel},
 };
 use crate::{
     history::{AuditAction, AuditEvent, AuditOutcome},
@@ -176,7 +176,13 @@ pub(super) fn sessions(snapshot: &DashboardSnapshot, csrf: &str) -> String {
     body.push_str(&metric(snapshot.stats.active_sessions, "在线会话"));
     body.push_str(&metric(snapshot.stats.hosts, "报告的主机"));
     body.push_str(&metric(snapshot.retention_days as usize, "历史保留天数"));
-    body.push_str(r#"</dl><section class="dashboard-section"><div class="dashboard-section-heading"><h2>在线连接</h2><a class="text-link" href="/account/history">查看连接历史 ↗</a></div><p class="dashboard-note">名称、主机和工作目录由客户端报告；会话归属按服务器验证的账户确认。</p>"#);
+    body.push_str("</dl>");
+    if let Some(traffic) = &snapshot.traffic {
+        body.push_str(r#"<section class="dashboard-section" aria-label="账户流量"><div class="dashboard-section-heading"><h2>账户流量</h2></div>"#);
+        body.push_str(&traffic_panel(traffic));
+        body.push_str("</section>");
+    }
+    body.push_str(r#"<section class="dashboard-section"><div class="dashboard-section-heading"><h2>在线连接</h2><a class="text-link" href="/account/history">查看连接历史 ↗</a></div><p class="dashboard-note">名称、主机和工作目录由客户端报告；会话归属按服务器验证的账户确认。</p>"#);
     body.push_str(&session_cards(snapshot, csrf, "/account/sessions", &[]));
     body.push_str("</section>");
     page("我的会话", &body)
@@ -342,10 +348,14 @@ fn user_row(
         .rate_limit_bps
         .map(mib_per_second)
         .unwrap_or_default();
-    let default_rate = mib_per_second(default_rate_limit_bps);
+    let default_rate = mib_per_second(if account.has_recharged {
+        default_rate_limit_bps.max(crate::user_policy::RECHARGED_RATE_LIMIT_BPS)
+    } else {
+        default_rate_limit_bps
+    });
     html.push_str(&format!(
         r#"</td><td data-label="状态"><span class="account-state {state_class}">{state}</span></td><td class="user-rate-cell" data-label="限速 · MiB/s"><form class="user-rate-form" method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="rate"><label class="visually-hidden" for="rate-{subject}">{username} 的限速，MiB/s</label><div class="rate-input"><input id="rate-{subject}" type="number" name="rate_mib" min="0.00000095367431640625" max="1024" step="any" inputmode="decimal" value="{value}" placeholder="默认 {default_rate}" aria-describedby="rate-help" autocomplete="off"><button class="secondary" type="submit">保存</button></div><small>{}</small></form></td><td class="user-actions" data-label="访问管理">"#,
-        if account.rate_limit_bps.is_some() { "自定义 · 留空恢复默认" } else { "使用服务器默认" },
+        if account.rate_limit_bps.is_some() { "自定义 · 留空恢复默认" } else if account.has_recharged { "已充值 · 使用充值默认限速" } else { "使用服务器默认" },
     ));
     html.push_str(&user_access_control(
         account,
@@ -457,6 +467,7 @@ mod tests {
             key_count: 0,
             banned: false,
             rate_limit_bps: Some(524_288),
+            has_recharged: false,
         }
     }
 
@@ -547,11 +558,83 @@ mod tests {
             audit_next_before: None,
             retention_days: 7,
             default_rate_limit_bps: 3 * 1_048_576,
+            traffic: None,
         };
         let html = admin(&snapshot, &[account], "csrf", "999");
         assert!(html.contains("服务器默认 <strong>3 MiB/s</strong>"));
         assert!(html.contains("<summary>1 在线</summary>"));
         assert!(!html.contains("<summary>2 在线</summary>"));
         assert!(html.contains("<dt>服务器用户</dt><dd><code>developer</code>"));
+    }
+
+    fn quota_snapshot(traffic: Option<crate::user_policy::TrafficQuota>) -> DashboardSnapshot {
+        DashboardSnapshot {
+            is_admin: false,
+            scope: Scope::Own,
+            generated_at: 1_700_000_000,
+            sessions: vec![],
+            stats: crate::management::DashboardStats {
+                active_sessions: 0,
+                owners: 0,
+                hosts: 0,
+            },
+            audit: vec![],
+            audit_next_before: None,
+            retention_days: 7,
+            default_rate_limit_bps: 8 * 1_048_576,
+            traffic,
+        }
+    }
+
+    fn monthly_traffic(used_bytes: u64) -> crate::user_policy::TrafficQuota {
+        crate::user_policy::TrafficQuota {
+            used_bytes,
+            limit_bytes: Some(1_000_000_000),
+            remaining_bytes: Some(1_000_000_000u64.saturating_sub(used_bytes)),
+            period: "2026-11".into(),
+            utc_offset_minutes: 480,
+            free_bytes: 1_000_000_000,
+            paid_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn sessions_show_account_monthly_remaining_and_used_traffic() {
+        let snapshot = quota_snapshot(Some(monthly_traffic(950_000_000)));
+        let html = sessions(&snapshot, "csrf");
+        assert!(html.contains("<h2>账户流量</h2>"));
+        assert!(html.contains(r#"title="50000000 字节">50 MB</dd>"#));
+        assert!(html.contains(r#"title="950000000 字节">950 MB</dd>"#));
+        assert!(html.contains("2026-11（UTC+08:00 自然月）"));
+        assert!(html.contains("月底到期，不滚存"));
+        assert!(html.contains("服务器流量有限，经常使用请购买流量包。"));
+    }
+
+    #[test]
+    fn sessions_show_unlimited_for_server_supplied_admin_quota() {
+        let mut traffic = monthly_traffic(2_000_000_000);
+        traffic.limit_bytes = None;
+        traffic.remaining_bytes = None;
+        let mut snapshot = quota_snapshot(Some(traffic));
+        snapshot.is_admin = true;
+        let html = sessions(&snapshot, "csrf");
+        assert!(html.contains("<dt>流量额度</dt><dd>无限</dd>"));
+        assert!(html.contains(r#"title="2000000000 字节">2 GB</dd>"#));
+        assert!(!html.contains("购买流量包"));
+        assert!(!html.contains("本月流量已用完"));
+    }
+
+    #[test]
+    fn sessions_show_exhaustion_and_do_not_invent_missing_quota() {
+        let exhausted = sessions(
+            &quota_snapshot(Some(monthly_traffic(1_000_000_000))),
+            "csrf",
+        );
+        assert!(exhausted.contains("本月流量已用完。"));
+        assert!(exhausted.contains(r#"title="0 字节">0 字节</dd>"#));
+        let unavailable = sessions(&quota_snapshot(None), "csrf");
+        assert!(!unavailable.contains("<h2>账户流量</h2>"));
+        assert!(!unavailable.contains("无限"));
+        assert!(!unavailable.contains("购买流量包"));
     }
 }

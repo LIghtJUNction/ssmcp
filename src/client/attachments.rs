@@ -951,6 +951,12 @@ mod tests {
             path_argument("'docs/设计 图.png'").unwrap(),
             "docs/设计 图.png"
         );
+        #[cfg(windows)]
+        assert_eq!(
+            path_argument("file:///C:/temp/image%20one.png").unwrap(),
+            r"C:\temp\image one.png"
+        );
+        #[cfg(not(windows))]
         assert_eq!(
             path_argument("file:///tmp/image%20one.png").unwrap(),
             "/tmp/image one.png"
