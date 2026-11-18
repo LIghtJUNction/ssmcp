@@ -1,0 +1,81 @@
+{
+  "status": "passed",
+  "platform": "Linux",
+  "transport": "isolated SSH/OAuth + owned PTY + independent vt100 decoder",
+  "scope": "caller grouping, stable navigation, same-name members and exact delivery; no models",
+  "binaries": {
+    "ssmcp": "a8b76a1c650fcb3ea162d15dc81c20907f1e6194865b8d339ea1a23bc7f63450",
+    "ssmcpd": "eb64d08781a8708f84cca889d282ba85d6313e4371384e199894977745d6b593",
+    "vt_snapshot": "4d8191654adb5d9ae8e0f3b1637c751f68623e14ec06f13a1362c3377f21fade"
+  },
+  "checks": [
+    "effective sshd config permits public keys only",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "three completed calls produce one caller row in the agent list",
+    "observed callers do not fabricate authenticated session members",
+    "keyboard selection targets the exact member ID despite equal display names",
+    "keyboard selection targets the exact member ID despite equal display names",
+    "two same-name members retain separate visible roster entries",
+    "same-name member rows expose their distinct identity suffixes",
+    "a new request preserves the selected caller's stable identity",
+    "caller navigation preserves draft, cursor, exact recipient and edit state",
+    "a fourth call updates the existing caller without adding another row",
+    "opening a caller's audit details leaves the authenticated recipient unchanged",
+    "audit details preserve the existing Unicode draft and cursor",
+    "narrow terminals retain one selected caller row",
+    "same-name callers with different models remain distinct and identifiable",
+    "returning from the resized roster preserves the exact original composition",
+    "typed input is acknowledged by the server queue",
+    "the submitted requirement retains the chosen member ID",
+    "a different same-name member cannot receive the directed requirement",
+    "an observed caller cannot receive the directed requirement",
+    "only the expected queued identity is included in the tool response",
+    "delivery retains the exact revised text and authenticated recipient",
+    "the tool response contains a conspicuous separate user-requirements text block",
+    "the exact recipient receives the requirement once"
+  ],
+  "metrics": {
+    "registered_members": 2,
+    "repeated_calls": 4,
+    "snapshot_count": 5
+  },
+  "snapshots": [
+    {
+      "cells": "agent-panel-callers.json",
+      "image": "agent-panel-callers.png"
+    },
+    {
+      "cells": "agent-panel-wide.json",
+      "image": "agent-panel-wide.png"
+    },
+    {
+      "cells": "agent-panel-call-details.json",
+      "image": "agent-panel-call-details.png"
+    },
+    {
+      "cells": "agent-panel-narrow.json",
+      "image": "agent-panel-narrow.png"
+    },
+    {
+      "cells": "agent-panel-narrow-models.json",
+      "image": "agent-panel-narrow-models.png"
+    }
+  ],
+  "duration_seconds": 7.866
+}

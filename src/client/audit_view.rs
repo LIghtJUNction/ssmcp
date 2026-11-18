@@ -325,7 +325,9 @@ impl AuditView {
         entries.sort_by_key(|(_, entry)| !entry.running);
         entries
             .into_iter()
-            .take(32)
+            // The audit store is already bounded; group all retained runs so
+            // repeated or stale calls cannot hide another retained caller.
+            .take(MAX_ENTRIES)
             .map(|(order, entry)| {
                 let controller = entry.controller.as_ref();
                 let source = match controller.map(|controller| controller.source) {
@@ -765,5 +767,112 @@ mod tests {
         assert_eq!(unknown["name"], "Unknown controller");
         assert_eq!(unknown["model"], "Model unknown");
         assert_eq!(unknown["source"], "metadata missing");
+    }
+    #[test]
+    fn retained_callers_survive_repeated_calls_until_history_eviction() {
+        let mut view = AuditView::default();
+        let mut tracker = crate::client::render::CallerTracker::default();
+        let data = json!({"preview":true});
+        let complete = |view: &mut AuditView, run: &str, name: &str| {
+            view.ingest(&json!({
+                "type":"ssmcp.code_mode","run_id":run,"phase":"started",
+                "controller":{"name":name,"model":"model","source":"caller-reported"}
+            }));
+            view.ingest(&json!({
+                "type":"ssmcp.code_mode","run_id":run,"phase":"finished","success":true
+            }));
+        };
+        complete(&mut view, "selected", "Selected caller");
+        let selected_key = tracker.groups(&view.observed_controllers(), &data)[0]
+            .key
+            .clone();
+        for index in 0..32 {
+            complete(&mut view, &format!("repeated-{index}"), "Repeated caller");
+        }
+        let groups = tracker.groups(&view.observed_controllers(), &data);
+        assert_eq!(
+            groups.len(),
+            2,
+            "both callers still have retained audit runs"
+        );
+        let selected = groups
+            .iter()
+            .find(|group| group.key == selected_key)
+            .expect("the selected caller remains available for stable selection");
+        assert_eq!(selected.calls, 1);
+        assert_eq!(selected.run_id, "selected");
+        assert_eq!(
+            groups
+                .iter()
+                .find(|group| group.name == "Repeated caller")
+                .unwrap()
+                .calls,
+            32
+        );
+        assert!(view.open_run(&selected.run_id));
+        assert_eq!(view.snapshot()["selected"]["run_id"], "selected");
+
+        for index in 32..MAX_ENTRIES {
+            complete(&mut view, &format!("repeated-{index}"), "Repeated caller");
+        }
+        let observed = view.observed_controllers();
+        assert_eq!(view.entries.len(), MAX_ENTRIES);
+        assert_eq!(observed.len(), MAX_ENTRIES);
+        let groups = tracker.groups(&observed, &data);
+        assert_eq!(
+            groups.len(),
+            1,
+            "a caller disappears only after its last run is evicted"
+        );
+        assert_eq!(groups[0].calls, MAX_ENTRIES);
+        assert!(!view.open_run("selected"));
+    }
+
+    #[test]
+    fn stale_running_calls_do_not_hide_a_completed_caller_after_reconnect() {
+        let mut view = AuditView::default();
+        let mut tracker = crate::client::render::CallerTracker::default();
+        let previous = json!({"connected":true,"room_id":"previous"});
+        for index in 0..32 {
+            let event = json!({
+                "type":"ssmcp.code_mode","run_id":format!("stale-{index}"),"phase":"started",
+                "controller":{"name":"Previous caller","model":"model","source":"caller-reported"}
+            });
+            view.ingest(&event);
+            tracker.observe(&event, &previous);
+        }
+        tracker.disconnect();
+        let current = json!({"connected":true,"room_id":"current"});
+        let event = json!({
+            "type":"ssmcp.code_mode","run_id":"current","phase":"started",
+            "controller":{"name":"Current caller","model":"model","source":"caller-reported"}
+        });
+        view.ingest(&event);
+        tracker.observe(&event, &current);
+        view.ingest(&json!({
+            "type":"ssmcp.code_mode","run_id":"current","phase":"finished","success":true
+        }));
+
+        let groups = tracker.groups(&view.observed_controllers(), &current);
+        assert_eq!(
+            groups.len(),
+            2,
+            "unfinished historical runs cannot mask current activity"
+        );
+        let latest = groups
+            .iter()
+            .find(|group| group.name == "Current caller")
+            .unwrap();
+        assert_eq!(latest.run_id, "current");
+        assert_eq!(latest.status, "done");
+        assert_eq!(latest.running, 0);
+        assert!(!latest.unknown);
+        let stale = groups
+            .iter()
+            .find(|group| group.name == "Previous caller")
+            .unwrap();
+        assert_eq!(stale.calls, 32);
+        assert_eq!(stale.running, 0);
+        assert!(stale.unknown);
     }
 }
