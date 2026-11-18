@@ -182,10 +182,12 @@ class AgentPanel(Composer):
         self.save_shot("wide", front)
 
         front.send(ENTER)
-        front.until(lambda shot: "terminal.status" in text(shot),
+        front.until(lambda shot: "Observed call ·" in text(shot)
+                    and "terminal.status" in text(shot),
                     "the selected caller's actual retained tool invocation")
         details = self.ui("/display/conversation")
-        self.check(details["detail"] is True and details["target"] == members[1]["agent_id"],
+        self.check(details["view"] == "agents" and details["focus"] == "content"
+                   and details["target"] == members[1]["agent_id"],
                    "opening a caller's audit details leaves the authenticated recipient unchanged")
         self.check(details["draft"] == composition["draft"],
                    "audit details preserve the existing Unicode draft and cursor")
