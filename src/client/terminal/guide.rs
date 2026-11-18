@@ -103,6 +103,11 @@ impl Guide {
         &self.url
     }
 
+    #[cfg(test)]
+    pub(super) fn prepare_for_test(&self) {
+        self.codes.prepare_for_test();
+    }
+
     pub(super) fn url_lines(&self, width: u16) -> Vec<&str> {
         self.url
             .as_bytes()
@@ -336,7 +341,7 @@ mod tests {
 
     fn ready_guide(endpoint: &str) -> Option<Guide> {
         let guide = Guide::from_endpoint(endpoint)?;
-        guide.codes.prepare_for_test();
+        guide.prepare_for_test();
         Some(guide)
     }
 
