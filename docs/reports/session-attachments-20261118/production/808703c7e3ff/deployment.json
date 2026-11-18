@@ -1,0 +1,23 @@
+{
+  "archive_strategy": "unique per-root zstd batches, checksummed and verified before sequential deletion",
+  "cleanup_retry": "never automatic; failed partial files and manifests remain together",
+  "client_installation_performed_by_helper": false,
+  "evidence_repository_path": "docs/reports/session-attachments-20261118/production/808703c7e3ff/deployment.json",
+  "expected_previous_version": "0.8.0",
+  "expected_version": "0.9.0",
+  "failure": {
+    "message": "command failed during read_only_preflight",
+    "step": "read_only_preflight",
+    "type": "Failure"
+  },
+  "finished_utc": "2026-11-18T10:10:12+00:00",
+  "mcp_authorization_survives_restart": false,
+  "mode": "deploy",
+  "package_sha256": "be28a277ff8d6dee340050ebb08d49df5d3d9e9a2c88d0e390bfa3b704903786",
+  "package_source_commit_abbrev": "808703c7e3ff",
+  "production_queue_after_restart": "pending_normal_png_and_v7_acceptance",
+  "schema": "ssmcp.image-rollout.v1",
+  "source_commit": "808703c7e3ff22520185083122ab8844d24fa84d",
+  "started_utc": "2026-11-18T10:10:07+00:00",
+  "status": "failed"
+}
