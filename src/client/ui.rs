@@ -492,7 +492,13 @@ mod tests {
             .unwrap();
         assert_eq!(terminal.background(), "49");
         assert_eq!(terminal.color("foreground"), "39");
-        assert_eq!(Ui::default().background(), "48;2;24;24;22");
+        let default = Ui::default();
+        assert_eq!(default.theme, Theme::Dark);
+        assert_eq!(default.background(), "48;2;16;20;28");
+        assert_eq!(
+            Ui::parse("[ui]\ntheme='dark'").unwrap().background(),
+            default.background()
+        );
     }
 
     #[test]

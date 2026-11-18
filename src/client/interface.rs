@@ -999,7 +999,39 @@ mod tests {
         for tool in &catalog {
             assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        assert_eq!(names.len(), 5);
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from([
+                "ssmcp.ui.action",
+                "ssmcp.ui.filter",
+                "ssmcp.ui.get",
+                "ssmcp.ui.message",
+                "ssmcp.ui.messages",
+                "ssmcp.ui.queue",
+                "ssmcp.ui.set",
+            ])
+        );
+        let message = catalog
+            .iter()
+            .find(|tool| tool["name"] == "ssmcp.ui.message")
+            .unwrap();
+        assert_eq!(message["inputSchema"]["required"], json!(["text"]));
+        assert_eq!(
+            message["inputSchema"]["properties"]["kind"]["enum"],
+            json!(["progress", "answer"])
+        );
+        assert_eq!(
+            message["inputSchema"]["properties"]["text"]["maxLength"],
+            16384
+        );
+        assert_eq!(message["annotations"]["readOnlyHint"], false);
+        let history = catalog
+            .iter()
+            .find(|tool| tool["name"] == "ssmcp.ui.messages")
+            .unwrap();
+        assert_eq!(history["annotations"]["readOnlyHint"], true);
+        assert_eq!(history["inputSchema"]["properties"]["offset"]["minimum"], 0);
+        assert_eq!(history["inputSchema"]["properties"]["limit"]["maximum"], 32);
         let schema = catalog
             .iter()
             .find(|tool| tool["name"] == "ssmcp.ui.action")
