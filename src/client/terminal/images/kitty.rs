@@ -88,11 +88,11 @@ impl Native {
         let max_width = u32::from(columns) * u32::from(cell.width);
         let max_height = u32::from(rows) * u32::from(cell.height);
         let scaled = self.width > max_width || self.height > max_height;
+        let width_limited = u64::from(max_width) * u64::from(self.height)
+            <= u64::from(max_height) * u64::from(self.width);
         let (width, height) = if !scaled {
             (self.width, self.height)
-        } else if u64::from(max_width) * u64::from(self.height)
-            <= u64::from(max_height) * u64::from(self.width)
-        {
+        } else if width_limited {
             (
                 max_width,
                 (u64::from(max_width) * u64::from(self.height) / u64::from(self.width)).max(1)
@@ -111,6 +111,7 @@ impl Native {
                 .min(u32::from(columns)) as u16,
             rows: height.div_ceil(u32::from(cell.height)).min(u32::from(rows)) as u16,
             scaled,
+            width_limited,
             cell,
         })
     }
@@ -146,6 +147,7 @@ pub(crate) struct ImageBox {
     pub(crate) columns: u16,
     pub(crate) rows: u16,
     scaled: bool,
+    width_limited: bool,
     cell: CellSize,
 }
 
@@ -164,16 +166,33 @@ impl ImageBox {
         if visible == 0 {
             return None;
         }
-        let source_row = |value: u16| {
-            if self.scaled {
-                u32::from(value) * image.height / u32::from(self.rows)
+        let source_row = |value: u16, round_up: bool| {
+            let (numerator, denominator) = if self.scaled && self.width_limited {
+                // The terminal scales by columns; the final occupied text row
+                // may contain only a fraction of a cell's image pixels.
+                (
+                    u64::from(value) * u64::from(self.cell.height) * u64::from(image.width),
+                    u64::from(self.columns) * u64::from(self.cell.width),
+                )
+            } else if self.scaled {
+                (
+                    u64::from(value) * u64::from(image.height),
+                    u64::from(self.rows),
+                )
             } else {
-                u32::from(value) * u32::from(self.cell.height)
-            }
-            .min(image.height)
+                (u64::from(value) * u64::from(self.cell.height), 1)
+            };
+            let source = if round_up {
+                numerator.div_ceil(denominator)
+            } else {
+                numerator / denominator
+            };
+            source.min(u64::from(image.height)) as u32
         };
-        let y = source_row(skip);
-        let end = source_row(skip + visible);
+        let y = source_row(skip, false);
+        // Rounding a height-limited crop inward would enlarge its width when
+        // the terminal fits the requested rows. Round its far edge outward.
+        let end = source_row(skip + visible, self.scaled && !self.width_limited);
         (end > y).then(|| Placement {
             image,
             rect: Rect {
@@ -184,6 +203,8 @@ impl ImageBox {
                 y,
                 height: end - y,
                 scaled: self.scaled,
+                width_limited: self.width_limited,
+                cell: self.cell,
             },
         })
     }
@@ -198,6 +219,8 @@ struct Rect {
     y: u32,
     height: u32,
     scaled: bool,
+    width_limited: bool,
+    cell: CellSize,
 }
 
 #[derive(Clone)]
@@ -228,7 +251,13 @@ impl Placement {
             r.height
         );
         if r.scaled {
-            let _ = write!(output, ",c={},r={}", r.columns, r.rows);
+            // One limiting axis avoids per-placement letterboxing/recentering
+            // when only part of a scaled image is visible.
+            if r.width_limited {
+                let _ = write!(output, ",c={}", r.columns);
+            } else {
+                let _ = write!(output, ",r={}", r.rows);
+            }
         }
         output.push_str("\x1b\\");
     }
@@ -744,7 +773,7 @@ mod tests {
         let (before, after) = renderer.update(vec![full.clone()], (20, 2), false);
         assert!(before.is_empty());
         assert!(after.contains("a=t,t=d,f=100"));
-        assert!(after.contains("C=1,z=1,q=1,c=20,r=5"));
+        assert!(after.contains("C=1,z=1,q=1,c=20\x1b\\"));
         assert!(after.ends_with("\x1b[21;3H\x1b[?25h"));
         assert_eq!(
             renderer.update(vec![full], (20, 2), false),
@@ -758,6 +787,47 @@ mod tests {
         assert!(clear.contains(&format!("d=I,i={}", image.id)));
         assert!(!clear.contains("d=A"));
         assert!(renderer.clear().is_empty());
+    }
+
+    #[test]
+    fn scaled_partial_rows_use_pixel_geometry_without_recentering_or_overflow() {
+        let image =
+            Native::prepare(&DynamicImage::ImageRgba8(image::RgbaImage::new(128, 64))).unwrap();
+        let cell = CellSize {
+            width: 8,
+            height: 16,
+        };
+        let bounds = image.layout(10, 8, cell).unwrap();
+        assert_eq!((bounds.columns, bounds.rows), (10, 3)); // 80 x 40 pixels
+        let crop = bounds.placement(image.clone(), 4, 2, 1, 2).unwrap();
+        assert_eq!((crop.rect.y, crop.rect.height), (25, 39));
+        let tail = bounds.placement(image, 4, 2, 2, 1).unwrap();
+        assert_eq!((tail.rect.y, tail.rect.height), (51, 13));
+        let mut wire = String::new();
+        tail.display(&mut wire);
+        assert!(wire.contains(",c=10"));
+        assert!(
+            !wire.contains(",r="),
+            "cell rounding must not vertically center a crop"
+        );
+        assert!(tail.rect.height * 80 / 128 <= u32::from(cell.height));
+
+        // An inward-rounded source crop would expand 1024 source pixels beyond
+        // the 1020-pixel viewport when only one height-limited row is visible.
+        let image =
+            Native::prepare(&DynamicImage::ImageRgba8(image::RgbaImage::new(1024, 200))).unwrap();
+        let cell = CellSize {
+            width: 1,
+            height: 1,
+        };
+        let bounds = image.layout(1020, 199, cell).unwrap();
+        let crop = bounds.placement(image, 2, 0, 1, 1).unwrap();
+        assert_eq!((crop.rect.y, crop.rect.height), (1, 2));
+        assert!(crop.image.width * u32::from(crop.rect.rows) / crop.rect.height <= 1020);
+        let mut wire = String::new();
+        crop.display(&mut wire);
+        assert!(wire.contains(",r=1"));
+        assert!(!wire.contains(",c="));
     }
 
     #[test]
