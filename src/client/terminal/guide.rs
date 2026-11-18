@@ -194,9 +194,9 @@ mod tests {
                 assert_eq!(cell.bgcolor(), vt100::Color::Rgb(255, 255, 255));
                 let value = cell.contents();
                 let dark = if y % 2 == 0 {
-                    matches!(value.as_str(), "█" | "▀")
+                    matches!(value, "█" | "▀")
                 } else {
-                    matches!(value.as_str(), "█" | "▄")
+                    matches!(value, "█" | "▄")
                 };
                 assert_eq!(
                     dark,

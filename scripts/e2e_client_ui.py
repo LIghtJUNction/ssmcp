@@ -271,7 +271,12 @@ def main():
 
             preview.send(b"\x0f")
             audit = preview.until(lambda s: "code audit" in s["rows"][0]
-                                  and "#example-01" in text(s), "Ctrl+O source details")
+                                  and "#example-01" in text(s), "Ctrl+O audit view")
+            if "Enter inspect" in text(audit):
+                preview.send(b"\r")
+            audit = preview.until(lambda s: "#example-01" in text(s)
+                                  and "command:" in body_text(s)
+                                  and "print(" in body_text(s), "selected source details")
             code_rows = [index for index, row in enumerate(left_rows(audit))
                          if any(token in row for token in ["const ", "command:", "print("])]
             left_width = audit["rows"][0].find("│")
