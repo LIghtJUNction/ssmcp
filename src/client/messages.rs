@@ -149,16 +149,7 @@ fn rendered(message: &Message, ui: &Ui, color: bool) -> String {
     } else {
         format!("\n{heading}\n")
     };
-    for line in message
-        .text
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .split('\n')
-    {
-        output.push_str("  ");
-        output.push_str(&panel::safe_text(line));
-        output.push('\n');
-    }
+    output.push_str(&render::message_body(&message.text, ui, color));
     output.push('\n');
     output
 }
@@ -275,6 +266,32 @@ mod tests {
             idempotency_key: key.map(str::to_owned),
         }
     }
+    #[test]
+    fn agent_reply_code_and_diff_share_highlighting_without_changing_copy_text() {
+        let text = "说明\n\u{0060}\u{0060}\u{0060}js\nconst 界 = 42; // note\n\u{0060}\u{0060}\u{0060}\n\u{0060}\u{0060}\u{0060}diff\n--- a/demo\n+++ b/demo\n@@ -1 +1 @@\n-old\n+new\n\u{0060}\u{0060}\u{0060}\nhttps://example.test/path";
+        let mut history = History::default();
+        let (message, _) = history.record(request(text, None)).unwrap();
+        let ui = Ui::default();
+        let plain = rendered(&message, &ui, false);
+        let colored = rendered(&message, &ui, true);
+        assert!(!plain.contains('\x1b'));
+        assert!(plain.contains("const 界 = 42; // note"));
+        assert!(colored.contains("mconst\x1b[0m"));
+        for expected in [
+            "--- a/demo",
+            "+++ b/demo",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+            "https://example.test/path",
+        ] {
+            assert!(plain.contains(expected));
+            assert!(colored.contains(expected));
+        }
+        assert_eq!(message.text, text);
+        assert_eq!(history.messages.back().unwrap().text, text);
+    }
+
     #[test]
     fn retry_is_idempotent_but_cannot_rewrite_an_answer() {
         let mut history = History::default();
