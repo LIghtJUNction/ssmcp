@@ -23,6 +23,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Restart this client session; preserve pending requests",
     },
     SlashCommand {
+        name: "/restart",
+        description: "Restart this client session (alias of /reload)",
+    },
+    SlashCommand {
         name: "/agents",
         description: "Show agents",
     },
@@ -73,6 +77,8 @@ pub(super) struct Composer {
     history_bytes: usize,
     history_index: Option<usize>,
     saved_draft: Option<(String, usize)>,
+    suggestion_index: usize,
+    suggestions_dismissed: bool,
 }
 
 impl Composer {
@@ -193,36 +199,53 @@ impl Composer {
         changed
     }
 
-    /// Move vertically within a multiline draft; return false at its first line.
-    pub(super) fn up(&mut self) -> bool {
-        let start = self.line_start();
-        if start == 0 {
-            return false;
-        }
-        let column = self
-            .preferred_column
-            .unwrap_or_else(|| display_column(&self.text[start..self.cursor]));
-        let end = start - 1;
-        let previous_start = self.text[..end].rfind('\n').map_or(0, |offset| offset + 1);
-        self.cursor = previous_start + offset_at_column(&self.text[previous_start..end], column);
-        self.preferred_column = Some(column);
-        true
+    /// Move by rendered rows, returning false only at the first navigable row.
+    pub(super) fn up(&mut self, width: u16) -> bool {
+        self.vertical(width, true)
     }
 
-    /// Move vertically within a multiline draft; return false at its last line.
-    pub(super) fn down(&mut self) -> bool {
-        let end = self.line_end();
-        if end == self.text.len() {
+    /// Move by rendered rows, returning false only at the last navigable row.
+    pub(super) fn down(&mut self, width: u16) -> bool {
+        self.vertical(width, false)
+    }
+
+    fn vertical(&mut self, width: u16, up: bool) -> bool {
+        if width == 0 {
             return false;
         }
-        let column = self
-            .preferred_column
-            .unwrap_or_else(|| display_column(&self.text[self.line_start()..self.cursor]));
-        let next_start = end + 1;
-        let next_end = self.text[next_start..]
-            .find('\n')
-            .map_or(self.text.len(), |offset| next_start + offset);
-        self.cursor = next_start + offset_at_column(&self.text[next_start..next_end], column);
+        let (_, content_width) = editor_columns(usize::from(width));
+        let mut positions = Vec::new();
+        let _ = self.wrapped(content_width, |offset, row, line| {
+            positions.push((offset, row, line.width()));
+        });
+        let Some(&(_, row, column)) = positions
+            .iter()
+            .find(|(offset, _, _)| *offset == self.cursor)
+        else {
+            return false;
+        };
+        let target_row = if up {
+            positions
+                .iter()
+                .rev()
+                .find(|(_, candidate, _)| *candidate < row)
+        } else {
+            positions.iter().find(|(_, candidate, _)| *candidate > row)
+        };
+        let Some(&(_, target_row, _)) = target_row else {
+            return false;
+        };
+        let column = self.preferred_column.unwrap_or(column);
+        // Tabs may occupy multiple rows but remain one input character. Only
+        // real UTF-8 boundaries are cursor stops, so skip tab-only visual rows.
+        let offset = positions
+            .iter()
+            .rev()
+            .find(|(_, row, candidate)| *row == target_row && *candidate <= column)
+            .or_else(|| positions.iter().find(|(_, row, _)| *row == target_row))
+            .map(|(offset, _, _)| *offset)
+            .expect("the target row contains a cursor stop");
+        self.cursor = offset;
         self.preferred_column = Some(column);
         true
     }
@@ -292,6 +315,7 @@ impl Composer {
         self.cursor = self.text.len();
         self.preferred_column = None;
         self.history_index = Some(index);
+        self.reset_suggestions();
         true
     }
 
@@ -310,11 +334,12 @@ impl Composer {
             self.cursor = cursor;
         }
         self.preferred_column = None;
+        self.reset_suggestions();
         true
     }
 
     pub(super) fn suggestions(&self) -> Vec<&'static SlashCommand> {
-        if self.text.contains('\n') {
+        if self.suggestions_dismissed || self.text.contains('\n') {
             return Vec::new();
         }
         let prefix = self.text.trim_start();
@@ -327,24 +352,64 @@ impl Composer {
             .collect()
     }
 
+    pub(super) fn selected_suggestion(&self) -> Option<&'static SlashCommand> {
+        let suggestions = self.suggestions();
+        suggestions
+            .get(
+                self.suggestion_index
+                    .min(suggestions.len().saturating_sub(1)),
+            )
+            .copied()
+    }
+
+    pub(super) fn move_suggestion(&mut self, delta: isize) -> bool {
+        let count = self.suggestions().len();
+        if count == 0 {
+            return false;
+        }
+        self.suggestion_index =
+            (self.suggestion_index as isize + delta).rem_euclid(count as isize) as usize;
+        true
+    }
+
+    pub(super) fn dismiss_suggestions(&mut self) {
+        self.suggestions_dismissed = true;
+    }
+
+    pub(super) fn menu_visible(&self, width: u16, max_height: u16) -> bool {
+        if width == 0 || max_height == 0 || self.suggestions().is_empty() {
+            return false;
+        }
+        let (_, content_width) = editor_columns(usize::from(width));
+        self.wrapped(content_width, |_, _, _| {}).len() < usize::from(max_height)
+    }
+
     /// Render only safe text and validated UI colors. The viewport always contains the cursor.
-    pub(super) fn rows(&self, width: u16, max_height: u16, ui: &Ui) -> ComposerRows {
+    pub(super) fn rows(
+        &self,
+        width: u16,
+        max_height: u16,
+        ui: &Ui,
+        show_suggestions: bool,
+    ) -> ComposerRows {
         if width == 0 || max_height == 0 {
             return ComposerRows::default();
         }
         let width = usize::from(width);
         let height = usize::from(max_height);
-        let prefix_width = if width >= 4 {
-            2
-        } else if width == 3 {
-            1
+        let (prefix_width, content_width) = editor_columns(width);
+        let mut cursor = (0, 0);
+        let wrapped = self.wrapped(content_width, |offset, row, line| {
+            if offset == self.cursor {
+                cursor = (row, line.width());
+            }
+        });
+        let (cursor_row, cursor_col) = cursor;
+        let suggestions = if show_suggestions {
+            self.suggestions()
         } else {
-            0
+            Vec::new()
         };
-        // Leave a trailing cursor cell instead of depending on terminal autowrap.
-        let content_width = width.saturating_sub(prefix_width + 1).max(1);
-        let (wrapped, cursor_row, cursor_col) = self.wrapped(content_width);
-        let suggestions = self.suggestions();
         let hint_count = suggestions
             .len()
             .min(3)
@@ -370,10 +435,19 @@ impl Composer {
             };
             lines.push(paint_row(&[(prompt, "accent"), (body, tone)], width, ui));
         }
-        for command in suggestions.into_iter().take(hint_count) {
+        let selected = self
+            .suggestion_index
+            .min(suggestions.len().saturating_sub(1));
+        let suggestion_start = selected.saturating_sub(hint_count.saturating_sub(1));
+        for (index, command) in suggestions
+            .iter()
+            .enumerate()
+            .skip(suggestion_start)
+            .take(hint_count)
+        {
             lines.push(paint_row(
                 &[
-                    ("  ", "muted"),
+                    (if index == selected { "› " } else { "  " }, "accent"),
                     (command.name, "accent"),
                     ("  ", "muted"),
                     (command.description, "muted"),
@@ -403,6 +477,12 @@ impl Composer {
         self.history_index = None;
         self.saved_draft = None;
         self.preferred_column = None;
+        self.reset_suggestions();
+    }
+
+    fn reset_suggestions(&mut self) {
+        self.suggestion_index = 0;
+        self.suggestions_dismissed = false;
     }
 
     fn line_start(&self) -> usize {
@@ -416,15 +496,14 @@ impl Composer {
             .map_or(self.text.len(), |offset| self.cursor + offset)
     }
 
-    fn wrapped(&self, width: usize) -> (Vec<String>, usize, usize) {
+    /// Rendering and movement share wrapping, including replacement glyphs,
+    /// expanded tabs, leading combining marks and the reserved final cursor cell.
+    fn wrapped(&self, width: usize, mut cursor_at: impl FnMut(usize, usize, &str)) -> Vec<String> {
         let mut lines = vec![String::new()];
         let mut used = 0;
-        let mut cursor = (0, 0);
         for (offset, ch) in self.text.char_indices() {
             if ch == '\n' {
-                if offset == self.cursor {
-                    cursor = (lines.len() - 1, lines.last().unwrap().width());
-                }
+                cursor_at(offset, lines.len() - 1, lines.last().unwrap());
                 lines.push(String::new());
                 used = 0;
                 continue;
@@ -444,8 +523,8 @@ impl Composer {
                     lines.push(String::new());
                     used = 0;
                 }
-                if index == 0 && offset == self.cursor {
-                    cursor = (lines.len() - 1, lines.last().unwrap().width());
+                if index == 0 {
+                    cursor_at(offset, lines.len() - 1, lines.last().unwrap());
                 }
                 if cells == 0 && used == 0 {
                     lines.last_mut().unwrap().push('◌');
@@ -455,10 +534,8 @@ impl Composer {
                 used += cells;
             }
         }
-        if self.cursor == self.text.len() {
-            cursor = (lines.len() - 1, lines.last().unwrap().width());
-        }
-        (lines, cursor.0, cursor.1)
+        cursor_at(self.text.len(), lines.len() - 1, lines.last().unwrap());
+        lines
     }
 }
 
@@ -472,31 +549,16 @@ fn safe_char(ch: char) -> char {
     }
 }
 
-fn cells(ch: char, column: usize) -> usize {
-    if ch == '\t' {
-        4 - column % 4
+fn editor_columns(width: usize) -> (usize, usize) {
+    let prefix_width = if width >= 4 {
+        2
+    } else if width == 3 {
+        1
     } else {
-        safe_char(ch).width().unwrap_or(0)
-    }
-}
-
-fn display_column(text: &str) -> usize {
-    text.chars()
-        .fold(0, |column, ch| column + cells(ch, column))
-}
-
-fn offset_at_column(text: &str, target: usize) -> usize {
-    let mut column = 0;
-    let mut result = 0;
-    for (offset, ch) in text.char_indices() {
-        let width = cells(ch, column);
-        if column + width > target {
-            break;
-        }
-        column += width;
-        result = offset + ch.len_utf8();
-    }
-    result
+        0
+    };
+    // Leave a trailing cursor cell instead of depending on terminal autowrap.
+    (prefix_width, width.saturating_sub(prefix_width + 1).max(1))
 }
 
 fn paint_row(parts: &[(&str, &str)], width: usize, ui: &Ui) -> String {
@@ -566,17 +628,17 @@ mod tests {
         let mut draft = Composer::default();
         assert!(draft.paste("abcde\r\nx\r界界z"));
         assert_eq!(draft.text(), "abcde\nx\n界界z");
-        assert!(draft.up());
+        assert!(draft.up(120));
         assert_eq!(&draft.text()[..draft.cursor()], "abcde\nx");
-        assert!(draft.up());
+        assert!(draft.up(120));
         assert_eq!(draft.cursor(), 5);
-        assert!(!draft.up());
-        assert!(draft.down());
-        assert!(draft.down());
+        assert!(!draft.up(120));
+        assert!(draft.down(120));
+        assert!(draft.down(120));
         assert_eq!(draft.cursor(), draft.text().len());
         assert!(draft.clear_before());
         assert_eq!(draft.text(), "abcde\nx\n");
-        assert!(draft.up());
+        assert!(draft.up(120));
         assert!(draft.clear_after());
         assert_eq!(draft.text(), "abcde\n\n");
         assert!(draft.clear_after());
@@ -584,6 +646,139 @@ mod tests {
         assert!(draft.set_text("keep 前一个词   "));
         assert!(draft.delete_word());
         assert_eq!(draft.text(), "keep ");
+    }
+
+    #[test]
+    fn vertical_movement_follows_soft_wrapping_and_preserves_the_cursor_column() {
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let mut draft = Composer::default();
+        draft.set_text("abcdefghi");
+        // Seven physical columns leave four text cells and a final cursor cell.
+        assert_eq!(draft.rows(7, 10, &ui, true).cursor_row, 2);
+        assert!(draft.up(7));
+        assert_eq!(draft.cursor(), 5);
+        assert_eq!(draft.rows(7, 10, &ui, true).cursor_row, 1);
+        assert!(draft.up(7));
+        assert_eq!(draft.cursor(), 1);
+        assert!(!draft.up(7));
+        assert!(draft.down(7));
+        assert_eq!(draft.cursor(), 5);
+        assert!(draft.down(7));
+        assert_eq!(draft.cursor(), 9);
+        assert!(!draft.down(7));
+
+        // EOF occupies the reserved cell; an interior soft-wrap boundary is
+        // instead the first cursor stop of the following row.
+        draft.set_text("abcdefgh");
+        assert_eq!(draft.rows(7, 10, &ui, true).cursor_col, 6);
+        assert!(draft.up(7));
+        assert_eq!(draft.cursor(), 3);
+        assert!(draft.down(7));
+        assert_eq!(draft.cursor(), 8);
+        draft.set_text("abcd\nefgh");
+        assert!(draft.up(7));
+        assert_eq!(
+            draft.cursor(),
+            4,
+            "a hard newline is a real end-of-row stop"
+        );
+        assert!(draft.down(7));
+        assert_eq!(draft.cursor(), 9);
+    }
+
+    #[test]
+    fn vertical_movement_matches_rendered_unicode_tabs_and_narrow_rows() {
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let mut draft = Composer::default();
+        draft.set_text("\tx");
+        assert_eq!(draft.rows(1, 20, &ui, true).cursor_row, 4);
+        assert!(draft.up(1));
+        assert_eq!(
+            draft.cursor(),
+            0,
+            "expanded tab cells are not input offsets"
+        );
+        assert!(draft.down(1));
+        assert_eq!(draft.cursor(), 2);
+        draft.set_text("\u{301}ab");
+        assert!(draft.up(5));
+        assert_eq!(draft.cursor(), "\u{301}".len());
+        assert!(draft.down(5));
+        assert_eq!(draft.cursor(), draft.text().len());
+
+        let text = "\t界\u{301}x\n\u{301}ab";
+        for width in [1, 2, 3, 4, 7, 12] {
+            draft.set_text(text);
+            let mut row = draft.rows(width, 100, &ui, true).cursor_row;
+            while draft.up(width) {
+                assert!(text.is_char_boundary(draft.cursor()));
+                let next = draft.rows(width, 100, &ui, true).cursor_row;
+                assert!(
+                    next < row,
+                    "Up must move to an earlier rendered row at width {width}"
+                );
+                row = next;
+            }
+            assert_eq!(row, 0);
+            while draft.down(width) {
+                assert!(text.is_char_boundary(draft.cursor()));
+                let next = draft.rows(width, 100, &ui, true).cursor_row;
+                assert!(
+                    next > row,
+                    "Down must move to a later rendered row at width {width}"
+                );
+                row = next;
+            }
+            assert_eq!(draft.cursor(), text.len());
+            assert_eq!(draft.text(), text);
+        }
+        assert!(!draft.up(0));
+        assert!(!draft.down(0));
+    }
+
+    #[test]
+    fn command_menu_tracks_selection_and_can_be_dismissed_without_editing() {
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let mut draft = Composer::default();
+        draft.set_text("/re");
+        assert!(draft.menu_visible(60, 3));
+        assert!(!draft.menu_visible(60, 1));
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/reload");
+        assert!(draft.move_suggestion(1));
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/restart");
+        assert!(
+            draft
+                .rows(60, 3, &ui, true)
+                .lines
+                .iter()
+                .any(|line| line.contains("› /restart"))
+        );
+        assert_eq!(draft.rows(60, 3, &ui, false).lines.len(), 1);
+        draft.dismiss_suggestions();
+        assert!(!draft.menu_visible(60, 3));
+        assert!(!draft.move_suggestion(1));
+        assert_eq!(draft.text(), "/re");
+        draft.set_text("/");
+        assert!(draft.move_suggestion(-1));
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/clear");
+        assert!(
+            draft
+                .rows(60, 3, &ui, true)
+                .lines
+                .iter()
+                .any(|line| line.contains("› /clear"))
+        );
+        draft.insert("a");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/agents");
     }
 
     #[test]
@@ -644,7 +839,7 @@ mod tests {
         let mut draft = Composer::default();
         draft.set_text("界e\u{301}\t\x1b]0;injected\x07\u{202e}\nnext\nlast");
         for width in [1, 2, 3, 4, 12, 40] {
-            let rendered = draft.rows(width, 2, &ui);
+            let rendered = draft.rows(width, 2, &ui, true);
             assert!(!rendered.lines.is_empty());
             assert!(rendered.lines.len() <= 2);
             assert!(usize::from(rendered.cursor_row) < rendered.lines.len());
@@ -656,13 +851,13 @@ mod tests {
             }
         }
         draft.home();
-        draft.up();
-        draft.up();
-        let rendered = draft.rows(12, 2, &ui);
+        draft.up(120);
+        draft.up(120);
+        let rendered = draft.rows(12, 2, &ui, true);
         assert!(rendered.lines[0].starts_with("❯ "));
         assert_eq!(rendered.cursor_row, 0);
-        assert!(draft.rows(0, 2, &ui).lines.is_empty());
-        assert!(draft.rows(12, 0, &ui).lines.is_empty());
+        assert!(draft.rows(0, 2, &ui, true).lines.is_empty());
+        assert!(draft.rows(12, 0, &ui, true).lines.is_empty());
     }
 
     #[test]
@@ -675,9 +870,12 @@ mod tests {
         draft.set_text("/");
         assert_eq!(draft.suggestions().len(), SLASH_COMMANDS.len());
         draft.set_text("/re");
-        assert_eq!(draft.suggestions(), vec![&SLASH_COMMANDS[1]]);
-        let rendered = draft.rows(60, 4, &ui);
-        assert_eq!(rendered.lines.len(), 2);
+        assert_eq!(
+            draft.suggestions(),
+            vec![&SLASH_COMMANDS[1], &SLASH_COMMANDS[2]]
+        );
+        let rendered = draft.rows(60, 4, &ui, true);
+        assert_eq!(rendered.lines.len(), 3);
         assert!(rendered.lines[1].contains("/reload"));
         assert_eq!(rendered.cursor_col, 5);
         for value in ["/filter cargo", "/unknown", "message /reload", "/\n"] {
