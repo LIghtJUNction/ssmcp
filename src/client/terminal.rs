@@ -22,6 +22,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
 mod events;
+mod guide;
 mod images;
 pub(crate) mod markdown;
 
@@ -54,7 +55,12 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn start(ui: &Ui, cwd: &str, title: Option<&str>) -> io::Result<Option<Self>> {
+    pub(crate) fn start(
+        ui: &Ui,
+        cwd: &str,
+        title: Option<&str>,
+        endpoint: Option<&str>,
+    ) -> io::Result<Option<Self>> {
         if !ui.dashboard
             || ui.log_format == LogFormat::Jsonl
             || !io::stdin().is_terminal()
@@ -72,6 +78,8 @@ impl Session {
         options.color &= std::env::var_os("NO_COLOR").is_none();
         let mut state = State::new(rows, cols, &options);
         state.set_context(cwd, title);
+        state.guide = endpoint.and_then(guide::Guide::from_endpoint);
+        state.graphics = images::Graphics::environment(&options);
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             stop: AtomicBool::new(false),
@@ -170,6 +178,20 @@ pub(super) fn log(bytes: &[u8]) -> bool {
     true
 }
 
+/// Feed native events to the existing preview while retaining the safe transcript.
+pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) -> bool {
+    let Some(shared) = shared() else {
+        return false;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.log_raw(bytes);
+    state.events.ingest_event(label, value, bytes);
+    true
+}
+
 /// Decode outside the State lock; preview failures do not alter native output.
 pub(crate) fn image(block: &serde_json::Value) {
     let Some(shared) = shared() else {
@@ -178,7 +200,13 @@ pub(crate) fn image(block: &serde_json::Value) {
     if !shared.alive.load(Ordering::Acquire) {
         return;
     }
-    let preview = match images::decode(block) {
+    let native = shared
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .graphics
+        .prepare_native();
+    let preview = match images::decode(block, native) {
         Ok(preview) => preview,
         Err(error) => {
             notice(&format!("Image preview unavailable: {error}"));
@@ -186,19 +214,7 @@ pub(crate) fn image(block: &serde_json::Value) {
         }
     };
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    let width = usize::from(state.geometry.left.saturating_sub(4).max(1));
-    let height = usize::from(state.geometry.log_rows.saturating_sub(3).clamp(1, 18));
-    let mut text = format!(
-        "\n[IMAGE] {} × {} · {}\n",
-        preview.width,
-        preview.height,
-        block["mimeType"].as_str().unwrap_or("image")
-    );
-    for row in preview.render(width, height, &state.ui) {
-        let _ = writeln!(text, "  {row}");
-    }
-    text.push('\n');
-    state.log(text.as_bytes());
+    state.image(preview, block["mimeType"].as_str().unwrap_or("image"));
 }
 
 /// Every PTY has its own parser, including terminals that are not on screen.
@@ -255,6 +271,7 @@ pub(crate) fn physical_resize(rows: u16, cols: u16) -> (u16, u16) {
         && shared.alive.load(Ordering::Acquire)
     {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.graphics.resized();
         state.resize(rows, cols);
         return (state.geometry.pty_rows, state.geometry.left);
     }
@@ -392,7 +409,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "focus":if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
-        "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
+        "conversation":conversation,"activity_mode":if state.raw_activity {"raw"} else {"compact"},"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
     })
 }
 
@@ -400,7 +417,32 @@ pub(crate) fn snapshot() -> serde_json::Value {
 fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
-    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
+    state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
+    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n[DIFF] src/main.rs\n- let expanded = true;\n+ let expanded = false;\n\n[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
+
+    state.events.clear();
+    state.events.ingest(b"[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n");
+    state.events.ingest_event(
+        "shell",
+        &serde_json::json!({"type":"ssmcp.exec.started","job_id":"preview"}),
+        b"[RUN] #17 cargo test --lib\n  cwd ~/project/ssmcp\n",
+    );
+    state.events.ingest_event(
+        "shell",
+        &serde_json::json!({"type":"ssmcp.exec.stdout","job_id":"preview"}),
+        b"test client::ui::custom_colors ... ok\ntest client::audit_view::browse ... ok\n",
+    );
+    state.events.ingest_event(
+        "shell",
+        &serde_json::json!({"type":"ssmcp.exec.exited","job_id":"preview","exit_code":0}),
+        b"[OK] completed exit=0\n",
+    );
+    state.events.ingest_event(
+        "fs",
+        &serde_json::json!({"type":"ssmcp.file.diff","path":"src/main.rs"}),
+        b"[DIFF] src/main.rs\n- let expanded = true;\n+ let expanded = false;\n",
+    );
+    state.events.ingest("[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · /agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n".as_bytes());
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
     state.audit.open();
@@ -457,6 +499,23 @@ pub(crate) fn take_session_replies() -> Vec<(String, Vec<u8>)> {
     };
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     state.take_session_replies()
+}
+
+/// The chat composer owns raw input, including binary bracketed-paste payloads.
+/// Fallback PTY input retains its separate UTF-8/session-key path.
+pub(crate) fn consume_chat_bytes(bytes: &[u8]) -> bool {
+    let Some(shared) = shared() else {
+        return false;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    if state.ui.layout != Layout::Chat {
+        return false;
+    }
+    let _ = state.keyboard(bytes, Instant::now(), false);
+    true
 }
 
 /// The display consumes browsing and filter input while it is active.
@@ -847,9 +906,13 @@ impl vt100::Callbacks for Replies {
 
 struct State {
     context_label: String,
+    guide: Option<guide::Guide>,
+    graphics: images::Graphics,
+    media: Vec<images::Placement>,
     geometry: Geometry,
     logs: vt100::Parser,
     events: events::EventView,
+    raw_activity: bool,
     pty: vt100::Parser<Replies>,
     active_session: String,
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
@@ -877,7 +940,11 @@ impl State {
         let geometry = Geometry::new(rows, cols, ui);
         Self {
             events: events::EventView::new(),
+            raw_activity: false,
             context_label: String::new(),
+            guide: None,
+            graphics: images::Graphics::default(),
+            media: Vec::new(),
             logs: vt100::Parser::new(
                 nonzero(geometry.log_rows),
                 nonzero(geometry.left),
@@ -1003,8 +1070,26 @@ impl State {
         }
         replies
     }
+    fn image(&mut self, preview: images::Preview, mime: &str) {
+        let width = usize::from(self.geometry.left.saturating_sub(4).max(1));
+        let height = usize::from(self.geometry.log_rows.saturating_sub(3).clamp(1, 18));
+        let mut text = format!(
+            "\n[IMAGE] {} × {} · {}\n",
+            preview.width, preview.height, mime
+        );
+        for row in preview.render(width, height, &self.ui) {
+            let _ = writeln!(text, "  {row}");
+        }
+        text.push('\n');
+        self.log(text.as_bytes());
+        self.events.attach_image(preview);
+    }
+
     fn log(&mut self, bytes: &[u8]) {
         self.events.ingest(bytes);
+        self.log_raw(bytes);
+    }
+    fn log_raw(&mut self, bytes: &[u8]) {
         let mut normalized = Vec::with_capacity(bytes.len());
         for &byte in bytes {
             if byte == b'\n' && !self.previous_cr {
@@ -1164,6 +1249,9 @@ impl State {
     }
 
     fn keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        let filtered = self.graphics.input(bytes, now, flush);
+        self.dirty |= self.graphics.take_changed();
+        let bytes = filtered.as_slice();
         if self.ui.layout == Layout::Chat {
             return self.chat_keyboard(bytes, now, flush);
         }
@@ -1361,8 +1449,22 @@ impl State {
     }
 
     fn frame(&mut self, now: Instant) -> Frame {
+        self.media.clear();
+        self.events
+            .image_cells(self.graphics.cell().filter(|_| self.ui.color));
         if self.ui.layout == Layout::Chat {
-            return self.chat_frame(now);
+            let frame = self.chat_frame(now);
+            if !self.help
+                && self.conversation.view == conversation::View::Activity
+                && !self.raw_activity
+                && self.log_query.is_empty()
+                && self.log_level == 0
+            {
+                self.media = self
+                    .events
+                    .image_placements(conversation::body_top(self.geometry.rows));
+            }
+            return frame;
         }
         let g = self.geometry;
         let filtered = self.filtered_logs();
@@ -1375,10 +1477,26 @@ impl State {
         );
         let sidebar = layout.sidebar.map(|rect| {
             let height = rect.height.saturating_sub(u16::from(g.rows >= 3));
-            (
-                rect,
-                panel::render_configured(&self.panel, rect.width, height, now, &self.ui),
+            let footer = self.guide_rows(rect.width, height);
+            let mut panel: Vec<String> = panel::render_configured(
+                &self.panel,
+                rect.width,
+                height.saturating_sub(footer.len() as u16),
+                now,
+                &self.ui,
             )
+            .into_iter()
+            .map(|item| {
+                let text = fit(&item.text, rect.width);
+                let padded = format!(
+                    "{text}{}",
+                    " ".repeat(usize::from(rect.width).saturating_sub(text.width()))
+                );
+                self.tone(item.tone, &padded)
+            })
+            .collect();
+            panel.extend(footer);
+            (rect, panel)
         });
         let mut rows = Vec::with_capacity(usize::from(g.rows));
         for row in 0..g.rows {
@@ -1393,6 +1511,15 @@ impl State {
                         " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
                         self.log_query
                     )
+                } else if let Some(guide) =
+                    self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18)
+                {
+                    let link = format!(" {} · F1 Help ", guide.url());
+                    if link.width() <= usize::from(g.cols) {
+                        link
+                    } else {
+                        " F1 · full online guide link ".into()
+                    }
                 } else if g.cols < 100 {
                     " Wheel Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F1 Help ".into()
                 } else {
@@ -1434,18 +1561,12 @@ impl State {
             };
             if let Some((rect, panel)) = &sidebar {
                 line.push_str(&self.tone(PanelTone::Muted, "│"));
-                let item = &panel[usize::from(row - rect.row)];
-                let text = fit(&item.text, rect.width);
-                let padded = format!(
-                    "{text}{}",
-                    " ".repeat(usize::from(rect.width).saturating_sub(text.width()))
-                );
-                line.push_str(&self.tone(item.tone, &padded));
+                line.push_str(&panel[usize::from(row - rect.row)]);
             }
             rows.push(line);
         }
         if self.help {
-            let lines = [
+            let mut lines = vec![
                 "SSMCP  /  Help & appearance".to_string(),
                 String::new(),
                 format!(
@@ -1478,6 +1599,17 @@ impl State {
                     "Appearance changes keep running tasks and audit history.".into()
                 }),
             ];
+            if let Some(guide) = &self.guide {
+                let mut links = vec!["Online guide".to_owned()];
+                links.extend(
+                    guide
+                        .url_lines(g.cols.saturating_sub(4))
+                        .into_iter()
+                        .map(str::to_owned),
+                );
+                links.push(String::new());
+                lines.splice(2..2, links);
+            }
             for (row, line) in rows.iter_mut().enumerate() {
                 let content = lines
                     .get(row.saturating_sub(1))
@@ -1511,6 +1643,11 @@ impl State {
             bracketed_paste: true,
             mouse_capture: !self.selection,
         }
+    }
+    fn guide_rows(&self, width: u16, height: u16) -> Vec<String> {
+        self.guide
+            .as_ref()
+            .map_or_else(Vec::new, |guide| guide.rows(width, height, &self.ui))
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
         if !self.ui.color {
@@ -1698,53 +1835,50 @@ struct Frame {
     bracketed_paste: bool,
     mouse_capture: bool,
 }
+impl ztui::Frame for Frame {
+    fn size(&self) -> ztui::Size {
+        ztui::Size {
+            rows: self.geometry.rows,
+            columns: self.geometry.cols,
+        }
+    }
+
+    fn row(&self, row: u16) -> &str {
+        self.rows
+            .get(usize::from(row))
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    fn cursor(&self) -> ztui::Cursor {
+        ztui::Cursor {
+            position: ztui::Point {
+                row: self.cursor.0,
+                column: self.cursor.1,
+            },
+            visible: !self.hidden,
+        }
+    }
+
+    fn modes(&self) -> ztui::Modes {
+        ztui::Modes {
+            application_cursor: self.application_cursor,
+            application_keypad: self.application_keypad,
+            bracketed_paste: self.bracketed_paste,
+            mouse_capture: self.mouse_capture,
+        }
+    }
+
+    fn same_layout(&self, previous: &Self) -> bool {
+        self.geometry == previous.geometry
+    }
+}
+
 impl Frame {
     fn diff(&self, previous: Option<&Self>) -> Vec<u8> {
-        if previous == Some(self) {
-            return Vec::new();
-        }
-        let mut output = String::from("\x1b[?25l");
-        let resized = previous.is_none_or(|old| old.geometry != self.geometry);
-        for (row, line) in self.rows.iter().enumerate() {
-            if resized || previous.and_then(|old| old.rows.get(row)) != Some(line) {
-                let _ = write!(output, "\x1b[{};1H\x1b[0m\x1b[2K{line}", row + 1);
-            }
-        }
-        if previous.is_none_or(|old| old.application_cursor != self.application_cursor) {
-            output.push_str(if self.application_cursor {
-                "\x1b[?1h"
-            } else {
-                "\x1b[?1l"
-            });
-        }
-        if previous.is_none_or(|old| old.application_keypad != self.application_keypad) {
-            output.push_str(if self.application_keypad {
-                "\x1b="
-            } else {
-                "\x1b>"
-            });
-        }
-        if previous.is_none_or(|old| old.mouse_capture != self.mouse_capture) {
-            output.push_str(if self.mouse_capture {
-                "\x1b[?1000h\x1b[?1006h"
-            } else {
-                "\x1b[?1000l\x1b[?1006l"
-            });
-        }
-        if previous.is_none_or(|old| old.bracketed_paste != self.bracketed_paste) {
-            output.push_str(if self.bracketed_paste {
-                "\x1b[?2004h"
-            } else {
-                "\x1b[?2004l"
-            });
-        }
-        let _ = write!(
-            output,
-            "\x1b[0m\x1b[{};{}H\x1b[?25{}",
-            self.cursor.0 + 1,
-            self.cursor.1 + 1,
-            if self.hidden { 'l' } else { 'h' }
-        );
+        let mut output = String::new();
+        ztui::write_diff(&mut output, self, previous)
+            .expect("writing an ANSI frame into String cannot fail");
         output.into_bytes()
     }
 }
@@ -1753,6 +1887,7 @@ struct RestoringOutput<'a> {
     shared: &'a Shared,
     output: PhysicalOutput,
     wrote: bool,
+    media: images::Renderer,
 }
 impl Write for RestoringOutput<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -1769,12 +1904,14 @@ impl Drop for RestoringOutput<'_> {
         // This guard also runs if parsing or drawing panics. Restoration is
         // bounded even when an enclosing PTY has stopped draining its output.
         let until = Instant::now() + Duration::from_millis(250);
+        let mut leave = self.media.clear();
+        leave.extend_from_slice(LEAVE);
         let mut offset = 0;
-        while self.wrote && offset < LEAVE.len() && Instant::now() < until {
-            if drain(&mut self.output, LEAVE, &mut offset).is_err() {
+        while self.wrote && offset < leave.len() && Instant::now() < until {
+            if drain(&mut self.output, &leave, &mut offset).is_err() {
                 break;
             }
-            if offset < LEAVE.len() {
+            if offset < leave.len() {
                 std::thread::sleep(Duration::from_millis(5));
             }
         }
@@ -1788,6 +1925,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
         shared,
         output,
         wrote: false,
+        media: images::Renderer::default(),
     };
     let mut pending = ENTER.to_vec();
     let mut offset = 0;
@@ -1795,24 +1933,38 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
         if offset >= pending.len() {
-            let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-            if last_panel.elapsed() >= Duration::from_secs(1) {
-                state.dirty = true;
-                last_panel = Instant::now();
-            }
-            // Freeze the visible frame while the host terminal owns selection.
-            if state.dirty
-                && !(state.selection
-                    && previous
-                        .as_ref()
-                        .is_some_and(|old: &Frame| !old.mouse_capture))
-            {
-                let frame = state.frame(Instant::now());
-                pending = frame.diff(previous.as_ref());
+            output.media.complete();
+            let (refresh, requests) = {
+                let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                if last_panel.elapsed() >= Duration::from_secs(1) {
+                    state.dirty = true;
+                    last_panel = Instant::now();
+                }
+                // Selection freezes normal updates. A resize still redraws so
+                // image rectangles cannot retain their old viewport bounds.
+                let frozen = state.selection
+                    && previous.as_ref().is_some_and(|old: &Frame| {
+                        !old.mouse_capture && old.geometry == state.geometry
+                    });
+                let refresh = if state.dirty && !frozen {
+                    let frame = state.frame(Instant::now());
+                    let media = std::mem::take(&mut state.media);
+                    state.dirty = false;
+                    Some((frame, media))
+                } else {
+                    None
+                };
+                (refresh, state.graphics.take_requests())
+            };
+            pending = requests;
+            if let Some((frame, media)) = refresh {
+                let (before, after) = output.media.update(media, frame.cursor, frame.hidden);
+                pending.extend_from_slice(before.as_bytes());
+                pending.extend_from_slice(&frame.diff(previous.as_ref()));
+                pending.extend_from_slice(after.as_bytes());
                 previous = Some(frame);
-                offset = 0;
-                state.dirty = false;
             }
+            offset = 0;
         }
         match drain(&mut output, &pending, &mut offset) {
             Ok(()) => {}
@@ -2487,14 +2639,14 @@ mod tests {
             ..split_ui()
         };
         assert!(
-            Session::start(&ui, "/workspace/project", None)
+            Session::start(&ui, "/workspace/project", None, None)
                 .unwrap()
                 .is_none()
         );
         ui.log_format = LogFormat::Pretty;
         ui.dashboard = false;
         assert!(
-            Session::start(&ui, "/workspace/project", None)
+            Session::start(&ui, "/workspace/project", None, None)
                 .unwrap()
                 .is_none()
         );

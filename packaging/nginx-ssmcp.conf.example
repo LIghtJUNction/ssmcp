@@ -20,7 +20,7 @@ server {
     proxy_request_buffering off;
     proxy_intercept_errors on;
     error_page 504 = @ssmcp_timeout;
-    location ~ ^/(oauth/|account/|\.well-known/|healthz$) {
+    location ~ ^/(oauth/|account/|guide/|\.well-known/|healthz$) {
         proxy_read_timeout 30s;
         proxy_send_timeout 30s;
         proxy_pass http://127.0.0.1:8080;

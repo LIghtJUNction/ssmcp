@@ -10,19 +10,26 @@ use std::{
 };
 use tokio::{sync::oneshot, task::JoinHandle};
 
-pub(super) const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_SOURCE_BYTES: usize = super::input::paste::MAX_IMAGE_PASTE_BYTES;
 const MAX_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 16_384;
 pub(super) const REFERENCE_RESERVE: usize = 64;
 
 pub(crate) enum Source {
     Clipboard,
+    Image {
+        mime_type: &'static str,
+        bytes: Vec<u8>,
+    },
     Path(String),
     Files(Vec<PathBuf>),
     Text(String),
     Copy(String),
     Handoff(String),
-    Context { command: String, arguments: String },
+    Context {
+        command: String,
+        arguments: String,
+    },
 }
 #[derive(Debug)]
 pub(crate) enum Loaded {
@@ -54,6 +61,13 @@ impl Task {
         });
         Ok(Self { receiver, handle })
     }
+    #[cfg(test)]
+    pub(super) fn pending_for_test() -> (Self, oneshot::Sender<Result<Loaded, String>>) {
+        let (sender, receiver) = oneshot::channel();
+        let handle = tokio::spawn(std::future::pending::<()>());
+        (Self { receiver, handle }, sender)
+    }
+
     pub(super) fn poll(&mut self) -> Option<Result<Loaded, String>> {
         match self.receiver.try_recv() {
             Ok(value) => Some(value),
@@ -133,6 +147,55 @@ fn quoted(path: &str) -> String {
     format!("@\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Classify a complete bracketed paste before any UTF-8 conversion or text cleanup.
+pub(crate) fn paste_source(bytes: Vec<u8>) -> Result<Source, String> {
+    if let Some(mime_type) = crate::output::image_mime_type(&bytes) {
+        if bytes.len() > MAX_SOURCE_BYTES {
+            return Err("Image paste exceeds 16 MiB; use a smaller image or /attach PATH".into());
+        }
+        return Ok(Source::Image { mime_type, bytes });
+    }
+    let head = &bytes[..bytes.len().min(96)];
+    let damaged_png = head.starts_with(b"\xef\xbf\xbdPNG")
+        || head.starts_with(b"\xc2\x89PNG")
+        || (head.starts_with(b"PNG") && head.windows(4).any(|part| part == b"IHDR"));
+    let damaged_jpeg = head.starts_with(b"\xef\xbf\xbd\xef\xbf\xbd")
+        && head
+            .windows(4)
+            .any(|part| part == b"JFIF" || part == b"Exif");
+    let damaged_webp = head.starts_with(b"RIFF") && head.windows(4).any(|part| part == b"WEBP");
+    if damaged_png || damaged_jpeg || damaged_webp {
+        return Err("The terminal altered image bytes; paste was not saved as text. Copy the original image and use Ctrl+V or /paste, or use /attach PATH.".into());
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| "Paste contains binary data that is not a supported image. Use Ctrl+V or /paste for an image, or /attach PATH for a file.")?;
+    if text.contains('\0') {
+        return Err(
+            "Paste contains binary data, not plain text. Use Ctrl+V or /paste, or /attach PATH."
+                .into(),
+        );
+    }
+    if text.len() > super::references::paste::MAX_PASTE_BYTES {
+        return Err("Paste exceeds 4 MiB of UTF-8 text; save it as a file and use @path".into());
+    }
+    Ok(Source::Text(text))
+}
+
+/// Inspect only a fixed header while collecting; images and text keep separate caps.
+pub(crate) fn paste_limit(current: &[u8], incoming: &[u8]) -> usize {
+    let mut head = [0u8; 16];
+    let mut count = 0;
+    for byte in current.iter().chain(incoming).take(head.len()) {
+        head[count] = *byte;
+        count += 1;
+    }
+    if crate::output::image_mime_type(&head[..count]).is_some() {
+        MAX_SOURCE_BYTES
+    } else {
+        super::references::paste::MAX_PASTE_BYTES
+    }
+}
+
 pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded, String> {
     match source {
         Source::Copy(text) => super::clipboard::write_text(&text)
@@ -153,6 +216,15 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
                 bytes,
             } => store_image(workspace.root().to_path_buf(), name, mime_type, bytes).await,
         },
+        Source::Image { mime_type, bytes } => {
+            store_image(
+                workspace.root().to_path_buf(),
+                "pasted image".into(),
+                mime_type.into(),
+                bytes,
+            )
+            .await
+        }
         Source::Path(path) => load_path(workspace, &path).await,
         Source::Files(paths) => load_files(workspace.root().to_path_buf(), paths).await,
         Source::Text(text) => store_text(workspace.root().to_path_buf(), text).await,
@@ -626,6 +698,95 @@ mod tests {
         drop(files);
         assert_eq!(std::fs::read_to_string(&source).unwrap(), text);
         assert_eq!(std::fs::read(&picture).unwrap(), image_bytes);
+    }
+
+    #[test]
+    fn bracketed_paste_classifies_png_before_utf8_and_enforces_separate_caps() {
+        let png = super::super::input::paste::fixture_png();
+        let Source::Image { mime_type, bytes } = paste_source(png.clone()).unwrap() else {
+            panic!("raw PNG must not become a text attachment");
+        };
+        assert_eq!(mime_type, "image/png");
+        assert_eq!(bytes, png);
+        assert!(
+            paste_source(String::from_utf8_lossy(&png).into_owned().into_bytes())
+                .err()
+                .unwrap()
+                .contains("terminal altered image bytes")
+        );
+        assert!(paste_source(b"ordinary\0binary".to_vec()).is_err());
+        assert!(paste_source(vec![0xff, 0x80]).is_err());
+        let Source::Text(text) = paste_source("中文正常粘贴".as_bytes().to_vec()).unwrap()
+        else {
+            panic!("UTF-8 prose must remain text");
+        };
+        assert_eq!(text, "中文正常粘贴");
+        assert_eq!(paste_limit(&png[..4], &png[4..16]), MAX_SOURCE_BYTES);
+        assert_eq!(
+            paste_limit(b"text", b" more"),
+            super::super::references::paste::MAX_PASTE_BYTES
+        );
+        assert!(
+            paste_source(vec![
+                b'x';
+                super::super::references::paste::MAX_PASTE_BYTES + 1
+            ])
+            .is_err()
+        );
+        let mut oversized = png;
+        oversized.resize(MAX_SOURCE_BYTES + 1, 0);
+        assert!(paste_source(oversized).err().unwrap().contains("16 MiB"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bracketed_png_import_is_a_private_image_readable_by_native_tool() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let temp = FileFixture::new();
+        let workspace = Workspace::new(temp.0.clone()).unwrap();
+        let png = super::super::input::paste::fixture_png();
+        let Loaded::Reference { reference, .. } =
+            load(paste_source(png.clone()).unwrap(), &workspace)
+                .await
+                .unwrap()
+        else {
+            panic!("PNG import must yield one image reference");
+        };
+        let path = reference
+            .strip_prefix("@\"")
+            .unwrap()
+            .strip_suffix('"')
+            .unwrap();
+        assert!(path.starts_with(".ssmcp/inputs/image-"));
+        assert!(path.ends_with(".png"));
+        assert_eq!(std::fs::read(temp.0.join(path)).unwrap(), png);
+        let reply = workspace
+            .perform("ssmcp.fs.read_image", json!({"path":path}))
+            .await
+            .unwrap();
+        assert_eq!(reply["structuredContent"]["mime_type"], "image/png");
+        assert_eq!(
+            reply["structuredContent"]["size"].as_u64(),
+            Some(png.len() as u64)
+        );
+        assert!(png.len() <= MAX_IMAGE_BYTES);
+        let block = reply["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|block| block["type"] == "image")
+            .unwrap();
+        assert_eq!(
+            STANDARD.decode(block["data"].as_str().unwrap()).unwrap(),
+            png
+        );
+
+        let invalid_root = temp.0.join("invalid");
+        std::fs::create_dir(&invalid_root).unwrap();
+        let invalid_workspace = Workspace::new(invalid_root.clone()).unwrap();
+        let invalid = paste_source(b"\x89PNG\r\n\x1a\n".to_vec()).unwrap();
+        assert!(load(invalid, &invalid_workspace).await.is_err());
+        assert!(!invalid_root.join(".ssmcp").exists());
     }
 
     #[cfg(unix)]

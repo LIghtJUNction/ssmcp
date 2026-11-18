@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Connect a computer to an AI app. Learn ssmcp requests, files, tools, browser workflows and saved context.">
+  <title>Guide · ssmcp</title>
+  <link rel="stylesheet" href="/guide/style.css">
+  <link rel="alternate" hreflang="en" href="/guide/en">
+  <link rel="alternate" hreflang="zh-CN" href="/guide/zh">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="container header">
+  <a class="brand" href="/">ssmcp<span>guide</span></a>
+  <nav aria-label="Language"><a href="/guide/en" lang="en" aria-current="page">English</a><a href="/guide/zh" lang="zh-CN">简体中文</a></nav>
+</header>
+<main class="container" id="content">
+  <section class="hero">
+    <p class="eyebrow">YOUR COMPUTER. YOUR TOOLS.</p>
+    <h1>A bridge from your AI app<br>to the work on your computer.</h1>
+    <p class="lead">ssmcp connects a computer to an app that supports MCP, the protocol for calling tools. Commands run on the connected computer. Their results return to your app and appear in the terminal.</p>
+    <div class="hero-links"><a class="button" href="#start">Get connected</a><a href="#scenarios">Explore use cases <span aria-hidden="true">↓</span></a></div>
+    <p class="note">This QR code opens public documentation. It contains no login code or session credential.</p>
+  </section>
+
+  <section id="start" aria-labelledby="start-title">
+    <div class="section-heading"><p class="eyebrow">01 / START</p><h2 id="start-title">Connect once, then choose your tools.</h2></div>
+    <ol class="steps">
+      <li><h3>Install the client.</h3><p>Get the client for your system from <a href="https://github.com/LIghtJUNction/ssmcp/releases">GitHub releases</a>. Open a terminal in the project folder you want to work with.</p></li>
+      <li><h3>Connect this computer.</h3><p>Choose your account name on the <a href="/">gateway account page</a>, then run the command below. Follow GitHub authorization when prompted.</p><pre><code>ssmcp yourname@{{gateway_authority}}</code></pre><p class="note">Replace <code>yourname</code> with your account name. On later visits, <code>ssmcp</code> can reuse your last authorized account.</p></li>
+      <li><h3>Add the gateway to your AI app.</h3><p>Use this MCP address and authorize the same GitHub account. Ask the app to list online clients, then select the intended computer before calling a tool.</p><pre><code>{{gateway_origin}}/mcp</code></pre><p class="note">The AI runs in your app or an installed harness. Connecting ssmcp does not start a model.</p></li>
+    </ol>
+  </section>
+
+  <section id="basics" aria-labelledby="basics-title">
+    <div class="section-heading"><p class="eyebrow">02 / EVERYDAY INPUT</p><h2 id="basics-title">Write a request. Add the context it needs.</h2></div>
+    <p>Enter queues your request for the selected member or the next eligible agent interaction. You can keep typing a second draft while work continues. Keep your AI conversation active so the agent can receive queued input.</p>
+    <div class="table-wrap"><table><thead><tr><th scope="col">Input</th><th scope="col">What it does</th></tr></thead><tbody>
+      <tr><td><code>@src/main.rs</code></td><td>Include a workspace file. Use <code>@"docs/My notes.md"</code> when the path has spaces.</td></tr>
+      <tr><td><code>@assets/chart.png</code></td><td>Reference an image for the agent to read. Native image reads support PNG, JPEG, GIF and WebP, up to 400 KiB per image.</td></tr>
+      <tr><td><code>$skill-name</code></td><td>Include an available project or user skill. Type a prefix and use Tab or Enter to accept a suggestion; Enter again sends.</td></tr>
+      <tr><td><code>!git status --short</code></td><td>Run a local shell command in this workspace and show its output and exit status.</td></tr>
+      <tr><td>Left at the start of a draft</td><td>Open Agents. Up/Down selects a member; Enter or Right chooses it. Esc returns with your draft intact.</td></tr>
+      <tr><td><code>/queue</code> · <code>/copy</code></td><td>Review queued requests, or copy the latest complete agent reply.</td></tr>
+      <tr><td>F1 · F7</td><td>Open scrollable help, or pause terminal mouse capture for native text selection.</td></tr>
+    </tbody></table></div>
+    <p class="note">An <code>@</code> reference uses the authorized workspace. Clipboard import can use <code>/paste</code>; an image can use <code>/attach PATH</code>. A paste over 8 KiB becomes a file reference so you can add a short instruction after it.</p>
+  </section>
+
+  <section id="scenarios" aria-labelledby="scenarios-title">
+    <div class="section-heading"><p class="eyebrow">03 / PUT IT TO WORK</p><h2 id="scenarios-title">Start with a concrete result.</h2></div>
+    <div class="scenarios">
+      <article><h3>Change a project</h3><p>Give the agent a file and a specific outcome. Ask it to inspect the change, run the relevant checks and explain the result.</p><pre><code>@src/main.rs Fix the reported error.
+Run the relevant tests and show the diff.</code></pre></article>
+      <article><h3>Follow a long task</h3><p>Ask the agent to start a build, test or report job and follow its output. Managed jobs continue after a code_mode call returns while the client stays connected.</p><pre><code>Run the test suite once.
+Track its job ID and report the exit code.</code></pre></article>
+      <article><h3>Review an image or report</h3><p>Combine the visual evidence with the question you want answered. The agent reads the actual image through the native image tool.</p><pre><code>@assets/chart.png
+Explain the trend and flag unclear labels.</code></pre></article>
+      <article><h3>Check a browser flow</h3><p>Use your app's authorized ChatGPT Browser plugin when available. Otherwise discover registered Playwright tools or select an observed CDP connection. The chosen provider controls the browser session.</p><pre><code>Inspect the open checkout page.
+Test the form and capture the resulting state.</code></pre></article>
+      <article><h3>Work across devices and members</h3><p><code>ssmcp list</code> lists authorized online devices. The terminal's Agents panel selects a member on the current connection. Choose the device first, then the recipient for your request.</p><pre><code>On the selected build machine,
+inspect the latest build result.</code></pre></article>
+      <article><h3>Continue with context</h3><p><code>/resume</code> opens saved conversations. <code>/context</code> and <code>/memory</code> inspect local branch memory. <code>/handoff</code> prepares a context-file draft for a recipient you choose.</p><pre><code>/handoff Continue the failing test investigation.</code></pre><p class="note">Restoring a conversation does not replay tools or resend old requests.</p></article>
+    </div>
+  </section>
+
+  <section id="tools" aria-labelledby="tools-title">
+    <div class="section-heading"><p class="eyebrow">04 / FOR TOOL CALLERS</p><h2 id="tools-title">Discover the live contract.</h2></div>
+    <p>Use <code>list</code> to get the selected client's ID. Inside code_mode, search its registered tools and read the returned schemas before calling them. Installed harnesses keep their native arguments and approval rules.</p>
+    <pre><code>const clientId = "ID_FROM_LIST";
+return await tools.search(clientId, {
+  name_prefix: "ssmcp.fs.",
+  query: "read",
+  limit: 5,
+  include_schemas: true
+});</code></pre>
+    <details><summary>Example: return a real image to the app</summary><p>Each code_mode call has its own scope. Include the selected ID in the call, and use a path from that client's workspace.</p><pre><code>const clientId = "ID_FROM_LIST";
+image(await call(clientId, "ssmcp.fs.read_image", {
+  path: "assets/chart.png"
+}));</code></pre></details>
+  </section>
+
+  <section class="help" aria-labelledby="help-title">
+    <h2 id="help-title">Need a quick check?</h2>
+    <dl><div><dt>No online client?</dt><dd>Keep the local client running and check that your app and client use the same authorized account and gateway.</dd></div><div><dt>A tool is missing?</dt><dd>Refresh the client list and search the selected client's live tools. Available capabilities depend on the tools and harnesses installed on that computer.</dd></div><div><dt>The QR does not fit?</dt><dd>The sidebar shows a readable link instead. F1 retains the full guide address on smaller terminals.</dd></div></dl>
+  </section>
+</main>
+<footer class="container footer"><span>ssmcp {{version}}</span><a href="/">Gateway account</a><a href="https://github.com/LIghtJUNction/ssmcp">Source &amp; documentation</a></footer>
+</body>
+</html>

@@ -6,7 +6,7 @@ ssmcp 是一个可自建的远程 harness 通道。客户端把命令、文件�
 
 [快速开始](#快速开始) · [会话操作](docs/client-input.md) · [工具与浏览器](docs/backends.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
 
-[![Rust](https://img.shields.io/badge/Rust-1.89%2B-64748b?style=flat-square)](Cargo.toml) [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE) [![Releases](https://img.shields.io/badge/Download-Releases-4285f4?style=flat-square)](https://github.com/LIghtJUNction/ssmcp/releases)
+[![Rust](https://img.shields.io/badge/Rust-1.100%2B-64748b?style=flat-square)](Cargo.toml) [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE) [![Releases](https://img.shields.io/badge/Download-Releases-4285f4?style=flat-square)](https://github.com/LIghtJUNction/ssmcp/releases)
 
 ---
 
@@ -60,13 +60,16 @@ ssmcp whoami    # 查看当前账号
 
 将终端显示的 `https://你的服务器/mcp` 加入 ChatGPT 或其他支持 OAuth 的 MCP 客户端，再完成该应用的授权。CLI 登录与 MCP 应用授权分别管理。
 
-对外入口保持三个：
+对外入口有四个：
 
 | 入口 | 作用 |
 | --- | --- |
 | `list` | 发现当前身份可访问的设备与客户端工具目录 |
 | `code_mode` | 用 JavaScript 组合原生调用，安排顺序、并发和结果读取 |
 | `collab` | 同一会话中的成员身份、定向消息、广播与确认 |
+| `invite` | 由当前 GitHub OAuth 身份签发一次性安装接入命令，目标设备无需再次登录 GitHub |
+
+控制端可调用 `invite` 获取 Shell 或 PowerShell 命令，发给自己的目标设备执行。命令验证网关发布的兼容客户端并安装到用户目录，再启动接入；邀请使用一次，设备授权受原始 OAuth 授权的期限和撤销约束。网关须先配置匹配的下载清单。[安装与邀请](docs/client-accounts.md)
 
 先从 `list` 选择确切的客户端 ID，再查询工具的原始 schema：
 
@@ -109,10 +112,11 @@ return await exec.run(clientId, {
 | 查看上下文 | `/context`、`/memory` 查看当前分支与有界记忆 |
 | 压缩与分支 | `/compact [摘要]`、`/fork [名称]`、`/switch CONTEXT_ID` |
 | 查看原生工具 | `/pi`、`/cc`、`/codex` 列出真实目录；`TOOL {...}` 显式调用 |
-| 浏览长输出 | 选择事件后 Enter 折叠或展开；PgUp / PgDn、滚轮滚动 |
+| 浏览工具输出 | 默认折叠；选择事件后 Enter 展开，状态显示运行中、退出码或失败原因 |
+| 查看原始日志 | `/raw` 切换保留的未折叠日志；`/logs` 回到紧凑活动视图 |
 | 复制与帮助 | `/copy` 复制最近回复；**F7** 原生选择；`/help` 打开完整帮助 |
 
-回复支持 Markdown 和常见代码块语法高亮。读取图片后，客户端会生成终端缩略图。超过 8 KiB 的整段粘贴会保存为私有工作区文件并插入引用，便于继续补充文字。
+回复支持 Markdown 和常见代码块语法高亮。读取图片后，客户端会探测终端的 Kitty 图像能力；支持时显示清晰图片，其他终端显示有界半块预览或文字说明。超过 8 KiB 的整段粘贴会保存为私有工作区文件并插入引用，便于继续补充文字。
 
 Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重试可带幂等键，回执提供消息 ID 与历史保存状态。使用 `ssmcp.ui.ask` 非阻塞提问，再通过 `ssmcp.ui.questions` 读取答案。这些工具提供本地沟通通道，外部聊天应用仍决定自己的消息显示方式。
 
@@ -130,7 +134,7 @@ ssmcp ui init
 ssmcp ui check
 ```
 
-内置 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题。通过 `[ui]` 配置调整侧栏、面板顺序和颜色，F5 应用显示配置；`/reload` 则重新启动客户端。[界面配置](docs/client-ui.md)
+内置 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题。通过 `[ui]` 配置调整侧栏、面板顺序和颜色，F5 应用显示配置；`/reload` 则重新启动客户端。右侧栏空间足够时显示教程二维码，窄窗口显示同一链接；教程提供英文和中文入口。[界面配置](docs/client-ui.md)
 
 ## 复用现有工具
 
@@ -138,7 +142,7 @@ ssmcp 发现并转发已安装工具的原生能力，保留它们的 schema、�
 
 - **开发工具**：Codex、Claude Code、Pi、OpenCode；能力以当前成功注册的目录为准。
 - **浏览器**：在 ChatGPT 中优先使用已连接的 Browser 插件；客户端也可转发已注册的 Playwright MCP 扩展工具，并提供独立 Chromium CDP、批量动作和条件等待。
-- **桌面**：按客户端实际平台提供窗口、截图和输入原语，支持独立桌面。
+- **桌面**：观察和输入默认指向独立桌面，`computer.app_launch` 在 Linux 上按需启动私有 Xvfb 桌面；操作宿主桌面需要显式指定 `desktop:"host"`。
 - **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 
 ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行连接的扩展端口。客户端浏览器扩展的安装记录、MCP 握手和浏览器配对分别确认；使用 `ssmcp.browser.discover`、`ssmcp.harnesses.list` 和实际工具目录选择可用路线，再调用原生接口。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/client-input.md)
@@ -158,6 +162,10 @@ ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行�
 | 扩展策略 | 可选的客户端 `ToolCallHook`，调用前允许或拒绝，调用后观察结果 |
 
 hook 默认关闭，不内置额外审核流程，也不改变工具原生权限。自定义策略由客户端开发者接入。当前连接统一使用 **wire v7**，旧协议会明确拒绝。[扩展接口与最小客户端](docs/client-extension.md) · [上下文边界](docs/context.md)
+
+### Project Z：ztui
+
+终端帧差分、几何边界和定宽行已接入工作区内的 [ztui](crates/ztui/README.md)。这个小库使用 `no_std`，禁止 `unsafe`，没有第三方依赖；缓冲区由调用方提供，Unicode 宽度规则由宿主决定。它只计算该写哪些终端字节，图片协议、终端输入、主题和会话状态仍由客户端管理。
 
 ## 运行边界
 

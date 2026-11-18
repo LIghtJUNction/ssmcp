@@ -48,7 +48,7 @@ Configuration:
   Audit: [portal] audit_dir, audit_retention_days (default 7), audit_max_events (default 20000).
   The gateway requires audit_dir when gateway_socket is configured. Portal-only is a socket client.
   Server settings: [server] listen, public_url, socket, client_download_dir.
-  --client-download-dir PATH serves native binaries for temporary device commands.
+  --client-download-dir PATH serves release.json and matching clients for verified enrollment.
   Files: ssmcp-TARGET (Windows: ssmcp-TARGET.exe), from the matching release.
   Environment: SSMCP_LISTEN, SSMCP_PUBLIC_URL, SSMCP_SOCKET, SSMCP_CLIENT_DOWNLOAD_DIR.
   GitHub: [auth.github] client_id, client_secret (private file mode 0600).

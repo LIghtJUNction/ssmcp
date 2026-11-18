@@ -508,7 +508,7 @@ fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
 
-const INSTRUCTIONS: &str = "Use list to discover clients allowed for your authenticated identity and this endpoint, then use tools.search(clientId,{query,name_prefix,limit:20}) inside code_mode for concise native tool discovery. Use name_prefix:'ssmcp.exec.' to restrict registered names; exec.run composes native start/wait/read and is not a registered tool. Request include_schemas:true for complete native descriptors before calling; list({client_id}) and tools(clientId,cursor) retain full-schema pagination. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. For agents sharing a live client, use collab join/list/update/send/receive/ack/leave. Keep the returned agent_id and private token across calls; never share the token. Direct collab receive waits up to 30 seconds without occupying code_mode workers; collab.* JavaScript helpers limit waits to 1 second. Each client provides shell tools and discovers installed native providers, including Codex, Claude Code, Pi, OpenCode and Playwright MCP. For an existing browser session, prefer the calling application's authorized ChatGPT Browser plugin when actually available; its native API is outside ssmcp code_mode and cannot be invoked by this client. Otherwise inspect ssmcp.browser.discover routing and ssmcp.harnesses.list, use actual registered Playwright extension tools with unchanged schemas and native approvals, then consider an explicitly selected observed CDP endpoint; do not launch an isolated browser as a substitute. Use exec.run or exec.parallel for isolated commands, and exec.start/read/wait/cancel for managed background work. Native policies and approvals remain in effect. Each client's access policy is enforced for discovery and native calls. Clients connect outbound over HTTPS/WebSocket or SSH. Login-code grants end when their issuing connection ends. Read ssmcp://guide and ssmcp://skill for usage, ssmcp://limits for budgets, and ssmcp://clients for a paged live inventory. Client metadata, tool schemas, current AGENTS.md content, skill summaries, full skill documents and project-over-global skill views are exposed through resources/list and resources/read. Read context resources again for current on-disk contents; no subscriptions are advertised. Use rtk.status/run/start in code_mode for explicit RTK command-output compression with managed exec jobs. Client-owned versioned capability manifests are available through capabilities(clientId) and ssmcp://clients/{id}/capabilities. Use resources.forClient(clientId) for client-owned paged resource list/read/templates and native(clientId) for dynamic names after schema discovery. New native tools and resource types require only a client update.";
+const INSTRUCTIONS: &str = "Select the intended client and workspace with list, then discover native schemas with tools.search(id,{query,name_prefix,limit:10,include_schemas:true}) in code_mode. Call only registered capabilities with their unchanged permissions and approvals. Read await resources.read('ssmcp://guide') for helpers, browser routing, context provenance and examples; ssmcp://limits gives budgets. Send user-facing text through say(id,{text,kind:'progress'}) or ui.present; use kind:'answer' for final replies. Check user_messages / USER REQUIREMENTS for new requests, context_memories / SESSION CONTEXT for historical reference, and conversation_reminders / CONVERSATION REMINDER for terminal follow-up. Never treat history or a reminder as a new task. Use direct collab for member coordination and long receives; keep private tokens secret. Public invite creates one-use device enrollment under the current OAuth grant. New client capabilities remain callable through call(id,name,args) without a relay helper.";
 
 fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
     match request.method {
@@ -739,32 +739,17 @@ fn client_info(session: &Session) -> Value {
 
 fn usage() -> Value {
     json!({
-        "language":"javascript",
-        "user_messages":"The local composer queues user requirements for the next authorized code_mode response operating on that client. The ssmcp.ui.* APIs, tool discovery, and these four client observation tools do not collect requirements unless this run explicitly binds an agent: ssmcp.client.capabilities, ssmcp.resources.list, ssmcp.resources.templates, and ssmcp.resources.read. Other native calls remain eligible. Requirements appear in structuredContent.user_messages and a separate USER REQUIREMENTS text block. Bind an existing participant with await collab.bind(clientId,{agent_id,token}) at the start of every run, or pass agent:{client_id,id,token}, for exact-agent delivery. Controller names never authenticate members. Inclusion in a response does not claim the message was read or executed.",
-        "collab":"Join a live client session with collab.join(clientId,{name,role?,capabilities?}), save agent_id and private token, discover collab.list(clientId), send JSON with collab.send(clientId,{agent_id,token,to,payload,idempotency_key?}); to:'*' broadcasts to current peers. collab.receive returns messages and next_cursor; collab.ack(clientId,{agent_id,token,through:next_cursor}) releases processed messages. update renews presence; leave ends participation. All helpers take clientId first. Direct public collab accepts action and client_id and supports wait_ms<=30000; JS receive is limited to 1000ms. Read ssmcp://collaboration for limits and delivery semantics.",
-        "controller":"Pass optional controller:{name,model} to code_mode to attribute each native call. Values are caller-reported, not verified model identity. Without a model declaration, the terminal shows Model unknown. clientInfo supplies only the current request's application name.",
-        "clients":"Online client metadata snapshot; select a client by id from list.",
-        "call":"await call(clientId, toolName, arguments = {}) returns short native MCP results unchanged. Long backend output returns artifact metadata in structuredContent; inspect isError, spilled and completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.",
-        "tools":"await tools.search(clientId,{query,name_prefix,limit:20,include_schemas:false,cursor:null,max_pages:32}) returns concise registered names, routing namespaces and descriptions. Optional name_prefix filters registered names only, case-insensitively, and combines with query. Set include_schemas:true for complete unchanged native descriptors. Continue with nextCursor and the same client/query/name_prefix/limit/schema options. Original tools(clientId,cursor?) returns full native pages. Search reduces model-visible output, not the first native page scan; see ssmcp://limits.",
-        "exec":"exec.run(clientId,{command:[...],cwd,wait_ms}) runs a command and collects output; exec.parallel(clientId,[{command:[...]},...],{concurrency:4}) settles bounded parallel runs. exec.start(clientId,{command:[...]}) starts background work. exec.status/read/write/wait/cancel/forget(clientId,{job_id,...options}) manage it; legacy (clientId,jobId,options) also works. exec.list(clientId) lists jobs. Local parallel option errors mark that item not_started and leave its worker available. wait_ms only limits waiting; timeout_ms limits execution. Reuse job_id; commands survive code_mode completion.",
-        "rtk":"rtk.status(clientId) checks the installed RTK version. rtk.run/start(clientId,{command:[\"git\",\"status\"],cwd,...}) execute literal RTK argv with managed exec jobs. Read/wait/cancel through exec. No shell rewriting or implicit fallback; preserve exit codes and RTK recall hints.",
-        "reload":"await reload(clientId) acknowledges a client restart from the updated installed executable. Stops background work; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.",
-        "outputs":"Long command output spills to private files under /tmp/ssmcp on the client. outputs.read(clientId,{id,offset,max_bytes}), outputs.stat(clientId,{id}), outputs.cleanup(clientId) inspect artifacts by returned ID. Metadata includes SHA-256, bytes, lines, completeness and expiry; automatic retention is 24 hours.",
-        "output":"Use print(value) or console.log(value) for logs; return a JSON-serializable value. Use image(nativeScreenshotResult) to emit actual MCP image content without copying base64 into logs.",
-        "computer":"Read client schemas and capabilities for desktop control. computer.desktop_start/status/stop and app_launch manage an isolated desktop; input defaults to it, and shared host input requires desktop:host. Browser-target controls are preferred for browser tasks. New primitives remain available through native(clientId).",
-        "omarchy":"Native Omarchy system primitives: omarchy.status, themes/theme_set, backgrounds/background_set, fonts/font_set, audio/audio_set, brightness/brightness_set, toggles/toggle_set, workspaces/workspace_switch, window_action, apps/app_launch, menu, battery and network. Inspect schemas and current state before changes.",
-        "browser":"Prefer the authorized ChatGPT Browser plugin when it is actually available in the caller for the requested browser; call its native API outside ssmcp code_mode. The client cannot invoke that public browser JavaScript API. Otherwise call ssmcp.browser.discover for cached routing metadata and ssmcp.harnesses.list for provider status. Search actual registered playwright.* tools and keep their native schemas and approvals. Use explicitly selected CDP only after these available extension routes. CDP controls remain browser.status/launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/wait_for/evaluate/screenshot/close/disconnect. Use connect only with an observed loopback endpoint. Do not replace requested existing Chrome with launch or another browser family. No model is invoked.",
-        "fs":"fs.list/stat/read/write/mkdir and fs.readText/writeText/editText(clientId, options) provide rooted binary and UTF-8 file primitives.",
-        "skills":"skills.list/read/view(clientId, options) read current skill metadata, exact SKILL.md contents and Markdown views. view defaults to project-over-global scope across explicitly granted roots; list uses scope:effective for that same resolution. Each entry retains its root and path.",
-        "agents":"agents.list/read/resolve(clientId, options) inspect instruction files and root-to-target precedence with explicit provenance.",
-        "context":"context.roots(clientId) lists workspace and operator-configured read-only context roots. Pass a returned root ID to skills/agents.",
-        "rsync":"rsync({source:{client_id,path},destination:{client_id,path},dry_run:true,delete:false}) starts a managed job; sync is an alias. Both paths must be existing directories; copies contents. Reverse by swapping endpoints.",
-        "jobs":"jobs.status(id), jobs.wait(id,{wait_ms:5000}), jobs.cancel(id), jobs.list(). Jobs survive code_mode completion; inspect the final state and exit codes.",
-        "ports":"ports.open({listen:{client_id,port},target:{client_id,port}}), ports.list(), ports.close(id). Loopback only; port 0 selects an unused listener port.",
-        "resources":"resources.list(cursor?), resources.templates(), resources.read(uri) discover relay resources. resources.forClient(clientId).list(options?), .templates(options?) and .read(uri) forward paged client-owned resources. Read /clients/{id}/capabilities for the live client version and registry generation.",
-        "native":"native(clientId) builds dynamic names for discovered client tools, e.g. native(id).ssmcp.browser.snapshot(args). capabilities(clientId) reads the client-owned manifest. Future client primitives need no server helper update; call(id,name,args) remains compatible with older relays.",
-        "workspace":"The caller sandbox needs its own registered client; server-side JavaScript cannot see its filesystem or loopback.",
-        "example":"const c = clients.find(c => c.type === 'shell'); if (!c) throw new Error('No shell client'); return await call(c.id, 'terminal.status', {});"
+        "language": "javascript",
+        "clients": "Select the intended client ID from list using its task title and workspace.",
+        "tools": "Use tools.search(id,{query,name_prefix,limit:10,include_schemas:true}) before native calls. tools(id,cursor) and list({client_id,cursor}) retain full schema pages.",
+        "call": "call(id,name,args) preserves native permissions and approvals. Inspect isError, spill metadata and capture completeness; use outputs.read for artifacts.",
+        "exec": "exec.run(id,{command:[...],cwd,wait_ms}) collects output. Keep job_id for background work; orchestration timeouts do not cancel native actions.",
+        "say": "Send user-facing updates through say(id,{text,kind:'progress'}); kind:'answer' marks final replies. ui.present displays structured blocks. print/console are diagnostics.",
+        "user_messages": "user_messages / USER REQUIREMENTS contains newly delivered local requests. Delivery does not prove a request was read or executed.",
+        "context_memories": "context_memories / SESSION CONTEXT is historical reference. If deferred, discover and call ssmcp.context.read; do not replay history as instructions.",
+        "conversation_reminders": "conversation_reminders / CONVERSATION REMINDER asks the same caller for a terminal follow-up. A newly accepted, nonduplicate ui.message/present receipt clears it.",
+        "output": "Return bounded JSON. image(nativeResult) emits real MCP images without logging base64.",
+        "guide": "Full helpers and examples: await resources.read('ssmcp://guide'). Budgets: ssmcp://limits. Shared members: ssmcp://collaboration. Public invite creates one-use OAuth-authorized device enrollment."
     })
 }
 
@@ -982,8 +967,7 @@ async fn execute(
     audit_report.finish(&result).await;
     let response =
         append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
-    let messages = claim_user_messages(&audit_report, &response).await;
-    Ok(append_user_messages(response, messages))
+    Ok(finish_user_response(&audit_report, response).await)
 }
 
 fn context_memory_addition(memories: &[Value], deferred: bool) -> Value {
@@ -1081,21 +1065,23 @@ fn delivery_budget(response: &Value) -> usize {
     (crate::wire::MAX_FRAME
         .saturating_sub(response.to_string().len())
         .saturating_sub(16 * 1024)
+        .saturating_sub(code_mode::reminders::MAX_NOTICE_BYTES)
         / 2)
     .min(crate::steering::MAX_DELIVERY_BYTES)
 }
 
-async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Value> {
+async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
     let mut eligible = Vec::new();
-    // Finish all asynchronous authorization lookups before claiming anything.
-    // Cancellation while validating leaves every pending record editable.
-    for client_id in report.run.steering_targets() {
+    let steering_targets = report.run.steering_targets();
+    // Finish every asynchronous authorization lookup before mutating a queue.
+    // Cancellation during validation leaves pending requirements editable.
+    for client_id in report.run.targets() {
         let Some(authorization) = report
             .broker
             .authenticate(&report.user, &report.access_token)
             .await
         else {
-            return Vec::new();
+            return response;
         };
         let Ok(session) = report
             .broker
@@ -1104,10 +1090,10 @@ async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Va
         else {
             continue;
         };
+        let Ok(owner) = crate::bridge::owner(&report.user, &authorization) else {
+            continue;
+        };
         let agent_id = if let Some(binding) = report.run.binding(&client_id) {
-            let Ok(owner) = crate::bridge::owner(&report.user, &authorization) else {
-                continue;
-            };
             if owner != binding.owner
                 || session
                     .collaboration
@@ -1120,20 +1106,39 @@ async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Va
         } else {
             None
         };
-        eligible.push((session, agent_id));
+        let may_claim = steering_targets.contains(&client_id);
+        eligible.push((session, owner, agent_id, may_claim));
     }
     let mut messages = Vec::new();
+    let mut notices = Vec::new();
     let mut bytes = 0usize;
-    let budget = delivery_budget(response);
-    for (session, agent_id) in eligible {
+    let budget = delivery_budget(&response);
+    let mut notice_budget = conversation_notice_budget(&response);
+    // No await after the first claim: each recipient's receipts, age and new
+    // delivery are finalized under the existing session Queue lock exactly once.
+    for (session, owner, agent_id, may_claim) in eligible {
         if !session.is_alive() {
             continue;
         }
-        let claimed = session.steering.claim(
-            session.client_id(),
-            &report.run.context.run_id,
-            agent_id.as_deref(),
-            crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len()),
+        let replies = report.run.accepted_replies(session.client_id());
+        let (claimed, notice) = session.steering.finish_response(
+            code_mode::reminders::Response {
+                client_id: session.client_id(),
+                run_id: &report.run.context.run_id,
+                owner: &owner,
+                agent_id: agent_id.as_deref(),
+                replies: &replies,
+                notice_budget: if notices.len() < code_mode::reminders::MAX_NOTICES {
+                    notice_budget
+                } else {
+                    0
+                },
+            },
+            if may_claim {
+                crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len())
+            } else {
+                0
+            },
             budget.saturating_sub(bytes),
         );
         bytes += claimed
@@ -1141,8 +1146,41 @@ async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Va
             .map(|message| message.to_string().len())
             .sum::<usize>();
         messages.extend(claimed);
+        if let Some(notice) = notice {
+            notice_budget = notice_budget.saturating_sub(notice.bytes);
+            notices.push(notice);
+        }
     }
-    messages
+    append_conversation_reminders(append_user_messages(response, messages), notices)
+}
+
+fn conversation_notice_budget(response: &Value) -> usize {
+    crate::wire::MAX_FRAME
+        .saturating_sub(response.to_string().len())
+        .saturating_sub(16 * 1024)
+        .min(code_mode::reminders::MAX_NOTICE_BYTES)
+        .saturating_sub(code_mode::reminders::NOTICE_ENVELOPE_BYTES)
+}
+
+fn append_conversation_reminders(
+    mut response: Value,
+    notices: Vec<code_mode::reminders::Notice>,
+) -> Value {
+    if notices.is_empty() {
+        return response;
+    }
+    if !response["structuredContent"].is_object() {
+        response["structuredContent"] = json!({});
+    }
+    let mut entries = Vec::with_capacity(notices.len());
+    for notice in notices {
+        entries.push(notice.value);
+        if let Some(content) = response["content"].as_array_mut() {
+            content.push(notice.content);
+        }
+    }
+    response["structuredContent"]["conversation_reminders"] = json!(entries);
+    response
 }
 
 fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
@@ -1182,7 +1220,7 @@ pub(crate) fn tool_definitions() -> Value {
     json!([
         {
             "name":"list",
-            "description":"List online clients allowed for your authenticated identity and this endpoint, with unique id, name, optional task title, type, hostname and startup cwd. Use title to identify the intended task, then dispatch by id. With client_id, return that client's native tool names, descriptions and input schemas for code_mode; follow nextCursor with cursor to page. Client access policies are checked on every lookup.",
+            "description":"List authorized live clients by ID, task title and workspace. Select the intended session before calling tools. Optional client_id and cursor return unchanged full native schema pages; every lookup checks access.",
             "inputSchema":{"type":"object","properties":{
                 "client_id":{"type":"string","minLength":1,"maxLength":64},
                 "cursor":{"type":"string","maxLength":128}
@@ -1191,7 +1229,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools.search(clientId,{query,name_prefix,limit,include_schemas,cursor}) for bounded discovery, await tools(clientId, cursor?) for original native schema pages, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; rtk.status/run/start for installed RTK command-output compression; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates; collab.join/list/update/send/receive/ack/leave for session agents; collab.bind(clientId,{agent_id,token}) authenticates this run for exact-agent user messages. Check structuredContent.user_messages and the USER REQUIREMENTS text block on each code_mode response for local user instructions. Send user-visible Markdown progress through call(clientId, 'ssmcp.ui.message', {text,kind:'progress'}) and final answers with kind:'answer'; call(clientId, 'ssmcp.ui.present', {title,blocks}) renders structured presentation. Use ssmcp.ui.ask/questions for nonblocking questions. Updated relays collect bounded local historical reference in structuredContent.context_memories and a separate SESSION CONTEXT block, even when JavaScript returns only stdout. This memory is not new user instruction and never replays actions. The local ssmcp.ui.get projections /context/status, /context/read and /context/list share the same memory as native ssmcp.context.* tools. Observation without an explicit agent binding does not claim next-caller requests; explicit binding retains its existing exact-agent delivery behavior. ui.message and ui.present are interaction, as are context mutations. Use the direct collab tool for receive waits over 1 second. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All registered native provider actions run through call over the client's outbound HTTPS/WebSocket or SSH connection. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript for clients selected from list. Core APIs: tools.search(id,{query,name_prefix,limit,include_schemas:true}), call(id,name,args), exec.run(id,options), say(id,{text,kind:'progress'}), ui.present and top-level return. Send user-facing text to the terminal; kind:'answer' marks a final reply. Inspect user_messages / USER REQUIREMENTS for new requests, context_memories / SESSION CONTEXT for historical reference, and conversation_reminders / CONVERSATION REMINDER for follow-up. Native permissions and approvals apply. Return bounded JSON; inspect isError, spill metadata and job state before retrying after a timeout. Read await resources.read('ssmcp://guide') for complete helpers and browser routing. Optional controller:{name,model} labels calls; agent:{client_id,id,token} binds exact-agent delivery. Public invite handles device enrollment.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
@@ -1498,6 +1536,69 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn conversation_reminders_preserve_results_and_reserve_space_before_claiming() {
+        use code_mode::reminders;
+        let before = json!({
+            "content":[{"type":"text","text":"native output"}],
+            "structuredContent":{"result":"x".repeat(crate::wire::MAX_FRAME - 32 * 1024)},
+            "isError":false,
+        });
+        let budget = delivery_budget(&before);
+        assert!(budget > 1024);
+        let messages = vec![json!({
+            "source":"client_user","client_id":"room","message_id":"m",
+            "revision":2,"text":"x".repeat(budget - 512)
+        })];
+        assert!(messages[0].to_string().len() <= budget);
+        let mut notices = Vec::new();
+        let now = std::time::Instant::now();
+        for index in 0..reminders::MAX_NOTICES {
+            let mut state = reminders::State::default();
+            let client_id = format!("client_{index}");
+            let mut response = reminders::Response {
+                client_id: &client_id,
+                run_id: "n",
+                owner: "owner",
+                agent_id: None,
+                replies: &[],
+                notice_budget: reminders::MAX_NOTICE_BYTES,
+            };
+            let _ = state.finish(&response, true, now);
+            response.run_id = "n1";
+            let _ = state.finish(&response, false, now);
+            response.run_id = "n2";
+            notices.push(state.finish(&response, false, now).unwrap());
+        }
+        let added = notices.iter().map(|notice| notice.bytes).sum::<usize>();
+        assert!(added <= conversation_notice_budget(&before));
+        let after =
+            append_conversation_reminders(append_user_messages(before.clone(), messages), notices);
+        assert_eq!(
+            after["structuredContent"]["result"],
+            before["structuredContent"]["result"]
+        );
+        assert_eq!(after["content"][0], before["content"][0]);
+        assert_eq!(after["isError"], false);
+        assert_eq!(
+            after["structuredContent"]["conversation_reminders"]
+                .as_array()
+                .unwrap()
+                .len(),
+            8
+        );
+        assert!(after.to_string().len() <= crate::wire::MAX_FRAME);
+        assert_eq!(
+            conversation_notice_budget(&json!({"content":"x".repeat(crate::wire::MAX_FRAME)})),
+            0
+        );
+        let error = append_conversation_reminders(
+            crate::code_mode::tool_result(Err("failed".into())),
+            Vec::new(),
+        );
+        assert_eq!(error["isError"], true);
+    }
 
     #[test]
     fn user_requirements_preserve_native_success_and_error_envelopes() {

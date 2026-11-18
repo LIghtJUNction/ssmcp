@@ -1,10 +1,13 @@
 //! Bounded local event previews. Expanding reveals retained display text, not a
 //! reread of tools or an unbounded replacement for their original output archive.
-use super::super::ui::Ui;
+use super::{super::ui::Ui, images};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod activity;
+
+const MAX_TOOL_BYTES: usize = 8 * 1024;
 const MAX_EVENTS: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const LONG_LINES: usize = 6;
@@ -19,6 +22,8 @@ struct Event {
     truncated: bool,
     tone: &'static str,
     cache: Option<(usize, bool, Vec<String>)>,
+    image: Option<images::Preview>,
+    activity: Option<activity::Activity>,
 }
 
 #[derive(Default)]
@@ -34,6 +39,8 @@ pub(crate) struct EventView {
     hit_rows: Vec<Option<u64>>,
     total_rows: usize,
     page_rows: usize,
+    image_cells: Option<images::CellSize>,
+    placements: Vec<images::Placement>,
 }
 
 impl EventView {
@@ -87,13 +94,10 @@ impl EventView {
             truncated,
             tone,
             cache: None,
+            image: None,
+            activity: None,
         });
-        while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
-            if let Some(event) = self.events.pop_front() {
-                self.bytes -= event.text.len();
-                self.dropped = self.dropped.saturating_add(1);
-            }
-        }
+        self.prune();
         if at_end {
             self.selected = Some(id);
             self.follow = true;
@@ -105,6 +109,122 @@ impl EventView {
             self.selected = self.events.front().map(|event| event.id);
             self.reveal = true;
         }
+    }
+
+    /// Fold tool activity in this same bounded store; notices/images still append.
+    pub(crate) fn ingest_event(&mut self, label: &str, value: &Value, bytes: &[u8]) {
+        if activity::duplicate_correlation(value) {
+            return;
+        }
+        let (text, truncated) = retained_text_limit(bytes, MAX_TOOL_BYTES);
+        let plain = unstyled(&text);
+        let first = plain
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .trim();
+        if ["[USER]", "[AGENT]", "[ANSWER]", "[IMAGE]"]
+            .iter()
+            .any(|p| first.starts_with(p))
+        {
+            self.ingest(bytes);
+            return;
+        }
+        let next = activity::metadata(label, value);
+        let old = self.events.iter().rposition(|event| {
+            event.activity.as_ref().is_some_and(|old| {
+                old.matches(&next) && (!next.started || old.status == activity::Status::Running)
+            })
+        });
+        if let Some(index) = old {
+            let event = &mut self.events[index];
+            self.bytes -= event.text.len();
+            let mut combined = std::mem::take(&mut event.text);
+            combined.push_str(&text);
+            let (text, trimmed) = retained_text_limit(combined.as_bytes(), MAX_TOOL_BYTES);
+            event.text = text;
+            event.lines = unstyled(&event.text).lines().count().max(1);
+            event.truncated |= truncated || trimmed;
+            event.cache = None;
+            let metadata = event.activity.as_mut().unwrap();
+            metadata.update(next);
+            event.expanded |= metadata.diff;
+            event.tone = activity_tone(metadata, event.tone);
+            self.bytes += event.text.len();
+            self.prune();
+        } else if !first.is_empty() {
+            let previous = self.next_id;
+            self.ingest(text.as_bytes());
+            if self.next_id == previous {
+                return;
+            }
+            if let Some(event) = self.events.back_mut() {
+                event.expanded = next.diff;
+                event.truncated |= truncated;
+                event.tone = activity_tone(&next, event.tone);
+                event.activity = Some(next);
+            }
+        }
+    }
+
+    fn prune(&mut self) {
+        while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
+            if let Some(event) = self.events.pop_front() {
+                self.bytes -= event.text.len();
+                self.dropped = self.dropped.saturating_add(1);
+            }
+        }
+        if self.selected.is_some()
+            && !self
+                .events
+                .iter()
+                .any(|event| Some(event.id) == self.selected)
+        {
+            self.selected = self.events.front().map(|event| event.id);
+            self.reveal = !self.follow;
+        }
+    }
+
+    /// Attach only a decoded image from the native result path. Text containing
+    /// "[IMAGE]" cannot manufacture a protocol placement.
+    pub(crate) fn attach_image(&mut self, preview: images::Preview) {
+        if let Some(event) = self.events.back_mut() {
+            event.image = Some(preview);
+        }
+        let mut bytes = self.image_bytes();
+        for event in &mut self.events {
+            if bytes <= images::CACHE_BYTES {
+                break;
+            }
+            if let Some(image) = event.image.as_mut()
+                && let Some(native) = image.native.take()
+            {
+                bytes -= native.bytes();
+            }
+        }
+    }
+
+    fn image_bytes(&self) -> usize {
+        self.events
+            .iter()
+            .filter_map(|event| event.image.as_ref()?.native.as_ref())
+            .map(|native| native.bytes())
+            .sum()
+    }
+
+    pub(crate) fn image_cells(&mut self, cells: Option<images::CellSize>) {
+        self.image_cells = cells;
+    }
+
+    pub(crate) fn image_placements(&self, top: u16) -> Vec<images::Placement> {
+        self.placements
+            .iter()
+            .cloned()
+            .map(|mut placement| {
+                placement.offset_row(top);
+                placement
+            })
+            .collect()
     }
 
     /// Negative selects an earlier event; positive selects a later event.
@@ -127,12 +247,18 @@ impl EventView {
 
     /// Scroll within expanded events without changing the selected event.
     pub(crate) fn scroll_by(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
         self.follow = false;
         self.reveal = false;
         self.scroll = self
             .scroll
             .saturating_add_signed(delta)
             .min(self.total_rows.saturating_sub(self.page_rows));
+        if delta > 0 && self.scroll == self.total_rows.saturating_sub(self.page_rows) {
+            self.latest();
+        }
     }
 
     pub(crate) fn latest(&mut self) {
@@ -205,6 +331,7 @@ impl EventView {
         self.hit_rows.clear();
         self.total_rows = 0;
         self.page_rows = 0;
+        self.placements.clear();
     }
 
     pub(crate) fn snapshot(&self) -> Value {
@@ -212,11 +339,14 @@ impl EventView {
             "schema_version":1, "events":self.events.iter().map(|event| json!({
                 "id":event.id,"summary":event.summary,"lines":event.lines,
                 "bytes":event.text.len(),"expanded":event.expanded,"truncated":event.truncated,
-                "selected":Some(event.id)==self.selected
+                "selected":Some(event.id)==self.selected,
+                "tool_status":event.activity.as_ref().map(|value| value.status.label())
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
-            "selected":self.selected,"scroll":self.scroll,
+            "selected":self.selected,"scroll":self.scroll,"follow":self.follow,
+            "max_tool_bytes":MAX_TOOL_BYTES,
+            "image_cache_bytes":self.image_bytes(),"max_image_cache_bytes":images::CACHE_BYTES,
             "scope":"retained display preview; original tool output uses its archive"
         })
     }
@@ -229,6 +359,7 @@ impl EventView {
         focused: bool,
     ) -> Vec<String> {
         self.hit_rows.clear();
+        self.placements.clear();
         if width == 0 || height == 0 {
             self.page_rows = 0;
             return vec![String::new(); usize::from(height)];
@@ -241,6 +372,7 @@ impl EventView {
         let body_width = width.saturating_sub(indent).max(1);
         let mut rows: Vec<(u64, String)> = Vec::new();
         let mut selected_row = None;
+        let mut image_spans = Vec::new();
         for event in &mut self.events {
             let selected = Some(event.id) == self.selected;
             if selected {
@@ -255,6 +387,37 @@ impl EventView {
                 event.tone
             };
             if event.expanded {
+                if let Some(image) = &event.image {
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            paint(&prefix, tone, ui, selected && focused),
+                            paint(&clip_plain(&event.summary, body_width), tone, ui, false)
+                        ),
+                    ));
+                    let inset = 2.min(body_width.saturating_sub(1));
+                    let image_width = body_width.saturating_sub(inset).max(1) as u16;
+                    let image_height = page.saturating_sub(2).clamp(1, 18) as u16;
+                    let native = self.image_cells.filter(|_| ui.color).and_then(|cell| {
+                        let native = image.native.as_ref()?;
+                        Some((
+                            native.clone(),
+                            native.layout(image_width, image_height, cell)?,
+                        ))
+                    });
+                    if let Some((native, area)) = native {
+                        image_spans.push((rows.len(), (indent + inset) as u16, native, area));
+                        rows.extend((0..area.rows).map(|_| (event.id, String::new())));
+                    } else {
+                        for row in
+                            image.render(usize::from(image_width), usize::from(image_height), ui)
+                        {
+                            rows.push((event.id, format!("{}{row}", " ".repeat(indent + inset))));
+                        }
+                    }
+                    continue;
+                }
                 if event.cache.as_ref().is_none_or(|(cached_width, color, _)| {
                     *cached_width != body_width || *color != ui.color
                 }) {
@@ -265,8 +428,23 @@ impl EventView {
                     ));
                 }
                 let content = &event.cache.as_ref().unwrap().2;
+                if event.activity.is_some() {
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            paint(&prefix, tone, ui, selected && focused),
+                            paint(
+                                &clip_plain(&event_heading(event), body_width),
+                                tone,
+                                ui,
+                                false
+                            )
+                        ),
+                    ));
+                }
                 for (index, row) in content.iter().enumerate() {
-                    let prefix = if index == 0 {
+                    let prefix = if index == 0 && event.activity.is_none() {
                         paint(&prefix, tone, ui, selected && focused)
                     } else {
                         " ".repeat(indent)
@@ -290,7 +468,7 @@ impl EventView {
             } else {
                 let label = format!(
                     "{} · {} lines{}",
-                    event.summary,
+                    event_heading(event),
                     event.lines,
                     if event.truncated { " · partial" } else { "" }
                 );
@@ -319,6 +497,21 @@ impl EventView {
             self.reveal = false;
         }
         self.scroll = self.scroll.min(max_scroll);
+        for (start, col, image, area) in image_spans {
+            let visible_start = start.max(self.scroll);
+            let visible_end = (start + usize::from(area.rows)).min(self.scroll + page);
+            if visible_start < visible_end
+                && let Some(placement) = area.placement(
+                    image,
+                    (visible_start - self.scroll) as u16,
+                    col,
+                    (visible_start - start) as u16,
+                    (visible_end - visible_start) as u16,
+                )
+            {
+                self.placements.push(placement);
+            }
+        }
         let mut result = rows
             .into_iter()
             .skip(self.scroll)
@@ -352,6 +545,31 @@ impl EventView {
             self.hit_rows.push(None);
         }
         result
+    }
+}
+
+fn activity_tone(value: &activity::Activity, fallback: &'static str) -> &'static str {
+    if value.failed {
+        "error"
+    } else {
+        match value.status {
+            activity::Status::Running => "accent",
+            activity::Status::Done | activity::Status::Exit(0) => "success",
+            _ => fallback,
+        }
+    }
+}
+
+fn event_heading(event: &Event) -> String {
+    let status = event
+        .activity
+        .as_ref()
+        .map(|value| value.status.label())
+        .unwrap_or_default();
+    if status.is_empty() {
+        event.summary.clone()
+    } else {
+        format!("{} · {status}", event.summary)
     }
 }
 
@@ -441,13 +659,17 @@ fn unstyled(text: &str) -> String {
 }
 
 fn retained_text(bytes: &[u8]) -> (String, bool) {
+    retained_text_limit(bytes, MAX_BYTES)
+}
+
+fn retained_text_limit(bytes: &[u8], limit: usize) -> (String, bool) {
     let raw = String::from_utf8_lossy(bytes);
     let clean = sanitize(&raw, true);
-    if clean.len() <= MAX_BYTES {
+    if clean.len() <= limit {
         return (clean, false);
     }
     let note = "\n… preview truncated; inspect the original output archive …\n";
-    let budget = MAX_BYTES - note.len();
+    let budget = limit - note.len();
     let mut head = budget / 2;
     while !clean.is_char_boundary(head) {
         head -= 1;
@@ -660,5 +882,291 @@ mod tests {
         }
         assert!(view.render(0, 0, &plain_ui(), true).is_empty());
         assert_eq!(view.render(0, 2, &plain_ui(), true), vec!["", ""]);
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use std::io::Cursor;
+
+    fn image_event(view: &mut EventView) {
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            600,
+            300,
+            image::Rgba([30, 120, 210, 255]),
+        ));
+        let mut encoded = Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let block = json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(encoded.into_inner())});
+        let preview = images::decode(&block, true).unwrap();
+        view.ingest(b"[IMAGE] 600 x 300\n");
+        view.attach_image(preview);
+        view.image_cells(Some(images::CellSize {
+            width: 8,
+            height: 16,
+        }));
+    }
+
+    #[test]
+    fn native_images_follow_visible_event_crops_and_clear_on_fold() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        let mut view = EventView::new();
+        image_event(&mut view);
+        for index in 0..3 {
+            view.ingest(format!("after {index}\n").as_bytes());
+        }
+        view.render(28, 8, &ui, false);
+        let placements = view.image_placements(3);
+        assert_eq!(placements.len(), 1);
+        let mut renderer = images::Renderer::default();
+        let (_, wire) = renderer.update(placements, (20, 0), false);
+        let placement = wire
+            .split("\x1b_Ga=p,")
+            .nth(1)
+            .unwrap()
+            .split("\x1b\\")
+            .next()
+            .unwrap();
+        let number = |key: &str| -> u32 {
+            placement
+                .split(',')
+                .find_map(|field| {
+                    let (name, value) = field.split_once('=')?;
+                    (name == key).then(|| value.parse().unwrap())
+                })
+                .unwrap()
+        };
+        assert!(
+            number("y") > 0,
+            "the image is cropped after scrolling its header off screen"
+        );
+        assert!(number("y") + number("h") <= 300);
+        assert!(number("c") <= 22 && number("r") <= 7);
+        assert!(
+            wire.contains("\x1b[4;7H"),
+            "physical anchor includes the Activity top and image inset"
+        );
+        view.select(-100);
+        assert!(view.back());
+        view.render(28, 8, &ui, true);
+        let (deletes, _) = renderer.update(view.image_placements(3), (20, 0), false);
+        assert!(
+            deletes.contains("a=d,d=I"),
+            "folding releases the image instead of leaving an overlay"
+        );
+        renderer.complete();
+        assert!(renderer.clear().is_empty());
+        view.clear();
+        assert!(view.image_placements(3).is_empty());
+        assert_eq!(view.snapshot()["image_cache_bytes"], 0);
+    }
+
+    #[test]
+    fn narrow_native_images_stay_inside_the_pane_and_text_cannot_place_images() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        for width in 1..=6 {
+            let mut view = EventView::new();
+            image_event(&mut view);
+            view.render(width, 3, &ui, false);
+            let placements = view.image_placements(0);
+            assert_eq!(placements.len(), 1);
+            let (_, wire) = images::Renderer::default().update(placements, (3, 0), true);
+            let anchor = wire
+                .split("\x1b[")
+                .find_map(|part| {
+                    let (position, suffix) = part.split_once('H')?;
+                    suffix.starts_with("\x1b_Ga=p,").then_some(position)
+                })
+                .unwrap();
+            let col: u16 = anchor.split(';').nth(1).unwrap().parse().unwrap();
+            assert!(col <= width);
+            assert!(!wire.contains("c=0"));
+        }
+        let mut view = EventView::new();
+        view.image_cells(Some(images::CellSize {
+            width: 8,
+            height: 16,
+        }));
+        view.ingest(b"[IMAGE] forged log label\n");
+        view.render(80, 20, &ui, false);
+        assert!(view.image_placements(0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+    fn ui() -> Ui {
+        Ui {
+            color: false,
+            ..Ui::default()
+        }
+    }
+
+    #[test]
+    fn one_job_is_collapsed_with_live_and_final_status_and_original_detail() {
+        let mut view = EventView::new();
+        view.ingest_event(
+            "shell",
+            &json!({"type":"ssmcp.exec.started","job_id":"job-a"}),
+            b"[RUN] cargo test\n",
+        );
+        assert_eq!(view.snapshot()["events"][0]["tool_status"], "running");
+        assert_eq!(view.snapshot()["events"][0]["expanded"], false);
+        view.ingest_event(
+            "shell",
+            &json!({"type":"ssmcp.exec.stdout","job_id":"job-a"}),
+            b"unique-output-line\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"ssmcp.exec.exited","job_id":"job-a","exit_code":0}),
+            b"[OK] completed\n",
+        );
+        assert_eq!(view.snapshot()["retained_events"], 1);
+        view.ingest_event(
+            "shell",
+            &json!({"type":"tool.completed","job_id":"job-a","success":true}),
+            b"",
+        );
+        assert_eq!(view.snapshot()["events"][0]["tool_status"], "exit=0");
+        let closed = view.render(100, 8, &ui(), true).join("\n");
+        assert!(closed.contains("exit=0"));
+        assert!(!closed.contains("unique-output-line"));
+        assert!(view.open());
+        let expanded = view.render(100, 12, &ui(), true).join("\n");
+        assert!(expanded.contains("unique-output-line"));
+        assert!(expanded.contains("[OK] completed"));
+    }
+
+    #[test]
+    fn provider_and_reused_request_ids_cannot_overwrite_another_tool() {
+        let mut view = EventView::new();
+        for label in ["first", "second"] {
+            view.ingest_event(
+                label,
+                &json!({"request":{"id":7,"method":"tools/call"}}),
+                b"[REQ] tool\n",
+            );
+        }
+        view.ingest_event(
+            "first",
+            &json!({"response":{"id":7,"result":{"isError":true}}}),
+            b"[ERR] failed\n",
+        );
+        assert_eq!(view.snapshot()["events"][0]["tool_status"], "failed");
+        assert_eq!(view.snapshot()["events"][1]["tool_status"], "running");
+        view.ingest_event(
+            "first",
+            &json!({"request":{"id":7,"method":"tools/call"}}),
+            b"[REQ] new call\n",
+        );
+        assert_eq!(view.snapshot()["retained_events"], 3);
+    }
+
+    #[test]
+    fn process_and_harness_correlation_preserve_a_single_preview() {
+        let mut view = EventView::new();
+        view.ingest_event(
+            "codex",
+            &json!({"request":{"id":1,"method":"command/exec",
+            "params":{"processId":"process-a"}},"harness_call_id":"call-a"}),
+            b"[RUN] command\n",
+        );
+        view.ingest_event(
+            "codex",
+            &json!({"method":"command/exec/outputDelta",
+            "params":{"processId":"process-a"}}),
+            b"process output\n",
+        );
+        view.ingest_event(
+            "codex",
+            &json!({"call_id":"call-a","type":"tool.completed","success":true}),
+            b"finished\n",
+        );
+        assert_eq!(view.snapshot()["retained_events"], 1);
+        assert_eq!(view.snapshot()["events"][0]["tool_status"], "done");
+        view.ingest_event(
+            "codex",
+            &json!({"rpc_correlation":true,"command_rpc_completed":true}),
+            b"redundant completion\n",
+        );
+        assert_eq!(view.snapshot()["retained_events"], 1);
+    }
+
+    #[test]
+    fn failed_cancelled_timeout_and_signal_remain_distinct() {
+        for (fields, expected) in [
+            (json!({"exit_code":12}), "exit=12"),
+            (json!({"cancelled":true}), "cancelled"),
+            (json!({"timed_out":true}), "timeout"),
+            (json!({"exit_signal":15}), "signal=15"),
+            (json!({"success":false}), "failed"),
+        ] {
+            let mut value = fields;
+            value["type"] = json!("ssmcp.exec.exited");
+            value["job_id"] = json!("job");
+            let mut view = EventView::new();
+            view.ingest_event("shell", &value, b"[ERR] command ended\n");
+            assert_eq!(view.snapshot()["events"][0]["tool_status"], expected);
+            assert_eq!(view.events[0].tone, "error");
+            view.ingest_event(
+                "shell",
+                &json!({"type":"tool.completed","job_id":"job","success":true}),
+                b"",
+            );
+            assert_eq!(view.snapshot()["events"][0]["tool_status"], expected);
+            assert_eq!(view.events[0].tone, "error");
+        }
+    }
+
+    #[test]
+    fn streaming_tool_preview_is_bounded_without_replacing_open_messages() {
+        let mut view = EventView::new();
+        view.ingest(b"[ANSWER] keep this reply open\n");
+        let value = json!({"type":"ssmcp.exec.stdout","job_id":"job"});
+        for _ in 0..6 {
+            view.ingest_event("shell", &value, "unicode 世界\n".repeat(1800).as_bytes());
+        }
+        assert_eq!(view.snapshot()["retained_events"], 2);
+        assert!(view.events[0].expanded);
+        assert!(view.events[1].text.len() <= MAX_TOOL_BYTES);
+        assert!(view.events[1].truncated);
+        assert_eq!(
+            view.bytes,
+            view.events.iter().map(|e| e.text.len()).sum::<usize>()
+        );
+        view.ingest_event(
+            "fs",
+            &json!({"type":"ssmcp.file.diff"}),
+            b"[DIFF] file\n-old\n+new\n",
+        );
+        assert!(view.events.back().unwrap().expanded);
+    }
+
+    #[test]
+    fn returning_to_the_bottom_resumes_following_new_activity() {
+        let mut view = EventView::new();
+        for i in 0..25 {
+            view.ingest(format!("[USER] message-{i}\n").as_bytes());
+        }
+        view.render(80, 6, &ui(), false);
+        view.scroll_by(-3);
+        assert!(!view.follow);
+        view.scroll_by(isize::MAX);
+        assert!(view.follow);
+        view.ingest(b"[ANSWER] newest-answer\n");
+        let rows = view.render(80, 6, &ui(), false).join("\n");
+        assert!(rows.contains("newest-answer"));
     }
 }
