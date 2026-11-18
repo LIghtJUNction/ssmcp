@@ -475,7 +475,7 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed),
             ));
             fs::create_dir(&path).unwrap();
-            Self(path)
+            Self(path.canonicalize().unwrap())
         }
         fn write(&self, path: &str, bytes: impl AsRef<[u8]>) {
             let target = self.0.join(path);
