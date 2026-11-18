@@ -7,6 +7,7 @@ mod setup;
 pub(crate) mod store;
 #[cfg(test)]
 mod tests;
+mod traffic;
 mod view;
 
 use crate::{
@@ -137,6 +138,9 @@ pub(crate) enum Problem {
     UsernameTaken,
     UsernameBound,
     Banned,
+    TrafficQuotaExceeded,
+    TrafficPeriodMismatch,
+    TrafficGrantConflict,
 }
 impl Problem {
     pub(crate) fn status(self) -> StatusCode {
@@ -144,6 +148,8 @@ impl Problem {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Csrf | Self::Forbidden | Self::Banned => StatusCode::FORBIDDEN,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,
+            Self::TrafficQuotaExceeded => StatusCode::PAYMENT_REQUIRED,
+            Self::TrafficPeriodMismatch | Self::TrafficGrantConflict => StatusCode::CONFLICT,
             Self::Storage
             | Self::ManagementDisabled
             | Self::ManagementUnavailable
@@ -187,6 +193,13 @@ impl Problem {
             }
             Self::UsernameBound => "此 GitHub 账户已有用户名，请使用已绑定的名称连接。",
             Self::Banned => "此账户已被服务器管理员封禁。",
+            Self::TrafficQuotaExceeded => {
+                "本月流量额度不足。服务器流量有限，经常使用请购买流量包。"
+            }
+            Self::TrafficPeriodMismatch => {
+                "订单所属月份已经结束，无法将旧订单流量计入新月份，请联系管理员处理。"
+            }
+            Self::TrafficGrantConflict => "订单到账记录与本次请求不一致，请联系管理员核对。",
         }
     }
 }
@@ -352,6 +365,10 @@ impl Portal {
         result.map_err(|_| Problem::AuditUnavailable)
     }
 
+    pub(crate) fn has_storage(&self) -> bool {
+        self.store.is_some()
+    }
+
     pub(crate) fn enabled(&self, broker: &Broker) -> bool {
         self.store.is_some() && broker.identities.enabled("github")
     }
@@ -455,7 +472,15 @@ async fn security_headers(mut response: Response) -> Response {
 
 async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<Response, Problem> {
     if !broker.portal.enabled(&broker) {
-        return Ok(Html(view::home(None, None, false, false, &broker.public_url)).into_response());
+        return Ok(Html(view::home(
+            None,
+            None,
+            false,
+            false,
+            &broker.public_url,
+            None,
+        ))
+        .into_response());
     }
     let mut new_cookie = None;
     let (_, csrf, subject) = match broker.portal.session(&headers) {
@@ -483,12 +508,31 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         Some(subject) => Some(broker.portal.storage(move |s| s.account(&subject)).await?),
         None => None,
     };
+    let traffic = if let Some(account) = &account {
+        if let Some(management) = &broker.portal.management {
+            let identity = Identity {
+                provider: "github".into(),
+                subject: account.subject.clone(),
+                login: account.github_login.clone(),
+            };
+            management
+                .snapshot(&identity, crate::management::Scope::Own)
+                .await
+                .map_err(|_| Problem::ManagementUnavailable)?
+                .traffic
+        } else {
+            Some(broker.traffic_quota(&account.subject).await?)
+        }
+    } else {
+        None
+    };
     let mut response = Html(view::home(
         account.as_ref(),
         Some(&csrf),
         true,
         broker.portal.management.is_some(),
         &broker.public_url,
+        traffic.as_ref(),
     ))
     .into_response();
     if let Some(raw) = new_cookie {
