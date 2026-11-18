@@ -175,8 +175,9 @@ class Presentations(InputHistory):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             front.pump(0.05)
-            state = self.ui("/display")
-            if state.get("rows") == rows and state.get("cols") == cols:
+            observed_rows = self.ui("/display/rows")
+            observed_cols = self.ui("/display/cols")
+            if observed_rows == rows and observed_cols == cols:
                 return
         raise AssertionError("client did not observe the actual owned PTY resize")
 
@@ -207,10 +208,24 @@ class Presentations(InputHistory):
             (self.output / f"presentations-{label.lower()}.txt").write_text(text(shot) + "\n", encoding="utf-8")
         self.snapshots.append(record)
 
-    def rejected(self, arguments, description):
+    def rejected(self, arguments, description, expected):
         before = self.history()
-        response, native = self.native("ssmcp.ui.present", arguments)
-        self.check(bool(native.get("isError")), description)
+        # Native errors reject call(), so code_mode returns its own error result.
+        # Exercise that HTTP boundary directly instead of the success-only helper.
+        code = "return await call(%s, 'ssmcp.ui.present', %s);" % (
+            json.dumps(self.client_id), json.dumps(arguments),
+        )
+        status, body, _ = self.rpc(
+            "tools/call", {"name": "code_mode", "arguments": {"code": code}}, modern=True,
+        )
+        if status != 200 or not isinstance(body, dict) or "error" in body:
+            raise AssertionError(f"presentation rejection HTTP boundary failed: {status}, {body}")
+        response = body["result"]
+        error_text = "\n".join(
+            block.get("text", "") for block in response.get("content", [])
+            if block.get("type") == "text"
+        )
+        self.check(response.get("isError") is True and expected in error_text, description)
         self.check(self.history() == before and not self.messages(response),
                    "rejected presentation input adds no retained message or unexpected requirement")
 
@@ -244,7 +259,8 @@ class Presentations(InputHistory):
                    "an identical presentation retry returns the same identity without another history row")
         conflict = copy.deepcopy(wide)
         conflict["title"] = "DIFFERENT_PRESENTATION"
-        self.rejected(conflict, "a changed payload cannot reuse a retained presentation idempotency key")
+        self.rejected(conflict, "a changed payload cannot reuse a retained presentation idempotency key",
+                      "idempotency_key already identifies")
         layout = {"title": "LAYOUT_IDENTITY", "kind": "answer", "idempotency_key": "same_plain",
                   "blocks": [{"type": "text", "text": "[SUCCESS] Status\nComplete"}]}
         _, layout_ack = self.present(layout)
@@ -254,13 +270,14 @@ class Presentations(InputHistory):
         # Card and text deliberately have identical plain text but different
         # rendering semantics; retry identity must include the full document.
         layout["blocks"] = [{"type": "card", "title": "Status", "body": "Complete", "tone": "success"}]
-        self.rejected(layout, "identical plain text with a different layout cannot reuse the same key")
+        self.rejected(layout, "identical plain text with a different layout cannot reuse the same key",
+                      "idempotency_key already identifies")
         self.rejected({"title": "INVALID_PRESENTATION", "blocks": []},
-                      "an invalid native presentation is rejected before message recording")
+                      "an invalid native presentation is rejected before message recording", "blocks")
         self.rejected({**wide_document, "author": "forged identity"},
-                      "presentation fields cannot spoof a caller identity")
+                      "presentation fields cannot spoof a caller identity", "author")
         self.rejected({"title": "INVALID_CONTROL", "blocks": [{"type": "text", "text": "\x1b[2J"}]},
-                      "terminal escape input is rejected before display or history")
+                      "terminal escape input is rejected before display or history", "control characters")
 
         draft = "PRESENT_DRAFT 保留输入界"
         front.send(draft.encode())

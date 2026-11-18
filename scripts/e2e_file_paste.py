@@ -15,12 +15,15 @@ import json
 import os
 from pathlib import Path
 import platform
+import random
 import re
 import signal
 import stat
+import struct
 import subprocess
 import tempfile
 import time
+import zlib
 
 from e2e_dashboard import sha256, text
 from e2e_input_history import InputHistory, png_fixture
@@ -53,6 +56,20 @@ else:
             time.sleep(0.005)
     sys.stdout.buffer.write(base64.b64decode(selection["payloads"][mime], validate=True))
 """
+
+
+def large_png_fixture():
+    """A deterministic real RGBA PNG larger than the 400 KiB read budget."""
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+    width, height = 640, 256
+    pixels = random.Random(26).randbytes(width * height * 4)
+    scanlines = b"".join(b"\x00" + pixels[row * width * 4:(row + 1) * width * 4]
+                         for row in range(height))
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(scanlines)) + chunk(b"IEND", b""))
 
 
 class FilePaste(InputHistory):
@@ -148,16 +165,18 @@ class FilePaste(InputHistory):
         expected = {path.name: path.read_bytes() for path in originals}
         self.check(len(expected) == len(originals), "fixture source names are distinct")
         actual = {}
-        for relative in paths:
+        for index, relative in enumerate(paths, start=1):
             path = Path(relative)
             self.check(not path.is_absolute() and ".." not in path.parts
-                       and len(path.parts) == 4 and path.parts[:2] == (".ssmcp", "inputs")
-                       and path.parts[2].startswith("files-"),
+                       and len(path.parts) == 5 and path.parts[:2] == (".ssmcp", "inputs")
+                       and re.fullmatch(r"files-[0-9a-f]{32}", path.parts[2])
+                       and path.parts[3] == str(index),
                        "imported references identify only a private workspace file batch")
             copied = self.workspace / path
             self.check(stat.S_ISREG(copied.lstat().st_mode)
                        and stat.S_IMODE(copied.stat().st_mode) == 0o600
-                       and stat.S_IMODE(copied.parent.stat().st_mode) == 0o700,
+                       and stat.S_IMODE(copied.parent.stat().st_mode) == 0o700
+                       and stat.S_IMODE(copied.parent.parent.stat().st_mode) == 0o700,
                        "imported files and their batch directory have private Unix permissions")
             actual[copied.name] = copied.read_bytes()
         self.check(actual == expected, "all imported names and complete original bytes are preserved")
@@ -198,6 +217,45 @@ class FilePaste(InputHistory):
                    "file insertion leaves the cursor at the complete UTF-8 reference block end")
         self.unchanged_queue(self.target)
         return paths
+
+    def direct_image(self, front):
+        self.clear_draft(front)
+        source = large_png_fixture()
+        self.check(400 * 1024 < len(source) <= 16 * 1024 * 1024,
+                   "the direct PNG clipboard fixture really exceeds the native image read budget")
+        before_reads = len(self.reads())
+        self.select({"image/png": source, "text/plain;charset=utf-8": b"ignored thumbnail text"},
+                    gate=True)
+        front.send(b"\x16")
+        self.wait_file(front, "blocked")
+        try:
+            front.send(b"\r")
+            state = self.wait_state(front, lambda current: current["draft"]["text"] == "",
+                                    "the pending image draft changed before clipboard bytes arrived")
+            self.check(not self.queue()["queue"] and state["target"] == self.target,
+                       "Enter during an empty pending image import sends no attachment or empty message")
+        finally:
+            (self.clipboard / "release").touch()
+        state = self.wait_state(front, lambda current: current["draft"]["text"].startswith('\n@"'),
+                                "the direct image MIME did not become a private reference")
+        paths = self.references(state["draft"]["text"])
+        self.check(len(paths) == 1 and re.fullmatch(r"\.ssmcp/inputs/image-[0-9a-f]{32}\.png", paths[0]),
+                   "direct image MIME becomes one private PNG reference with no inline payload")
+        copied = self.workspace / paths[0]
+        encoded = copied.read_bytes()
+        width, height = struct.unpack(">II", encoded[16:24])
+        self.check(stat.S_ISREG(copied.lstat().st_mode)
+                   and stat.S_IMODE(copied.stat().st_mode) == 0o600
+                   and stat.S_IMODE(copied.parent.stat().st_mode) == 0o700,
+                   "the direct clipboard image is stored with private Unix permissions")
+        self.check(encoded[:8] == b"\x89PNG\r\n\x1a\n" and encoded[25] == 6
+                   and 0 < width < 640 and 0 < height < 256 and len(encoded) <= 400 * 1024,
+                   "a real oversized clipboard PNG retains alpha and is resized within 400 KiB")
+        self.check(self.reads()[before_reads:] == ["image/png"],
+                   "the adapter requests the offered image MIME exactly once instead of its text fallback")
+        self.read_native_image(paths[0], encoded)
+        self.unchanged_queue(self.target)
+        self.save_shot("direct-image", front, cells=True)
 
     def rejected_batch(self, front, valid, invalid, marker, label):
         self.clear_draft(front)
@@ -253,6 +311,7 @@ class FilePaste(InputHistory):
                    "the native rooted text tool reads every original UTF-8 byte of an imported file")
         self.read_native_image(paths[1], source_bytes[png])
         self.save_shot("uri-list", front, cells=True)
+        self.direct_image(front)
 
         self.clear_draft(front)
         self.paste_success(front, "x-special/gnome-copied-files",
@@ -338,7 +397,7 @@ def main():
         "status": "failed", "platform": platform.system(),
         "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
         "clipboard": "private PATH fake wl-paste; no real desktop clipboard or shared frontend",
-        "scope": "file MIME priority, UTF-8/PNG @references, GNOME cut copy, native image read, literal text, atomic invalid batches and async draft rollback; no models",
+        "scope": "direct oversized image MIME, file MIME priority, UTF-8/PNG @references, GNOME cut copy, native image read, literal text, atomic invalid batches and async draft rollback; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_file_paste.py", "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",
