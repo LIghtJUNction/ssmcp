@@ -3110,7 +3110,11 @@ mod tests {
                     "{line:?}"
                 );
             }
-            let mut terminal = vt100::Parser::new(20, width as u16, 0);
+            let mut terminal = vt100::Parser::new(
+                std::num::NonZeroU16::new(20).unwrap(),
+                std::num::NonZeroU16::new(width as u16).unwrap(),
+                0,
+            );
             terminal.process(colored.replace('\n', "\r\n").as_bytes());
             assert!(terminal.screen().contents().contains("const"));
             assert!(!terminal.screen().application_cursor());

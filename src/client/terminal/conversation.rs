@@ -2298,7 +2298,8 @@ mod tests {
             input(&mut state, "输入\n第二行".as_bytes());
             let before = (state.geometry.pty_rows, prompt_top(rows));
             let parser = display(&mut state);
-            assert_eq!(parser.screen().size(), (rows, cols));
+            let (actual_rows, actual_cols) = parser.screen().size();
+            assert_eq!((actual_rows.get(), actual_cols.get()), (rows, cols));
             assert_eq!((state.geometry.pty_rows, prompt_top(rows)), before);
             assert!(!parser.screen().hide_cursor());
         }
