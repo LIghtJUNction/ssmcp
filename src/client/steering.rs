@@ -791,6 +791,27 @@ impl Manager {
                 }
             }
         }
+        // A complete, current snapshot also tells us which acknowledged
+        // records are no longer retained. The server can trim delivered history
+        // before the client observes delivery; absence must never masquerade as
+        // an editable queued request or cause an automatic resend.
+        for record in &mut self.outbox.records {
+            if record.room_id == self.outbox.room_id
+                && record.ever_sent
+                && !record.terminal()
+                && !record.safe_to_publish
+                && !record.uncertain
+                && record.pending.is_none()
+                && !snapshot
+                    .messages
+                    .iter()
+                    .any(|message| message.id == record.message.id)
+            {
+                record.uncertain = true;
+                record.resume_after_reload = false;
+                record.error = Some("Server no longer retains this request; previous delivery cannot be confirmed. Review it before resending.".into());
+            }
+        }
         Ok(())
     }
 
@@ -1684,5 +1705,85 @@ mod tests {
         assert!(ticket.path.exists());
         fs::set_permissions(&ticket.path, fs::Permissions::from_mode(0o600)).unwrap();
         assert!(read_handoff(&ticket.path).unwrap().is_some());
+    }
+    #[test]
+    fn trimmed_server_history_marks_requests_uncertain_without_replaying() {
+        let queue = crate::steering::Queue::default();
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+        let text = "x".repeat(MAX_USER_MESSAGE_BYTES);
+        let mut first_id = String::new();
+        for index in 0..30 {
+            let message_id = manager.submit(&text, None).unwrap();
+            if index == 0 {
+                first_id = message_id;
+            }
+            let (id, request) = command(&mut manager, &mut receiver);
+            manager
+                .reply(id, queue.command("room_one", vec![], request))
+                .unwrap();
+            manager.events.clear();
+        }
+        assert_eq!(manager.outbox.records[0].status(true), "queued");
+        let claimed = queue.claim("room_one", "run_one", None, 1, 64 * 1024);
+        assert_eq!(claimed[0]["message_id"], first_id);
+
+        // The next publish crosses the server's retained-byte limit. Its ACK
+        // omits the first delivered record before this client has observed it.
+        manager.submit(&text, None).unwrap();
+        let (id, request) = command(&mut manager, &mut receiver);
+        let snapshot = queue.command("room_one", vec![], request).unwrap();
+        assert!(
+            !snapshot
+                .messages
+                .iter()
+                .any(|message| message.id == first_id)
+        );
+        manager.reply(id, Ok(snapshot)).unwrap();
+        let record = &manager.outbox.records[manager.index(&first_id).unwrap()];
+        assert_eq!(record.status(true), "uncertain");
+        assert!(!record.safe_to_publish);
+        assert!(
+            record
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("no longer retains")
+        );
+        assert!(
+            record.message.delivery.is_none(),
+            "absence is not a delivery receipt"
+        );
+
+        manager.poll().unwrap();
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert_eq!(request, SteeringCommand::Snapshot {});
+        assert!(
+            receiver.try_recv().is_err(),
+            "expired history never replays automatically"
+        );
+    }
+
+    #[test]
+    fn missing_history_reconciliation_ignores_stale_snapshots_and_pending_mutations() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let message = publish(&mut manager, &mut receiver, "confirmed queued", None);
+        manager.merge(&snapshot_for("room_one", 0, vec![])).unwrap();
+        assert_eq!(manager.outbox.records[0].status(true), "queued");
+
+        let pending_id = manager.submit("still being published", None).unwrap();
+        let _ = command(&mut manager, &mut receiver);
+        manager
+            .merge(&snapshot_for("room_one", 1, vec![message]))
+            .unwrap();
+        let pending = &manager.outbox.records[manager.index(&pending_id).unwrap()];
+        assert!(!pending.uncertain);
+        assert_eq!(pending.status(true), "sending");
     }
 }

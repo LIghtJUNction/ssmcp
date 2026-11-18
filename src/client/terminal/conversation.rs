@@ -1222,13 +1222,14 @@ impl State {
                 };
                 let hint = self.notice.clone().unwrap_or_else(|| {
                     format!(
-                        "{} · {status} · {} agents · {pending} queued · Tab focus · /help",
+                        "{} · {status} · {} members / {} calls · {pending} queued · Tab focus · /help",
                         if self.conversation.content_focus {
                             "browse"
                         } else {
                             "input"
                         },
-                        agents.len()
+                        agents.len(),
+                        observed.len()
                     )
                 });
                 rows.push(self.chat_line(&format!(" {hint}"), PanelTone::Muted, g.cols));
@@ -1285,7 +1286,7 @@ impl State {
                 let mut section = match kind {
                     crate::client::ui::Panel::Agents => {
                         let mut section =
-                            vec![(format!(" Agents · {}", agents.len()), PanelTone::Heading)];
+                            vec![(format!(" Members · {}", agents.len()), PanelTone::Heading)];
                         for agent in agents.iter().take(4) {
                             section.push((format!(" {}", field(agent, "name")), PanelTone::Accent));
                             section.push((
@@ -1829,7 +1830,7 @@ mod tests {
         state.ui.panels = vec![crate::client::ui::Panel::Queue];
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("Queue · 1 pending"));
-        assert!(!screen.contains("Agents · 2"));
+        assert!(!screen.contains("Members · 2"));
         // The READY fixture also mentions `/filter cargo`; use the full command
         // so this assertion tests block association rather than that second match.
         input(&mut state, b"/filter cargo test --lib\r");
