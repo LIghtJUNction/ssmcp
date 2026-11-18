@@ -190,3 +190,74 @@ test('signals and artifact capture completeness survive the RTK wrapper', async 
   assert.equal(result(record).cancelled,true);
   assert.deepEqual(result(record).snapshot.stdout.artifact,artifact);
 });
+
+for (const method of ['start', 'run']) {
+  test('RTK ' + method + ' rejects invalid options through catch without native calls', async () => {
+    const invalid = [{command:[]}, {command:['git'],fallback:true}];
+    const record = await run(
+      'const failures=[];for(const options of ' + JSON.stringify(invalid) + '){'
+      + 'failures.push(await rtk.' + method + '("one",options).catch(error=>error.message));}'
+      + 'return failures;',
+      () => assert.fail('invalid options reached native exec'),
+    );
+    succeeded(record);
+    assert.equal(result(record).length, invalid.length);
+    assert(result(record).every(message => typeof message === 'string' && message.startsWith('rtk')));
+    assert.deepEqual(record.requests, []);
+  });
+
+  test('RTK ' + method + ' allSettled retains a launched job beside invalid options', async () => {
+    const options = {command:['git','status'], ...(method === 'run' ? {wait_ms:0} : {})};
+    const snapshot = {job_id:'started-once',running:false,exit_code:0};
+    const record = await run(
+      'const results=await Promise.allSettled(['
+      + 'rtk.' + method + '("one",' + JSON.stringify(options) + '),'
+      + 'rtk.' + method + '("one",{command:[]})]);'
+      + 'return results.map(entry=>entry.status==="fulfilled"?entry:'
+      + '{status:entry.status,reason:entry.reason.message});',
+      request => {
+        if (request.name === 'ssmcp.exec.start') {
+          assert.deepEqual(request.arguments, {command:['rtk','git','status']});
+          return native({job_id:'started-once',running:true});
+        }
+        assert.equal(method, 'run');
+        assert.equal(request.name, 'ssmcp.exec.read');
+        assert.equal(request.arguments.job_id, 'started-once');
+        return native({snapshot,stdout:'success',stderr:''});
+      },
+    );
+    succeeded(record);
+    const entries = result(record);
+    assert.deepEqual(entries.map(entry => entry.status), ['fulfilled','rejected']);
+    assert.equal(entries[0].value.job_id, 'started-once');
+    assert.match(entries[1].reason, /rtk command must contain/);
+    if (method === 'run') {
+      assert.equal(entries[0].value.exit_code, 0);
+      assert.equal(entries[0].value.stdout, 'success');
+    }
+    assert.equal(record.requests.filter(request => request.name === 'ssmcp.exec.start').length, 1);
+    assert.equal(record.requests.length, method === 'run' ? 2 : 1);
+  });
+
+  test('RTK ' + method + ' settles native launch failures without retrying', async () => {
+    for (const response of [
+      {ok:false,error:'launch transport interrupted'},
+      {ok:true,value:{isError:true,content:[{type:'text',text:'could not start command: RTK executable missing'}]}},
+    ]) {
+      const record = await run(
+        'const results=await Promise.allSettled(['
+        + 'rtk.' + method + '("one",{command:["git","commit","-m","once"]})]);'
+        + 'return results.map(entry=>({status:entry.status,reason:entry.reason?.message}));',
+        request => {
+          assert.equal(request.name, 'ssmcp.exec.start');
+          assert.deepEqual(request.arguments.command, ['rtk','git','commit','-m','once']);
+          return response;
+        },
+      );
+      succeeded(record);
+      const message = response.error ?? response.value.content[0].text;
+      assert.deepEqual(result(record), [{status:'rejected',reason:message}]);
+      assert.equal(record.requests.length, 1, 'a failed launch must never be retried');
+    }
+  });
+}
