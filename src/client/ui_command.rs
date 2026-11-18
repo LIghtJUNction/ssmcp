@@ -194,28 +194,31 @@ async fn preview(ui: Ui, explicit: Option<&Path>) -> crate::Result<()> {
     super::interface::initialize_path(explicit);
     super::render::configure(ui.clone());
     let cwd = std::env::current_dir()?;
-    let Some(_display) = super::terminal::Session::start(&ui, &cwd.to_string_lossy(), None)? else {
+    let Some(_display) = super::terminal::Session::start(
+        &ui,
+        &cwd.to_string_lossy(),
+        None,
+        Some(super::account::DEFAULT_SERVER),
+    )?
+    else {
         return Err("interactive preview requires a foreground terminal with dashboard enabled and a pretty log format; use ssmcp ui preview --static for a single frame".into());
     };
-    let mut keyboard = Keyboard::open()?;
+    let mut keyboard = Keyboard::open(false)?;
     super::terminal::seed_preview();
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             event = keyboard.next() => match event? {
-                Event::Text(text) => {
-                    if text.contains('\u{3}') {
-                        break;
-                    }
-                    let _ = super::terminal::keyboard(&text);
+                Event::Bytes(bytes) => {
+                    let _ = super::terminal::keyboard_bytes(&bytes);
                 }
                 Event::Resize(rows, cols) => {
                     if rows > 0 && cols > 0 {
                         super::terminal::physical_resize(rows, cols);
                     }
                 }
-                Event::Detach | Event::End => break,
+                Event::Interrupt | Event::Detach | Event::End => break,
             },
             _ = tick.tick() => {
                 let _ = super::terminal::take_keyboard();

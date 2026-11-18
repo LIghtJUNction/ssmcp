@@ -4,7 +4,8 @@ use crate::Result;
 use std::{collections::VecDeque, time::Duration};
 
 pub(crate) enum Event {
-    Text(String),
+    Bytes(Vec<u8>),
+    Interrupt,
     Resize(u16, u16),
     Detach,
     End,
@@ -23,7 +24,7 @@ pub(crate) struct Keyboard {
 }
 
 impl Keyboard {
-    pub(crate) fn open() -> Result<Self> {
+    pub(crate) fn open(read_only: bool) -> Result<Self> {
         let platform = platform::Keyboard::open()?;
         let mut events = VecDeque::new();
         if let Some((rows, cols)) = platform.size() {
@@ -31,7 +32,10 @@ impl Keyboard {
         }
         Ok(Self {
             platform,
-            decoder: Decoder::default(),
+            decoder: Decoder {
+                detach_on_interrupt: read_only,
+                ..Decoder::default()
+            },
             events,
             escape_deadline: None,
         })
@@ -86,8 +90,8 @@ impl Keyboard {
 struct Decoder {
     pasted: bool,
     escape: Vec<u8>,
-    utf8: Vec<u8>,
     detached: bool,
+    detach_on_interrupt: bool,
 }
 impl Decoder {
     fn pending_escape(&self) -> bool {
@@ -115,15 +119,20 @@ impl Decoder {
                     break;
                 }
                 let value = self.escape.remove(0);
-                if value == 0x1d && !self.pasted {
-                    self.decode(&literal, false, &mut events);
-                    literal.clear();
-                    events.push(Event::Detach);
-                    self.detached = true;
-                    self.escape.clear();
-                    break;
+                if !self.pasted && (value == 0x1d || value == 0x03) {
+                    Self::emit(&mut literal, &mut events);
+                    if value == 0x1d || self.detach_on_interrupt {
+                        events.push(Event::Detach);
+                        self.detached = true;
+                        self.escape.clear();
+                        break;
+                    }
+                    // A writer's interrupt belongs to its inner PTY, not the
+                    // dashboard's process-level interrupt action.
+                    events.push(Event::Interrupt);
+                } else {
+                    literal.push(value);
                 }
-                literal.push(value);
                 if self.escape.is_empty() {
                     break;
                 }
@@ -132,39 +141,53 @@ impl Decoder {
         if eof {
             literal.append(&mut self.escape);
         }
-        self.decode(&literal, eof, &mut events);
+        Self::emit(&mut literal, &mut events);
         events
     }
     fn flush_escape(&mut self) -> Vec<Event> {
-        let bytes = std::mem::take(&mut self.escape);
         let mut events = Vec::new();
-        self.decode(&bytes, false, &mut events);
+        Self::emit(&mut self.escape, &mut events);
         events
     }
-    fn decode(&mut self, bytes: &[u8], eof: bool, events: &mut Vec<Event>) {
-        self.utf8.extend_from_slice(bytes);
+    fn emit(bytes: &mut Vec<u8>, events: &mut Vec<Event>) {
+        if !bytes.is_empty() {
+            events.push(Event::Bytes(std::mem::take(bytes)));
+        }
+    }
+}
+
+/// Decode only after the compositor has consumed binary paste input. The
+/// fallback attach protocol remains text based and preserves split UTF-8.
+#[derive(Default)]
+pub(crate) struct Utf8Input {
+    pending: Vec<u8>,
+}
+
+impl Utf8Input {
+    pub(crate) fn push(&mut self, bytes: &[u8], eof: bool) -> String {
+        self.pending.extend_from_slice(bytes);
         let mut text = String::new();
         loop {
-            match std::str::from_utf8(&self.utf8) {
+            match std::str::from_utf8(&self.pending) {
                 Ok(value) => {
                     text.push_str(value);
-                    self.utf8.clear();
+                    self.pending.clear();
                     break;
                 }
                 Err(error) => {
                     let valid = error.valid_up_to();
                     // SAFETY: valid_up_to is the UTF-8 parser's verified prefix.
-                    text.push_str(unsafe { std::str::from_utf8_unchecked(&self.utf8[..valid]) });
-                    self.utf8.drain(..valid);
+                    text.push_str(unsafe { std::str::from_utf8_unchecked(&self.pending[..valid]) });
+                    self.pending.drain(..valid);
                     match error.error_len() {
                         Some(length) => {
                             text.push(char::REPLACEMENT_CHARACTER);
-                            self.utf8.drain(..length);
+                            self.pending.drain(..length);
                         }
                         None => {
                             if eof {
                                 text.push(char::REPLACEMENT_CHARACTER);
-                                self.utf8.clear();
+                                self.pending.clear();
                             }
                             break;
                         }
@@ -172,9 +195,7 @@ impl Decoder {
                 }
             }
         }
-        if !text.is_empty() {
-            events.push(Event::Text(text));
-        }
+        text
     }
 }
 
@@ -526,16 +547,17 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn text(events: Vec<Event>) -> String {
+    fn bytes(events: Vec<Event>) -> Vec<u8> {
         events
             .into_iter()
             .filter_map(|e| {
-                if let Event::Text(s) = e {
+                if let Event::Bytes(s) = e {
                     Some(s)
                 } else {
                     None
                 }
             })
+            .flatten()
             .collect()
     }
     #[cfg(unix)]
@@ -566,7 +588,7 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert!(matches!(received, Some(Event::Text(ref value)) if value == "\x1b"));
+        assert!(matches!(received, Some(Event::Bytes(ref value)) if value == b"\x1b"));
         assert!(keyboard.escape_deadline.is_none());
 
         // A later Escape receives a new waiting window, not an expired deadline.
@@ -610,7 +632,7 @@ mod tests {
         keyboard.escape_deadline = Some(tokio::time::Instant::now() - Duration::from_secs(1));
         keyboard.feed(b"200~\x1b");
         assert!(matches!(keyboard.next().await.unwrap(),
-            Event::Text(value) if value == "\x1b[200~"));
+            Event::Bytes(value) if value == b"\x1b[200~"));
         {
             let mut next = std::pin::pin!(keyboard.next());
             assert!(
@@ -621,7 +643,7 @@ mod tests {
         }
         keyboard.feed(b"[201~");
         assert!(matches!(keyboard.next().await.unwrap(),
-            Event::Text(value) if value == "\x1b[201~"));
+            Event::Bytes(value) if value == b"\x1b[201~"));
         assert!(keyboard.escape_deadline.is_none());
     }
 
@@ -630,8 +652,15 @@ mod tests {
         let source = "中文 λ shell\n";
         for split in 0..=source.len() {
             let mut decoder = Decoder::default();
-            let first = text(decoder.feed(&source.as_bytes()[..split], false));
-            let second = text(decoder.feed(&source.as_bytes()[split..], true));
+            let mut utf8 = Utf8Input::default();
+            let first = utf8.push(
+                &bytes(decoder.feed(&source.as_bytes()[..split], false)),
+                false,
+            );
+            let second = utf8.push(
+                &bytes(decoder.feed(&source.as_bytes()[split..], true)),
+                true,
+            );
             assert_eq!(first + &second, source);
         }
     }
@@ -640,7 +669,7 @@ mod tests {
         let mut decoder = Decoder::default();
         let events = decoder.feed(b"echo ok\n\x1dexit\n", false);
         assert!(events.iter().any(|e| matches!(e, Event::Detach)));
-        assert_eq!(text(events), "echo ok\n");
+        assert_eq!(bytes(events), b"echo ok\n");
     }
     #[test]
     fn pasted_detach_is_literal_even_when_markers_are_split() {
@@ -650,7 +679,7 @@ mod tests {
             let mut events = decoder.feed(&source[..split], false);
             events.extend(decoder.feed(&source[split..], false));
             assert!(!events.iter().any(|e| matches!(e, Event::Detach)));
-            assert_eq!(text(events).as_bytes(), source);
+            assert_eq!(bytes(events), source);
             assert!(
                 decoder
                     .feed(b"\x1d", false)
@@ -658,5 +687,59 @@ mod tests {
                     .any(|e| matches!(e, Event::Detach))
             );
         }
+    }
+    #[test]
+    fn binary_paste_is_preserved_before_utf8_decoding_at_every_boundary() {
+        let source = b"\x1b[200~\x89PNG\r\n\x1a\n\x00\xff\x03\x1d\x11\x13\x1b[18~\x1b[201~";
+        for read_only in [false, true] {
+            for split in 0..=source.len() {
+                let mut decoder = Decoder {
+                    detach_on_interrupt: read_only,
+                    ..Decoder::default()
+                };
+                let mut events = decoder.feed(&source[..split], false);
+                events.extend(decoder.feed(&source[split..], true));
+                assert!(
+                    !events
+                        .iter()
+                        .any(|event| matches!(event, Event::Detach | Event::Interrupt))
+                );
+                assert_eq!(
+                    bytes(events),
+                    source,
+                    "read-only {read_only}, split {split}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn observer_interrupt_detaches_but_writer_interrupt_keeps_order() {
+        let mut observer = Decoder {
+            detach_on_interrupt: true,
+            ..Decoder::default()
+        };
+        let events = observer.feed(b"before\x03after", false);
+        assert!(events.iter().any(|event| matches!(event, Event::Detach)));
+        assert_eq!(bytes(events), b"before");
+        assert!(observer.feed(b"ignored", true).is_empty());
+
+        let mut writer = Decoder::default();
+        let events = writer.feed(b"before\x03after", false);
+        assert!(matches!(
+            events.as_slice(),
+            [Event::Bytes(before), Event::Interrupt, Event::Bytes(after)]
+                if before == b"before" && after == b"after"
+        ));
+    }
+
+    #[test]
+    fn fallback_utf8_keeps_invalid_and_incomplete_input_behavior() {
+        let mut utf8 = Utf8Input::default();
+        assert_eq!(utf8.push(b"a\xff\xe4", false), "a\u{fffd}");
+        assert_eq!(utf8.push(b"\xb8\xad", false), "中");
+        assert_eq!(utf8.push(b"\xe4", false), "");
+        assert_eq!(utf8.push(&[], true), "\u{fffd}");
+        assert_eq!(utf8.push(b"ok", true), "ok");
     }
 }

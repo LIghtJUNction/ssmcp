@@ -528,7 +528,8 @@ async fn attached(
     let ui = Ui::load(None)?;
     crate::client::interface::initialize_path(None);
     render::configure(ui.clone());
-    let display = terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref())?;
+    let display =
+        terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref(), None)?;
     let mut terminal_ids = Vec::new();
     sync_terminals(open, &mut terminal_ids);
     let mut selected = 0usize;
@@ -546,7 +547,7 @@ async fn attached(
     let live_cursor = open["live_cursor"].as_u64().unwrap_or(0);
     let mut geometry = None;
     let mut waiting_input_warned = false;
-    let mut keyboard = input::Keyboard::open()?;
+    let mut keyboard = input::Keyboard::open(read_only)?;
     render::status(
         "attach",
         "Connected",
@@ -595,24 +596,43 @@ async fn attached(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut refresh = Instant::now();
     let mut keys = crate::client::input::SessionKeys::default();
+    let mut utf8 = input::Utf8Input::default();
     let result: Result<()> = async {
         loop {
             tokio::select! {
                 _ = interrupt.recv() => break,
                 _ = terminate.recv() => break,
                 event = keyboard.next() => match event? {
-                    input::Event::Detach | input::Event::End => break,
+                    input::Event::Detach => break,
+                    input::Event::Interrupt => {
+                        // Session attach keeps Ctrl-C on the inner PTY even with
+                        // the dashboard active. Flush fallback key prefixes in order.
+                        let text = utf8.push(b"\x03", false);
+                        apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed(&text,Instant::now(),false),read_only,backend_generation).await?;
+                    }
+                    input::Event::End => {
+                        let text = utf8.push(&[], true);
+                        apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed(&text,Instant::now(),true),read_only,backend_generation).await?;
+                        break;
+                    }
                     input::Event::Resize(rows, cols) => {
                         let (rows, cols) = terminal::physical_resize(rows,cols);
                         geometry=Some((rows,cols));
                         if !read_only && let Some(generation)=backend_generation { ipc::request(&directory, ENDPOINT,json!({"op":"resize","lease":lease,"backend_generation":generation,"rows":rows,"cols":cols})).await?; }
                     }
-                    input::Event::Text(text) => {
-                        if read_only && text.contains('\u{3}') { break; }
+                    input::Event::Bytes(bytes) => {
                         if !read_only && backend_generation.is_none() && !waiting_input_warned {
                             render::status("attach","Warning","Session is connecting. Terminal input is unavailable and is not queued for later execution.");waiting_input_warned=true;
                         }
-                        apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed(&text,Instant::now(),false),read_only,backend_generation).await?;
+                        // Preserve original paste bytes until the compositor consumes them.
+                        // Its output has already handled dashboard shortcuts; only fallback
+                        // text uses SessionKeys to select the existing remote PTY.
+                        let events = if let Some(output) = terminal::keyboard_bytes(&bytes) {
+                            vec![crate::client::input::InputEvent::Text(utf8.push(&output, false))]
+                        } else {
+                            keys.feed(&utf8.push(&bytes, false), Instant::now(), false)
+                        };
+                        apply_keys(&directory,lease,&mut selected,&terminal_ids,events,read_only,backend_generation).await?;
                     }
                 },
                 page = pages.recv() => {
@@ -644,7 +664,7 @@ async fn attached(
                     }
                     if !read_only && !queued.is_empty() && let Some(generation)=backend_generation { send_input(&directory,lease,generation,terminal_ids.get(selected).map(String::as_str).unwrap_or("main"),queued).await?; }
                     for (id,bytes) in terminal::take_session_replies() {
-                        if !read_only && let Some(generation)=backend_generation { send_input(&directory,lease,generation,&id,String::from_utf8_lossy(&bytes).into_owned()).await?; }
+                        if !read_only && let Some(generation)=backend_generation { send_input(&directory,lease,generation,&id,String::from_utf8(bytes).map_err(|_| "invalid virtual terminal reply")?).await?; }
                     }
                     if refresh.elapsed() >= Duration::from_secs(2) {
                         let snapshot = ipc::request(&directory, ENDPOINT, json!({"op":"terminals","lease":lease})).await?;
@@ -755,7 +775,6 @@ async fn apply_keys(
     for event in events {
         match event {
             crate::client::input::InputEvent::Text(text) => {
-                let text = crate::client::terminal::keyboard(&text);
                 if !read_only
                     && !text.is_empty()
                     && let Some(generation) = backend_generation

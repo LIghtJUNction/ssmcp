@@ -22,8 +22,10 @@ import subprocess
 import tempfile
 import termios
 import time
+import zlib
 
 from e2e_dashboard import Decoder, text
+from e2e_input_history import png_fixture
 
 
 class AttachFrontend:
@@ -233,9 +235,11 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
     proof = cwd / "attach-detached-command.txt"
     readonly_proof = cwd / "attach-readonly-command.txt"
     resize_proof = cwd / "attach-terminal-size.txt"
+    dashboard_interrupt_proof = cwd / "attach-dashboard-interrupt.txt"
     before_size = cwd / "attach-size-before-observer.txt"
     after_size = cwd / "attach-size-after-observer.txt"
-    for path in (proof, readonly_proof, resize_proof, before_size, after_size):
+    for path in (proof, readonly_proof, resize_proof, before_size, after_size,
+                 dashboard_interrupt_proof):
         if path.exists():
             raise AssertionError("attach fixture proof path must start absent")
     try:
@@ -256,6 +260,35 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
         )
         check(chat.process.poll() is None,
               "standalone Escape dismisses attach help without another keystroke")
+
+        # A legal ancillary PNG chunk carries bytes that are not UTF-8 and
+        # resemble terminal shortcuts. Make it larger than a single stdin read.
+        # The observer must keep them as paste data and never detach on its 0x03.
+        payload = b"raw\x00\xff\x03\x1d\x11\x13\x1b[18~" * 400
+        chunk_type = b"raWp"
+        chunk = (struct.pack(">I", len(payload)) + chunk_type + payload
+                 + struct.pack(">I", zlib.crc32(chunk_type + payload) & 0xFFFFFFFF))
+        original = png_fixture()
+        pasted_png = original[:-12] + chunk + original[-12:]
+        input_directory = cwd / ".ssmcp" / "inputs"
+        previous_images = set(input_directory.glob("image-*.png"))
+        chat.send(b"\x1b[200~")
+        for offset in range(0, len(pasted_png), 2048):
+            chat.send(pasted_png[offset:offset + 2048])
+            chat.pump(0.01)
+        chat.send(b"\x1b[201~")
+        records["chat_png"] = chat.until(
+            lambda s: any(image.name in text(s) for image in
+                          set(input_directory.glob("image-*.png")) - previous_images),
+            "raw PNG pasted through attach",
+        )
+        saved_image, = set(input_directory.glob("image-*.png")) - previous_images
+        check(saved_image.read_bytes() == pasted_png
+              and saved_image.stat().st_mode & 0o777 == 0o600,
+              "attach preserves a split raw PNG byte-for-byte in a private input file")
+        check(saved_image.name in text(records["chat_png"])
+              and chat.process.poll() is None,
+              "pasted Ctrl-C, Ctrl-] and F7 bytes stay literal in read-only attach")
         chat.detach()
         chat_status = status_callback()
         check(chat_status.get("manager_pid") == pid
@@ -309,7 +342,10 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
               and after.get("generation") == before.get("generation")
               and before_client and after_client == before_client,
               "detach preserves the same worker generation and Broker connection")
-        observer.detach()
+        observer.send(b"\x03")
+        check(observer.wait_exit() == 0
+              and termios.tcgetattr(observer.slave) == observer.original_termios,
+              "Ctrl-C detaches a read-only observer and restores its terminal mode")
         replacement = open_frontend("reattached-writer")
         replacement.until(lambda s: "SSMCP_ATTACH_DETACHED_DONE" in text(s), "retained terminal output on reattach")
         check(True, "reattach reacquires input and replays retained terminal output")
@@ -328,6 +364,38 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
         replacement.send("printf '%s%s\\n' 'SSMCP_ATTACH_' 'INTERRUPT_OK'\n")
         replacement.until(lambda s: "SSMCP_ATTACH_INTERRUPT_OK" in text(s), "inner Ctrl-C interrupt", timeout=5)
         check(replacement.process.poll() is None, "Ctrl-C interrupts the inner command without disconnecting attach")
+
+        # Start a real foreground inner process through raw input, then transfer
+        # the writer lease to a dashboard frontend. Ctrl-C must reach that same
+        # inner process without triggering the dashboard's own SIGINT action.
+        inner_program = (
+            "import signal,sys,time\n"
+            "from pathlib import Path\n"
+            "def interrupted(*_):\n"
+            f"    Path({str(dashboard_interrupt_proof)!r}).write_text('interrupted')\n"
+            "    sys.exit(0)\n"
+            "signal.signal(signal.SIGINT, interrupted)\n"
+            "print('SSMCP_ATTACH_DASHBOARD_READY', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        replacement.send("python3 -u -c " + shlex.quote(inner_program) + "\n")
+        replacement.until(lambda s: "SSMCP_ATTACH_DASHBOARD_READY" in text(s),
+                          "foreground inner task before dashboard attach")
+        replacement.detach()
+        dashboard_writer = open_frontend("dashboard-writer", dashboard=True)
+        dashboard_writer.until(lambda s: s["alternate_screen"], "writable dashboard attach")
+        dashboard_writer.send(b"\x03")
+        deadline = time.monotonic() + 5
+        while content(dashboard_interrupt_proof) != "interrupted" and time.monotonic() < deadline:
+            dashboard_writer.pump()
+        check(content(dashboard_interrupt_proof) == "interrupted"
+              and dashboard_writer.process.poll() is None,
+              "dashboard writer Ctrl-C interrupts the inner task while attach stays alive")
+        records["dashboard_writer_interrupt"] = dashboard_writer.snapshot()
+        dashboard_writer.detach()
+        replacement = open_frontend("writer-after-dashboard")
+        replacement.until(lambda s: f"Attached to {name}" in text(s),
+                          "raw writer after dashboard interrupt")
         replacement.resize(44, 110)
         replacement.pump(0.2)
         replacement.send("printf '%s\\n' 'Session survived detach.' 'Input, output, resize and reattach verified.'; stty echo\n")

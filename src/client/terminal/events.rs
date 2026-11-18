@@ -1,14 +1,15 @@
 //! Bounded local event previews. Expanding reveals retained display text, not a
 //! reread of tools or an unbounded replacement for their original output archive.
-use super::super::ui::Ui;
+use super::{super::ui::Ui, images};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+mod correlation;
+use correlation::{Meta, Status};
 
 const MAX_EVENTS: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
-const LONG_LINES: usize = 6;
-const LONG_BYTES: usize = 640;
+const MAX_DETAIL: usize = 128 * 1024;
 
 struct Event {
     id: u64,
@@ -18,7 +19,41 @@ struct Event {
     expanded: bool,
     truncated: bool,
     tone: &'static str,
-    cache: Option<(usize, bool, Vec<String>)>,
+    cache: Option<(usize, String, Vec<String>)>,
+    meta: Meta,
+    image: Option<images::Preview>,
+}
+
+impl Event {
+    fn append(&mut self, text: String, truncated: bool) {
+        if !text.is_empty() {
+            self.text.push_str(&text);
+            let (retained, trimmed) = retained_text(self.text.as_bytes());
+            self.text = retained;
+            self.truncated |= trimmed;
+            self.lines = unstyled(&self.text).lines().count().max(1);
+        }
+        self.truncated |= truncated;
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.text.len() + self.summary.len() + self.meta.bytes()
+    }
+
+    fn matches(&self, query: &str, level: u8) -> bool {
+        (level != 1 || self.meta.command || self.summary.starts_with("[RUN"))
+            && (level != 2 || self.meta.status.is_some_and(Status::failed) || self.tone == "error")
+            && (query.is_empty()
+                || self.summary.to_lowercase().contains(query)
+                || self.text.to_lowercase().contains(query))
+    }
+
+    fn summary_with_status(&self) -> String {
+        match self.meta.status {
+            Some(status) => format!("{} [{}]", self.summary, status.label()),
+            None => self.summary.clone(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -34,6 +69,10 @@ pub(crate) struct EventView {
     hit_rows: Vec<Option<u64>>,
     total_rows: usize,
     page_rows: usize,
+    image_cells: Option<images::CellSize>,
+    placements: Vec<images::Placement>,
+    query: String,
+    level: u8,
 }
 
 impl EventView {
@@ -49,78 +88,265 @@ impl EventView {
     }
 
     pub(crate) fn ingest(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() {
+        self.ingest_inner(bytes, Meta::default());
+    }
+
+    /// Correlate only registered event identities. Text is never an identity.
+    pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
+        self.ingest_inner(bytes, Meta::from_event(label, event));
+    }
+
+    fn ingest_inner(&mut self, bytes: &[u8], mut meta: Meta) {
+        if meta.skip {
             return;
         }
+        let mut matches = Vec::new();
+        for key in &meta.keys {
+            if let Some((index, _)) = self.events.iter().enumerate().rev().find(|(_, event)| {
+                event.meta.keys.contains(key)
+                    && (!meta.started
+                        || event
+                            .meta
+                            .status
+                            .is_none_or(|status| status == Status::Running))
+            }) && !matches.contains(&index)
+            {
+                matches.push(index);
+            }
+        }
+        matches.sort_unstable();
         let (text, truncated) = retained_text(bytes);
         let plain = unstyled(&text);
-        let Some(first) = plain.lines().find(|line| !line.trim().is_empty()) else {
-            return;
-        };
-        let first = first.trim();
-        let conversation = ["[USER]", "[AGENT]", "[ANSWER]", "[IMAGE]"]
-            .iter()
-            .any(|prefix| first.starts_with(prefix));
-        let tone = if first.starts_with("[ERR") {
+        let first = plain.lines().map(heading).find(|line| !line.is_empty());
+        if first.is_none() && matches.is_empty() {
+            return; // Empty stream chunks must not become separate UI cards.
+        }
+        let first = first.unwrap_or("");
+        let conversation = [
+            "[USER]",
+            "[AGENT]",
+            "[UPDATE]",
+            "[ANSWER]",
+            "[IMAGE]",
+            "[CONTEXT]",
+        ]
+        .iter()
+        .any(|prefix| first.starts_with(prefix));
+        let error = plain
+            .lines()
+            .map(heading)
+            .find(|line| line.starts_with("[ERR"));
+        let warning = plain
+            .lines()
+            .map(heading)
+            .find(|line| line.starts_with("[WARN") || line.starts_with("[STDERR"));
+        let attention = error.or(warning);
+        meta.diff |= first.starts_with("[DIFF]") || first.starts_with("diff --git ");
+        if meta.language.is_empty() {
+            meta.language = first
+                .split_whitespace()
+                .find_map(|part| {
+                    let language = correlation::language_for_path(part);
+                    (!language.is_empty()).then_some(language)
+                })
+                .unwrap_or("");
+        }
+        let tone = if error.is_some() {
             "error"
-        } else if first.starts_with("[WARN") || first.starts_with("[STDERR") {
+        } else if attention.is_some() {
             "warning"
         } else if first.starts_with("[OK") {
             "success"
-        } else if conversation || first.starts_with("[RUN") || first.starts_with("[REQ") {
+        } else if first.starts_with("[READ") || first.starts_with("[WRITE") {
+            "blue"
+        } else if first.starts_with("[REQ") || first.starts_with("[RES") {
+            "purple"
+        } else if conversation || first.starts_with("[RUN") {
             "accent"
         } else {
             "foreground"
         };
-        let summary = super::super::panel::fit(first, 200);
-        let lines = plain.lines().count().max(1);
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
-        let at_end = self.events.is_empty() || self.follow;
-        self.bytes += text.len();
-        self.events.push_back(Event {
-            id,
-            text,
-            summary,
-            lines,
-            expanded: conversation || (lines <= LONG_LINES && plain.len() <= LONG_BYTES),
-            truncated,
-            tone,
-            cache: None,
-        });
+        // Ordinary short log lines keep their original styled body visible.
+        // Compact defaults apply to tool events, whose heading carries meaning.
+        let short_log = meta.keys.is_empty()
+            && !meta.command
+            && !first.starts_with('[')
+            && plain.lines().count() <= 6
+            && text.len() <= 640;
+        let expanded = conversation
+            || short_log
+            || attention.is_some()
+            || meta.diff
+            || meta.status.is_some_and(Status::failed);
+        let follow = self.follow || self.events.is_empty();
+        if let Some(&index) = matches.first() {
+            // A response can join a request row and its native job row. Keep
+            // their earliest position and both retained bodies, once.
+            for &other in matches.iter().skip(1).rev() {
+                if let Some(previous) = self.events.remove(other) {
+                    if self.selected == Some(previous.id) {
+                        self.selected = Some(self.events[index].id);
+                    }
+                    if previous.summary.starts_with("[RUN")
+                        && !self.events[index].summary.starts_with("[RUN")
+                    {
+                        self.events[index].summary = previous.summary;
+                    }
+                    self.events[index].expanded |= previous.expanded;
+                    self.events[index].append(previous.text, previous.truncated);
+                    self.events[index].meta.merge(previous.meta);
+                }
+            }
+            let event = &mut self.events[index];
+            event.append(text, truncated);
+            event.meta.merge(meta);
+            event.expanded |= expanded;
+            event.cache = None;
+        } else {
+            let id = self.next_id;
+            self.next_id = self.next_id.wrapping_add(1);
+            let summary = event_summary(
+                &plain,
+                if conversation {
+                    first
+                } else {
+                    attention.unwrap_or(first)
+                },
+            );
+            let lines = plain.lines().count().max(1);
+            self.events.push_back(Event {
+                id,
+                text,
+                summary,
+                lines,
+                expanded,
+                truncated,
+                tone,
+                meta,
+                cache: None,
+                image: None,
+            });
+        }
+        self.bytes = self.events.iter().map(Event::retained_bytes).sum();
         while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
             if let Some(event) = self.events.pop_front() {
-                self.bytes -= event.text.len();
+                self.bytes -= event.retained_bytes();
                 self.dropped = self.dropped.saturating_add(1);
             }
         }
-        if at_end {
-            self.selected = Some(id);
+        if follow {
+            self.selected = self
+                .events
+                .iter()
+                .rev()
+                .find(|event| event.matches(&self.query, self.level))
+                .map(|event| event.id);
             self.follow = true;
         } else if !self
             .events
             .iter()
             .any(|event| Some(event.id) == self.selected)
         {
-            self.selected = self.events.front().map(|event| event.id);
+            self.selected = self
+                .events
+                .iter()
+                .find(|event| event.matches(&self.query, self.level))
+                .map(|event| event.id);
             self.reveal = true;
         }
+        // Updating a correlated row does not move a reader away from their viewport.
+    }
+
+    pub(crate) fn filter(&mut self, query: &str, level: u8) {
+        let query = query.to_lowercase();
+        if self.query == query && self.level == level {
+            return;
+        }
+        self.query = query;
+        self.level = level;
+        if !self
+            .events
+            .iter()
+            .any(|event| Some(event.id) == self.selected && event.matches(&self.query, self.level))
+        {
+            self.selected = self
+                .events
+                .iter()
+                .find(|event| event.matches(&self.query, self.level))
+                .map(|event| event.id);
+        }
+        self.reveal = true;
+    }
+
+    pub(crate) fn rows_below(&self) -> usize {
+        self.total_rows
+            .saturating_sub(self.page_rows)
+            .saturating_sub(self.scroll)
+    }
+
+    pub(crate) fn is_following(&self) -> bool {
+        self.follow
+    }
+
+    /// Attach only a decoded image from the native result path. Text containing
+    /// "[IMAGE]" cannot manufacture a protocol placement.
+    pub(crate) fn attach_image(&mut self, preview: images::Preview) {
+        if let Some(event) = self.events.back_mut() {
+            event.image = Some(preview);
+        }
+        let mut bytes = self.image_bytes();
+        for event in &mut self.events {
+            if bytes <= images::CACHE_BYTES {
+                break;
+            }
+            if let Some(image) = event.image.as_mut()
+                && let Some(native) = image.native.take()
+            {
+                bytes -= native.bytes();
+            }
+        }
+    }
+
+    fn image_bytes(&self) -> usize {
+        self.events
+            .iter()
+            .filter_map(|event| event.image.as_ref()?.native.as_ref())
+            .map(|native| native.bytes())
+            .sum()
+    }
+
+    pub(crate) fn image_cells(&mut self, cells: Option<images::CellSize>) {
+        self.image_cells = cells;
+    }
+
+    pub(crate) fn image_placements(&self, top: u16) -> Vec<images::Placement> {
+        self.placements
+            .iter()
+            .cloned()
+            .map(|mut placement| {
+                placement.offset_row(top);
+                placement
+            })
+            .collect()
     }
 
     /// Negative selects an earlier event; positive selects a later event.
     pub(crate) fn select(&mut self, delta: isize) {
-        if self.events.is_empty() {
-            return;
-        }
-        let current = self
+        let visible = self
             .events
             .iter()
-            .position(|event| Some(event.id) == self.selected)
-            .unwrap_or(self.events.len() - 1);
-        let next = current
-            .saturating_add_signed(delta)
-            .min(self.events.len() - 1);
-        self.selected = Some(self.events[next].id);
+            .filter(|event| event.matches(&self.query, self.level))
+            .map(|event| event.id)
+            .collect::<Vec<_>>();
+        if visible.is_empty() {
+            return;
+        }
+        let current = visible
+            .iter()
+            .position(|id| Some(*id) == self.selected)
+            .unwrap_or(visible.len() - 1);
+        let next = current.saturating_add_signed(delta).min(visible.len() - 1);
+        self.selected = Some(visible[next]);
         self.follow = false;
         self.reveal = true;
     }
@@ -133,12 +359,18 @@ impl EventView {
             .scroll
             .saturating_add_signed(delta)
             .min(self.total_rows.saturating_sub(self.page_rows));
+        self.follow = self.scroll == self.total_rows.saturating_sub(self.page_rows);
     }
 
     pub(crate) fn latest(&mut self) {
         self.follow = true;
         self.reveal = false;
-        self.selected = self.events.back().map(|event| event.id);
+        self.selected = self
+            .events
+            .iter()
+            .rev()
+            .find(|event| event.matches(&self.query, self.level))
+            .map(|event| event.id);
     }
 
     pub(crate) fn toggle(&mut self) -> bool {
@@ -147,6 +379,9 @@ impl EventView {
             .iter_mut()
             .find(|event| Some(event.id) == self.selected)
         {
+            if event.meta.diff {
+                return false;
+            }
             event.expanded = !event.expanded;
             self.follow = false;
             self.reveal = true;
@@ -172,6 +407,9 @@ impl EventView {
         else {
             return false;
         };
+        if event.meta.diff && !expanded {
+            return false;
+        }
         let changed = event.expanded != expanded;
         event.expanded = expanded;
         self.follow = false;
@@ -205,6 +443,9 @@ impl EventView {
         self.hit_rows.clear();
         self.total_rows = 0;
         self.page_rows = 0;
+        self.placements.clear();
+        self.query.clear();
+        self.level = 0;
     }
 
     pub(crate) fn snapshot(&self) -> Value {
@@ -212,11 +453,14 @@ impl EventView {
             "schema_version":1, "events":self.events.iter().map(|event| json!({
                 "id":event.id,"summary":event.summary,"lines":event.lines,
                 "bytes":event.text.len(),"expanded":event.expanded,"truncated":event.truncated,
-                "selected":Some(event.id)==self.selected
+                "selected":Some(event.id)==self.selected,
+                "status":event.meta.status.map(Status::label),"command":event.meta.command
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
             "selected":self.selected,"scroll":self.scroll,
+            "rows_below":self.rows_below(),"following":self.follow,
+            "image_cache_bytes":self.image_bytes(),"max_image_cache_bytes":images::CACHE_BYTES,
             "scope":"retained display preview; original tool output uses its archive"
         })
     }
@@ -229,6 +473,7 @@ impl EventView {
         focused: bool,
     ) -> Vec<String> {
         self.hit_rows.clear();
+        self.placements.clear();
         if width == 0 || height == 0 {
             self.page_rows = 0;
             return vec![String::new(); usize::from(height)];
@@ -241,7 +486,12 @@ impl EventView {
         let body_width = width.saturating_sub(indent).max(1);
         let mut rows: Vec<(u64, String)> = Vec::new();
         let mut selected_row = None;
+        let mut image_spans = Vec::new();
+        let palette = palette_key(ui);
         for event in &mut self.events {
+            if !event.matches(&self.query, self.level) {
+                continue;
+            }
             let selected = Some(event.id) == self.selected;
             if selected {
                 selected_row = Some(rows.len());
@@ -252,21 +502,89 @@ impl EventView {
             let tone = if selected && focused {
                 "accent"
             } else {
-                event.tone
+                event.meta.status.map_or(event.tone, Status::tone)
             };
-            if event.expanded {
-                if event.cache.as_ref().is_none_or(|(cached_width, color, _)| {
-                    *cached_width != body_width || *color != ui.color
-                }) {
+            if event.expanded || !self.query.is_empty() {
+                if let Some(image) = &event.image {
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            paint(&prefix, tone, ui, selected && focused),
+                            paint(
+                                &clip_plain(&event.summary_with_status(), body_width),
+                                tone,
+                                ui,
+                                false
+                            )
+                        ),
+                    ));
+                    let inset = 2.min(body_width.saturating_sub(1));
+                    let image_width = body_width.saturating_sub(inset).max(1) as u16;
+                    let image_height = page.saturating_sub(2).clamp(1, 18) as u16;
+                    let native = self.image_cells.filter(|_| ui.color).and_then(|cell| {
+                        let native = image.native.as_ref()?;
+                        Some((
+                            native.clone(),
+                            native.layout(image_width, image_height, cell)?,
+                        ))
+                    });
+                    if let Some((native, area)) = native {
+                        image_spans.push((rows.len(), (indent + inset) as u16, native, area));
+                        rows.extend((0..area.rows).map(|_| (event.id, String::new())));
+                    } else {
+                        for row in
+                            image.render(usize::from(image_width), usize::from(image_height), ui)
+                        {
+                            rows.push((event.id, format!("{}{row}", " ".repeat(indent + inset))));
+                        }
+                    }
+                    continue;
+                }
+                let correlated = !event.meta.keys.is_empty();
+                if correlated {
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            paint(&prefix, tone, ui, selected && focused),
+                            paint(
+                                &clip_plain(&event.summary_with_status(), body_width),
+                                tone,
+                                ui,
+                                false
+                            )
+                        ),
+                    ));
+                }
+                if event
+                    .cache
+                    .as_ref()
+                    .is_none_or(|(cached_width, cached_palette, _)| {
+                        *cached_width != body_width || *cached_palette != palette
+                    })
+                {
                     event.cache = Some((
                         body_width,
-                        ui.color,
-                        styled_rows(&event.text, body_width, ui.color),
+                        palette.clone(),
+                        styled_rows(
+                            &semantic_text(
+                                if correlated {
+                                    event.text.split_once('\n').map_or("", |(_, body)| body)
+                                } else {
+                                    &event.text
+                                },
+                                ui,
+                                event.meta.language,
+                            ),
+                            body_width,
+                            ui.color,
+                        ),
                     ));
                 }
                 let content = &event.cache.as_ref().unwrap().2;
                 for (index, row) in content.iter().enumerate() {
-                    let prefix = if index == 0 {
+                    let prefix = if index == 0 && !correlated {
                         paint(&prefix, tone, ui, selected && focused)
                     } else {
                         " ".repeat(indent)
@@ -290,7 +608,7 @@ impl EventView {
             } else {
                 let label = format!(
                     "{} · {} lines{}",
-                    event.summary,
+                    event.summary_with_status(),
                     event.lines,
                     if event.truncated { " · partial" } else { "" }
                 );
@@ -319,6 +637,21 @@ impl EventView {
             self.reveal = false;
         }
         self.scroll = self.scroll.min(max_scroll);
+        for (start, col, image, area) in image_spans {
+            let visible_start = start.max(self.scroll);
+            let visible_end = (start + usize::from(area.rows)).min(self.scroll + page);
+            if visible_start < visible_end
+                && let Some(placement) = area.placement(
+                    image,
+                    (visible_start - self.scroll) as u16,
+                    col,
+                    (visible_start - start) as u16,
+                    (visible_end - visible_start) as u16,
+                )
+            {
+                self.placements.push(placement);
+            }
+        }
         let mut result = rows
             .into_iter()
             .skip(self.scroll)
@@ -353,6 +686,136 @@ impl EventView {
         }
         result
     }
+}
+
+fn heading(line: &str) -> &str {
+    let line = line.trim();
+    if let Some((timestamp, rest)) = line.split_once(' ')
+        && timestamp.len() == 13
+        && timestamp.ends_with('Z')
+        && timestamp
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || b":.Z".contains(&byte))
+    {
+        return rest.trim_start();
+    }
+    line
+}
+
+fn event_summary(plain: &str, first: &str) -> String {
+    let mut summary = first.to_owned();
+    if (first.starts_with("[RES") || first.starts_with("[REQ"))
+        && first.ends_with("audit")
+        && let Some(detail) = plain.lines().map(heading).find(|line| {
+            line.contains('.')
+                && line.len() <= 128
+                && line
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+        })
+    {
+        summary.push_str(" · ");
+        summary.push_str(detail);
+    }
+    super::super::panel::fit(&summary, 200)
+}
+
+/// Reuse the shared lexer, preserving existing renderer SGR and exact text.
+fn semantic_text(text: &str, ui: &Ui, language: &str) -> String {
+    if !ui.color {
+        return sanitize(text, false);
+    }
+    let mut output = String::new();
+    let mut lexer = crate::client::highlight::Lexer::for_language(language);
+    let mut code = !language.is_empty();
+    let mut fence: Option<char> = None;
+    for line in text.split_inclusive('\n') {
+        let plain = unstyled(line);
+        let trimmed = plain.trim_start();
+        let marker = trimmed.chars().next();
+        let is_fence = matches!(marker, Some('\u{60}' | '~'))
+            && trimmed.chars().take_while(|ch| Some(*ch) == marker).count() >= 3;
+        if is_fence {
+            if fence == marker {
+                fence = None;
+                code = !language.is_empty();
+                lexer = crate::client::highlight::Lexer::for_language(language);
+            } else if fence.is_none() {
+                fence = marker;
+                code = true;
+                lexer = crate::client::highlight::Lexer::for_language(
+                    trimmed.trim_start_matches(marker.unwrap()).trim(),
+                );
+            }
+            output.push_str(&paint(line, "muted", ui, false));
+            continue;
+        }
+        if line.contains('\x1b') {
+            // Advance language state, but the renderer's established colors win.
+            if code {
+                let _ = lexer.line(&plain);
+            }
+            output.push_str(line);
+        } else if trimmed.starts_with('[') {
+            let tone = if trimmed.starts_with("[ERR") {
+                "error"
+            } else if trimmed.starts_with("[WARN") || trimmed.starts_with("[STDERR") {
+                "warning"
+            } else if trimmed.starts_with("[OK") {
+                "success"
+            } else if trimmed.starts_with("[READ") || trimmed.starts_with("[WRITE") {
+                "blue"
+            } else if trimmed.starts_with("[RES") || trimmed.starts_with("[REQ") {
+                "purple"
+            } else {
+                "accent"
+            };
+            output.push_str(&paint(line, tone, ui, false));
+        } else if code {
+            for token in lexer.line(line) {
+                output.push_str(&paint(token.text, token.tone, ui, token.bold));
+            }
+        } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+            output.push_str(&paint(line, "success", ui, false));
+        } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+            output.push_str(&paint(line, "error", ui, false));
+        } else if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            output.push_str(&paint(line, "muted", ui, false));
+        } else {
+            for word in line.split_inclusive(char::is_whitespace) {
+                let token = word.trim_end();
+                let path = token.contains('/')
+                    || token.contains('\\')
+                    || !correlation::language_for_path(token).is_empty();
+                if path {
+                    output.push_str(&paint(word, "blue", ui, false));
+                } else {
+                    output.push_str(word);
+                }
+            }
+        }
+    }
+    output
+}
+
+fn palette_key(ui: &Ui) -> String {
+    if !ui.color {
+        return String::new();
+    }
+    [
+        "foreground",
+        "muted",
+        "accent",
+        "success",
+        "warning",
+        "error",
+        "blue",
+        "purple",
+    ]
+    .iter()
+    .map(|tone| ui.color(tone))
+    .collect::<Vec<_>>()
+    .join(";")
 }
 
 fn paint(text: &str, tone: &str, ui: &Ui, bold: bool) -> String {
@@ -443,11 +906,11 @@ fn unstyled(text: &str) -> String {
 fn retained_text(bytes: &[u8]) -> (String, bool) {
     let raw = String::from_utf8_lossy(bytes);
     let clean = sanitize(&raw, true);
-    if clean.len() <= MAX_BYTES {
+    if clean.len() <= MAX_DETAIL {
         return (clean, false);
     }
     let note = "\n… preview truncated; inspect the original output archive …\n";
-    let budget = MAX_BYTES - note.len();
+    let budget = MAX_DETAIL - note.len();
     let mut head = budget / 2;
     while !clean.is_char_boundary(head) {
         head -= 1;
@@ -660,5 +1123,209 @@ mod tests {
         }
         assert!(view.render(0, 0, &plain_ui(), true).is_empty());
         assert_eq!(view.render(0, 2, &plain_ui(), true), vec!["", ""]);
+    }
+    #[test]
+    fn rpc_and_native_output_share_one_command_row_and_preserve_the_final_outcome() {
+        let mut view = EventView::new();
+        view.ingest_event(
+            "shell",
+            &json!({"request":{"id":1,"method":"tools/call",
+            "params":{"name":"ssmcp.exec.start","arguments":{"command":["cargo","test"]}}}}),
+            b"[REQ] exec.start\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":"job","command":["cargo","test"]}),
+            b"[RUN] cargo test\n",
+        );
+        assert_eq!(view.events.len(), 2);
+        view.ingest_event(
+            "shell",
+            &json!({"id":1,"result":{"structuredContent":{"job_id":"job","running":true}}}),
+            b"started\n",
+        );
+        for bytes in [
+            b"first line\n".as_slice(),
+            b"\n\n".as_slice(),
+            b"second line\n".as_slice(),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":"job"}),
+                bytes,
+            );
+        }
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"job","exit_code":7}),
+            b"[ERR] command failed\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"ssmcp.harness.tool.completed",
+            "rpc_correlation":true,"command_rpc_completed":true,"success":true}),
+            b"",
+        );
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].summary, "[RUN] cargo test");
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(7)));
+        assert!(view.events[0].text.contains("first line\n\n\nsecond line"));
+        assert!(view.snapshot()["events"][0]["status"] == "exit=7");
+        view.back();
+        assert!(
+            view.render(90, 8, &plain_ui(), true)
+                .join("\n")
+                .contains("exit=7")
+        );
+    }
+
+    #[test]
+    fn unrelated_jobs_and_reused_rpc_ids_do_not_combine() {
+        let mut view = EventView::new();
+        for provider in ["a", "b"] {
+            view.ingest_event(
+                provider,
+                &json!({"type":"exec.started","job_id":"job"}),
+                b"[RUN] task\n",
+            );
+        }
+        view.ingest_event(
+            "a",
+            &json!({"type":"exec.exited","job_id":"job","exit_code":0}),
+            b"done\n",
+        );
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
+        assert_eq!(view.events[1].meta.status, Some(Status::Running));
+        let request = json!({"request":{"id":"reused","method":"command/exec","params":{"processId":"same"}}});
+        for code in [7, 0] {
+            view.ingest_event("rpc", &request, b"[RUN] invocation\n");
+            view.ingest_event(
+                "rpc",
+                &json!({"id":"reused","result":{"exitCode":code}}),
+                b"result\n",
+            );
+        }
+        assert_eq!(view.events.len(), 4);
+        assert_eq!(view.events[2].meta.status, Some(Status::Exit(7)));
+        assert_eq!(view.events[3].meta.status, Some(Status::Exit(0)));
+    }
+
+    #[test]
+    fn cancelled_signalled_failed_and_timed_out_snapshots_never_show_done() {
+        let mut view = EventView::new();
+        for (id, snapshot, expected) in [
+            (1, json!({"cancelled":true}), "cancelled"),
+            (2, json!({"exit_signal":15}), "signal=15"),
+            (
+                3,
+                json!({"error":"capture unavailable","state":"failed"}),
+                "failed",
+            ),
+            (4, json!({"timed_out":true}), "timeout"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"id":id,"result":{"structuredContent":snapshot}}),
+                b"[RES] status\n",
+            );
+            assert_eq!(
+                view.events.back().unwrap().meta.status.unwrap().label(),
+                expected
+            );
+        }
+        view.filter("", 2);
+        assert_eq!(
+            view.events
+                .iter()
+                .filter(|event| event.matches("", 2))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn short_tools_fold_but_diffs_and_attention_remain_open() {
+        let mut view = EventView::new();
+        view.ingest(b"[RES ] audit\n  ssmcp.fs.read_text\n  source.rs\n");
+        assert!(!view.events[0].expanded);
+        assert!(view.events[0].summary.contains("ssmcp.fs.read_text"));
+        view.ingest(b"12:34:56.789Z [UPDATE] progress\nvisible details\n");
+        assert!(view.events[1].expanded);
+        view.ingest(b"[STDOUT] job\npartial\n[ERR] exit=7\n");
+        assert!(view.events[2].expanded);
+        assert_eq!(view.events[2].tone, "error");
+        assert_eq!(view.events[2].summary, "[ERR] exit=7");
+        view.ingest_event("fs", &json!({"type":"ssmcp.file.diff"}), b"-old\n+new\n");
+        assert!(view.events[3].expanded);
+        assert!(!view.back());
+        assert!(!view.toggle());
+        view.ingest(b"\n\n");
+        assert_eq!(view.events.len(), 4);
+    }
+
+    #[test]
+    fn filtered_navigation_and_scroll_to_bottom_restore_live_following() {
+        let mut view = EventView::new();
+        for (id, output) in [
+            ("one", "needle first"),
+            ("two", "unrelated"),
+            ("three", "needle last"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":id}),
+                format!("[RUN] {output}\n").as_bytes(),
+            );
+        }
+        view.filter("needle", 0);
+        view.select(isize::MIN);
+        view.select(1);
+        assert_eq!(view.selected, Some(2));
+        view.filter("", 0);
+        view.ingest(b"[AGENT]\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+        view.latest();
+        view.render(70, 5, &plain_ui(), true);
+        view.scroll_by(-2);
+        let before = view.scroll;
+        assert!(!view.is_following());
+        assert_eq!(view.rows_below(), 2);
+        view.ingest(b"[READ] latest event\n");
+        view.render(70, 5, &plain_ui(), true);
+        assert_eq!(view.scroll, before);
+        assert!(view.rows_below() > 2);
+        view.scroll_by(isize::MAX);
+        assert!(view.is_following());
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn source_highlighting_semantic_colors_and_no_color_preserve_content() {
+        let ui = Ui::default();
+        let source = "let answer = 42; // comment\nlet path = \"src/lib.rs\";\n";
+        let styled = semantic_text(source, &ui, "rust");
+        assert_eq!(unstyled(&styled), source);
+        for tone in ["accent", "warning", "muted", "success"] {
+            assert!(
+                styled.contains(&ui.color(tone)),
+                "missing {tone}: {styled:?}"
+            );
+        }
+        let existing = "\x1b[31moriginal red\x1b[0m\n";
+        assert_eq!(semantic_text(existing, &ui, ""), existing);
+        assert_eq!(semantic_text(source, &plain_ui(), "rust"), source);
+        assert!(!semantic_text(existing, &plain_ui(), "").contains('\x1b'));
+        let mut view = EventView::new();
+        view.ingest_event(
+            "fs",
+            &json!({"request":{"id":1,"method":"tools/call",
+            "params":{"arguments":{"path":"src/lib.rs"}}}}),
+            format!("[READ] src/lib.rs\n{source}").as_bytes(),
+        );
+        view.open();
+        let rows = view.render(90, 12, &ui, false).join("\n");
+        assert!(rows.contains(&ui.color("accent")));
+        let plain = view.render(90, 12, &plain_ui(), false).join("\n");
+        assert!(!plain.contains('\x1b'));
+        assert!(plain.contains("let answer = 42; // comment"));
     }
 }

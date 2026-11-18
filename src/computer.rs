@@ -1851,8 +1851,10 @@ if root.exists():
         let mut next = tokio::spawn({
             let computer = computer.clone();
             async move {
+                // Cleanup is tracked on this host Computer. An omitted
+                // desktop now routes to a separate private-desktop adapter.
                 computer
-                    .perform("ssmcp.computer.not_a_tool", json!({}))
+                    .perform("ssmcp.computer.not_a_tool", json!({"desktop":"host"}))
                     .await
             }
         });
