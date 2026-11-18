@@ -217,6 +217,8 @@ checks 在各原生 runner 上先显式构建 native_plugin_fixture 动态库，
 
 Windows 官方 build job 另运行 `scripts/test_windows_browser_bootstrap.ps1`，使用该 runner 的原生 PowerShell 和隔离 helper fixtures，并上传独立 JSON 证据。这检查下载、版本、哈希与错误路径，不安装真实浏览器依赖，也不等同于所有用户桌面环境的实机验收。报告放在 out，不混入发行附件集合。
 
+同一 Windows 正式发布矩阵还运行 [`scripts/smoke_windows_browser.ps1`](../scripts/smoke_windows_browser.ps1)：只导入生产安装器的依赖函数，在隔离临时目录真实安装官方 Node 24 LTS、Playwright 1.65.1 与 Chromium，再执行一次复用安装。它使用本 job 新构建的客户端核对 `setup browser --native --check --json` 的精确路径，并让 Chromium 无窗口渲染本地页面。父进程以 Windows Job Object 收口自有进程树，结束后恢复用户环境、删除临时依赖；失败、超时或清理异常都阻止该平台通过。独立 JSON 仅记录版本、摘要、架构与检查状态，不记录原环境或 npm 输出。Windows ARM64 的客户端和 Node 必须匹配 ARM64；Chromium 按 Playwright 实际产物运行并记录其 PE 架构，不能把系统支持的 x64 仿真写成原生 ARM64 浏览器。只有对应 Windows runner 的成功报告才算这项真实验证完成；本机语法检查和 Linux fixtures 不替代它。[Playwright 1.65.1 Chromium 下载映射](https://github.com/microsoft/playwright/blob/v1.65.1/packages/playwright-core/src/server/registry/index.ts)
+
 发布依赖顺序如下：
 
 | 包 | 发布责任与校验 |
