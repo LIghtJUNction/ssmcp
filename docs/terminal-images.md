@@ -10,6 +10,16 @@ Image data travels through the PTY using the [Kitty graphics protocol](https://s
 
 When native placement is unavailable, Activity shows a compact **Image attachment** card with the source dimensions and an explicit preview-unavailable note. It does not convert the picture into colored blocks or ASCII art. The same card is used with `NO_COLOR`, tmux and screen in this version. The authorized MCP image block delivered to the caller is unchanged. See [the graphics adapter](../src/client/terminal/images/kitty.rs) and [Activity rendering](../src/client/terminal/events.rs).
 
+## Optional ztty entry on Linux
+
+When a newer ztty binary is installed alongside an older running broker, launching the new binary can still reuse that old broker. The optional repository script creates an independent socket for each launch:
+
+```sh
+./scripts/ssmcp-ztty.sh
+```
+
+It checks `$HOME/.local/bin/ztty` for version 0.2.1 or newer and launches the current `ssmcp` from PATH. `SSMCP_ZTTY` and `SSMCP_LAUNCH_CLIENT` select explicit executable paths. Working directory and client arguments are preserved. Other terminals with working Kitty graphics support can run ssmcp directly.
+
 ## Limits and image ownership
 
 The native image envelope, decoding buffer and retained preview have separate limits. Accepting a larger local attachment does not increase the size of an MCP image block.

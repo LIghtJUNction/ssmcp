@@ -600,13 +600,15 @@ class FilePaste(InputHistory):
         uploads, deletions = len(front.native_uploads), len(front.native_deletions)
         front.send(f"\x1b_Gi={image_id};ENOSPC:owned fixture failure\x1b\\")
         front.until(lambda shot: len(front.native_deletions) > deletions
-                    and any("▀" in row for row in shot["rows"]),
-                    "a native graphics error selects readable cell fallback")
+                    and "Image attachment" in text(shot)
+                    and "Inline preview unavailable" in text(shot),
+                    "a native graphics error selects a readable attachment card")
         self.read_native_image(path, source)
-        front.until(lambda shot: any("▀" in row for row in shot["rows"]),
-                    "subsequent image output remains visible after native failure")
+        front.until(lambda shot: "Image attachment" in text(shot)
+                    and "Inline preview unavailable" in text(shot),
+                    "subsequent images retain attachment cards after native failure")
         self.check(len(front.native_uploads) == uploads,
-                   "native errors stop subsequent PNG encoding/upload while preserving image fallback")
+                   "native errors stop subsequent PNG encoding/upload while retaining attachment cards")
         self.metrics["native_graphics"] = {
             "probes": front.probes, "cell_queries": front.cell_queries,
             "uploads": len(front.native_uploads), "placements": len(front.native_placements),
