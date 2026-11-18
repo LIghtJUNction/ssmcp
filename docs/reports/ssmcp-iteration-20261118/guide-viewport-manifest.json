@@ -1,0 +1,159 @@
+{
+  "schema": "ssmcp.guide-screenshots.v1",
+  "started_at": "2026-11-18T14:42:00.428740+00:00",
+  "status": "passed",
+  "capture_mode": "viewport",
+  "full_page": false,
+  "browser_executable": "/usr/lib/chromium/chromium",
+  "browser_version": "Chromium 157.0.8103.38",
+  "browser_sha256": "9b7ed7e974ffc97f15da26574a92e7cb96e5550b1d17e0b94c215181e16cd1ba",
+  "isolation": {
+    "headless": true,
+    "temporary_profile": true,
+    "temporary_home_xdg": true,
+    "owned_loopback_cdp_only": true,
+    "user_browser_connected": false,
+    "desktop_used": false,
+    "parallel_browser_processes": 1
+  },
+  "cases": [
+    {
+      "name": "english-desktop",
+      "url": "https://ssmcp.lmm.best/guide/en",
+      "viewport": {
+        "width": 1365,
+        "height": 900,
+        "device_scale_factor": 1,
+        "mobile": false
+      },
+      "started_at": "2026-11-18T14:42:01.191872+00:00",
+      "status": "passed",
+      "document": {
+        "title": "Guide · ssmcp",
+        "language": "en",
+        "url": "https://ssmcp.lmm.best/guide/en",
+        "innerWidth": 1365,
+        "innerHeight": 900,
+        "scrollWidth": 1365,
+        "scrollHeight": 4736,
+        "bodyWidth": 1365,
+        "h1": "A bridge from your AI appto the work on your computer.",
+        "stylesheetCount": 1,
+        "background": "rgba(0, 0, 0, 0)",
+        "bodyFont": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", \"Noto Sans CJK SC\", sans-serif",
+        "unresolvedTemplate": false
+      },
+      "screenshot": {
+        "file": "english-desktop.png",
+        "bytes": 104126,
+        "width": 1365,
+        "height": 900,
+        "sha256": "b497da09a55e42ecf21a2ddb24eee86e55410f2dc29e9303e92773ab8805dbf0"
+      },
+      "console": [],
+      "page_errors": [],
+      "network_failures": [],
+      "responses": [
+        {
+          "url": "https://ssmcp.lmm.best/guide/en",
+          "status": 200,
+          "mime_type": "text/html",
+          "type": "Document"
+        },
+        {
+          "url": "https://ssmcp.lmm.best/guide/style.css",
+          "status": 200,
+          "mime_type": "text/css",
+          "type": "Stylesheet"
+        }
+      ],
+      "http_status": 200,
+      "checks": {
+        "http_200": true,
+        "correct_url": true,
+        "correct_language": true,
+        "stylesheet_loaded": true,
+        "viewport_width": true,
+        "no_horizontal_overflow": true,
+        "no_unresolved_template": true,
+        "no_page_errors": true,
+        "no_document_or_style_failures": true,
+        "png_within_native_budget": true,
+        "png_matches_viewport": true
+      },
+      "finished_at": "2026-11-18T14:42:04.215426+00:00"
+    },
+    {
+      "name": "chinese-mobile",
+      "url": "https://ssmcp.lmm.best/guide/zh",
+      "viewport": {
+        "width": 390,
+        "height": 844,
+        "device_scale_factor": 1,
+        "mobile": true
+      },
+      "started_at": "2026-11-18T14:42:04.215457+00:00",
+      "status": "passed",
+      "document": {
+        "title": "使用指南 · ssmcp",
+        "language": "zh-CN",
+        "url": "https://ssmcp.lmm.best/guide/zh",
+        "innerWidth": 390,
+        "innerHeight": 844,
+        "scrollWidth": 390,
+        "scrollHeight": 6021,
+        "bodyWidth": 390,
+        "h1": "把 AI 对话，连接到电脑上的工作。",
+        "stylesheetCount": 1,
+        "background": "rgba(0, 0, 0, 0)",
+        "bodyFont": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", \"Noto Sans CJK SC\", sans-serif",
+        "unresolvedTemplate": false
+      },
+      "screenshot": {
+        "file": "chinese-mobile.png",
+        "bytes": 81833,
+        "width": 390,
+        "height": 844,
+        "sha256": "d33d306f3ec0d8baa87f297fd879a73e5ba0d891ed56bc1b6ed7fdcac96cfd5f"
+      },
+      "console": [],
+      "page_errors": [],
+      "network_failures": [],
+      "responses": [
+        {
+          "url": "https://ssmcp.lmm.best/guide/zh",
+          "status": 200,
+          "mime_type": "text/html",
+          "type": "Document"
+        },
+        {
+          "url": "https://ssmcp.lmm.best/guide/style.css",
+          "status": 200,
+          "mime_type": "text/css",
+          "type": "Stylesheet"
+        }
+      ],
+      "http_status": 200,
+      "checks": {
+        "http_200": true,
+        "correct_url": true,
+        "correct_language": true,
+        "stylesheet_loaded": true,
+        "viewport_width": true,
+        "no_horizontal_overflow": true,
+        "no_unresolved_template": true,
+        "no_page_errors": true,
+        "no_document_or_style_failures": true,
+        "png_within_native_budget": true,
+        "png_matches_viewport": true
+      },
+      "finished_at": "2026-11-18T14:42:05.750040+00:00"
+    }
+  ],
+  "owned_browser_pid": 143242,
+  "owned_browser_exit_code": 0,
+  "browser_stderr_bytes": 4638,
+  "temporary_profile_removed": true,
+  "finished_at": "2026-11-18T14:42:05.784294+00:00",
+  "script_sha256": "4a00a160cd3c3b6932c7b05d82bb5388bbd54101e68e8ae35a0caa64981d8c42"
+}
