@@ -343,7 +343,9 @@ fn prepare(
             Provider::Browser => id.starts_with("ssmcp.browser."),
             Provider::Computer => id.starts_with("ssmcp.computer."),
             Provider::Omarchy => id.starts_with("ssmcp.omarchy."),
-            Provider::Harnesses => id == "ssmcp.harnesses.list",
+            Provider::Harnesses => {
+                matches!(id.as_str(), "ssmcp.harnesses.list" | "ssmcp.harnesses.load")
+            }
             Provider::Workspace => id.starts_with("ssmcp.fs.") || id.starts_with("ssmcp.net."),
             Provider::Context => ["ssmcp.skills.", "ssmcp.agents.", "ssmcp.context."]
                 .iter()
