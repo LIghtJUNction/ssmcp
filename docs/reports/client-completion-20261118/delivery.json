@@ -1,0 +1,10 @@
+{
+  "recorded_at": "2026-11-18T22:21:19.044364+08:00",
+  "status": "validation_complete_delivery_in_progress",
+  "source_revision": "d4eed29657bda8ea5d2de2ac212df69c3fa51e21",
+  "crate_publication_performed": false,
+  "public_service_restart_performed": false,
+  "main_merged": false,
+  "local_install_verified": false,
+  "drive_report_uploaded": false
+}
