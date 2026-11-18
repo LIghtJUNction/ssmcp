@@ -362,9 +362,37 @@ class Harness:
                    == ["Parent rule.\n", "Nested rule.\n"]
                    and result["instruction"]["content"] == "Parent rule.\n",
                    f"{label}: AGENTS resolution keeps parent-to-target order and exact text")
+        resource_files = result["ruleResource"]["files"]
+        native_files = result["rules"]["files"]
+        expected_client = client_id or self.client_id
+        self.check(len(resource_files) == len(native_files),
+                   f"{label}: the instruction resource preserves the native chain length")
+        for resource_file, native_file in zip(resource_files, native_files):
+            parsed = urlsplit(resource_file["readUri"])
+            self.check(resource_file["path"] == native_file["path"]
+                       and parsed.scheme == "ssmcp" and parsed.netloc == "clients"
+                       and parsed.path == f"/{expected_client}/agents/read" and not parsed.fragment
+                       and parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                       == {"root": ["workspace"], "path": [native_file["path"]]},
+                       f"{label}: instruction readUri names the exact client, root and file")
+        readback_code = "return await Promise.all(%s.map(uri => resources.read(uri)));" % json.dumps(
+            [row["readUri"] for row in resource_files]
+        )
+        readback = self.public_call("code_mode", {"code": readback_code})["result"]
+        self.check(len(readback) == len(native_files)
+                   and all(value["contents"] == [{
+                       "uri": resource_file["readUri"], "mimeType": "text/markdown",
+                       "text": native_file["content"],
+                   }] for value, resource_file, native_file in zip(readback, resource_files, native_files)),
+                   f"{label}: every instruction readUri returns the exact original text through SSH")
+        undecorated = []
+        for resource_file in resource_files:
+            native_copy = dict(resource_file)
+            del native_copy["readUri"]
+            undecorated.append(native_copy)
         self.check(result["skillResource"]["skills"][0]["name"] == "ssh-skill"
-                   and result["ruleResource"]["files"] == result["rules"]["files"],
-                   f"{label}: dynamic skill and instruction resources route across actual SSH")
+                   and undecorated == native_files,
+                   f"{label}: dynamic resources preserve all native fields beside their verified readUri")
 
     def read_until(self, pattern, *, cursor=0, timeout=5.0, client_id=None):
         deadline = time.monotonic() + timeout
