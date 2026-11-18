@@ -313,15 +313,19 @@ const bootstrap = `(() => {
       throw new Failure('tools.search requires a client ID of at most 128 UTF-8 bytes');
     }
     if (!options || typeof options !== 'object' || isArray(options)
-        || keys(options).some(key => !['query','limit','include_schemas','cursor','max_pages'].includes(key))) {
-      throw new Failure('tools.search accepts query, limit, include_schemas, cursor and max_pages');
+        || keys(options).some(key => !['query','name_prefix','limit','include_schemas','cursor','max_pages'].includes(key))) {
+      throw new Failure('tools.search accepts query, name_prefix, limit, include_schemas, cursor and max_pages');
     }
     const query = options.query === undefined ? '' : options.query;
+    const namePrefix = options.name_prefix === undefined ? '' : options.name_prefix;
     const limit = options.limit === undefined ? 20 : options.limit;
     const includeSchemas = options.include_schemas === undefined ? false : options.include_schemas;
     const maxPages = options.max_pages === undefined ? 32 : options.max_pages;
     if (typeof query !== 'string' || searchUtf8Bytes(query) > 256) {
       throw new Failure('tools.search query must be a string of at most 256 UTF-8 bytes');
+    }
+    if (typeof namePrefix !== 'string' || !/^[A-Za-z0-9_.-]{0,128}$/u.test(namePrefix)) {
+      throw new Failure('tools.search name_prefix must contain at most 128 registered-name characters: A-Z, a-z, 0-9, _, . or -');
     }
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
       throw new Failure('tools.search limit must be 1..=50');
@@ -333,6 +337,7 @@ const bootstrap = `(() => {
       throw new Failure('tools.search max_pages must be 1..=32');
     }
     const needle = query.trim().toLowerCase();
+    const prefix = namePrefix.toLowerCase();
     let cursor = null, offset = 0, expectedPageHash = null, totalScanned = 0;
     let visited = [];
     if (options.cursor !== undefined && options.cursor !== null) {
@@ -342,10 +347,13 @@ const bootstrap = `(() => {
       let state;
       try { state = parse(options.cursor); }
       catch { throw new Failure('invalid tools.search cursor; restart the search'); }
+      const fields = ['v','client','query','limit','include_schemas','page','offset','page_hash','visited','scanned'];
+      if (prefix) fields.push('name_prefix');
       if (!state || typeof state !== 'object' || isArray(state)
-          || keys(state).length !== 10
-          || keys(state).some(key => !['v','client','query','limit','include_schemas','page','offset','page_hash','visited','scanned'].includes(key))
-          || state.v !== 1 || state.client !== id || state.query !== needle
+          || keys(state).length !== fields.length
+          || keys(state).some(key => !fields.includes(key))
+          || state.v !== (prefix ? 2 : 1) || (prefix && state.name_prefix !== prefix)
+          || state.client !== id || state.query !== needle
           || state.limit !== limit || state.include_schemas !== includeSchemas
           || !searchCursorValid(state.page)
           || !Number.isSafeInteger(state.offset) || state.offset < 0 || state.offset > 64
@@ -368,7 +376,8 @@ const bootstrap = `(() => {
     let itemBytes = 2, pagesRead = 0, scanned = 0;
     const result = (complete, reason, pageHash = null) => {
       const continuation = complete ? null : stringify({
-        v:1, client:id, query:needle, limit, include_schemas:includeSchemas,
+        v:prefix ? 2 : 1, ...(prefix ? {name_prefix:prefix} : {}),
+        client:id, query:needle, limit, include_schemas:includeSchemas,
         page:cursor, offset, page_hash:pageHash, visited, scanned:totalScanned,
       });
       if (continuation !== null && searchUtf8Bytes(continuation) > 12 * 1024) {
@@ -377,6 +386,7 @@ const bootstrap = `(() => {
       const value = {
         tools:matches, nextCursor:continuation, complete, stopped_reason:reason,
         include_schemas:includeSchemas, namespace_source:'registered_tool_name',
+        ...(prefix ? {name_prefix:prefix} : {}),
         stats:{pages_read:pagesRead, tools_scanned:scanned, total_tools_scanned:totalScanned},
       };
       if (searchUtf8Bytes(stringify(value)) > 128 * 1024) {
@@ -420,8 +430,9 @@ const bootstrap = `(() => {
           throw new Failure('tools.search received an invalid native tool descriptor');
         }
         const description = typeof descriptor.description === 'string' ? descriptor.description : '';
-        const match = !needle || descriptor.name.toLowerCase().includes(needle)
-          || description.toLowerCase().includes(needle);
+        const name = descriptor.name.toLowerCase();
+        const match = name.startsWith(prefix)
+          && (!needle || name.includes(needle) || description.toLowerCase().includes(needle));
         if (match) {
           const parts = descriptor.name.split('.');
           // This is the observed routing namespace, not an invented provider ID.

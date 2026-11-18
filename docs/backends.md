@@ -134,18 +134,22 @@ return states;
 
 ### 按需查询目录
 
-`tools.search` 在一次代码调用中读取所需的目录页，只把匹配结果返回给模型。`query` 是名称或描述的不区分大小写子串；默认返回 20 项名称、路由命名空间与短说明。`namespace` 来自实际注册名称前缀，不是额外的权威 provider 字段。指定 `include_schemas:true` 时返回整个原生 descriptor，保留 input/output Schema、注解及扩展字段。[worker 实现](../src/code_mode.js)
+`tools.search` 在一次代码调用中读取所需的目录页，只把匹配结果返回给模型。`query` 是名称或描述的不区分大小写子串；默认返回 20 项名称、路由命名空间与短说明。可选的 `name_prefix` 只匹配实际注册名称的前缀，不区分大小写；同时提供 `query` 时，两项条件都必须满足。这样可查询指定工具族，避免其他工具的长说明因提及同一个词而进入结果。`namespace` 来自实际注册名称前缀，不是额外的权威 provider 字段。指定 `include_schemas:true` 时返回整个原生 descriptor，保留 input/output Schema、注解及扩展字段。[worker 实现](../src/code_mode.js)
 
 ```javascript
 const id = "CLIENT_ID_FROM_LIST";
 return await tools.search(id, {
-  query: "playwright",
+  name_prefix: "ssmcp.exec.",
   limit: 10,
   include_schemas: true
 });
 ```
 
-返回 `nextCursor` 表示还可继续。下一次传入该游标，并保持同一客户端、query、limit 与 schema 模式；这些搜索游标不能直接传给原生 `tools(id,cursor)`。页内续查会重新读取该页并核对 SHA-256，变更时明确要求重新搜索。底层仍保留原有目录快照语义，每页重新经过在线状态与授权校验，没有新增 helper 缓存。
+`name_prefix` 最长 128 字节，只接受注册名称字符 `A–Z`、`a–z`、`0–9`、`_`、`.`、`-`。省略或传空字符串时，搜索结果及 v1 游标保持兼容；非空前缀会规范为小写并返回在结果的 `name_prefix` 中，使用绑定该前缀的 v2 游标。若要只匹配 `ssmcp.exec` 工具族，请保留末尾的 `.`；前缀不支持通配符。
+
+`exec.run` 和 `exec.parallel` 是 JavaScript 便捷函数，不是目录中的原生工具。`exec.run` 组合调用 `ssmcp.exec.start`、`ssmcp.exec.wait` 和 `ssmcp.exec.read`；`wait_ms:0` 时跳过等待。查询参数时可使用上面的工具族前缀，不能将 `ssmcp.exec.run` 当作原生工具名称。
+
+返回 `nextCursor` 表示还可继续。下一次传入该游标，并保持同一客户端、query、name_prefix、limit 与 schema 模式；这些搜索游标不能直接传给原生 `tools(id,cursor)`。页内续查会重新读取该页并核对 SHA-256，变更时明确要求重新搜索。底层仍保留原有目录快照语义，每页重新经过在线状态与授权校验，没有新增 helper 缓存。
 
 一次搜索最多读取 32 页，`max_pages` 可设为 1–32；单条续查链最多经过 128 个不同页和 8,192 个工具。`limit` 为 1–50。结果中的 `complete`、`stopped_reason` 和 `stats` 区分已结束、条数上限、分页预算与输出预算；即使本页没有匹配项，仍应检查 `nextCursor`。
 

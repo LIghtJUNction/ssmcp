@@ -271,3 +271,115 @@ test('the existing total native call budget still applies to search',async()=>{
   failure(record,/exceeds 128 native calls/);
   assert.equal(record.requests.length,128);
 });
+
+test('name_prefix filters registered names before large unrelated descriptions', async () => {
+  const unrelated = descriptor('claude.Agent', 'ssmcp.exec. command execution ' + 'x'.repeat(100000));
+  const start = descriptor('ssmcp.exec.start', 'Start a command');
+  const read = descriptor('ssmcp.exec.read', 'Read command output');
+  const pages = new Map([[null, {tools:[unrelated, start, read]}]]);
+  const record = await run("return await tools.search('one',{name_prefix:'SSMCP.EXEC.',include_schemas:true});", replyPages(pages));
+  success(record);
+  assert.deepEqual(value(record).tools, [start, read], 'excluded descriptions must not consume the item budget');
+  assert.equal(value(record).name_prefix, 'ssmcp.exec.');
+  assert.equal(value(record).complete, true);
+  assert.equal(value(record).stats.tools_scanned, 3);
+});
+
+test('name_prefix intersects the existing name or description query', async () => {
+  const pages = new Map([[null, {tools:[
+    descriptor('ssmcp.exec.start', 'Start an OUTPUT-producing command'),
+    descriptor('ssmcp.exec.output_status', 'Inspect a command'),
+    descriptor('ssmcp.exec.wait', 'Wait for completion'),
+    descriptor('ssmcp.fs.read', 'Read output'),
+  ]}]]);
+  const record = await run("return await tools.search('one',{name_prefix:'ssmcp.exec.',query:' Output '});", replyPages(pages));
+  success(record);
+  assert.deepEqual(value(record).tools.map(item => item.name), ['ssmcp.exec.start', 'ssmcp.exec.output_status']);
+});
+
+test('filtered pagination resumes within and across pages without losing matches', async () => {
+  const pages = new Map([
+    [null, {tools:[descriptor('claude.exec'), descriptor('ssmcp.exec.start'), descriptor('ssmcp.exec.read')], nextCursor:'next'}],
+    ['next', {tools:[descriptor('ssmcp.fs.read'), descriptor('ssmcp.exec.wait')], nextCursor:'last'}],
+    ['last', {tools:[descriptor('ssmcp.exec.status')]}],
+  ]);
+  let cursor = null;
+  const found = [];
+  for (const expectedPage of [null, null, 'next', 'last']) {
+    const record = await run(
+      `return await tools.search('one',${JSON.stringify({name_prefix:'ssmcp.exec.',limit:1,cursor})});`,
+      replyPages(pages));
+    success(record);
+    assert.equal(record.requests[0].cursor, expectedPage);
+    const result = value(record);
+    found.push(...result.tools.map(item => item.name));
+    cursor = result.nextCursor;
+    if (cursor) {
+      const state = JSON.parse(cursor);
+      assert.equal(state.v, 2);
+      assert.equal(state.name_prefix, 'ssmcp.exec.');
+    } else {
+      assert.equal(result.complete, true);
+      assert.equal(result.stats.total_tools_scanned, 6);
+    }
+  }
+  assert.equal(cursor, null);
+  assert.deepEqual(found, ['ssmcp.exec.start', 'ssmcp.exec.read', 'ssmcp.exec.wait', 'ssmcp.exec.status']);
+});
+
+test('filtered continuations bind the prefix and reject mismatches before contacting the host', async () => {
+  const pages = new Map([[null, {tools:[descriptor('ssmcp.exec.start'), descriptor('ssmcp.exec.wait')]}]]);
+  const first = await run("return await tools.search('one',{name_prefix:'ssmcp.exec.',limit:1});", replyPages(pages));
+  success(first);
+  const cursor = value(first).nextCursor;
+  for (const name_prefix of [undefined, '', 'ssmcp.fs.', 'ssmcp.exec']) {
+    const record = await run(
+      `return await tools.search('one',${JSON.stringify({name_prefix,limit:1,cursor})});`,
+      () => assert.fail('a different prefix must not reach the host'));
+    failure(record, /cursor does not match/);
+    assert.equal(record.requests.length, 0);
+  }
+  const resumed = await run(
+    `return await tools.search('one',${JSON.stringify({name_prefix:'SSMCP.EXEC.',limit:1,cursor})});`,
+    replyPages(pages));
+  success(resumed);
+  assert.deepEqual(value(resumed).tools.map(item => item.name), ['ssmcp.exec.wait']);
+});
+
+test('omitted and empty prefixes retain the unfiltered result and v1 cursor contract', async () => {
+  const pages = new Map([[null, {tools:[descriptor('claude.exec'), descriptor('ssmcp.exec.start')]}]]);
+  const omitted = await run("return await tools.search('one',{query:'exec',limit:1});", replyPages(pages));
+  const empty = await run("return await tools.search('one',{query:'exec',name_prefix:'',limit:1});", replyPages(pages));
+  success(omitted);
+  success(empty);
+  assert.deepEqual(value(empty), value(omitted));
+  const cursor = value(omitted).nextCursor;
+  assert.equal(JSON.parse(cursor).v, 1);
+  assert(!Object.hasOwn(JSON.parse(cursor), 'name_prefix'));
+  const resumed = await run(
+    `return await tools.search('one',${JSON.stringify({query:'exec',name_prefix:'',limit:1,cursor})});`,
+    replyPages(pages));
+  success(resumed);
+  assert.deepEqual(value(resumed).tools.map(item => item.name), ['ssmcp.exec.start']);
+  const filtered = await run(
+    `return await tools.search('one',${JSON.stringify({query:'exec',name_prefix:'ssmcp.',limit:1,cursor})});`,
+    () => assert.fail('a v1 cursor cannot be reused with a new filter'));
+  failure(filtered, /cursor does not match/);
+  assert.equal(filtered.requests.length, 0);
+});
+
+test('name_prefix validates type, length and registered-name characters before host requests', async () => {
+  for (const name_prefix of [null, true, 1, [], {}, 'x'.repeat(129), '界', 'ssmcp.exec.*', 'ssmcp exec', ' ssmcp.']) {
+    const record = await run(
+      `return await tools.search('one',${JSON.stringify({name_prefix})});`,
+      () => assert.fail('invalid prefix reached the host'));
+    failure(record, /name_prefix/);
+    assert.equal(record.requests.length, 0);
+  }
+  const name_prefix = 'x'.repeat(128);
+  const record = await run(
+    `return await tools.search('one',${JSON.stringify({name_prefix})});`,
+    replyPages(new Map([[null, {tools:[descriptor(name_prefix)]}]])));
+  success(record);
+  assert.equal(value(record).tools[0].name, name_prefix);
+});
