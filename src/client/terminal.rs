@@ -29,11 +29,13 @@ pub(crate) mod markdown;
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
 const MAX_SESSIONS: usize = 16;
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+const SYNC_END: &[u8] = b"\x1b[?2026l";
 // Rendered cells cost much more than UTF-8 output. Keep a short interactive
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
-const LEAVE: &[u8] = b"\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
+const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
 fn nonzero(value: u16) -> NonZeroU16 {
@@ -2065,6 +2067,29 @@ impl Frame {
     }
 }
 
+// Keep row diffs and native-image changes in one terminal presentation, even
+// when nonblocking output splits the bytes across several drain attempts.
+fn append_frame(
+    output: &mut Vec<u8>,
+    frame: &Frame,
+    previous: Option<&Frame>,
+    before: &str,
+    after: &str,
+) {
+    let diff = frame.diff(previous);
+    if previous.is_some() && before.is_empty() && diff.is_empty() && after.is_empty() {
+        return;
+    }
+    output.extend_from_slice(SYNC_BEGIN);
+    if previous.is_none() {
+        output.extend_from_slice(ENTER);
+    }
+    output.extend_from_slice(before.as_bytes());
+    output.extend_from_slice(&diff);
+    output.extend_from_slice(after.as_bytes());
+    output.extend_from_slice(SYNC_END);
+}
+
 struct RestoringOutput<'a> {
     shared: &'a Shared,
     output: PhysicalOutput,
@@ -2109,7 +2134,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
         wrote: false,
         media: images::Renderer::default(),
     };
-    let mut pending = ENTER.to_vec();
+    let mut pending = Vec::new();
     let mut offset = 0;
     let mut previous = None;
     let mut previous_cell = None;
@@ -2140,9 +2165,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             pending = requests;
             if let Some((frame, media)) = refresh {
                 let (before, after) = output.media.update(media, frame.cursor, frame.hidden);
-                pending.extend_from_slice(before.as_bytes());
-                pending.extend_from_slice(&frame.diff(previous.as_ref()));
-                pending.extend_from_slice(after.as_bytes());
+                append_frame(&mut pending, &frame, previous.as_ref(), &before, &after);
                 previous = Some(frame);
             }
             offset = 0;
@@ -2771,6 +2794,95 @@ mod tests {
             "│"
         );
     }
+    #[test]
+    fn synchronized_frame_includes_initial_clear_rows_and_native_images() {
+        let mut state = State::new(30, 110, &split_ui());
+        state.log(b"complete frame\n");
+        let frame = state.frame(Instant::now());
+        let before = "\x1b_Ga=d,d=I,i=42\x1b\\";
+        let after = "\x1b_Ga=p,i=43,p=1\x1b\\";
+        let mut bytes = Vec::new();
+        append_frame(&mut bytes, &frame, None, before, after);
+        assert!(bytes.starts_with(SYNC_BEGIN));
+        assert!(bytes.ends_with(SYNC_END));
+        let initial_end = SYNC_BEGIN.len() + ENTER.len();
+        assert_eq!(&bytes[SYNC_BEGIN.len()..initial_end], ENTER);
+        assert!(bytes[initial_end..].starts_with(before.as_bytes()));
+        assert!(bytes[..bytes.len() - SYNC_END.len()].ends_with(after.as_bytes()));
+        assert_eq!(
+            bytes
+                .windows(SYNC_BEGIN.len())
+                .filter(|part| *part == SYNC_BEGIN)
+                .count(),
+            1
+        );
+        let mut screen = vt100::Parser::new(nonzero(30), nonzero(110), 0);
+        screen.process(&bytes);
+        assert!(screen.screen().contents().contains("complete frame"));
+        let mut unchanged = Vec::new();
+        append_frame(&mut unchanged, &frame, Some(&frame), "", "");
+        assert!(unchanged.is_empty());
+        assert!(LEAVE.starts_with(SYNC_END));
+    }
+
+    #[test]
+    fn synchronized_frame_remains_open_until_a_split_scroll_write_completes() {
+        let mut state = State::new(30, 110, &split_ui());
+        for index in 0..80 {
+            state.log(format!("scroll row {index:03}\n").as_bytes());
+        }
+        let first = state.frame(Instant::now());
+        state.keyboard(b"\x1b[5~", Instant::now(), false);
+        let next = state.frame(Instant::now());
+        let mut bytes = Vec::new();
+        append_frame(&mut bytes, &next, Some(&first), "", "");
+        assert!(bytes.starts_with(SYNC_BEGIN));
+        assert!(bytes.ends_with(SYNC_END));
+        assert!(!bytes.windows(ENTER.len()).any(|part| part == ENTER));
+
+        struct Backpressure {
+            bytes: Vec<u8>,
+            limit: usize,
+        }
+        impl Write for Backpressure {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let count = bytes.len().min(self.limit);
+                if count == 0 {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                self.bytes.extend_from_slice(&bytes[..count]);
+                self.limit -= count;
+                Ok(count)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut output = Backpressure {
+            bytes: Vec::new(),
+            limit: bytes.len() / 2,
+        };
+        let mut offset = 0;
+        drain(&mut output, &bytes, &mut offset).unwrap();
+        assert!(offset > SYNC_BEGIN.len() && offset < bytes.len() - SYNC_END.len());
+        assert!(
+            !output
+                .bytes
+                .windows(SYNC_END.len())
+                .any(|part| part == SYNC_END)
+        );
+        output.limit = bytes.len();
+        drain(&mut output, &bytes, &mut offset).unwrap();
+        assert_eq!(offset, bytes.len());
+        assert_eq!(output.bytes, bytes);
+        let mut screen = physical(&first);
+        screen.process(&output.bytes);
+        assert_eq!(
+            screen.screen().contents(),
+            physical(&next).screen().contents()
+        );
+    }
+
     #[test]
     fn nonblocking_output_keeps_partial_bytes_for_the_next_frame() {
         struct Partial {
