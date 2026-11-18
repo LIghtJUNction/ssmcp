@@ -663,6 +663,7 @@ impl Geometry {
 }
 
 fn request_interrupt() {
+    crate::client::interface::computer::local_input();
     #[cfg(unix)]
     // SAFETY: this targets only the current process, whose normal signal handler
     // owns graceful shutdown and restoration of the original terminal mode.
@@ -1414,6 +1415,9 @@ impl State {
             self.geometry.log_rows > 0,
             self.ui.layout == Layout::Logs,
         );
+        if !self.preview && (!output.is_empty() || !actions.is_empty()) {
+            crate::client::interface::computer::local_input();
+        }
         let mut layout_changed = false;
         for action in actions {
             if matches!(action, Key::Interrupt) {

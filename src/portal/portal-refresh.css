@@ -1,0 +1,82 @@
+:root {
+  --accent: #a8eed1;
+  --line: #262e34;
+  --surface: #151b20;
+}
+
+body {
+  background: radial-gradient(ellipse at 13% 0%, #142320 0%, transparent 42rem), #0c1115;
+}
+
+.site-header { border-color: #ffffff12; }
+.site-nav { min-height: 70px; }
+.hero { gap: clamp(32px, 7vw, 96px); padding-block: clamp(48px, 8vw, 100px); }
+.hero h1 span { color: #a8b7ba; }
+.hero-copy > .eyebrow, .workspace-header .eyebrow { display: none; }
+.hero-description { line-height: 1.85; }
+
+.account-panel {
+  border: 0;
+  border-radius: 22px;
+  background: #172126;
+  box-shadow: none;
+}
+.account-panel .panel-bar { border: 0; background: transparent; padding-inline: 28px; }
+.account-panel .panel-bar > .eyebrow { visibility: hidden; }
+.account-body { padding: 14px 28px 30px; }
+.account-facts div { border: 0; }
+.account-actions { flex-wrap: wrap; justify-content: flex-start; }
+.account-actions > a { white-space: nowrap; }
+button, .button { border-radius: 9px; }
+button:hover, .button:hover { background: #c7f8e4; }
+
+.traffic-summary { margin-block: 28px; }
+.traffic-summary .account-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px clamp(18px, 3vw, 36px);
+  margin: 16px 0;
+}
+.traffic-summary .account-facts div {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  min-width: 0;
+  text-align: left;
+}
+.traffic-summary .account-facts dd {
+  text-align: left;
+  font-size: clamp(17px, 2vw, 24px);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -.035em;
+}
+.traffic-summary .dashboard-note { margin: 14px 0 0; line-height: 1.75; }
+.traffic-meter {
+  appearance: none;
+  width: 100%;
+  height: 10px;
+  display: block;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #ffffff1a;
+  color: var(--accent);
+}
+.traffic-meter::-webkit-progress-bar { background: #ffffff1a; }
+.traffic-meter::-webkit-progress-value { background: #a8eed1; border-radius: 999px; }
+.traffic-meter::-moz-progress-bar { background: #a8eed1; border-radius: 999px; }
+.traffic-meter-caption { margin-top: 8px; color: var(--accent); font-size: .8rem; }
+.workspace-header { border: 0; }
+.workspace-grid { gap: clamp(28px, 5vw, 64px); }
+#install { display: grid; gap: 16px; }
+#install pre, .terminal { border-color: transparent; border-radius: 12px; }
+#install pre { background: #151c21; }
+#pricing { padding-block: 20px 32px; }
+#pricing > p { margin-top: 10px; color: #a8b7ba; }
+
+@media (max-width: 560px) {
+  .account-panel .panel-bar { padding-inline: 20px; }
+  .account-body { padding-inline: 20px; }
+  .traffic-summary .account-facts { gap: 14px 20px; }
+}

@@ -338,6 +338,16 @@ impl From<Problem> for ApiError {
                 "account_banned",
                 "This account has been banned by the server administrator.",
             ),
+            Problem::TrafficQuotaExceeded => Self::new(
+                StatusCode::PAYMENT_REQUIRED,
+                "traffic_quota_exceeded",
+                "Monthly traffic allowance exhausted. Purchase a package or wait for the next month.",
+            ),
+            Problem::TrafficPeriodMismatch | Problem::TrafficGrantConflict => Self::new(
+                StatusCode::CONFLICT,
+                "traffic_grant_conflict",
+                "The payment month or recorded order does not match. Contact the administrator.",
+            ),
             Problem::Busy => Self::rate(60),
             Problem::Limit => Self::new(
                 StatusCode::CONFLICT,

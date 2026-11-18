@@ -1,5 +1,6 @@
 //! Browser account portal, sharing the MCP gateway's verified GitHub identity provider.
 //! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
+mod commerce;
 mod dashboard;
 mod dashboard_view;
 mod guide;
@@ -7,6 +8,7 @@ mod setup;
 pub(crate) mod store;
 #[cfg(test)]
 mod tests;
+mod traffic;
 mod view;
 
 use crate::{
@@ -49,6 +51,7 @@ pub struct Portal {
     store: Option<Arc<Mutex<Store>>>,
     credentials: Option<Arc<Mutex<crate::device::Credentials>>>,
     management: Option<ManagementClient>,
+    commerce: Option<Arc<crate::commerce::Commerce>>,
 }
 
 #[derive(Default)]
@@ -137,6 +140,9 @@ pub(crate) enum Problem {
     UsernameTaken,
     UsernameBound,
     Banned,
+    TrafficQuotaExceeded,
+    TrafficPeriodMismatch,
+    TrafficGrantConflict,
 }
 impl Problem {
     pub(crate) fn status(self) -> StatusCode {
@@ -144,6 +150,8 @@ impl Problem {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Csrf | Self::Forbidden | Self::Banned => StatusCode::FORBIDDEN,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,
+            Self::TrafficQuotaExceeded => StatusCode::PAYMENT_REQUIRED,
+            Self::TrafficPeriodMismatch | Self::TrafficGrantConflict => StatusCode::CONFLICT,
             Self::Storage
             | Self::ManagementDisabled
             | Self::ManagementUnavailable
@@ -187,6 +195,13 @@ impl Problem {
             }
             Self::UsernameBound => "此 GitHub 账户已有用户名，请使用已绑定的名称连接。",
             Self::Banned => "此账户已被服务器管理员封禁。",
+            Self::TrafficQuotaExceeded => {
+                "本月流量额度不足。服务器流量有限，经常使用请购买流量包。"
+            }
+            Self::TrafficPeriodMismatch => {
+                "订单所属月份已经结束，无法将旧订单流量计入新月份，请联系管理员处理。"
+            }
+            Self::TrafficGrantConflict => "订单到账记录与本次请求不一致，请联系管理员核对。",
         }
     }
 }
@@ -255,6 +270,7 @@ impl Portal {
                 path,
             )?))),
             management: None,
+            commerce: None,
         })
     }
     /// The private socket carries only requests authenticated by this portal's sessions.
@@ -352,6 +368,10 @@ impl Portal {
         result.map_err(|_| Problem::AuditUnavailable)
     }
 
+    pub(crate) fn has_storage(&self) -> bool {
+        self.store.is_some()
+    }
+
     pub(crate) fn enabled(&self, broker: &Broker) -> bool {
         self.store.is_some() && broker.identities.enabled("github")
     }
@@ -425,13 +445,51 @@ pub fn routes() -> Router<Arc<Broker>> {
                 )
             }),
         )
+        .route(
+            "/copy-command.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("portal/copy-command.js"),
+                )
+            }),
+        )
+        .route(
+            "/portal-refresh.css",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                    include_str!("portal/portal-refresh.css"),
+                )
+            }),
+        )
+        .route(
+            "/traffic-meter.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("portal/traffic-meter.js"),
+                )
+            }),
+        )
+        .route(
+            "/client-install-copy.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("portal/client-install-copy.js"),
+                )
+            }),
+        )
         .route("/account/login", post(login))
         .route("/account/logout", post(logout))
+        .route("/account/username", post(register_username))
         .route("/account/keys", post(add_key))
         .route("/account/keys/delete", post(delete_key))
         .merge(guide::routes())
         .merge(setup::routes())
         .merge(dashboard::routes())
+        .merge(commerce::routes())
         .layer(middleware::map_response(security_headers))
 }
 
@@ -445,7 +503,7 @@ async fn security_headers(mut response: Response) -> Response {
         HeaderValue::from_static("nosniff"),
     );
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
+    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
     h.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -455,7 +513,15 @@ async fn security_headers(mut response: Response) -> Response {
 
 async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<Response, Problem> {
     if !broker.portal.enabled(&broker) {
-        return Ok(Html(view::home(None, None, false, false, &broker.public_url)).into_response());
+        return Ok(Html(view::home(
+            None,
+            None,
+            false,
+            false,
+            &broker.public_url,
+            None,
+        ))
+        .into_response());
     }
     let mut new_cookie = None;
     let (_, csrf, subject) = match broker.portal.session(&headers) {
@@ -483,12 +549,31 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         Some(subject) => Some(broker.portal.storage(move |s| s.account(&subject)).await?),
         None => None,
     };
+    let traffic = if let Some(account) = &account {
+        if let Some(management) = &broker.portal.management {
+            let identity = Identity {
+                provider: "github".into(),
+                subject: account.subject.clone(),
+                login: account.github_login.clone(),
+            };
+            management
+                .snapshot(&identity, crate::management::Scope::Own)
+                .await
+                .map_err(|_| Problem::ManagementUnavailable)?
+                .traffic
+        } else {
+            Some(broker.traffic_quota(&account.subject).await?)
+        }
+    } else {
+        None
+    };
     let mut response = Html(view::home(
         account.as_ref(),
         Some(&csrf),
         true,
         broker.portal.management.is_some(),
         &broker.public_url,
+        traffic.as_ref(),
     ))
     .into_response();
     if let Some(raw) = new_cookie {
@@ -853,6 +938,30 @@ async fn logout_inner(
     set_cookie(&mut response, "", 0);
     Ok(response)
 }
+async fn register_username(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
+    let (headers, values) = form(request).await?;
+    only(&values, &["csrf", "username"])?;
+    let (_, subject) = broker
+        .portal
+        .verify(&headers, &values, &broker.public_url)?;
+    let subject = subject.ok_or(Problem::Unauthorized)?;
+    broker
+        .portal
+        .browser
+        .lock()
+        .map_err(|_| Problem::Storage)?
+        .charge(format!("username:{subject}"), 20)?;
+    let username = values["username"].clone();
+    broker
+        .portal
+        .storage(move |store| store.claim_handle(&subject, &username))
+        .await?;
+    Ok(Redirect::to("/#account").into_response())
+}
+
 async fn key_action(
     broker: &Broker,
     headers: &HeaderMap,

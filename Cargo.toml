@@ -139,6 +139,7 @@ include = [
     "/scripts/test_windows_browser_bootstrap.ps1",
     "/scripts/smoke_windows_browser.ps1",
     "/docs/configuration.md",
+    "/docs/commerce.md",
     "/docs/deployment.md",
     "/docs/validation.md",
     "/docs/validation-portal.md",
