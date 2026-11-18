@@ -26,6 +26,14 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show keyboard shortcuts and commands",
     },
     SlashCommand {
+        name: "/exit",
+        description: "Close this frontend and restore the terminal",
+    },
+    SlashCommand {
+        name: "/quit",
+        description: "Close this frontend (alias of /exit)",
+    },
+    SlashCommand {
         name: "/reload",
         description: "Restart this client session; preserve pending requests",
     },

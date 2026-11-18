@@ -229,6 +229,9 @@ async fn preview(ui: Ui, explicit: Option<&Path>) -> crate::Result<()> {
                 }
             }
         }
+        if super::terminal::exit_requested() {
+            break;
+        }
     }
     // Keyboard and compositor guards restore terminal mode on both success and errors.
     Ok(())

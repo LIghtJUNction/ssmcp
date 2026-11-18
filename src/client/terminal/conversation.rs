@@ -3,6 +3,7 @@ use super::*;
 use crate::client::{attachments, composer::Composer, references, steering};
 use serde_json::{Value, json};
 mod canvas;
+mod hints;
 mod history;
 mod login;
 mod questions;
@@ -65,6 +66,7 @@ pub(super) struct Conversation {
     pub(super) content_focus: bool,
     canvas: canvas::Canvas,
     pub(super) logs_open: bool,
+    pub(super) exit_requested: bool,
     tasks: tasks::TaskPanel,
     selected: usize,
     selected_agent: Option<String>,
@@ -420,6 +422,13 @@ impl State {
         let (command, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
         let rest = rest.trim();
         match command {
+            "/exit" | "/quit" => {
+                if !rest.is_empty() {
+                    return Err("Use /exit or /quit without arguments".into());
+                }
+                self.conversation.exit_requested = true;
+                self.notice = Some("Closing this client · restoring the terminal".into());
+            }
             "/help" => {
                 self.conversation.help_scroll = 0;
                 self.help = true;
@@ -649,6 +658,15 @@ impl State {
     }
 
     fn chat_submit(&mut self) {
+        // Exit is local even while editing a queued request or waiting for an acknowledgement.
+        let text = self.conversation.composer.text().to_owned();
+        if matches!(text.split_whitespace().next(), Some("/exit" | "/quit")) {
+            if let Err(error) = self.chat_command(text.trim()) {
+                self.notice = Some(error);
+            }
+            self.dirty = true;
+            return;
+        }
         if self.chat_wait_for_input() {
             return;
         }
@@ -896,13 +914,23 @@ impl State {
             });
             return;
         }
-        if self.conversation.logs_open {
-            if matches!(key, Key::Back | Key::Open) {
-                self.canvas_move(if matches!(key, Key::Back) { -1 } else { 1 });
+        if self.conversation.logs_open && !self.help {
+            let scrolling = match key {
+                Key::AuditUp | Key::AuditDown | Key::Home | Key::End => {
+                    self.conversation.content_focus
+                }
+                Key::Up | Key::Down | Key::HistoryStart | Key::HistoryEnd | Key::Filter => true,
+                Key::Mouse {
+                    button,
+                    release: false,
+                    ..
+                } => button & 64 != 0,
+                _ => false,
+            };
+            if scrolling {
+                self.logs_key(key);
                 return;
             }
-            self.logs_key(key);
-            return;
         }
         if !self.help && matches!(key, Key::Back | Key::Open) {
             let editor = if self.conversation.view == View::Questions {
@@ -1135,10 +1163,13 @@ impl State {
                 self.notice = Some("Cancel a task explicitly with /tasks cancel ID".into());
             }
             Key::Delete => {
+                if self.conversation.view == View::Logs {
+                    self.conversation.content_focus = false;
+                }
                 self.conversation.composer.delete();
             }
             Key::Newline => {
-                if self.conversation.view == View::Tasks {
+                if matches!(self.conversation.view, View::Tasks | View::Logs) {
                     self.conversation.content_focus = false;
                 }
                 self.conversation.composer.insert("\n");
@@ -1225,10 +1256,6 @@ impl State {
 
     fn chat_escape(&mut self) {
         self.dirty = true;
-        if self.conversation.logs_open {
-            self.logs_toggle();
-            return;
-        }
         if self.conversation.view == View::Questions && !self.help {
             self.question_key(Key::Escape);
             return;
@@ -1243,6 +1270,10 @@ impl State {
             self.help = false;
             self.conversation.content_focus = false;
             self.notice = None;
+            return;
+        }
+        if self.conversation.logs_open {
+            self.logs_close_restore();
             return;
         }
         if self.conversation.view == View::Tasks {
@@ -1302,16 +1333,6 @@ impl State {
             }
             return;
         }
-        if self.conversation.logs_open {
-            if character == '\u{1b}' {
-                self.logs_toggle();
-                return;
-            }
-            if character.is_control() {
-                return;
-            }
-            self.logs_toggle();
-        }
         if self.help {
             if character == '\u{1b}' {
                 self.chat_escape();
@@ -1346,7 +1367,7 @@ impl State {
         {
             self.chat_change_view(View::Activity);
         }
-        if self.conversation.view == View::Tasks
+        if matches!(self.conversation.view, View::Tasks | View::Logs)
             && self.conversation.content_focus
             && matches!(
                 character,
@@ -2328,6 +2349,7 @@ impl State {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
+                    if let Some(hint) = self.chat_contextual_hint(status) { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::Tasks {
@@ -2537,10 +2559,7 @@ impl State {
             geometry: g,
             rows,
             cursor,
-            hidden: self.conversation.logs_open
-                || self.help
-                || self.conversation.content_focus
-                || prompt_rows(g.rows) == 0,
+            hidden: self.help || self.conversation.content_focus || prompt_rows(g.rows) == 0,
             application_cursor: false,
             application_keypad: false,
             bracketed_paste: true,
@@ -3196,7 +3215,7 @@ mod tests {
         });
         for view in [View::Agents, View::Queue] {
             let mut state = preview(18, 120);
-            state.conversation.view = view;
+            state.canvas_focus(view);
             state.conversation.content_focus = true;
             state.conversation.selected = 15;
             let rows = state.chat_list_rows(&data, body_rows(state.geometry.rows));
@@ -3224,7 +3243,7 @@ mod tests {
                 "subtitle selects its visible item"
             );
             state.chat_key(Key::Mouse {
-                button: 2,
+                button: 0,
                 x: 1,
                 y: body_top(state.geometry.rows),
                 release: false,
@@ -3235,6 +3254,13 @@ mod tests {
                 "list header is not an entry"
             );
             assert!(!state.conversation.detail);
+            state.chat_key(Key::Mouse {
+                button: 2,
+                x: 1,
+                y: body_top(state.geometry.rows),
+                release: false,
+            });
+            assert_eq!(state.conversation.view, View::Logs);
             assert!(state.conversation.logs_open);
             state.chat_key(Key::Mouse {
                 button: 2,
@@ -3248,6 +3274,7 @@ mod tests {
                 "prompt border is not an entry"
             );
             assert!(!state.conversation.logs_open);
+            assert_eq!(state.conversation.view, view);
         }
     }
 
@@ -4243,5 +4270,104 @@ mod tests {
                 .contains("conversation  2/8")
         );
         assert!(!conversation.contains("A quieter workspace"));
+    }
+    #[test]
+    fn logs_editor_stays_in_its_column_and_commands_target_that_column() {
+        let mut state = preview(36, 120);
+        state.canvas_focus(View::Audit);
+        state.conversation.target = Some("example-builder".into());
+        state.conversation.composer.set_text("abc");
+        state.conversation.composer.home();
+        state.conversation.composer.right();
+        state.logs_open();
+        input(&mut state, b"\t");
+        assert!(!state.conversation.content_focus);
+        state.chat_key(Key::Open);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert_eq!(state.conversation.composer.cursor(), 2);
+        input(&mut state, b"d");
+        assert_eq!(state.conversation.composer.text(), "abdc");
+        assert!(!display(&mut state).screen().hide_cursor());
+        state.chat_key(Key::CanvasRight);
+        assert_eq!(state.conversation.view, View::Tasks);
+        state.chat_key(Key::CanvasLeft);
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Audit);
+        assert_eq!(state.conversation.composer.text(), "abdc");
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-builder")
+        );
+
+        state.logs_open();
+        state.conversation.composer.set_text("ab");
+        state.conversation.composer.home();
+        state.conversation.content_focus = true;
+        state.chat_key(Key::Delete);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "b");
+        state.conversation.content_focus = true;
+        state.chat_key(Key::Newline);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "\nb");
+        assert!(!display(&mut state).screen().hide_cursor());
+        state.conversation.composer.set_text("");
+        input(&mut state, b"/close\r");
+        assert!(
+            !state.conversation.canvas.snapshot()["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|column| column == "Logs")
+        );
+        state.chat_command("/logs").unwrap();
+        input(&mut state, b"/new chat\r");
+        assert_eq!(state.conversation.view, View::Activity);
+        let canvas = state.conversation.canvas.snapshot();
+        let columns = canvas["columns"].as_array().unwrap();
+        let logs = columns.iter().position(|column| column == "Logs").unwrap();
+        assert_eq!(columns[logs + 1], "Tasks");
+        assert_eq!(canvas["active"].as_u64().unwrap() as usize, logs + 2);
+    }
+
+    #[test]
+    fn exit_aliases_request_local_cleanup_without_publishing_a_message() {
+        for command in ["/exit", "/quit"] {
+            for pending in 0..3 {
+                let mut state = preview(36, 120);
+                state.events.set_scope(events::EventScope::Conversation);
+                if pending > 0 {
+                    state.conversation.editing = Some("pending-edit".into());
+                }
+                if pending > 1 {
+                    state.conversation.submitting =
+                        Some(("pending-request".into(), "pending-command".into()));
+                }
+                let editing = state.conversation.editing.clone();
+                let submitting = state.conversation.submitting.clone();
+                let before = state.events.snapshot();
+                input(&mut state, format!("{command} extra\r").as_bytes());
+                assert!(!state.conversation.exit_requested);
+                assert!(
+                    state
+                        .notice
+                        .as_deref()
+                        .unwrap()
+                        .contains("without arguments")
+                );
+                assert_eq!(
+                    state.conversation.composer.text(),
+                    format!("{command} extra")
+                );
+                state.conversation.composer.set_text("");
+                input(&mut state, format!("{command}\r").as_bytes());
+                assert!(state.conversation.exit_requested);
+                assert_eq!(state.events.snapshot(), before);
+                assert_eq!(state.conversation.editing, editing);
+                assert_eq!(state.conversation.submitting, submitting);
+            }
+        }
     }
 }

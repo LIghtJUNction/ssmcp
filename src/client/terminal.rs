@@ -111,7 +111,7 @@ impl Session {
                     let handle = tokio::runtime::Handle::try_current().ok()?;
                     let display = Arc::downgrade(&shared);
                     Some(handle.spawn(async move {
-                        // Keep networking and QR encoding outside the compositor lock.
+                        // Keep guide route discovery outside the compositor lock.
                         let Some(guide) = guide::Guide::resolve(&url).await else {
                             return;
                         };
@@ -174,6 +174,18 @@ impl Drop for Session {
 
 pub(crate) fn active() -> bool {
     shared().is_some_and(|shared| shared.alive.load(Ordering::Acquire))
+}
+
+/// A local command requests normal frontend cleanup; it does not signal other processes.
+pub(crate) fn exit_requested() -> bool {
+    shared().is_some_and(|shared| {
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .conversation
+            .exit_requested
+    })
 }
 
 /// Wake the display after asynchronous local discovery without publishing a log.
@@ -474,7 +486,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
             "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
             "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":conversation::body_rows(g.rows),"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
             "input":{"row":conversation::prompt_top(g.rows)+1,"col":0,"rows":conversation::prompt_rows(g.rows),"cols":g.left,"visible":chat && conversation::prompt_rows(g.rows)>0}},
-        "focus":if chat && state.conversation.logs_open {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
+        "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
@@ -1421,6 +1433,9 @@ impl State {
             self.keyboard.paste_last_input = Some(now);
         }
         let filtered = self.graphics.input(bytes, now, flush);
+        for id in self.graphics.take_rejected_images() {
+            self.events.reject_image(id);
+        }
         self.dirty |= self.graphics.take_changed();
         let bytes = filtered.as_slice();
         if self.ui.layout == Layout::Chat {
@@ -1831,16 +1846,8 @@ impl State {
             mouse_capture: !self.selection,
         }
     }
-    fn guide_rows(&mut self, width: u16, height: u16, row: u16, col: u16) -> Vec<String> {
-        let Some(guide) = self.guide.as_ref() else {
-            return Vec::new();
-        };
-        let (rows, placement) =
-            guide.rows(width, height, &self.ui, self.graphics.cell(), (row, col));
-        if let Some(placement) = placement {
-            self.media.push(placement);
-        }
-        rows
+    fn guide_rows(&mut self, width: u16, height: u16, _row: u16, _col: u16) -> Vec<String> {
+        guide::pet_rows(width, height, &self.ui)
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
         if !self.ui.color {
@@ -2367,7 +2374,97 @@ mod tests {
         parser
     }
     #[test]
+    fn rejected_native_image_keeps_other_images_and_future_uploads_available() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let source = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            16,
+            16,
+            image::Rgba([30, 120, 210, 255]),
+        ));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let block = serde_json::json!({
+            "type":"image", "mimeType":"image/png",
+            "data":STANDARD.encode(bytes.into_inner()),
+        });
+        let ui = Ui {
+            layout: Layout::Chat,
+            color: true,
+            sidebar: false,
+            ..Ui::default()
+        };
+        let mut state = State::new(40, 100, &ui);
+        state.graphics = images::Graphics::probe_for_test();
+        let now = Instant::now();
+        assert!(
+            state
+                .keyboard(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false)
+                .is_empty()
+        );
+        let rejected = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        let rejected_id = rejected.native.as_ref().unwrap().id();
+        state.image(rejected, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
+        let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        state.image(retained, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
+        let before = state.frame(now);
+        assert_eq!(state.media.len(), 2);
+        let mut media = images::Renderer::default();
+        media.update(
+            std::mem::take(&mut state.media),
+            before.cursor,
+            before.hidden,
+        );
+        media.complete();
+
+        let rejection =
+            format!("\x1b_Gi={rejected_id};E2BIG:image exceeds decoded size limit\x1b\\");
+        assert!(state.keyboard(rejection.as_bytes(), now, false).is_empty());
+        assert!(state.graphics.prepare_native());
+        let after = state.frame(now);
+        assert_eq!(
+            state.media.len(),
+            1,
+            "only the rejected image loses its placement"
+        );
+        assert!(
+            physical(&after)
+                .screen()
+                .contents()
+                .contains("Low-resolution thumbnail")
+        );
+        let (delete, _) =
+            media.update(std::mem::take(&mut state.media), after.cursor, after.hidden);
+        assert!(delete.contains(&format!("a=d,d=I,i={rejected_id},")));
+
+        let next = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        assert!(next.native.is_some());
+        let next_id = next.native.as_ref().unwrap().id();
+        state.image(next, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
+        let final_frame = state.frame(now);
+        assert_eq!(state.media.len(), 2);
+        let (_, upload) = media.update(
+            std::mem::take(&mut state.media),
+            final_frame.cursor,
+            final_frame.hidden,
+        );
+        assert!(upload.contains(&format!("a=t,t=d,f=100,i={next_id},")));
+        assert!(!upload.contains(&format!("a=t,t=d,f=100,i={rejected_id},")));
+    }
+
+    #[test]
     fn selection_freeze_releases_native_placements_when_cell_measurement_expires() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
         let ui = Ui {
             layout: Layout::Chat,
             color: true,
@@ -2377,16 +2474,32 @@ mod tests {
             ..Ui::default()
         };
         let mut state = State::new(30, 120, &ui);
-        state.guide = guide::Guide::from_endpoint("https://ssmcp.lmm.best/mcp");
-        state.guide.as_ref().unwrap().prepare_for_test();
         state.graphics = images::Graphics::probe_for_test();
         let now = Instant::now();
         assert!(
             state
                 .graphics
-                .input(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false,)
+                .input(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false)
                 .is_empty()
         );
+        let source = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            16,
+            16,
+            image::Rgba([30, 120, 210, 255]),
+        ));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let block = serde_json::json!({
+            "type":"image", "mimeType":"image/png",
+            "data":STANDARD.encode(bytes.into_inner()),
+        });
+        let image = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        state.image(image, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         state.selection = true;
         let before = state.frame(now);
         let previous_cell = state.graphics.cell();
@@ -2399,10 +2512,9 @@ mod tests {
         );
         assert!(
             upload.contains("a=p"),
-            "the frame has an actual native QR placement"
+            "the frame has an actual user image placement"
         );
         media.complete();
-        assert!(screen.screen().contents().contains("Scan for the guide"));
         state.dirty = true;
         assert!(
             !state.should_redraw(Some(&before), previous_cell),
@@ -2422,14 +2534,12 @@ mod tests {
         );
         assert!(!output.contains("a=p"));
         screen.process(&after.diff(Some(&before)));
-        assert!(screen.screen().contents().contains("Online guide"));
         assert!(
             screen
                 .screen()
                 .contents()
-                .contains("https://ssmcp.lmm.best/guide/")
+                .contains("Low-resolution thumbnail")
         );
-        assert!(!screen.screen().contents().contains("Scan for the guide"));
     }
 
     #[test]

@@ -1,0 +1,153 @@
+{
+  "status": "passed",
+  "binaries": {
+    "ssmcp": "a8b76a1c650fcb3ea162d15dc81c20907f1e6194865b8d339ea1a23bc7f63450",
+    "ssmcpd": "eb64d08781a8708f84cca889d282ba85d6313e4371384e199894977745d6b593",
+    "vt_snapshot": "4d8191654adb5d9ae8e0f3b1637c751f68623e14ec06f13a1362c3377f21fade",
+    "ztty": "5e1f6d111b7840ccbb2526bc253d7b75ab0a3f1d68f20685a8e74988f384607b"
+  },
+  "terminal": {
+    "path": "/home/lightjunction/.local/bin/ztty",
+    "version": "ztty 0.2.1",
+    "sha256": "5e1f6d111b7840ccbb2526bc253d7b75ab0a3f1d68f20685a8e74988f384607b"
+  },
+  "transport": "candidate ssmcp directly in an owned ztty PTY",
+  "display": "private Xvfb",
+  "pixels": "X11 window readback",
+  "checks": [
+    "effective sshd config permits public keys only",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "real graphics and cell-size replies do not enter the composer",
+    "fixture colors are absent before native image upload",
+    "native-grid.png remains an unchanged real MCP image block",
+    "native ztty pixels preserve the complete single-pixel 128 x 64 grid",
+    "help removes the image placement",
+    "returning to Activity restores the cached native image",
+    "new text scrolls the earlier image out without leaving an overlay",
+    "scrolling back restores the image at its current event position",
+    "native-grid.png remains an unchanged real MCP image block",
+    "native image is redrawn after an actual terminal resize",
+    "resized image pixels remain inside Activity, above the composer",
+    "clearing Activity removes native image pixels",
+    "native-grid.png remains an unchanged real MCP image block",
+    "an image can be displayed again after cache cleanup",
+    "native-tall.png remains an unchanged real MCP image block",
+    "2400-pixel-tall image opens with pixel-exact text and 1px details at the top",
+    "a new tall image pauses at its heading with more image rows below",
+    "later activity does not move a reader inspecting the tall image",
+    "the top image crop survives later activity",
+    "new activity keeps the native image at the same screen position",
+    "scrolling selects an interior source interval",
+    "scrolling preserves pixel-exact interior text and 1px details",
+    "scrolling a tall image preserves its horizontal scale",
+    "Ctrl+End reveals the pixel-exact bottom of the long image",
+    "the width-fitting fixture stays within ztty's decoded-image budget",
+    "native-width-fit.png remains an unchanged real MCP image block",
+    "wide source fits Activity width and retains visible text and 1px details",
+    "width fitting leaves the long image scrollable",
+    "the width-fitted image reaches the Activity edge without overflow",
+    "width-fitted source cropping preserves text and single display pixels",
+    "width-fitted scrolling keeps a constant scale",
+    "the rejection fixture exceeds ztty's decoded-image budget",
+    "native-over-terminal-limit.png remains an unchanged real MCP image block",
+    "terminal rejection releases the rejected payload while retaining its image event",
+    "the rejected image does not leave a native width-fitted placement",
+    "native-grid.png remains an unchanged real MCP image block",
+    "a later small image remains pixel-exact native after a terminal rejection",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "actual client reload leaves no old image placement",
+    "the new session's capability probe also leaves the draft empty"
+  ],
+  "metrics": {
+    "native_grid_origin": [
+      72,
+      112
+    ],
+    "cell_pixels": [
+      10,
+      25
+    ],
+    "tall_image": {
+      "source_pixels": [
+        600,
+        2400
+      ],
+      "top_origin": [
+        72,
+        87
+      ],
+      "interior_origin": [
+        72,
+        37
+      ],
+      "interior_source_y": 575,
+      "initial_following": false,
+      "ctrl_end_following": true
+    },
+    "width_fitted_image": {
+      "source_pixels": [
+        2280,
+        1728
+      ],
+      "display_pixels": [
+        1140,
+        864
+      ],
+      "top_origin": [
+        72,
+        87
+      ],
+      "interior_origin": [
+        72,
+        37
+      ],
+      "interior_display_y": 250
+    },
+    "terminal_rejection": {
+      "source_pixels": [
+        2280,
+        2400
+      ],
+      "source_rgba_bytes": 21888000,
+      "ztty_default_decoded_limit_bytes": 16777216,
+      "rejected_native_cache_bytes": 0,
+      "subsequent_small_native_origin": [
+        72,
+        112
+      ],
+      "same_client_session": true
+    }
+  },
+  "duration_seconds": 13.588
+}

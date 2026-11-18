@@ -1,22 +1,16 @@
-//! A public guide link and cached QR matrices. No I/O or encoding during redraw.
-use super::super::{account, ui::Ui};
-use super::images::{CellSize, Placement};
-use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
+//! Public guide links and same-origin route checks, plus the local ASCII footer.
+use super::super::account;
 use reqwest::Url;
-use std::{sync::Arc, time::Duration};
-use unicode_width::UnicodeWidthStr;
+use std::time::Duration;
 
-mod native;
+mod pet;
+pub(super) use pet::rows as pet_rows;
 
-const QUIET: i32 = 4;
-const STATUS_ROWS: usize = 8;
 const MAX_URL_BYTES: usize = 512;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) struct Guide {
     url: String,
-    // Prefer Medium; Low is a compact fallback for a narrower sidebar.
-    codes: native::Cache,
 }
 
 impl Guide {
@@ -47,25 +41,7 @@ impl Guide {
     }
 
     fn new(url: String) -> Self {
-        let segments = QrSegment::make_segments(&url);
-        let codes = [QrCodeEcc::Medium, QrCodeEcc::Low]
-            .into_iter()
-            .filter_map(|ecc| {
-                QrCode::encode_segments_advanced(
-                    &segments,
-                    ecc,
-                    Version::MIN,
-                    Version::new(5),
-                    None,
-                    true,
-                )
-                .ok()
-            })
-            .collect();
-        Self {
-            url,
-            codes: native::Cache::new(codes),
-        }
+        Self { url }
     }
 
     /// The established portal is usable while a live session checks the newer route.
@@ -103,87 +79,12 @@ impl Guide {
         &self.url
     }
 
-    #[cfg(test)]
-    pub(super) fn prepare_for_test(&self) {
-        self.codes.prepare_for_test();
-    }
-
     pub(super) fn url_lines(&self, width: u16) -> Vec<&str> {
         self.url
             .as_bytes()
             .chunks(usize::from(width.max(1)))
             .map(|bytes| std::str::from_utf8(bytes).expect("serialized origin is ASCII"))
             .collect()
-    }
-
-    /// Complete footer rows and an optional, wholly visible native QR. The
-    /// terminal must report graphics support and actual cell dimensions first.
-    pub(super) fn rows(
-        &self,
-        width: u16,
-        height: u16,
-        ui: &Ui,
-        cell: Option<CellSize>,
-        origin: (u16, u16),
-    ) -> (Vec<String>, Option<Placement>) {
-        if width == 0 || height == 0 {
-            return (Vec::new(), None);
-        }
-        let links = self.url_lines(width);
-        let available = usize::from(height);
-        let image_rows = available.saturating_sub(STATUS_ROWS + 1 + links.len()) as u16;
-        let code = cell.filter(|_| ui.color).and_then(|cell| {
-            // A fitting, confirmed terminal is the only path that requests
-            // PNG preparation. The first frame keeps the URL while the bounded
-            // cache worker encodes outside the input/display lock.
-            self.codes.image(width, image_rows, cell).and_then(|image| {
-                image
-                    .layout(width, image_rows, cell)
-                    .map(|bounds| (image, bounds))
-            })
-        });
-        if code.is_none() && 1 + links.len() > available {
-            return (vec![line("Guide · F1 for URL", width, ui, "muted")], None);
-        }
-        let mut rows = vec![line(
-            if code.is_some() {
-                "Scan for the guide"
-            } else {
-                "Online guide · F1"
-            },
-            width,
-            ui,
-            "heading",
-        )];
-        if let Some((_, bounds)) = code {
-            rows.extend((0..bounds.rows).map(|_| line("", width, ui, "foreground")));
-        }
-        rows.extend(links.into_iter().map(|text| line(text, width, ui, "muted")));
-        let placement = code.and_then(|(image, bounds)| {
-            let row = origin
-                .0
-                .checked_add(height.saturating_sub(rows.len() as u16))?
-                .checked_add(1)?;
-            let col = origin
-                .1
-                .checked_add(width.saturating_sub(bounds.columns) / 2)?;
-            bounds.placement(Arc::clone(image), row, col, 0, bounds.rows)
-        });
-        (rows, placement)
-    }
-}
-
-fn line(text: &str, width: u16, ui: &Ui, color: &str) -> String {
-    let text = super::fit(text, width);
-    let padding = " ".repeat(usize::from(width).saturating_sub(text.width()));
-    if ui.color {
-        format!(
-            "\x1b[{};{}m{text}{padding}\x1b[0m",
-            ui.background(),
-            ui.color(color)
-        )
-    } else {
-        format!("{text}{padding}")
     }
 }
 
@@ -269,19 +170,7 @@ mod tests {
             ] {
                 assert!(!headers.contains(forbidden), "request leaked {forbidden}");
             }
-            let shown = guide
-                .rows(
-                    80,
-                    5,
-                    &Ui {
-                        color: false,
-                        ..Ui::default()
-                    },
-                    None,
-                    (0, 0),
-                )
-                .0;
-            assert!(shown.iter().any(|row| row.trim_end() == guide.url()));
+            assert_eq!(guide.url_lines(80).concat(), guide.url());
         }
     }
 
@@ -339,94 +228,18 @@ mod tests {
         assert_eq!(guide.url(), format!("{origin}/"));
     }
 
-    fn ready_guide(endpoint: &str) -> Option<Guide> {
-        let guide = Guide::from_endpoint(endpoint)?;
-        guide.prepare_for_test();
-        Some(guide)
-    }
-
     #[test]
-    fn supported_default_footer_places_whole_square_pixels_inside_its_rows() {
-        let guide = ready_guide("https://ssmcp.lmm.best/mcp").unwrap();
-        let (rows, placement) = guide.rows(
-            37,
-            29,
-            &Ui::default(),
-            Some(CellSize {
-                width: 8,
-                height: 16,
-            }),
-            (0, 0),
-        );
-        assert_eq!(rows.len(), 21);
-        assert!(rows.join("\n").contains(guide.url()));
-        assert!(!rows.iter().any(|row| row.contains(['█', '▀', '▄'])));
-        let (_, wire) = super::super::images::Renderer::default().update(
-            vec![placement.expect("a supported 120x30 terminal has room for the QR")],
-            (0, 0),
-            true,
-        );
-        assert!(wire.contains("a=t,t=d,f=100"));
-        assert!(wire.contains("w=296,h=296"));
-        assert!(wire.contains("\x1b[10;1H"));
-        assert!(
-            !wire.contains(",c=") && !wire.contains(",r="),
-            "QR pixels are never scaled"
-        );
-    }
-
-    #[test]
-    fn unsupported_small_or_uncolored_sidebars_keep_complete_links_without_a_partial_qr() {
-        let guide = ready_guide("https://ssmcp.lmm.best/alice").unwrap();
-        let cell = Some(CellSize {
-            width: 8,
-            height: 16,
-        });
-        let mono = Ui {
-            color: false,
-            ..Ui::default()
-        };
-        for (width, height, ui, graphics) in [
-            (30, 29, Ui::default(), cell),
-            (37, 20, Ui::default(), cell),
-            (37, 29, mono, cell),
-            (37, 29, Ui::default(), None),
-        ] {
-            let (rows, placement) = guide.rows(width, height, &ui, graphics, (0, 0));
-            assert!(placement.is_none());
-            let mut parser = vt100::Parser::new(
-                super::super::nonzero(rows.len() as u16),
-                super::super::nonzero(width),
-                0,
+    fn full_public_links_remain_available_without_graphics() {
+        let guide = Guide::from_endpoint("https://ssmcp.lmm.best/private-user").unwrap();
+        for width in [0, 1, 12, 80] {
+            let lines = guide.url_lines(width);
+            assert_eq!(lines.concat(), guide.url());
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| line.len() <= usize::from(width.max(1)))
             );
-            parser.process(rows.join("\r\n").as_bytes());
-            assert!(parser.screen().contents().contains(guide.url()));
-            assert!(!rows.iter().any(|row| row.contains(['█', '▀', '▄'])));
-            if !ui.color {
-                assert!(!rows.iter().any(|row| row.contains('\x1b')));
-            }
         }
-        assert!(guide.rows(33, 29, &Ui::default(), cell, (0, 0)).1.is_some());
-        let long =
-            Guide::from_endpoint(&format!("https://{}.example/alice", "a".repeat(60))).unwrap();
-        let (rows, placement) = long.rows(
-            20,
-            25,
-            &Ui {
-                color: false,
-                ..Ui::default()
-            },
-            None,
-            (0, 0),
-        );
-        assert!(placement.is_none());
-        assert_eq!(
-            rows.iter()
-                .skip(1)
-                .map(|row| row.trim_end())
-                .collect::<String>(),
-            long.url()
-        );
-        assert!(guide.rows(0, 20, &Ui::default(), cell, (0, 0)).0.is_empty());
+        assert_eq!(guide.portal().url(), "https://ssmcp.lmm.best/");
     }
 }

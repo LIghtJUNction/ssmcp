@@ -363,7 +363,7 @@ impl Runtime {
                 return content(
                     uri,
                     "text/markdown",
-                    include_str!("../../skills/ssmcp/SKILL.md").into(),
+                    crate::context::BUILTIN_SSMCP_SKILL.into(),
                 );
             }
             "capabilities" => return json_content(uri, self.client_capabilities()?),
@@ -547,7 +547,7 @@ Read ssmcp://clients/{id}/context for configured context roots, /skills for skil
  an instruction path. Follow nextUri to continue a page without changing its cursor. Every \
  read fetches the current files from the client; no build-time or server-side file cache is used. \
  context.roots, skills.list/read/view and agents.list/read/resolve expose the same native views \
- in code_mode without invoking a model. Additional --context-root directories are explicit, \
+ in code_mode without invoking a model. Installed global skill directories and linked packages grant skills only; additional --context-root directories are explicit, \
  read-only context sources; they do not expand filesystem write access.\n\n\
 Use fs.readText for bounded UTF-8 text with byte offsets and next_offset, fs.writeText to \
  create or explicitly overwrite text, and fs.editText for one exact literal replacement. \

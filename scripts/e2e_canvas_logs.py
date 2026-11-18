@@ -33,13 +33,13 @@ def column(shot):
     # neighbors also occur in the breadcrumb, so text containment is ambiguous.
     header = shot["rows"][0].partition("ssmcp  /  ")[2].split("  /  ", 1)[0]
     match = re.search(
-        r"\b(agents|conversation|code audit|queue|questions|history)\s+(\d+)/(\d+)\b",
-        header,
+        r"\b(agents|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
+        header, re.IGNORECASE,
     )
     if not match:
         return None
     name, position, count = match.groups()
-    return name, int(position), int(count)
+    return name.lower(), int(position), int(count)
 
 
 def view(shot, name):
@@ -48,7 +48,7 @@ def view(shot, name):
 
 
 def logs_open(shot):
-    return shot["rows"][0].partition("ssmcp  /  ")[2].startswith("Logs")
+    return view(shot, "logs")
 
 
 def mouse(button, *, release=False, x=8, y=4):
@@ -99,6 +99,7 @@ def run(binary, decoder, output, checks):
             check(DIAGNOSTIC not in text(initial),
                   "background diagnostics do not appear in the conversation")
             initial_count = column(initial)[2]
+            check(initial_count == 8, "the main workflow starts with all eight logical columns")
             save_shot(output, "canvas-conversation", initial)
 
             draft = "canvas draft 界"
@@ -254,10 +255,10 @@ def run(binary, decoder, output, checks):
                   and preview.process.poll() is None,
                   "/new and /close extend and shrink the canvas without ending the session")
             preview.send(ALT_RIGHT * 8)
-            final = preview.until(lambda shot: view(shot, "history"), "last logical column")
+            final = preview.until(lambda shot: view(shot, "tasks"), "last logical column")
             preview.send(ALT_RIGHT)
             bounded_right = snapshot(preview)
-            check(view(bounded_right, "history") and column(bounded_right)[1] == column(bounded_right)[2]
+            check(view(bounded_right, "tasks") and column(bounded_right)[1] == column(bounded_right)[2]
                   and body(bounded_right) == body(final),
                   "horizontal navigation stops at the last column without wrapping")
         except BaseException:
@@ -385,6 +386,204 @@ def run_diff_login(binary, decoder, output, checks):
               "diff and login preview restores terminal attributes and exits cleanly")
 
 
+def run_tasks(binary, decoder, output, checks):
+    def check(value, label):
+        if not value:
+            raise AssertionError(label)
+        checks.append(label)
+
+    def edit(preview, shot, value):
+        y = prompt_start(shot) + 2
+        preview.send(mouse(0, x=4, y=y) + mouse(0, release=True, x=4, y=y))
+        preview.send(b"\x01\x0b" + value.encode())
+        return preview.until(lambda current: value in prompt_text(current), "the local command draft")
+
+    def command(preview, shot, value):
+        edit(preview, shot, value)
+        preview.send(b"\r")
+
+    def task_list(shot):
+        return (view(shot, "tasks") and "fictional task data" in body(shot)
+                and "preview-task-build" in body(shot) and "preview-task-test" in body(shot)
+                and "Enter details" in body(shot))
+
+    with tempfile.TemporaryDirectory(prefix="ssmcp-task-columns-") as temporary:
+        config = Path(temporary) / "config.toml"
+        config.write_text('[ui]\nlayout="chat"\nsidebar=false\ncolor=true\n', encoding="utf-8")
+        preview = Preview(binary, decoder, config, rows=30, cols=110)
+        try:
+            initial = preview.until(lambda shot: view(shot, "conversation"), "the eight-column canvas")
+            check(column(initial) == ("conversation", 2, 8),
+                  "the default canvas has eight columns with conversation second")
+            preview.send(ALT_LEFT + b"\x1b[B\r")
+            recipient = preview.until(lambda shot: view(shot, "conversation")
+                                      and "To · Builder" in text(shot), "the shared task-panel recipient")
+            command(preview, recipient, "/tasks")
+            tasks = preview.until(task_list, "the actual Tasks panel")
+            check(column(tasks) == ("tasks", 8, 8)
+                  and "cargo check --workspace" in body(tasks)
+                  and "cargo test --lib" in body(tasks)
+                  and "running" in body(tasks) and "completed" in body(tasks)
+                  and "/preview/fictional-project" in body(tasks)
+                  and "To · Builder" in text(tasks),
+                  "/tasks opens the canonical Tasks column with explicitly fictional preview job metadata")
+            save_shot(output, "canvas-tasks-list", tasks)
+
+            draft = "tasks draft 界"
+            typed = edit(preview, tasks, draft)
+            cursor = typed["cursor"]
+            preview.send(b"\x1b[Z\x1b[B")
+            selected = preview.until(
+                lambda shot: any("› preview-task-test" in row for row in shot["rows"]),
+                "the second task selected by its stable job id",
+            )
+            check(draft in prompt_text(selected) and "To · Builder" in text(selected),
+                  "task selection preserves the shared Unicode draft and recipient")
+            preview.send(b"\r")
+            detail = preview.until(lambda shot: view(shot, "tasks")
+                                   and "Job: preview-task-test" in body(shot), "the selected task details")
+            check("State: completed" in body(detail) and "Exit: 0" in body(detail)
+                  and "Command: cargo test --lib" in body(detail),
+                  "Enter opens the selected task's status and command without launching work")
+            save_shot(output, "canvas-tasks-detail", detail)
+            preview.resize(12, 60)
+            narrow = preview.until(lambda shot: shot["size"] == [12, 60]
+                                   and view(shot, "tasks") and "Job: preview-task-test" in body(shot),
+                                   "narrow task details")
+            preview.send(b"\x1b[6~")
+            scrolled = preview.until(lambda shot: view(shot, "tasks") and body(shot) != body(narrow),
+                                     "task metadata scrolling")
+            check(intact_cells(scrolled), "task details scroll inside a bounded narrow viewport")
+            save_shot(output, "canvas-tasks-narrow", scrolled)
+            preview.send(LEFT)
+            logs = preview.until(logs_open, "Tasks Left reaching the adjacent Logs column")
+            check(column(logs)[1] + 1 == column(scrolled)[1]
+                  and draft in prompt_text(logs) and "To · Builder" in text(logs),
+                  "Tasks Left reaches Logs without changing the draft or recipient")
+            preview.send(RIGHT)
+            restored = preview.until(lambda shot: view(shot, "tasks"), "Logs Right returning to Tasks")
+            check(body(restored) == body(scrolled) and draft in prompt_text(restored),
+                  "Logs Right restores the task selection, detail and scroll position")
+            preview.send(ESCAPE)
+            preview.resize(30, 110)
+            listed = preview.until(
+                lambda shot: shot["size"] == [30, 110] and task_list(shot)
+                and any("› preview-task-test" in row for row in shot["rows"]),
+                "the selected task retained in the full-width list",
+            )
+            check(draft in prompt_text(listed) and "To · Builder" in text(listed),
+                  "Escape leaves task details while keeping the selected job and draft")
+
+            preview.send(ALT_LEFT * 5)
+            audit = preview.until(lambda shot: view(shot, "code audit"), "the Audit return bookmark origin")
+            original_column, original_body = column(audit), body(audit)
+            preview.send(mouse(2) + mouse(2, release=True))
+            preview.until(logs_open, "Logs opened from Audit")
+            preview.send(RIGHT)
+            preview.until(task_list, "the adjacent Tasks column during the Logs round trip")
+            preview.send(LEFT)
+            preview.until(logs_open, "Logs revisited without replacing the return bookmark")
+            preview.send(ESCAPE)
+            returned = preview.until(lambda shot: column(shot) == original_column, "Escape returning to Audit")
+            check(body(returned) == original_body and draft in prompt_text(returned)
+                  and "To · Builder" in text(returned),
+                  "Audit to Logs to Tasks to Logs then Escape returns to the original bookmarked column")
+            preview.send(ALT_LEFT)
+            chat = preview.until(lambda shot: view(shot, "conversation"), "the shared composer after task navigation")
+            check(draft in prompt_text(chat) and chat["cursor"] == cursor,
+                  "task and log navigation preserves the original wide-glyph composer cursor")
+
+            # Only this disposable fixture draft is replaced by the following local commands.
+            command(preview, chat, "/tasks")
+            current = preview.until(task_list, "Tasks before closing its column")
+            command(preview, current, "/close")
+            closed_tasks = preview.until(lambda shot: logs_open(shot) and column(shot)[2] == 7,
+                                         "closing Tasks without ending its jobs")
+            command(preview, closed_tasks, "/tasks")
+            reopened_tasks = preview.until(lambda shot: task_list(shot) and column(shot) == ("tasks", 8, 8),
+                                           "the canonical Tasks column recreated next to Logs")
+            check("To · Builder" in text(reopened_tasks),
+                  "closing and reopening Tasks restores the canonical pair and preserves the recipient")
+            preview.send(LEFT)
+            current_logs = preview.until(logs_open, "Logs before closing its column")
+            command(preview, current_logs, "/close")
+            closed_logs = preview.until(lambda shot: view(shot, "history") and column(shot)[2] == 7,
+                                        "closing the actual Logs column")
+            command(preview, closed_logs, "/tasks")
+            repaired = preview.until(lambda shot: task_list(shot) and column(shot) == ("tasks", 8, 8),
+                                     "Tasks restoring its missing Logs neighbor")
+            preview.send(LEFT)
+            repaired_logs = preview.until(lambda shot: logs_open(shot) and column(shot) == ("logs", 7, 8),
+                                          "the rebuilt adjacent Logs column")
+            check("To · Builder" in text(repaired_logs),
+                  "dedicated Tasks restores a closed Logs neighbor without deleting jobs or the recipient")
+
+            command(preview, repaired_logs, "/new chat")
+            inserted = preview.until(lambda shot: column(shot) == ("conversation", 9, 9),
+                                     "a new chat column inserted after the whole Logs and Tasks pair")
+            preview.send(ALT_LEFT)
+            preview.until(lambda shot: task_list(shot) and column(shot)[1] == 8,
+                          "Tasks remaining immediately left of the inserted chat")
+            preview.send(ALT_LEFT)
+            adjacent_logs = preview.until(lambda shot: logs_open(shot) and column(shot)[1] == 7,
+                                          "Logs and Tasks remaining adjacent after insertion")
+            check(column(adjacent_logs)[2] == 9 and "To · Builder" in text(adjacent_logs),
+                  "/new from Logs inserts after Tasks and never splits the canonical pair")
+            check(preview.process.poll() is None, "closing system columns leaves the preview session alive")
+        except BaseException:
+            save_shot(output, "canvas-tasks-failure", snapshot(preview))
+            raise
+        finally:
+            restored_terminal = preview.close()
+        check(restored_terminal and preview.process.returncode == 0,
+              "task-column preview restores original terminal attributes and exits cleanly")
+
+
+def run_exit_aliases(binary, decoder, output, checks):
+    def check(value, label):
+        if not value:
+            raise AssertionError(label)
+        checks.append(label)
+
+    for command in ["/exit", "/quit"]:
+        with tempfile.TemporaryDirectory(prefix="ssmcp-preview-exit-") as temporary:
+            config = Path(temporary) / "config.toml"
+            config.write_text('[ui]\nlayout="chat"\nsidebar=false\ncolor=false\n', encoding="utf-8")
+            preview = Preview(binary, decoder, config, rows=30, cols=110)
+            try:
+                initial = preview.until(lambda shot: view(shot, "conversation"), "the exit-test preview")
+                if command == "/exit":
+                    preview.send(b"/exit extra\r")
+                    invalid = preview.until(
+                        lambda shot: "arguments" in shot["rows"][-1]
+                        and ("without" in shot["rows"][-1] or "no arguments" in shot["rows"][-1]),
+                        "the explicit invalid-exit argument error",
+                    )
+                    check(preview.process.poll() is None and column(invalid) == column(initial)
+                          and "/exit extra" in prompt_text(invalid),
+                          "/exit extra reports an error without exiting or changing the canvas and draft")
+                    save_shot(output, "canvas-exit-invalid", invalid)
+                    preview.send(b"\x01\x0b")
+                preview.send(command.encode() + b"\r")
+                # Require the command itself to end the process before cleanup can send any signal.
+                preview.process.wait(timeout=5)
+                preview.pump(0.15)
+                exited = preview.decoder.request(op="snapshot", cells=True)
+                check(preview.process.returncode == 0, f"{command} exits the preview normally with code zero")
+                check(not exited["alternate_screen"] and not exited["bracketed_paste"]
+                      and not exited["hide_cursor"],
+                      f"{command} restores the primary screen, bracketed-paste state and visible cursor")
+                check(b"\x1b[?1000l" in preview.transcript and b"\x1b[?1006l" in preview.transcript,
+                      f"{command} disables mouse event reporting before exit")
+                save_shot(output, "canvas-" + command[1:] + "-restored", exited)
+            except BaseException:
+                save_shot(output, "canvas-" + command[1:] + "-failure", snapshot(preview))
+                raise
+            finally:
+                restored = preview.close()
+            check(restored, f"{command} restores the original PTY termios without a signal-driven exit")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", required=True, type=Path)
@@ -395,12 +594,16 @@ def main():
     report = args.report or args.out / "report.json"
     report.parent.mkdir(parents=True, exist_ok=True)
     checks = []
-    result = {"suite": "canvas-logs", "status": "failed", "checks": checks}
+    result = {"suite": "canvas-logs-tasks", "status": "failed", "checks": checks}
     try:
         run((args.bin_dir / "ssmcp").resolve(),
             (args.bin_dir / "examples" / "vt_snapshot").resolve(), args.out, checks)
         run_diff_login((args.bin_dir / "ssmcp").resolve(),
                        (args.bin_dir / "examples" / "vt_snapshot").resolve(), args.out, checks)
+        run_tasks((args.bin_dir / "ssmcp").resolve(),
+                  (args.bin_dir / "examples" / "vt_snapshot").resolve(), args.out, checks)
+        run_exit_aliases((args.bin_dir / "ssmcp").resolve(),
+                         (args.bin_dir / "examples" / "vt_snapshot").resolve(), args.out, checks)
         result["status"] = "passed"
     except BaseException as error:
         result["error"] = str(error)
