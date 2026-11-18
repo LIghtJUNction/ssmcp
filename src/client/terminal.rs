@@ -503,6 +503,7 @@ enum Key {
     Escape,
     AuditUp,
     AuditDown,
+    Takeback,
     Open,
     Back,
     Filter,
@@ -527,6 +528,7 @@ const KEYS: &[(&[u8], Key)] = &[
     (b"\x1b[27;2;13~", Key::Newline),
     (b"\x1b[1;5H", Key::HistoryStart),
     (b"\x1b[1;5F", Key::HistoryEnd),
+    (b"\x1b[1;2A", Key::Takeback),
     (b"\x1b[A", Key::AuditUp),
     (b"\x1bOA", Key::AuditUp),
     (b"\x1b[B", Key::AuditDown),
@@ -581,6 +583,7 @@ impl Keyboard {
             | Key::Save
             | Key::AuditUp
             | Key::AuditDown
+            | Key::Takeback
             | Key::Open
             | Key::Back
             | Key::Filter

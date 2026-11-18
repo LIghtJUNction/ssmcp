@@ -341,6 +341,39 @@ fn items(value: &Value, key: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+fn latest_takeback_request(data: &Value) -> Result<&Value, &'static str> {
+    let queue = data["queue"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let latest = queue
+        .iter()
+        .rev()
+        .find(|entry| !matches!(field(entry, "status"), "delivered" | "cancelled"));
+    match latest {
+        Some(entry) if matches!(field(entry, "status"), "queued" | "editing" | "offline") => {
+            Ok(entry)
+        }
+        Some(entry)
+            if matches!(
+                field(entry, "status"),
+                "sending" | "taking-back" | "cancelling"
+            ) =>
+        {
+            Err(
+                "The latest request is changing · wait for queue confirmation, then press Shift+↑ again",
+            )
+        }
+        Some(_) => {
+            Err("Previous delivery is uncertain · review this request in /queue before editing")
+        }
+        None if queue
+            .iter()
+            .any(|entry| field(entry, "status") == "delivered") =>
+        {
+            Err("No pending request · delivered requests cannot be recalled")
+        }
+        None => Err("No pending request to take back"),
+    }
+}
+
 fn recipients(value: &Value, observed: Vec<Value>) -> Vec<Value> {
     let mut entries = vec![
         json!({"agent_id":"next","name":"Next caller","role":"default recipient","status":"first eligible tool response"}),
@@ -1018,6 +1051,84 @@ impl State {
         entries.get(self.conversation.selected).cloned()
     }
 
+    fn chat_prepare_takeback(&mut self, data: &Value) -> Option<String> {
+        if self.conversation.image_task.is_some()
+            || self.conversation.submitting.is_some()
+            || self.conversation.editing.is_some()
+            || self.conversation.parked.is_some()
+        {
+            self.chat_block_replacement();
+            return None;
+        }
+        match latest_takeback_request(data) {
+            Ok(entry) => {
+                self.conversation.content_focus = false;
+                self.conversation.detail = false;
+                self.notice = Some(
+                    "Taking back the latest request… · draft and images stay here until confirmed"
+                        .into(),
+                );
+                self.dirty = true;
+                Some(message_id(entry).into())
+            }
+            Err(message) => {
+                self.notice = Some(message.into());
+                self.dirty = true;
+                None
+            }
+        }
+    }
+
+    fn chat_takeback_latest(&mut self) {
+        let data = self.chat_data();
+        if let Some(id) = self.chat_prepare_takeback(&data) {
+            if self.preview {
+                self.notice = Some("Preview only · Shift+↑ takes back the latest pending request in a connected session".into());
+            } else if let Err(error) = steering::take_back(&id) {
+                self.notice = Some(error);
+            }
+        }
+    }
+
+    /// Leaving an unchanged held request is safe: its original content remains
+    /// in the queue as Editing. Changed text/images stay here until submitted or
+    /// cancelled; restoring another draft must not discard those changes.
+    fn chat_leave_unmodified_edit(&mut self, data: &Value) -> bool {
+        let Some(id) = self.conversation.editing.as_deref() else {
+            return false;
+        };
+        if self.conversation.content_focus
+            || self.conversation.detail
+            || self.conversation.submitting.is_some()
+            || self.conversation.parked.is_none()
+        {
+            return false;
+        }
+        let queue = items(data, "queue");
+        let unchanged = queue
+            .iter()
+            .find(|entry| message_id(entry) == id)
+            .is_some_and(|entry| {
+                let target = field(entry, "target");
+                field(entry, "status") == "editing"
+                    && field(entry, "text") == self.conversation.composer.text()
+                    && (if target.is_empty() { "next" } else { target })
+                        == self.conversation.target.as_deref().unwrap_or("next")
+                    && items(entry, "images") == attachments::metadata(&self.conversation.images)
+            });
+        if unchanged {
+            self.conversation.editing = None;
+            if let Some(parked) = self.conversation.parked.take() {
+                self.chat_restore_draft(parked);
+            }
+            self.notice =
+                Some("Previous draft restored · taken-back request stays held in /queue".into());
+        } else {
+            self.notice = Some("This edit has changes · finish or cancel it first; both drafts and images are preserved".into());
+        }
+        true
+    }
+
     fn chat_open(&mut self, edit: bool) {
         if edit
             && self.conversation.view == View::Queue
@@ -1131,6 +1242,7 @@ impl State {
                 self.filter_offset = 0;
             }
             Key::FocusBack => self.conversation.content_focus = !content,
+            Key::Takeback => self.chat_takeback_latest(),
             Key::Up => self.chat_move(
                 -(isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
             ),
@@ -1291,6 +1403,9 @@ impl State {
             self.help = false;
             self.conversation.content_focus = false;
             self.notice = None;
+            return;
+        }
+        if self.chat_leave_unmodified_edit(&self.chat_data()) {
             return;
         }
         if !self.conversation.content_focus
@@ -1808,12 +1923,13 @@ impl State {
                 "",
                 "  Enter      Queue a new requirement",
                 "  Up/Down    Move within input · select commands or history",
+                "  Shift+Up   Take back the latest pending request for editing",
                 "  Ctrl+J     New line · pasted text stays in the draft",
                 "  Ctrl+V     Paste image or text · /paste if the terminal intercepts it",
                 "  /attach    Add image file · /images details · /detach N removes",
                 "  /copy      Copy the latest agent message to the clipboard",
                 "  Tab        Complete command · switch input / content focus",
-                "  Esc        Restore a parked draft when input is focused",
+                "  Esc        Restore parked draft if this edit is unchanged",
                 "  Ctrl+O     Source audit · Enter/→ open · ← back",
                 "  F2         Activity / audit / agents / queue",
                 "  Wheel      Scroll directly · PgUp/PgDn also work",
@@ -2703,6 +2819,103 @@ mod tests {
         state.chat_move(1);
         assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
     }
+
+    #[test]
+    fn shift_up_decodes_across_reads_without_recalling_plain_arrow_history() {
+        let mut state = preview(24, 40);
+        state.conversation.composer.remember("old history");
+        state.conversation.composer.set_text("正在编辑的草稿");
+        let before = state.chat_saved_draft();
+        input(&mut state, b"\x1b[1;");
+        input(&mut state, b"2A");
+        assert_eq!(state.chat_saved_draft(), before);
+        assert!(state.notice.as_ref().unwrap().contains("Shift+↑"));
+        assert!(state.conversation.editing.is_none());
+        input(&mut state, b"\x1b[H\x1b[A");
+        assert_eq!(state.conversation.composer.text(), "old history");
+    }
+
+    #[test]
+    fn shift_up_chooses_latest_pending_and_never_replays_delivered_or_changing_requests() {
+        let data = json!({"queue":[
+            {"id":"first","text":"first","status":"queued"},
+            {"id":"second","text":"second","status":"queued"},
+            {"id":"receipt","text":"delivered","status":"delivered"}]});
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("new draft");
+        let before = state.chat_saved_draft();
+        assert_eq!(
+            state.chat_prepare_takeback(&data).as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            state.chat_saved_draft(),
+            before,
+            "wait for CAS confirmation before replacing input"
+        );
+        assert!(state.conversation.editing.is_none());
+        for status in ["sending", "taking-back", "uncertain", "retarget-required"] {
+            let data =
+                json!({"queue":[{"id":"first","status":"queued"},{"id":"latest","status":status}]});
+            assert!(state.chat_prepare_takeback(&data).is_none());
+            assert_eq!(state.chat_saved_draft(), before);
+        }
+        let delivered = json!({"queue":[{"id":"receipt","status":"delivered"}]});
+        assert!(state.chat_prepare_takeback(&delivered).is_none());
+        assert!(
+            state
+                .notice
+                .as_ref()
+                .unwrap()
+                .contains("cannot be recalled")
+        );
+        assert_eq!(state.chat_saved_draft(), before);
+        assert!(state.conversation.parked.is_none());
+    }
+
+    #[test]
+    fn confirmed_shift_up_preserves_both_image_drafts_and_escape_only_leaves_unchanged_edits() {
+        let mut state = preview(24, 100);
+        let original = steering::SavedDraft {
+            text: "当前需求".into(),
+            cursor: "当前".len(),
+            target: Some("reviewer".into()),
+            images: vec![test_image("draft.png", 20)],
+        };
+        state.chat_restore_draft(original.clone());
+        let taken = test_image("queued.png", 40);
+        let data = json!({"queue":[{"id":"latest","status":"queued","text":"待发送",
+            "target":"next","images":attachments::metadata(std::slice::from_ref(&taken))}]});
+        assert_eq!(
+            state.chat_prepare_takeback(&data).as_deref(),
+            Some("latest")
+        );
+        assert_eq!(state.chat_saved_draft(), original);
+        // This is the same Editable event emitted only after successful CAS.
+        state.chat_editable("latest".into(), "待发送".into(), None, vec![taken.clone()]);
+        assert_eq!(state.conversation.parked.as_ref(), Some(&original));
+        assert_eq!(state.conversation.images, [taken.clone()]);
+        let held = json!({"queue":[{"id":"latest","status":"editing","text":"待发送",
+            "target":"next","images":attachments::metadata(std::slice::from_ref(&taken))}]});
+        state.conversation.composer.set_text("修改后的需求");
+        assert!(state.chat_leave_unmodified_edit(&held));
+        assert_eq!(state.conversation.composer.text(), "修改后的需求");
+        assert_eq!(state.conversation.parked.as_ref(), Some(&original));
+        state.conversation.composer.set_text("待发送");
+        state.conversation.images.clear();
+        assert!(state.chat_leave_unmodified_edit(&held));
+        assert!(
+            state.conversation.editing.is_some(),
+            "removing an image is an edit"
+        );
+        state.conversation.images = vec![taken];
+        assert!(state.chat_leave_unmodified_edit(&held));
+        assert_eq!(state.chat_saved_draft(), original);
+        assert!(state.conversation.editing.is_none());
+        assert!(state.conversation.parked.is_none());
+        assert!(state.notice.as_ref().unwrap().contains("stays held"));
+    }
+
     fn test_image(name: &str, color: u8) -> UserImage {
         let mut bytes = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(

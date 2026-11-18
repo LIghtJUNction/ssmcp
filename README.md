@@ -115,6 +115,7 @@ ssmcp trust list
 | 操作 | 用途 |
 | --- | --- |
 | Ctrl+V / `/paste` | 粘贴剪贴板图片或文字；终端拦截 Ctrl+V 时使用 `/paste` |
+| Shift-↑ | 取回最新待交付请求重新编辑，文字和图片一起保留；当前草稿自动暂存。未修改时 Esc 可恢复原稿，已修改时先完成或取消编辑。 |
 | `/attach "/path/screenshot.png"` | 附加本机图片文件；也可粘贴完整图片路径 |
 | `/images` | 查看附件名称、实际尺寸、格式和大小 |
 | `/detach 1` / `/detach all` | 移除指定附件 / 全部附件 |
