@@ -55,6 +55,26 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Toggle sidebar",
     },
     SlashCommand {
+        name: "/paste",
+        description: "Paste a clipboard image or text (Ctrl+V)",
+    },
+    SlashCommand {
+        name: "/attach",
+        description: "Attach an image file: /attach PATH",
+    },
+    SlashCommand {
+        name: "/images",
+        description: "List attached images and actual dimensions",
+    },
+    SlashCommand {
+        name: "/detach",
+        description: "Remove an image: /detach 1 or /detach all",
+    },
+    SlashCommand {
+        name: "/copy",
+        description: "Copy the latest agent message",
+    },
+    SlashCommand {
         name: "/clear",
         description: "Clear visible logs",
     },
@@ -79,6 +99,7 @@ pub(super) struct Composer {
     saved_draft: Option<(String, usize)>,
     suggestion_index: usize,
     suggestions_dismissed: bool,
+    external_paste: Option<usize>,
 }
 
 impl Composer {
@@ -100,6 +121,11 @@ impl Composer {
         }
         if !text.is_empty() {
             self.detach_history();
+            if let Some(anchor) = &mut self.external_paste
+                && self.cursor < *anchor
+            {
+                *anchor += text.len();
+            }
             self.text.insert_str(self.cursor, text);
             self.cursor += text.len();
         }
@@ -131,11 +157,38 @@ impl Composer {
         self.insert(&normalized)
     }
 
+    /// Keep an asynchronous clipboard read at its original insertion position.
+    pub(super) fn begin_external_paste(&mut self) {
+        self.external_paste = Some(self.cursor);
+    }
+
+    pub(super) fn cancel_external_paste(&mut self) {
+        self.external_paste = None;
+    }
+
+    pub(super) fn finish_external_paste(&mut self, text: &str) -> bool {
+        let Some(anchor) = self.external_paste.take() else {
+            return false;
+        };
+        let cursor = self.cursor;
+        let before = self.text.len();
+        self.cursor = anchor;
+        let accepted = self.paste(text);
+        self.cursor = cursor
+            + if cursor >= anchor {
+                self.text.len() - before
+            } else {
+                0
+            };
+        accepted
+    }
+
     pub(super) fn set_text(&mut self, text: &str) -> bool {
         if text.len() > MAX_DRAFT_BYTES {
             return false;
         }
         self.detach_history();
+        self.external_paste = None;
         self.text.clear();
         self.text.push_str(text);
         self.cursor = self.text.len();
@@ -145,6 +198,7 @@ impl Composer {
     /// Draining a draft does not mark it as submitted; call `remember` after queue acceptance.
     pub(super) fn take_text(&mut self) -> String {
         self.detach_history();
+        self.external_paste = None;
         self.cursor = 0;
         std::mem::take(&mut self.text)
     }
@@ -468,6 +522,13 @@ impl Composer {
             return false;
         }
         self.detach_history();
+        if let Some(anchor) = &mut self.external_paste {
+            *anchor = if *anchor >= end {
+                *anchor - (end - start)
+            } else {
+                (*anchor).min(start)
+            };
+        }
         self.text.replace_range(start..end, "");
         self.cursor = start;
         true
@@ -882,5 +943,41 @@ mod tests {
             draft.set_text(value);
             assert!(draft.suggestions().is_empty());
         }
+    }
+    #[test]
+    fn asynchronous_paste_keeps_later_typing_after_the_clipboard_text() {
+        let mut draft = Composer::default();
+        draft.set_text("before ");
+        draft.begin_external_paste();
+        draft.insert(" after");
+        assert!(draft.finish_external_paste("中\r\n文"));
+        assert_eq!(draft.text(), "before 中\n文 after");
+        assert_eq!(draft.cursor(), draft.text().len());
+    }
+
+    #[test]
+    fn asynchronous_paste_tracks_unicode_edits_before_its_anchor() {
+        let mut draft = Composer::default();
+        draft.set_text("界tail");
+        draft.home();
+        draft.right();
+        draft.begin_external_paste();
+        draft.home();
+        draft.insert("前");
+        draft.delete();
+        assert!(draft.finish_external_paste("图"));
+        assert_eq!(draft.text(), "前图tail");
+        assert!(draft.text().is_char_boundary(draft.cursor()));
+        assert_eq!(draft.cursor(), "前图".len());
+        draft.begin_external_paste();
+        let before = draft.text().to_owned();
+        let cursor = draft.cursor();
+        assert!(!draft.finish_external_paste(&"x".repeat(MAX_DRAFT_BYTES)));
+        assert_eq!(draft.text(), before);
+        assert_eq!(draft.cursor(), cursor);
+        draft.begin_external_paste();
+        draft.cancel_external_paste();
+        assert!(!draft.finish_external_paste("ignored"));
+        assert_eq!(draft.text(), before);
     }
 }
