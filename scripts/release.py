@@ -282,6 +282,7 @@ def package(target, root=None):
 
 
 def checksums(root=None):
+    """Verify GitHub archives; Publisher raw-client release.json is separate."""
     root = root or ROOT
     release_version = version(root)
     output = root / "dist"
@@ -356,7 +357,7 @@ def publish(root=None):
             pending.append((package, release_version, digest(path)))
     for package, release_version, checksum in pending:
         # finalize jointly verified unpublished workspace dependencies.
-        subprocess.run(["cargo", "publish", "--locked", "--no-verify", "--package", package],
+        subprocess.run(["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io", "--package", package],
                        cwd=root, check=True)
         for _ in range(18):
             existing = registry_checksum(release_version, package)
