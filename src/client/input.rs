@@ -1,5 +1,5 @@
 //! Dashboard input belongs to its composer and navigation; fallback input uses the selected PTY.
-//! Keep the outer terminal's interrupt handling: Ctrl-C disconnects the client.
+//! Preserve binary paste; a Ctrl-C key outside paste requests the existing client shutdown.
 use crate::{
     pty::Terminal,
     terminals::Terminals,
@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::task::JoinHandle;
+
+pub(crate) mod paste;
 
 pub(crate) struct Input {
     task: Option<JoinHandle<()>>,
@@ -105,6 +107,8 @@ async fn forward_keys(terminals: &Terminals, events: Vec<InputEvent>) -> Result<
                 apply_display_changes(terminals).await?;
                 forward_local(terminals, &text).await;
             }
+            #[cfg(unix)]
+            InputEvent::Interrupt => interrupt(),
             InputEvent::NextTerminal => {
                 if super::terminal::active() {
                     let _ = super::terminal::keyboard("\x1b[18~");
@@ -170,6 +174,8 @@ async fn resize(terminals: &Terminals, rows: u16, cols: u16) -> Result<(), Strin
 pub(crate) enum InputEvent {
     Text(String),
     NextTerminal,
+    #[cfg(unix)]
+    Interrupt,
 }
 
 /// Preserve ordering around F7 even when one stdin read contains input for two
@@ -197,6 +203,14 @@ impl SessionKeys {
         let mut output = Vec::new();
         let mut events = Vec::new();
         for &byte in text.as_bytes() {
+            #[cfg(unix)]
+            if byte == 3 && !self.pasting {
+                output.append(&mut self.pending);
+                emit(&mut output, &mut events);
+                self.since = None;
+                events.push(InputEvent::Interrupt);
+                continue;
+            }
             if self.pending.is_empty() && byte != 0x1b {
                 output.push(byte);
                 continue;
@@ -278,6 +292,8 @@ mod key_tests {
                 match event {
                     InputEvent::Text(chunk) => text.push_str(&chunk),
                     InputEvent::NextTerminal => panic!("pasted F7 must not select a terminal"),
+                    #[cfg(unix)]
+                    InputEvent::Interrupt => panic!("pasted Ctrl-C must not interrupt the client"),
                 }
             }
         }
@@ -313,12 +329,41 @@ mod key_tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn ctrl_c_is_an_interrupt_only_outside_bracketed_paste_in_fallback_layouts() {
+        let now = Instant::now();
+        let mut keys = SessionKeys::default();
+        assert_eq!(
+            keys.feed("before\u{3}after", now, false),
+            vec![
+                InputEvent::Text("before".into()),
+                InputEvent::Interrupt,
+                InputEvent::Text("after".into())
+            ]
+        );
+        assert_eq!(
+            keys.feed("\x1b[200~inside\u{3}\x1b[201~", now, false),
+            vec![InputEvent::Text("\x1b[200~inside\u{3}\x1b[201~".into())]
+        );
+        assert_eq!(keys.feed("\u{3}", now, false), vec![InputEvent::Interrupt]);
+    }
+
     #[test]
     fn input_chunks_keep_unicode_intact_at_the_write_limit() {
         let text = format!("{}界🌍{}", "x".repeat(MAX_WRITE - 1), "y".repeat(MAX_WRITE));
         let pieces: Vec<_> = chunks(&text).collect();
         assert!(pieces.iter().all(|piece| piece.len() <= MAX_WRITE));
         assert_eq!(pieces.concat(), text);
+    }
+}
+
+#[cfg(unix)]
+pub(super) fn interrupt() {
+    // SAFETY: raise sends SIGINT to this process only. The already installed Tokio
+    // signal handler follows the same shutdown path as the former terminal ISIG.
+    unsafe {
+        libc::raise(libc::SIGINT);
     }
 }
 
@@ -350,15 +395,20 @@ mod platform {
                 .map_err(|e| format!("register local terminal input: {e}"))?;
             let saved = attributes(fd.get_ref().as_raw_fd()).map_err(|e| e.to_string())?;
             let mut local = saved;
-            local.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ECHONL | libc::IEXTEN);
-            local.c_lflag |= libc::ISIG;
-            local.c_iflag &= !(libc::IXON
+            local.c_lflag &=
+                !(libc::ICANON | libc::ECHO | libc::ECHONL | libc::IEXTEN | libc::ISIG);
+            local.c_iflag &= !(libc::IGNBRK
+                | libc::BRKINT
+                | libc::INPCK
+                | libc::IXON
                 | libc::IXOFF
                 | libc::ICRNL
                 | libc::INLCR
                 | libc::IGNCR
                 | libc::ISTRIP
                 | libc::PARMRK);
+            local.c_cflag &= !(libc::CSIZE | libc::PARENB);
+            local.c_cflag |= libc::CS8;
             local.c_cc[libc::VMIN] = 1;
             local.c_cc[libc::VTIME] = 0;
             // Ctrl-Z / Ctrl-\\ should reach the inner shell instead of suspending or
@@ -525,7 +575,13 @@ mod platform {
                     });
                     match read {
                         Ok(Ok(0)) => { forward_human(terminals, &mut keys, &utf8.push(&[], true)).await?; break; }
-                        Ok(Ok(n)) => forward_human(terminals, &mut keys, &utf8.push(&buffer[..n], false)).await?,
+                        Ok(Ok(n)) => {
+                            if let Some(text) = utf8.route(&buffer[..n], false, super::super::terminal::consume_chat_bytes) {
+                                forward_human(terminals, &mut keys, &text).await?;
+                            } else {
+                                apply_display_changes(terminals).await?;
+                            }
+                        }
                         Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                         Ok(Err(e)) => return Err(format!("read local terminal: {e}")),
                         Err(_) => continue,
@@ -542,6 +598,21 @@ mod platform {
     }
 
     impl Utf8Input {
+        /// Give the active chat first access to untouched bytes. Decode only the
+        /// fallback terminal stream; decoding a PNG here is irreversible.
+        fn route(
+            &mut self,
+            bytes: &[u8],
+            eof: bool,
+            consume: impl FnOnce(&[u8]) -> bool,
+        ) -> Option<String> {
+            if consume(bytes) {
+                None
+            } else {
+                Some(self.push(bytes, eof))
+            }
+        }
+
         fn push(&mut self, bytes: &[u8], eof: bool) -> String {
             self.pending.extend_from_slice(bytes);
             let mut text = String::new();
@@ -668,6 +739,92 @@ mod platform {
         }
 
         #[test]
+        fn raw_chat_route_preserves_fragmented_png_before_lossy_fallback_decoder() {
+            let png = super::super::paste::fixture_png();
+            for size in [1, 2, 13, 4096] {
+                let mut decoder = Utf8Input::default();
+                let mut seen = Vec::new();
+                for part in png.chunks(size) {
+                    assert!(
+                        decoder
+                            .route(part, false, |raw| {
+                                seen.extend_from_slice(raw);
+                                true
+                            })
+                            .is_none()
+                    );
+                }
+                assert_eq!(seen, png);
+                assert!(decoder.pending.is_empty());
+            }
+            let mut fallback = Utf8Input::default();
+            assert_eq!(
+                fallback.route(b"\xe7", false, |_| false),
+                Some(String::new())
+            );
+            assert_eq!(
+                fallback.route(b"\x95\x8c", false, |_| false),
+                Some("界".into())
+            );
+        }
+
+        #[tokio::test]
+        async fn owned_raw_terminal_preserves_png_control_bytes_and_restores_attributes() {
+            let (master, source) = pair();
+            let saved = attributes(source.as_raw_fd()).unwrap();
+            let mode = Mode::enable(reopen_tty(source.as_raw_fd()).unwrap().unwrap()).unwrap();
+            let attached = attributes(source.as_raw_fd()).unwrap();
+            assert_eq!(
+                attached.c_lflag & (libc::ISIG | libc::IEXTEN | libc::ICANON | libc::ECHO),
+                0
+            );
+            assert_eq!(
+                attached.c_iflag
+                    & (libc::IXON | libc::IXOFF | libc::ICRNL | libc::INLCR | libc::ISTRIP),
+                0
+            );
+            let png = super::super::paste::fixture_png();
+            write(&master, &png);
+            let mut received = Vec::new();
+            timeout(Duration::from_secs(2), async {
+                while received.len() < png.len() {
+                    let mut ready = mode.fd.readable().await.unwrap();
+                    let mut buffer = [0u8; 64];
+                    match ready.try_io(|fd| {
+                        // SAFETY: owned fd is open; buffer is writable for its full size.
+                        let count = unsafe {
+                            libc::read(
+                                fd.get_ref().as_raw_fd(),
+                                buffer.as_mut_ptr().cast(),
+                                buffer.len(),
+                            )
+                        };
+                        if count < 0 {
+                            Err(io::Error::last_os_error())
+                        } else {
+                            Ok(count as usize)
+                        }
+                    }) {
+                        Ok(Ok(count)) => {
+                            assert!(count > 0);
+                            received.extend_from_slice(&buffer[..count]);
+                        }
+                        Ok(Err(error)) => panic!("{error}"),
+                        Err(_) => continue,
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                received, png,
+                "no Ctrl-C, flow-control, newline or invalid UTF-8 byte may be lost"
+            );
+            drop(mode);
+            same_mode(saved, attributes(source.as_raw_fd()).unwrap());
+        }
+
+        #[test]
         fn input_decoder_preserves_split_characters_and_controls() {
             let mut decoder = Utf8Input::default();
             assert_eq!(decoder.push(b"x\x1b[D\xe7", false), "x\x1b[D");
@@ -707,7 +864,7 @@ mod platform {
             let mode = Mode::enable(reopen_tty(source.as_raw_fd()).unwrap().unwrap()).unwrap();
             let attached = attributes(source.as_raw_fd()).unwrap();
             assert_eq!(attached.c_lflag & (libc::ICANON | libc::ECHO), 0);
-            assert_ne!(attached.c_lflag & libc::ISIG, 0);
+            assert_eq!(attached.c_lflag & (libc::ISIG | libc::IEXTEN), 0);
             assert_eq!(attached.c_cc[libc::VINTR], saved.c_cc[libc::VINTR]);
             // SAFETY: F_GETFL only reads source flags; the independent fd must not alter them.
             assert_eq!(

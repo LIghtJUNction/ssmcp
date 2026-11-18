@@ -265,7 +265,7 @@ impl Default for Ui {
             layout: Layout::default(),
             log_height_percent: 60,
             sidebar: true,
-            sidebar_width: 30,
+            sidebar_width: 37,
             panels: vec![
                 Panel::Agents,
                 Panel::Queue,

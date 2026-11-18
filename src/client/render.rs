@@ -272,7 +272,13 @@ pub(crate) fn event(label: &str, value: &Value) {
             .dashboard_active
             .then(|| renderer.panel_snapshot(Instant::now()))
     };
-    publish(&bytes, snapshot);
+    if super::terminal::log_event(label, value, &bytes) {
+        if let Some(snapshot) = snapshot {
+            super::terminal::set_panel(snapshot);
+        }
+    } else {
+        publish(&bytes, snapshot);
+    }
 }
 
 /// Held by the individual native request, including while it awaits I/O.

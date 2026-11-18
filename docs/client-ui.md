@@ -561,3 +561,11 @@ return { conversation, panes, requests };
 无需内置终端界面时，在配置中设置 `dashboard = false`。使用 `ssmcp --log-format jsonl` 可以将脱敏后的事件交给自己的日志消费者。自定义前端仍通过现有客户端授权访问设备能力。
 
 相关说明：[输入、引用与本地沟通](client-input.md) · [会话历史](conversation-history.md) · [命令与事件](commands.md) · [多终端](terminal-control.md) · [后端与代码模式](backends.md) · [日志与归档](logging.md)
+
+## 紧凑活动和原始日志
+
+工具调用默认折叠到一条活动。相同提供方和任务 ID 的开始、输出与结束复用这条记录，显示 `running`、退出码、超时、取消或失败；重新使用已经完成的请求 ID 会创建新记录。Enter 展开保留的预览，用户和 Agent 对话、图片与差异保持展开。
+
+每个工具预览最多保留 8 KiB；完整输出仍由原来的归档负责。`/raw` 切换同一段保留的 VT 日志，`/logs` 回到紧凑视图，不清除草稿或重新执行工具。滚动回到底部后恢复跟随新活动。筛选继续使用保留日志；清除筛选后可逐条展开。
+
+帧差分和定宽行使用工作区内零第三方依赖的 [ztui](../crates/ztui/README.md)，调用方持有全部缓冲区。

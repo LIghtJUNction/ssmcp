@@ -1,9 +1,12 @@
-//! Bounded in-memory thumbnails rendered with ordinary true-color terminal cells.
+//! Bounded previews with ordinary terminal cells and capability-probed native images.
 use crate::client::ui::Ui;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
 use serde_json::Value;
-use std::{fmt::Write as _, io::Cursor};
+use std::{fmt::Write as _, io::Cursor, sync::Arc};
+
+mod kitty;
+pub(crate) use kitty::{CACHE_BYTES, CellSize, Graphics, Native, Placement, Renderer};
 
 const MAX_DIMENSION: u32 = 4096;
 const MAX_DECODED_BYTES: u64 = 64 * 1024 * 1024;
@@ -14,11 +17,13 @@ pub(crate) struct Preview {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pixels: RgbaImage,
+    pub(crate) native: Option<Arc<Native>>,
 }
 
 /// Decode an already-authorized MCP image block once, outside the drawing loop.
-/// Source paths are never opened here. Keep only the small thumbnail in UI state.
-pub(crate) fn decode(block: &Value) -> Result<Preview, String> {
+/// Source paths are never opened here. The full decoded buffer is temporary;
+/// retained thumbnails and the optional PNG cache each have separate bounds.
+pub(crate) fn decode(block: &Value, native: bool) -> Result<Preview, String> {
     crate::output::validate_image_content(block)?;
     let format = match block["mimeType"].as_str() {
         Some("image/png") => ImageFormat::Png,
@@ -50,6 +55,7 @@ pub(crate) fn decode(block: &Value) -> Result<Preview, String> {
     }
     let decoded =
         DynamicImage::from_decoder(decoder).map_err(|error| format!("image preview: {error}"))?;
+    let native = native.then(|| Native::prepare(&decoded)).flatten();
     let pixels = decoded
         .thumbnail(THUMBNAIL_PIXELS.min(width), THUMBNAIL_PIXELS.min(height))
         .into_rgba8();
@@ -57,6 +63,7 @@ pub(crate) fn decode(block: &Value) -> Result<Preview, String> {
         width,
         height,
         pixels,
+        native,
     })
 }
 
@@ -152,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn decodes_each_supported_format_and_retains_only_a_thumbnail() {
+    fn decodes_each_supported_format_with_bounded_preview_storage() {
         let pixels = RgbaImage::from_pixel(16, 8, image::Rgba([30, 120, 210, 255]));
         for (mime, format) in [
             ("image/png", ImageFormat::Png),
@@ -167,7 +174,7 @@ mod tests {
                 image
             };
             let bytes = encoded(image, format);
-            let preview = decode(&block(mime, &bytes)).unwrap();
+            let preview = decode(&block(mime, &bytes), true).unwrap();
             assert_eq!((preview.width, preview.height), (16, 8), "{mime}");
             assert!(preview.pixels.width() <= THUMBNAIL_PIXELS);
             assert!(preview.pixels.height() <= THUMBNAIL_PIXELS);
@@ -175,6 +182,9 @@ mod tests {
                 preview.pixels.as_raw().len() <= (THUMBNAIL_PIXELS * THUMBNAIL_PIXELS * 4) as usize
             );
             assert!(!preview.render(16, 4, &Ui::default()).is_empty());
+            let native = preview.native.as_ref().unwrap();
+            assert_eq!((native.width, native.height), (16, 8));
+            assert!(native.bytes() < 4096);
         }
     }
 
@@ -185,6 +195,7 @@ mod tests {
             width: 1,
             height: 2,
             pixels,
+            native: None,
         };
         let ui = Ui {
             color: true,
@@ -211,7 +222,7 @@ mod tests {
             image::RgbImage::from_raw(2, 2, vec![255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255])
                 .unwrap();
         let bytes = encoded(DynamicImage::ImageRgb8(pixels), ImageFormat::Png);
-        let preview = decode(&block("image/png", &bytes)).unwrap();
+        let preview = decode(&block("image/png", &bytes), false).unwrap();
         assert_eq!((preview.pixels.width(), preview.pixels.height()), (2, 2));
         let ui = Ui {
             color: true,
@@ -240,6 +251,7 @@ mod tests {
             width: 128,
             height: 128,
             pixels: RgbaImage::from_pixel(128, 128, image::Rgba([0, 0, 0, 255])),
+            native: None,
         };
         let ui = Ui {
             color: false,
@@ -280,11 +292,11 @@ mod tests {
 
     #[test]
     fn malformed_and_oversized_images_fail_before_full_pixel_allocation() {
-        assert!(decode(&block("image/png", b"\x89PNG\r\n\x1a\n")).is_err());
-        assert!(decode(&block("image/png", b"<svg/>")).is_err());
+        assert!(decode(&block("image/png", b"\x89PNG\r\n\x1a\n"), false).is_err());
+        assert!(decode(&block("image/png", b"<svg/>"), false).is_err());
         let mut oversized = vec![0; crate::output::MAX_IMAGE_BYTES + 1];
         oversized[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
-        assert!(decode(&block("image/png", &oversized)).is_err());
+        assert!(decode(&block("image/png", &oversized), false).is_err());
         let png = encoded(
             DynamicImage::ImageRgba8(RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]))),
             ImageFormat::Png,
@@ -292,13 +304,15 @@ mod tests {
         // These small valid-CRC headers advertise large outputs. Rejection
         // must happen before attempting to decode the tiny IDAT as that image.
         let wide = png_header(png.clone(), MAX_DIMENSION + 1, 1, 8);
-        let error = decode(&block("image/png", &wide)).err().unwrap();
+        let error = decode(&block("image/png", &wide), false).err().unwrap();
         assert!(
             error.to_lowercase().contains("limit") || error.contains("4096"),
             "{error}"
         );
         let large_pixels = png_header(png, MAX_DIMENSION, MAX_DIMENSION, 16);
-        let error = decode(&block("image/png", &large_pixels)).err().unwrap();
+        let error = decode(&block("image/png", &large_pixels), false)
+            .err()
+            .unwrap();
         assert!(
             error.to_lowercase().contains("limit") || error.contains("64 MiB"),
             "{error}"

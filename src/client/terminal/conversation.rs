@@ -67,6 +67,8 @@ pub(super) struct Conversation {
     text_pending: Vec<u8>,
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
+    paste_png: crate::client::input::paste::PngFraming,
+    paste_last_input: Option<Instant>,
     input_task: Option<attachments::Task>,
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
@@ -450,7 +452,22 @@ impl State {
             }
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
-            "/logs" => self.chat_change_view(View::Activity),
+            "/logs" => {
+                self.raw_activity = false;
+                self.chat_change_view(View::Activity);
+            }
+            "/raw" => {
+                self.raw_activity = !self.raw_activity;
+                self.chat_change_view(View::Activity);
+                self.notice = Some(
+                    if self.raw_activity {
+                        "Raw retained transcript · /raw returns to compact activity"
+                    } else {
+                        "Compact activity · Enter expands the selected tool"
+                    }
+                    .into(),
+                );
+            }
             "/sidebar" => self.actions.push("sidebar.toggle"),
             "/theme" => {
                 if rest.is_empty() {
@@ -543,7 +560,19 @@ impl State {
                 .menu_visible(self.geometry.left, prompt_rows(self.geometry.rows))
     }
 
+    fn chat_wait_for_input(&mut self) -> bool {
+        if self.conversation.input_task.is_none() {
+            return false;
+        }
+        self.notice = Some("Preparing local input… · wait for it to finish before sending".into());
+        self.dirty = true;
+        true
+    }
+
     fn chat_submit(&mut self) {
+        if self.chat_wait_for_input() {
+            return;
+        }
         self.chat_refresh_completions();
         if self.conversation.composer.completion_loading() {
             self.notice = Some("Loading reference suggestions · your draft is preserved".into());
@@ -685,6 +714,10 @@ impl State {
             }
             View::History => self.chat_resume_selected(),
             View::Activity => {
+                if self.raw_activity {
+                    self.notice = Some("Use /logs to expand individual tool activity".into());
+                    return;
+                }
                 if !self.log_query.is_empty() || self.log_level != 0 {
                     self.notice = Some("Clear the log filter to expand individual events".into());
                     return;
@@ -703,7 +736,9 @@ impl State {
         match self.conversation.view {
             View::Activity => {
                 self.scroll_logs(-delta);
-                self.events.scroll_by(delta);
+                if !self.raw_activity {
+                    self.events.scroll_by(delta);
+                }
             }
             View::Audit => self.audit.scroll_by(delta),
             View::Agents if self.conversation.detail => self.audit.scroll_by(delta),
@@ -849,6 +884,7 @@ impl State {
             Key::AuditUp
                 if content
                     && self.conversation.view == View::Activity
+                    && !self.raw_activity
                     && self.log_query.is_empty()
                     && self.log_level == 0 =>
             {
@@ -857,6 +893,7 @@ impl State {
             Key::AuditDown
                 if content
                     && self.conversation.view == View::Activity
+                    && !self.raw_activity
                     && self.log_query.is_empty()
                     && self.log_level == 0 =>
             {
@@ -917,7 +954,9 @@ impl State {
                 self.chat_escape();
             }
             Key::Back if self.conversation.view == View::Activity && content => {
-                if !self.log_query.is_empty() || self.log_level != 0 {
+                if self.raw_activity {
+                    self.notice = Some("Use /logs to fold individual tool activity".into());
+                } else if !self.log_query.is_empty() || self.log_level != 0 {
                     self.notice = Some("Clear the log filter to fold individual events".into());
                 } else if !self.events.back() {
                     self.chat_agents();
@@ -971,6 +1010,7 @@ impl State {
                 } else {
                     self.conversation.content_focus = true;
                     if self.conversation.view == View::Activity
+                        && !self.raw_activity
                         && self.log_query.is_empty()
                         && self.log_level == 0
                     {
@@ -1082,6 +1122,15 @@ impl State {
     }
 
     fn chat_character(&mut self, character: char) {
+        #[cfg(unix)]
+        if character == '\u{3}' {
+            // ISIG is disabled to preserve binary paste; only a real key outside
+            // bracketed paste reaches this path and requests the existing shutdown.
+            if !self.preview {
+                crate::client::input::interrupt();
+            }
+            return;
+        }
         self.chat_refresh_completions();
         if self.selection {
             if character == '\u{1b}' {
@@ -1445,14 +1494,49 @@ impl State {
         Ok(())
     }
 
-    fn chat_output(&mut self, output: &[u8]) {
-        if output == b"\x1b[200~" {
-            self.conversation.paste = Some(Vec::new());
+    fn chat_expire_image_paste(&mut self, now: Instant) {
+        if self.conversation.paste.is_some()
+            && self.conversation.paste_png.is_png()
+            && self.conversation.paste_last_input.is_some_and(|last| {
+                now.saturating_duration_since(last)
+                    >= crate::client::input::paste::IMAGE_IDLE_TIMEOUT
+            })
+        {
+            self.conversation.paste = None;
+            self.conversation.paste_png = Default::default();
+            self.conversation.paste_last_input = None;
+            self.keyboard.pasting = false;
+            self.keyboard.pending.clear();
+            self.keyboard.since = None;
+            self.notice = Some(if self.conversation.paste_overflow {
+                "Image paste exceeds 16 MiB; draft preserved. Use a smaller image or /attach PATH."
+            } else {
+                "Incomplete image paste discarded; draft preserved. Copy the original image and use Ctrl+V or /paste, or /attach PATH."
+            }.into());
             self.conversation.paste_overflow = false;
+            self.dirty = true;
+        }
+    }
+
+    fn chat_output(&mut self, output: &[u8], now: Instant) {
+        if output.is_empty() {
             return;
         }
-        if output == b"\x1b[201~" {
+        if output == b"\x1b[200~" && self.conversation.paste.is_none() {
+            self.conversation.paste = Some(Vec::new());
+            self.conversation.paste_overflow = false;
+            self.conversation.paste_png = Default::default();
+            self.conversation.paste_last_input = Some(now);
+            return;
+        }
+        if output == b"\x1b[201~" && !self.conversation.paste_png.allows_end() {
+            // The PNG container is not complete: this marker belongs to its bytes.
+            // Keyboard only recognizes framing; keep it in opaque paste mode.
+            self.keyboard.pasting = true;
+        } else if output == b"\x1b[201~" {
             if let Some(paste) = self.conversation.paste.take() {
+                self.conversation.paste_png = Default::default();
+                self.conversation.paste_last_input = None;
                 if !paste.is_empty() {
                     if self.conversation.view == View::Agents {
                         self.chat_change_view(View::Activity);
@@ -1465,13 +1549,15 @@ impl State {
                 let result = if self.selection {
                     Err("Leave copy mode before pasting".into())
                 } else if self.conversation.paste_overflow {
-                    Err("Paste exceeds 4 MiB; save it as a file and use @path".into())
+                    Err(
+                        "Paste exceeds its limit (4 MiB text / 16 MiB image); use /attach PATH"
+                            .into(),
+                    )
                 } else {
-                    match std::str::from_utf8(&paste) {
-                        Ok(text) => self.chat_paste_text(text),
-                        Err(_) => {
-                            Err("Paste is not UTF-8 text; save it as a file and use @path".into())
-                        }
+                    match attachments::paste_source(paste) {
+                        Ok(attachments::Source::Text(text)) => self.chat_paste_text(&text),
+                        Ok(source) => self.chat_start_input(source, false),
+                        Err(error) => Err(error),
                     }
                 };
                 if let Err(error) = result {
@@ -1482,7 +1568,12 @@ impl State {
             return;
         }
         if let Some(paste) = &mut self.conversation.paste {
-            if paste.len().saturating_add(output.len()) <= references::paste::MAX_PASTE_BYTES {
+            self.conversation.paste_png.feed(output);
+            self.conversation.paste_last_input = Some(now);
+            if !self.conversation.paste_overflow
+                && paste.len().saturating_add(output.len())
+                    <= attachments::paste_limit(paste, output)
+            {
                 paste.extend_from_slice(output);
             } else {
                 self.conversation.paste_overflow = true;
@@ -1506,18 +1597,24 @@ impl State {
     }
 
     pub(super) fn chat_keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        // Recover before accepting new input, so text typed after the deadline is
+        // not swallowed by a truncated binary paste.
+        self.chat_expire_image_paste(now);
+        if !bytes.is_empty() && self.conversation.paste.is_some() {
+            self.conversation.paste_last_input = Some(now);
+        }
         self.chat_updates();
         // Keep text and navigation in their original order, including coalesced reads.
         for byte in bytes {
             let (output, keys) = self.keyboard.feed(&[*byte], now, false, true, false);
-            self.chat_output(&output);
+            self.chat_output(&output, now);
             for key in keys {
                 self.chat_key(key);
             }
         }
-        if flush {
+        if flush && self.conversation.paste.is_none() {
             let (output, keys) = self.keyboard.feed(&[], now, true, true, false);
-            self.chat_output(&output);
+            self.chat_output(&output, now);
             for key in keys {
                 self.chat_key(key);
             }
@@ -1539,13 +1636,12 @@ impl State {
 
     fn chat_line(&self, text: &str, tone: PanelTone, width: u16) -> String {
         let plain = fit(text, width);
-        self.tone(
-            tone,
-            &format!(
-                "{plain}{}",
-                " ".repeat(usize::from(width).saturating_sub(plain.width()))
-            ),
-        )
+        let row = ztui::Row::measured(&plain, |text| text.width());
+        let mut padded =
+            String::with_capacity(plain.len() + usize::from(width).saturating_sub(row.columns()));
+        row.write_padded(&mut padded, width)
+            .expect("fit bounds the row and writing into String cannot fail");
+        self.tone(tone, &padded)
     }
 
     fn chat_list_window(&mut self, count: usize, height: u16) -> std::ops::Range<usize> {
@@ -1909,7 +2005,7 @@ impl State {
         let height = body_rows(g.rows);
         let mut body = match self.conversation.view {
             View::Activity => self.filtered_logs().unwrap_or_else(|| {
-                if self.events.is_empty() {
+                if self.raw_activity || self.events.is_empty() {
                     (0..height)
                         .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
                         .collect()
@@ -2007,6 +2103,11 @@ impl State {
                             "↑↓ select · Enter/→ choose · Esc back · ● current recipient".into()
                         };
                     }
+                    if let Some(guide) = self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18) {
+                        let link = format!("{status} · {}", guide.url());
+                        return if link.width() < usize::from(g.cols) { link }
+                            else { "F1 · full online guide link".into() };
+                    }
                     format!(
                         "{} · {status} · {} members / {} calls · {pending} queued · ← agents · /help",
                         if self.conversation.content_focus {
@@ -2033,7 +2134,11 @@ impl State {
                 self.chat_line(
                     &format!(
                         "  ssmcp  /  {}{}{suffix}",
-                        self.conversation.view.name(),
+                        if self.raw_activity && self.conversation.view == View::Activity {
+                            "raw activity"
+                        } else {
+                            self.conversation.view.name()
+                        },
                         self.context_label,
                     ),
                     PanelTone::Heading,
@@ -2073,6 +2178,8 @@ impl State {
         );
         if let Some(rect) = layout.sidebar {
             let limit = usize::from(g.rows.saturating_sub(1));
+            let footer = self.guide_rows(rect.width, limit as u16);
+            let footer_start = limit.saturating_sub(footer.len());
             let mut sidebar = Vec::new();
             for kind in &self.ui.panels {
                 let mut section = match kind {
@@ -2146,12 +2253,16 @@ impl State {
                 }
             }
             for (index, line) in rows.iter_mut().enumerate().take(limit) {
-                let (text, tone) = sidebar
-                    .get(index)
-                    .cloned()
-                    .unwrap_or((String::new(), PanelTone::Normal));
                 line.push_str(&self.tone(PanelTone::Muted, "│"));
-                line.push_str(&self.chat_line(&text, tone, rect.width));
+                if index >= footer_start {
+                    line.push_str(&footer[index - footer_start]);
+                } else {
+                    let (text, tone) = sidebar
+                        .get(index)
+                        .cloned()
+                        .unwrap_or((String::new(), PanelTone::Normal));
+                    line.push_str(&self.chat_line(&text, tone, rect.width));
+                }
             }
         }
         let cursor = (
@@ -2190,6 +2301,147 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
+    }
+
+    #[test]
+    fn raw_activity_shows_retained_output_and_preserves_the_draft_and_compact_state() {
+        let mut state = State::new(24, 100, &Ui::default());
+        state.preview = true;
+        let event = json!({"type":"ssmcp.exec.started","job_id":"raw-test"});
+        let bytes = b"[RUN] raw-test\nraw-only-detail-marker\n";
+        state.log_raw(bytes);
+        state.events.ingest_event("shell", &event, bytes);
+        assert!(state.conversation.composer.insert("unfinished draft"));
+        state.conversation.composer.left();
+        let before = (
+            state.conversation.composer.text().to_owned(),
+            state.conversation.composer.cursor(),
+            state.events.snapshot(),
+        );
+        assert!(
+            !display(&mut state)
+                .screen()
+                .contents()
+                .contains("raw-only-detail-marker")
+        );
+        assert!(state.chat_command("/raw").unwrap());
+        assert!(state.raw_activity);
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("raw-only-detail-marker")
+        );
+        state.chat_move(-1);
+        assert_eq!(state.events.snapshot(), before.2);
+        assert!(state.chat_command("/logs").unwrap());
+        assert!(!state.raw_activity);
+        assert_eq!(state.conversation.composer.text(), before.0);
+        assert_eq!(state.conversation.composer.cursor(), before.1);
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        assert!(
+            !display(&mut state)
+                .screen()
+                .contents()
+                .contains("raw-only-detail-marker")
+        );
+    }
+
+    #[test]
+    fn binary_png_paste_keeps_controls_delimiters_and_following_text_separate() {
+        let png = crate::client::input::paste::fixture_png();
+        for size in [1, 3, 17, 4096] {
+            let mut state = preview(24, 100);
+            state.conversation.composer.set_text("保留草稿");
+            state.conversation.target = Some("agent-fixture".into());
+            let now = Instant::now();
+            input(&mut state, b"\x1b[200~");
+            for part in png.chunks(size) {
+                assert!(state.chat_keyboard(part, now, false).is_empty());
+            }
+            assert_eq!(state.conversation.paste.as_deref(), Some(png.as_slice()));
+            assert!(state.conversation.paste_png.allows_end());
+            assert!(state.keyboard.pasting);
+            assert_eq!(state.conversation.composer.text(), "保留草稿");
+            assert_eq!(state.conversation.target.as_deref(), Some("agent-fixture"));
+            assert!(state.actions.is_empty());
+            assert!(state.conversation.input_task.is_none());
+            assert!(state.conversation.submitting.is_none());
+            let tail = [b"\x1b[201~".as_slice(), " 继续中文".as_bytes()].concat();
+            assert!(state.chat_keyboard(&tail, now, false).is_empty());
+            assert!(state.conversation.paste.is_none());
+            assert!(!state.keyboard.pasting);
+            assert_eq!(state.conversation.composer.text(), "保留草稿 继续中文");
+            assert!(state.notice.as_deref().unwrap().contains("Preview"));
+            assert!(state.actions.is_empty());
+        }
+    }
+
+    #[test]
+    fn truncated_png_paste_recovers_before_new_text_without_replaying_bytes() {
+        let png = crate::client::input::paste::fixture_png();
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("原草稿");
+        state.conversation.target = Some("agent-fixture".into());
+        let now = Instant::now();
+        let incomplete = [
+            b"\x1b[200~".as_slice(),
+            &png[..png.len() - 8],
+            b"\x1b[201~\r\x1b[15~\x03",
+        ]
+        .concat();
+        assert!(state.chat_keyboard(&incomplete, now, false).is_empty());
+        assert_eq!(state.conversation.composer.text(), "原草稿");
+        assert!(state.actions.is_empty());
+        assert!(state.conversation.submitting.is_none());
+        // Pending ESC bytes must not leak into the next ordinary input.
+        assert!(state.chat_keyboard(b"\x1b[", now, false).is_empty());
+        let later = now + crate::client::input::paste::IMAGE_IDLE_TIMEOUT;
+        assert!(
+            state
+                .chat_keyboard(" 后续文字".as_bytes(), later, false)
+                .is_empty()
+        );
+        assert_eq!(state.conversation.composer.text(), "原草稿 后续文字");
+        assert_eq!(state.conversation.target.as_deref(), Some("agent-fixture"));
+        assert!(state.conversation.paste.is_none());
+        assert!(!state.keyboard.pasting);
+        assert!(state.keyboard.pending.is_empty());
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Incomplete image paste")
+        );
+        assert!(state.actions.is_empty());
+    }
+
+    #[test]
+    fn damaged_png_paste_is_rejected_without_text_attachment_or_draft_change() {
+        let png = crate::client::input::paste::fixture_png();
+        let damaged = String::from_utf8_lossy(&png);
+        // Remove terminal delimiters here: this regression is the original lossy
+        // UTF-8 header, independent from the valid raw PNG framing regression.
+        let mut bad = damaged.as_bytes()[..16].to_vec();
+        bad.extend_from_slice(b"IHDR");
+        bad.resize(9 * 1024, b'x');
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("不改变草稿");
+        input(&mut state, b"\x1b[200~");
+        input(&mut state, &bad);
+        input(&mut state, b"\x1b[201~");
+        assert_eq!(state.conversation.composer.text(), "不改变草稿");
+        assert!(state.conversation.input_task.is_none());
+        assert!(state.conversation.submitting.is_none());
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("terminal altered image bytes")
+        );
+        assert!(state.notice.as_deref().unwrap().contains("Ctrl+V"));
     }
 
     #[cfg(unix)]
@@ -3123,6 +3375,98 @@ mod tests {
         state.chat_move(1);
         assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
     }
+    #[tokio::test]
+    async fn enter_waits_for_input_without_changing_draft_recipient_or_edit_revision() {
+        for editing in [None, Some("editable-request".to_owned())] {
+            let mut state = preview(24, 100);
+            state.conversation.composer.set_text("说明：请检查界");
+            state.conversation.composer.left();
+            state.conversation.target = Some("chosen-agent".into());
+            state.conversation.editing = editing.clone();
+            let stamp = state.chat_input_stamp().unwrap();
+            let (task, sender) = attachments::Task::pending_for_test();
+            state.conversation.input_task = Some(task);
+            state.conversation.input_stamp = Some(stamp.clone());
+            state.dirty = false;
+
+            input(&mut state, b"\r");
+
+            assert_eq!(state.chat_input_stamp().as_ref(), Some(&stamp));
+            assert!(state.conversation.submitting.is_none());
+            assert!(state.actions.is_empty());
+            assert!(state.dirty);
+            assert_eq!(
+                state.notice.as_deref(),
+                Some("Preparing local input… · wait for it to finish before sending")
+            );
+            assert!(state.conversation.input_task.is_some());
+
+            sender
+                .send(Ok(attachments::Loaded::Reference {
+                    reference: "@\".ssmcp/inputs/image-fixture.png\"".into(),
+                    description: "Prepared local image".into(),
+                }))
+                .unwrap();
+            state.chat_poll_input();
+            assert_eq!(
+                state.conversation.composer.text(),
+                "说明：请检查\n@\".ssmcp/inputs/image-fixture.png\"\n界"
+            );
+            assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+            assert_eq!(state.conversation.editing, editing);
+            assert!(state.conversation.submitting.is_none());
+            assert!(!state.chat_wait_for_input());
+        }
+    }
+
+    #[tokio::test]
+    async fn enter_waits_for_attachment_before_submitting_a_question_answer() {
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("保留普通草稿");
+        state.conversation.view = View::Questions;
+        state.conversation.detail = true;
+        state.conversation.question_id = Some("pending-image-question".into());
+        let mut answer = Composer::default();
+        answer.set_text("回答界");
+        answer.left();
+        state
+            .conversation
+            .answers
+            .insert("pending-image-question".into(), answer);
+        let stamp = state.chat_input_stamp().unwrap();
+        let (task, sender) = attachments::Task::pending_for_test();
+        state.conversation.input_task = Some(task);
+        state.conversation.input_stamp = Some(stamp.clone());
+
+        input(&mut state, b"\r");
+
+        assert_eq!(state.chat_input_stamp().as_ref(), Some(&stamp));
+        assert_eq!(state.conversation.composer.text(), "保留普通草稿");
+        assert_eq!(
+            state.notice.as_deref(),
+            Some("Preparing local input… · wait for it to finish before sending")
+        );
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+        sender
+            .send(Ok(attachments::Loaded::Reference {
+                reference: "@\".ssmcp/inputs/answer-fixture.png\"".into(),
+                description: "Prepared answer image".into(),
+            }))
+            .unwrap();
+        state.chat_poll_input();
+        assert_eq!(
+            state.question_editor().unwrap().text(),
+            "回答\n@\".ssmcp/inputs/answer-fixture.png\"\n界"
+        );
+        assert_eq!(state.conversation.composer.text(), "保留普通草稿");
+        assert_eq!(
+            state.conversation.question_id.as_deref(),
+            Some("pending-image-question")
+        );
+        assert!(!state.chat_wait_for_input());
+    }
+
     #[test]
     fn async_local_reference_stays_editable_and_keeps_recipient() {
         let mut state = preview(24, 100);
