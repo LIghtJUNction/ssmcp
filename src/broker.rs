@@ -82,7 +82,6 @@ pub struct Session {
     // Resolved provider subject IDs are immutable for this SSH connection.
     allow: Vec<Identity>,
     info: ClientInfo,
-    wire_version: u32,
     sender: mpsc::Sender<Call>,
     reports: mpsc::Sender<wire::CodeCompletion>,
     slots: Semaphore,
@@ -110,17 +109,14 @@ impl Session {
     }
 
     pub fn supports_controller(&self) -> bool {
-        self.wire_version >= wire::CONTROLLER_VERSION
-    }
-
-    fn supports_code_context(&self) -> bool {
-        self.wire_version >= wire::CODE_VERSION
+        // Registration accepts only the current protocol, which includes attribution.
+        true
     }
 
     /// Called only after the HTTP caller rechecks its current token and ACL.
     pub(crate) fn report_code_mode(&self, completion: wire::CodeCompletion) -> Result<(), String> {
         completion.validate()?;
-        if !self.is_alive() || !self.supports_code_context() {
+        if !self.is_alive() {
             return Err("client cannot receive code audit completion".into());
         }
         self.reports
@@ -132,8 +128,8 @@ impl Session {
         &self,
         command: wire::SteeringCommand,
     ) -> Result<wire::SteeringSnapshot, String> {
-        if !self.is_alive() || self.wire_version < wire::VERSION {
-            return Err("the local composer requires wire protocol version 7".into());
+        if !self.is_alive() {
+            return Err("client connection is closed".into());
         }
         self.steering
             .command(self.client_id(), self.collaboration.presence()?, command)
@@ -189,13 +185,7 @@ impl Session {
         if let Some(controller) = &controller {
             controller.validate()?;
         }
-        // An older client uses a strict frame parser. Omit the new field
-        // entirely; never corrupt its connection merely to improve display.
-        let controller = controller.filter(|_| self.supports_controller());
-        let code_context = audit_run
-            .as_ref()
-            .filter(|_| self.supports_code_context())
-            .map(|run| (*run.context).clone());
+        let code_context = audit_run.as_ref().map(|run| (*run.context).clone());
         let carries_source = code_context.is_some();
         if !self.alive.load(Ordering::Acquire) {
             return Err("client disconnected".into());
@@ -436,7 +426,6 @@ impl Broker {
                 cwd: "/test".into(),
                 hostname: "localhost".into(),
             },
-            wire_version: wire::VERSION,
             sender,
             reports,
             slots: Semaphore::new(1),
@@ -559,31 +548,17 @@ impl Broker {
     {
         let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
-        let (wire_version, mode, metadata) = match timeout(
-            IO_TIMEOUT,
-            wire::read_frame(&mut reader),
-        )
-        .await??
-        {
+        let (mode, metadata) = match timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await?? {
             Some(Frame::Hello {
                 version,
                 mode,
                 metadata,
-            }) if matches!(
-                version,
-                wire::VERSION
-                    | wire::CODE_VERSION
-                    | wire::CONTROLLER_VERSION
-                    | wire::LEGACY_VERSION
-            ) =>
-            {
-                (version, mode, metadata)
-            }
+            }) if version == wire::VERSION => (mode, metadata),
             _ => {
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5, v6 and v7)".into(),
+                        message: format!("unsupported ssmcp wire protocol; server requires version {}; update ssmcp and ssmcpd", wire::VERSION),
                     },
                 )
                 .await?;
@@ -691,7 +666,6 @@ impl Broker {
                 cwd: metadata.cwd,
                 hostname: metadata.hostname,
             },
-            wire_version,
             sender,
             reports,
             slots: Semaphore::new(wire::MAX_INFLIGHT),
@@ -1027,16 +1001,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn controller_and_code_audit_negotiate_real_version_four_five_and_six_connections() {
-        for version in [
-            wire::LEGACY_VERSION,
-            wire::CONTROLLER_VERSION,
-            wire::CODE_VERSION,
-            wire::VERSION,
-        ] {
+    async fn registration_rejects_every_noncurrent_wire_version() {
+        for version in [0, 4, 5, 6, wire::VERSION + 1] {
             let broker = Arc::new(Broker::new("https://example.test".into()));
             let (server, client) = UnixStream::pair().unwrap();
-            let server_task = tokio::spawn(broker.clone().attach(server));
+            let server_task = tokio::spawn(broker.attach(server));
             let (reader, mut writer) = client.into_split();
             let mut reader = BufReader::new(reader);
             wire::write_frame(
@@ -1044,99 +1013,117 @@ mod tests {
                 &Frame::Hello {
                     version,
                     mode: wire::Mode::Shell,
-                    metadata: metadata("controller test", "/project"),
+                    metadata: metadata("unsupported protocol", "/project"),
                 },
             )
             .await
             .unwrap();
-            let Some(Frame::Ready {
-                url, login_code, ..
-            }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
-                .await
-                .unwrap()
-                .unwrap()
+            let Some(Frame::Reject { message }) =
+                timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                    .await
+                    .unwrap()
+                    .unwrap()
             else {
-                panic!("registration failed");
+                panic!("noncurrent version {version} was not rejected");
             };
-            let user = url.rsplit('/').next().unwrap();
-            let subject = broker.redeem_login(user, &login_code).await.unwrap();
-            assert_eq!(
-                subject.supports_controller(),
-                version >= wire::CONTROLLER_VERSION
-            );
-            let reports = subject.clone();
-            let code =
-                "// preserve source spacing\n  return await exec.run('one', {command:['true']});\n";
-            let run = crate::code_mode::AuditRun::new(code, None).unwrap();
-            let request =
-                tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
-                    subject
-                        .call_with_controller(
-                            Operation::Status {},
-                            Some(wire::Controller {
-                                name: Some("ChatGPT".into()),
-                                model: Some("test-model".into()),
-                                source: wire::ControllerSource::CallerReported,
-                            }),
-                        )
-                        .await
-                }));
-            let Some(Frame::Call {
-                id,
-                controller,
-                code_context,
-                ..
-            }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
-                .await
-                .unwrap()
-                .unwrap()
-            else {
-                panic!("missing call");
-            };
-            if version == wire::LEGACY_VERSION {
-                assert!(controller.is_none());
-            } else {
-                assert_eq!(controller.unwrap().model.as_deref(), Some("test-model"));
-            }
-            if version >= wire::CODE_VERSION {
-                assert_eq!(code_context.unwrap().code, code);
-                assert_eq!(run.targets(), vec![reports.client_id().to_owned()]);
-            } else {
-                assert!(code_context.is_none());
-                assert!(run.targets().is_empty());
-            }
-            wire::write_frame(
-                &mut writer,
-                &Frame::Reply {
-                    id,
-                    result: Ok(serde_json::json!({"ok":true})),
-                },
-            )
-            .await
-            .unwrap();
-            let result = request.await.unwrap();
-            assert!(result.as_ref().unwrap()["ok"] == true);
-            if version >= wire::CODE_VERSION {
-                reports.report_code_mode(run.completion(&result)).unwrap();
-                let Some(Frame::CodeModeFinished { completion }) =
-                    timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
-                        .await
-                        .unwrap()
-                        .unwrap()
-                else {
-                    panic!("missing run completion");
-                };
-                assert_eq!(completion.run_id, run.context.run_id);
-                assert!(completion.success);
-            }
-            drop(reader);
-            drop(writer);
+            assert!(message.contains(&format!("server requires version {}", wire::VERSION)));
             timeout(Duration::from_secs(2), server_task)
                 .await
                 .unwrap()
                 .unwrap()
                 .unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn current_protocol_carries_controller_and_code_audit() {
+        let broker = Arc::new(Broker::new("https://example.test".into()));
+        let (server, client) = UnixStream::pair().unwrap();
+        let server_task = tokio::spawn(broker.clone().attach(server));
+        let (reader, mut writer) = client.into_split();
+        let mut reader = BufReader::new(reader);
+        wire::write_frame(
+            &mut writer,
+            &Frame::Hello {
+                version: wire::VERSION,
+                mode: wire::Mode::Shell,
+                metadata: metadata("controller test", "/project"),
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::Ready {
+            url, login_code, ..
+        }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("registration failed");
+        };
+        let user = url.rsplit('/').next().unwrap();
+        let subject = broker.redeem_login(user, &login_code).await.unwrap();
+        assert!(subject.supports_controller());
+        let reports = subject.clone();
+        let code =
+            "// preserve source spacing\n  return await exec.run('one', {command:['true']});\n";
+        let run = crate::code_mode::AuditRun::new(code, None).unwrap();
+        let request = tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+            subject
+                .call_with_controller(
+                    Operation::Status {},
+                    Some(wire::Controller {
+                        name: Some("ChatGPT".into()),
+                        model: Some("test-model".into()),
+                        source: wire::ControllerSource::CallerReported,
+                    }),
+                )
+                .await
+        }));
+        let Some(Frame::Call {
+            id,
+            controller,
+            code_context,
+            ..
+        }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("missing call");
+        };
+        assert_eq!(controller.unwrap().model.as_deref(), Some("test-model"));
+        assert_eq!(code_context.unwrap().code, code);
+        assert_eq!(run.targets(), vec![reports.client_id().to_owned()]);
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(serde_json::json!({"ok":true})),
+            },
+        )
+        .await
+        .unwrap();
+        let result = request.await.unwrap();
+        assert!(result.as_ref().unwrap()["ok"] == true);
+        reports.report_code_mode(run.completion(&result)).unwrap();
+        let Some(Frame::CodeModeFinished { completion }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing run completion");
+        };
+        assert_eq!(completion.run_id, run.context.run_id);
+        assert!(completion.success);
+        drop(reader);
+        drop(writer);
+        timeout(Duration::from_secs(2), server_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1196,73 +1183,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn controller_metadata_is_per_call_and_omitted_for_version_four_clients() {
-        for version in [
-            wire::LEGACY_VERSION,
-            wire::CONTROLLER_VERSION,
-            wire::CODE_VERSION,
-            wire::VERSION,
-        ] {
-            let (sender, mut receiver) = mpsc::channel(4);
-            let mut subject = session("controller-test", "secret");
-            let mutable = Arc::get_mut(&mut subject).unwrap();
-            mutable.sender = sender;
-            mutable.slots = Semaphore::new(4);
-            mutable.wire_version = version;
-            let mut tasks = Vec::new();
-            for (tool, model) in [("tool.a", "model-a"), ("tool.b", "model-b")] {
-                let subject = subject.clone();
-                tasks.push(tokio::spawn(async move {
-                    subject
-                        .call_with_controller(
-                            Operation::CallTool {
-                                name: tool.into(),
-                                arguments: serde_json::json!({}),
-                            },
-                            Some(wire::Controller {
-                                name: Some("ChatGPT".into()),
-                                model: Some(model.into()),
-                                source: wire::ControllerSource::CallerReported,
-                            }),
-                        )
-                        .await
-                }));
-            }
-            let first = timeout(Duration::from_secs(2), receiver.recv())
-                .await
-                .unwrap()
+    async fn controller_metadata_is_per_call_on_current_protocol() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let mut subject = session("controller-test", "secret");
+        let mutable = Arc::get_mut(&mut subject).unwrap();
+        mutable.sender = sender;
+        mutable.slots = Semaphore::new(4);
+        let mut tasks = Vec::new();
+        for (tool, model) in [("tool.a", "model-a"), ("tool.b", "model-b")] {
+            let subject = subject.clone();
+            tasks.push(tokio::spawn(async move {
+                subject
+                    .call_with_controller(
+                        Operation::CallTool {
+                            name: tool.into(),
+                            arguments: serde_json::json!({}),
+                        },
+                        Some(wire::Controller {
+                            name: Some("ChatGPT".into()),
+                            model: Some(model.into()),
+                            source: wire::ControllerSource::CallerReported,
+                        }),
+                    )
+                    .await
+            }));
+        }
+        let first = timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let second = timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        for call in [second, first] {
+            let Operation::CallTool { name, .. } = call.operation else {
+                panic!("expected native call");
+            };
+            let expected = if name == "tool.a" {
+                "model-a"
+            } else {
+                "model-b"
+            };
+            assert_eq!(call.controller.unwrap().model.as_deref(), Some(expected));
+            call.reply
+                .send(Ok(serde_json::json!({"tool":name})))
                 .unwrap();
-            let second = timeout(Duration::from_secs(2), receiver.recv())
-                .await
-                .unwrap()
-                .unwrap();
-            for call in [second, first] {
-                let Operation::CallTool { name, .. } = call.operation else {
-                    panic!("expected native call");
-                };
-                if version == wire::LEGACY_VERSION {
-                    assert!(call.controller.is_none());
-                } else {
-                    let expected = if name == "tool.a" {
-                        "model-a"
-                    } else {
-                        "model-b"
-                    };
-                    assert_eq!(call.controller.unwrap().model.as_deref(), Some(expected));
-                }
-                call.reply
-                    .send(Ok(serde_json::json!({"tool":name})))
-                    .unwrap();
-            }
-            for task in tasks {
-                assert!(
-                    timeout(Duration::from_secs(2), task)
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .is_ok()
-                );
-            }
+        }
+        for task in tasks {
+            assert!(
+                timeout(Duration::from_secs(2), task)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_ok()
+            );
         }
     }
 
@@ -1299,7 +1274,6 @@ mod tests {
                 cwd: "/project".into(),
                 hostname: "localhost".into(),
             },
-            wire_version: wire::VERSION,
             sender,
             reports,
             slots: Semaphore::new(1),

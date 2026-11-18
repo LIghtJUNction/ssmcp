@@ -4,13 +4,8 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
+/// The sole supported wire protocol, including controller, source audit and steering.
 pub const VERSION: u32 = 7;
-/// Version 6 adds code-mode source auditing; version 7 adds the local composer.
-pub const CODE_VERSION: u32 = 6;
-/// Version 5 supports controller attribution but not code-mode audit metadata.
-pub const CONTROLLER_VERSION: u32 = 5;
-/// Version 4 clients remain usable, but cannot receive controller metadata.
-pub const LEGACY_VERSION: u32 = 4;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub const MAX_READ: usize = 32 * 1024;
 pub const MAX_WRITE: usize = 16 * 1024;
@@ -448,11 +443,11 @@ pub enum Frame {
     Call {
         id: u64,
         operation: Operation,
-        /// Absent on the version 4 wire. Per-call attribution avoids one caller
-        /// overwriting another caller's identity during concurrent execution.
+        /// Optional per-call attribution prevents concurrent callers from
+        /// overwriting one another's displayed identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         controller: Option<Controller>,
-        /// Omitted entirely for version 4/5 peers with strict frame decoders.
+        /// Present only when this call belongs to an audited code-mode run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code_context: Option<CodeContext>,
     },
@@ -551,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_controller_retains_the_strict_version_four_frame_shape() {
+    fn call_metadata_is_optional_and_keeps_per_call_attribution() {
         let frame = Frame::Call {
             id: 7,
             operation: Operation::Status {},

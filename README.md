@@ -1,28 +1,28 @@
 # ssmcp
 
-**连接你的设备，让终端和 MCP 客户端调用本机工具。**
+### 把你的电脑接到 Agent。用一个 `code_mode` 调用原生工具。
 
-[![ssmcp 原创短片《日蚀》封面，日冕照亮立体城市天际线](docs/assets/ssmcp-eclipse.jpg)](docs/assets/ssmcp-eclipse.mp4)
+ssmcp 是一个可自建的远程 harness 通道。客户端把命令、文件、浏览器和已安装的开发工具接入授权会话；Agent 通过 MCP 选择设备并调用这些工具。模型可以在云端，工作区、执行环境和工具状态留在你的机器上。
 
-[播放《日蚀》 · 24 秒](docs/assets/ssmcp-eclipse.mp4)
+[快速开始](#快速开始) · [会话操作](docs/client-input.md) · [工具与浏览器](docs/backends.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
 
-[![CI](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LIghtJUNction/ssmcp/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/ssmcp.svg)](https://crates.io/crates/ssmcp)
-[![License: MIT](https://img.shields.io/badge/License-MIT-64748b)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.89%2B-64748b?style=flat-square)](Cargo.toml) [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE) [![Releases](https://img.shields.io/badge/Download-Releases-4285f4?style=flat-square)](https://github.com/LIghtJUNction/ssmcp/releases)
 
-ssmcp 将本机 Shell、命令任务、文件和已安装工具接入经过授权的 MCP 会话。设备通过 HTTPS/WSS 连接服务器，操作在设备上执行。`list` 发现设备，`code_mode` 编排原生调用，`collab` 管理同一会话中的 agent 成员与消息。终端界面展示执行记录、源码审计和工作区状态，也支持通过原子接口构建自己的 UI。
+---
 
-[快速开始](#快速开始) · [服务器与信任](#中转服务器与信任) · [定制客户端](#定制客户端) · [原子接口](#原子接口) · [文档](#文档)
+## 一条连接，三种用法
 
-## 一个命令连接
+| 你想做的事 | ssmcp 提供什么 |
+| --- | --- |
+| 让云端 Agent 操作开发机 | 原生 Shell、独立命令任务、文件、浏览器、桌面，以及实际发现到的 Codex / Claude Code / Pi / OpenCode / Playwright 工具 |
+| 在终端里持续协作 | Markdown 回复、代码高亮、文件和技能引用、问答队列、历史恢复；运行期间仍可继续输入 |
+| 做自己的远程 harness | 客户端拥有工具目录、schema、上下文与 UI；复用协议和客户端扩展 hook，替换自己需要的部分 |
 
-运行 `ssmcp alice@relay.example.com`，首次连接会检查你选择的用户名，引导 GitHub 授权，然后建立 HTTPS/WSS 连接。后续复用这台服务器的本机凭据；`ssmcp login` 保留为兼容入口。
-
-本项目由 Astra Pro 在网页版 Chat 模式下使用 ssmcp 插件开发。
+它的基本过程很直接：Agent 选中一个在线客户端，提交带参数的工具调用，客户端在本机执行，再返回结果、图片或完整输出的归档位置。工具的名称和参数来自实时目录；安装了一个产品，不代表它的全部内部功能都可以直接调用。
 
 ## 快速开始
 
-### 1. 安装客户端
+### 1. 安装
 
 Linux / macOS：
 
@@ -36,289 +36,159 @@ Windows PowerShell：
 irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex
 ```
 
-已安装 Rust 时也可运行 `cargo install ssmcp --locked --bin ssmcp`。Release 提供 Linux、macOS、Windows 的 x86_64 与 ARM64 客户端；安装脚本核验下载文件和版本后替换程序，重复运行即可升级。[平台要求与安装选项](docs/releases.md)
+也可以使用 `cargo install ssmcp --locked --bin ssmcp`。安装脚本获取已发布版本；本文的新会话能力对应仓库中的 **0.9.0 源码**。[平台与安装选项](docs/releases.md)
 
-### 2. 登录并连接设备
-
-使用已启用 GitHub OAuth、账号门户和客户端 API 的 ssmcp 服务器，将示例地址换成实际服务地址：
+### 2. 在项目目录连接
 
 ```sh
-# 在要操作的项目目录运行，首次连接自动引导授权。
-ssmcp alice@ssmcp.example.com --name dev --title "开发与测试"
-
-# 无图形浏览器时，打印链接和确认码供另一台设备打开。
-ssmcp alice@ssmcp.example.com --no-browser
+ssmcp alice@relay.example.com --name dev --title "开发与测试"
 ```
 
-`alice` 是你在这台服务器选择的用户名，可以与 GitHub 用户名不同。用户名统一为小写，长度为 3–32 个 ASCII 字符；首字符为字母，末字符为字母或数字，中间可用字母、数字、`_`、`-`。每个 GitHub 账号在一台服务器绑定一个用户名，各服务器的凭据分别保存。[用户名与管理员配置](docs/named-accounts.md)
+把服务器地址换成自己的服务地址。首次连接引导 GitHub 授权，并在该服务器绑定你选择的用户名。后续直接运行 `ssmcp`，即可复用最近的授权账号；没有图形浏览器时使用 `--no-browser`。
 
-保持终端打开即可提供当前目录的本机工具。之后可直接运行 `ssmcp --name dev` 复用默认服务器，`ssmcp whoami` 查看身份。连接采用出站 HTTPS/WSS，无需设备入站端口；断线后默认尝试重连，`--no-watchdog` 可以关闭自动重连。
-
-在另一个终端查看会话，或进入设备的交互终端：
+客户端主动建立 HTTPS/WSS 连接，无需在设备上开放入站端口。保持终端或后台客户端运行，就能使用它的工作区和工具。已有 SSH 部署可以显式运行 `ssmcp --ssh my-server`。
 
 ```sh
-ssmcp list
-ssmcp -i
+ssmcp list       # 查看已授权的在线设备
+ssmcp -i         # 进入一台设备的交互终端
+ssmcp whoami    # 查看当前账号
 ```
 
-Ctrl-] 离开远端控制界面，会话继续运行；其中的 Ctrl-C 发送给远端 Shell。[账号、临时接入与会话管理](docs/client-accounts.md)
+完整步骤见[账号与设备](docs/client-accounts.md)、[默认服务器与可信公钥](docs/client-server.md)和[SSH 配置](docs/configuration.md)。
 
-### 3. 接入 MCP 客户端
+### 3. 接入 MCP
 
-将终端显示的 `https://你的服务器/mcp` 加入 ChatGPT 或其他支持 OAuth 的 MCP 客户端，用同一 GitHub 账号确认授权。调用 `list` 选择设备，再通过 `code_mode` 调用该设备的能力；需要多个 agent 交换任务与结果时，使用 `collab`。CLI 登录和 MCP 应用授权分别管理。
+将终端显示的 `https://你的服务器/mcp` 加入 ChatGPT 或其他支持 OAuth 的 MCP 客户端，再完成该应用的授权。CLI 登录与 MCP 应用授权分别管理。
 
-已有 SSH 连接通过 `ssmcp --ssh my-server` 显式使用；`-F`、`--identity` 或 `-p` 也会选择 SSH 路径，见[SSH 接入与身份授权](docs/configuration.md)。自建服务器的部署步骤见[部署指南](docs/deployment.md)。
+对外入口保持三个：
 
-## 中转服务器与信任
-
-### 保存默认服务器
-
-```sh
-ssmcp config set server https://relay.example.com
-ssmcp config get server
-ssmcp config path
-```
-
-地址按 `--server` → 配置文件的 `[client].server` → 最后登录的服务器 → 内置地址 `https://ssmcp.lmm.best` 选择。`config set` 保留已有 UI 设置与注释；`config unset server` 移除文件中的覆盖。首次切换服务器可运行 `ssmcp alice@relay.example.com` 自动注册或登录，各服务器的账号凭据分别保存。
-
-也可编辑 `ssmcp config path` 指定的文件，默认是 `~/.config/ssmcp/config.toml`：
-
-```toml
-[client]
-server = "https://relay.example.com"
-```
-
-`SSMCP_CLIENT_CONFIG` 可指定另一份绝对路径配置文件；`--ui-config` 和 `SSMCP_UI_CONFIG` 只选择显示配置。[路径、优先级与命令示例](docs/client-server.md#设置默认服务器)
-
-### 固定可信公钥
-
-取得并核验管理员提供的 HTTPS 入口公钥后，可登记到本机：
-
-```sh
-ssmcp trust add --server https://relay.example.com --public-key ./server-public.pem
-ssmcp trust path
-ssmcp trust list
-```
-
-记录保存在客户端配置同目录的 `trusted-servers.toml`，默认是 `~/.config/ssmcp/trusted-servers.toml`。这里登记 TLS 证书的 SPKI 公钥；使用 Nginx、Caddy 或 CDN 时，应登记实际 HTTPS 入口的公钥。HTTPS API 与 WSS 连接会同时检查正常证书条件和已登记公钥，不匹配时停止连接。证书沿用原公钥续签时无需更新，换钥时先核验并登记新公钥。[文件格式、指纹与轮换](docs/client-server.md#信任公钥写到哪里)
-
-## 定制客户端
-
-本节描述 0.8.0 候选功能；通用安装命令获取已发布版本。候选源码、验证结果与安装状态见[最终集成报告](docs/reports/client-experience-0.8.0-20261118/final/README.md)。从当前源码预览可运行 `cargo run --locked --bin ssmcp -- ui preview`。
-
-0.8.0 客户端默认使用 `dark` 主题和 `chat` 布局：连续事件流展示调用、输出和结果，底部输入框用于追加用户要求。运行期间可以继续输入，待交付要求保留在队列中，支持取回编辑；下一次符合目标的 `code_mode` 响应携带这些要求时，界面标记为已交付。已交付表示附加到了响应，不代表模型已经阅读或执行。
-
-`/help` 或 F1 打开可滚动的完整帮助；`/audit` 浏览原始编排源码，`/queue` 管理待交付要求。输入框为空或光标在整份草稿开头时按 ← 打开 Agent 面板：↑/↓ 选择、Enter/→ 选定后返回会话、Esc/← 保留原收件人和草稿返回。Tab 切换输入与内容焦点，F2 轮换事件流、审计、成员、队列、问题与历史，F3 收起侧栏。`/reload` 重新启动客户端，F5 只重载显示配置。终端输入继续通过 `terminal.*` 或 `ssmcp -i` 使用。
-
-| 操作 | 用法与边界 |
+| 入口 | 作用 |
 | --- | --- |
-| 文件、技能与图片 | 输入 `@path`、`@"含空格的路径"` 或 `$skill-name`。文件须位于工作区内；文本附有界预览，图片通过 `ssmcp.fs.read_image` 实际读取后显示本地缩略图。支持 PNG/JPEG/GIF/WebP，单图最多 400 KiB；旧中转端仍仅兼容 PNG/JPEG |
-| 长粘贴 | Unix 终端的整段粘贴超过 8 KiB 时保存为私有文件并插入 `@file`，可继续追加要求；单次最多 4 MiB |
-| 事件与复制 | 缓冲工具输出默认摘要 8 行；活动页逐条折叠或展开，保留最多 128 条、合计 2 MiB 的展示正文。F7 冻结界面并释放鼠标选择，F7/Esc 返回；支持的终端也可 Shift+拖选 |
-| 历史与原生工具 | `/resume` 恢复本工作区的版本化 JSONL 文本历史，不重放工具或要求。`/pi`、`/cc`、`/codex` 先显示实际工具目录；只有显式 `TOOL {...}` 才调用工具，不虚构 Pi 内部 LSP 接口 |
+| `list` | 发现当前身份可访问的设备与客户端工具目录 |
+| `code_mode` | 用 JavaScript 组合原生调用，安排顺序、并发和结果读取 |
+| `collab` | 同一会话中的成员身份、定向消息、广播与确认 |
 
-Agent 向本机用户发送 Markdown 进度与结果时使用 `ssmcp.ui.message`；需要回答时用 `ssmcp.ui.ask` 非阻塞提问，稍后通过 `ssmcp.ui.questions` 读取答案。用户按 Shift+↑ 打开问题，普通草稿单独保留。这条本地通道不会拦截外部聊天应用。前台输入与后台 `ssmcp.ui.queue` 要求都在服务器确认接收后写入本地历史；确认入队不等于已交付。[输入、引用与本地沟通](docs/client-input.md) · [会话历史格式与恢复边界](docs/conversation-history.md)
-
-![ssmcp 客户端：执行记录、输入框和状态面板](docs/assets/client-ui.png)
-
-*图片由客户端实际渲染器回放固定示例生成；其中的成员、命令、输出与耗时用于展示布局。*
-
-先在本机预览，不需要连接服务器：
-
-```sh
-ssmcp ui preview
-ssmcp ui init
-ssmcp ui show
-ssmcp ui check
-```
-
-预览中按 Ctrl-] 退出，输入的要求不会执行。`ui init` 创建默认配置，已有文件会保留。编辑 `~/.config/ssmcp/config.toml` 后，按 F5 应用主题与布局；也可用 `--ui-config FILE` 为不同项目选择配置。
-
-```toml
-[ui]
-theme = "minimal"
-sidebar = true
-sidebar_width = 30
-panels = ["agents", "queue", "tasks", "git", "history"]
-hide_empty = true
-
-[ui.colors]
-background = "#101214"
-foreground = "#e8eaed"
-muted = "#9aa0a6"
-accent = "#8ab4f8"
-success = "#81c995"
-warning = "#fdd663"
-error = "#f28b82"
-heading = "#e8eaed"
-```
-
-内置 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题。默认 `dark` 绘制完整深色背景；`minimal` 跟随终端颜色。颜色可逐项覆盖，源码审计与日志可以单独浏览，状态面板可以排序或隐藏。[完整配置、快捷键与队列接口](docs/client-ui.md)
-
-要求队列和成员目标需要客户端与服务器支持协议 v7，源码审计需要 v6 或更新版本。兼容旧连接时界面会说明可用范围。源码来自调用方提交的 `code_mode.code`，脱敏后只发送给本次调用实际操作的客户端。重载使用私有、单次读取的草稿与队列交接；交付不确定的记录保留待复核，不会自动重发。[队列与恢复](docs/client-ui.md#输入要求与队列) · [源码范围](docs/client-ui.md#源码审计与运行状态)
-
-### 独立命令观察窗口
-
-启动时添加 `--tty`，可以在本机终端窗口中持续查看命令、输出和结束状态：
-
-```sh
-ssmcp --tty kitty alice@ssmcp.example.com
-ssmcp --tty ztty alice@ssmcp.example.com
-```
-
-顺序命令复用窗口，并行命令使用独立窗口。关闭观察窗口不会停止任务，客户端会重新打开显示；窗口中的键盘输入不发送给任务，交互仍使用 `exec.write` 或 `terminal.write`。终端程序需要能够访问客户端的桌面环境。
-
-启用 `--tty` 后，Unix 命令通过 PTY 输出，`output_mode: "pty"` 表示 stdout 包含合并后的 stdout/stderr；Windows 命令任务继续使用独立管道。完整输出、取消和执行期限仍由原有任务接口管理。[观察窗口、启动器与输出语义](docs/terminal-observers.md) · [已记录的验证](docs/validation-terminal-observers.md)
-
-## 原子接口
-
-ssmcp 的显示和执行能力各自提供小接口。自定义 TUI、桌面面板或其他 MCP 客户端可以读取状态、选择终端、控制任务和调整主题，不必解析屏幕文字。`ssmcp.ui.get` 支持按 JSON Pointer 读取字段和分页，界面轮询可以只取需要的状态。
-
-客户端提供自己的版本、能力清单、工具目录与资源内容，服务器按当前授权转发。`capabilities(clientId)` 读取能力清单，`resources.forClient(clientId)` 列出或读取客户端资源，`native(clientId)` 在查询 schema 后按工具名生成调用入口。新原语可通过原有 `call` 在旧服务器上使用；新增的 JavaScript helper 和通用资源路由需要服务器支持。[客户端能力与资源](docs/browser-desktop.md#client-owned-capabilities-and-resources)
-
-UI 状态、工具目录、能力清单和客户端资源查询默认不领取 `Next caller` 要求；下一次符合条件的工作调用仍会收到队列内容。显式 `collab.bind` 绑定身份的编排保持可领取状态。
-
-| 能力 | 接口 |
-| --- | --- |
-| 当前客户端能力与资源 | `capabilities`、`resources.forClient`、动态 `native(clientId)` |
-| 界面配置、状态与筛选 | `ssmcp.ui.get`、`ssmcp.ui.set`、`ssmcp.ui.action`、`ssmcp.ui.filter` |
-| 用户要求队列 | `ssmcp.ui.queue`：读取、提交、取回、编辑、取消与重新选择目标 |
-| 源码与调用审计 | `ssmcp.audit.events`，按游标读取 |
-| 多个交互终端 | `terminal.open/list/select/close/read/write/status/resize` |
-| 独立命令任务 | `exec.start/run/list/status/read/write/wait/cancel/forget` |
-| RTK 输出压缩 | `rtk.status/start/run`，调用设备上已安装的 RTK |
-| 执行事件 | `exec.events`，按游标增量读取 |
-| 工作区文件 | `fs.list/stat/read/write/mkdir`、`fs.readText/writeText/editText` |
-| 技能与项目指令 | `skills.list/read/view`、`agents.list/read/resolve` |
-| 当前项目上下文 | MCP `resources/read`，读取 AGENTS 内容、技能摘要与全文 |
-| 浏览器与桌面 | `browser.*`、`computer.*`，按实际能力状态调用 |
-| 输出归档 | `outputs.read/stat/cleanup` |
-| 会话内 agent 协作 | `collab.join/list/update/send/receive/ack/leave` |
-
-对外 MCP 提供 `list`、`code_mode` 和 `collab` 三个工具，分别用于设备发现、JavaScript 编排和成员通信。调用设备能力前先查询原生工具目录，再使用返回的参数 schema：
+先从 `list` 选择确切的客户端 ID，再查询工具的原始 schema：
 
 ```javascript
-const matches = clients.filter(c => c.name === "dev");
-if (matches.length !== 1) throw new Error("Select a unique client ID from list");
-const client = matches[0];
-
-return await tools.search(client.id, {
-  query: "ssmcp.ui",
+const clientId = "CLIENT_ID_FROM_LIST";
+return await tools.search(clientId, {
+  query: "ssmcp.exec",
   include_schemas: true
 });
 ```
 
-在下一次 `code_mode` 中，通过选中的 ID 调整界面：
+运行一个独立命令：
 
 ```javascript
-const client = clients.find(c => c.name === "dev");
-if (!client) throw new Error("dev is offline");
-
-return await call(client.id, "ssmcp.ui.set", {
-  patch: { layout: "audit", sidebar: false },
-  persist: true
-});
-```
-
-使用同一套连接运行独立命令：
-
-```javascript
-const client = clients.find(c => c.name === "dev");
-if (!client) throw new Error("dev is offline");
-
-return await exec.run(client.id, {
+const clientId = "CLIENT_ID_FROM_LIST";
+return await exec.run(clientId, {
   command: ["git", "status", "--short"],
   wait_ms: 5000
 });
 ```
 
-命令使用 argv 数组，结果带任务 ID、退出码、stdout/stderr 和输出游标。日志使用 `python3 -c · 83 lines` 这类脚本标签，并分别显示实际输出和结束状态；源码可在审计区展开。运行中的任务用同一 ID 继续 `wait` 或 `read`。`exec.parallel` 按实际运行的命令限制并发，单次等待到期不会释放占用名额。[命令接口](docs/commands.md) · [多终端与后台输入](docs/terminal-control.md) · [自定义 UI](docs/client-ui.md#构建自己的界面)
+返回值包含任务 ID、运行状态、退出码与输出游标。等待时间到期后，任务可以继续运行；使用同一个 ID 读取或取消。大结果返回可追溯的归档元数据。[命令接口](docs/commands.md) · [编排与输出](docs/session-control.md)
 
-运行中的 stdout/stderr 各保留 64 KiB 内存尾部；流成功结束后释放重复尾部，小输出保留一份，较大输出通过已有归档按游标读取。归档仍受保留期与容量限制，缺失或缩短时返回错误；捕获失败会保留尾部并标明错误。客户端还通过共享压缩工具目录、紧凑事件存储和 128 行本地可见滚动历史减少常驻内存；原始命令与事件归档继续按各自策略保留。[内存占用、实测数据与验证边界](docs/client-memory.md)
+## 终端就是工作会话
 
-## 多个 agent 协作
+客户端采用持续事件流和独立输入框。你可以在工具运行期间补充要求，也可以指定某个已登记的 Agent 接收。
 
-多个 agent 可以加入同一在线客户端连接，分别取得 `agent_id` 与私密 `token`。`collab.list` 返回当前有效成员，`send` 支持定向 JSON 消息和广播；`receive` 可重读未确认消息，处理后用 `ack` 释放邮箱容量。
+| 操作 | 用法 |
+| --- | --- |
+| 发给指定 Agent | 光标在草稿开头时按 **←**，选择成员，Enter / → 返回 |
+| 引用文件、图片 | 输入 `@` 枚举工作区；支持中文、带空格路径和目录续补 |
+| 引用技能 | 输入 `$` 枚举有效技能；项目技能覆盖同名全局技能 |
+| 接受候选 | ↑ / ↓ 选择，Tab / Enter 补全；补全后再 Enter 发送 |
+| 运行本地命令 | `!pwd`、`!cargo test`；输出与退出码回到会话 |
+| 查看任务 | `/tasks`；`/tasks cancel JOB_ID` 停止指定命令任务 |
+| 回答问题 | **Shift + ↑** 打开待答问题，保留普通草稿 |
+| 继续旧会话 | `/resume` 选择本工作区的 JSONL 历史 |
+| 查看原生工具 | `/pi`、`/cc`、`/codex` 列出真实目录；`TOOL {...}` 显式调用 |
+| 浏览长输出 | 选择事件后 Enter 折叠或展开；PgUp / PgDn、滚轮滚动 |
+| 复制与帮助 | **F7** 冻结显示并使用终端原生选择；`/help` 打开完整帮助 |
 
-```javascript
-const clientId = "CLIENT_ID_FROM_LIST";
-return await collab.join(clientId, {
-  name: "implementation",
-  role: "developer",
-  capabilities: ["rust", "tests"]
-});
+回复支持 Markdown 和常见代码块语法高亮。读取图片后，客户端会生成终端缩略图。超过 8 KiB 的整段粘贴会保存为私有工作区文件并插入引用，便于继续补充文字。
+
+Agent 使用 `ssmcp.ui.message` 把回复显示在这个会话里；使用 `ssmcp.ui.ask` 非阻塞提问，再通过 `ssmcp.ui.questions` 读取答案。这些工具提供本地沟通通道，外部聊天应用仍决定自己的消息显示方式。
+
+未选择接收人时，用户要求由下一次符合条件的单个调用领取；选择成员后，仅绑定该成员身份的调用能领取。**已交付**表示要求进入了工具响应，执行进度仍需由接收者反馈。[输入与交付语义](docs/client-input.md) · [成员协作](docs/agent-collaboration.md)
+
+### 先预览，再调整
+
+```sh
+ssmcp ui preview
+ssmcp ui init
+ssmcp ui check
 ```
 
-保存返回的成员凭证，后续请求继续使用；JavaScript 变量不会跨 `code_mode` 请求保留。成员租约为 15 分钟，成功的成员操作续租，单纯查询名单不续租。状态由成员自行报告，发送成功表示入队；协作接口不启动模型，也不会唤醒停止的 agent。
+内置 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题。通过 `[ui]` 配置调整侧栏、面板顺序和颜色，F5 应用显示配置；`/reload` 则重新启动客户端。[界面配置](docs/client-ui.md)
 
-接收定向的本地用户要求时，agent 在每次 `code_mode` 开始调用 `collab.bind(clientId, {agent_id, token})`，绑定已经登记的身份。服务器按经过校验的成员 ID 交付；显示名称和 `controller.model` 不决定接收者。
+## 复用现有工具
 
-持续等消息时，直接调用公开 `collab` 工具的 `receive`，最长等待 30 秒；`code_mode` 中的同名 helper 最长等待 1 秒。客户端断开或服务器重启会结束对应的内存协作状态。[完整接口、私信与恢复语义](docs/agent-collaboration.md)
+ssmcp 发现并转发已安装工具的原生能力，保留它们的 schema、会话状态和审批方式。目录查询和原语调用不会自动启动模型回合；显式调用某个 harness 的模型接口仍以该接口的原生行为为准。
 
-## 设备与工具
+- **开发工具**：Codex、Claude Code、Pi、OpenCode；能力以当前成功注册的目录为准。
+- **浏览器**：优先使用已安装 Playwright MCP 的扩展连接复用现有 Chrome；也提供独立 Chromium CDP 控制、批量动作和条件等待。
+- **桌面**：按客户端实际平台提供窗口、截图和输入原语，支持独立桌面。
+- **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 
-**临时接入另一台设备。** 在已登录的设备执行 `ssmcp invite`，把生成的命令交给另一台设备运行；Windows 使用 `ssmcp invite --shell powershell`。邀请默认 10 分钟内兑换一次，会话默认持续 1 小时。未固定公钥时，从所选服务器下载临时客户端；已固定公钥时，使用预安装客户端流程，在接入前登记可信指纹。[临时接入](docs/client-accounts.md) · [公钥与邀请](docs/client-server.md#公钥固定后的临时邀请)
+浏览器扩展的安装记录、MCP 握手和浏览器配对是三个状态。先使用 `ssmcp.browser.discover`、`ssmcp.harnesses.list` 和实际工具目录确认连接，再调用枚举到的原语。ChatGPT 或其他浏览器扩展也遵循这个条件。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/client-input.md)
 
-**后台会话。** `ssmcp --daemon --name dev` 创建本地后台会话；使用 `ssmcp sessions list/status/logs/stop` 管理，`ssmcp attach dev` 打开观察界面。需要开机或登录后常驻时，安装平台对应的服务。[常驻服务](docs/session-service.md) · [平台说明](docs/client-service-platforms.md)
+## 客户端掌握能力，服务端负责连接
 
-**007 轻量值守。** Linux 上可用 `ssmcp 007 install` 安装独立的恢复连接，需要工作时再唤醒完整会话。它在空闲时不加载终端或工具目录，并保存一份可用于恢复的程序；普通客户端升级或启动失败时，恢复连接仍可创建独立会话。安装前应完成账号授权，工作区和完整客户端路径通过安装参数指定。[安装、唤醒与恢复边界](docs/007.md)
+服务端负责身份、会话路由、成员通信与受限 JavaScript 编排。客户端负责执行工具、组织上下文、保存输出和绘制界面。增加客户端原语后，调用方可以通过实时目录发现它，并继续使用通用 `call(clientId, name, arguments)`。
 
-**本机工具发现。** Shell、文件、命令任务和上下文接口内置于客户端。Codex、Claude Code、Pi、OpenCode 及 Playwright MCP 按本机安装与配置发现，工具保留原生参数和审批行为。`ssmcp --list-tools` 查看实际目录；`ssmcp.harnesses.list` 查看提供者状态。[后端指南](docs/backends.md)
+因此，你可以重写客户端，接入自己的远程 harness，或只替换 UI。现有界面也通过小接口读取状态和控制任务：
 
-**项目上下文。** MCP 资源直接提供当前 AGENTS 内容、技能摘要和技能全文；修改文件后重新读取即可获取最新内容。项目技能覆盖同名全局技能，额外只读根通过 `--context-root` 显式加入。[上下文资源与原语](docs/context.md)
+| 边界 | 可复用接口 |
+| --- | --- |
+| 能力发现 | 客户端版本、原生工具 schema、客户端资源 |
+| 执行 | `terminal.*`、`ssmcp.exec.*`、原生 harness 工具 |
+| 上下文 | `ssmcp.fs.*`、`ssmcp.skills.*`、`ssmcp.agents.*` |
+| 会话界面 | `ssmcp.ui.*`、问答、历史、队列与源码事件 |
+| 扩展策略 | 可选的客户端 `ToolCallHook`，调用前允许或拒绝，调用后观察结果 |
 
-**命令输出压缩。** 设备已安装 RTK 时，可使用 `rtk.run(clientId, {command:["git","status"]})`。参数按数组原样传入，返回退出码和 RTK 的原文恢复提示，后台任务继续通过 `exec.read/wait/cancel` 管理。[RTK 用法与限制](docs/rtk.md)
+hook 默认关闭，不内置额外审核流程，也不改变工具原生权限。自定义策略由客户端开发者接入。当前连接统一使用 **wire v7**，旧协议会明确拒绝。[扩展接口与最小客户端](docs/client-extension.md) · [上下文边界](docs/context.md)
 
-**浏览器与桌面。** 浏览器接口提供标签页、页面快照、点击、填表与截图；新标签页默认在后台打开，`browser.wait_for` 在客户端等待页面文字变化。Linux 可通过 `computer.desktop_start` 创建隔离桌面，再用 `computer.app_launch` 启动应用；输入默认使用运行中的隔离桌面。直接控制宿主桌面需要显式指定 `desktop: "host"`，隔离桌面关闭或失效时不会自动改为控制宿主。实际能力由 `browser.status`、`computer.status` 返回。
+## 运行边界
 
-运行 `ssmcp setup browser --check --json` 检查浏览器接入，`ssmcp setup browser --install` 配置 Playwright MCP；首次扩展连接仍由用户在浏览器中批准。[后台浏览器与隔离桌面](docs/browser-desktop.md) · [已有 Chrome 接入](docs/browser-existing-session.md)
+工具使用客户端进程的操作系统权限；MCP 账号授权控制谁能调用设备。文件 API 受工作区和显式 context roots 限制，Shell 仍按操作系统权限执行。
 
-## 执行与授权
+本地历史采用版本化 JSONL，`/resume` 恢复文本上下文，不重放工具，也不恢复外部模型线程。问答队列当前保存在进程内；reload 后可从历史查看已记录正文。完整边界见[会话历史](docs/conversation-history.md)。
 
-每个调用按服务器分配的客户端 ID 路由，并检查当前授权。命令和原生工具使用设备上的系统用户权限；工作区文件接口以客户端启动目录为根。`--context-root` 只扩展技能与指令文档的只读范围。中转服务器负责处理连接与工具调用，应选择自己信任的服务器。
-
-终端主题和布局保存在本机。JSONL、后台会话或重定向日志适合无界面的消费者；事件展示与审计使用脱敏副本，原生工具结果保持原有内容。完整输出通过任务游标或输出归档读取。[日志与输出](docs/logging.md)
-
-任务归属于创建它的客户端连接。断线清理或重载会结束这条连接拥有的后台任务；重连后重新 `list` 获取客户端 ID。长时间执行的操作应保存任务 ID，并检查状态后再决定是否重试。[生命周期与恢复](docs/session-control.md)
+图片原生读取限制为 400 KiB，支持 PNG / JPEG / GIF / WebP。GIF / WebP 经 `code_mode` 返回时还需要支持这些格式的 relay；旧 relay 的图像通道仍只有 PNG / JPEG。长工具输出保留有界预览与归档，展开界面事件只读取当前保留的显示正文。
 
 ## 开发
 
-仓库固定 Rust 工具链见 [rust-toolchain.toml](rust-toolchain.toml)。在项目目录运行：
-
 ```sh
-cargo build --locked
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+git clone https://github.com/LIghtJUNction/ssmcp.git
+cd ssmcp
+cargo build --locked --bins --example vt_snapshot
+cargo run --locked --bin ssmcp -- ui preview
 ```
 
-协议与 Harness 测试使用确定性 fixture。[0.8.0 最终集成验证](docs/reports/client-experience-0.8.0-20261118/final/README.md)记录合入内存优化、007 恢复与客户端能力发现后的 Rust 回归、真实 PTY、账号队列、重载及观察窗口结果；[此前内存集成候选](docs/reports/client-experience-0.8.0-20261118/integrated/README.md)保留当时结果；[此前集成验证](docs/reports/client-experience-0.8.0-20261118/README.md)与[首轮客户端交互验证](docs/reports/client-experience-20261118/README.md)保留对应源码的证据和截图；[历史权限验收](docs/validation.md)保留早期 SSH 与 OAuth 记录。发布与平台构建见[发布流程](docs/releases.md)。提交改动时，请附上对应验证结果；界面修改同时附上渲染截图。
+`make check` 检查格式和 Clippy；`make test-client-ui` 在隔离的真实 PTY 中验证输入、问答、图片、历史和重载。验证脚本使用测试自己的进程与工作区。
 
-优化构建、安装包内容和隔离网关试运行记录在[当前集成候选报告](docs/reports/client-experience-0.8.0-20261118/final/README.md)中；[首次候选包报告](docs/reports/client-experience-0.8.0-20261118/ROLLOUT.md)作为历史记录保留。各报告分别列明候选验证、正式发布与生产切换的状态。
+项目持续使用 ssmcp 自己的远程工具开发。[发布与构建](docs/releases.md) · [下一版本计划](docs/next-version.md)
 
 ## 文档
 
-| 主题 | 文档 |
+| 从这里开始 | 深入实现 |
 | --- | --- |
-| 输入与队列、主题、源码审计和自定义界面 | [客户端 UI](docs/client-ui.md) |
-| 文件与技能引用、图片、长粘贴和本地沟通 | [客户端输入](docs/client-input.md) |
-| 版本化 JSONL 会话历史与不重放的恢复 | [会话历史](docs/conversation-history.md) |
-| 登录、设备列表和临时邀请 | [客户端账号](docs/client-accounts.md) |
-| 用户名绑定与服务器管理 | [具名账号](docs/named-accounts.md) |
-| 默认中转服务器与可信公钥 | [服务器与信任](docs/client-server.md) |
-| 成员发现、私信、广播与消息确认 | [Agent 协作](docs/agent-collaboration.md) |
-| 执行任务、事件与长输出 | [命令接口](docs/commands.md) · [日志](docs/logging.md) |
-| 客户端内存占用、优化边界与复现数据 | [客户端内存报告](docs/client-memory.md) |
-| RTK 命令与输出压缩 | [RTK](docs/rtk.md) |
-| 多终端、后台输入和控制者显示 | [终端控制](docs/terminal-control.md) |
-| 复用终端窗口查看命令与输出 | [命令观察窗口](docs/terminal-observers.md) |
-| 自动发现、本机工具和 JavaScript 编排 | [后端与代码模式](docs/backends.md) |
-| 浏览器、隔离桌面和客户端能力 | [后台浏览器与桌面](docs/browser-desktop.md) · [电脑控制](docs/computer-use.md) · [现有 Chrome](docs/browser-existing-session.md) |
-| 后台会话、常驻服务和重载 | [会话管理](docs/session-control.md) · [常驻服务](docs/session-service.md) |
-| 轻量值守、唤醒与升级恢复 | [007 恢复连接](docs/007.md) |
-| 技能、项目指令与文件操作 | [上下文接口](docs/context.md) · [工作区](docs/workspaces.md) |
-| 服务器、账号门户和 SSH 配置 | [部署](docs/deployment.md) · [门户](docs/portal-console.md) · [配置](docs/configuration.md) |
-| 安装升级、平台要求和发布 | [Release 指南](docs/releases.md) |
-| 给 AI 客户端的使用说明 | [ssmcp skill](skills/ssmcp/SKILL.md) |
+| [账号、设备与临时接入](docs/client-accounts.md) | [工具注册与 harness](docs/backends.md) |
+| [输入框与本地工作流](docs/client-input.md) | [客户端扩展与上下文工程](docs/client-extension.md) |
+| [主题、布局与快捷键](docs/client-ui.md) | [协议、资源与能力](docs/browser-desktop.md) |
+| [部署服务器](docs/deployment.md) | [完整输出与会话控制](docs/session-control.md) |
+| [信任与默认服务器](docs/client-server.md) | [会话历史格式](docs/conversation-history.md) |
 
-[MIT License](LICENSE) · [MCP](https://modelcontextprotocol.io/)
+<details>
+<summary>项目创作记录</summary>
+
+[原创短片《日蚀》 · 24 秒](docs/assets/ssmcp-eclipse.mp4)
+
+</details>
+
+---
+
+[MIT License](LICENSE)

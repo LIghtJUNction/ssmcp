@@ -1,5 +1,6 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
 mod capabilities;
+pub mod hooks;
 use crate::catalog::{self, ToolDescriptor};
 use crate::rsync::Rsync;
 use crate::{
@@ -9,7 +10,7 @@ use crate::{
     context::Context,
     omarchy::Omarchy,
     output::OutputStore,
-    registry::{Provider, Registry},
+    registry::{Provider, RegisteredTool, Registry},
     wire::Operation,
     workspace::Workspace,
 };
@@ -279,6 +280,7 @@ pub struct Runtime {
     audit: Arc<EventLog>,
     code_audit: CodeAudit,
     next_call: AtomicU64,
+    tool_call_hook: Mutex<Option<Arc<dyn hooks::ToolCallHook>>>,
     catalog: Catalog,
     sessions: Option<crate::session::control::Control>,
 }
@@ -342,12 +344,23 @@ impl Runtime {
             audit,
             output,
             next_call: AtomicU64::new(1),
+            tool_call_hook: Mutex::new(None),
             catalog: Catalog::default(),
             sessions,
         });
         crate::client::interface::harness::bind(&runtime);
+        crate::client::completion::bind(&runtime);
         Ok(runtime)
     }
+    /// Install an optional in-process call hook. The default is None.
+    /// Each call keeps one snapshot; replacement affects subsequent calls.
+    pub fn set_tool_call_hook(&self, hook: Option<Arc<dyn hooks::ToolCallHook>>) {
+        *self
+            .tool_call_hook
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = hook;
+    }
+
     pub(crate) fn local_registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }
@@ -393,6 +406,13 @@ impl Runtime {
         crate::client::references::expand(text, &self.workspace, &self.context).await
     }
 
+    pub(crate) async fn reference_completions(
+        &self,
+        key: &crate::client::completion::Key,
+    ) -> Result<crate::client::completion::Listing, String> {
+        crate::client::completion::enumerate(&self.workspace, &self.context, key).await
+    }
+
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         self.registry.ensure_open()?;
@@ -425,6 +445,60 @@ impl Runtime {
         let tool = self.registry.lookup(&name)?;
         self.registry.validate(&tool)?;
         let call_id = self.next_call.fetch_add(1, Ordering::Relaxed);
+        let hook = self
+            .tool_call_hook
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let Some(hook) = hook else {
+            return self
+                .perform_registered(name, arguments, tool, call_id)
+                .await;
+        };
+        let call = hooks::ToolCall {
+            id: call_id,
+            name: name.clone(),
+            native_name: tool.native_name.clone(),
+            provider: tool.provider,
+            generation: tool.generation,
+            arguments: arguments.clone(),
+        };
+        let decision =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook.before_call(&call)));
+        let result = match decision {
+            Ok(Ok(())) => match self.registry.validate(&tool) {
+                Ok(()) => {
+                    self.perform_registered(name, arguments, tool, call_id)
+                        .await
+                }
+                Err(error) => Err(error),
+            },
+            Ok(Err(reason)) => Err(format!("client tool hook denied {}: {reason}", call.name)),
+            Err(_) => Err(format!(
+                "client tool hook panicked before dispatch; {} rejected",
+                call.name
+            )),
+        };
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hook.after_call(&call, &result)
+        }))
+        .is_err()
+        {
+            self.audit.push(json!({
+                "type":"ssmcp.status","level":"Warning","call_id":call_id,"tool":call.name,
+                "message":format!("Client tool hook panicked after {}; native result was preserved", call.name),
+            }));
+        }
+        result
+    }
+
+    async fn perform_registered(
+        &self,
+        name: String,
+        arguments: Value,
+        tool: RegisteredTool,
+        call_id: u64,
+    ) -> Result<Value, String> {
         let started = std::time::Instant::now();
         let harness_call = tool
             .provider

@@ -25,6 +25,10 @@
 | `$skill-name` | 按真实技能元数据名称选择有效技能，项目配置优先于明确配置的全局来源 |
 | `\@literal`、`\$literal` | 保留为普通文字；反引号代码中的符号也不展开 |
 
+键入 `@` 或 `$` 后，输入框会异步枚举真实文件或有效技能，继续输入可筛选。↑/↓ 选择，Tab 或 Enter 补全；补全引用不会立即发送要求，随后再按 Enter 才提交。目录候选以 `/` 结尾，选中后继续浏览该目录；带空格的路径自动加引号，光标前后的其他文字保留。Esc 收起候选，Shift-Tab 仍可切换焦点。以 `!` 或 `/` 开头的本地命令、代码片段与邮箱中的符号不会触发引用补全。
+
+补全只枚举当前目录层级及明确授予的技能来源，项目技能覆盖同名全局技能；不扫描任意用户目录。菜单最多保留 64 个匹配项，索引有边界或结果不完整时会提示。目录与技能元数据使用短期缓存，枚举失败保留草稿；发送时仍重新执行原有引用检查。[补全实现与限制](../src/client/completion.rs)
+
 文件必须存在、可读且为工作区内的普通文件。目录、`..`、符号链接、工作区外路径和超限文件会返回错误，原稿保留。工作区内的绝对路径会转成相对路径；这不会授予读取其他目录的权限。
 
 引用随原有文本消息投递。UTF-8 文本附最多 1 KiB 预览，图片和二进制附路径、类型、大小及原生读取方法；技能附来源和 `ssmcp.skills.read` 参数，agent 应完整读取技能后再应用。预览不会替代完整内容，也不会把路径伪装成已上传的副本。文件在后续读取前仍可能被用户修改。
@@ -149,3 +153,58 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.questions", {
 历史采用版本化 `ssmcp.conversation.v1` JSONL，并经过既有审计脱敏。恢复只展示内容并选择后续保存位置，不重放旧要求、工具或模型调用，也不恢复外部 harness 会话或成员凭据。路径、记录字段、容量和只读接口见[会话历史格式](conversation-history.md)。
 
 [完整 UI 配置与按键](client-ui.md) · [日志与输出归档](logging.md)
+
+## 8. 在 code_mode 中复用浏览器插件
+
+控制现有 Chrome 时，先区分三件事：本机发现了扩展文件、Playwright MCP 服务已注册工具、浏览器已经批准连接。前两项都不能替代第三项。ssmcp 的 Playwright 适配器复用已安装的 MCP 服务及其 `--extension` 模式；首次连接仍由浏览器中的原生扩展确认，默认后台模式不会替用户批准配对。
+
+先在 `code_mode` 查看元数据、服务状态和实际目录，以下代码不执行浏览器操作：
+
+```javascript
+const clientId = "CLIENT_ID_FROM_LIST";
+const [observed, providers, catalog] = await Promise.all([
+  call(clientId, "ssmcp.browser.discover", {}),
+  call(clientId, "ssmcp.harnesses.list", {}),
+  tools.search(clientId, {
+    query: "playwright.",
+    include_schemas: true,
+    limit: 20
+  })
+]);
+return { observed, providers, catalog };
+```
+
+目录有 `nextCursor` 时，沿用相同查询和游标继续读取。根据真实返回的工具名、描述和 `inputSchema` 选择动作，再调用：
+
+```javascript
+// 把下面的名称与参数替换为刚才目录实际返回的值。
+return await call(
+  "CLIENT_ID_FROM_LIST",
+  "EXACT_PLAYWRIGHT_TOOL_NAME_FROM_CATALOG",
+  { /* 按该工具的 inputSchema 填写实际参数 */ }
+);
+```
+
+适配器只给原生名称加 `playwright.` 路由前缀，保留工具描述、参数、返回值和原生授权。操作后继续读取该工具的实际结果或快照，再决定下一步；不要根据想象的页面结构、工具名或旧引用连续点击。截图结果包含 MCP image block 时，可用本页图片示例中的 `image(result)` 展示。
+
+找不到可调用工具时，查看 `ssmcp.harnesses.list` 的实际诊断。本机 `ssmcp setup browser --check` 检查已有安装；`ssmcp setup browser` 可保存可用 CLI 的配置；只有明确需要安装时才用 `--install`。配置变化后重启客户端刷新目录。扩展已安装但 MCP CLI 缺失、CLI 不支持后台模式、浏览器尚未批准连接，是不同状态；不要将它们都当成“浏览器已可控制”。
+
+ChatGPT、Claude 等扩展的安装记录仅用于发现。它们只有在发起端会话或客户端真实暴露了可用工具时才能调用；不能凭扩展名称或磁盘文件推断出可通过 `code_mode` 使用的隐藏接口。需要复用已有登录会话时，保留当前浏览器与其原生批准流程。
+
+`browser.*` 是另一条已存在的 Chromium CDP 通道，不是 `playwright.*` 的别名。只有观察到实际可用的 loopback CDP 端点后才连接。`browser.act` 可在同一目标上按顺序执行最多 16 个动作，`browser.wait` 可等待已观察到的 selector 或文字；批次失败时检查已完成数量与失败步骤，不整批自动重放。不要为了代替用户指定的现有 Chrome 而启动另一浏览器。
+
+[现有浏览器与扩展](browser-existing-session.md) · [后台浏览器与桌面](browser-desktop.md) · [原生 Playwright 适配器](../src/backend/playwright.rs)
+
+## 9. 在输入框执行 shell 命令
+
+使用半角 `!` 前缀，例如 `!pwd` 或 `!cargo test`。命令通过当前客户端的原生 exec job 在工作区运行，使用本机配置的 shell，管道和引号由该 shell 解析。命令单独运行；`cd` 只影响这一次命令，可写成 `!cd subdir && cargo test`。
+
+执行是异步的，输出、job ID 和退出码显示在会话里。最多同时运行四个本地命令或 harness 调用。长输出保留原生 output artifact，可用 `ssmcp.output.read` 读取；原生 `ssmcp.exec.cancel` 可以停止显示的 job ID。任务随当前客户端断开或 reload 停止。
+
+命令由本地用户显式提交，使用当前操作系统用户权限；它不进入 Agent 需求队列。预览模式不会执行命令。命令正文与结果进入本地会话记录。
+
+## 10. 命令行帮助
+
+`ssmcp --help` 显示简短入口；`ssmcp --help-full` 展开全部连接参数和示例。子命令使用各自的 `--help`，连接后的完整交互操作使用 `/help`。
+
+下一版本的中文显示语言计划见 [next-version.md](next-version.md)。

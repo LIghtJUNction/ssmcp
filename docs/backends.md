@@ -1,6 +1,6 @@
 # 统一客户端、Harness 与代码模式
 
-ssmcp 对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
+ssmcp 对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
 
 <a id="启动参数"></a>
 
@@ -45,7 +45,7 @@ ssmcp --ssh --name dev --title "继续项目开发" --allow octocat@github my-se
 | Pi | 显式连接已初始化的本机私有 Unix RPC socket | `pi.rpc` 与事件、请求、回复四项桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
 | OpenCode | 操作者已启动的本机 HTTP 服务；显式配置 loopback 地址 | 从 `/api/info` 握手和 `/openapi.json` 发现操作；发现阶段不代为启动服务 |
 
-发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend/mod.rs)
+发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend.rs)
 
 各提供者在后台独立探测和刷新；Shell 的连接与目录不等待可选 Harness。版本、握手或目录读取超时只使该提供者不可用，断线会取消仍挂起的发现。时间、页数和工具数量有界，具体限制由对应适配器定义。[启动回归测试](../tests/client_startup.rs)
 
@@ -75,7 +75,7 @@ Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST"}}
 ```
 
-这个结果包含 `client` 和 `tools`；每个能力提供名称、描述及 `inputSchema`。目录按最多 64 项分页，也可能因 schema 大小提前分页。无游标的请求读取当前注册表，并为这次扫描保存合并后的目录快照；存在 `nextCursor` 时，将它传入下一次请求。后续页面读取同一快照，因此扫描途中原生目录变化不会改变已开始的分页。后台刷新后，重新发送无游标请求可读取最新注册表。[分页实现](../src/backend/mod.rs) · [合并目录快照](../src/runtime.rs)
+这个结果包含 `client` 和 `tools`；每个能力提供名称、描述及 `inputSchema`。目录按最多 64 项分页，也可能因 schema 大小提前分页。无游标的请求读取当前注册表，并为这次扫描保存合并后的目录快照；存在 `nextCursor` 时，将它传入下一次请求。后续页面读取同一快照，因此扫描途中原生目录变化不会改变已开始的分页。后台刷新后，重新发送无游标请求可读取最新注册表。[分页实现](../src/backend.rs) · [合并目录快照](../src/runtime.rs)
 
 `list` 与 `tools` 共享同一注册表。注册项保留提供者、原生名称、完整 Schema、可用状态与代号；不同来源使用独立命名空间。目录中的工具不因名称相同而互相覆盖；调用时仍验证当前提供者和代号，陈旧快照不会授予已失效工具的调用权。
 
@@ -297,7 +297,7 @@ return await call(c.id, "pi.rpc", {type: "get_state", arguments: {}});
 
 `get_state` 用于协议握手，发现不会发送 prompt。扩展对话通过 `ssmcp.pi.requests` 读取，`ssmcp.pi.respond` 保留原始 ID；实际字段和互斥条件以目录 Schema 为准。收到回复确认只表示交给了 Pi，不证明任务完成。
 
-自动发现不启动新的 Pi 进程。操作者需事先初始化原生 JSONL RPC 会话，并通过 `SSMCP_PI_RPC_SOCKET` 显式提供本机私有 Unix socket 入口。ssmcp 核对已安装程序与版本；socket 路径必须为绝对路径，socket 和直接父目录不能是符号链接，必须由当前 UID 拥有且没有 group/other 权限。连接后再次核对 peer UID，并在 5 秒内完成原生 `get_state` 握手。只有 `success: true`、`command: "get_state"` 且 `data` 为对象的响应才被接受。未配置安全的既有入口时保持 unavailable；保留已安装与不可连接的诊断，不禁用用户扩展，也不替代其原生审批。ssmcp 不模拟终端交互来创建这一接口。[连接与发现](../src/backend/mod.rs)
+自动发现不启动新的 Pi 进程。操作者需事先初始化原生 JSONL RPC 会话，并通过 `SSMCP_PI_RPC_SOCKET` 显式提供本机私有 Unix socket 入口。ssmcp 核对已安装程序与版本；socket 路径必须为绝对路径，socket 和直接父目录不能是符号链接，必须由当前 UID 拥有且没有 group/other 权限。连接后再次核对 peer UID，并在 5 秒内完成原生 `get_state` 握手。只有 `success: true`、`command: "get_state"` 且 `data` 为对象的响应才被接受。未配置安全的既有入口时保持 unavailable；保留已安装与不可连接的诊断，不禁用用户扩展，也不替代其原生审批。ssmcp 不模拟终端交互来创建这一接口。[连接与发现](../src/backend.rs)
 
 Pi 1.5.0 的原生包解析器在 `PI_OFFLINE=1` 时跳过缺失包安装，但扩展代码仍可执行。RPC 模式在处理第一条 `get_state` 前先绑定扩展，发出 `session_start` 并运行资源发现钩子；仅配置离线模式不能证明启动无安装或模型副作用。[包解析](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/core/package-manager.ts) · [RPC 启动顺序](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/modes/rpc/rpc-mode.ts) · [扩展绑定](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/core/agent-session.ts)
 

@@ -131,6 +131,17 @@ pub(crate) fn active() -> bool {
     shared().is_some_and(|shared| shared.alive.load(Ordering::Acquire))
 }
 
+/// Wake the display after asynchronous local discovery without publishing a log.
+pub(super) fn invalidate() {
+    if let Some(shared) = shared() {
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .dirty = true;
+    }
+}
+
 pub(super) fn log_width() -> Option<usize> {
     let shared = shared()?;
     if !shared.alive.load(Ordering::Acquire) {
