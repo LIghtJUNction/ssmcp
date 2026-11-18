@@ -248,6 +248,14 @@ struct AcceptedHistory {
     text: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct DeliveredMemory {
+    id: String,
+    text: String,
+    revision: u64,
+    target: String,
+}
+
 #[derive(Default)]
 struct Manager {
     outbox: Outbox,
@@ -263,6 +271,7 @@ struct Manager {
     // Drained by transport replies even when no terminal frontend is running.
     // Pure Manager operations never perform history I/O.
     accepted_history: Vec<AcceptedHistory>,
+    delivered_memory: Vec<DeliveredMemory>,
     frozen: bool,
     reload_requested: bool,
     error: Option<String>,
@@ -902,6 +911,19 @@ impl Manager {
                 record.message.id == message.id && record.room_id == self.outbox.room_id
             }) {
                 if message.revision >= record.message.revision {
+                    if !record.terminal()
+                        && message.revision > record.message.revision
+                        && message.state == SteeringState::Delivered
+                        && message.delivery.is_some()
+                        && message.target == "next"
+                    {
+                        self.delivered_memory.push(DeliveredMemory {
+                            id: message.id.clone(),
+                            text: super::references::source(&message.text).to_owned(),
+                            revision: message.revision,
+                            target: message.target.clone(),
+                        });
+                    }
                     let keep_local_edit = message.state == SteeringState::Editing
                         && message.revision == record.message.revision
                         && !record.terminal()
@@ -1273,9 +1295,13 @@ pub(super) fn sent(id: u64) -> bool {
     with(|manager| manager.sent(id))
 }
 pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
-    let (outcome, accepted) = with(|manager| {
+    let (outcome, accepted, delivered) = with(|manager| {
         let outcome = manager.reply(id, result);
-        (outcome, std::mem::take(&mut manager.accepted_history))
+        (
+            outcome,
+            std::mem::take(&mut manager.accepted_history),
+            std::mem::take(&mut manager.delivered_memory),
+        )
     });
     // Disk and display work happen after releasing the request manager lock.
     // A history error cannot change an acknowledged publication to failed.
@@ -1285,6 +1311,24 @@ pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result
                 "history",
                 "Warning",
                 &format!("Request was accepted, but its history could not be saved: {error}"),
+            );
+        }
+    }
+    // Queue publication is not delivery. Only a newly confirmed public request
+    // can become shared workspace memory, after its original history exists.
+    for message in delivered {
+        if let Err(error) = super::interface::history::remember_delivered_request(
+            &message.id,
+            &message.text,
+            message.revision,
+            &message.target,
+        ) {
+            super::render::status(
+                "memory",
+                "Warning",
+                &format!(
+                    "Request delivery was confirmed, but its memory could not be saved: {error}"
+                ),
             );
         }
     }
@@ -1550,6 +1594,87 @@ mod tests {
             })
         );
         message
+    }
+
+    #[test]
+    fn only_new_public_delivery_receipts_enter_shared_memory_once() {
+        for target in ["next", "agent_one"] {
+            let mut manager = Manager::default();
+            let mut receiver = manager.connect("room_one", crate::wire::VERSION);
+            ready(&mut manager, &mut receiver, "room_one");
+            let source = "原始请求 @notes.txt";
+            let mut message = publish(&mut manager, &mut receiver, source, Some(target));
+            assert!(
+                manager.delivered_memory.is_empty(),
+                "publication is not delivery"
+            );
+            message.text = expanded_reference_fixture(source, "expanded file contents");
+            message.state = SteeringState::Delivered;
+            message.revision = 2;
+            message.delivery = Some(crate::wire::SteeringDelivery {
+                run_id: "delivery_run".into(),
+                agent_id: Some("agent_one".into()),
+                included_at_ms: 42,
+            });
+            let snapshot = snapshot_for("room_one", 2, vec![message.clone()]);
+            manager.merge(&snapshot).unwrap();
+            if target == "next" {
+                assert_eq!(
+                    manager.delivered_memory,
+                    vec![DeliveredMemory {
+                        id: message.id.clone(),
+                        text: source.into(),
+                        revision: 2,
+                        target: "next".into(),
+                    }]
+                );
+            } else {
+                assert!(
+                    manager.delivered_memory.is_empty(),
+                    "exact-agent requests remain private"
+                );
+            }
+            manager.delivered_memory.clear();
+            manager.merge(&snapshot).unwrap();
+            assert!(
+                manager.delivered_memory.is_empty(),
+                "a repeated terminal snapshot is not new memory"
+            );
+
+            let mut restored = Manager::default();
+            restored.connect("room_one", crate::wire::VERSION);
+            restored.merge(&snapshot).unwrap();
+            assert!(
+                restored.delivered_memory.is_empty(),
+                "imported history must not enter the active branch"
+            );
+        }
+    }
+
+    #[test]
+    fn unreceipted_or_already_terminal_requests_do_not_enter_memory() {
+        for cancelled in [false, true] {
+            let mut manager = Manager::default();
+            let mut receiver = manager.connect("room_one", crate::wire::VERSION);
+            ready(&mut manager, &mut receiver, "room_one");
+            let mut message = publish(&mut manager, &mut receiver, "public request", None);
+            if cancelled {
+                manager.outbox.records[0].message.state = SteeringState::Cancelled;
+            }
+            message.state = SteeringState::Delivered;
+            message.revision = 2;
+            if cancelled {
+                message.delivery = Some(crate::wire::SteeringDelivery {
+                    run_id: "late_receipt".into(),
+                    agent_id: None,
+                    included_at_ms: 42,
+                });
+            }
+            manager
+                .merge(&snapshot_for("room_one", 2, vec![message]))
+                .unwrap();
+            assert!(manager.delivered_memory.is_empty());
+        }
     }
 
     #[test]

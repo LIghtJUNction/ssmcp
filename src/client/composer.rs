@@ -67,11 +67,11 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/paste",
-        description: "Import clipboard text or image",
+        description: "Import clipboard text, image or desktop file selection",
     },
     SlashCommand {
         name: "/attach",
-        description: "Import a local image as a private file reference",
+        description: "Reference a workspace file or import selected local files",
     },
     SlashCommand {
         name: "/copy",
@@ -80,6 +80,26 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/handoff",
         description: "Prepare a context file and editable handoff draft",
+    },
+    SlashCommand {
+        name: "/context",
+        description: "List local memory branches",
+    },
+    SlashCommand {
+        name: "/memory",
+        description: "Read the active local memory branch",
+    },
+    SlashCommand {
+        name: "/compact",
+        description: "Create a local checkpoint; optional explicit summary",
+    },
+    SlashCommand {
+        name: "/fork",
+        description: "Fork local memory; optional branch name",
+    },
+    SlashCommand {
+        name: "/switch",
+        description: "Switch memory branch by exact ID; never replay work",
     },
     SlashCommand {
         name: "/resume",

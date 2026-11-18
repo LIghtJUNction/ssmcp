@@ -28,6 +28,8 @@ pub const MAX_IMAGES: usize = 4;
 pub const MAX_IMAGE_ENCODED_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CALLS: usize = 128;
 pub const MAX_NATIVE_INFLIGHT: usize = 16;
+pub(crate) const MAX_CONTEXT_ENTRY_BYTES: usize = 12 * 1024;
+pub(crate) const MAX_CONTEXT_BYTES: usize = 64 * 1024;
 pub const MAX_CONCURRENT: usize = 4;
 const MAX_ERROR_BYTES: usize = 4096;
 static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
@@ -44,7 +46,23 @@ pub(crate) struct AuditRun {
     steering_targets: Arc<Mutex<HashSet<String>>>,
     finished: Arc<Mutex<Option<crate::wire::CodeCompletion>>>,
     bindings: Arc<Mutex<HashMap<String, RunBinding>>>,
+    memories: Arc<Mutex<ContextMemories>>,
     started: Instant,
+}
+
+/// Per-run capture only; no workspace history is cached between callers.
+#[derive(Default)]
+struct ContextMemories {
+    clients: HashMap<String, ContextMemory>,
+    bytes: usize,
+    overflowed: bool,
+}
+
+struct ContextMemory {
+    workspace: String,
+    revision: u64,
+    entry: Option<Value>,
+    bytes: usize,
 }
 
 /// Private server-side proof for one room, never serialized to a native client.
@@ -84,6 +102,7 @@ impl AuditRun {
             steering_targets: Arc::new(Mutex::new(HashSet::new())),
             finished: Arc::new(Mutex::new(None)),
             bindings: Arc::new(Mutex::new(HashMap::new())),
+            memories: Arc::new(Mutex::new(ContextMemories::default())),
             started: Instant::now(),
         })
     }
@@ -114,13 +133,17 @@ impl AuditRun {
     pub(crate) fn native_dispatched(&self, client_id: &str, tool: Option<&str>) {
         self.dispatched(client_id);
         if tool.is_some_and(|name| {
-            (name == "ssmcp.ui.message" || !name.starts_with("ssmcp.ui."))
+            (matches!(name, "ssmcp.ui.message" | "ssmcp.ui.present")
+                || !name.starts_with("ssmcp.ui."))
                 && !matches!(
                     name,
                     "ssmcp.client.capabilities"
                         | "ssmcp.resources.list"
                         | "ssmcp.resources.templates"
                         | "ssmcp.resources.read"
+                        | "ssmcp.context.status"
+                        | "ssmcp.context.read"
+                        | "ssmcp.context.list"
                 )
         }) {
             self.interacted(client_id);
@@ -145,6 +168,86 @@ impl AuditRun {
             .collect::<Vec<_>>();
         targets.sort();
         targets
+    }
+
+    /// Called only after the host has reauthorized a completed native call.
+    /// Older concurrent replies cannot overwrite a newer workspace revision.
+    pub(crate) fn capture_context(&self, client_id: &str, result: &Value) {
+        if client_id.is_empty()
+            || client_id.len() > 128
+            || !self
+                .targets
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .contains(client_id)
+        {
+            return;
+        }
+        let Some(context) = result
+            .get("_meta")
+            .and_then(|meta| meta.get("ssmcp.context"))
+            .filter(|context| context.is_object())
+        else {
+            return;
+        };
+        let Some(workspace) = context["workspace"]["id"]
+            .as_str()
+            .filter(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        else {
+            return;
+        };
+        let Some(revision) = context["revision"].as_u64() else {
+            return;
+        };
+        let mut memories = self
+            .memories
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(old) = memories.clients.get(client_id) {
+            if old.workspace == workspace && old.revision >= revision {
+                return;
+            }
+        } else if memories.clients.len() >= MAX_CALLS {
+            memories.overflowed = true;
+            return;
+        }
+        let old_bytes = memories.clients.get(client_id).map_or(0, |old| old.bytes);
+        let retained = memories.bytes.saturating_sub(old_bytes);
+        let entry = json!({"client_id":client_id,"context":context});
+        let bytes = entry.to_string().len();
+        // Include array separators in the capture bound. HTTP separately bounds
+        // the complete structured + textual presentation before claiming requests.
+        let fits = bytes <= MAX_CONTEXT_ENTRY_BYTES
+            && retained
+                .saturating_add(bytes)
+                .saturating_add(memories.clients.len() + 3)
+                <= MAX_CONTEXT_BYTES;
+        let bytes = if fits { bytes } else { 0 };
+        memories.bytes = retained + bytes;
+        memories.clients.insert(
+            client_id.into(),
+            ContextMemory {
+                workspace: workspace.into(),
+                revision,
+                entry: fits.then_some(entry),
+                bytes,
+            },
+        );
+    }
+
+    pub(crate) fn context_memories(&self) -> (Vec<Value>, bool) {
+        let memories = self
+            .memories
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut clients = memories.clients.iter().collect::<Vec<_>>();
+        clients.sort_by(|left, right| left.0.cmp(right.0));
+        let omitted = memories.overflowed || clients.iter().any(|(_, value)| value.entry.is_none());
+        let entries = clients
+            .into_iter()
+            .filter_map(|(_, value)| value.entry.clone())
+            .collect();
+        (entries, omitted)
     }
 
     pub(crate) fn completion(&self, result: &Result<Value, String>) -> crate::wire::CodeCompletion {
@@ -762,6 +865,88 @@ mod tests {
 
     static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    fn memory_result(workspace: char, revision: u64, text: &str) -> Value {
+        json!({"content":[],"_meta":{"ssmcp.context":{
+            "workspace":{"id":workspace.to_string().repeat(64)},
+            "revision":revision,"summary":text,"mode":"provided_summary"
+        }}})
+    }
+
+    #[test]
+    fn context_capture_is_per_run_per_client_and_keeps_the_latest_revision() {
+        let run = AuditRun::new("return native.stdout;", None).unwrap();
+        run.capture_context("one", &memory_result('a', 4, "not dispatched"));
+        assert!(run.context_memories().0.is_empty());
+        run.native_dispatched("one", Some("ssmcp.exec.run"));
+        run.capture_context("one", &memory_result('a', 4, "newest"));
+        run.capture_context("one", &memory_result('a', 3, "late old reply"));
+        run.capture_context("one", &memory_result('a', 4, "duplicate"));
+        let (memories, omitted) = run.context_memories();
+        assert!(!omitted);
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0]["client_id"], "one");
+        assert_eq!(memories[0]["context"]["summary"], "newest");
+        run.capture_context("one", &memory_result('b', 1, "different workspace"));
+        assert_eq!(
+            run.context_memories().0[0]["context"]["summary"],
+            "different workspace"
+        );
+        let other_run = AuditRun::new("return 1;", None).unwrap();
+        assert!(other_run.context_memories().0.is_empty());
+    }
+
+    #[test]
+    fn context_capture_enforces_budgets_without_reintroducing_an_older_snapshot() {
+        let run = AuditRun::new("return 1;", None).unwrap();
+        run.native_dispatched("one", Some("ssmcp.exec.run"));
+        run.capture_context("one", &memory_result('a', 1, "old"));
+        run.capture_context(
+            "one",
+            &memory_result('a', 2, &"x".repeat(MAX_CONTEXT_ENTRY_BYTES)),
+        );
+        run.capture_context("one", &memory_result('a', 1, "late old"));
+        assert!(run.context_memories().0.is_empty());
+        assert!(run.context_memories().1);
+        run.capture_context("one", &memory_result('a', 3, "new compact snapshot"));
+        assert!(!run.context_memories().1);
+        for index in 0..20 {
+            let client = format!("client-{index}");
+            run.native_dispatched(&client, Some("ssmcp.exec.run"));
+            run.capture_context(&client, &memory_result('a', 1, &"x".repeat(11 * 1024)));
+        }
+        let (memories, omitted) = run.context_memories();
+        assert!(omitted);
+        assert!(serde_json::to_vec(&memories).unwrap().len() <= MAX_CONTEXT_BYTES);
+        assert!(
+            memories
+                .iter()
+                .all(|entry| entry.to_string().len() <= MAX_CONTEXT_ENTRY_BYTES)
+        );
+    }
+
+    #[test]
+    fn context_reads_are_observation_and_context_mutations_are_interaction() {
+        let run = AuditRun::new("return 1;", None).unwrap();
+        for tool in [
+            "ssmcp.context.status",
+            "ssmcp.context.read",
+            "ssmcp.context.list",
+        ] {
+            run.native_dispatched("reader", Some(tool));
+        }
+        assert!(run.steering_targets().is_empty());
+        assert_eq!(run.targets(), ["reader"]);
+        for tool in [
+            "ssmcp.context.compact",
+            "ssmcp.context.fork",
+            "ssmcp.context.switch",
+        ] {
+            let run = AuditRun::new("return 1;", None).unwrap();
+            run.native_dispatched("writer", Some(tool));
+            assert_eq!(run.steering_targets(), ["writer"]);
+        }
+    }
+
     #[test]
     fn ui_observation_retains_source_audit_without_claiming_user_requirements() {
         let run = AuditRun::new("return await ui.get('display');", None).unwrap();
@@ -802,26 +987,28 @@ mod tests {
 
     #[test]
     fn agent_messages_receive_next_caller_without_fabricating_an_exact_agent_binding() {
-        let run = AuditRun::new("return await say('work', 'Ready');", None).unwrap();
-        run.native_dispatched("observed", Some("ssmcp.ui.history"));
-        run.native_dispatched("work", Some("ssmcp.ui.message"));
-        assert_eq!(run.targets(), ["observed", "work"]);
-        assert_eq!(run.steering_targets(), ["work"]);
-        assert!(run.binding("work").is_none());
+        for tool in ["ssmcp.ui.message", "ssmcp.ui.present"] {
+            let run = AuditRun::new("return await say('work', 'Ready');", None).unwrap();
+            run.native_dispatched("observed", Some("ssmcp.ui.history"));
+            run.native_dispatched("work", Some(tool));
+            assert_eq!(run.targets(), ["observed", "work"]);
+            assert_eq!(run.steering_targets(), ["work"]);
+            assert!(run.binding("work").is_none());
 
-        run.bind("work", "owner", "agent_one", "private-token")
-            .unwrap();
-        run.native_dispatched("work", Some("ssmcp.ui.message"));
-        let bound = run.binding("work").unwrap();
-        assert_eq!(bound.owner, "owner");
-        assert_eq!(bound.agent_id, "agent_one");
-        assert_eq!(bound.token, "private-token");
-        assert!(
-            run.bind("work", "owner", "agent_two", "other-token")
-                .is_err()
-        );
-        assert_eq!(run.binding("work").unwrap().agent_id, "agent_one");
-        assert_eq!(run.steering_targets(), ["work"]);
+            run.bind("work", "owner", "agent_one", "private-token")
+                .unwrap();
+            run.native_dispatched("work", Some(tool));
+            let bound = run.binding("work").unwrap();
+            assert_eq!(bound.owner, "owner");
+            assert_eq!(bound.agent_id, "agent_one");
+            assert_eq!(bound.token, "private-token");
+            assert!(
+                run.bind("work", "owner", "agent_two", "other-token")
+                    .is_err()
+            );
+            assert_eq!(run.binding("work").unwrap().agent_id, "agent_one");
+            assert_eq!(run.steering_targets(), ["work"]);
+        }
     }
 
     // Fixed test programs verify the runner/pipe protocol; execute() always requires bubblewrap.

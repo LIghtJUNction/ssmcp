@@ -6,3 +6,5 @@ __pycache__/
 /ssmcpd.toml
 /.env
 /.ssmcp/inputs/
+/.worktrees/
+/out/

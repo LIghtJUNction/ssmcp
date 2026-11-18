@@ -1,5 +1,6 @@
 //! Accepted agent replies share the JSONL history; only retry receipts and the
 //! latest copyable text are cached here.
+use crate::client::presentation::Presentation;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -54,12 +55,16 @@ fn parse(arguments: Value) -> Result<Request, String> {
     }
     Ok(request)
 }
-fn fingerprint(request: &Request) -> [u8; 32] {
+fn fingerprint(request: &Request, presentation: Option<&Presentation>) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"ssmcp.ui.message.v1\0");
     digest.update(request.kind.as_str().as_bytes());
     digest.update(b"\0");
     digest.update(request.text.as_bytes());
+    if let Some(document) = presentation {
+        digest.update(b"\0presentation\0");
+        digest.update(serde_json::to_vec(document).expect("a typed presentation serializes"));
+    }
     digest.finalize().into()
 }
 fn message_id() -> Result<String, String> {
@@ -86,19 +91,31 @@ struct Cache {
     last_copy: Option<String>,
 }
 impl Cache {
-    fn previous(&self, request: &Request) -> Result<Option<Receipt>, String> {
+    fn previous(
+        &self,
+        request: &Request,
+        presentation: Option<&Presentation>,
+    ) -> Result<Option<Receipt>, String> {
         let Some(key) = &request.idempotency_key else {
             return Ok(None);
         };
         let Some(previous) = self.receipts.iter().find(|entry| entry.key == *key) else {
             return Ok(None);
         };
-        if previous.fingerprint != fingerprint(request) {
-            return Err("idempotency_key already identifies different message text or kind".into());
+        if previous.fingerprint != fingerprint(request, presentation) {
+            return Err(
+                "idempotency_key already identifies different message text, kind or presentation"
+                    .into(),
+            );
         }
         Ok(Some(previous.receipt.clone()))
     }
-    fn remember(&mut self, request: &Request, receipt: Receipt) {
+    fn remember(
+        &mut self,
+        request: &Request,
+        receipt: Receipt,
+        presentation: Option<&Presentation>,
+    ) {
         let Some(key) = &request.idempotency_key else {
             return;
         };
@@ -107,7 +124,7 @@ impl Cache {
         }
         self.receipts.push_back(Deduplication {
             key: key.clone(),
-            fingerprint: fingerprint(request),
+            fingerprint: fingerprint(request, presentation),
             receipt,
         });
     }
@@ -137,26 +154,49 @@ fn response(receipt: &Receipt, duplicate: bool) -> Value {
 /// Called only under interface::UPDATES, which serializes concurrent native writes.
 /// Cache locks never cover history I/O or terminal rendering: /copy may hold State.
 pub(super) fn send(arguments: Value) -> Result<Value, String> {
+    send_with_presentation(arguments, None)
+}
+
+pub(crate) fn send_presentation(
+    arguments: Value,
+    presentation: Presentation,
+) -> Result<Value, String> {
+    send_with_presentation(arguments, Some(presentation))
+}
+
+fn send_with_presentation(
+    arguments: Value,
+    presentation: Option<Presentation>,
+) -> Result<Value, String> {
     let request = parse(arguments)?;
     let previous = cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .previous(&request)?;
+        .previous(&request, presentation.as_ref())?;
     if let Some(receipt) = previous {
         return Ok(response(&receipt, true));
     }
     let id = message_id()?;
-    let history_saved =
-        crate::client::render::message_identified(&request.text, request.kind, &id).is_ok();
+    let saved = match presentation.as_ref() {
+        Some(document) => crate::client::render::presentation_identified(
+            &request.text,
+            request.kind,
+            &id,
+            document,
+        ),
+        None => crate::client::render::message_identified(&request.text, request.kind, &id),
+    };
+    let history_saved = saved.is_ok();
     let receipt = Receipt {
         id,
         kind: request.kind,
         history_saved,
     };
-    cache()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remember(&request, receipt.clone());
+    cache().lock().unwrap_or_else(|e| e.into_inner()).remember(
+        &request,
+        receipt.clone(),
+        presentation.as_ref(),
+    );
     Ok(response(&receipt, false))
 }
 
@@ -232,20 +272,47 @@ mod tests {
     fn retry_receipts_bind_original_chinese_text_and_message_kind() {
         let mut cache = Cache::default();
         let original = request("## 结果\n保留中文和空格。", "answer", "reply-1");
-        cache.remember(&original, receipt(1));
-        assert_eq!(cache.previous(&original).unwrap(), Some(receipt(1)));
+        cache.remember(&original, receipt(1), None);
+        assert_eq!(cache.previous(&original, None).unwrap(), Some(receipt(1)));
         assert!(
             cache
-                .previous(&request("另一个结果", "answer", "reply-1"))
+                .previous(&request("另一个结果", "answer", "reply-1"), None)
                 .is_err()
         );
         assert!(
             cache
-                .previous(&request(&original.text, "progress", "reply-1"))
+                .previous(&request(&original.text, "progress", "reply-1"), None)
                 .is_err()
         );
         assert_eq!(cache.receipts.len(), 1);
     }
+    #[test]
+    fn identical_plain_text_with_different_layout_is_not_an_idempotent_retry() {
+        let text_document: Presentation = serde_json::from_value(json!({
+            "title":"Build","blocks":[
+                {"type":"text","text":"[SUCCESS] Checks\nReady"}
+            ]
+        }))
+        .unwrap();
+        let card_document: Presentation = serde_json::from_value(json!({
+            "title":"Build","blocks":[
+                {"type":"card","title":"Checks","body":"Ready","tone":"success"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(text_document.plain_text(), card_document.plain_text());
+        let request = request(&text_document.plain_text(), "answer", "presentation-1");
+        let mut cache = Cache::default();
+        cache.remember(&request, receipt(1), Some(&text_document));
+        assert_eq!(
+            cache.previous(&request, Some(&text_document)).unwrap(),
+            Some(receipt(1))
+        );
+        assert!(cache.previous(&request, Some(&card_document)).is_err());
+        assert!(cache.previous(&request, None).is_err());
+        assert_eq!(cache.receipts.len(), 1);
+    }
+
     #[test]
     fn receipt_cache_is_bounded_and_does_not_replace_the_latest_copy() {
         let mut cache = Cache {
@@ -254,12 +321,12 @@ mod tests {
         };
         for index in 0..100 {
             let value = request("reply", "answer", &format!("key-{index}"));
-            cache.remember(&value, receipt(index));
+            cache.remember(&value, receipt(index), None);
         }
         assert_eq!(cache.receipts.len(), MAX_RECEIPTS);
         assert!(
             cache
-                .previous(&request("reply", "answer", "key-0"))
+                .previous(&request("reply", "answer", "key-0"), None)
                 .unwrap()
                 .is_none()
         );

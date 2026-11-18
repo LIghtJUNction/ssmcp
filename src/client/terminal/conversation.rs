@@ -398,10 +398,7 @@ impl State {
                 self.chat_start_input(attachments::Source::Clipboard, true)?;
             }
             "/attach" => {
-                self.chat_start_input(
-                    attachments::Source::Path(attachments::path_argument(rest)?),
-                    true,
-                )?;
+                self.chat_start_input(attachments::source_argument(rest)?, true)?;
             }
             "/copy" => {
                 if !rest.is_empty() {
@@ -419,6 +416,15 @@ impl State {
                 }
                 self.chat_start_input(
                     crate::client::attachments::Source::Handoff(rest.into()),
+                    true,
+                )?;
+            }
+            "/context" | "/memory" | "/compact" | "/fork" | "/switch" => {
+                self.chat_start_input(
+                    attachments::Source::Context {
+                        command: command[1..].into(),
+                        arguments: rest.into(),
+                    },
                     true,
                 )?;
             }
@@ -1272,14 +1278,16 @@ impl State {
             return Err("A local input job is still running; your draft is preserved".into());
         }
         let copying = matches!(&source, attachments::Source::Copy(_));
-        if self.conversation.view == View::Questions && !copying {
+        let context = matches!(&source, attachments::Source::Context { .. });
+        let inserts = !copying && !context;
+        if self.conversation.view == View::Questions && inserts {
             self.question_paste_len()?;
         }
         let mut stamp = self
             .chat_input_stamp()
             .ok_or("No answer editor is open; press Esc to return to your draft")?;
         let used = if command { 0 } else { stamp.text.len() };
-        if !copying
+        if inserts
             && attachments::REFERENCE_RESERVE
                 > crate::client::composer::MAX_DRAFT_BYTES.saturating_sub(used)
         {
@@ -1300,6 +1308,8 @@ impl State {
         self.notice = Some(
             if copying {
                 "Copying the latest agent message…"
+            } else if context {
+                "Reading local context…"
             } else {
                 "Preparing local input… · keep this draft unchanged to insert the result"
             }
@@ -1334,6 +1344,38 @@ impl State {
         match result {
             Ok(attachments::Loaded::Copied) => {
                 self.notice = Some("Latest agent message copied to the system clipboard".into());
+            }
+            Ok(attachments::Loaded::Context(text)) => {
+                let mut record = String::from("\n[CONTEXT]\n");
+                for line in markdown::rows(&text, self.geometry.left, &self.ui) {
+                    let _ = writeln!(record, "{line}");
+                }
+                record.push('\n');
+                self.log(record.as_bytes());
+                self.notice = Some(
+                    "Local context updated · source history and queue were not replayed".into(),
+                );
+            }
+            Ok(attachments::Loaded::Files {
+                text,
+                description,
+                mut files,
+            }) if unchanged => {
+                self.notice = match self.chat_paste_text(&text) {
+                    Ok(()) => {
+                        files.keep();
+                        Some(format!("{description} · Enter sends when ready"))
+                    }
+                    Err(error) => {
+                        if let Some(command) = original_command {
+                            self.conversation.composer.set_text(command);
+                        }
+                        Some(format!("{error} · imported copies were rolled back"))
+                    }
+                };
+            }
+            Ok(attachments::Loaded::Files { .. }) => {
+                self.notice = Some("Draft or recipient changed · imported copies were rolled back; source files are unchanged".into());
             }
             Ok(attachments::Loaded::Text(text)) if unchanged => {
                 self.notice = match self.chat_paste_text(&text) {
@@ -1384,25 +1426,21 @@ impl State {
         if required > crate::client::composer::MAX_DRAFT_BYTES.saturating_sub(used) {
             return Err("Not enough draft space for this paste; your draft was preserved".into());
         }
-        let stored;
-        let inserted = if large {
-            stored = format!("\n{}\n", references::paste::store(text)?);
-            stored.as_str()
-        } else {
-            text
-        };
+        if large {
+            if text.len() > references::paste::MAX_PASTE_BYTES {
+                return Err("Paste exceeds 4 MiB; save it as a file and use @path".into());
+            }
+            // File creation/fsync happens on the shared async input job. The
+            // completion stamp protects edits, answers and recipient changes.
+            return self.chat_start_input(attachments::Source::Text(text.to_owned()), false);
+        }
         let accepted = if question {
-            self.question_paste(inserted)
+            self.question_paste(text)
         } else {
-            self.conversation.composer.paste(inserted)
+            self.conversation.composer.paste(text)
         };
         if !accepted {
             return Err("Paste could not be inserted; your draft was preserved".into());
-        }
-        if large {
-            self.notice = Some(
-                "Long paste saved as @file · add your instructions after the reference".into(),
-            );
         }
         Ok(())
     }
@@ -1556,7 +1594,7 @@ impl State {
         let target = self.conversation.target.as_deref().unwrap_or("next");
         let mut rows = vec![self.chat_line(
             &format!(
-                "  Agents · {} members · {running} active calls",
+                "  Agents · {} · {running} active calls",
                 items(data, "agents").len()
             ),
             PanelTone::Heading,
@@ -2141,6 +2179,94 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_batch_acceptance_is_atomic_and_changed_drafts_roll_back_copies() {
+        use crate::client::references::files::{self, SelectedFile};
+        use std::{
+            fs,
+            time::{Duration, SystemTime, UNIX_EPOCH},
+        };
+        for mode in ["accept", "changed", "full"] {
+            let root = std::env::temp_dir().join(format!(
+                "ssmcp-draft-files-{}-{}-{mode}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&root).unwrap();
+            let imported = files::import(
+                &root,
+                vec![SelectedFile {
+                    name: "fixture.txt".into(),
+                    bytes: b"original copy".to_vec(),
+                }],
+            )
+            .unwrap();
+            let destination = root.join(&imported.entries[0].path);
+            let references = imported.references();
+            let mut state = super::super::preview_state(24, 100, &Ui::default());
+            state.conversation.composer.set_text(if mode == "full" {
+                &"x".repeat(crate::client::composer::MAX_DRAFT_BYTES)
+            } else {
+                "中文草稿"
+            });
+            let expected = state.chat_input_stamp().unwrap();
+            if mode == "changed" {
+                state.conversation.composer.set_text("更新后的草稿");
+            }
+            let before = state.conversation.composer.text().to_owned();
+            state.chat_finish_input(
+                Some(&expected),
+                None,
+                Ok(attachments::Loaded::Files {
+                    text: references.clone(),
+                    description: "fixture import".into(),
+                    files: imported,
+                }),
+            );
+            if mode == "accept" {
+                assert!(state.conversation.composer.text().contains(&references));
+                assert_eq!(fs::read(&destination).unwrap(), b"original copy");
+            } else {
+                assert_eq!(state.conversation.composer.text(), before);
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while destination.exists() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(
+                    !destination.exists(),
+                    "rejected import must roll back its owned copy"
+                );
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn local_memory_result_never_replaces_an_edited_user_draft() {
+        let mut state = super::super::preview_state(24, 100, &Ui::default());
+        state.conversation.composer.set_text("保留当前用户要求");
+        let expected = state.chat_input_stamp().unwrap();
+        state.conversation.composer.set_text("后来编辑的新内容");
+        state.chat_finish_input(
+            Some(&expected),
+            Some("/memory"),
+            Ok(attachments::Loaded::Context(
+                "Memory fixture · local reference".into(),
+            )),
+        );
+        assert_eq!(state.conversation.composer.text(), "后来编辑的新内容");
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("Memory fixture")
+        );
     }
 
     #[test]

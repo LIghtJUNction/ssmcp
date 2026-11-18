@@ -1,11 +1,12 @@
 //! Local clipboard/import jobs produce ordinary @references, never a second wire queue.
+use super::references::files;
 use crate::{output::MAX_IMAGE_BYTES, workspace::Workspace};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, ImageReader};
 use serde_json::{Value, json};
 use std::{
     io::{Cursor, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 use tokio::{sync::oneshot, task::JoinHandle};
 
@@ -17,8 +18,11 @@ pub(super) const REFERENCE_RESERVE: usize = 64;
 pub(crate) enum Source {
     Clipboard,
     Path(String),
+    Files(Vec<PathBuf>),
+    Text(String),
     Copy(String),
     Handoff(String),
+    Context { command: String, arguments: String },
 }
 #[derive(Debug)]
 pub(crate) enum Loaded {
@@ -27,6 +31,12 @@ pub(crate) enum Loaded {
         reference: String,
         description: String,
     },
+    Files {
+        text: String,
+        description: String,
+        files: files::ImportedFiles,
+    },
+    Context(String),
     Copied,
 }
 pub(super) struct Task {
@@ -58,6 +68,15 @@ impl Drop for Task {
     fn drop(&mut self) {
         self.handle.abort();
     }
+}
+
+/// Explicit absolute file selections are copied; workspace-relative paths retain
+/// the existing rooted reference behavior. Plain pasted prose is never inferred.
+pub(super) fn source_argument(text: &str) -> Result<Source, String> {
+    if let Some(paths) = files::pasted_paths(text) {
+        return Ok(Source::Files(paths));
+    }
+    path_argument(text).map(Source::Path)
 }
 
 /// Parse one explicit path, with quotes/escaped spaces, without shell expansion.
@@ -121,17 +140,11 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
             .map(|()| Loaded::Copied),
         Source::Clipboard => match super::clipboard::read().await? {
             super::clipboard::Content::Text(text) if text.len() > 8 * 1024 => {
-                let root = workspace.root().to_path_buf();
-                tokio::task::spawn_blocking(move || {
-                    super::references::paste::store_at(&root, &text).map(|reference| {
-                        Loaded::Reference {
-                            reference,
-                            description: format!("Saved clipboard text · {} bytes", text.len()),
-                        }
-                    })
-                })
-                .await
-                .map_err(|error| format!("Clipboard storage failed: {error}"))?
+                store_text(workspace.root().to_path_buf(), text).await
+            }
+            #[cfg(all(not(target_os = "macos"), not(windows)))]
+            super::clipboard::Content::Files(paths) => {
+                load_files(workspace.root().to_path_buf(), paths).await
             }
             super::clipboard::Content::Text(text) => Ok(Loaded::Text(text)),
             super::clipboard::Content::Image {
@@ -141,6 +154,13 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
             } => store_image(workspace.root().to_path_buf(), name, mime_type, bytes).await,
         },
         Source::Path(path) => load_path(workspace, &path).await,
+        Source::Files(paths) => load_files(workspace.root().to_path_buf(), paths).await,
+        Source::Text(text) => store_text(workspace.root().to_path_buf(), text).await,
+        Source::Context { command, arguments } => tokio::task::spawn_blocking(move || {
+            super::context_memory::command(&command, &arguments).map(Loaded::Context)
+        })
+        .await
+        .map_err(|error| format!("Context operation failed: {error}"))?,
         Source::Handoff(note) => {
             let root = workspace.root().to_path_buf();
             tokio::task::spawn_blocking(move || {
@@ -153,6 +173,72 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
             .map_err(|error| format!("Handoff preparation failed: {error}"))?
         }
     }
+}
+
+async fn store_text(root: PathBuf, text: String) -> Result<Loaded, String> {
+    tokio::task::spawn_blocking(move || {
+        super::references::paste::store_at(&root, &text).map(|reference| Loaded::Reference {
+            reference,
+            description: format!("Saved long text · {} UTF-8 bytes", text.len()),
+        })
+    })
+    .await
+    .map_err(|error| format!("Text storage failed: {error}"))?
+}
+
+async fn load_files(root: PathBuf, paths: Vec<PathBuf>) -> Result<Loaded, String> {
+    tokio::task::spawn_blocking(move || load_files_at(&root, &paths))
+        .await
+        .map_err(|error| format!("File import failed: {error}"))?
+}
+
+fn load_files_at(root: &Path, paths: &[PathBuf]) -> Result<Loaded, String> {
+    let selected = files::read(paths)?;
+    let mut prepared = Vec::with_capacity(selected.len());
+    let mut labels = Vec::new();
+    for mut file in selected {
+        if let Some(mime) = crate::output::image_mime_type(&file.bytes) {
+            let image = prepare(&file.name, mime, file.bytes, MAX_IMAGE_BYTES)?;
+            labels.push(image.label);
+            if image.mime_type != mime {
+                let extension = match image.mime_type {
+                    "image/png" => "png",
+                    "image/jpeg" => "jpg",
+                    "image/gif" => "gif",
+                    "image/webp" => "webp",
+                    _ => return Err("Unsupported processed image format".into()),
+                };
+                let mut name = PathBuf::from(&file.name);
+                name.set_extension(extension);
+                file.name = name.to_string_lossy().into_owned();
+            }
+            file.bytes = image.bytes;
+        }
+        prepared.push(file);
+    }
+    // Validate and decode every source before creating any owned destination.
+    let imported = files::import(root, prepared)?;
+    let count = imported.entries.len();
+    let bytes: u64 = imported.entries.iter().map(|entry| entry.bytes).sum();
+    let names = imported
+        .entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let description = format!(
+        "Imported {count} files · {bytes} bytes · {names}{}",
+        if labels.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", labels.join("; "))
+        }
+    );
+    Ok(Loaded::Files {
+        text: imported.references(),
+        description,
+        files: imported,
+    })
 }
 
 async fn load_path(workspace: &Workspace, supplied: &str) -> Result<Loaded, String> {
@@ -469,6 +555,95 @@ mod tests {
             .unwrap();
         bytes.into_inner()
     }
+    #[cfg(unix)]
+    struct FileFixture(PathBuf);
+    #[cfg(unix)]
+    impl FileFixture {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "ssmcp-file-batch-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(std::fs::canonicalize(path).unwrap())
+        }
+    }
+    #[cfg(unix)]
+    impl Drop for FileFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_batch_keeps_images_and_text_in_the_same_private_reference_transaction() {
+        let temp = FileFixture::new();
+        let root = temp.0.join("workspace");
+        std::fs::create_dir(&root).unwrap();
+        let source = temp.0.join("原文.txt");
+        let picture = temp.0.join("图.png");
+        let text = "原文保留，不执行任何命令\n";
+        let image_bytes = png(4, 4);
+        std::fs::write(&source, text).unwrap();
+        std::fs::write(&picture, &image_bytes).unwrap();
+        let Loaded::Files {
+            text: references,
+            mut files,
+            ..
+        } = load_files_at(&root, &[source.clone(), picture.clone()]).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(files.entries.len(), 2);
+        assert!(references.contains("@\".ssmcp/inputs/"));
+        for entry in &files.entries {
+            assert_eq!(
+                std::fs::read(root.join(&entry.path)).unwrap(),
+                if entry.name == "原文.txt" {
+                    text.as_bytes().to_vec()
+                } else {
+                    image_bytes.clone()
+                }
+            );
+        }
+        let workspace = Workspace::new(root.clone()).unwrap();
+        let image = files
+            .entries
+            .iter()
+            .find(|entry| entry.name == "图.png")
+            .unwrap();
+        let reply = workspace
+            .perform("ssmcp.fs.read_image", json!({"path":image.path}))
+            .await
+            .unwrap();
+        assert_eq!(reply["structuredContent"]["mime_type"], "image/png");
+        files.keep();
+        drop(files);
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), text);
+        assert_eq!(std::fs::read(&picture).unwrap(), image_bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_image_rejects_entire_file_batch_before_any_private_copy() {
+        let temp = FileFixture::new();
+        let root = temp.0.join("workspace");
+        std::fs::create_dir(&root).unwrap();
+        let source = temp.0.join("good.txt");
+        let bad = temp.0.join("bad.png");
+        std::fs::write(&source, "unchanged").unwrap();
+        // A recognized signature with an invalid body must fail decoding.
+        std::fs::write(&bad, [137, 80, 78, 71, 13, 10, 26, 10]).unwrap();
+        assert!(load_files_at(&root, &[source.clone(), bad]).is_err());
+        assert!(!root.join(".ssmcp").exists());
+        assert_eq!(std::fs::read_to_string(source).unwrap(), "unchanged");
+    }
+
     #[test]
     fn explicit_paths_preserve_quotes_without_shell_expansion() {
         assert_eq!(
