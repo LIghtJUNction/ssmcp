@@ -358,6 +358,14 @@ pub(crate) struct Graphics {
 }
 
 impl Graphics {
+    #[cfg(test)]
+    pub(crate) fn probe_for_test() -> Self {
+        Self {
+            enabled: true,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn environment(ui: &Ui) -> Self {
         let term = std::env::var("TERM").unwrap_or_default();
         let multiplexed = std::env::var_os("TMUX").is_some()
