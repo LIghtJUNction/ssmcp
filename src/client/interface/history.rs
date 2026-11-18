@@ -79,14 +79,21 @@ impl SearchFilter {
     fn validate(&self) -> Result<(), String> {
         if self.query.trim().is_empty()
             || self.query.len() > 256
-            || self.query.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+            || self
+                .query
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
         {
             return Err("history query must contain 1..=256 UTF-8 bytes of literal text".into());
         }
         if let Some(id) = &self.id {
             session_name(id)?;
         }
-        if self.role.as_deref().is_some_and(|role| !matches!(role, "system" | "user" | "assistant" | "tool")) {
+        if self
+            .role
+            .as_deref()
+            .is_some_and(|role| !matches!(role, "system" | "user" | "assistant" | "tool"))
+        {
             return Err("history search role must be system, user, assistant or tool".into());
         }
         Ok(())
@@ -131,8 +138,15 @@ fn match_index(content: &str, query: &str, case_sensitive: bool) -> Option<usize
 }
 
 fn search_hit(conversation_id: &str, index: usize, message: &Message, at: usize) -> SearchHit {
-    let start = message.content[..at].char_indices().rev().nth(80).map_or(0, |(offset, _)| offset);
-    let end = message.content[start..].char_indices().nth(384).map_or(message.content.len(), |(offset, _)| start + offset);
+    let start = message.content[..at]
+        .char_indices()
+        .rev()
+        .nth(80)
+        .map_or(0, |(offset, _)| offset);
+    let end = message.content[start..]
+        .char_indices()
+        .nth(384)
+        .map_or(message.content.len(), |(offset, _)| start + offset);
     SearchHit {
         conversation_id: conversation_id.into(),
         message_id: message.id.clone(),
@@ -142,7 +156,16 @@ fn search_hit(conversation_id: &str, index: usize, message: &Message, at: usize)
         created_at_ms: message.created_at_ms,
         content_bytes: message.content.len(),
         source_truncated: message.truncated,
-        snippet: format!("{}{}{}", if start > 0 { "…" } else { "" }, &message.content[start..end], if end < message.content.len() { "…" } else { "" }),
+        snippet: format!(
+            "{}{}{}",
+            if start > 0 { "…" } else { "" },
+            &message.content[start..end],
+            if end < message.content.len() {
+                "…"
+            } else {
+                ""
+            }
+        ),
         snippet_truncated: start > 0 || end < message.content.len(),
     }
 }
@@ -700,41 +723,98 @@ impl History {
 
     fn metadata(&self, id: &str) -> Result<Value, String> {
         let conversation = self.read(id)?;
-        Ok(json!({"schema_version":1,"metadata":conversation.metadata,"summary":self.summary(&conversation)}))
+        Ok(
+            json!({"schema_version":1,"metadata":conversation.metadata,"summary":self.summary(&conversation)}),
+        )
     }
 
     fn search(&self, filter: &SearchFilter) -> Result<SearchResult, String> {
         filter.validate()?;
         let _lock = self.directory.lock()?;
-        let candidates = if let Some(id) = &filter.id {
+        let mut conversations = Vec::new();
+        let mut scan_truncated = false;
+        if let Some(id) = &filter.id {
             let conversation = self.load(id)?;
             if conversation.metadata.workspace != self.workspace {
                 return Err("conversation belongs to a different workspace".into());
             }
-            let bytes = Self::encode(&conversation)?.len();
-            vec![(self.summary(&conversation), bytes)]
+            conversations.push(conversation);
         } else {
-            self.histories()?.into_iter().filter(|(summary, _)| summary.workspace == self.workspace).collect()
-        };
-        let mut result = SearchResult { matches: Vec::new(), scanned_sessions: 0, scan_truncated: false };
-        let mut scanned_bytes = 0usize;
-        for (summary, bytes) in candidates {
-            if result.scanned_sessions >= MAX_SESSIONS || scanned_bytes.saturating_add(bytes) > MAX_TOTAL_BYTES {
-                result.scan_truncated = true;
-                break;
-            }
-            let conversation = self.load(&summary.id)?;
-            if conversation.metadata.workspace != self.workspace {
-                return Err("conversation workspace changed during search".into());
-            }
-            result.scanned_sessions += 1;
-            scanned_bytes += bytes;
-            for (index, message) in conversation.messages.iter().enumerate() {
-                if filter.role.as_ref().is_some_and(|role| role != &message.role) {
+            // Inspect file metadata before reading bodies. Manual imports must
+            // not turn a bounded search into an unbounded scan of old files.
+            let mut candidates = Vec::new();
+            for name in self.directory.names()? {
+                let Some(id) = name
+                    .strip_suffix(".jsonl")
+                    .filter(|id| valid_id(id, "conversation"))
+                else {
+                    continue;
+                };
+                let Ok(file) = self.directory.open(&name, false, false, false) else {
+                    continue;
+                };
+                let Ok(metadata) = file.metadata() else {
+                    continue;
+                };
+                let Ok(bytes) = usize::try_from(metadata.len()) else {
+                    continue;
+                };
+                if bytes > MAX_SESSION_BYTES {
                     continue;
                 }
-                if let Some(at) = match_index(&message.content, &filter.query, filter.case_sensitive) {
-                    result.matches.push(search_hit(&summary.id, index, message, at));
+                candidates.push((
+                    id.to_owned(),
+                    bytes,
+                    metadata.modified().unwrap_or(UNIX_EPOCH),
+                ));
+            }
+            candidates
+                .sort_by(|left, right| right.2.cmp(&left.2).then_with(|| right.0.cmp(&left.0)));
+            let mut scanned_bytes = 0usize;
+            for (scanned_files, (id, bytes, _)) in candidates.into_iter().enumerate() {
+                if scanned_files >= MAX_SESSIONS
+                    || scanned_bytes.saturating_add(bytes) > MAX_TOTAL_BYTES
+                {
+                    scan_truncated = true;
+                    break;
+                }
+                scanned_bytes += bytes;
+                let Ok(conversation) = self.load(&id) else {
+                    continue;
+                };
+                if conversation.metadata.workspace == self.workspace {
+                    conversations.push(conversation);
+                }
+            }
+        }
+        conversations.sort_by(|left, right| {
+            let left = self.summary(left);
+            let right = self.summary(right);
+            right
+                .updated_at_ms
+                .cmp(&left.updated_at_ms)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        let mut result = SearchResult {
+            matches: Vec::new(),
+            scanned_sessions: conversations.len(),
+            scan_truncated,
+        };
+        for conversation in conversations {
+            for (index, message) in conversation.messages.iter().enumerate() {
+                if filter
+                    .role
+                    .as_ref()
+                    .is_some_and(|role| role != &message.role)
+                {
+                    continue;
+                }
+                if let Some(at) =
+                    match_index(&message.content, &filter.query, filter.case_sensitive)
+                {
+                    result
+                        .matches
+                        .push(search_hit(&conversation.metadata.id, index, message, at));
                 }
             }
         }
@@ -846,6 +926,24 @@ pub(crate) struct SafeDirectory {
     directory: File,
     #[cfg(windows)]
     directory: cap_std::fs::Dir,
+}
+
+pub(crate) struct HistoryLock {
+    _file: File,
+}
+
+impl Drop for HistoryLock {
+    fn drop(&mut self) {
+        // flock is owned by the open file description. A concurrent fork can
+        // retain a duplicate until exec, so closing only our fd can leave a
+        // completed transaction locked. Explicitly release our own lock first.
+        #[cfg(unix)]
+        while let Err(error) = self._file.unlock() {
+            if error.kind() != io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
 }
 
 fn private_tree(path: &Path) -> Result<(), String> {
@@ -1005,11 +1103,11 @@ impl SafeDirectory {
         Ok(file)
     }
 
-    pub(crate) fn lock(&self) -> Result<File, String> {
+    pub(crate) fn lock(&self) -> Result<HistoryLock, String> {
         let file = self.open(".history.lock", true, true, false)?;
         crate::platform::lock_file(&file, true)
             .map_err(|_| "conversation storage is busy; retry shortly")?;
-        Ok(file)
+        Ok(HistoryLock { _file: file })
     }
 
     pub(crate) fn names(&self) -> Result<Vec<String>, String> {
@@ -1137,7 +1235,12 @@ enum Request {
     },
 }
 
-fn search_page(history: &History, filter: &SearchFilter, offset: usize, limit: usize) -> Result<Value, String> {
+fn search_page(
+    history: &History,
+    filter: &SearchFilter,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, String> {
     if !(1..=64).contains(&limit) {
         return Err("history page limit must be in 1..=64".into());
     }
@@ -1150,7 +1253,9 @@ fn search_page(history: &History, filter: &SearchFilter, offset: usize, limit: u
     // Account for the query, envelope, and JSON escaping, as well as each hit.
     let mut bytes = 4096;
     for entry in result.matches.into_iter().skip(offset).take(limit) {
-        let size = serde_json::to_vec(&entry).map_err(|_| "cannot encode history match")?.len();
+        let size = serde_json::to_vec(&entry)
+            .map_err(|_| "cannot encode history match")?
+            .len();
         if bytes + size > MAX_PAGE_BYTES {
             break;
         }
@@ -1158,11 +1263,13 @@ fn search_page(history: &History, filter: &SearchFilter, offset: usize, limit: u
         page.push(entry);
     }
     let next = offset + page.len();
-    Ok(json!({"schema_version":1,"schema":SCHEMA,"query":filter.query,
+    Ok(
+        json!({"schema_version":1,"schema":SCHEMA,"query":filter.query,
         "case_sensitive":filter.case_sensitive,"id":filter.id,"role":filter.role,
         "matches":page,"total":total,"offset":offset,"next_offset":(next < total).then_some(next),
         "scanned_sessions":result.scanned_sessions,"scan_truncated":result.scan_truncated,
-        "scope":"current_workspace","order":"session_updated_desc_then_message_asc"}))
+        "scope":"current_workspace","order":"session_updated_desc_then_message_asc"}),
+    )
 }
 
 pub(super) fn call(arguments: Value) -> Result<Value, String> {
@@ -1172,12 +1279,12 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
     {
         return Err("history expects an object; omit optional fields instead of null".into());
     }
-    let request: Request =
-        serde_json::from_value(arguments).map_err(|_| "expected a history list, metadata, read or search action")?;
+    let request: Request = serde_json::from_value(arguments)
+        .map_err(|_| "expected a history list, metadata, read or search action")?;
     let (offset, limit) = match &request {
-        Request::List { offset, limit } | Request::Read { offset, limit, .. } | Request::Search { offset, limit, .. } => {
-            (offset.unwrap_or(0), limit.unwrap_or(16))
-        }
+        Request::List { offset, limit }
+        | Request::Read { offset, limit, .. }
+        | Request::Search { offset, limit, .. } => (offset.unwrap_or(0), limit.unwrap_or(16)),
         Request::Metadata { .. } => (0, 1),
     };
     if !(1..=64).contains(&limit) {
@@ -1185,8 +1292,19 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
     }
     match request {
         Request::Metadata { id } => with(|history| history.metadata(&id)),
-        Request::Search { query, id, role, case_sensitive, .. } => {
-            let filter = SearchFilter { query, id, role, case_sensitive };
+        Request::Search {
+            query,
+            id,
+            role,
+            case_sensitive,
+            ..
+        } => {
+            let filter = SearchFilter {
+                query,
+                id,
+                role,
+                case_sensitive,
+            };
             with(|history| search_page(history, &filter, offset, limit))
         }
         Request::List { .. } => {
@@ -1298,19 +1416,33 @@ mod tests {
     }
 
     fn query(text: &str) -> SearchFilter {
-        SearchFilter { query: text.into(), id: None, role: None, case_sensitive: false }
+        SearchFilter {
+            query: text.into(),
+            id: None,
+            role: None,
+            case_sensitive: false,
+        }
     }
 
     #[test]
     fn metadata_and_search_are_read_only_scoped_and_keep_source_positions() {
         let temp = Temporary::new();
         let mut history = temp.history();
-        history.record("user", "请修复登录，History search uses literal [A.*]").unwrap();
-        history.record("assistant", "登录已修复，history preserved").unwrap();
-        history.record("tool", "API_TOKEN=private_fixture_secret").unwrap();
+        history
+            .record("user", "请修复登录，History search uses literal [A.*]")
+            .unwrap();
+        history
+            .record("assistant", "登录已修复，history preserved")
+            .unwrap();
+        history
+            .record("tool", "API_TOKEN=private_fixture_secret")
+            .unwrap();
         let current = history.current().unwrap().unwrap();
         let id = current.metadata.id.clone();
-        let path = temp.0.join("conversations").join(session_name(&id).unwrap());
+        let path = temp
+            .0
+            .join("conversations")
+            .join(session_name(&id).unwrap());
         let before = fs::read(&path).unwrap();
         let metadata = history.metadata(&id).unwrap();
         assert_eq!(metadata["metadata"]["id"], id);
@@ -1326,7 +1458,13 @@ mod tests {
         assert_eq!(history.search(&query("[A.*]")).unwrap().matches.len(), 1);
         assert!(history.search(&query("H.*ry")).unwrap().matches.is_empty());
         assert_eq!(history.search(&query("登录")).unwrap().matches.len(), 2);
-        assert!(history.search(&query("private_fixture_secret")).unwrap().matches.is_empty());
+        assert!(
+            history
+                .search(&query("private_fixture_secret"))
+                .unwrap()
+                .matches
+                .is_empty()
+        );
 
         let mut filter = query("history");
         filter.id = Some(id.clone());
@@ -1336,7 +1474,8 @@ mod tests {
         filter.role = Some("user".into());
         assert!(history.search(&filter).unwrap().matches.is_empty());
 
-        let other = History::with_workspace(temp.0.join("conversations"), "/fixture/other".into()).unwrap();
+        let other =
+            History::with_workspace(temp.0.join("conversations"), "/fixture/other".into()).unwrap();
         assert!(other.search(&query("登录")).unwrap().matches.is_empty());
         assert!(other.metadata(&id).is_err());
         assert!(other.search(&filter).is_err());
@@ -1349,14 +1488,26 @@ mod tests {
         let temp = Temporary::new();
         let mut history = temp.history();
         for n in 0..70 {
-            history.record("user", &format!("{n} {}İSTANBUL 登录{}", "前文".repeat(250), "后文".repeat(250))).unwrap();
+            history
+                .record(
+                    "user",
+                    &format!(
+                        "{n} {}İSTANBUL 登录{}",
+                        "前文".repeat(250),
+                        "后文".repeat(250)
+                    ),
+                )
+                .unwrap();
         }
         let filter = query("i\u{307}stanbul 登录");
         let first = search_page(&history, &filter, 0, 64).unwrap();
         assert_eq!(first["total"], 70);
         let hits = first["matches"].as_array().unwrap();
         assert!(!hits.is_empty());
-        assert!(hits.iter().all(|hit| hit["snippet"].as_str().unwrap().contains("İSTANBUL 登录")));
+        assert!(
+            hits.iter()
+                .all(|hit| hit["snippet"].as_str().unwrap().contains("İSTANBUL 登录"))
+        );
         assert!(hits.iter().all(|hit| hit["snippet_truncated"] == true));
         assert!(serde_json::to_vec(&first).unwrap().len() <= MAX_PAGE_BYTES);
         let next = first["next_offset"].as_u64().unwrap() as usize;
@@ -1367,6 +1518,28 @@ mod tests {
         assert!(search_page(&history, &filter, 71, 1).is_err());
         assert!(search_page(&history, &filter, 0, 0).is_err());
         assert!(search_page(&history, &filter, 0, 65).is_err());
+    }
+
+    #[test]
+    fn search_bounds_manually_imported_files_and_reports_incomplete_scope() {
+        let temp = Temporary::new();
+        let mut history = temp.history();
+        history.record("user", "bounded keyword").unwrap();
+        let mut conversation = history.current().unwrap().unwrap();
+        for _ in 0..MAX_SESSIONS {
+            conversation.metadata.id = random_id("conversation").unwrap();
+            history
+                .directory
+                .write_atomic(
+                    &session_name(&conversation.metadata.id).unwrap(),
+                    &History::encode(&conversation).unwrap(),
+                )
+                .unwrap();
+        }
+        let result = history.search(&query("keyword")).unwrap();
+        assert!(result.scan_truncated);
+        assert_eq!(result.scanned_sessions, MAX_SESSIONS);
+        assert_eq!(result.matches.len(), MAX_SESSIONS);
     }
 
     #[test]
@@ -1641,6 +1814,23 @@ mod tests {
             .join("conversations")
             .join(session_name(&summary.id).unwrap());
         assert!(fs::metadata(path).unwrap().len() <= MAX_SESSION_BYTES as u64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transaction_lock_releases_while_an_inherited_descriptor_stays_open() {
+        let temp = Temporary::new();
+        let history = temp.history();
+        let lock = history.directory.lock().unwrap();
+        let inherited = lock._file.try_clone().unwrap();
+        let busy = Some("conversation storage is busy; retry shortly");
+        assert_eq!(history.directory.lock().err().as_deref(), busy);
+        drop(lock);
+        let next = history.directory.lock().unwrap();
+        drop(inherited);
+        assert_eq!(history.directory.lock().err().as_deref(), busy);
+        drop(next);
+        assert!(history.directory.lock().is_ok());
     }
 
     #[test]

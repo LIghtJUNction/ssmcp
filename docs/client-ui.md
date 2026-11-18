@@ -390,7 +390,7 @@ foreground = "default"
 | `ssmcp.ui.message` | `{text}` | 向本机用户显示 Markdown 进度或结果，记录为 Agent 消息 |
 | `ssmcp.ui.ask` | `{question, title?, options?, idempotency_key?}` | 非阻塞创建本地问题，返回问题 ID |
 | `ssmcp.ui.questions` | `{id}` 或 `{state?, offset?, limit?}` | 读取问题与已保存答案，不消费记录 |
-| `ssmcp.ui.history` | `{action:"list", offset?, limit?}` 或 `{action:"read", id, offset?, limit?}` | 只读浏览本工作区的版本化会话历史 |
+| `ssmcp.ui.history` | `{action:"list"/"metadata"/"read"/"search", ...}` | 只读浏览会话元数据、分页正文和关键词命中，见 [历史格式](conversation-history.md) |
 | `ssmcp.ui.harness` | `{action:"tools", provider, offset?, limit?}` 或 `{action:"inspect", provider, tool}` | 只读发现实际后端目录与原始 schema，不调用模型 |
 
 `patch` 使用工具 schema 列出的可动态修改字段，`colors` 是其嵌套对象。例如 `{theme:"nord", colors:{accent:"#8ab4f8"}}`。颜色设为 `""` 恢复预设；`null` 不是有效配置值。将 `panels` 设为新的数组可以整体替换面板顺序。
