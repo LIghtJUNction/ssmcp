@@ -190,7 +190,7 @@ impl State {
 
     fn chat_accepted(&mut self, id: String, text: String) {
         self.conversation.composer.remember(&text);
-        let mut record = format!("\n[USER] #{id}\n");
+        let mut record = format!("\n{} #{id}\n", self.tone(PanelTone::Accent, "[USER]"));
         for line in text.lines() {
             let _ = writeln!(record, "  {}", panel::safe_text(line));
         }
@@ -202,7 +202,11 @@ impl State {
                 panel::safe_text(&attachments::description(image))
             );
         }
-        record.push_str("  queued · waiting for the next eligible tool response\n\n");
+        record.push_str(&self.tone(
+            PanelTone::Warning,
+            "  queued · waiting for the next eligible tool response",
+        ));
+        record.push_str("\n\n");
         self.log(record.as_bytes());
         if self
             .conversation
@@ -1423,7 +1427,7 @@ impl State {
                 } else if entry["active"] == true {
                     PanelTone::Success
                 } else {
-                    PanelTone::Normal
+                    PanelTone::Agent
                 },
                 width,
             ));
@@ -1707,7 +1711,7 @@ impl State {
                         let mut section =
                             vec![(format!(" Members · {}", agents.len()), PanelTone::Heading)];
                         for agent in agents.iter().take(4) {
-                            section.push((format!(" {}", field(agent, "name")), PanelTone::Accent));
+                            section.push((format!(" {}", field(agent, "name")), PanelTone::Agent));
                             section.push((
                                 format!("   reported {}", field(agent, "status")),
                                 PanelTone::Muted,
@@ -1721,7 +1725,7 @@ impl State {
                             for controller in observed.iter().take(3) {
                                 section.push((
                                     format!(" ↳ {}", field(controller, "name")),
-                                    PanelTone::Accent,
+                                    PanelTone::Agent,
                                 ));
                                 section.push((
                                     format!(
@@ -1739,7 +1743,14 @@ impl State {
                         section
                     }
                     crate::client::ui::Panel::Queue => vec![
-                        (format!(" Queue · {pending} pending"), PanelTone::Heading),
+                        (
+                            format!(" Queue · {pending} pending"),
+                            if pending > 0 {
+                                PanelTone::Warning
+                            } else {
+                                PanelTone::Muted
+                            },
+                        ),
                         (" /queue to review and edit".into(), PanelTone::Muted),
                     ],
                     _ => {
