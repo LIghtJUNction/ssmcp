@@ -286,3 +286,54 @@ test('skill views preserve invalid argument errors and never retry a rejected ef
     assert.equal(record.requests.length, 1, 'an older client must fail without a single-root fallback');
   }
 });
+
+test('local validation errors leave parallel workers available for later valid commands', async () => {
+  for (const concurrency of [1, 2]) {
+    const record = await run(`
+      return await exec.parallel('one', [
+        null, ['invalid'],
+        {command:['invalid-wait'], wait_ms:60001},
+        {command:['first'], wait_ms:0},
+        {command:['invalid-output'], max_bytes:0},
+        {command:['last'], wait_ms:0, max_bytes:17},
+      ], {concurrency:${concurrency}});
+    `, request => {
+      const id = request.name === 'ssmcp.exec.start'
+        ? request.arguments.command[0] : request.arguments.job_id;
+      assert(['first', 'last'].includes(id), 'invalid options must never reach native execution');
+      const state = {job_id:id, running:false, exit_code:0};
+      if (request.name === 'ssmcp.exec.start') return native(state);
+      assert.equal(request.name, 'ssmcp.exec.read');
+      assert.equal(request.arguments.max_bytes, id === 'last' ? 17 : 2048);
+      return native({snapshot:state, stdout:id, stderr:''});
+    });
+    succeeded(record);
+    const entries = result(record);
+    assert.deepEqual(entries.map(entry => entry.status),
+      ['rejected', 'rejected', 'rejected', 'fulfilled', 'rejected', 'fulfilled']);
+    for (const index of [0, 1, 2, 4]) {
+      assert.equal(entries[index].not_started, true);
+      assert(!Object.hasOwn(entries[index], 'job_id'));
+    }
+    assert.equal(entries[3].value.stdout, 'first');
+    assert.equal(entries[5].value.stdout, 'last');
+    assert.equal(record.requests.filter(request => request.name === 'ssmcp.exec.start').length, 2);
+  }
+});
+
+test('a lost start response reserves its parallel worker even without a job ID', async () => {
+  const record = await run(`
+    return await exec.parallel('one', [
+      {command:['uncertain']}, {command:['must-not-start']}
+    ], {concurrency:1});
+  `, request => {
+    assert.equal(request.name, 'ssmcp.exec.start');
+    assert.deepEqual(request.arguments.command, ['uncertain']);
+    return {ok:false, error:'start transport interrupted'};
+  });
+  succeeded(record);
+  assert.equal(record.requests.length, 1);
+  assert.match(result(record)[0].reason, /start transport interrupted/);
+  assert(!Object.hasOwn(result(record)[0], 'not_started'));
+  assert.equal(result(record)[1].not_started, true);
+});
