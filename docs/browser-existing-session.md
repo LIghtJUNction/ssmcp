@@ -2,6 +2,14 @@
 
 用户指定现有 Chrome 时，先确认那一个浏览器的可调用接口，再复用它的标签页和会话。`browser.launch` 创建独立临时 profile，不用于替代这次指定的现有会话；发现失败也不能改用 Chromium 或其他浏览器家族。[原生浏览器实现](../src/browser.rs)
 
+## 优先使用调用方已有的 Browser 插件
+
+调用方已经提供可用、已授权的 ChatGPT Browser 插件时，优先在那个插件里选择用户指定的浏览器，使用它提供的原生接口。该接口运行在 ChatGPT 应用的浏览器上下文中，**ssmcp 客户端不能调用这套公开的浏览器 JavaScript API**。它也不是可以从安装清单推断出的本机 MCP 或 CDP 服务；ssmcp 不猜测内部地址、配对方式或令牌。[ChatGPT 官方扩展说明](https://learn.chatgpt.com/docs/chrome-extension.md)
+
+没有适用的调用方 Browser 插件时，查看客户端**实际注册**的 Playwright 扩展工具；再根据用户明确选择，使用已观察到的 CDP 端点。原生工具的 inputSchema、结果和扩展确认都保持原样。这个顺序选择可用接口，不会自动切换浏览器或新建替代 profile。[路由建议](../src/browser/routing.rs)
+
+`ssmcp.browser.discover` 的 `routing` 返回上述顺序，以及至多 32 个实际注册的 Playwright 工具名称、总数、截断标记和目录 generation。只有真实 `playwright.*` 工具存在时，`preferred_client_provider` 才指向 Playwright；只有事件/请求控制工具时不宣称具备浏览器动作。外部 ChatGPT Browser 插件的可用性由调用方确认，客户端报告 `not_observed`；工具目录存在也不代表浏览器已经连接。[注册表摘要](../src/registry.rs) · [Runtime 接线](../src/runtime.rs)
+
 ## 先看连接条件
 
 通过 `list` 选定开发机客户端 ID，然后在 `code_mode` 中读取两类证据：
@@ -15,12 +23,13 @@ const [browser, providers] = await Promise.all([
 return { browser, providers };
 ```
 
-`ssmcp.browser.discover` 只读浏览器、扩展和本机入口元数据，不启动、重启或连接浏览器。扩展清单存在只证明安装文件存在，不能证明启用、配对或授权。`ssmcp.harnesses.list` 报告原生提供者的实际发现状态；CLI 存在、MCP 服务握手成功和浏览器已连接是三个不同结果。[发现与注册](../src/backend/mod.rs)
+`ssmcp.browser.discover` 只读浏览器、扩展和本机入口元数据，不启动、重启或连接浏览器。扩展清单存在只证明安装文件存在，不能证明启用、配对或授权。`ssmcp.harnesses.list` 报告原生提供者的实际发现状态；CLI 存在、MCP 服务握手成功和浏览器已连接是三个不同结果。[发现与注册](../src/backend.rs)
 
 | 可用证据 | 后续操作 |
 | --- | --- |
-| 已观察到现有 Chrome 的回环 CDP 端点 | 用 `browser.connect` 显式附着，再读取 tabs/snapshot；断开不终止外部浏览器 |
+| 调用方提供可用的 ChatGPT Browser 插件 | 直接使用调用方原生 Browser 工具；此调用不进入 ssmcp code_mode |
 | Playwright MCP 原生握手与工具枚举成功 | 查询实际 `playwright.*` Schema，再用 `call` 转发；原生扩展确认仍需完成 |
+| 已观察到现有 Chrome 的回环 CDP 端点 | 用 `browser.connect` 显式附着，再读取 tabs/snapshot；断开不终止外部浏览器 |
 | 只有扩展安装文件，缺少服务入口或连接 | 报告具体缺口，保留 unavailable 诊断；不下载安装或创建替代浏览器 |
 | ChatGPT 浏览器连接要求 originating context | 在发起操作的浏览器上下文中完成原生连接；不能声称 ssmcp 已经复用该扩展 |
 | Claude 原生接口未枚举浏览器工具 | 不把扩展安装视为可调用 API，也不调用 Claude 模型来代为控制 |

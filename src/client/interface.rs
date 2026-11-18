@@ -12,6 +12,11 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+pub(crate) mod harness;
+pub(crate) mod history;
+pub(crate) mod messages;
+pub(crate) mod questions;
+
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static UPDATES: Mutex<()> = Mutex::new(());
 static RESIZES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -53,6 +58,7 @@ pub(crate) fn get() -> Value {
         "display": terminal::snapshot(),
         "activity": render::snapshot(),
         "steering": super::steering::snapshot(),
+        "questions": questions::snapshot(),
     })
 }
 
@@ -473,14 +479,50 @@ pub(crate) async fn call(
     arguments: Value,
     terminals: &crate::terminals::Terminals,
 ) -> Result<Value, String> {
+    // User-facing messages commit JSONL and derived memory before their ACK.
+    // Keep their existing serial order while all storage/display work runs on
+    // a blocking worker; no mutex is held across an await.
+    if matches!(name, "ssmcp.ui.message" | "ssmcp.ui.present") {
+        let presentation = name == "ssmcp.ui.present";
+        return tokio::task::spawn_blocking(move || {
+            let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
+            if presentation {
+                super::presentation::send(arguments)
+            } else {
+                messages::send(arguments)
+            }
+        })
+        .await
+        .map_err(|_| "message storage worker stopped".to_owned())?;
+    }
+    // Memory reads are a projection of the same document, not a second cache.
+    // Finish every disk read before taking the UI configuration/update mutex.
+    if name == "ssmcp.ui.get" {
+        let projection = parse_get(&arguments)?;
+        let context_requested = projection
+            .as_ref()
+            .is_some_and(|p| p.path == "/context" || p.path.starts_with("/context/"));
+        let mut snapshot = get();
+        if context_requested || projection.is_none() {
+            let context = tokio::task::spawn_blocking(super::context_memory::ui_snapshot)
+                .await
+                .map_err(|_| "context memory worker stopped".to_owned())?;
+            match context {
+                Ok(context) => snapshot["context"] = context,
+                Err(error) if context_requested => return Err(error),
+                Err(error) => snapshot["context"] = json!({"available":false,"error":error}),
+            }
+        }
+        return project_snapshot(snapshot, projection);
+    }
     let size = {
         let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
         match name {
+            "ssmcp.ui.harness" => return harness::call(arguments),
+            "ssmcp.ui.history" => return history::call(arguments),
+            "ssmcp.ui.ask" => return questions::ask(arguments),
+            "ssmcp.ui.questions" => return questions::read(arguments),
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
-            "ssmcp.ui.get" => {
-                let projection = parse_get(&arguments)?;
-                return project_snapshot(get(), projection);
-            }
             "ssmcp.ui.set" => {
                 let (ui, persist) = parse_set(&render::current_ui(), arguments)?;
                 apply(ui, persist)?
@@ -535,13 +577,16 @@ pub(crate) fn tools() -> Vec<Value> {
         get_tool(),
         json!({"name":"ssmcp.ui.set","description":"Validate and apply a partial display configuration immediately. Colors merge by key; panels replace the ordered list. Set persist:true to save to this client's UI config. Running jobs and terminal contents are retained.","inputSchema":{"type":"object","required":["patch"],"additionalProperties":false,"properties":{"patch":{"type":"object","properties":properties,"additionalProperties":false},"persist":{"type":"boolean","default":false}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
-    ]
+    ].into_iter().chain(questions::tools())
+    .chain(std::iter::once(history::tool()))
+    .chain(std::iter::once(harness::tool()))
+    .chain(std::iter::once(super::presentation::tool())).collect()
 }
 
 fn get_tool() -> Value {
     json!({
         "name":"ssmcp.ui.get",
-        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
+        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. The /context/status, /context/read and /context/list projections read the same local memory document off the UI thread; use /context/read/summary or /context/read/recent for bounded paging. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
         "inputSchema":{
             "type":"object",
             "additionalProperties":false,
@@ -951,7 +996,17 @@ mod tests {
         for tool in &catalog {
             assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 11);
+        assert!(names.contains("ssmcp.ui.harness"));
+        assert!(names.contains("ssmcp.ui.history"));
+        for name in [
+            "ssmcp.ui.ask",
+            "ssmcp.ui.questions",
+            "ssmcp.ui.message",
+            "ssmcp.ui.present",
+        ] {
+            assert!(names.contains(name));
+        }
         let schema = catalog
             .iter()
             .find(|tool| tool["name"] == "ssmcp.ui.action")

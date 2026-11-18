@@ -107,7 +107,7 @@ await sessions.close(managerClientId, {
 });
 ```
 
-`inventory.sessions` 是会话数组。便捷入口依赖新版服务端的 code_mode 脚本；原生形式保持为 `call(managerClientId, "ssmcp.session.create", {...})`，返回 MCP structuredContent。工具名为 `ssmcp.session.list/status/create/restart/close`。公开 MCP 提供 `list`、`code_mode` 和 `collab`；会话管理通过 `code_mode` 调用，`collab` 用于在线客户端内的成员通信。[Agent 协作](agent-collaboration.md)
+`inventory.sessions` 是会话数组。便捷入口依赖新版服务端的 code_mode 脚本；原生形式保持为 `call(managerClientId, "ssmcp.session.create", {...})`，返回 MCP structuredContent。工具名为 `ssmcp.session.list/status/create/restart/close`。公开 MCP 提供 `list`、`code_mode`、`collab` 和 `invite`；会话管理通过 `code_mode` 调用，`collab` 用于在线客户端内的成员通信。[Agent 协作](agent-collaboration.md)
 
 新建会话继承管理连接的 SSH 目标、配置和 GitHub 允许列表；原子参数不允许替换身份或传入任意启动 argv。cwd 必须是该连接工作区内的现有目录，拒绝父级遍历和越界符号链接。子会话默认不继承 session-control 授权。带 `expected_generation` 的操作在串行管理事务中检查实例是否变化，避免基于旧状态关闭新进程。
 

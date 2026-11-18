@@ -423,10 +423,14 @@ fn absolute_path(path: &Path, label: &str) -> ssmcp::Result<()> {
 fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
     let portal = &config.portal;
     if !ssmcp::user_policy::valid_rate(portal.default_rate_limit_bps) {
-        return Err("portal.default_rate_limit_bps must be in 1..=1073741824 bytes per second".into());
+        return Err(
+            "portal.default_rate_limit_bps must be in 1..=1073741824 bytes per second".into(),
+        );
     }
     if !portal.admin_usernames.is_empty() && portal.state_dir.is_none() {
-        return Err("portal.admin_usernames requires portal.state_dir and registered usernames".into());
+        return Err(
+            "portal.admin_usernames requires portal.state_dir and registered usernames".into(),
+        );
     }
     AuditConfig {
         retention_days: portal.audit_retention_days,
@@ -648,9 +652,12 @@ async fn bind_socket(path: &Path) -> ssmcp::Result<(UnixListener, SocketFile)> {
 
 async fn serve(config: Config) -> ssmcp::Result<()> {
     use std::future::IntoFuture;
-    let downloads =
-        ssmcp::client_downloads::router(&config.public_url, config.client_download_dir.as_deref())?;
+    let (downloads, publication) = ssmcp::client_downloads::configured(
+        &config.public_url,
+        config.client_download_dir.as_deref(),
+    )?;
     let mut broker = Broker::with_identity_config(config.public_url, config.oauth, config.github)?;
+    broker.client_downloads = publication;
     if let Some(path) = config.client_registry {
         broker.oauth.enable_client_registry(&path)?;
         ssmcp::observability::log(
@@ -675,7 +682,9 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         }
     }
 
-    broker.configure_user_policies(config.portal.default_rate_limit_bps).await?;
+    broker
+        .configure_user_policies(config.portal.default_rate_limit_bps)
+        .await?;
 
     // A portal-only process never opens audit storage or binds either gateway socket.
     let mut audit = None;
@@ -683,7 +692,12 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         && let Some(socket) = &config.portal.gateway_socket
     {
         let mut admins = config.portal.admin_github_ids;
-        admins.extend(broker.portal.resolve_admin_usernames(&config.portal.admin_usernames).await?);
+        admins.extend(
+            broker
+                .portal
+                .resolve_admin_usernames(&config.portal.admin_usernames)
+                .await?,
+        );
         if !config.portal.admin_github_users.is_empty() {
             let principals = config
                 .portal

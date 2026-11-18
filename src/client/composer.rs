@@ -1,11 +1,18 @@
 //! Local draft editing and rendering; submission and queue ownership live outside this module.
-use super::ui::Ui;
+use super::{completion, ui::Ui};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) const MAX_DRAFT_BYTES: usize = 16 * 1024;
 const MAX_HISTORY_ENTRIES: usize = 64;
 const MAX_HISTORY_BYTES: usize = 256 * 1024;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Suggestion<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub reference: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SlashCommand {
@@ -27,8 +34,8 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Restart this client session (alias of /reload)",
     },
     SlashCommand {
-        name: "/agents",
-        description: "Show agents",
+        name: "/tasks",
+        description: "List local command jobs; cancel an exact job ID",
     },
     SlashCommand {
         name: "/queue",
@@ -40,7 +47,15 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/logs",
-        description: "Show logs",
+        description: "Show compact tool activity",
+    },
+    SlashCommand {
+        name: "/raw",
+        description: "Toggle the original tool transcript",
+    },
+    SlashCommand {
+        name: "/questions",
+        description: "Review pending questions",
     },
     SlashCommand {
         name: "/filter",
@@ -58,6 +73,58 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "/clear",
         description: "Clear visible logs",
     },
+    SlashCommand {
+        name: "/paste",
+        description: "Import clipboard text, image or desktop file selection",
+    },
+    SlashCommand {
+        name: "/attach",
+        description: "Reference a workspace file or import selected local files",
+    },
+    SlashCommand {
+        name: "/copy",
+        description: "Copy the latest agent reply",
+    },
+    SlashCommand {
+        name: "/handoff",
+        description: "Prepare a context file and editable handoff draft",
+    },
+    SlashCommand {
+        name: "/context",
+        description: "List local memory branches",
+    },
+    SlashCommand {
+        name: "/memory",
+        description: "Read the active local memory branch",
+    },
+    SlashCommand {
+        name: "/compact",
+        description: "Create a local checkpoint; optional explicit summary",
+    },
+    SlashCommand {
+        name: "/fork",
+        description: "Fork local memory; optional branch name",
+    },
+    SlashCommand {
+        name: "/switch",
+        description: "Switch memory branch by exact ID; never replay work",
+    },
+    SlashCommand {
+        name: "/resume",
+        description: "Resume saved local conversation history",
+    },
+    SlashCommand {
+        name: "/pi",
+        description: "Inspect or call the installed Pi harness",
+    },
+    SlashCommand {
+        name: "/cc",
+        description: "Inspect or call native Claude Code tools",
+    },
+    SlashCommand {
+        name: "/codex",
+        description: "Inspect or call native Codex tools",
+    },
 ];
 
 /// Cursor coordinates are zero based and relative to `lines`.
@@ -72,6 +139,7 @@ pub(super) struct ComposerRows {
 pub(super) struct Composer {
     text: String,
     cursor: usize,
+    revision: u64,
     preferred_column: Option<usize>,
     history: VecDeque<String>,
     history_bytes: usize,
@@ -79,6 +147,8 @@ pub(super) struct Composer {
     saved_draft: Option<(String, usize)>,
     suggestion_index: usize,
     suggestions_dismissed: bool,
+    reference_query: Option<completion::Query>,
+    references: completion::Matches,
 }
 
 impl Composer {
@@ -91,6 +161,9 @@ impl Composer {
     /// A byte offset that always falls on a UTF-8 boundary.
     pub(super) fn cursor(&self) -> usize {
         self.cursor
+    }
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Reject oversized edits as a whole so a submitted request is never silently truncated.
@@ -338,8 +411,23 @@ impl Composer {
         true
     }
 
-    pub(super) fn suggestions(&self) -> Vec<&'static SlashCommand> {
-        if self.suggestions_dismissed || self.text.contains('\n') {
+    pub(super) fn suggestions(&self) -> Vec<Suggestion<'_>> {
+        if self.suggestions_dismissed {
+            return Vec::new();
+        }
+        if self.reference_active() {
+            return self
+                .references
+                .items
+                .iter()
+                .map(|item| Suggestion {
+                    name: &item.name,
+                    description: &item.description,
+                    reference: true,
+                })
+                .collect();
+        }
+        if self.text.contains('\n') {
             return Vec::new();
         }
         let prefix = self.text.trim_start();
@@ -349,10 +437,15 @@ impl Composer {
         SLASH_COMMANDS
             .iter()
             .filter(|command| command.name.starts_with(prefix))
+            .map(|command| Suggestion {
+                name: command.name,
+                description: command.description,
+                reference: false,
+            })
             .collect()
     }
 
-    pub(super) fn selected_suggestion(&self) -> Option<&'static SlashCommand> {
+    pub(super) fn selected_suggestion(&self) -> Option<Suggestion<'_>> {
         let suggestions = self.suggestions();
         suggestions
             .get(
@@ -360,6 +453,77 @@ impl Composer {
                     .min(suggestions.len().saturating_sub(1)),
             )
             .copied()
+    }
+
+    pub(super) fn refresh_completions(&mut self, enabled: bool) {
+        let query = enabled
+            .then(|| completion::query(&self.text, self.cursor))
+            .flatten();
+        if query != self.reference_query {
+            self.reference_query = query;
+            self.references = completion::Matches::default();
+            self.suggestion_index = 0;
+            self.suggestions_dismissed = false;
+        }
+        if !self.suggestions_dismissed
+            && let Some(query) = &self.reference_query
+        {
+            let selected = self
+                .references
+                .items
+                .get(self.suggestion_index)
+                .map(|item| item.name.clone());
+            self.references = completion::lookup(query);
+            self.suggestion_index = selected
+                .and_then(|name| {
+                    self.references
+                        .items
+                        .iter()
+                        .position(|item| item.name == name)
+                })
+                .unwrap_or_else(|| {
+                    self.suggestion_index
+                        .min(self.references.items.len().saturating_sub(1))
+                });
+        }
+    }
+
+    pub(super) fn reference_active(&self) -> bool {
+        !self.suggestions_dismissed
+            && self.reference_query.is_some()
+            && completion::query(&self.text, self.cursor) == self.reference_query
+    }
+
+    pub(super) fn completion_loading(&self) -> bool {
+        self.reference_active() && self.references.loading
+    }
+
+    pub(super) fn accept_suggestion(&mut self) -> Result<bool, String> {
+        let Some(selected) = self.selected_suggestion() else {
+            return Ok(false);
+        };
+        if selected.reference {
+            let query = self.reference_query.as_ref().unwrap();
+            let index = self
+                .suggestion_index
+                .min(self.references.items.len().saturating_sub(1));
+            let (text, cursor) = completion::apply(
+                &self.text,
+                self.cursor,
+                query,
+                &self.references.items[index].replacement,
+                MAX_DRAFT_BYTES,
+            )?;
+            self.detach_history();
+            self.text = text;
+            self.cursor = cursor;
+        } else {
+            let text = format!("{} ", selected.name);
+            if !self.set_text(&text) {
+                return Err("Draft limit reached · 16 KiB".into());
+            }
+        }
+        Ok(true)
     }
 
     pub(super) fn move_suggestion(&mut self, delta: isize) -> bool {
@@ -379,6 +543,9 @@ impl Composer {
     pub(super) fn menu_visible(&self, width: u16, max_height: u16) -> bool {
         if width == 0 || max_height == 0 || self.suggestions().is_empty() {
             return false;
+        }
+        if self.reference_active() {
+            return max_height >= 2;
         }
         let (_, content_width) = editor_columns(usize::from(width));
         self.wrapped(content_width, |_, _, _| {}).len() < usize::from(max_height)
@@ -410,11 +577,22 @@ impl Composer {
         } else {
             Vec::new()
         };
+        let available = if self.reference_active() {
+            height.saturating_sub(1)
+        } else {
+            height.saturating_sub(wrapped.len().min(height))
+        };
+        let notice = (show_suggestions && self.reference_active())
+            .then_some(self.references.notice.as_deref())
+            .flatten();
+        let notice_rows =
+            usize::from(notice.is_some() && (suggestions.is_empty() || available > 1))
+                .min(available);
         let hint_count = suggestions
             .len()
             .min(3)
-            .min(height.saturating_sub(wrapped.len().min(height)));
-        let visible_height = height - hint_count;
+            .min(available.saturating_sub(notice_rows));
+        let visible_height = height - hint_count - notice_rows;
         let first = cursor_row
             .saturating_sub(visible_height / 2)
             .min(wrapped.len().saturating_sub(visible_height));
@@ -429,7 +607,7 @@ impl Composer {
                 _ => "",
             };
             let (body, tone) = if self.text.is_empty() {
-                ("Message the agent · / commands", "muted")
+                ("Message the agent · @file · $skill · / commands", "muted")
             } else {
                 (body.as_str(), "foreground")
             };
@@ -456,6 +634,9 @@ impl Composer {
                 ui,
             ));
         }
+        if notice_rows > 0 {
+            lines.push(paint_row(&[(notice.unwrap_or(""), "muted")], width, ui));
+        }
         ComposerRows {
             lines,
             cursor_row: (cursor_row - first) as u16,
@@ -481,6 +662,7 @@ impl Composer {
     }
 
     fn reset_suggestions(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
         self.suggestion_index = 0;
         self.suggestions_dismissed = false;
     }
@@ -769,16 +951,16 @@ mod tests {
         assert_eq!(draft.text(), "/re");
         draft.set_text("/");
         assert!(draft.move_suggestion(-1));
-        assert_eq!(draft.selected_suggestion().unwrap().name, "/clear");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/codex");
         assert!(
             draft
                 .rows(60, 3, &ui, true)
                 .lines
                 .iter()
-                .any(|line| line.contains("› /clear"))
+                .any(|line| line.contains("› /codex"))
         );
         draft.insert("a");
-        assert_eq!(draft.selected_suggestion().unwrap().name, "/agents");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");
     }
 
     #[test]
@@ -871,16 +1053,74 @@ mod tests {
         assert_eq!(draft.suggestions().len(), SLASH_COMMANDS.len());
         draft.set_text("/re");
         assert_eq!(
-            draft.suggestions(),
-            vec![&SLASH_COMMANDS[1], &SLASH_COMMANDS[2]]
+            draft
+                .suggestions()
+                .iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>(),
+            vec!["/reload", "/restart", "/resume"]
         );
         let rendered = draft.rows(60, 4, &ui, true);
-        assert_eq!(rendered.lines.len(), 3);
+        assert_eq!(rendered.lines.len(), 4);
         assert!(rendered.lines[1].contains("/reload"));
         assert_eq!(rendered.cursor_col, 5);
         for value in ["/filter cargo", "/unknown", "message /reload", "/\n"] {
             draft.set_text(value);
             assert!(draft.suggestions().is_empty());
         }
+    }
+    fn reference_fixture(text: &str, cursor: usize, replacement: &str) -> Composer {
+        let mut draft = Composer::default();
+        draft.set_text(text);
+        draft.cursor = cursor;
+        draft.reference_query = completion::query(text, cursor);
+        draft.references = completion::Matches {
+            items: vec![completion::Candidate {
+                name: "@设计 文稿.md".into(),
+                description: "File".into(),
+                replacement: replacement.into(),
+            }],
+            ..completion::Matches::default()
+        };
+        draft
+    }
+
+    #[test]
+    fn reference_completion_preserves_surrounding_text_and_utf8_cursor() {
+        let text = "检查 @\"设计 文\"，然后测试";
+        let cursor = text.find("文\"").unwrap() + "文".len();
+        let mut draft = reference_fixture(text, cursor, "@\"设计 文稿.md\" ");
+        assert!(draft.menu_visible(40, 3));
+        assert!(draft.selected_suggestion().unwrap().reference);
+        assert!(draft.accept_suggestion().unwrap());
+        assert_eq!(draft.text(), "检查 @\"设计 文稿.md\" ，然后测试");
+        assert!(draft.text().is_char_boundary(draft.cursor()));
+        assert!(draft.suggestions().is_empty());
+    }
+
+    #[test]
+    fn stale_or_oversized_reference_completion_keeps_the_draft() {
+        let mut draft = reference_fixture("@文", "@文".len(), "@\"设计 文稿.md\" ");
+        draft.left();
+        let original = draft.text().to_owned();
+        assert!(!draft.accept_suggestion().unwrap());
+        assert_eq!(draft.text(), original);
+        let mut draft = reference_fixture("@文", "@文".len(), &"x".repeat(MAX_DRAFT_BYTES + 1));
+        let original = (draft.text().to_owned(), draft.cursor());
+        assert!(draft.accept_suggestion().is_err());
+        assert_eq!((draft.text().to_owned(), draft.cursor()), original);
+    }
+
+    #[test]
+    fn reference_menu_survives_wrapped_drafts_and_escape_only_dismisses_it() {
+        let text = "第一行\n第二行\n第三行 @文";
+        let mut draft = reference_fixture(text, text.len(), "@\"设计 文稿.md\" ");
+        let rows = draft.rows(20, 3, &Ui::default(), true);
+        assert!(draft.menu_visible(20, 3));
+        assert_eq!(rows.lines.len(), 3);
+        assert!(rows.lines.iter().any(|line| line.contains("@设计")));
+        draft.dismiss_suggestions();
+        assert!(draft.suggestions().is_empty());
+        assert_eq!(draft.text(), text);
     }
 }

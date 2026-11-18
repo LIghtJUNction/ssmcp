@@ -221,3 +221,114 @@ test('CUA shares existing implementations and does not alter discovered Codex MC
   assert.equal(result(record).hidden, 'undefined');
   assert.deepEqual(record.frames.filter(frame => frame.type === 'image').map(frame => frame.content), [png]);
 });
+
+test('image forwards GIF87a, GIF89a and WebP native image blocks on the image channel', async () => {
+  const gif89Bytes = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64');
+  const gif87Bytes = Buffer.from(gif89Bytes);
+  gif87Bytes.write('GIF87a', 0);
+  // Header validation matches the native validator; this bridge does not decode codecs.
+  const images = [
+    { type: 'image', mimeType: 'image/gif', data: gif87Bytes.toString('base64') },
+    { type: 'image', mimeType: 'image/gif', data: gif89Bytes.toString('base64') },
+    { type: 'image', mimeType: 'image/webp', data: Buffer.from('RIFF\0\0\0\0WEBP').toString('base64') },
+  ];
+  const record = await run(`
+    const response = await call('one', 'ssmcp.fs.read_image', {path:'fixture'});
+    image(response);
+    return response.structuredContent;
+  `, () => ({
+    ok: true, value: { content: images, structuredContent: { count: images.length } },
+  }));
+  assert.equal(record.exitCode, 0, record.stderr || error(record));
+  assert.deepEqual(result(record), { count: images.length });
+  assert.deepEqual(record.frames.filter(frame => frame.type === 'image').map(frame => frame.content), images);
+  const nonImages = JSON.stringify(record.frames.filter(frame => frame.type !== 'image'));
+  for (const image of images) assert(!nonImages.includes(image.data));
+});
+
+test('image rejects mismatched, truncated and unsupported raster headers and noncanonical base64', async () => {
+  const block = (mimeType, data) => ({ type: 'image', mimeType, data });
+  const base64 = text => Buffer.from(text).toString('base64');
+  const cases = [
+    [block('image/gif', png.data), /declared raster MIME/],
+    [block('image/webp', base64('GIF89a')), /declared raster MIME/],
+    [block('image/jpeg', base64('RIFF\0\0\0\0WEBP')), /declared raster MIME/],
+    [block('image/gif', base64('GIF88a')), /declared raster MIME/],
+    [block('image/gif', base64('GIF87')), /declared raster MIME/],
+    [block('image/webp', base64('RIFF\0\0\0\0WAVE')), /declared raster MIME/],
+    [block('image/webp', base64('RIFF\0\0\0\0WEB')), /declared raster MIME/],
+    [block('image/svg+xml', base64('<svg/>')), /PNG, JPEG, GIF or WebP/],
+    [block('image/gif', base64('GIF89a') + '\n'), /canonical base64/],
+    // Nonzero pad bits decode to the same bytes but are not canonical base64.
+    [block('image/gif', 'R0lGODlhAB=='), /canonical base64/],
+  ];
+  for (const [content, expected] of cases) {
+    const record = await run(`
+      const response = await call('one', 'ssmcp.fs.read_image', {path:'fixture'});
+      try { image(response); } catch (error) { return {reason:error.message}; }
+      throw new Error('expected image rejection');
+    `, () => ({ ok: true, value: { content: [content] } }));
+    assert.equal(record.exitCode, 0, record.stderr || error(record));
+    assert.match(result(record).reason, expected, JSON.stringify(content));
+    assert(!record.frames.some(frame => frame.type === 'image'));
+  }
+});
+
+test('GIF and WebP retain decoded size, image count and encoded aggregate budgets', async () => {
+  const webp = size => {
+    const bytes = Buffer.alloc(size);
+    bytes.write('RIFF', 0);
+    bytes.write('WEBP', 8);
+    return { type: 'image', mimeType: 'image/webp', data: bytes.toString('base64') };
+  };
+  const gif = { type: 'image', mimeType: 'image/gif', data: Buffer.from('GIF89a').toString('base64') };
+  const cases = [
+    { content: webp(400 * 1024), attempts: 1, accepted: 1, reason: null },
+    { content: webp(400 * 1024 + 1), attempts: 1, accepted: 0, reason: /within 400 KiB/ },
+    { content: gif, attempts: 5, accepted: 4, reason: /4 images or 2 MiB/ },
+    { content: webp(400 * 1024), attempts: 4, accepted: 3, reason: /4 images or 2 MiB/ },
+  ];
+  for (const fixture of cases) {
+    const record = await run(`
+      const response = await call('one', 'ssmcp.fs.read_image', {path:'fixture'});
+      let accepted = 0;
+      try {
+        for (let i = 0; i < ${fixture.attempts}; i++) { image(response); accepted++; }
+      } catch (error) { return {accepted, reason:error.message}; }
+      return {accepted, reason:null};
+    `, () => ({ ok: true, value: { content: [fixture.content] } }));
+    assert.equal(record.exitCode, 0, record.stderr || error(record));
+    assert.equal(result(record).accepted, fixture.accepted);
+    assert.equal(record.frames.filter(frame => frame.type === 'image').length, fixture.accepted);
+    if (fixture.reason) assert.match(result(record).reason, fixture.reason);
+    else assert.equal(result(record).reason, null);
+  }
+});
+
+test('ui.present preserves typed arguments and the native acceptance receipt', async () => {
+  const document = {
+    title: '中文结果', kind: 'answer', idempotency_key: 'presentation_1',
+    blocks: [{ type: 'metrics', items: [{ label: '检查', value: '42' }] }],
+  };
+  const receipt = {
+    shown: true, accepted: true, message_id: 'message_native',
+    history_saved: true, duplicate: false, format: 'intelligence_ui.v1', block_count: 1,
+  };
+  const record = await run('return await ui.present("one", ' + JSON.stringify(document) + ');',
+    request => {
+      assert.equal(request.name, 'ssmcp.ui.present');
+      assert.equal(request.client_id, 'one');
+      assert.deepEqual(request.arguments, document);
+      return { ok: true, value: { structuredContent: receipt, isError: false } };
+    });
+  assert.equal(record.exitCode, 0, record.stderr || error(record));
+  assert.deepEqual(result(record), receipt);
+  assert.equal(record.requests.length, 1);
+  const rejected = await run(
+    'try { await ui.present("one", {}); } catch (error) { return {reason:error.message}; }',
+    () => ({ ok: true, value: {
+      isError: true, content: [{ type: 'text', text: 'invalid presentation: title required' }],
+    } }));
+  assert.equal(rejected.exitCode, 0, rejected.stderr || error(rejected));
+  assert.deepEqual(result(rejected), { reason: 'invalid presentation: title required' });
+});

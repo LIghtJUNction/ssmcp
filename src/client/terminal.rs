@@ -21,6 +21,10 @@ use std::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
+mod events;
+mod guide;
+mod images;
+pub(crate) mod markdown;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -48,10 +52,16 @@ fn shared() -> Option<Arc<Shared>> {
 pub(crate) struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    guide_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
-    pub(crate) fn start(ui: &Ui, cwd: &str, title: Option<&str>) -> io::Result<Option<Self>> {
+    pub(crate) fn start(
+        ui: &Ui,
+        cwd: &str,
+        title: Option<&str>,
+        endpoint: Option<&str>,
+    ) -> io::Result<Option<Self>> {
         if !ui.dashboard
             || ui.log_format == LogFormat::Jsonl
             || !io::stdin().is_terminal()
@@ -69,6 +79,10 @@ impl Session {
         options.color &= std::env::var_os("NO_COLOR").is_none();
         let mut state = State::new(rows, cols, &options);
         state.set_context(cwd, title);
+        let guide = endpoint.and_then(guide::Guide::from_endpoint);
+        let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
+        state.guide = guide.map(guide::Guide::portal);
+        state.graphics = images::Graphics::environment(&options);
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             stop: AtomicBool::new(false),
@@ -92,10 +106,39 @@ impl Session {
             .spawn(move || {
                 draw_loop(&worker, output);
             }) {
-            Ok(thread) => Ok(Some(Self {
-                shared,
-                thread: Some(thread),
-            })),
+            Ok(thread) => {
+                let guide_probe = guide_url.and_then(|url| {
+                    let handle = tokio::runtime::Handle::try_current().ok()?;
+                    let display = Arc::downgrade(&shared);
+                    Some(handle.spawn(async move {
+                        // Keep networking and QR encoding outside the compositor lock.
+                        let Some(guide) = guide::Guide::resolve(&url).await else {
+                            return;
+                        };
+                        let Some(shared) = display.upgrade() else {
+                            return;
+                        };
+                        if shared.stop.load(Ordering::Acquire)
+                            || !shared.alive.load(Ordering::Acquire)
+                        {
+                            return;
+                        }
+                        let mut state = shared
+                            .state
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        if !state.preview {
+                            state.guide = Some(guide);
+                            state.dirty = true;
+                        }
+                    }))
+                });
+                Ok(Some(Self {
+                    shared,
+                    thread: Some(thread),
+                    guide_probe,
+                }))
+            }
             Err(error) => {
                 *DISPLAY
                     .get()
@@ -111,6 +154,9 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
+        if let Some(probe) = self.guide_probe.take() {
+            probe.abort();
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -126,8 +172,19 @@ impl Drop for Session {
     }
 }
 
-pub(super) fn active() -> bool {
+pub(crate) fn active() -> bool {
     shared().is_some_and(|shared| shared.alive.load(Ordering::Acquire))
+}
+
+/// Wake the display after asynchronous local discovery without publishing a log.
+pub(super) fn invalidate() {
+    if let Some(shared) = shared() {
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .dirty = true;
+    }
 }
 
 pub(super) fn log_width() -> Option<usize> {
@@ -154,6 +211,66 @@ pub(super) fn log(bytes: &[u8]) -> bool {
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     state.log(bytes);
     true
+}
+
+/// Keep correlated activity and the original transcript in the same update.
+pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) -> bool {
+    let Some(shared) = shared() else {
+        return false;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.log_event(label, value, bytes);
+    true
+}
+
+/// The renderer releases its lock before publishing these display-only updates.
+pub(super) fn diagnostics(updates: &[super::render::DiagnosticUpdate]) {
+    if updates.is_empty() {
+        return;
+    }
+    let Some(shared) = shared() else {
+        return;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return;
+    }
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    for update in updates {
+        if state.events.ingest_diagnostic(update) {
+            // Keep the retained raw pane's safe first warning. Unfolded original
+            // records remain available in explicit verbose/JSONL and the archive.
+            state.log_raw(update.text().as_bytes());
+        }
+    }
+    state.dirty = true;
+}
+
+/// Decode outside the State lock; preview failures do not alter native output.
+pub(crate) fn image(block: &serde_json::Value) {
+    let Some(shared) = shared() else {
+        return;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return;
+    }
+    let native = shared
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .graphics
+        .prepare_native();
+    let preview = match images::decode(block, native) {
+        Ok(preview) => preview,
+        Err(error) => {
+            notice(&format!("Image preview unavailable: {error}"));
+            return;
+        }
+    };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.image(preview, block["mimeType"].as_str().unwrap_or("image"));
 }
 
 /// Every PTY has its own parser, including terminals that are not on screen.
@@ -210,6 +327,7 @@ pub(crate) fn physical_resize(rows: u16, cols: u16) -> (u16, u16) {
         && shared.alive.load(Ordering::Acquire)
     {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.graphics.resized();
         state.resize(rows, cols);
         return (state.geometry.pty_rows, state.geometry.left);
     }
@@ -221,6 +339,7 @@ pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
     let shared = shared()?;
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     state.ui = ui.clone();
+    state.conversation.history_width = 0;
     state.ui.color &= std::env::var_os("NO_COLOR").is_none();
     let (rows, cols) = (state.geometry.rows, state.geometry.cols);
     state.resize(rows, cols);
@@ -230,9 +349,20 @@ pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
     Some((state.geometry.pty_rows, state.geometry.left))
 }
 
+/// Called after the steering lock is released; recipients and audit runs stay intact.
+pub(super) fn callers_disconnected() {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.caller_tracker.disconnect();
+        state.dirty = true;
+    }
+}
+
 pub(crate) fn audit(value: &serde_json::Value) {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let data = state.chat_data();
+        state.caller_tracker.observe(value, &data);
         if state.audit.ingest(value) {
             state.dirty = true;
         }
@@ -282,9 +412,18 @@ pub(crate) fn browse(action: &str) -> Result<(), String> {
         "audit.down" => state.audit.down(),
         "audit.open" => state.audit.open(),
         "audit.back" => state.audit.back(),
-        "logs.page-up" => state.scroll_logs(page),
-        "logs.page-down" => state.scroll_logs(-page),
-        "logs.end" => state.scroll_logs(isize::MIN),
+        "logs.page-up" => {
+            state.scroll_logs(page);
+            state.events.scroll_by(-page);
+        }
+        "logs.page-down" => {
+            state.scroll_logs(-page);
+            state.events.scroll_by(page);
+        }
+        "logs.end" => {
+            state.scroll_logs(isize::MIN);
+            state.events.latest();
+        }
         _ => return Err("unknown display browsing action".into()),
     }
     state.dirty = true;
@@ -310,6 +449,7 @@ pub(crate) fn notice(message: &str) {
 pub(crate) fn clear_logs() {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.events.clear();
         state.logs = vt100::Parser::new(
             nonzero(state.geometry.log_rows),
             nonzero(state.geometry.left),
@@ -336,7 +476,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "focus":if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
-        "conversation":conversation,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
+        "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
     })
 }
 
@@ -344,7 +484,11 @@ pub(crate) fn snapshot() -> serde_json::Value {
 fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
-    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · /agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
+    state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
+    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
+    state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"17","exit_code":0}), "[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
+    state.log("[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
+    state.log("[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
     state.audit.open();
@@ -406,14 +550,40 @@ pub(crate) fn take_session_replies() -> Vec<(String, Vec<u8>)> {
 /// The display consumes browsing and filter input while it is active.
 /// A headless connection keeps the existing native terminal input path.
 pub(crate) fn keyboard(text: &str) -> String {
-    let Some(shared) = shared() else {
-        return text.into();
-    };
+    keyboard_bytes(text.as_bytes())
+        .map(|output| String::from_utf8_lossy(&output).into_owned())
+        .unwrap_or_else(|| text.into())
+}
+
+/// Give the active compositor original stdin bytes before any UTF-8 decoding.
+/// Binary bracketed pastes are consumed here; headless input keeps its text path.
+pub(crate) fn keyboard_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let shared = shared()?;
     if !shared.alive.load(Ordering::Acquire) {
-        return text.into();
+        return None;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    String::from_utf8_lossy(&state.keyboard(text.as_bytes(), Instant::now(), false)).into_owned()
+    Some(state.keyboard(bytes, Instant::now(), false))
+}
+
+/// Preserve an outer reader's actual image-input time when it retains a split
+/// framing marker instead of returning bytes to the compositor immediately.
+pub(crate) fn paste_input_progress(now: Instant) {
+    let Some(shared) = shared() else {
+        return;
+    };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.paste_input_progress(now);
+}
+
+/// The attach decoder emits an explicit recovery boundary. Reset every
+/// compositor layer before bytes following that boundary are accepted.
+pub(crate) fn discard_image_paste() {
+    let Some(shared) = shared() else {
+        return;
+    };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.discard_image_paste();
 }
 
 /// Called by the input pump so a lone Escape never waits indefinitely for a
@@ -492,9 +662,19 @@ impl Geometry {
     }
 }
 
+fn request_interrupt() {
+    #[cfg(unix)]
+    // SAFETY: this targets only the current process, whose normal signal handler
+    // owns graceful shutdown and restoration of the original terminal mode.
+    let _ = unsafe { libc::kill(libc::getpid(), libc::SIGINT) };
+}
+
 #[derive(Clone, Copy)]
 enum Key {
+    Interrupt,
     Help,
+    Questions,
+    Select,
     Layout,
     Sidebar,
     Theme,
@@ -526,12 +706,18 @@ enum Key {
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[1;2A", Key::Questions),
+    (b"\x1b[18~", Key::Select),
     (b"\x1b[Z", Key::FocusBack),
     (b"\x1b[3~", Key::Delete),
     (b"\x1b[13;2u", Key::Newline),
     (b"\x1b[27;2;13~", Key::Newline),
     (b"\x1b[1;5H", Key::HistoryStart),
+    (b"\x1b[1;5~", Key::HistoryStart),
+    (b"\x1b[7;5~", Key::HistoryStart),
     (b"\x1b[1;5F", Key::HistoryEnd),
+    (b"\x1b[4;5~", Key::HistoryEnd),
+    (b"\x1b[8;5~", Key::HistoryEnd),
     (b"\x1b[A", Key::AuditUp),
     (b"\x1bOA", Key::AuditUp),
     (b"\x1b[B", Key::AuditDown),
@@ -571,14 +757,40 @@ struct Keyboard {
     since: Option<Instant>,
     logs: bool,
     pasting: bool,
+    paste_png: crate::client::input::paste::PngFraming,
+    paste_last_input: Option<Instant>,
 }
 impl Keyboard {
+    fn image_paste_expired(&self, now: Instant) -> bool {
+        self.pasting
+            && self.paste_png.is_image_prefix()
+            && self.paste_last_input.is_some_and(|last| {
+                now.saturating_duration_since(last)
+                    >= crate::client::input::paste::IMAGE_IDLE_TIMEOUT
+            })
+    }
+
+    fn discard_image_paste(&mut self) -> bool {
+        if !self.pasting || !self.paste_png.is_image_prefix() {
+            return false;
+        }
+        self.pasting = false;
+        self.paste_png = Default::default();
+        self.paste_last_input = None;
+        self.pending.clear();
+        self.since = None;
+        true
+    }
+
     fn accepts(&self, key: Key, allow_logs: bool) -> bool {
         if self.pasting {
-            return matches!(key, Key::PasteEnd);
+            return matches!(key, Key::PasteEnd) && self.paste_png.allows_end();
         }
         match key {
-            Key::Help
+            Key::Interrupt
+            | Key::Help
+            | Key::Questions
+            | Key::Select
             | Key::Layout
             | Key::Sidebar
             | Key::Theme
@@ -609,13 +821,40 @@ impl Keyboard {
         allow_logs: bool,
         force_logs: bool,
     ) -> (Vec<u8>, Vec<Key>) {
+        if self.image_paste_expired(now) {
+            self.discard_image_paste();
+        }
         self.logs |= force_logs;
         let mut output = Vec::new();
         let mut actions = Vec::new();
         for &byte in bytes {
+            if self.pasting {
+                self.paste_last_input = Some(now);
+            }
+            if byte == 0x03 && !self.pasting {
+                self.pending.clear();
+                self.since = None;
+                actions.push(Key::Interrupt);
+                continue;
+            }
+            // A fresh ESC starts a new key. Resolve a preceding standalone ESC
+            // immediately, even when both keys arrive in one terminal read.
+            if byte == 0x1b && !self.pasting && !self.pending.is_empty() {
+                if self.logs && self.pending == b"\x1b" {
+                    self.logs = force_logs;
+                    self.pending.clear();
+                    actions.push(Key::Escape);
+                } else {
+                    output.append(&mut self.pending);
+                }
+                self.since = None;
+            }
             if self.pending.is_empty() && byte != 0x1b {
                 if !self.pasting {
                     self.logs = force_logs;
+                }
+                if self.pasting {
+                    self.paste_png.feed(&[byte]);
                 }
                 output.push(byte);
                 continue;
@@ -660,10 +899,14 @@ impl Keyboard {
                     Key::PasteStart => {
                         self.logs = force_logs;
                         self.pasting = true;
+                        self.paste_png = Default::default();
+                        self.paste_last_input = Some(now);
                         output.extend_from_slice(sequence);
                     }
                     Key::PasteEnd => {
                         self.pasting = false;
+                        self.paste_png = Default::default();
+                        self.paste_last_input = None;
                         output.extend_from_slice(sequence);
                     }
                     key => actions.push(*key),
@@ -678,11 +921,15 @@ impl Keyboard {
                 if !self.pasting {
                     self.logs = force_logs;
                 }
+                if self.pasting {
+                    self.paste_png.feed(&self.pending);
+                }
                 output.append(&mut self.pending);
                 self.since = None;
             }
         }
         if flush
+            && !(self.pasting && self.paste_png.is_image_prefix())
             && self.since.is_some_and(|since| {
                 now.saturating_duration_since(since) >= Duration::from_millis(80)
             })
@@ -694,6 +941,9 @@ impl Keyboard {
             } else {
                 if !self.pasting {
                     self.logs = force_logs;
+                }
+                if self.pasting {
+                    self.paste_png.feed(&self.pending);
                 }
                 output.append(&mut self.pending);
             }
@@ -773,8 +1023,12 @@ impl vt100::Callbacks for Replies {
 
 struct State {
     context_label: String,
+    guide: Option<guide::Guide>,
+    graphics: images::Graphics,
+    media: Vec<images::Placement>,
     geometry: Geometry,
     logs: vt100::Parser,
+    events: events::EventView,
     pty: vt100::Parser<Replies>,
     active_session: String,
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
@@ -782,7 +1036,10 @@ struct State {
     panel: PanelSnapshot,
     ui: Ui,
     help: bool,
+    selection: bool,
     audit: AuditView,
+    caller_tracker: super::render::CallerTracker,
+    raw_logs: bool,
     log_query: String,
     log_level: u8,
     filter_editing: bool,
@@ -800,7 +1057,11 @@ impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let geometry = Geometry::new(rows, cols, ui);
         Self {
+            events: events::EventView::new(),
             context_label: String::new(),
+            guide: None,
+            graphics: images::Graphics::default(),
+            media: Vec::new(),
             logs: vt100::Parser::new(
                 nonzero(geometry.log_rows),
                 nonzero(geometry.left),
@@ -819,7 +1080,10 @@ impl State {
             panel: PanelSnapshot::default(),
             ui: ui.clone(),
             help: false,
+            selection: false,
             audit: AuditView::default(),
+            caller_tracker: super::render::CallerTracker::default(),
+            raw_logs: ui.log_format == LogFormat::PrettyVerbose || ui.show_raw_json,
             log_query: String::new(),
             log_level: 0,
             filter_editing: false,
@@ -925,7 +1189,30 @@ impl State {
         }
         replies
     }
+    fn image(&mut self, preview: images::Preview, mime: &str) {
+        let width = usize::from(self.geometry.left.saturating_sub(4).max(1));
+        let height = usize::from(self.geometry.log_rows.saturating_sub(3).clamp(1, 18));
+        let mut text = format!(
+            "\n[IMAGE] {} × {} · {}\n",
+            preview.width, preview.height, mime
+        );
+        for row in preview.render(width, height, &self.ui) {
+            let _ = writeln!(text, "  {row}");
+        }
+        text.push('\n');
+        self.log(text.as_bytes());
+        self.events.attach_image(preview);
+    }
+
     fn log(&mut self, bytes: &[u8]) {
+        self.events.ingest(bytes);
+        self.log_raw(bytes);
+    }
+    fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
+        self.events.ingest_event(label, value, bytes);
+        self.log_raw(bytes);
+    }
+    fn log_raw(&mut self, bytes: &[u8]) {
         let mut normalized = Vec::with_capacity(bytes.len());
         for &byte in bytes {
             if byte == b'\n' && !self.previous_cr {
@@ -1084,7 +1371,37 @@ impl State {
         Some(result)
     }
 
+    fn paste_input_progress(&mut self, now: Instant) {
+        if self.keyboard.pasting && self.keyboard.paste_png.is_image_prefix() {
+            self.keyboard.paste_last_input = Some(
+                self.keyboard
+                    .paste_last_input
+                    .map_or(now, |last| last.max(now)),
+            );
+        }
+        self.graphics.paste_input_progress(now);
+    }
+
+    fn discard_image_paste(&mut self) {
+        let discarded = self.keyboard.discard_image_paste() | self.graphics.discard_image_paste();
+        if discarded {
+            self.chat_discard_image_paste();
+            self.dirty = true;
+        }
+    }
+
     fn keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        if self.keyboard.image_paste_expired(now) {
+            self.discard_image_paste();
+        }
+        // Graphics may retain a split framing marker. Every layer uses the same
+        // raw input progress, so it cannot expire while another still buffers it.
+        if !bytes.is_empty() && self.keyboard.pasting {
+            self.keyboard.paste_last_input = Some(now);
+        }
+        let filtered = self.graphics.input(bytes, now, flush);
+        self.dirty |= self.graphics.take_changed();
+        let bytes = filtered.as_slice();
         if self.ui.layout == Layout::Chat {
             return self.chat_keyboard(bytes, now, flush);
         }
@@ -1099,6 +1416,10 @@ impl State {
         );
         let mut layout_changed = false;
         for action in actions {
+            if matches!(action, Key::Interrupt) {
+                request_interrupt();
+                return Vec::new();
+            }
             if matches!(action, Key::Escape) && showing_help {
                 self.help = false;
                 self.keyboard.logs = old_focus;
@@ -1281,9 +1602,34 @@ impl State {
         Vec::new()
     }
 
+    fn should_redraw(
+        &self,
+        previous: Option<&Frame>,
+        previous_cell: Option<images::CellSize>,
+    ) -> bool {
+        let pixels_changed = self.graphics.cell() != previous_cell;
+        let frozen = self.selection
+            && !pixels_changed
+            && previous.is_some_and(|old| !old.mouse_capture && old.geometry == self.geometry);
+        (self.dirty || pixels_changed) && !frozen
+    }
+
     fn frame(&mut self, now: Instant) -> Frame {
+        self.media.clear();
+        self.events
+            .image_cells(self.graphics.cell().filter(|_| self.ui.color));
         if self.ui.layout == Layout::Chat {
-            return self.chat_frame(now);
+            let frame = self.chat_frame(now);
+            if !self.help
+                && self.conversation.view == conversation::View::Activity
+                && !self.raw_logs
+            {
+                self.media.extend(
+                    self.events
+                        .image_placements(conversation::body_top(self.geometry.rows)),
+                );
+            }
+            return frame;
         }
         let g = self.geometry;
         let filtered = self.filtered_logs();
@@ -1296,10 +1642,26 @@ impl State {
         );
         let sidebar = layout.sidebar.map(|rect| {
             let height = rect.height.saturating_sub(u16::from(g.rows >= 3));
-            (
-                rect,
-                panel::render_configured(&self.panel, rect.width, height, now, &self.ui),
+            let footer = self.guide_rows(rect.width, height, rect.row, rect.col);
+            let mut panel: Vec<String> = panel::render_configured(
+                &self.panel,
+                rect.width,
+                height.saturating_sub(footer.len() as u16),
+                now,
+                &self.ui,
             )
+            .into_iter()
+            .map(|item| {
+                let text = fit(&item.text, rect.width);
+                let padded = format!(
+                    "{text}{}",
+                    " ".repeat(usize::from(rect.width).saturating_sub(text.width()))
+                );
+                self.tone(item.tone, &padded)
+            })
+            .collect();
+            panel.extend(footer);
+            (rect, panel)
         });
         let mut rows = Vec::with_capacity(usize::from(g.rows));
         for row in 0..g.rows {
@@ -1314,6 +1676,15 @@ impl State {
                         " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
                         self.log_query
                     )
+                } else if let Some(guide) =
+                    self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18)
+                {
+                    let link = format!(" {} · F1 Help ", guide.url());
+                    if link.width() <= usize::from(g.cols) {
+                        link
+                    } else {
+                        " F1 · full online guide link ".into()
+                    }
                 } else if g.cols < 100 {
                     " Wheel Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F1 Help ".into()
                 } else {
@@ -1355,18 +1726,13 @@ impl State {
             };
             if let Some((rect, panel)) = &sidebar {
                 line.push_str(&self.tone(PanelTone::Muted, "│"));
-                let item = &panel[usize::from(row - rect.row)];
-                let text = fit(&item.text, rect.width);
-                let padded = format!(
-                    "{text}{}",
-                    " ".repeat(usize::from(rect.width).saturating_sub(text.width()))
-                );
-                line.push_str(&self.tone(item.tone, &padded));
+                line.push_str(&panel[usize::from(row - rect.row)]);
             }
             rows.push(line);
         }
         if self.help {
-            let lines = [
+            self.media.clear();
+            let mut lines = vec![
                 "SSMCP  /  Help & appearance".to_string(),
                 String::new(),
                 format!(
@@ -1399,6 +1765,17 @@ impl State {
                     "Appearance changes keep running tasks and audit history.".into()
                 }),
             ];
+            if let Some(guide) = &self.guide {
+                let mut links = vec!["Online guide".to_owned()];
+                links.extend(
+                    guide
+                        .url_lines(g.cols.saturating_sub(4))
+                        .into_iter()
+                        .map(str::to_owned),
+                );
+                links.push(String::new());
+                lines.splice(2..2, links);
+            }
             for (row, line) in rows.iter_mut().enumerate() {
                 let content = lines
                     .get(row.saturating_sub(1))
@@ -1430,7 +1807,19 @@ impl State {
             application_cursor: false,
             application_keypad: false,
             bracketed_paste: true,
+            mouse_capture: !self.selection,
         }
+    }
+    fn guide_rows(&mut self, width: u16, height: u16, row: u16, col: u16) -> Vec<String> {
+        let Some(guide) = self.guide.as_ref() else {
+            return Vec::new();
+        };
+        let (rows, placement) =
+            guide.rows(width, height, &self.ui, self.graphics.cell(), (row, col));
+        if let Some(placement) = placement {
+            self.media.push(placement);
+        }
+        rows
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
         if !self.ui.color {
@@ -1616,47 +2005,52 @@ struct Frame {
     application_cursor: bool,
     application_keypad: bool,
     bracketed_paste: bool,
+    mouse_capture: bool,
 }
+impl ztui::Frame for Frame {
+    fn size(&self) -> ztui::Size {
+        ztui::Size {
+            rows: self.geometry.rows,
+            columns: self.geometry.cols,
+        }
+    }
+
+    fn row(&self, row: u16) -> &str {
+        self.rows
+            .get(usize::from(row))
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    fn cursor(&self) -> ztui::Cursor {
+        ztui::Cursor {
+            position: ztui::Point {
+                row: self.cursor.0,
+                column: self.cursor.1,
+            },
+            visible: !self.hidden,
+        }
+    }
+
+    fn modes(&self) -> ztui::Modes {
+        ztui::Modes {
+            application_cursor: self.application_cursor,
+            application_keypad: self.application_keypad,
+            bracketed_paste: self.bracketed_paste,
+            mouse_capture: self.mouse_capture,
+        }
+    }
+
+    fn same_layout(&self, previous: &Self) -> bool {
+        self.geometry == previous.geometry
+    }
+}
+
 impl Frame {
     fn diff(&self, previous: Option<&Self>) -> Vec<u8> {
-        if previous == Some(self) {
-            return Vec::new();
-        }
-        let mut output = String::from("\x1b[?25l");
-        let resized = previous.is_none_or(|old| old.geometry != self.geometry);
-        for (row, line) in self.rows.iter().enumerate() {
-            if resized || previous.and_then(|old| old.rows.get(row)) != Some(line) {
-                let _ = write!(output, "\x1b[{};1H\x1b[0m{line}", row + 1);
-            }
-        }
-        if previous.is_none_or(|old| old.application_cursor != self.application_cursor) {
-            output.push_str(if self.application_cursor {
-                "\x1b[?1h"
-            } else {
-                "\x1b[?1l"
-            });
-        }
-        if previous.is_none_or(|old| old.application_keypad != self.application_keypad) {
-            output.push_str(if self.application_keypad {
-                "\x1b="
-            } else {
-                "\x1b>"
-            });
-        }
-        if previous.is_none_or(|old| old.bracketed_paste != self.bracketed_paste) {
-            output.push_str(if self.bracketed_paste {
-                "\x1b[?2004h"
-            } else {
-                "\x1b[?2004l"
-            });
-        }
-        let _ = write!(
-            output,
-            "\x1b[0m\x1b[{};{}H\x1b[?25{}",
-            self.cursor.0 + 1,
-            self.cursor.1 + 1,
-            if self.hidden { 'l' } else { 'h' }
-        );
+        let mut output = String::new();
+        ztui::write_diff(&mut output, self, previous)
+            .expect("writing an ANSI frame into String cannot fail");
         output.into_bytes()
     }
 }
@@ -1665,6 +2059,7 @@ struct RestoringOutput<'a> {
     shared: &'a Shared,
     output: PhysicalOutput,
     wrote: bool,
+    media: images::Renderer,
 }
 impl Write for RestoringOutput<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -1681,12 +2076,14 @@ impl Drop for RestoringOutput<'_> {
         // This guard also runs if parsing or drawing panics. Restoration is
         // bounded even when an enclosing PTY has stopped draining its output.
         let until = Instant::now() + Duration::from_millis(250);
+        let mut leave = self.media.clear();
+        leave.extend_from_slice(LEAVE);
         let mut offset = 0;
-        while self.wrote && offset < LEAVE.len() && Instant::now() < until {
-            if drain(&mut self.output, LEAVE, &mut offset).is_err() {
+        while self.wrote && offset < leave.len() && Instant::now() < until {
+            if drain(&mut self.output, &leave, &mut offset).is_err() {
                 break;
             }
-            if offset < LEAVE.len() {
+            if offset < leave.len() {
                 std::thread::sleep(Duration::from_millis(5));
             }
         }
@@ -1700,25 +2097,45 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
         shared,
         output,
         wrote: false,
+        media: images::Renderer::default(),
     };
     let mut pending = ENTER.to_vec();
     let mut offset = 0;
     let mut previous = None;
+    let mut previous_cell = None;
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
         if offset >= pending.len() {
-            let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-            if last_panel.elapsed() >= Duration::from_secs(1) {
-                state.dirty = true;
-                last_panel = Instant::now();
-            }
-            if state.dirty {
-                let frame = state.frame(Instant::now());
-                pending = frame.diff(previous.as_ref());
+            output.media.complete();
+            let (refresh, requests) = {
+                let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                if last_panel.elapsed() >= Duration::from_secs(1) {
+                    state.dirty = true;
+                    last_panel = Instant::now();
+                }
+                // Selection freezes normal updates. Grid or font-cell changes
+                // still redraw so images cannot retain their old pixel bounds.
+                let cell = state.graphics.cell();
+                let refresh = if state.should_redraw(previous.as_ref(), previous_cell) {
+                    let frame = state.frame(Instant::now());
+                    let media = std::mem::take(&mut state.media);
+                    state.dirty = false;
+                    previous_cell = cell;
+                    Some((frame, media))
+                } else {
+                    None
+                };
+                (refresh, state.graphics.take_requests())
+            };
+            pending = requests;
+            if let Some((frame, media)) = refresh {
+                let (before, after) = output.media.update(media, frame.cursor, frame.hidden);
+                pending.extend_from_slice(before.as_bytes());
+                pending.extend_from_slice(&frame.diff(previous.as_ref()));
+                pending.extend_from_slice(after.as_bytes());
                 previous = Some(frame);
-                offset = 0;
-                state.dirty = false;
             }
+            offset = 0;
         }
         match drain(&mut output, &pending, &mut offset) {
             Ok(()) => {}
@@ -1914,6 +2331,7 @@ mod tests {
     fn split_ui() -> Ui {
         Ui {
             layout: Layout::Split,
+            sidebar_width: 30,
             ..Ui::default()
         }
     }
@@ -1927,6 +2345,106 @@ mod tests {
         parser.process(&frame.diff(None));
         parser
     }
+    #[test]
+    fn selection_freeze_releases_native_placements_when_cell_measurement_expires() {
+        let ui = Ui {
+            layout: Layout::Chat,
+            color: true,
+            sidebar: true,
+            sidebar_width: 37,
+            panels: vec![crate::client::ui::Panel::Agents],
+            ..Ui::default()
+        };
+        let mut state = State::new(30, 120, &ui);
+        state.guide = guide::Guide::from_endpoint("https://ssmcp.lmm.best/mcp");
+        state.guide.as_ref().unwrap().prepare_for_test();
+        state.graphics = images::Graphics::probe_for_test();
+        let now = Instant::now();
+        assert!(
+            state
+                .graphics
+                .input(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false,)
+                .is_empty()
+        );
+        state.selection = true;
+        let before = state.frame(now);
+        let previous_cell = state.graphics.cell();
+        let mut screen = physical(&before);
+        let mut media = images::Renderer::default();
+        let (_, upload) = media.update(
+            std::mem::take(&mut state.media),
+            before.cursor,
+            before.hidden,
+        );
+        assert!(
+            upload.contains("a=p"),
+            "the frame has an actual native QR placement"
+        );
+        media.complete();
+        assert!(screen.screen().contents().contains("Scan for the guide"));
+        state.dirty = true;
+        assert!(
+            !state.should_redraw(Some(&before), previous_cell),
+            "ordinary updates remain frozen"
+        );
+
+        state.dirty = false;
+        state.graphics.resized();
+        assert!(state.geometry == before.geometry, "the grid stays the same");
+        assert!(state.should_redraw(Some(&before), previous_cell));
+        let after = state.frame(now);
+        let (delete, output) =
+            media.update(std::mem::take(&mut state.media), after.cursor, after.hidden);
+        assert!(
+            delete.contains("a=d,d=I"),
+            "the next frame removes stale native pixels"
+        );
+        assert!(!output.contains("a=p"));
+        screen.process(&after.diff(Some(&before)));
+        assert!(screen.screen().contents().contains("Online guide"));
+        assert!(
+            screen
+                .screen()
+                .contents()
+                .contains("https://ssmcp.lmm.best/guide/")
+        );
+        assert!(!screen.screen().contents().contains("Scan for the guide"));
+    }
+
+    #[test]
+    fn frame_diff_erases_old_text_when_a_row_shrinks_or_becomes_empty() {
+        let mut state = State::new(12, 40, &split_ui());
+        let mut before = state.frame(Instant::now());
+        before.rows[0] = "\x1b[31mold text including a wide 界 suffix".into();
+        before.rows[1] = "a row that disappears".into();
+        let mut screen = physical(&before);
+        let mut after = before.clone();
+        after.rows[0] = "new".into();
+        after.rows[1].clear();
+        screen.process(&after.diff(Some(&before)));
+        let rows: Vec<_> = screen.screen().rows(0, 40).collect();
+        assert_eq!(rows[0], "new");
+        assert_eq!(rows[1], "");
+        assert_eq!(screen.screen().cell(0, 8).unwrap().contents(), "");
+        assert!(after.diff(Some(&after)).is_empty());
+    }
+
+    #[test]
+    fn escape_followed_by_an_arrow_remains_two_keys_at_every_read_boundary() {
+        let bytes = b"\x1b\x1b[D";
+        for split in 0..=bytes.len() {
+            let mut keyboard = Keyboard::default();
+            let now = Instant::now();
+            let (mut output, mut keys) = keyboard.feed(&bytes[..split], now, false, true, false);
+            let (rest, more) = keyboard.feed(&bytes[split..], now, false, true, false);
+            output.extend(rest);
+            keys.extend(more);
+            assert_eq!(output, b"\x1b");
+            assert!(matches!(keys.as_slice(), [Key::Back]));
+            assert!(keyboard.pending.is_empty());
+        }
+    }
+
     #[test]
     fn geometry_reserves_real_panes_and_survives_narrow_resize() {
         let mut state = State::new(58, 106, &split_ui());
@@ -2359,14 +2877,14 @@ mod tests {
             ..split_ui()
         };
         assert!(
-            Session::start(&ui, "/workspace/project", None)
+            Session::start(&ui, "/workspace/project", None, None)
                 .unwrap()
                 .is_none()
         );
         ui.log_format = LogFormat::Pretty;
         ui.dashboard = false;
         assert!(
-            Session::start(&ui, "/workspace/project", None)
+            Session::start(&ui, "/workspace/project", None, None)
                 .unwrap()
                 .is_none()
         );
@@ -2424,6 +2942,7 @@ mod tests {
         let session = Session {
             shared: shared.clone(),
             thread: Some(thread),
+            guide_probe: None,
         };
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 65536];
@@ -2583,5 +3102,58 @@ mod tests {
         assert!(state.keyboard(b"\x1b[A\x1b[C", now, false).is_empty());
         assert_eq!(state.audit.snapshot()["selected"]["run_id"], "source-2");
         assert_eq!(state.audit.snapshot()["detail"], true);
+    }
+    #[test]
+    fn interrupt_is_decoded_only_outside_paste_at_every_input_boundary() {
+        let png = crate::client::input::paste::fixture_png();
+        let pasted = [b"\x1b[200~".as_slice(), &png, b"\x1b[201~"].concat();
+        let bytes = [pasted.as_slice(), b"\x03"].concat();
+        for split in 0..=bytes.len() {
+            let mut keyboard = Keyboard::default();
+            let now = Instant::now();
+            let (mut output, mut actions) = keyboard.feed(&bytes[..split], now, false, true, false);
+            let (tail, extra) = keyboard.feed(&bytes[split..], now, false, true, false);
+            output.extend(tail);
+            actions.extend(extra);
+            assert_eq!(output, pasted, "split={split}");
+            assert_eq!(
+                actions
+                    .iter()
+                    .filter(|key| matches!(key, Key::Interrupt))
+                    .count(),
+                1
+            );
+            assert!(!keyboard.pasting);
+            assert!(keyboard.pending.is_empty());
+        }
+    }
+    #[test]
+    fn image_idle_recovery_releases_real_keys_even_without_an_outer_end() {
+        use crate::client::input::paste::{IMAGE_IDLE_TIMEOUT, fixture_png};
+        let png = fixture_png();
+        let malformed = b"\x89PNG\r\n\x1a\n\xff\xff\xff\xffIHDR".to_vec();
+        for payload in [&png[..1], &png[..png.len() - 1], png.as_slice(), &malformed] {
+            let now = Instant::now();
+            let mut keyboard = Keyboard::default();
+            let source = [b"\x1b[200~".as_slice(), payload].concat();
+            let (output, actions) = keyboard.feed(&source, now, false, true, false);
+            assert_eq!(output, source);
+            assert!(actions.is_empty());
+            assert!(keyboard.pasting);
+            let (_, actions) = keyboard.feed(
+                &[],
+                now + IMAGE_IDLE_TIMEOUT - Duration::from_millis(1),
+                true,
+                true,
+                false,
+            );
+            assert!(actions.is_empty());
+            assert!(keyboard.pasting);
+            let (output, actions) =
+                keyboard.feed(b"\x03", now + IMAGE_IDLE_TIMEOUT, false, true, false);
+            assert!(output.is_empty());
+            assert!(matches!(actions.as_slice(), [Key::Interrupt]));
+            assert!(!keyboard.pasting);
+        }
     }
 }

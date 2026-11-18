@@ -81,7 +81,7 @@ jobs:
           python3 scripts/test_installer_download_bounds.py
       - name: Check JavaScript orchestration helpers
         run: make test-code-mode
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --workspace --locked --all-targets -- -D warnings
       - name: Render terminal transcript fixture
         if: matrix.runner == 'ubuntu-24.04'
         env:
@@ -95,7 +95,7 @@ jobs:
           path: ${{ runner.temp }}/ssmcp-terminal.ansi
           if-no-files-found: error
           retention-days: 14
-      - run: cargo test --locked
+      - run: cargo test --workspace --locked
       - name: Exercise system Node.js and bubblewrap
         run: |
           cargo test --locked --lib code_mode::tests -- --include-ignored
@@ -223,6 +223,10 @@ jobs:
           components: clippy
       - run: cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings
       - run: cargo test --locked --lib --bin ssmcp --test release_client
+      - name: Check and test the zero-dependency TUI primitives
+        run: |
+          cargo clippy --locked -p ztui-core --all-targets -- -D warnings
+          cargo test --locked -p ztui-core
       - run: cargo build --locked --bin ssmcp
       - name: Check client startup
         shell: bash

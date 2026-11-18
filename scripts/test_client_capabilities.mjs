@@ -1,5 +1,5 @@
 // Exercise the real code_mode worker through its JSON transport; no model or
-// external service is invoked. Run: node --test scripts/test_tools_search.mjs
+// external service is invoked. Run: node --test scripts/test_client_capabilities.mjs
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -125,4 +125,52 @@ test('legacy call and relay resource helpers keep their existing wire requests',
   assert.deepEqual(record.requests.map(r=>r.name),['legacy.tool','resources.list','resources.templates','resources.read']);
   assert.equal(record.requests[0].op,'call');
   assert(record.requests.slice(1).every(r=>r.op==='builtin'));
+});
+
+test('say preserves Markdown, kind and retry identity through the registered message tool', async () => {
+  const body = '## 结果\n保留中文和空格。';
+  const requests = [
+    {text:body},
+    {text:body,kind:'answer',idempotency_key:'reply-1'},
+    {text:'Next step',kind:'progress'},
+  ];
+  let sequence = 0;
+  const record = await run(
+    "return [await say('one'," + JSON.stringify(body) + "),"
+      + "await say('one'," + JSON.stringify(requests[1]) + "),"
+      + "await ui.message('one'," + JSON.stringify(requests[2]) + ")];",
+    request => {
+      const index = sequence++;
+      assert.equal(request.op,'call');
+      assert.equal(request.client_id,'one');
+      assert.equal(request.name,'ssmcp.ui.message');
+      assert.deepEqual(request.arguments,requests[index]);
+      return {ok:true,value:{isError:false,content:[],structuredContent:{
+        shown:true,accepted:true,message_id:'message-'+index,
+        kind:request.arguments.kind??'progress',duplicate:index===1,history_saved:true,
+      }}};
+    });
+  success(record);
+  assert.equal(record.requests.length,3);
+  assert.deepEqual(value(record),requests.map((request,index)=>({
+    shown:true,accepted:true,message_id:'message-'+index,
+    kind:request.kind??'progress',duplicate:index===1,history_saved:true,
+  })));
+});
+
+test('say surfaces native and transport failures without a fallback message channel', async () => {
+  for (const [reply,pattern] of [
+    [{ok:true,value:{isError:true,content:[{type:'text',text:'idempotency_key already identifies different text'}]}},/idempotency_key/],
+    [{ok:false,error:'tool is unavailable or not registered'},/unavailable/],
+    [{ok:true,value:{content:[]}},/returned no structured result/],
+  ]) {
+    const record = await run(
+      "return await say('one',{text:'Try once',idempotency_key:'once'});",
+      request => {
+        assert.equal(request.name,'ssmcp.ui.message');
+        return reply;
+      });
+    failure(record,pattern);
+    assert.equal(record.requests.length,1);
+  }
 });

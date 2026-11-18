@@ -1,9 +1,13 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
-mod account;
+pub(crate) mod account;
+pub(crate) mod attachments;
 mod audit_view;
 mod browser_setup;
+mod clipboard;
+pub(crate) mod completion;
 mod composer;
 mod config;
+pub(crate) mod context_memory;
 
 pub(crate) use config::BrowserSettings;
 
@@ -12,12 +16,16 @@ pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
     config::browser()
 }
 mod git_status;
+mod handoff;
+mod highlight;
 pub(crate) mod input;
 pub(crate) mod interface;
 mod onboarding;
 mod panel;
+pub(crate) mod presentation;
 #[cfg(test)]
 mod protocol_tests;
+pub(crate) mod references;
 mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;
@@ -34,9 +42,8 @@ use crate::{
     platform::{interrupt_signal, terminate_signal},
     runtime::Runtime,
     wire::{
-        CODE_VERSION, CONTROLLER_VERSION, ClientMetadata, Frame, LEGACY_VERSION,
-        MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, canonical_github_principal,
-        read_frame, validate_title, write_frame,
+        ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
+        canonical_github_principal, read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -56,7 +63,31 @@ use tokio::{
     time::timeout,
 };
 
-const HELP: &str = r#"ssmcp — connect your devices and control authorized sessions
+const HELP: &str = r#"ssmcp — connect a device; control its tools remotely
+
+Usage: ssmcp [username@server] [options]
+
+Start
+  ssmcp                         Reuse your last authorized account
+  ssmcp alice@relay.example     Connect and sign in when needed
+  ssmcp list                    List your online devices
+  ssmcp -i                      Open an authorized remote terminal
+
+Manage
+  config · whoami · logout      Account and server settings
+  invite · join                Share a temporary session
+  sessions · attach · service  Saved and background sessions
+  setup · ui · 007             Setup, appearance and recovery
+
+Options
+  --name NAME   --title TEXT   --server URL   --context-root PATH
+  --no-browser  --no-watchdog  --theme NAME   --no-color
+
+Use ssmcp COMMAND --help for command options; --help-full lists all connection flags.
+In a connected chat: /help, @file, $skill, !command; Left opens Agents.
+"#;
+
+const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized sessions
 
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
@@ -109,7 +140,7 @@ Usage: ssmcp username@server [options]
   --ui-config FILE     Local [ui] TOML; default ~/.config/ssmcp/config.toml
   --theme NAME         dark, codex-dark, nord, solarized, light, or minimal
   --timestamps         Show UTC timestamps on event headings
-  --max-inline-output N  Maximum lines per buffered output block (default 12)
+  --max-inline-output N  Maximum lines per buffered output block (default 8)
   --list-tools         Discover native and workspace tools as JSON, then exit without SSH
 
 The client always connects as shell. Installed Codex, Claude Code, Pi and OpenCode
@@ -401,6 +432,10 @@ impl Options {
             match arg.to_str() {
                 Some("-h" | "--help") => {
                     print!("{HELP}");
+                    return Ok(None);
+                }
+                Some("--help-full") => {
+                    print!("{HELP_FULL}");
                     return Ok(None);
                 }
                 Some("-V" | "--version") => {
@@ -832,7 +867,10 @@ impl Options {
 pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate::Result<()> {
     let mut args = spec.args.iter();
     while let Some(arg) = args.next() {
-        if matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V") {
+        if matches!(
+            arg.as_str(),
+            "--help" | "--help-full" | "-h" | "--version" | "-V"
+        ) {
             return Err("saved sessions cannot contain help or version actions".into());
         }
         if connection_option_takes_value(arg) {
@@ -933,7 +971,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help for SSH options."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help-full for SSH options."
         );
         return Ok(());
     }
@@ -1352,6 +1390,15 @@ pub async fn run() -> crate::Result<()> {
     }
     interface::initialize_path(options.ui_config.as_deref());
     render::configure(ui.clone());
+    if let Err(error) = context_memory::initialize() {
+        render::status(
+            "context",
+            "Warning",
+            &format!(
+                "Local memory unavailable; conversation history and drafts remain usable: {error}"
+            ),
+        );
+    }
     steering::restore_handoff()?;
     let mut attachment = if let Some(runner) = &service {
         Some(crate::session::attach::serve(runner.directory().to_path_buf(), None).await?)
@@ -1391,7 +1438,6 @@ pub async fn run() -> crate::Result<()> {
     let mut attempt = 0u64;
     let mut setup_attempted = setup_requested;
     let mut ever_registered = false;
-    let mut protocol = VERSION;
     let mut reauthenticated = false;
     loop {
         if let Some(runner) = &service
@@ -1440,7 +1486,6 @@ pub async fn run() -> crate::Result<()> {
             attachment.as_ref(),
             attempt,
             &mut registered,
-            &mut protocol,
         )
         .await
         {
@@ -1582,7 +1627,7 @@ impl std::fmt::Display for UnsupportedWireProtocol {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION}, {CODE_VERSION}, {CONTROLLER_VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
+            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected wire protocol {VERSION}; update ssmcp and ssmcpd; older protocol versions are not supported"
         )
     }
 }
@@ -1615,161 +1660,147 @@ async fn stop_registration(
 
 async fn register_ssh(
     metadata: &ClientMetadata,
-    protocol: &mut u32,
     registered: &mut bool,
     mut command: impl FnMut() -> Command,
     cancelled: impl std::future::Future<Output = ()>,
     deadline: Duration,
 ) -> crate::Result<Option<RegisteredSsh>> {
     tokio::pin!(cancelled);
-    loop {
-        tokio::select! {
-            biased;
-            _ = &mut cancelled => return Ok(None),
-            _ = std::future::ready(()) => {},
-        }
-        let mut ssh = command()
-            .spawn()
-            .map_err(|error| format!("could not start OpenSSH ssh: {error}"))?;
-        let mut stderr_pump = ssh.stderr.take().map(|mut stderr| {
-            SshStderr(tokio::spawn(async move {
-                let mut bytes = [0u8; 4096];
-                while let Ok(count) = stderr.read(&mut bytes).await {
-                    if count == 0 {
-                        break;
-                    }
-                    render::event(
-                        "ssh",
-                        &json!({"stderr":String::from_utf8_lossy(&bytes[..count])}),
-                    );
+    tokio::select! {
+        biased;
+        _ = &mut cancelled => return Ok(None),
+        _ = std::future::ready(()) => {},
+    }
+    let mut ssh = command()
+        .spawn()
+        .map_err(|error| format!("could not start OpenSSH ssh: {error}"))?;
+    let mut stderr_pump = ssh.stderr.take().map(|mut stderr| {
+        SshStderr(tokio::spawn(async move {
+            let mut bytes = [0u8; 4096];
+            while let Ok(count) = stderr.read(&mut bytes).await {
+                if count == 0 {
+                    break;
                 }
-            }))
-        });
-        let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
-        let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
-        let mut wire_metadata = metadata.clone();
-        if *protocol == LEGACY_VERSION {
-            // Early v4 peers have a strict metadata schema predating title.
-            // Keep local display context and every authorization field intact.
-            wire_metadata.title = None;
-        }
-        if let Err(error) = write_frame(
-            &mut writer,
-            &Frame::Hello {
-                version: *protocol,
-                mode: Mode::Shell,
-                metadata: wire_metadata,
-            },
-        )
-        .await
-        {
+                render::event(
+                    "ssh",
+                    &json!({"stderr":String::from_utf8_lossy(&bytes[..count])}),
+                );
+            }
+        }))
+    });
+    let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
+    let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
+    if let Err(error) = write_frame(
+        &mut writer,
+        &Frame::Hello {
+            version: VERSION,
+            mode: Mode::Shell,
+            metadata: metadata.clone(),
+        },
+    )
+    .await
+    {
+        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        return Err(error.into());
+    }
+    let response = tokio::select! {
+        result = timeout(deadline, read_frame(&mut reader)) => {
+            result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSH authentication timed out"))
+                .and_then(|frame| frame)
+        },
+        _ = &mut cancelled => {
+            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            return Ok(None);
+        },
+    };
+    let response = match response {
+        Ok(frame) => frame,
+        Err(error) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
             return Err(error.into());
         }
-        let response = tokio::select! {
-            result = timeout(deadline, read_frame(&mut reader)) => {
-                result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSH authentication timed out"))
-                    .and_then(|frame| frame)
-            },
-            _ = &mut cancelled => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                return Ok(None);
-            },
-        };
-        let response = match response {
-            Ok(frame) => frame,
-            Err(error) => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                return Err(error.into());
-            }
-        };
-        let ready = match response {
-            Some(Frame::Ready {
-                url,
-                login_code,
-                login_expires_in,
-                client_id,
-            }) => (url, login_code, login_expires_in, client_id),
-            Some(Frame::Reject { message }) => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                // Only the first parsed response to this Hello may negotiate.
-                // Text on stderr, EOF, timeouts, and later Reject frames cannot.
-                if message == UNSUPPORTED_WIRE_PROTOCOL
-                    || message
-                        == "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)"
-                {
-                    if matches!(*protocol, VERSION | CODE_VERSION | CONTROLLER_VERSION) {
-                        let rejected = *protocol;
-                        *protocol = match rejected {
-                            VERSION => CODE_VERSION,
-                            CODE_VERSION => CONTROLLER_VERSION,
-                            _ => LEGACY_VERSION,
-                        };
-                        let limitation = match *protocol {
-                            CODE_VERSION => {
-                                "The local request queue requires a version 7 gateway; composer drafts stay local."
-                            }
-                            CONTROLLER_VERSION => "Raw code audit requires a version 6 gateway.",
-                            _ => {
-                                "Task titles stay local; per-call controller attribution is unavailable."
-                            }
-                        };
-                        render::status(
-                            "ssh",
-                            "Warning",
-                            &format!(
-                                "Gateway rejected wire protocol {rejected}; retrying with version {protocol}. {limitation}"
-                            ),
-                        );
-                        continue;
-                    }
-                    if *protocol == LEGACY_VERSION {
-                        return Err(UnsupportedWireProtocol.into());
-                    }
-                }
-                return Err(relay::failure(message));
-            }
-            None => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                return Err(
-                    "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions".into()
-                );
-            }
-            _ => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                return Err("unexpected registration response".into());
-            }
-        };
-        *registered = true;
-        let github_auth = !metadata.allow.is_empty();
-        if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
+    };
+    let ready = match response {
+        Some(Frame::Ready {
+            url,
+            login_code,
+            login_expires_in,
+            client_id,
+        }) => (url, login_code, login_expires_in, client_id),
+        Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
-            return Err("server did not acknowledge the --allow GitHub access policy; upgrade ssmcpd with GitHub authorization configured before connecting".into());
+            // Only a parsed registration rejection is terminal for the protocol.
+            // Stderr, EOF, timeouts and unrelated authorization errors stay distinct.
+            if message == UNSUPPORTED_WIRE_PROTOCOL
+                || message.starts_with(&format!("{UNSUPPORTED_WIRE_PROTOCOL};"))
+            {
+                return Err(UnsupportedWireProtocol.into());
+            }
+            return Err(relay::failure(message));
         }
-        if !github_auth && (ready.1.is_empty() || ready.2 == 0) {
+        None => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
-            return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
+            return Err(
+                "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions".into()
+            );
         }
-        return Ok(Some(RegisteredSsh {
-            ssh,
-            stderr_pump,
-            writer,
-            reader,
-            ready,
-        }));
+        _ => {
+            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            return Err("unexpected registration response".into());
+        }
+    };
+    *registered = true;
+    let github_auth = !metadata.allow.is_empty();
+    if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
+        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        return Err("server did not acknowledge the --allow GitHub access policy; upgrade ssmcpd with GitHub authorization configured before connecting".into());
     }
+    if !github_auth && (ready.1.is_empty() || ready.2 == 0) {
+        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
+    }
+    Ok(Some(RegisteredSsh {
+        ssh,
+        stderr_pump,
+        writer,
+        reader,
+        ready,
+    }))
 }
 
 async fn send_steering(
     writer: &Arc<Mutex<tokio::process::ChildStdin>>,
     id: u64,
-    command: crate::wire::SteeringCommand,
+    backend: &Runtime,
 ) -> crate::Result<()> {
-    if !steering::sent(id) {
+    let Some(command) = steering::pending_command(id) else {
         return Ok(());
-    }
+    };
+    let command = if let crate::wire::SteeringCommand::Publish { text, .. } = &command {
+        let prepared = match timeout(Duration::from_secs(5), backend.expand_references(text)).await {
+            Ok(Ok(text)) => steering::prepare_publish(id, text),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err("Preparing the file or skill references timed out. The request was not sent; review the retained draft and retry.".into()),
+        };
+        match prepared {
+            Ok(Some(command)) => command,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                steering::fail_unsent(id, &error);
+                terminal::notice(&error);
+                return Ok(());
+            }
+        }
+    } else {
+        command
+    };
     timeout(Duration::from_secs(10), async {
         let mut writer = writer.lock().await;
+        // Preparation and lock acquisition cannot consume the reply deadline.
+        // A cancelled or superseded request must never reach the wire.
+        if !steering::sent(id) {
+            return Ok(());
+        }
         write_frame(&mut *writer, &Frame::Steering { id, command }).await
     })
     .await
@@ -1791,7 +1822,7 @@ async fn reclaim_steering(
             if steering::reload_ready()? { return Ok::<(), crate::Error>(()); }
             tokio::select! {
                 command = commands.recv() => match command {
-                    Some(steering::Transport::Wire { id, command }) => send_steering(writer, id, command).await?,
+                    Some(steering::Transport::Wire { id, .. }) => send_steering(writer, id, backend).await?,
                     Some(steering::Transport::Reload) => {},
                     None => return Err("client control channel ended while preparing reload".into()),
                 },
@@ -1818,7 +1849,6 @@ async fn connect(
     attachment: Option<&crate::session::attach::Handle>,
     attempt: u64,
     registered: &mut bool,
-    protocol: &mut u32,
 ) -> crate::Result<ConnectionExit> {
     let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
@@ -1857,7 +1887,6 @@ async fn connect(
     };
     let registration = register_ssh(
         &metadata,
-        protocol,
         registered,
         || {
             let mut command =
@@ -1904,7 +1933,7 @@ async fn connect(
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
     let display_session =
-        match terminal::Session::start(ui, &metadata.cwd, metadata.title.as_deref()) {
+        match terminal::Session::start(ui, &metadata.cwd, metadata.title.as_deref(), Some(&url)) {
             Ok(session) => session,
             Err(error) => {
                 render::status(
@@ -2046,7 +2075,7 @@ async fn connect(
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
-    let mut steering_commands = steering::connect(&client_id, *protocol);
+    let mut steering_commands = steering::connect(&client_id, VERSION);
     let mut steering_updates = tokio::time::interval(Duration::from_secs(1));
     steering_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
@@ -2060,8 +2089,8 @@ async fn connect(
                 if let Err(error) = steering::poll() { terminal::notice(&error); }
             },
             command = steering_commands.recv() => match command {
-                Some(steering::Transport::Wire { id, command }) => {
-                    if let Err(error) = send_steering(&writer, id, command).await { break Err(error); }
+                Some(steering::Transport::Wire { id, .. }) => {
+                    if let Err(error) = send_steering(&writer, id, &backend).await { break Err(error); }
                 },
                 Some(steering::Transport::Reload) => {
                     while let Some(completed) = requests.try_join_next() {

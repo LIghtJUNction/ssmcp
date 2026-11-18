@@ -29,6 +29,7 @@ ESC = b"\x1b"
 UP = b"\x1b[A"
 DOWN = b"\x1b[B"
 LEFT = b"\x1b[D"
+RIGHT = b"\x1b[C"
 HOME = b"\x1b[H"
 DELETE = b"\x1b[3~"
 ENTER = b"\r"
@@ -142,7 +143,7 @@ class Composer(Dashboard):
         if self.ui("/display/conversation")["draft"]["text"]:
             raise AssertionError("local command helper would overwrite a nonempty draft")
         front.send(command + "\r")
-        view = {"/queue": "queue", "/agents": "agents", "/logs": "activity"}[command]
+        view = {"/queue": "queue", "/logs": "activity"}[command]
         front.until(lambda shot: f"ssmcp  /  {view}" in text(shot), f"local {command} view")
 
     def submit(self, front, request_text):
@@ -171,8 +172,17 @@ class Composer(Dashboard):
             "keyboard selection of the actual request identity",
         )
 
+    def agents(self, front):
+        self.focus_input(front)
+        draft = self.ui("/display/conversation")["draft"]
+        if draft["cursor"] != 0:
+            raise AssertionError("agent panel helper requires the start of the current draft")
+        front.send(LEFT)
+        front.until(lambda shot: "ssmcp  /  agents" in text(shot) and shot["hide_cursor"],
+                    "Left opening the agent panel")
+
     def recipient(self, front, member=None):
-        self.command(front, "/agents")
+        self.agents(front)
         roster = self.queue()["agents"]
         if member is None:
             index = 0
@@ -182,7 +192,12 @@ class Composer(Dashboard):
                              if agent["agent_id"] == member["agent_id"])
             label = roster[index - 1]["name"]
         front.send(HOME + DOWN * index + ENTER)
-        front.until(lambda shot: f"To · {label}" in text(shot), "selected recipient in the prompt")
+        front.until(lambda shot: f"To · {label}" in text(shot)
+                                 and "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+                    "selected recipient returning to the conversation composer")
+        self.check(self.ui("/display/conversation")["target"]
+                   == (None if member is None else member["agent_id"]),
+                   "Enter selects the exact member and closes the agent panel")
         self.command(front, "/queue")
 
     def expect_delivery(self, response, record, request_text=None, agent_id=None):
@@ -324,13 +339,57 @@ class Composer(Dashboard):
                                          "agent_id": member["agent_id"], "token": member["token"],
                                          "status": status})
             members.append(member)
-        self.command(front, "/agents")
+        self.agents(front)
         front.until(lambda shot: "reviewing" in text(shot) and "testing" in text(shot),
                     "the two real public collaboration statuses")
         roster = self.queue()["agents"]
         self.check(len(roster) == 2 and {agent["status"] for agent in roster} == {"reviewing", "testing"}
                    and all(member["token"] not in json.dumps(roster) for member in members),
                    "the roster shows actual members and public status without participant tokens")
+        front.send(ESC)
+        front.until(lambda shot: "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+                    "Escape returning from agents to the default conversation")
+        navigation_draft = "保留草稿 界"
+        front.send(navigation_draft.encode() + LEFT)
+        front.until(lambda shot: navigation_draft in input_text(shot),
+                    "a Unicode draft with ordinary Left cursor movement")
+        navigation = self.ui("/display/conversation")
+        self.check(navigation["view"] == "activity" and navigation["focus"] == "input"
+                   and navigation["draft"] == {"text": navigation_draft,
+                                                "cursor": len(navigation_draft.encode()) - len("界".encode())},
+                   "Left within nonempty UTF-8 input moves the cursor without opening agents")
+        front.send(b"\x01" + LEFT)
+        front.until(lambda shot: "ssmcp  /  agents" in text(shot) and navigation_draft in input_text(shot),
+                    "Left at the start of a draft opening the agent panel")
+        before_choice = self.ui("/display/conversation")
+        self.check(before_choice["draft"] == {"text": navigation_draft, "cursor": 0}
+                   and before_choice["target"] is None and before_choice["editing"] is None,
+                   "opening agents preserves the draft and does not choose or send a recipient")
+        front.send(ESC)
+        front.until(lambda shot: "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+                    "Escape closing the panel without clearing the Unicode draft")
+        after_escape = self.ui("/display/conversation")
+        self.check(after_escape["draft"] == before_choice["draft"] and after_escape["target"] is None,
+                   "Escape restores the conversation with exactly the same UTF-8 cursor and recipient")
+        self.agents(front)
+        selected_index = 1 + next(index for index, item in enumerate(self.queue()["agents"])
+                                  if item["agent_id"] == members[0]["agent_id"])
+        front.send(HOME + DOWN * selected_index + RIGHT)
+        front.until(lambda shot: "ssmcp  /  activity" in text(shot)
+                                 and "To · Shared name" in text(shot) and not shot["hide_cursor"],
+                    "Right choosing the member and closing the panel")
+        chosen = self.ui("/display/conversation")
+        self.check(chosen["target"] == members[0]["agent_id"]
+                   and chosen["draft"] == before_choice["draft"],
+                   "Right changes only the authenticated recipient while preserving the draft")
+        self.agents(front)
+        self.check(self.ui("/display/conversation")["selected_agent"] == "member:" + members[0]["agent_id"],
+                   "reopening agents highlights the currently selected member")
+        front.send(ESC)
+        front.until(lambda shot: "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+                    "the selected member conversation restored")
+        front.send(b"\x01\x0b")
+        front.until(lambda shot: "Message the agent" in input_text(shot), "the navigation fixture draft cleared")
         self.recipient(front, members[0])
         exact = self.submit(front, "COMPOSER_EXACT_AGENT_REQUEST")
         self.check(exact["target"] == members[0]["agent_id"], "recipient selection uses the registered agent ID")
@@ -346,14 +405,19 @@ class Composer(Dashboard):
         front.until(lambda shot: "Editing · Shared name" in text(shot)
                                  and retargeted["text"] in input_text(shot),
                     "an exact-agent requirement taken back for recipient editing")
-        # Slash commands are literal request text while editing. Use the F2
-        # tabs to select Agents without replacing or publishing that draft.
-        front.send(b"\x1bOQ" * 3)
+        # Open recipients directly at the beginning of the active edit. No
+        # slash command or view cycling may replace or publish the held text.
+        front.send(b"\x01" + LEFT)
         front.until(lambda shot: "ssmcp  /  agents" in text(shot),
-                    "the recipients tab while retaining the active edit")
+                    "the agent panel while retaining the active edit")
+        held = self.ui("/display/conversation")
+        self.check(held["editing"] == retargeted["id"]
+                   and held["draft"] == {"text": retargeted["text"], "cursor": 0},
+                   "Left preserves the held request identity and original text during retargeting")
         front.send(HOME + ENTER)
-        front.until(lambda shot: "Editing · next caller" in text(shot),
-                    "the explicit Next caller choice during editing")
+        front.until(lambda shot: "Editing · next caller" in text(shot)
+                                 and "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+                    "the explicit Next caller choice returning to the active edit")
         retargeted_text = "COMPOSER_RETARGET_NEXT_CALLER"
         front.send(b"\x01\x0b" + retargeted_text.encode() + ENTER)
         front.until(lambda shot: "Queued" in shot["rows"][-1]

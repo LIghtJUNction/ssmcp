@@ -1,5 +1,6 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
 mod capabilities;
+pub mod hooks;
 use crate::catalog::{self, ToolDescriptor};
 use crate::rsync::Rsync;
 use crate::{
@@ -9,7 +10,7 @@ use crate::{
     context::Context,
     omarchy::Omarchy,
     output::OutputStore,
-    registry::{Provider, Registry},
+    registry::{Provider, RegisteredTool, Registry},
     wire::Operation,
     workspace::Workspace,
 };
@@ -279,6 +280,7 @@ pub struct Runtime {
     audit: Arc<EventLog>,
     code_audit: CodeAudit,
     next_call: AtomicU64,
+    tool_call_hook: Mutex<Option<Arc<dyn hooks::ToolCallHook>>>,
     catalog: Catalog,
     sessions: Option<crate::session::control::Control>,
 }
@@ -329,7 +331,7 @@ impl Runtime {
             "annotations":{"readOnlyHint":true,"destructiveHint":false}
         })])?;
         let audit = EventLog::with_output("audit", output.clone());
-        Ok(Arc::new(Self {
+        let runtime = Arc::new(Self {
             backend,
             registry,
             workspace,
@@ -342,9 +344,25 @@ impl Runtime {
             audit,
             output,
             next_call: AtomicU64::new(1),
+            tool_call_hook: Mutex::new(None),
             catalog: Catalog::default(),
             sessions,
-        }))
+        });
+        crate::client::interface::harness::bind(&runtime);
+        crate::client::completion::bind(&runtime);
+        Ok(runtime)
+    }
+    /// Install an optional in-process call hook. The default is None.
+    /// Each call keeps one snapshot; replacement affects subsequent calls.
+    pub fn set_tool_call_hook(&self, hook: Option<Arc<dyn hooks::ToolCallHook>>) {
+        *self
+            .tool_call_hook
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = hook;
+    }
+
+    pub(crate) fn local_registry(&self) -> Arc<Registry> {
+        self.registry.clone()
     }
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
@@ -384,6 +402,24 @@ impl Runtime {
     ) -> Result<(), String> {
         self.code_audit.finish(completion)
     }
+    pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
+        crate::client::references::expand(text, &self.workspace, &self.context).await
+    }
+
+    pub(crate) async fn reference_completions(
+        &self,
+        key: &crate::client::completion::Key,
+    ) -> Result<crate::client::completion::Listing, String> {
+        crate::client::completion::enumerate(&self.workspace, &self.context, key).await
+    }
+
+    pub(crate) async fn import_input(
+        &self,
+        source: crate::client::attachments::Source,
+    ) -> Result<crate::client::attachments::Loaded, String> {
+        crate::client::attachments::load(source, &self.workspace).await
+    }
+
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         self.registry.ensure_open()?;
@@ -416,6 +452,60 @@ impl Runtime {
         let tool = self.registry.lookup(&name)?;
         self.registry.validate(&tool)?;
         let call_id = self.next_call.fetch_add(1, Ordering::Relaxed);
+        let hook = self
+            .tool_call_hook
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let Some(hook) = hook else {
+            return self
+                .perform_registered(name, arguments, tool, call_id)
+                .await;
+        };
+        let call = hooks::ToolCall {
+            id: call_id,
+            name: name.clone(),
+            native_name: tool.native_name.clone(),
+            provider: tool.provider,
+            generation: tool.generation,
+            arguments: arguments.clone(),
+        };
+        let decision =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook.before_call(&call)));
+        let result = match decision {
+            Ok(Ok(())) => match self.registry.validate(&tool) {
+                Ok(()) => {
+                    self.perform_registered(name, arguments, tool, call_id)
+                        .await
+                }
+                Err(error) => Err(error),
+            },
+            Ok(Err(reason)) => Err(format!("client tool hook denied {}: {reason}", call.name)),
+            Err(_) => Err(format!(
+                "client tool hook panicked before dispatch; {} rejected",
+                call.name
+            )),
+        };
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hook.after_call(&call, &result)
+        }))
+        .is_err()
+        {
+            self.audit.push(json!({
+                "type":"ssmcp.status","level":"Warning","call_id":call_id,"tool":call.name,
+                "message":format!("Client tool hook panicked after {}; native result was preserved", call.name),
+            }));
+        }
+        result
+    }
+
+    async fn perform_registered(
+        &self,
+        name: String,
+        arguments: Value,
+        tool: RegisteredTool,
+        call_id: u64,
+    ) -> Result<Value, String> {
         let started = std::time::Instant::now();
         let harness_call = tool
             .provider
@@ -454,14 +544,34 @@ impl Runtime {
                 .client_resource_call(&tool.native_name, arguments)
                 .await
                 .map(backend::result),
-            Provider::Browser => self.browser.perform(&tool.native_name, arguments).await,
+            Provider::Browser => self
+                .browser
+                .perform(&tool.native_name, arguments)
+                .await
+                .and_then(|mut value| {
+                    if tool.native_name != "ssmcp.browser.discover" {
+                        return Ok(value);
+                    }
+                    let mut metadata = value
+                        .get_mut("structuredContent")
+                        .ok_or("browser discovery returned no metadata")?
+                        .take();
+                    metadata["routing"] = crate::browser::control_routes(&self.registry)?;
+                    Ok(backend::result(metadata))
+                }),
             Provider::Computer => self.computer.perform(&tool.native_name, arguments).await,
             Provider::Omarchy => self.omarchy.perform(&tool.native_name, arguments).await,
             Provider::Workspace => self
                 .workspace
                 .perform(&tool.native_name, arguments)
                 .await
-                .map(backend::result),
+                .map(|value| {
+                    if tool.native_name == "ssmcp.fs.read_image" {
+                        value
+                    } else {
+                        backend::result(value)
+                    }
+                }),
             Provider::Context => self
                 .context
                 .perform(&tool.native_name, arguments)
@@ -553,20 +663,45 @@ impl Runtime {
                 }
             }
         };
+        if crate::client::terminal::active()
+            && let Some(content) = value.get("content").and_then(Value::as_array)
+        {
+            let images: Vec<Value> = content
+                .iter()
+                .filter(|block| block["type"] == "image")
+                .take(4)
+                .cloned()
+                .collect();
+            if !images.is_empty() {
+                let _ = tokio::task::spawn_blocking(move || {
+                    for image in images {
+                        crate::client::terminal::image(&image);
+                    }
+                })
+                .await;
+            }
+        }
         // Retrieval pages already point to the original complete capture. Guarding
         // them again would recursively archive the artifact-read response itself.
         // Context already enforces a 1 MiB response and 256 KiB full-document limit.
         // Keep structured contents available to resources/read instead of spilling them.
-        if matches!(tool.provider, Provider::Context | Provider::Client)
+        let value = if matches!(tool.provider, Provider::Context | Provider::Client)
             || matches!(
                 name.as_str(),
                 "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
-            )
-        {
-            Ok(value)
+            ) {
+            value
         } else {
-            Ok(self.output.guard_result(value))
-        }
+            self.output.guard_result(value)
+        };
+        // Only an actually dispatched, authorized operation reaches this boundary.
+        // Add local history after spill handling so the metadata stays available
+        // even when the original native output is an artifact reference.
+        let context = tokio::task::spawn_blocking(crate::client::context_memory::snapshot_for_tool)
+            .await
+            .ok()
+            .flatten();
+        Ok(attach_context_metadata(value, context))
     }
     pub async fn shutdown(&self) {
         self.registry.close();
@@ -596,10 +731,108 @@ impl Runtime {
     }
 }
 
+/// Preserve every native field, including opaque provider metadata. Memory is
+/// reference data in its own namespace, never a user requirement or tool output.
+fn attach_context_metadata(mut result: Value, context: Option<Value>) -> Value {
+    let Some(mut context) = context else {
+        return result;
+    };
+    if !result.is_object()
+        || result
+            .get("_meta")
+            .is_some_and(|meta| !meta.is_object() || meta.get("ssmcp.context").is_some())
+    {
+        return result;
+    }
+    let base = result.to_string().len();
+    let limit = crate::wire::MAX_FRAME.saturating_sub(8192);
+    if context.to_string().len() > crate::wire::MAX_CONTEXT_ENTRY_BYTES
+        || base
+            .saturating_add(context.to_string().len())
+            .saturating_add(64)
+            > limit
+    {
+        context = json!({
+            "workspace":{"id":context["workspace"]["id"]},
+            "revision":context["revision"],
+            "snapshot":{"context_omitted":true,"full_read":"ssmcp.context.read"},
+            "provenance":"Saved local workspace history; omitted at the native result budget. Read ssmcp.context.read for the complete context."
+        });
+        if base
+            .saturating_add(context.to_string().len())
+            .saturating_add(64)
+            > limit
+        {
+            return result;
+        }
+    }
+    let object = result.as_object_mut().expect("object checked");
+    object
+        .entry("_meta")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("metadata checked")
+        .insert("ssmcp.context".into(), context);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn memory_metadata_preserves_native_output_errors_and_vendor_metadata() {
+        let context =
+            json!({"workspace":{"id":"a".repeat(64)},"revision":4,"summary":"earlier work"});
+        for failed in [false, true] {
+            let original = json!({
+                "content":[{"type":"text","text":"stdout"},{"type":"image","mimeType":"image/png","data":"opaque-image"}],
+                "structuredContent":{"exit_code":7},"isError":failed,
+                "_meta":{"vendor/result":{"unchanged":true}}
+            });
+            let mut result = attach_context_metadata(original.clone(), Some(context.clone()));
+            assert_eq!(result["_meta"]["ssmcp.context"], context);
+            result["_meta"]
+                .as_object_mut()
+                .unwrap()
+                .remove("ssmcp.context");
+            assert_eq!(result, original);
+        }
+        for original in [
+            json!({"content":[],"_meta":"opaque"}),
+            json!({"content":[],"_meta":{"ssmcp.context":{"provider":"reserved"}}}),
+            json!(["native-array"]),
+        ] {
+            assert_eq!(
+                attach_context_metadata(original.clone(), Some(context.clone())),
+                original
+            );
+        }
+    }
+
+    #[test]
+    fn native_memory_budget_returns_an_explicit_read_reference_without_changing_output() {
+        let original = json!({"content":[{"type":"text","text":"original"}],"isError":false});
+        let result = attach_context_metadata(
+            original.clone(),
+            Some(json!({
+                "workspace":{"id":"b".repeat(64)},"revision":5,
+                "summary":"x".repeat(crate::wire::MAX_CONTEXT_ENTRY_BYTES)
+            })),
+        );
+        assert_eq!(result["content"], original["content"]);
+        assert_eq!(result["isError"], original["isError"]);
+        assert_eq!(
+            result["_meta"]["ssmcp.context"]["snapshot"]["context_omitted"],
+            true
+        );
+        assert_eq!(
+            result["_meta"]["ssmcp.context"]["snapshot"]["full_read"],
+            "ssmcp.context.read"
+        );
+        assert_eq!(result["_meta"]["ssmcp.context"]["revision"], 5);
+    }
 
     fn code_context(code: &str) -> crate::wire::CodeContext {
         crate::wire::CodeContext {

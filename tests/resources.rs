@@ -447,7 +447,7 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["list", "code_mode", "collab"]);
+        assert_eq!(names, ["list", "code_mode", "collab", "invite"]);
         let method = if modern {
             "server/discover"
         } else {
@@ -561,7 +561,7 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
             .await;
         assert_eq!(
             data(&body)["public_tools"],
-            json!(["list", "code_mode", "collab"])
+            json!(["list", "code_mode", "collab", "invite"])
         );
         assert_eq!(server.clients[0].calls.load(Ordering::Acquire), 0);
     }

@@ -1,5 +1,5 @@
 pkgname=ssmcp-git
-pkgver=0.6.0.r0
+pkgver=0.9.0.r0
 pkgrel=1
 pkgdesc='Bridge native local tools and concurrent shell tasks to MCP over SSH'
 arch=('x86_64' 'aarch64')

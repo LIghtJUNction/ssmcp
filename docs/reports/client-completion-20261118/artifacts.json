@@ -1,0 +1,58 @@
+{
+  "source_revision": "d4eed29657bda8ea5d2de2ac212df69c3fa51e21",
+  "validated": {
+    "ssmcpd": {
+      "sha256": "dbac9844a0ff09aeadac86ff72f4a435c82687787d7474b158fbfd83734fccfa",
+      "bytes": 112893312,
+      "profile": "validated"
+    },
+    "ssmcp": {
+      "sha256": "c56a977e3a7786e3647c4b54bf3fd74ba751f77958cee10edc5600b831bd7517",
+      "bytes": 140281136,
+      "profile": "validated"
+    },
+    "vt_snapshot": {
+      "sha256": "7d091694cb872744698b3bd86a6d04f8f976047c99cf52e9a84a98b88592a73a",
+      "bytes": 6457912,
+      "profile": "validated"
+    }
+  },
+  "release": {
+    "ssmcpd": {
+      "sha256": "99a237b1c1c93193c0168f240a7035a7a9f4d56da43dca8e5915b3020aec7a1e",
+      "bytes": 5554848,
+      "profile": "release"
+    },
+    "ssmcp": {
+      "sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13",
+      "bytes": 9885680,
+      "profile": "release"
+    },
+    "vt_snapshot": {
+      "sha256": "7d091694cb872744698b3bd86a6d04f8f976047c99cf52e9a84a98b88592a73a",
+      "bytes": 6457912,
+      "profile": "dev"
+    }
+  },
+  "arch_package": {
+    "source_revision": "ee052440ba9f4af80f7a6a2f96b4b4b4e1e7e40e",
+    "binary_revision": "d4eed29657bda8ea5d2de2ac212df69c3fa51e21",
+    "package_version": "0.9.1.r377.gee05244-1",
+    "sha256": "d0da242e239eef5e87c371762b78f2dad62b83dc8536dca821c22360fe95f335",
+    "bytes": 13087540,
+    "binaries_match_release": true,
+    "filename": "ssmcp-git-0.9.1.r377.gee05244-1-x86_64.pkg.tar.zst"
+  },
+  "crates": [
+    {
+      "name": "ztui-core-0.1.0.crate",
+      "sha256": "3454326537f0bd97fbc839aee1b74cf81548748e4a06a984eb198b6f48829763",
+      "bytes": 15025
+    },
+    {
+      "name": "ssmcp-0.9.1.crate",
+      "sha256": "af501e079f976e739c90c8af0770994e88d4954436952df9af1e1673b1cd18f1",
+      "bytes": 7711112
+    }
+  ]
+}

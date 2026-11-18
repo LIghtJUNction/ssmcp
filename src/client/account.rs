@@ -1036,7 +1036,12 @@ fn join_command(server: &str, token: &str) -> Result<String> {
     command(server, token, false, false)
 }
 
-fn command(server: &str, token: &str, bootstrap: bool, powershell: bool) -> Result<String> {
+pub(crate) fn command(
+    server: &str,
+    token: &str,
+    bootstrap: bool,
+    powershell: bool,
+) -> Result<String> {
     let server = normalize_server(server)?;
     if !valid_secret(token) {
         return Err("server returned an invalid enrollment token".into());
@@ -1154,10 +1159,26 @@ async fn invite(args: &Arguments) -> Result<()> {
             "{}",
             json!({"server":credential.server,"command":selected,"command_sh":sh,"command_powershell":powershell,
             "bootstrap":bootstrap,"requires_installed_client":!bootstrap,"server_pins":pins,
+            "release":value["release"],"release_error":value["release_error"],
+            "wire_version":crate::wire::VERSION,"supported_targets":value["supported_targets"],
             "expires_in":value["expires_in"],"session_expires_in":value["session_expires_in"]})
         );
     } else {
         println!("{selected}");
+        if bootstrap {
+            if let Some(version) = value["release"]["version"].as_str() {
+                eprintln!(
+                    "Gateway publication: ssmcp {}; wire {}. The installer verifies the current compatible release before replacing the user installation.",
+                    safe(version),
+                    crate::wire::VERSION
+                );
+            } else if let Some(error) = value["release_error"].as_str() {
+                eprintln!(
+                    "Bootstrap publication unavailable: {}. Use --no-bootstrap with an installed compatible client.",
+                    safe(error)
+                );
+            }
+        }
         if !pins.is_empty() {
             eprintln!(
                 "Server public key pinning is enabled. Install ssmcp on device B from a trusted source first; this command saves the trusted keys before joining."
@@ -1299,7 +1320,8 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
         json!({"terminal_id":terminal}),
     )
     .await?;
-    let mut keyboard = input::Keyboard::open()?;
+    let mut keyboard = input::Keyboard::open(false)?;
+    let mut utf8 = input::Utf8Input::default();
     eprintln!(
         "Connected to {} / {} · Ctrl-] detaches · Ctrl-C reaches the remote shell",
         safe(id),
@@ -1331,9 +1353,23 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
             tokio::select!{
                 _=terminate.recv()=>break,
                 event=keyboard.next()=>match event?{
-                    input::Event::Detach|input::Event::End=>break,
-                    input::Event::Text(text)=>{
+                    input::Event::Detach=>break,
+                    input::Event::InputProgress(_)=>{}
+                    input::Event::PasteExpired=>{utf8=input::Utf8Input::default();}
+                    input::Event::End=>{
+                        let text=utf8.push(&[],true);
+                        if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
+                        break;
+                    }
+                    input::Event::Interrupt=>{
+                        // This interactive command owns a remote shell, not a
+                        // dashboard. Preserve the advertised remote Ctrl-C.
+                        let text=utf8.push(b"\x03",false);
                         api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;
+                    }
+                    input::Event::Bytes(bytes)|input::Event::PasteBytes(bytes)=>{
+                        let text=utf8.push(&bytes,false);
+                        if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
                     }
                     input::Event::Resize(rows,cols)=>{
                         api.call(credential,id,"terminal.resize",json!({"terminal_id":terminal,"rows":rows.clamp(1,1000),"cols":cols.clamp(1,1000)})).await?;

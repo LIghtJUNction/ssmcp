@@ -4,7 +4,7 @@
 
 服务器已经部署好时，可直接阅读 [配置、SSH 公钥与登录](configuration.md)：复用 `~/.ssh/config`、添加和轮换公钥、完成 OAuth 登录，以及处理重新打开后的授权状态。
 
-当前实现使用内部 wire v4，对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。客户端始终提供 shell 和独立命令，并自动发现 PATH 中的编程 harness。旧客户端可继续使用登录码；`--allow 用户名@github` 需要两端支持，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
+当前实现使用内部 wire v7，对外提供 `list`、`code_mode`、`collab` 和 `invite` 四个 MCP 工具。客户端始终提供 shell 和独立命令，并自动发现 PATH 中的编程 harness。客户端与服务端须支持同一 wire v7；登录码仍可用于原有连接路径；`--allow 用户名@github` 需要两端支持，并在服务端配置 GitHub OAuth。服务器重启会清空当前连接和 OAuth 授权；启用持久化后 DCR 客户端登记保留。
 
 ## 标准账号部署与旧配置迁移
 
@@ -188,7 +188,7 @@ ssmcp --name laptop --title "项目开发与测试" --allow octocat@github alice
 
 在 MCP 客户端中添加完整 `/mcp` URL，启用 OAuth 登录。ssmcp 页面显示 MCP 客户端名称、已登记回调来源和资源 URL；点击 GitHub 登录，在 GitHub 完成身份验证后返回 ssmcp。页面显示已验证身份和当前可访问会话数，再由用户点击“允许连接”或“取消”。只完成 GitHub 登录不会自动授权这个 MCP 客户端。[登录步骤](configuration.md#github-allow)
 
-同意后由 MCP 客户端取得并保存 ssmcp 令牌。调用 `tools/list` 确认工具表包含 `list`、`code_mode` 和 `collab`，再用 `list({})` 查看允许访问的在线客户端。每个目标客户端都依据接入时解析的 GitHub 稳定用户 ID 检查权限；未获准的客户端不会显示，也不能通过猜测 `client_id` 调用。当前没有获准访问的在线连接时可先完成登录，`list` 返回空列表，之后会显示新接入且允许该身份的连接。
+同意后由 MCP 客户端取得并保存 ssmcp 令牌。调用 `tools/list` 确认工具表包含 `list`、`code_mode`、`collab` 和 `invite`，再用 `list({})` 查看允许访问的在线客户端。每个目标客户端都依据接入时解析的 GitHub 稳定用户 ID 检查权限；未获准的客户端不会显示，也不能通过猜测 `client_id` 调用。当前没有获准访问的在线连接时可先完成登录，`list` 返回空列表，之后会显示新接入且允许该身份的连接。
 
 省略 `--allow` 时保留原有 `/SSH用户名` 与登录码方式。登录码从签发起有效 1800 秒，成功使用一次即消耗；`login_expires_in` 扣除后端初始化时间。该授权只覆盖同一 SSH 账户下未设置 `--allow` 的连接，签发连接退出后撤销。设置了 `--allow` 的连接无法通过登录码授权访问。[两种授权方式](configuration.md#authorization-modes)
 
@@ -282,7 +282,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 ## 6. 检查与升级
 
-`http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 包含 `list`、`code_mode` 和 `collab`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
+`http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 包含 `list`、`code_mode`、`collab` 和 `invite`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
 
 在 `code_mode` 中通过 `await exec.run(clientId, {command:["git","status","--short"],wait_ms:5000})` 验证命令执行；检查 `running` 和 `exit_code`，长任务沿用返回的 `job_id` 等待或读取；`wait_timed_out` 只表示本次等待到期，不会停止命令，不应重新启动同一工作。[独立命令与等待](commands.md)。交互式 Shell 使用 `terminal.write/read`。Harness 链路使用实时目录中确认无模型的状态接口，例如已注册 `pi.rpc` 时传入 `{type:"get_state",arguments:{}}`。先通过 `list({client_id})` 查看 Schema；工具真实调用与原生审批传播分别保留证据，不为开发或测试提交模型任务。Claude Code 前台 Bash 的输出在调用结束时返回，后台增量观察只跟随原生结果明确返回的输出路径。
 

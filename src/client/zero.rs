@@ -4,7 +4,7 @@ mod install;
 use super::{account, trust};
 use crate::{
     Result,
-    wire::{CONTROLLER_VERSION, ClientMetadata, Frame, Mode, Operation},
+    wire::{ClientMetadata, Frame, Mode, Operation, VERSION},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -548,10 +548,8 @@ async fn connect(control: Arc<Control>) -> Result<()> {
     send(
         &mut socket,
         Frame::Hello {
-            // Recovery implements calls and controller metadata, not v6 source
-            // audit or v7 steering. Advertising the full client's version would
-            // make the broker send completion frames this small loop cannot use.
-            version: CONTROLLER_VERSION,
+            // Recovery shares the current transport while keeping its small tool set.
+            version: VERSION,
             mode: Mode::Shell,
             metadata: control.config.metadata()?,
         },
@@ -600,6 +598,10 @@ async fn connect(control: Arc<Control>) -> Result<()> {
                         } else {
                             send(&mut socket, Frame::Reply { id, result: Err("007 is busy; inspect the session before retrying".into()) }).await?;
                         }
+                    }
+                    Some(Frame::CodeModeFinished { completion }) if ready => {
+                        // Source-audit observation must not start a runtime or interrupt recovery.
+                        completion.validate()?;
                     }
                     Some(Frame::Reject { .. }) => return Err("007 registration rejected; check authorization and relay version".into()),
                     Some(_) => return Err("unexpected 007 protocol frame".into()),

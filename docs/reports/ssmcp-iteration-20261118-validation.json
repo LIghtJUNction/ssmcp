@@ -1,0 +1,366 @@
+{
+  "schema": "ssmcp.iteration-validation.v1",
+  "date": "2026-11-18",
+  "timezone": "Asia/Taipei",
+  "status": "installed_checkpoint_with_live_layout_fix_pending",
+  "baseline_validation": {
+    "scope": "Shared client workflows before late PR26 presentation, branch-memory and transactional file-list import increments.",
+    "committed_base": "5b6deb54a0ecdadcba120cdef018ea407a6a0998",
+    "checkpoint_after_test_fixes": "47bc27a18b94570efb06da452f798766f278ed68",
+    "source_note": "r7/r8 were run on the reviewed working tree, including test/style corrections and render VT assertions. Final validation below identifies the pinned integration commit; baseline counts are not presented as final-release coverage.",
+    "rust_default": {
+      "passed": 1006,
+      "failed": 0,
+      "ignored": 25,
+      "library": {
+        "passed": 896,
+        "failed": 0,
+        "ignored": 9
+      },
+      "evidence": {
+        "path": "out/iteration-20261118/final-unit-r7/01.txt",
+        "sha256": "a20ff4a8301051af38d8885961df3039632bc678b63ed6ab03cbb9702c4571d6",
+        "bytes": 496949
+      }
+    },
+    "code_mode_explicit": {
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0,
+      "include_ignored": true,
+      "note": "Overlaps default tests; do not add counts as unique tests.",
+      "evidence": {
+        "path": "out/iteration-20261118/final-unit-r7/02.txt",
+        "sha256": "7e87bf7d1fbf59e26464f4fd9a20e87110a4f648b2f7a68eddcd7b0552758630",
+        "bytes": 2461
+      }
+    },
+    "strict_lint_and_targeted_recheck": {
+      "steps": [
+        {
+          "command": [
+            "/home/lightjunction/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/cargo",
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "exit_code": 0,
+          "seconds": 1.61,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/out/iteration-20261118/final-style-r8/00.txt"
+        },
+        {
+          "command": [
+            "/home/lightjunction/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/cargo",
+            "clippy",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "seconds": 41.263,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/out/iteration-20261118/final-style-r8/01.txt"
+        },
+        {
+          "command": [
+            "/home/lightjunction/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/cargo",
+            "test",
+            "--locked",
+            "--lib",
+            "client::",
+            "--",
+            "--test-threads=2"
+          ],
+          "exit_code": 0,
+          "seconds": 30.058,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/out/iteration-20261118/final-style-r8/02.txt"
+        },
+        {
+          "command": [
+            "/home/lightjunction/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin/cargo",
+            "build",
+            "--locked",
+            "--bins",
+            "--example",
+            "vt_snapshot"
+          ],
+          "exit_code": 0,
+          "seconds": 15.079,
+          "log": "/home/lightjunction/Documents/GITHUB/ssmcp/out/iteration-20261118/final-style-r8/03.txt"
+        }
+      ],
+      "client_tests_passed": 411,
+      "evidence": {
+        "path": "out/iteration-20261118/final-style-r8/results.json",
+        "sha256": "46a86e1b6965873add3eae82a2c4be919e9a08d359b11566985667d393e2dd80",
+        "bytes": 1416
+      }
+    },
+    "node": {
+      "passed": 31,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": {
+        "path": "out/iteration-20261118/final-node/tests.log",
+        "sha256": "5e2c724e824c9ec745a861638f617d5aa5d87aea2247ba7f1def240a696c65cb",
+        "bytes": 7129
+      }
+    },
+    "pty": {
+      "total_passed": 416,
+      "suites": [
+        {
+          "suite": "composer",
+          "passed": 96,
+          "failed": 0,
+          "status": "passed",
+          "evidence": {
+            "path": "out/iteration-20261118/pty/final-r3/composer.json",
+            "sha256": "7b0ccdc7bd3bb7b22ee97f6bae4e6e992321e5599cafef37d0c6e020f9e31bce",
+            "bytes": 7644
+          },
+          "scope": "real composer, queue revisions, bound recipients, and local reexec; no models",
+          "duration_seconds": 16.442
+        },
+        {
+          "suite": "questions",
+          "passed": 43,
+          "failed": 0,
+          "status": "passed",
+          "evidence": {
+            "path": "out/iteration-20261118/pty/final-r3/questions-rejection-fix.json",
+            "sha256": "4a93092c8686ac4bea7fe0cbc63bd0dd6b893ded51ae1849c8ef7235ec5c1fba",
+            "bytes": 4151
+          },
+          "scope": "nonblocking questions, local answers, independent drafts, Markdown display; no models",
+          "duration_seconds": 7.258
+        },
+        {
+          "suite": "relay_composer",
+          "passed": 45,
+          "failed": 0,
+          "status": "passed",
+          "evidence": {
+            "path": "out/iteration-20261118/pty/final-r3/relay-composer.json",
+            "sha256": "e1dc27354a792d87a76c4d8bc62ed7d3cb3e8538a7f6db5a105d902b5bfea5b7",
+            "bytes": 5093
+          },
+          "scope": "account queue response delivery, CAS editing, same-account local reexec and safe handoff",
+          "duration_seconds": 5.825
+        },
+        {
+          "suite": "client_ui",
+          "passed": 41,
+          "failed": 0,
+          "status": "passed",
+          "evidence": {
+            "path": "out/iteration-20261118/pty/final-r3/client-ui-help-fix/ui-smoke.json",
+            "sha256": "1b80b246fc0891426199297ed1fc9a7f34a2e6b3bcbb91685fa710c4fbf761a6",
+            "bytes": 2540
+          },
+          "scope": "production compositor with sample events, isolated PTY; no live connection",
+          "duration_seconds": null
+        },
+        {
+          "suite": "browser",
+          "passed": 69,
+          "failed": 0,
+          "status": "passed",
+          "evidence": {
+            "path": "out/iteration-20261118/pty/browser-r3-final/report.json",
+            "sha256": "67e6241187c7f0019a2a3c89e61cc5719b7e63c16eaf309436072488be37f8ee",
+            "bytes": 6203
+          },
+          "scope": "OpenSSH public-key + OAuth PKCE + HTTP MCP + native Chromium CDP",
+          "duration_seconds": 20.205
+        },
+        {
+          "suite": "input_history",
+          "passed": 122,
+          "failed": 0,
+          "status": "passed",
+          "evidence": {
+            "path": "out/iteration-20261118/pty/final-r3/input-history-paged-refwrap.json",
+            "sha256": "74b7503a788f4439728795ba365d4d3d258281f979f998efea76cfa1378ad035",
+            "bytes": 10783
+          },
+          "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, automatic JSONL and resume; no models",
+          "duration_seconds": 22.201
+        }
+      ]
+    },
+    "candidate_binaries": [
+      {
+        "name": "ssmcp",
+        "path": "out/iteration-20261118/candidate-bins-r3/ssmcp",
+        "sha256": "cc3a24581002689305b0f2b2644c46ac65e40ba83069a243ff064d9173671d6c",
+        "bytes": 131111232
+      },
+      {
+        "name": "ssmcpd",
+        "path": "out/iteration-20261118/candidate-bins-r3/ssmcpd",
+        "sha256": "5038c45599442393b01e388d0175531a3e8d2abfc357102d50301ab9a3acddbc",
+        "bytes": 106737664
+      },
+      {
+        "name": "examples/vt_snapshot",
+        "path": "out/iteration-20261118/candidate-bins-r3/examples/vt_snapshot",
+        "sha256": "d5c7e57ed50d1c2d116ff3aa74593e363fb6909e752b0c2b6dfae87611e64339",
+        "bytes": 6457848
+      },
+      {
+        "name": "lib-fixture",
+        "path": "out/iteration-20261118/candidate-bins-r3/lib-fixture",
+        "sha256": "df022fda83c9694279db8ce22a4e8956ce8d4d65081a66e9d2036382e6184e0c",
+        "bytes": 197674736
+      }
+    ],
+    "prior_failed_attempts_preserved": true,
+    "corrections": "Runtime fixes cover shortened-row clearing, Escape decoding, intraword Markdown, bounded image sizing and expired exact-recipient selection. Fixture-only corrections cover shared VT theme assertions, complete help scrolling, thrown native errors, spill pagination, newline-wrapped references and a fixed audit-capture watermark."
+  },
+  "final_validation": null,
+  "installation": null,
+  "reload": null,
+  "deployment_scope": "Local package/client install and selected foreground reload only; no production relay deployment.",
+  "boundaries": [
+    "PTY relay uses a synthetic identity provider and loopback transport, not a production TLS/OAuth account test.",
+    "Browser acceptance uses isolated Chromium, not the user's personal browser profile.",
+    "No model or ssmcp-managed agent was started.",
+    "Chinese display language remains planned for the version after 0.9.0."
+  ],
+  "installed_checkpoint": {
+    "recorded_at_utc": "2026-11-18T11:37:13.722736+00:00",
+    "source_commit": "97c026c7ce28d60cb1766074d245c0ea18a949e9",
+    "status": "installed; live full-width row rendering hotfix pending",
+    "unit": {
+      "passed": 1044,
+      "failed": 0,
+      "ignored": 25,
+      "explicit_code_mode_passed": 28,
+      "node_passed": 56,
+      "fmt": "passed",
+      "clippy_all_targets_D_warnings": "passed",
+      "results": "final-integration-r10/results.json"
+    },
+    "pty": {
+      "passed_checks": 642,
+      "reports": [
+        {
+          "suite": "composer",
+          "checks": 96,
+          "report": "pty/final-r4/review/composer.json",
+          "sha256": "9c9504f86459ec95fc37bf9144f55dbfc452ca23fc3eeb3044ae3b4053060b18"
+        },
+        {
+          "suite": "questions",
+          "checks": 43,
+          "report": "pty/final-r4/review/questions.json",
+          "sha256": "169612a4277488cb754387b50822ac07c28e4ae8be045484b36b26cac6aa9f8c"
+        },
+        {
+          "suite": "relay_composer",
+          "checks": 45,
+          "report": "pty/final-r4/root/relay-composer.json",
+          "sha256": "c7e991d30c0c469e5848fb592420630fbed5fbbf0ed91936915ddcd0af7bd039"
+        },
+        {
+          "suite": "client_ui",
+          "checks": 41,
+          "report": "pty/final-r4/panel/client-ui/ui-smoke.json",
+          "sha256": "1b80b246fc0891426199297ed1fc9a7f34a2e6b3bcbb91685fa710c4fbf761a6"
+        },
+        {
+          "suite": "browser_owned",
+          "checks": 69,
+          "report": "pty/final-r4/root/browser-owned/report.json",
+          "sha256": "f8a9074f937a05da93e8dd713060c6d5f77f5a32a3c032d2ac562acd63f9bf20"
+        },
+        {
+          "suite": "input_history",
+          "checks": 122,
+          "report": "pty/final-r4/input-history.json",
+          "sha256": "7aff51eb339bbd43f55d0e2e83a2527b3e3b8929aa961c7b937629f4d3668fc7"
+        },
+        {
+          "suite": "presentations",
+          "checks": 58,
+          "report": "pty/final-r4/panel/presentations-final/report.json",
+          "sha256": "e414f06d769c1acc07d2c441943b6ed0f1732bcb8328f0b79db8190822208af1"
+        },
+        {
+          "suite": "context_memory",
+          "checks": 87,
+          "report": "pty/final-r4/context-memory.json",
+          "sha256": "86bd7cb39c75e9da9879422b50b3d0c598df2e83690e92433664d930a0ffe499"
+        },
+        {
+          "suite": "file_paste_image",
+          "checks": 81,
+          "report": "pty/final-r4/file-paste-image.json",
+          "sha256": "424df3cc62dd06cdb01b38c54128f0f1a154ee711052b1d1ef5f29885a5f867e"
+        }
+      ]
+    },
+    "candidate_binary_sha256": {
+      "ssmcp": "209d5a16d3113e9261fe0efe439fe6273af6512dff7eaad2827fbed7a4eec6d7",
+      "ssmcpd": "5a5078c0452ecd7b20ee90a7ca26d134ec833e4efd4611a946b8042dec6a83d0",
+      "examples/vt_snapshot": "b1e3cb664926fcf4c6ea51e6e1429e49393fcab8a954bd6c44b53f7c021ddaac",
+      "lib-fixture": "8851ab5d8f92d9fe0e4062857bd85aa7907ee7ad538523cf0093430453186cab"
+    },
+    "installation": {
+      "pacman": "ssmcp-git 0.9.0.r339.g97c026c-1",
+      "source_commit": "97c026c7ce28d60cb1766074d245c0ea18a949e9",
+      "installed": [
+        {
+          "path": "/usr/bin/ssmcp",
+          "version": "ssmcp 0.9.0",
+          "sha256": "0407c2c4eae7bf1b355e7fc7152066297ec88013340a33a3e186740caff5fed3",
+          "bytes": 9830232
+        },
+        {
+          "path": "/usr/bin/ssmcpd",
+          "version": "ssmcpd 0.9.0",
+          "sha256": "97109668fdb5cdd15412c29882f7abc08676d5b2f02fc5ca47055ad37c274869",
+          "bytes": 5508592
+        },
+        {
+          "path": "/home/lightjunction/.cargo/bin/ssmcp",
+          "version": "ssmcp 0.9.0",
+          "sha256": "4a10f901146dd6b0b9621b31a06670d5e48a4e7eb793c8cb744b75991690368d",
+          "bytes": 9719184
+        },
+        {
+          "path": "/home/lightjunction/.cargo/bin/ssmcpd",
+          "version": "ssmcpd 0.9.0",
+          "sha256": "7e254a60cc1e26fa3a496b5641ea7e97319f3bab6574f545c78061a4619e8544",
+          "bytes": 5397416
+        }
+      ],
+      "local_ssmcpd_active": "inactive"
+    },
+    "live_observation": {
+      "pid": 2013166,
+      "binary_sha256": "4a10f901146dd6b0b9621b31a06670d5e48a4e7eb793c8cb744b75991690368d",
+      "native_message_accepted": true,
+      "native_message_history_saved": true,
+      "explicit_image_reference_read": true,
+      "reload_acknowledged_by_this_controller": false
+    },
+    "limits": [
+      "Actual user screenshot exposed a missing fixed-width body contract; standard PTY tests did not assert sidebar body columns. A focused hotfix and VT test are required.",
+      "External hidden Chromium tab screenshot returned its documented timeout without activation; the isolated owned-browser acceptance passed 69 checks.",
+      "No production relay deployment, real OS matrix acceptance, or public release publication was performed."
+    ]
+  },
+  "followup_scope": [
+    "fixed-width live terminal layout",
+    "native Kitty image output for capable terminals",
+    "zero-dependency Project Z ztui crate",
+    "persistent same-origin bootstrap and MCP OAuth invitation issuer",
+    "QR sidebar and English/Chinese public gateway guide",
+    "computer use defaults to private desktop",
+    "remaining PR integration"
+  ]
+}

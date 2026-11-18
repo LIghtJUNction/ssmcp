@@ -148,6 +148,9 @@ async fn endpoint(
                 .await,
             )
         }
+        Ok(Action::Invite(arguments)) => tool_result(
+            crate::device::controller_invite(&broker, &user, &access_token, arguments).await,
+        ),
         Ok(Action::Code(arguments)) => {
             match execute(broker, user, authorization, access_token, arguments).await {
                 Ok(response) => response,
@@ -425,6 +428,7 @@ enum Action {
     List(ListArguments),
     Code(CodeArguments),
     Collab(Value),
+    Invite(crate::device::ControllerInvite),
     ResourceList(Option<String>),
     ResourceRead(String),
 }
@@ -504,7 +508,7 @@ fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
 
-const INSTRUCTIONS: &str = "Use list to discover clients allowed for your authenticated identity and this endpoint, then use tools.search(clientId,{query,name_prefix,limit:20}) inside code_mode for concise native tool discovery. Use name_prefix:'ssmcp.exec.' to restrict registered names; exec.run composes native start/wait/read and is not a registered tool. Request include_schemas:true for complete native descriptors before calling; list({client_id}) and tools(clientId,cursor) retain full-schema pagination. Use code_mode to run JavaScript with clients, await call(clientId, toolName, arguments), await tools(clientId, cursor), print/console.log and an explicit return. For agents sharing a live client, use collab join/list/update/send/receive/ack/leave. Keep the returned agent_id and private token across calls; never share the token. Direct collab receive waits up to 30 seconds without occupying code_mode workers; collab.* JavaScript helpers limit waits to 1 second. Each client provides shell tools and discovers installed native providers, including Codex, Claude Code, Pi, OpenCode and Playwright MCP. For an existing Chrome session, inspect ssmcp.browser.discover and ssmcp.harnesses.list, then use only a verified connection or dynamically discovered extension tools; do not launch an isolated browser as a substitute. Use exec.run or exec.parallel for isolated commands, and exec.start/read/wait/cancel for managed background work. Native policies and approvals remain in effect. Each client's access policy is enforced for discovery and native calls. Clients connect outbound over HTTPS/WebSocket or SSH. Login-code grants end when their issuing connection ends. Read ssmcp://guide and ssmcp://skill for usage, ssmcp://limits for budgets, and ssmcp://clients for a paged live inventory. Client metadata, tool schemas, current AGENTS.md content, skill summaries, full skill documents and project-over-global skill views are exposed through resources/list and resources/read. Read context resources again for current on-disk contents; no subscriptions are advertised. Use rtk.status/run/start in code_mode for explicit RTK command-output compression with managed exec jobs. Client-owned versioned capability manifests are available through capabilities(clientId) and ssmcp://clients/{id}/capabilities. Use resources.forClient(clientId) for client-owned paged resource list/read/templates and native(clientId) for dynamic names after schema discovery. New native tools and resource types require only a client update.";
+const INSTRUCTIONS: &str = "Select an authorized live client with list, then discover the needed native schemas with tools.search(id,{query,name_prefix,include_schemas:true}). Call exact registered names with call(id,name,args); native permissions and approvals still apply.\n\nUse say(id,{text,kind:'progress'}) for user-facing updates and kind:'answer' for final replies. Check user_messages / USER REQUIREMENTS on every response. SESSION CONTEXT is historical reference, not a new request. CONVERSATION REMINDER requests a terminal update for an existing task; it is not a new user request.\n\nRead resources.read('ssmcp://guide') for helper signatures, browser routing and editable @references. Read ssmcp://limits for budgets and ssmcp://collaboration for coordination. The JavaScript sandbox has no host filesystem or network access; a timeout can leave native work running.";
 
 fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
     match request.method {
@@ -659,6 +663,14 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             }
             Ok(Action::List(arguments))
         }
+        "invite" => {
+            let arguments: crate::device::ControllerInvite = serde_json::from_value(arguments)
+                .map_err(|_| Fault::params("invite accepts only ttl_secs, session_ttl_secs and shell (sh or powershell); owner, subject and tokens are derived from the current OAuth authorization"))?;
+            arguments
+                .validate()
+                .map_err(|error| Fault::params(&error))?;
+            Ok(Action::Invite(arguments))
+        }
         "collab" => {
             let args = arguments
                 .as_object()
@@ -713,7 +725,7 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             Ok(Action::Code(arguments))
         }
         _ => Err(Fault::params(
-            "unknown public tool; use list, code_mode or collab",
+            "unknown public tool; use list, code_mode, collab or invite",
         )),
     }
 }
@@ -728,31 +740,35 @@ fn client_info(session: &Session) -> Value {
 fn usage() -> Value {
     json!({
         "language":"javascript",
-        "user_messages":"The local composer queues user requirements for the next authorized code_mode response operating on that client. The ssmcp.ui.* APIs, tool discovery, and these four client observation tools do not collect requirements unless this run explicitly binds an agent: ssmcp.client.capabilities, ssmcp.resources.list, ssmcp.resources.templates, and ssmcp.resources.read. Other native calls remain eligible. Requirements appear in structuredContent.user_messages and a separate USER REQUIREMENTS text block. Bind an existing participant with await collab.bind(clientId,{agent_id,token}) at the start of every run, or pass agent:{client_id,id,token}, for exact-agent delivery. Controller names never authenticate members. Inclusion in a response does not claim the message was read or executed.",
-        "collab":"Join a live client session with collab.join(clientId,{name,role?,capabilities?}), save agent_id and private token, discover collab.list(clientId), send JSON with collab.send(clientId,{agent_id,token,to,payload,idempotency_key?}); to:'*' broadcasts to current peers. collab.receive returns messages and next_cursor; collab.ack(clientId,{agent_id,token,through:next_cursor}) releases processed messages. update renews presence; leave ends participation. All helpers take clientId first. Direct public collab accepts action and client_id and supports wait_ms<=30000; JS receive is limited to 1000ms. Read ssmcp://collaboration for limits and delivery semantics.",
-        "controller":"Pass optional controller:{name,model} to code_mode to attribute each native call. Values are caller-reported, not verified model identity. Without a model declaration, the terminal shows Model unknown. clientInfo supplies only the current request's application name.",
-        "clients":"Online client metadata snapshot; select a client by id from list.",
-        "call":"await call(clientId, toolName, arguments = {}) returns short native MCP results unchanged. Long backend output returns artifact metadata in structuredContent; inspect isError, spilled and completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.",
-        "tools":"await tools.search(clientId,{query,name_prefix,limit:20,include_schemas:false,cursor:null,max_pages:32}) returns concise registered names, routing namespaces and descriptions. Optional name_prefix filters registered names only, case-insensitively, and combines with query. Set include_schemas:true for complete unchanged native descriptors. Continue with nextCursor and the same client/query/name_prefix/limit/schema options. Original tools(clientId,cursor?) returns full native pages. Search reduces model-visible output, not the first native page scan; see ssmcp://limits.",
-        "exec":"exec.run(clientId,{command:[...],cwd,wait_ms}) runs a command and collects output; exec.parallel(clientId,[{command:[...]},...],{concurrency:4}) settles bounded parallel runs. exec.start(clientId,{command:[...]}) starts background work. exec.status/read/write/wait/cancel/forget(clientId,{job_id,...options}) manage it; legacy (clientId,jobId,options) also works. exec.list(clientId) lists jobs. Local parallel option errors mark that item not_started and leave its worker available. wait_ms only limits waiting; timeout_ms limits execution. Reuse job_id; commands survive code_mode completion.",
-        "rtk":"rtk.status(clientId) checks the installed RTK version. rtk.run/start(clientId,{command:[\"git\",\"status\"],cwd,...}) execute literal RTK argv with managed exec jobs. Read/wait/cancel through exec. No shell rewriting or implicit fallback; preserve exit codes and RTK recall hints.",
-        "reload":"await reload(clientId) acknowledges a client restart from the updated installed executable. Stops background work; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.",
-        "outputs":"Long command output spills to private files under /tmp/ssmcp on the client. outputs.read(clientId,{id,offset,max_bytes}), outputs.stat(clientId,{id}), outputs.cleanup(clientId) inspect artifacts by returned ID. Metadata includes SHA-256, bytes, lines, completeness and expiry; automatic retention is 24 hours.",
-        "output":"Use print(value) or console.log(value) for logs; return a JSON-serializable value. Use image(nativeScreenshotResult) to emit actual MCP image content without copying base64 into logs.",
-        "computer":"Read client schemas and capabilities for desktop control. computer.desktop_start/status/stop and app_launch manage an isolated desktop; input defaults to it, and shared host input requires desktop:host. Browser-target controls are preferred for browser tasks. New primitives remain available through native(clientId).",
-        "omarchy":"Native Omarchy system primitives: omarchy.status, themes/theme_set, backgrounds/background_set, fonts/font_set, audio/audio_set, brightness/brightness_set, toggles/toggle_set, workspaces/workspace_switch, window_action, apps/app_launch, menu, battery and network. Inspect schemas and current state before changes.",
-        "browser":"For an existing Chrome session, call ssmcp.browser.discover for read-only metadata and ssmcp.harnesses.list for native provider status. Search the actual playwright.* catalog for extension tools; native approvals remain in the browser. CDP controls remain browser.status/launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/wait_for/evaluate/screenshot/close/disconnect. Use connect only with an observed loopback endpoint. Do not replace requested existing Chrome with launch or another browser family. No model is invoked.",
-        "fs":"fs.list/stat/read/write/mkdir and fs.readText/writeText/editText(clientId, options) provide rooted binary and UTF-8 file primitives.",
-        "skills":"skills.list/read/view(clientId, options) read current skill metadata, exact SKILL.md contents and Markdown views. view defaults to project-over-global scope across explicitly granted roots; list uses scope:effective for that same resolution. Each entry retains its root and path.",
-        "agents":"agents.list/read/resolve(clientId, options) inspect instruction files and root-to-target precedence with explicit provenance.",
-        "context":"context.roots(clientId) lists workspace and operator-configured read-only context roots. Pass a returned root ID to skills/agents.",
-        "rsync":"rsync({source:{client_id,path},destination:{client_id,path},dry_run:true,delete:false}) starts a managed job; sync is an alias. Both paths must be existing directories; copies contents. Reverse by swapping endpoints.",
-        "jobs":"jobs.status(id), jobs.wait(id,{wait_ms:5000}), jobs.cancel(id), jobs.list(). Jobs survive code_mode completion; inspect the final state and exit codes.",
-        "ports":"ports.open({listen:{client_id,port},target:{client_id,port}}), ports.list(), ports.close(id). Loopback only; port 0 selects an unused listener port.",
-        "resources":"resources.list(cursor?), resources.templates(), resources.read(uri) discover relay resources. resources.forClient(clientId).list(options?), .templates(options?) and .read(uri) forward paged client-owned resources. Read /clients/{id}/capabilities for the live client version and registry generation.",
-        "native":"native(clientId) builds dynamic names for discovered client tools, e.g. native(id).ssmcp.browser.snapshot(args). capabilities(clientId) reads the client-owned manifest. Future client primitives need no server helper update; call(id,name,args) remains compatible with older relays.",
-        "workspace":"The caller sandbox needs its own registered client; server-side JavaScript cannot see its filesystem or loopback.",
-        "example":"const c = clients.find(c => c.type === 'shell'); if (!c) throw new Error('No shell client'); return await call(c.id, 'terminal.status', {});"
+        "user_messages":"Inspect user_messages / USER REQUIREMENTS on every response. Unbound observation does not collect requests; ui.message/ui.present are interaction. Full recipient rules: ssmcp://guide.",
+        "conversation_reminders":"A reminder follows an existing request after two responses without a new accepted terminal reply; it is not a new task. A successful nonduplicate message/present receipt clears it. Details: ssmcp://guide.",
+        "collab":"collab.join/list/update/send/receive/ack/leave coordinate existing participants. Keep tokens private; use direct collab for receive waits over 1s. See ssmcp://collaboration.",
+        "controller":"controller:{name,model} is caller-reported display attribution, not authentication.",
+        "clients":"Choose an authorized live id from list; title/name/cwd identify the task.",
+        "call":"call(id,name,args) returns native MCP content. Check isError and structuredContent.spilled/completeness; read saved output when needed.",
+        "tools":"tools.search(id,{query,name_prefix,include_schemas:true}) discovers exact schemas. tools(id,cursor) pages full descriptors.",
+        "exec":"exec.run/parallel/start manage commands. status/read/write/wait/cancel/forget accept (id,{job_id,...options}) or (id,jobId,options). wait_ms waits; timeout_ms limits execution. Inspect the final state.",
+        "rtk":"rtk.status/run/start use installed RTK with managed jobs and literal argv. Details: ssmcp://guide.",
+        "reload":"reload(id) restarts the client, stops background work and changes its ID; refresh list.",
+        "outputs":"outputs.read/stat/cleanup inspect returned artifact IDs. Check completeness before using captured output.",
+        "output":"print/console are diagnostics; return JSON. image(nativeResult) emits real MCP images.",
+        "computer":"Discover schemas. Input defaults to a private desktop; desktop:'host' explicitly targets shared input.",
+        "omarchy":"Discover available Omarchy system primitives. Helper contracts: ssmcp://guide.",
+        "browser":"Prefer the authorized ChatGPT Browser plugin outside code_mode; otherwise discover registered extension tools before an observed CDP endpoint. Routing: ssmcp://guide.",
+        "fs":"fs.list/stat/read/write/mkdir/readText/writeText/editText operate within granted roots.",
+        "skills":"skills.list/read/view read current sources and project-over-global precedence.",
+        "agents":"agents.list/read/resolve inspect instruction files with root/path provenance.",
+        "context":"context.roots lists granted roots. Native ssmcp.context.* and ui.get use the same local context memory.",
+        "rsync":"rsync/sync({source,destination,dry_run,delete}) starts a managed transfer job. Exact arguments: ssmcp://guide.",
+        "jobs":"jobs.status/wait/cancel/list manage relay jobs that outlive code_mode.",
+        "ports":"ports.open/list/close forward loopback endpoints. Exact arguments: ssmcp://guide.",
+        "resources":"resources.list/templates/read access relay resources; resources.forClient(id) accesses the selected client's resources.",
+        "native":"capabilities(id) reads client-owned metadata; native(id) exposes discovered names with unchanged schemas.",
+        "workspace":"The JavaScript sandbox has no host filesystem/network access. Connect another workspace as a client.",
+        "example":"const c = clients.find(c => c.type === 'shell'); if (!c) throw new Error('No shell client'); return await tools.search(c.id,{name_prefix:'ssmcp.exec.',include_schemas:true});",
+        "say":"say(id,{text,kind:'progress'}) publishes progress; kind:'answer' publishes a reply. Its response may carry new user requirements.",
+        "ui":"ui.get/set/action/filter/queue/message/present/ask/questions/history/harness use registered native tools. Discover schemas first.",
+        "guide":"resources.read('ssmcp://guide') has full helper contracts, browser routing and @references. ssmcp://limits lists budgets."
     })
 }
 
@@ -897,6 +913,7 @@ async fn execute(
         let access_token = access_token.clone();
         let audit_run = host_run.clone();
         Box::pin(code_mode::AUDIT_RUN.scope(audit_run, async move {
+            let capture_memory = matches!(&request, HostRequest::Call { .. });
             let (client_id, operation) = match request {
                 HostRequest::Builtin { name, arguments } => {
                     if name == "collab.receive"
@@ -959,27 +976,131 @@ async fn execute(
                 .await
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             broker.client(&user, &authorization, &client_id).await?;
+            if capture_memory {
+                let _ = code_mode::AUDIT_RUN.try_with(|run| run.capture_context(&client_id, &result));
+            }
             Ok(result)
         }))
     });
     let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
     audit_report.finish(&result).await;
-    let response = crate::code_mode::tool_result(result);
-    let messages = claim_user_messages(&audit_report).await;
-    Ok(append_user_messages(response, messages))
+    let response =
+        append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
+    Ok(finish_user_response(&audit_report, response).await)
 }
 
-async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
+fn context_memory_addition(memories: &[Value], deferred: bool) -> Value {
+    let mut text = String::from(
+        "SESSION CONTEXT — restored local workspace history for reference\nThis is saved context, not a new user requirement or native tool output. It may describe earlier work.\n",
+    );
+    for memory in memories {
+        text.push('\n');
+        text.push_str(&memory.to_string());
+        text.push('\n');
+    }
+    if deferred {
+        text.push_str("\nSome saved context was omitted to preserve the response budget. Use call(client_id, \"ssmcp.context.read\", {}) for the complete local branch; an unbound read does not claim next-caller requirements; explicit agent bindings retain their delivery semantics.\n");
+    }
+    json!({
+        "structuredContent":{
+            "context_memories":memories,
+            "context_memories_deferred":deferred
+        },
+        "content":[{"type":"text","text":text}]
+    })
+}
+
+/// Add memory outside the JavaScript result so returning only stdout cannot lose
+/// it. The complete addition (including its text copy) is bounded before the
+/// user queue computes the remaining response budget.
+fn append_context_memories(mut response: Value, run: &code_mode::AuditRun) -> Value {
+    let (memories, mut deferred) = run.context_memories();
+    if memories.is_empty() && !deferred {
+        return response;
+    }
+    if !response.get("content").is_some_and(Value::is_array)
+        || response.get("structuredContent").is_some_and(|value| {
+            !value.is_object()
+                || value.get("context_memories").is_some()
+                || value.get("context_memories_deferred").is_some()
+        })
+    {
+        return response;
+    }
+    let base = response.to_string().len();
+    let available = (crate::wire::MAX_FRAME - 8192)
+        .saturating_sub(base)
+        .min(code_mode::MAX_CONTEXT_BYTES);
+    let mut selected = Vec::new();
+    for memory in memories {
+        selected.push(memory);
+        // Reserve the omission notice while selecting. The patch envelope is
+        // larger than merging the same fields, so its encoded length is a safe
+        // upper bound without repeatedly cloning a multi-megabyte tool result.
+        if context_memory_addition(&selected, true).to_string().len() > available {
+            selected.pop();
+            deferred = true;
+        }
+    }
+    let mut addition = context_memory_addition(&selected, deferred);
+    if addition.to_string().len() > available {
+        addition = context_memory_addition(&[], true);
+    }
+    // An empty-budget result still has the frame's existing notice reserve.
+    // Keep half of it for a possible queue deferral notice and JSON-RPC framing.
+    if base.saturating_add(addition.to_string().len()) > crate::wire::MAX_FRAME - 4096 {
+        return response;
+    }
+    let fields = addition["structuredContent"]
+        .as_object()
+        .expect("context fields");
+    let structured = response
+        .as_object_mut()
+        .expect("MCP result")
+        .entry("structuredContent")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("structured result checked");
+    for (key, value) in fields {
+        structured.insert(key.clone(), value.clone());
+    }
+    response["content"]
+        .as_array_mut()
+        .expect("MCP content")
+        .extend(
+            addition["content"]
+                .as_array()
+                .expect("context text")
+                .iter()
+                .cloned(),
+        );
+    response
+}
+
+fn delivery_budget(response: &Value) -> usize {
+    // User text appears both in structuredContent and in a textual block.
+    // Reserve framing/header space before claiming any request, so a full
+    // native result plus saved memory never consumes work it cannot return.
+    (crate::wire::MAX_FRAME
+        .saturating_sub(response.to_string().len())
+        .saturating_sub(16 * 1024)
+        .saturating_sub(code_mode::reminders::MAX_NOTICE_BYTES)
+        / 2)
+    .min(crate::steering::MAX_DELIVERY_BYTES)
+}
+
+async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
     let mut eligible = Vec::new();
-    // Finish all asynchronous authorization lookups before claiming anything.
-    // Cancellation while validating leaves every pending record editable.
-    for client_id in report.run.steering_targets() {
+    let steering_targets = report.run.steering_targets();
+    // Finish every asynchronous authorization lookup before mutating a queue.
+    // Cancellation during validation leaves pending requirements editable.
+    for client_id in report.run.targets() {
         let Some(authorization) = report
             .broker
             .authenticate(&report.user, &report.access_token)
             .await
         else {
-            return Vec::new();
+            return response;
         };
         let Ok(session) = report
             .broker
@@ -988,10 +1109,10 @@ async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
         else {
             continue;
         };
+        let Ok(owner) = crate::bridge::owner(&report.user, &authorization) else {
+            continue;
+        };
         let agent_id = if let Some(binding) = report.run.binding(&client_id) {
-            let Ok(owner) = crate::bridge::owner(&report.user, &authorization) else {
-                continue;
-            };
             if owner != binding.owner
                 || session
                     .collaboration
@@ -1004,28 +1125,81 @@ async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
         } else {
             None
         };
-        eligible.push((session, agent_id));
+        let may_claim = steering_targets.contains(&client_id);
+        eligible.push((session, owner, agent_id, may_claim));
     }
     let mut messages = Vec::new();
+    let mut notices = Vec::new();
     let mut bytes = 0usize;
-    for (session, agent_id) in eligible {
+    let budget = delivery_budget(&response);
+    let mut notice_budget = conversation_notice_budget(&response);
+    // No await after the first claim: each recipient's receipts, age and new
+    // delivery are finalized under the existing session Queue lock exactly once.
+    for (session, owner, agent_id, may_claim) in eligible {
         if !session.is_alive() {
             continue;
         }
-        let claimed = session.steering.claim(
-            session.client_id(),
-            &report.run.context.run_id,
-            agent_id.as_deref(),
-            crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len()),
-            crate::steering::MAX_DELIVERY_BYTES.saturating_sub(bytes),
+        let replies = report.run.accepted_replies(session.client_id());
+        let (claimed, notice) = session.steering.finish_response(
+            code_mode::reminders::Response {
+                client_id: session.client_id(),
+                run_id: &report.run.context.run_id,
+                owner: &owner,
+                agent_id: agent_id.as_deref(),
+                replies: &replies,
+                notice_budget: if notices.len() < code_mode::reminders::MAX_NOTICES {
+                    notice_budget
+                } else {
+                    0
+                },
+            },
+            if may_claim {
+                crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len())
+            } else {
+                0
+            },
+            budget.saturating_sub(bytes),
         );
         bytes += claimed
             .iter()
             .map(|message| message.to_string().len())
             .sum::<usize>();
         messages.extend(claimed);
+        if let Some(notice) = notice {
+            notice_budget = notice_budget.saturating_sub(notice.bytes);
+            notices.push(notice);
+        }
     }
-    messages
+    append_conversation_reminders(append_user_messages(response, messages), notices)
+}
+
+fn conversation_notice_budget(response: &Value) -> usize {
+    crate::wire::MAX_FRAME
+        .saturating_sub(response.to_string().len())
+        .saturating_sub(16 * 1024)
+        .min(code_mode::reminders::MAX_NOTICE_BYTES)
+        .saturating_sub(code_mode::reminders::NOTICE_ENVELOPE_BYTES)
+}
+
+fn append_conversation_reminders(
+    mut response: Value,
+    notices: Vec<code_mode::reminders::Notice>,
+) -> Value {
+    if notices.is_empty() {
+        return response;
+    }
+    if !response["structuredContent"].is_object() {
+        response["structuredContent"] = json!({});
+    }
+    let mut entries = Vec::with_capacity(notices.len());
+    for notice in notices {
+        entries.push(notice.value);
+        if let Some(content) = response["content"].as_array_mut() {
+            content.push(notice.content);
+        }
+    }
+    response["structuredContent"]["conversation_reminders"] = json!(entries);
+    response
 }
 
 fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
@@ -1065,7 +1239,7 @@ pub(crate) fn tool_definitions() -> Value {
     json!([
         {
             "name":"list",
-            "description":"List online clients allowed for your authenticated identity and this endpoint, with unique id, name, optional task title, type, hostname and startup cwd. Use title to identify the intended task, then dispatch by id. With client_id, return that client's native tool names, descriptions and input schemas for code_mode; follow nextCursor with cursor to page. Client access policies are checked on every lookup.",
+            "description":"List live clients authorized for this identity and endpoint. Select by task title/name, then dispatch by id. client_id returns that client's full native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
             "inputSchema":{"type":"object","properties":{
                 "client_id":{"type":"string","minLength":1,"maxLength":64},
                 "cursor":{"type":"string","maxLength":128}
@@ -1074,7 +1248,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools.search(clientId,{query,name_prefix,limit,include_schemas,cursor}) for bounded discovery, await tools(clientId, cursor?) for original native schema pages, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; rtk.status/run/start for installed RTK command-output compression; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates; collab.join/list/update/send/receive/ack/leave for session agents; collab.bind(clientId,{agent_id,token}) authenticates this run for exact-agent user messages. Check structuredContent.user_messages and the USER REQUIREMENTS text block on each code_mode response for local user instructions. Use the direct collab tool for receive waits over 1 second. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All registered native provider actions run through call over the client's outbound HTTPS/WebSocket or SSH connection. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript for clients selected from list. Discover schemas with tools.search(id,{query,name_prefix,include_schemas:true}), then use call(id,name,args) or exec.run(id,{command:[...],cwd,wait_ms}). Native permissions and approvals apply.\n\nSend user-facing progress with say(id,{text,kind:'progress'}) and final replies with kind:'answer'. ui.present renders structured content; ui.history reads conversation history. Check user_messages / USER REQUIREMENTS on each response; context_memories / SESSION CONTEXT is historical reference. conversation_reminders / CONVERSATION REMINDER follows an existing task; reply in the terminal. Controller names are display attribution, not authentication.\n\nUse print/console for diagnostics, image(nativeResult) for real MCP images, and return JSON. Inspect errors, job state and output completeness. Timeout ends orchestration; native work may continue. Full helper signatures, exec job compatibility, browser routing and @reference handling: resources.read('ssmcp://guide'). Limits: ssmcp://limits. No direct host filesystem or network access.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
@@ -1092,7 +1266,17 @@ pub(crate) fn tool_definitions() -> Value {
             },"required":["code"],"additionalProperties":false},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}
         },
-        collaboration_tool()
+        collaboration_tool(),
+        {
+            "name":"invite",
+            "description":"Create a short-lived one-use device installation/enrollment command from this verified GitHub OAuth authorization. Returns shell and PowerShell commands containing only the invitation, exact currently published compatible client release, platforms and expiry. The device does not log into GitHub. Requires the identity /mcp resource or this account's own resource, configured account storage and a published gateway client release. The device remains bound to the original grant and its revocation; refresh never extends this delegation. The caller cannot choose another owner or supply credentials.",
+            "inputSchema":{"type":"object","properties":{
+                "ttl_secs":{"type":"integer","minimum":1,"maximum":3600,"default":600},
+                "session_ttl_secs":{"type":"integer","minimum":1,"maximum":86400,"default":3600},
+                "shell":{"type":"string","enum":["sh","powershell"],"default":"sh"}
+            },"additionalProperties":false},
+            "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}
+        }
     ])
 }
 
@@ -1175,7 +1359,7 @@ fn collaboration_tool() -> Value {
     .collect();
     json!({
         "name":"collab",
-        "description":"Coordinate agents sharing a live client without starting a model or occupying a code_mode worker. join creates a participant and private token; list discovers peers; update changes public status and renews the 15-minute lease. send delivers JSON privately or broadcasts to '*' with optional retry deduplication. receive reads without deleting and waits up to 30s; ack releases processed messages through next_cursor. leave ends participation. Save agent_id and token across calls. All actions require the session ACL; handle actions also require the owning identity and private token. Participants and messages end when the client connection closes. Read ssmcp://collaboration for examples and limits.",
+        "description":"Coordinate existing participants without starting a model. join/list/update/send/receive/ack/leave require an authorized client; participant operations also require its private token. Keep tokens private. Direct receive waits up to 30s; JavaScript receive up to 1s. Read ssmcp://collaboration for delivery and expiry rules.",
         "inputSchema":{"type":"object","properties":fields,"required":["action","client_id"],"oneOf":variants,"additionalProperties":false},
         "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
     })
@@ -1248,7 +1432,192 @@ impl Fault {
 
 #[cfg(test)]
 mod tests {
+    fn captured_memory_run(clients: usize, summary_bytes: usize) -> code_mode::AuditRun {
+        let run = code_mode::AuditRun::new("return {stdout: result.stdout};", None).unwrap();
+        for index in 0..clients {
+            let client = format!("memory-client-{index}");
+            run.native_dispatched(&client, Some("ssmcp.exec.run"));
+            run.capture_context(
+                &client,
+                &json!({
+                    "_meta":{"ssmcp.context":{
+                        "workspace":{"id":"a".repeat(64)},"branch":{"id":"main","revision":2},
+                        "revision":2,"summary":"x".repeat(summary_bytes),"mode":"provided_summary",
+                        "recent":[]
+                    }}
+                }),
+            );
+        }
+        run
+    }
+
+    #[test]
+    fn restored_context_is_separate_from_stdout_requirements_and_native_images() {
+        let run = captured_memory_run(1, 32);
+        for failed in [false, true] {
+            let original = json!({
+                "content":[{"type":"text","text":"original native result"},
+                    {"type":"image","mimeType":"image/png","data":"original-image"}],
+                "structuredContent":{"result":{"stdout":"only stdout"},"logs":["original log"]},
+                "isError":failed,"_meta":{"opaque":"preserved"}
+            });
+            let response = append_context_memories(original.clone(), &run);
+            assert_eq!(
+                response["structuredContent"]["result"],
+                original["structuredContent"]["result"]
+            );
+            assert_eq!(
+                response["structuredContent"]["logs"],
+                original["structuredContent"]["logs"]
+            );
+            assert_eq!(
+                &response["content"].as_array().unwrap()[..2],
+                original["content"].as_array().unwrap()
+            );
+            assert_eq!(response["isError"], failed);
+            assert_eq!(response["_meta"], original["_meta"]);
+            assert_eq!(
+                response["structuredContent"]["context_memories"][0]["client_id"],
+                "memory-client-0"
+            );
+            assert_eq!(
+                response["structuredContent"]["context_memories"][0]["context"]["revision"],
+                2
+            );
+            assert_eq!(
+                response["structuredContent"]["context_memories_deferred"],
+                false
+            );
+            assert!(response["structuredContent"].get("user_messages").is_none());
+            let text = response["content"][2]["text"].as_str().unwrap();
+            assert!(text.starts_with("SESSION CONTEXT"));
+            assert!(text.contains("not a new user requirement"));
+            assert!(!text.contains("USER REQUIREMENTS"));
+        }
+    }
+
+    #[test]
+    fn restored_context_counts_text_and_structured_copies_before_queue_budgeting() {
+        let run = captured_memory_run(20, 11 * 1024);
+        let original = crate::code_mode::tool_result(Ok(json!({"result":"stdout","logs":[]})));
+        let response = append_context_memories(original.clone(), &run);
+        assert!(
+            response.to_string().len() - original.to_string().len() <= code_mode::MAX_CONTEXT_BYTES
+        );
+        assert_eq!(
+            response["structuredContent"]["context_memories_deferred"],
+            true
+        );
+        assert!(
+            !response["structuredContent"]["context_memories"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let near_limit = json!({
+            "content":[{"type":"text","text":"x".repeat(crate::wire::MAX_FRAME - 8192 - 128)}],
+            "structuredContent":{"result":{"stdout":"unchanged"}},"isError":false
+        });
+        let response = append_context_memories(near_limit.clone(), &run);
+        assert!(response.to_string().len() < crate::wire::MAX_FRAME - 4096);
+        assert_eq!(response["content"][0], near_limit["content"][0]);
+        assert_eq!(
+            response["structuredContent"]["result"],
+            near_limit["structuredContent"]["result"]
+        );
+        assert_eq!(response["structuredContent"]["context_memories"], json!([]));
+        assert_eq!(
+            response["structuredContent"]["context_memories_deferred"],
+            true
+        );
+        assert!(
+            response["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("ssmcp.context.read")
+        );
+    }
+
+    #[test]
+    fn saved_memory_and_requirements_share_the_frame_budget_before_claim() {
+        assert_eq!(
+            delivery_budget(&json!({"content":[]})),
+            crate::steering::MAX_DELIVERY_BYTES
+        );
+        assert_eq!(
+            delivery_budget(&json!({"content":"x".repeat(crate::wire::MAX_FRAME)})),
+            0
+        );
+        let response = json!({"content":"x".repeat(crate::wire::MAX_FRAME - 32 * 1024)});
+        assert!(delivery_budget(&response) < crate::steering::MAX_DELIVERY_BYTES);
+        assert!(delivery_budget(&response) > 0);
+    }
+
     use super::*;
+
+    #[test]
+    fn conversation_reminders_preserve_results_and_reserve_space_before_claiming() {
+        use code_mode::reminders;
+        let before = json!({
+            "content":[{"type":"text","text":"native output"}],
+            "structuredContent":{"result":"x".repeat(crate::wire::MAX_FRAME - 32 * 1024)},
+            "isError":false,
+        });
+        let budget = delivery_budget(&before);
+        assert!(budget > 1024);
+        let messages = vec![json!({
+            "source":"client_user","client_id":"room","message_id":"m",
+            "revision":2,"text":"x".repeat(budget - 512)
+        })];
+        assert!(messages[0].to_string().len() <= budget);
+        let mut notices = Vec::new();
+        let now = std::time::Instant::now();
+        for index in 0..reminders::MAX_NOTICES {
+            let mut state = reminders::State::default();
+            let client_id = format!("client_{index}");
+            let mut response = reminders::Response {
+                client_id: &client_id,
+                run_id: "n",
+                owner: "owner",
+                agent_id: None,
+                replies: &[],
+                notice_budget: reminders::MAX_NOTICE_BYTES,
+            };
+            let _ = state.finish(&response, true, now);
+            response.run_id = "n1";
+            let _ = state.finish(&response, false, now);
+            response.run_id = "n2";
+            notices.push(state.finish(&response, false, now).unwrap());
+        }
+        let added = notices.iter().map(|notice| notice.bytes).sum::<usize>();
+        assert!(added <= conversation_notice_budget(&before));
+        let after =
+            append_conversation_reminders(append_user_messages(before.clone(), messages), notices);
+        assert_eq!(
+            after["structuredContent"]["result"],
+            before["structuredContent"]["result"]
+        );
+        assert_eq!(after["content"][0], before["content"][0]);
+        assert_eq!(after["isError"], false);
+        assert_eq!(
+            after["structuredContent"]["conversation_reminders"]
+                .as_array()
+                .unwrap()
+                .len(),
+            8
+        );
+        assert!(after.to_string().len() <= crate::wire::MAX_FRAME);
+        assert_eq!(
+            conversation_notice_budget(&json!({"content":"x".repeat(crate::wire::MAX_FRAME)})),
+            0
+        );
+        let error = append_conversation_reminders(
+            crate::code_mode::tool_result(Err("failed".into())),
+            Vec::new(),
+        );
+        assert_eq!(error["isError"], true);
+    }
 
     #[test]
     fn user_requirements_preserve_native_success_and_error_envelopes() {
@@ -1280,6 +1649,240 @@ mod tests {
                 .contains("native execution failed")
         );
         assert!(failure["structuredContent"]["user_messages"].is_array());
+    }
+
+    #[tokio::test]
+    async fn conversation_reminders_finalize_real_deliveries_and_ignore_failed_authorization() {
+        use crate::wire::{self, Frame, SteeringCommand, SteeringState};
+        use tokio::{
+            io::BufReader,
+            net::{TcpListener, UnixStream},
+            time::timeout,
+        };
+
+        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let routes = router(broker.clone());
+        let http_server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+        let (server, client) = UnixStream::pair().unwrap();
+        let attachment = tokio::spawn(broker.clone().attach(server));
+        let (reader, mut writer) = client.into_split();
+        let mut reader = BufReader::new(reader);
+        wire::write_frame(
+            &mut writer,
+            &Frame::Hello {
+                version: wire::VERSION,
+                mode: wire::Mode::Shell,
+                metadata: wire::ClientMetadata {
+                    name: "reminder-fixture".into(),
+                    title: None,
+                    cwd: "/tmp".into(),
+                    hostname: "fixture".into(),
+                    allow: Vec::new(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::Ready {
+            url,
+            login_code,
+            client_id,
+            ..
+        }) = wire::read_frame(&mut reader).await.unwrap()
+        else {
+            panic!("missing ready frame");
+        };
+        let user = url.rsplit('/').next().unwrap().to_owned();
+        let access_token = cancellation_test_token(&base, &url, &login_code).await;
+        let authorization = broker.authenticate(&user, &access_token).await.unwrap();
+        let session = broker
+            .client(&user, &authorization, &client_id)
+            .await
+            .unwrap();
+
+        let report = |run, token: &str| CodeRunReport {
+            broker: broker.clone(),
+            user: user.clone(),
+            access_token: token.into(),
+            run,
+            // This test calls only response finalization; it does not run a worker.
+            delivered: true,
+        };
+        let run = |tool| {
+            let run = code_mode::AuditRun::new("return null;", None).unwrap();
+            run.native_dispatched(&client_id, Some(tool));
+            run
+        };
+        let publish = |id: &str| {
+            session
+                .steering
+                .command(
+                    &client_id,
+                    Vec::new(),
+                    SteeringCommand::Publish {
+                        command_id: format!("publish-{id}"),
+                        message_id: id.into(),
+                        expected_revision: 0,
+                        text: format!("requirement {id}"),
+                        target: "next".into(),
+                    },
+                )
+                .unwrap();
+        };
+        let snapshot = || {
+            session
+                .steering
+                .command(&client_id, Vec::new(), SteeringCommand::Snapshot {})
+                .unwrap()
+        };
+        let original = json!({
+            "content":[{"type":"text","text":"native output"}],
+            "structuredContent":{"result":"kept"},
+            "isError":false,
+        });
+
+        publish("first");
+        let unauthorized = report(run("ssmcp.exec.run"), "invalid-token");
+        assert_eq!(
+            finish_user_response(&unauthorized, original.clone()).await,
+            original
+        );
+        assert_eq!(snapshot().messages[0].state, SteeringState::Queued);
+
+        let first = report(run("ssmcp.exec.run"), &access_token);
+        let first_run_id = first.run.context.run_id.clone();
+        let response = finish_user_response(&first, original.clone()).await;
+        assert_eq!(
+            response["structuredContent"]["user_messages"][0]["message_id"],
+            "first"
+        );
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+        assert_eq!(snapshot().messages[0].state, SteeringState::Delivered);
+
+        // Failed authorization must neither consume another request nor age the
+        // recipient's pending episode. Observation can age it but cannot claim.
+        publish("second");
+        for _ in 0..2 {
+            let unauthorized = report(run("ssmcp.exec.run"), "invalid-token");
+            assert_eq!(
+                finish_user_response(&unauthorized, original.clone()).await,
+                original
+            );
+        }
+        let next = report(run("ssmcp.ui.get"), &access_token);
+        let response = finish_user_response(&next, original.clone()).await;
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+        assert!(response["structuredContent"].get("user_messages").is_none());
+        assert_eq!(snapshot().messages[1].state, SteeringState::Queued);
+
+        let second = report(run("ssmcp.ui.get"), &access_token);
+        let native_error = code_mode::tool_result(Err("native execution failed".into()));
+        let response = finish_user_response(&second, native_error.clone()).await;
+        assert_eq!(response["isError"], true);
+        assert_eq!(response["content"][0], native_error["content"][0]);
+        assert_eq!(
+            response["structuredContent"]["conversation_reminders"][0]["after_run_id"],
+            first_run_id
+        );
+        assert_eq!(
+            response["structuredContent"]["conversation_reminders"][0]["responses_without_reply"],
+            2
+        );
+        assert_eq!(snapshot().messages[1].state, SteeringState::Queued);
+        let later = report(run("ssmcp.ui.get"), &access_token);
+        let response = finish_user_response(&later, original.clone()).await;
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+
+        // A real broker-dispatched native ACK clears the old episode before this
+        // same response claims "second". No returned JavaScript JSON is involved.
+        let reply_run =
+            code_mode::AuditRun::new("await ui.message(client, {text:'reply'});", None).unwrap();
+        let reply_target = session.clone();
+        let native_run = reply_run.clone();
+        let request = tokio::spawn(code_mode::AUDIT_RUN.scope(native_run, async move {
+            reply_target
+                .call_with_authorization(
+                    Operation::CallTool {
+                        name: "ssmcp.ui.message".into(),
+                        arguments: json!({"text":"reply","kind":"progress"}),
+                    },
+                    None,
+                    &authorization,
+                )
+                .await
+        }));
+        let Some(Frame::Call { id, .. }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing native dialogue call");
+        };
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(json!({
+                    "structuredContent":{"accepted":true,"duplicate":false,"message_id":"reply_1"}
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        request.await.unwrap().unwrap();
+        assert_eq!(reply_run.accepted_replies(&client_id).len(), 1);
+        let reply_run_id = reply_run.context.run_id.clone();
+        let reply = report(reply_run, &access_token);
+        let response = finish_user_response(&reply, original.clone()).await;
+        assert_eq!(
+            response["structuredContent"]["user_messages"][0]["message_id"],
+            "second"
+        );
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+        assert_eq!(snapshot().messages[1].state, SteeringState::Delivered);
+
+        let next = report(run("ssmcp.ui.get"), &access_token);
+        let response = finish_user_response(&next, original.clone()).await;
+        assert!(
+            response["structuredContent"]
+                .get("conversation_reminders")
+                .is_none()
+        );
+        let second = report(run("ssmcp.ui.get"), &access_token);
+        let response = finish_user_response(&second, original).await;
+        assert_eq!(
+            response["structuredContent"]["conversation_reminders"][0]["after_run_id"],
+            reply_run_id
+        );
+        assert_eq!(snapshot().messages.len(), 2);
+
+        drop(reader);
+        drop(writer);
+        timeout(Duration::from_secs(2), attachment)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        http_server.abort();
     }
 
     #[tokio::test]
@@ -1871,6 +2474,32 @@ mod tests {
     }
 
     #[test]
+    fn public_invite_rejects_owner_tokens_and_unbounded_lifetimes() {
+        let mut value = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invite","arguments":{}}});
+        assert!(matches!(operation(&parse(&value)), Ok(Action::Invite(_))));
+        value["params"]["arguments"] =
+            json!({"ttl_secs":30,"session_ttl_secs":60,"shell":"powershell"});
+        assert!(matches!(operation(&parse(&value)), Ok(Action::Invite(_))));
+        for arguments in [
+            json!({"subject":"43"}),
+            json!({"owner":"other"}),
+            json!({"token":"cl_fixture"}),
+            json!({"access_token":"at_fixture"}),
+            json!({"ttl_secs":0}),
+            json!({"ttl_secs":3601}),
+            json!({"session_ttl_secs":86401}),
+            json!({"shell":"bash"}),
+            json!({"shell":null}),
+        ] {
+            value["params"]["arguments"] = arguments;
+            assert!(
+                operation(&parse(&value)).is_err(),
+                "untrusted invite scope accepted"
+            );
+        }
+    }
+
+    #[test]
     fn public_catalog_and_arguments_include_direct_collaboration() {
         let names: Vec<_> = tool_definitions()
             .as_array()
@@ -1878,7 +2507,7 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        assert_eq!(names, ["list", "code_mode", "collab"]);
+        assert_eq!(names, ["list", "code_mode", "collab", "invite"]);
         let mut value =
             json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list"}});
         assert!(matches!(operation(&parse(&value)), Ok(Action::List(_))));
