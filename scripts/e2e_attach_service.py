@@ -27,7 +27,8 @@ from e2e_dashboard import Decoder, text
 
 
 class AttachFrontend:
-    def __init__(self, binary, env, cwd, name, *, read_only=False, rows=44, cols=110):
+    def __init__(self, binary, env, cwd, name, *, read_only=False, dashboard=True,
+                 rows=44, cols=110):
         self.decoder = Decoder(Path(binary).parent / "examples" / "vt_snapshot")
         self.master, self.slave = os.openpty()
         self.original_termios = termios.tcgetattr(self.slave)
@@ -43,8 +44,11 @@ class AttachFrontend:
         }
         # An explicit local UI file keeps the acceptance independent of the
         # operator's themes and preferences. It belongs to the fixture workspace.
-        config = Path(cwd) / "attach-test-ui.toml"
-        config.write_text('[ui]\ndashboard = true\ncolor = false\nlog_format = "pretty"\n')
+        mode = "chat" if dashboard else "raw"
+        config = Path(cwd) / f"attach-test-ui-{mode}.toml"
+        config.write_text(
+            f'[ui]\ndashboard = {str(dashboard).lower()}\ncolor = false\nlog_format = "pretty"\n'
+        )
         environment["SSMCP_UI_CONFIG"] = str(config)
 
         def own_controlling_terminal():
@@ -214,9 +218,11 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
         checks.append(label)
         print(f"PASS {label}", flush=True)
 
-    def open_frontend(label, read_only=False):
+    def open_frontend(label, read_only=False, *, dashboard=False):
         frontend = AttachFrontend(binary, env, cwd, name, read_only=read_only,
-                                  rows=26 if read_only else 44, cols=80 if read_only else 110)
+                                  dashboard=dashboard,
+                                  rows=26 if read_only and not dashboard else 44,
+                                  cols=80 if read_only and not dashboard else 110)
         frontends.append((label, frontend))
         return frontend
 
@@ -233,15 +239,41 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
         if path.exists():
             raise AssertionError("attach fixture proof path must start absent")
     try:
+        # The default chat layout owns navigation; it must never send composer
+        # text to the session PTY. Exercise Escape before raw terminal input.
+        chat = open_frontend("chat-navigation", read_only=True, dashboard=True)
+        chat.until(lambda s: s["alternate_screen"], "read-only chat attach compositor")
+        chat.send("/help\r")
+        help_title = "ssmcp · keyboard and commands"
+        records["chat_help"] = chat.until(
+            lambda s: help_title in text(s), "attach help before standalone Escape"
+        )
+        chat.send(b"\x1b")
+        # No following keystroke may complete or accidentally flush the prefix.
+        records["chat_after_escape"] = chat.until(
+            lambda s: s["alternate_screen"] and help_title not in text(s),
+            "standalone Escape dismissing attach help", timeout=3,
+        )
+        check(chat.process.poll() is None,
+              "standalone Escape dismisses attach help without another keystroke")
+        chat.detach()
+        chat_status = status_callback()
+        check(chat_status.get("manager_pid") == pid
+              and chat_status.get("generation") == before.get("generation")
+              and chat_status.get("connection_state") == "connected",
+              "chat navigation and detach preserve the live service worker")
+
+        # Shell lifecycle checks explicitly use raw input mode. Dashboard
+        # layouts consume interface input even when their name is split/audit.
         writer = open_frontend("writer")
-        writer.until(lambda s: s["alternate_screen"], "writer attach compositor")
+        writer.until(lambda s: f"Attached to {name}" in text(s), "raw writer attach ready")
         writer.send(f"stty -echo; stty size > {shlex.quote(str(before_size))}\n")
         deadline = time.monotonic() + 5
         while not content(before_size) and time.monotonic() < deadline:
             writer.pump()
         initial_size = before_size.read_text()
         observer = open_frontend("observer", read_only=True)
-        observer.until(lambda s: s["alternate_screen"], "read-only attach compositor")
+        observer.until(lambda s: f"Attached to {name}" in text(s), "raw read-only attach ready")
         conflict = open_frontend("conflicting-writer")
         conflict_code = conflict.wait_exit()
         conflict_text = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", conflict.transcript.decode(errors="replace")).split())
@@ -288,8 +320,8 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
         while not content(resize_proof) and time.monotonic() < deadline:
             replacement.pump()
         rows, cols = [int(value) for value in resize_proof.read_text().split()]
-        check(0 < rows < 38 and 0 < cols <= 100,
-              "attach resize applies the actual inner PTY viewport")
+        check((rows, cols) == (38, 100),
+              "raw attach resize applies the full physical terminal dimensions")
         replacement.send("sleep 30\n")
         replacement.pump(0.2)
         replacement.send(b"\x03")

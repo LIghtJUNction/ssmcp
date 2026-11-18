@@ -634,7 +634,7 @@ async fn attached(
                     }
                 }
                 _ = tick.tick() => {
-                    apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed("",Instant::now(),false),read_only,backend_generation).await?;
+                    apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed("",Instant::now(),true),read_only,backend_generation).await?;
                     let queued = terminal::take_keyboard();
                     if let Some((rows,cols)) = crate::client::interface::apply_pending()? {
                         geometry=Some((rows,cols));

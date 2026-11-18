@@ -121,6 +121,29 @@ class Sessions(Harness):
         listed = self.public_call("code_mode", {"code": f"return await sessions.list({json.dumps(self.client_id)});"})["result"]
         self.check(isinstance(listed.get("sessions"), list) and any(item["name"] == "manager" for item in listed["sessions"]), "sessions helper dispatches through authenticated MCP")
 
+        discovery = self.public_call("code_mode", {"code": """
+const found = [];
+let cursor = null;
+do {
+  const page = await tools.search(%s, {
+    name_prefix: 'SSMCP.EXEC.', include_schemas: true, limit: 2, cursor
+  });
+  if (page.name_prefix !== 'ssmcp.exec.') throw new Error('missing prefix metadata');
+  found.push(...page.tools);
+  cursor = page.nextCursor;
+  if (found.length > 50) throw new Error('unexpected execution catalog size');
+} while (cursor);
+return {names: found.map(tool => tool.name),
+        schemas: found.every(tool => tool.inputSchema && tool.inputSchema.type === 'object')};
+""" % json.dumps(self.client_id)})["result"]
+        names = discovery["names"]
+        self.check(names and all(name.startswith("ssmcp.exec.") for name in names)
+                   and len(names) == len(set(names)),
+                   "authenticated prefix discovery pages through native execution tools without duplicates")
+        self.check({"ssmcp.exec.start", "ssmcp.exec.wait", "ssmcp.exec.read"}.issubset(names)
+                   and discovery["schemas"],
+                   "prefix discovery preserves the real execution tool schemas")
+
         created = self.call("ssmcp.session.create", {"name":"worker", "cwd":"child", "watchdog":True, "reconnect_delay_secs":1})
         self.names.add("worker")
         self.check(created["name"] == "worker" and Path(created["cwd"]) == self.workspace / "child", "atomic create preserves stable name and authorized child cwd")
