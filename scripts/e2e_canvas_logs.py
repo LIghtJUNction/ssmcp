@@ -92,8 +92,10 @@ def run(binary, decoder, output, checks):
                 "conversation and compact tool activity",
             )
             check("Improve the client experience" in body(initial)
-                  and "expanded = false" in body(initial),
-                  "conversation retains user messages, tool results and editing diffs")
+                  and "src/client/terminal/events.rs" in body(initial)
+                  and "exit=0" in body(initial)
+                  and "expanded = false" not in body(initial),
+                  "conversation retains user messages and result summaries while tool and diff details start collapsed")
             check(DIAGNOSTIC not in text(initial),
                   "background diagnostics do not appear in the conversation")
             initial_count = column(initial)[2]
@@ -197,6 +199,12 @@ def run(binary, decoder, output, checks):
                 lambda shot: shot["size"] == [12, 60] and view(shot, "code audit"),
                 "short code audit viewport",
             )
+            preview.send(b"\r")
+            short_audit = preview.until(
+                lambda shot: view(shot, "code audit") and "const client" in body(shot)
+                and "Enter inspect" not in body(shot),
+                "the selected audit source opened for inspection",
+            )
             preview.send(b"\x1b[6~")
             scrolled = preview.until(lambda shot: body(shot) != body(short_audit),
                                      "code audit scrolling within its own column")
@@ -263,6 +271,120 @@ def run(binary, decoder, output, checks):
               "preview disables mouse reporting on exit")
 
 
+def run_diff_login(binary, decoder, output, checks):
+    def check(value, label):
+        if not value:
+            raise AssertionError(label)
+        checks.append(label)
+
+    def split_visible(shot):
+        return any("Old" in row and "New" in row and "│" in row
+                   for row in body(shot).splitlines())
+
+    def changes_visible(shot):
+        return "expanded = true" in body(shot) and "expanded = false" in body(shot)
+
+    with tempfile.TemporaryDirectory(prefix="ssmcp-canvas-diff-login-") as temporary:
+        config = Path(temporary) / "config.toml"
+        config.write_text('[ui]\nlayout="chat"\nsidebar=false\ncolor=true\n', encoding="utf-8")
+        preview = Preview(binary, decoder, config, rows=30, cols=110)
+        try:
+            initial = preview.until(lambda shot: view(shot, "conversation")
+                                    and "src/client/terminal/events.rs" in body(shot),
+                                    "collapsed diff tool")
+            diff_row = next(index for index, row in enumerate(initial["rows"])
+                            if "src/client/terminal/events.rs" in row)
+            preview.send(mouse(0, x=8, y=diff_row + 1)
+                         + mouse(0, release=True, x=8, y=diff_row + 1))
+            opened = preview.until(changes_visible, "expanded diff changes")
+            check(not split_visible(opened),
+                  "opening a collapsed diff shows all old and new content in the default single layout")
+            prompt_y = prompt_start(opened) + 2
+            preview.send(mouse(0, x=4, y=prompt_y)
+                         + mouse(0, release=True, x=4, y=prompt_y))
+            preview.send(b"/diff split\r")
+            split = preview.until(lambda shot: split_visible(shot) and changes_visible(shot),
+                                  "wide split diff")
+            check(any("expanded = true" in row and "expanded = false" in row
+                      for row in body(split).splitlines()) and intact_cells(split),
+                  "/diff split aligns old and new changes on the same bounded row")
+            save_shot(output, "canvas-diff-split", split)
+
+            preview.resize(30, 60)
+            narrow = preview.until(lambda shot: shot["size"] == [30, 60]
+                                   and changes_visible(shot) and not split_visible(shot),
+                                   "single-column fallback on a narrow screen")
+            check(intact_cells(narrow),
+                  "split diff falls back to complete single-column changes below its minimum width")
+            save_shot(output, "canvas-diff-narrow", narrow)
+            preview.send(b"/diff\r")
+            preferred = preview.until(lambda shot: "Diff layout · split" in text(shot),
+                                      "the retained split preference")
+            check(changes_visible(preferred) and not split_visible(preferred),
+                  "narrow fallback preserves the selected split preference")
+            preview.resize(30, 110)
+            restored = preview.until(lambda shot: shot["size"] == [30, 110] and split_visible(shot),
+                                     "split layout returning after a resize")
+            check(changes_visible(restored) and intact_cells(restored),
+                  "restoring terminal width restores the selected split diff")
+
+            preview.send(b"/diff single\r")
+            single = preview.until(lambda shot: changes_visible(shot) and not split_visible(shot)
+                                   and "Diff layout · single" in text(shot), "explicit single diff")
+            check(intact_cells(single), "/diff single keeps both versions on a wide screen")
+            save_shot(output, "canvas-diff-single", single)
+            preview.resize(30, 60)
+            single_narrow = preview.until(lambda shot: shot["size"] == [30, 60]
+                                          and changes_visible(shot) and not split_visible(shot),
+                                          "explicit single diff on a narrow screen")
+            check(intact_cells(single_narrow), "single diff stays complete and bounded after narrowing")
+            save_shot(output, "canvas-diff-single-narrow", single_narrow)
+            preview.resize(30, 110)
+            preview.until(lambda shot: shot["size"] == [30, 110] and changes_visible(shot),
+                          "the wide conversation before login checks")
+
+            preview.send(b"/new chat\r")
+            duplicate = preview.until(lambda shot: view(shot, "conversation")
+                                      and column(shot)[2] == column(initial)[2] + 1,
+                                      "an independent duplicate conversation")
+            expected_column = column(duplicate)
+            expected_body = body(duplicate)
+            check("expanded = false" not in expected_body,
+                  "a new conversation column starts with its own collapsed tool cards")
+            for command in ["/login", "/login open", "/login copy", "/login link"]:
+                preview.send(b"\x01\x0b" + command.encode())
+                typed = preview.until(lambda shot: command in prompt_text(shot),
+                                      "the login command draft")
+                cursor = typed["cursor"]
+                preview.send(b"\r")
+                rejected = preview.until(
+                    lambda shot: "Preview does not start GitHub login" in text(shot),
+                    "the explicit preview login rejection",
+                )
+                check(command in prompt_text(rejected) and rejected["cursor"] == cursor
+                      and not rejected["hide_cursor"] and column(rejected) == expected_column
+                      and body(rejected) == expected_body and "To · next caller" in text(rejected),
+                      f"{command} is explicitly rejected in preview without changing draft, cursor, recipient or canvas")
+            save_shot(output, "canvas-login-preview", rejected)
+            preview.send(ALT_LEFT)
+            previous = preview.until(lambda shot: view(shot, "conversation") and changes_visible(shot),
+                                     "the original column's expanded diff")
+            check("/login link" in prompt_text(previous),
+                  "returning to the original conversation restores expansion and preserves the rejected command draft")
+            preview.send(ALT_RIGHT)
+            returned = preview.until(lambda shot: column(shot) == expected_column
+                                     and body(shot) == expected_body, "the independent duplicate column")
+            check("/login link" in prompt_text(returned),
+                  "the duplicate conversation retains its own collapsed state after the round trip")
+        except BaseException:
+            save_shot(output, "canvas-diff-login-failure", snapshot(preview))
+            raise
+        finally:
+            restored_terminal = preview.close()
+        check(restored_terminal and preview.process.returncode == 0,
+              "diff and login preview restores terminal attributes and exits cleanly")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", required=True, type=Path)
@@ -277,6 +399,8 @@ def main():
     try:
         run((args.bin_dir / "ssmcp").resolve(),
             (args.bin_dir / "examples" / "vt_snapshot").resolve(), args.out, checks)
+        run_diff_login((args.bin_dir / "ssmcp").resolve(),
+                       (args.bin_dir / "examples" / "vt_snapshot").resolve(), args.out, checks)
         result["status"] = "passed"
     except BaseException as error:
         result["error"] = str(error)

@@ -6,6 +6,7 @@ mod canvas;
 mod history;
 mod login;
 mod questions;
+mod tasks;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum View {
@@ -16,6 +17,8 @@ pub(super) enum View {
     Queue,
     Questions,
     History,
+    Logs,
+    Tasks,
 }
 impl View {
     fn name(self) -> &'static str {
@@ -26,16 +29,20 @@ impl View {
             Self::Queue => "queue",
             Self::Questions => "questions",
             Self::History => "history",
+            Self::Logs => "Logs",
+            Self::Tasks => "Tasks",
         }
     }
     fn next(self) -> Self {
         match self {
             Self::Activity => Self::Audit,
-            Self::Audit => Self::Agents,
-            Self::Agents => Self::Queue,
+            Self::Audit => Self::Queue,
+            Self::Agents => Self::Activity,
             Self::Queue => Self::Questions,
             Self::Questions => Self::History,
-            Self::History => Self::Activity,
+            Self::History => Self::Logs,
+            Self::Logs => Self::Tasks,
+            Self::Tasks => Self::Agents,
         }
     }
 }
@@ -58,6 +65,7 @@ pub(super) struct Conversation {
     pub(super) content_focus: bool,
     canvas: canvas::Canvas,
     pub(super) logs_open: bool,
+    tasks: tasks::TaskPanel,
     selected: usize,
     selected_agent: Option<String>,
     drawn_agents: Vec<String>,
@@ -88,11 +96,11 @@ pub(super) struct Conversation {
 
 impl Conversation {
     pub(super) fn snapshot(&self) -> Value {
-        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history" },
+        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history",View::Logs=>"logs",View::Tasks=>"tasks" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
-            "canvas":self.canvas.snapshot(),"logs_open":self.logs_open,
+            "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
 }
@@ -274,6 +282,9 @@ impl State {
     }
 
     fn chat_updates(&mut self) {
+        if self.conversation.tasks.poll() {
+            self.dirty = true;
+        }
         if !self.conversation.restored && !self.preview {
             let (text, cursor) = steering::draft();
             let context = steering::draft_context();
@@ -368,11 +379,13 @@ impl State {
 
     fn chat_change_view(&mut self, view: View) {
         self.canvas_focus(view);
-        self.conversation.logs_open = false;
-        self.raw_logs = false;
         self.help = false;
         self.notice = None;
         self.dirty = true;
+    }
+
+    pub(super) fn chat_initial_logs(&mut self) {
+        self.logs_open();
     }
 
     #[cfg(test)]
@@ -464,11 +477,23 @@ impl State {
                 self.notice = Some("Harness request queued · results appear here".into());
             }
             "/tasks" => {
-                if self.preview {
-                    return Err("Preview has no live command jobs".into());
+                if rest.is_empty() {
+                    self.chat_change_view(View::Tasks);
+                    self.conversation.content_focus = true;
+                    if let Err(error) = self.conversation.tasks.refresh(self.preview) {
+                        self.notice = Some(error);
+                    }
+                } else {
+                    let arguments: Vec<_> = rest.split_whitespace().collect();
+                    if !matches!(arguments.as_slice(), ["cancel", id] if !id.is_empty()) {
+                        return Err("Use /tasks to browse jobs, or /tasks cancel ID".into());
+                    }
+                    if self.preview {
+                        return Err("Preview cannot cancel live tasks".into());
+                    }
+                    crate::client::interface::harness::submit_tasks(rest)?;
+                    self.notice = Some("Task cancellation requested".into());
                 }
-                crate::client::interface::harness::submit_tasks(rest)?;
-                self.notice = Some("Task status requested · results appear here".into());
             }
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
@@ -488,8 +513,7 @@ impl State {
                 ));
             }
             "/logs" => {
-                self.conversation.logs_open = true;
-                self.raw_logs = true;
+                self.logs_open();
                 self.notice = None;
             }
             "/raw" => {
@@ -531,7 +555,7 @@ impl State {
             }
             "/filter" => {
                 if let Some(level) = rest.strip_prefix("--") {
-                    self.log_level = match level {
+                    let level = match level {
                         "all" => 0,
                         "commands" => 1,
                         "errors" => 2,
@@ -539,15 +563,16 @@ impl State {
                             return Err("Use /filter text, or --all / --commands / --errors".into());
                         }
                     };
+                    self.logs_open();
+                    self.log_level = level;
                 } else {
                     if rest.len() > 256 || rest.chars().any(char::is_control) {
                         return Err("A log filter accepts up to 256 bytes of plain text".into());
                     }
+                    self.logs_open();
                     self.log_query = rest.into();
                 }
                 self.filter_offset = 0;
-                self.conversation.logs_open = true;
-                self.raw_logs = true;
                 self.help = false;
                 self.notice = None;
             }
@@ -766,6 +791,10 @@ impl State {
                 }
             }
             View::History => self.chat_resume_selected(),
+            View::Tasks => {
+                self.conversation.tasks.open();
+            }
+            View::Logs => {}
             View::Activity => {
                 if self.raw_logs {
                     self.notice = Some("Raw transcript · /logs returns to tool details".into());
@@ -788,6 +817,8 @@ impl State {
                 self.events.scroll_by(delta);
             }
             View::Audit => self.audit.scroll_by(delta),
+            View::Logs => self.scroll_logs(-delta),
+            View::Tasks => self.conversation.tasks.scroll_by(delta),
             View::Agents if self.conversation.detail => self.audit.scroll_by(delta),
             View::Queue | View::History if self.conversation.detail => {
                 self.conversation.detail_scroll =
@@ -866,6 +897,10 @@ impl State {
             return;
         }
         if self.conversation.logs_open {
+            if matches!(key, Key::Back | Key::Open) {
+                self.canvas_move(if matches!(key, Key::Back) { -1 } else { 1 });
+                return;
+            }
             self.logs_key(key);
             return;
         }
@@ -954,10 +989,9 @@ impl State {
             Key::Reload => self.actions.push("reload"),
             Key::Save => self.actions.push("save"),
             Key::Filter => {
+                self.logs_open();
                 self.log_level = (self.log_level + 1) % 3;
                 self.filter_offset = 0;
-                self.conversation.logs_open = true;
-                self.raw_logs = true;
             }
             Key::FocusBack => self.conversation.content_focus = !content,
             Key::Up => self.chat_move(
@@ -966,6 +1000,14 @@ impl State {
             Key::Down => self.chat_move(
                 (isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
             ),
+            Key::HistoryStart if self.conversation.view == View::Tasks => {
+                self.conversation
+                    .tasks
+                    .scroll_by(isize::MIN.saturating_add(1));
+            }
+            Key::HistoryEnd if self.conversation.view == View::Tasks => {
+                self.conversation.tasks.scroll_by(isize::MAX);
+            }
             Key::HistoryStart => {
                 self.scroll_logs(isize::MAX);
                 self.events.scroll_by(isize::MIN.saturating_add(1));
@@ -985,6 +1027,12 @@ impl State {
                 if content && self.conversation.view == View::Activity && !self.raw_logs =>
             {
                 self.events.select(1)
+            }
+            Key::AuditUp if content && self.conversation.view == View::Tasks => {
+                self.conversation.tasks.move_selection(-1);
+            }
+            Key::AuditDown if content && self.conversation.view == View::Tasks => {
+                self.conversation.tasks.move_selection(1);
             }
             Key::AuditUp if content => self.chat_move(-1),
             Key::AuditDown if content => self.chat_move(1),
@@ -1083,10 +1131,16 @@ impl State {
                     self.notice = Some(error);
                 }
             }
+            Key::Delete if content && self.conversation.view == View::Tasks => {
+                self.notice = Some("Cancel a task explicitly with /tasks cancel ID".into());
+            }
             Key::Delete => {
                 self.conversation.composer.delete();
             }
             Key::Newline => {
+                if self.conversation.view == View::Tasks {
+                    self.conversation.content_focus = false;
+                }
                 self.conversation.composer.insert("\n");
             }
             Key::Escape => self.chat_escape(),
@@ -1102,6 +1156,16 @@ impl State {
                     self.conversation.content_focus = false;
                 } else {
                     self.conversation.content_focus = true;
+                    if self.conversation.view == View::Tasks {
+                        if let Some(row) = y.checked_sub(body_top(self.geometry.rows))
+                            && self.conversation.tasks.mouse_select(row)
+                            && button == 0
+                        {
+                            self.conversation.tasks.open();
+                        }
+                        self.dirty = true;
+                        return;
+                    }
                     if self.conversation.view == View::Activity
                         && !self.raw_logs
                         && !self.events.is_empty()
@@ -1178,6 +1242,11 @@ impl State {
         if self.help {
             self.help = false;
             self.conversation.content_focus = false;
+            self.notice = None;
+            return;
+        }
+        if self.conversation.view == View::Tasks {
+            self.conversation.content_focus = self.conversation.tasks.back();
             self.notice = None;
             return;
         }
@@ -1276,6 +1345,15 @@ impl State {
             )
         {
             self.chat_change_view(View::Activity);
+        }
+        if self.conversation.view == View::Tasks
+            && self.conversation.content_focus
+            && matches!(
+                character,
+                '\n' | '\u{1}' | '\u{5}' | '\u{15}' | '\u{b}' | '\u{17}' | '\u{7f}' | '\u{8}'
+            )
+        {
+            self.conversation.content_focus = false;
         }
         match character {
             'i' | 'I'
@@ -2137,7 +2215,13 @@ impl State {
 
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.events.set_scope(events::EventScope::Conversation);
+        self.conversation.logs_open = self.conversation.view == View::Logs;
         self.chat_updates();
+        if self.conversation.view == View::Tasks
+            && let Err(error) = self.conversation.tasks.refresh(self.preview)
+        {
+            self.notice = Some(error);
+        }
         self.chat_refresh_completions();
         let g = self.geometry;
         let data = self.chat_data();
@@ -2159,17 +2243,17 @@ impl State {
             }
             View::History => self.chat_history_rows(height),
             View::Questions => self.question_rows(height),
+            View::Logs => self.filtered_logs().unwrap_or_else(|| {
+                (0..height)
+                    .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
+                    .collect()
+            }),
+            View::Tasks => self.conversation.tasks.render(g.left, height, &self.ui),
             View::Audit => self.audit.render(g.left, height, &self.ui),
             View::Agents if self.conversation.detail => self.audit.render(g.left, height, &self.ui),
             _ => self.chat_list_rows(&data, height),
         };
-        if self.conversation.logs_open {
-            body = self.filtered_logs().unwrap_or_else(|| {
-                (0..height)
-                    .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
-                    .collect()
-            });
-        } else if self.help {
+        if self.help {
             body = self.chat_help_rows(height);
         }
         body.resize_with(usize::from(height), || {
@@ -2244,8 +2328,15 @@ impl State {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
-                    if self.conversation.logs_open { return "Logs · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc close".into(); }
+                    if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
+                    if self.conversation.view == View::Tasks {
+                        return if self.conversation.content_focus {
+                            "Tasks · ↑↓ select · Enter details · PgUp/PgDn scroll · Esc back · ←/→ panels".into()
+                        } else {
+                            "Tasks · Tab browse · Enter sends draft · /tasks cancel ID".into()
+                        };
+                    }
                     if self.conversation.view == View::History {
                         return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
                             else { "↑↓ select · Enter resume · Esc back".into() };
@@ -2285,7 +2376,9 @@ impl State {
                 rows.push(self.chat_line(&format!(" {hint}"), hint_tone, g.cols));
                 continue;
             } else if top > 0 && index == 0 {
-                let suffix = if !self.log_query.is_empty() || self.log_level != 0 {
+                let suffix = if self.conversation.view == View::Logs
+                    && (!self.log_query.is_empty() || self.log_level != 0)
+                {
                     format!(
                         " · {} /{}",
                         ["all", "commands", "errors"][usize::from(self.log_level)],
@@ -2294,13 +2387,9 @@ impl State {
                 } else {
                     String::new()
                 };
-                let label = if self.conversation.logs_open {
-                    "Logs".into()
-                } else {
-                    self.conversation.canvas.label(g.left)
-                };
+                let label = self.conversation.canvas.label(g.left);
                 let mut heading = format!("  ssmcp  /  {label}{}{suffix}", self.context_label);
-                if !self.conversation.logs_open && heading.width() > usize::from(g.left) {
+                if heading.width() > usize::from(g.left) {
                     heading = format!(
                         "  ssmcp  /  {}{}{suffix}",
                         self.conversation.canvas.label(0),
@@ -2481,6 +2570,130 @@ mod tests {
         parser
     }
 
+    #[test]
+    fn tasks_command_renders_its_own_jobs_without_appending_conversation_or_logs() {
+        let mut state = preview(32, 120);
+        display(&mut state);
+        state.conversation.composer.set_text("保留草稿界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("chosen-agent".into());
+        state.conversation.editing = Some("editable-request".into());
+        let draft = state.conversation.snapshot()["draft"].clone();
+        let events = state.events.snapshot()["events"].clone();
+        let logs = state.logs.screen().contents_formatted();
+
+        assert!(state.chat_command("/tasks").unwrap());
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert!(!state.conversation.logs_open);
+        let tasks = state.conversation.tasks.snapshot();
+        assert_eq!(tasks["source"], "preview_fixture");
+        assert_eq!(tasks["selected_id"], "preview-task-build");
+        assert_eq!(tasks["jobs"].as_array().unwrap().len(), 2);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("fictional task data"), "{screen}");
+        assert!(screen.contains("cargo check --workspace"), "{screen}");
+        assert_eq!(state.events.snapshot()["events"], events);
+        assert_eq!(state.logs.screen().contents_formatted(), logs);
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+        assert_eq!(
+            state.conversation.editing.as_deref(),
+            Some("editable-request")
+        );
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+    }
+
+    #[test]
+    fn logs_and_tasks_are_adjacent_columns_and_escape_restores_the_bookmark() {
+        let mut state = preview(30, 120);
+        state.conversation.composer.set_text("unfinished 界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("chosen-agent".into());
+        state.chat_change_view(View::Audit);
+        let draft = state.conversation.snapshot()["draft"].clone();
+        assert!(state.chat_command("/logs").unwrap());
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(
+            state.conversation.snapshot()["logs_open"]
+                .as_bool()
+                .unwrap()
+        );
+        state.chat_key(Key::Open);
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+        state.chat_key(Key::Back);
+        assert_eq!(state.conversation.view, View::Logs);
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Audit);
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+    }
+
+    #[test]
+    fn tasks_selection_enter_and_escape_keep_the_shared_draft_intact() {
+        let mut state = preview(30, 120);
+        state.conversation.composer.set_text("draft stays 界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("chosen-agent".into());
+        let draft = state.conversation.snapshot()["draft"].clone();
+        state.chat_command("/tasks").unwrap();
+        display(&mut state);
+        state.chat_key(Key::AuditDown);
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_id"],
+            "preview-task-test"
+        );
+        state.chat_character('\r');
+        assert_eq!(state.conversation.tasks.snapshot()["detail"], true);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("cargo test --lib"), "{screen}");
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.tasks.snapshot()["detail"], false);
+        assert!(state.conversation.content_focus);
+        assert_eq!(state.conversation.view, View::Tasks);
+        state.chat_key(Key::Delete);
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("/tasks cancel ID")
+        );
+        state.chat_key(Key::Escape);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_id"],
+            "preview-task-test"
+        );
+        assert_eq!(state.conversation.snapshot()["draft"], draft);
+        assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
+    }
+
+    #[test]
+    fn task_commands_require_an_explicit_cancellation_id_and_preview_never_cancels() {
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("keep this draft");
+        let before = state.chat_input_stamp().unwrap();
+        let events = state.events.snapshot()["events"].clone();
+        for command in [
+            "/tasks unknown",
+            "/tasks cancel",
+            "/tasks cancel job extra",
+            "/tasks cancel preview-task-build",
+        ] {
+            assert!(state.chat_command(command).is_err(), "{command}");
+            assert_eq!(state.chat_input_stamp().as_ref(), Some(&before));
+            assert_eq!(state.events.snapshot()["events"], events);
+            assert!(state.actions.is_empty());
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn file_batch_acceptance_is_atomic_and_changed_drafts_roll_back_copies() {
@@ -2581,17 +2794,17 @@ mod tests {
             (
                 "/workspace/alpha-project/",
                 None,
-                "  ssmcp  /  ‹ agents     conversation  2/6     code audit ›  /  alpha-project",
+                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›  /  alpha-project",
             ),
             (
                 "/workspace/终端",
                 Some("修复输入框"),
-                "  ssmcp  /  ‹ agents     conversation  2/6     code audit ›  /  终端  /  修复输入框",
+                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›  /  终端  /  修复输入框",
             ),
             (
                 "",
                 None,
-                "  ssmcp  /  ‹ agents     conversation  2/6     code audit ›",
+                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›",
             ),
         ] {
             state.set_context(cwd, title);
@@ -2603,7 +2816,7 @@ mod tests {
         let screen = display(&mut state).screen().contents();
         assert_eq!(
             screen.lines().next().unwrap().trim_end(),
-            "  ssmcp  /  ‹ code audit     queue  4/6     questions ›  /  alpha-project  /  Review uploads",
+            "  ssmcp  /  ‹ code audit     queue  4/8     questions ›  /  alpha-project  /  Review uploads",
         );
     }
 
@@ -3560,7 +3773,7 @@ mod tests {
         assert_eq!(state.logs.screen().scrollback(), 0);
         input(&mut state, b"\x1b[<64;10;5M");
         assert!(state.logs.screen().scrollback() > 0);
-        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.conversation.view, View::Logs);
         assert!(display(&mut state).screen().hide_cursor());
         assert_eq!(state.conversation.composer.text(), "unfinished");
         input(&mut state, b"\x1b[1;5F");
@@ -3647,13 +3860,18 @@ mod tests {
         state.chat_key(Key::HistoryStart);
         let start = display(&mut state).screen().contents();
         assert!(
-            start.lines().skip(1).any(|row| row
-                .trim_start()
-                .starts_with("● #17  cargo test --lib")),
+            start
+                .lines()
+                .skip(1)
+                .any(|row| row.trim_start().starts_with("● #17  cargo test --lib")),
             "filtered diagnostics retain the command heading at Home:\n{start}"
         );
         assert!(
-            state.logs.screen().contents().contains("[RUN] #17  cargo test --lib"),
+            state
+                .logs
+                .screen()
+                .contents()
+                .contains("[RUN] #17  cargo test --lib"),
             "semantic log labels must not rewrite the retained raw transcript"
         );
         assert!(!start.contains("A quieter workspace"));
@@ -3664,11 +3882,16 @@ mod tests {
         assert!(!screen.contains("A quieter workspace"));
         state.chat_key(Key::Escape);
         assert!(!state.conversation.logs_open);
-        assert_eq!(state.log_query, "cargo test --lib");
+        assert_eq!(state.conversation.view, View::Activity);
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("Improve the client experience"));
         assert!(screen.contains("cargo test --lib"));
         assert!(!screen.contains("A quieter workspace"));
+        state.chat_command("/logs").unwrap();
+        assert_eq!(state.conversation.view, View::Logs);
+        assert_eq!(state.log_query, "cargo test --lib");
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Activity);
     }
     #[test]
     fn observed_agent_calls_open_audit_without_changing_the_message_recipient() {
@@ -3989,7 +4212,7 @@ mod tests {
                     .lines()
                     .next()
                     .unwrap()
-                    .contains("conversation  2/6")
+                    .contains("conversation  2/8")
             );
             assert!(conversation.contains("cargo test --lib"));
             assert!(!conversation.contains("A quieter workspace"));
@@ -4017,7 +4240,7 @@ mod tests {
                 .lines()
                 .next()
                 .unwrap()
-                .contains("conversation  2/6")
+                .contains("conversation  2/8")
         );
         assert!(!conversation.contains("A quieter workspace"));
     }

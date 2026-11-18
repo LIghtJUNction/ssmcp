@@ -4,11 +4,22 @@ use super::*;
 pub(super) struct Canvas {
     columns: Vec<Column>,
     active: usize,
+    next_id: u64,
+    logs_return: Option<u64>,
 }
 
 struct Column {
+    id: u64,
     view: View,
     position: Option<Position>,
+}
+
+#[derive(Default)]
+struct LogPosition {
+    scrollback: usize,
+    query: String,
+    level: u8,
+    filter_offset: usize,
 }
 
 struct Position {
@@ -21,6 +32,8 @@ struct Position {
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     audit: crate::client::audit_view::AuditPosition,
     events: events::EventPosition,
+    logs: Option<LogPosition>,
+    tasks: Option<tasks::TaskPosition>,
 }
 
 impl Default for Canvas {
@@ -33,21 +46,55 @@ impl Default for Canvas {
                 View::Queue,
                 View::Questions,
                 View::History,
+                View::Logs,
+                View::Tasks,
             ]
             .into_iter()
-            .map(|view| Column {
+            .enumerate()
+            .map(|(index, view)| Column {
+                id: index as u64 + 1,
                 view,
                 position: None,
             })
             .collect(),
             active: 1,
+            next_id: 9,
+            logs_return: None,
         }
     }
 }
 
 impl Canvas {
+    fn index(&self, id: u64) -> Option<usize> {
+        self.columns.iter().position(|column| column.id == id)
+    }
+
+    fn insert(&mut self, index: usize, view: View) {
+        let id = self.next_id;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("canvas column id exhausted");
+        self.columns.insert(
+            index,
+            Column {
+                id,
+                view,
+                position: None,
+            },
+        );
+        if index <= self.active {
+            self.active += 1;
+        }
+    }
+
     pub(super) fn snapshot(&self) -> Value {
-        json!({"active":self.active,"columns":self.columns.iter().map(|column| column.view.name()).collect::<Vec<_>>()})
+        json!({
+            "active": self.active,
+            "columns": self.columns.iter().map(|column| column.view.name()).collect::<Vec<_>>(),
+            "column_ids": self.columns.iter().map(|column| column.id).collect::<Vec<_>>(),
+            "logs_return": self.logs_return,
+        })
     }
 
     pub(super) fn label(&self, width: u16) -> String {
@@ -81,6 +128,11 @@ impl Canvas {
 }
 
 impl State {
+    pub(super) fn canvas_sync_logs(&mut self) {
+        self.conversation.logs_open = self.conversation.view == View::Logs;
+        self.raw_logs = self.conversation.logs_open;
+    }
+
     fn canvas_save(&mut self) {
         let position = Position {
             content_focus: self.conversation.content_focus,
@@ -92,6 +144,14 @@ impl State {
             history: self.conversation.history.clone(),
             audit: self.audit.position(),
             events: self.events.position(),
+            logs: (self.conversation.view == View::Logs).then(|| LogPosition {
+                scrollback: self.logs.screen().scrollback(),
+                query: self.log_query.clone(),
+                level: self.log_level,
+                filter_offset: self.filter_offset,
+            }),
+            tasks: (self.conversation.view == View::Tasks)
+                .then(|| self.conversation.tasks.position()),
         };
         self.conversation.canvas.columns[self.conversation.canvas.active].position = Some(position);
     }
@@ -100,7 +160,16 @@ impl State {
         if index == self.conversation.canvas.active
             || index >= self.conversation.canvas.columns.len()
         {
+            self.canvas_sync_logs();
             return;
+        }
+        let canvas = &mut self.conversation.canvas;
+        if canvas.columns[index].view == View::Logs
+            && canvas.columns[canvas.active].view != View::Logs
+        {
+            canvas
+                .logs_return
+                .get_or_insert(canvas.columns[canvas.active].id);
         }
         self.canvas_save();
         self.canvas_restore(index);
@@ -108,9 +177,12 @@ impl State {
 
     fn canvas_restore(&mut self, index: usize) {
         self.conversation.canvas.active = index;
-        let column = &mut self.conversation.canvas.columns[index];
-        self.conversation.view = column.view;
-        if let Some(position) = column.position.take() {
+        let (view, position) = {
+            let column = &mut self.conversation.canvas.columns[index];
+            (column.view, column.position.take())
+        };
+        self.conversation.view = view;
+        if let Some(position) = position {
             self.conversation.content_focus = position.content_focus;
             self.conversation.selected = position.selected;
             self.conversation.selected_agent = position.selected_agent;
@@ -120,29 +192,47 @@ impl State {
             self.conversation.history = position.history;
             self.audit.restore_position(&position.audit);
             self.events.restore_position(&position.events);
+            if let Some(logs) = position.logs {
+                self.logs.screen_mut().set_scrollback(logs.scrollback);
+                self.log_query = logs.query;
+                self.log_level = logs.level;
+                self.filter_offset = logs.filter_offset;
+            }
+            if let Some(tasks) = position.tasks {
+                self.conversation.tasks.restore_position(&tasks);
+            }
         } else {
-            self.conversation.content_focus = column.view != View::Activity;
+            self.conversation.content_focus = view != View::Activity;
             self.conversation.selected = 0;
             self.conversation.selected_agent = None;
             self.conversation.detail = false;
             self.conversation.detail_scroll = 0;
-            if column.view == View::Questions {
-                self.conversation.question_id = None;
-            }
-            if column.view == View::Activity {
-                self.events
-                    .restore_position(&events::EventPosition::default());
-            }
-            if column.view == View::Audit {
-                self.audit.restore_position(&Default::default());
-            }
-            if column.view == View::History {
-                self.conversation.history = None;
-            }
-            if column.view == View::Agents {
-                self.chat_select_target();
+            match view {
+                View::Questions => self.conversation.question_id = None,
+                View::Activity => self
+                    .events
+                    .restore_position(&events::EventPosition::default()),
+                View::Audit => self.audit.restore_position(&Default::default()),
+                View::History => self.conversation.history = None,
+                View::Queue => {
+                    self.conversation.selected = 0;
+                    self.conversation.detail = false;
+                    self.conversation.detail_scroll = 0;
+                }
+                View::Agents => self.chat_select_target(),
+                View::Logs => {
+                    self.logs.screen_mut().set_scrollback(0);
+                    self.log_query.clear();
+                    self.log_level = 0;
+                    self.filter_offset = 0;
+                }
+                View::Tasks => self
+                    .conversation
+                    .tasks
+                    .restore_position(&Default::default()),
             }
         }
+        self.canvas_sync_logs();
         self.conversation.history_width = 0;
         self.conversation.history_rows.clear();
         self.conversation.drawn_agents.clear();
@@ -150,7 +240,7 @@ impl State {
         self.conversation.list_count = 0;
         self.help = false;
         self.notice = None;
-        if self.conversation.view == View::History && !self.preview {
+        if view == View::History && !self.preview {
             match crate::client::interface::history::sessions() {
                 Ok(sessions) => self.conversation.sessions = sessions,
                 Err(error) => self.notice = Some(format!("Could not read history: {error}")),
@@ -159,12 +249,57 @@ impl State {
         self.dirty = true;
     }
 
-    pub(super) fn canvas_focus(&mut self, view: View) {
-        if self.conversation.canvas.columns[self.conversation.canvas.active].view == view {
-            if self.conversation.view != view {
-                self.conversation.view = view;
-                self.dirty = true;
+    /// Dedicated entries restore the canonical pair without copying either data store.
+    fn canvas_system_columns(&mut self) {
+        let canvas = &mut self.conversation.canvas;
+        let active_id = canvas.columns[canvas.active].id;
+        if !canvas
+            .columns
+            .iter()
+            .any(|column| column.view == View::Logs)
+        {
+            let index = canvas
+                .columns
+                .iter()
+                .position(|column| column.view == View::Tasks)
+                .unwrap_or(canvas.columns.len());
+            canvas.insert(index, View::Logs);
+        }
+        let logs = canvas
+            .columns
+            .iter()
+            .position(|column| column.view == View::Logs)
+            .unwrap();
+        if let Some(tasks) = canvas
+            .columns
+            .iter()
+            .position(|column| column.view == View::Tasks)
+        {
+            if tasks != logs + 1 {
+                let column = canvas.columns.remove(tasks);
+                let logs = canvas
+                    .columns
+                    .iter()
+                    .position(|column| column.view == View::Logs)
+                    .unwrap();
+                canvas.columns.insert(logs + 1, column);
             }
+        } else {
+            canvas.insert(logs + 1, View::Tasks);
+        }
+        canvas.active = canvas
+            .index(active_id)
+            .expect("active column remains on the canvas");
+    }
+
+    pub(super) fn canvas_focus(&mut self, view: View) {
+        if matches!(view, View::Logs | View::Tasks) {
+            self.canvas_system_columns();
+        }
+        if self.conversation.canvas.columns[self.conversation.canvas.active].view == view {
+            self.conversation.view = view;
+            self.canvas_sync_logs();
+            self.dirty = true;
             return;
         }
         let index = self
@@ -181,8 +316,6 @@ impl State {
     }
 
     pub(super) fn canvas_move(&mut self, delta: isize) {
-        self.conversation.logs_open = false;
-        self.raw_logs = false;
         let index = self
             .conversation
             .canvas
@@ -194,15 +327,22 @@ impl State {
     }
 
     pub(super) fn canvas_new(&mut self, view: View) {
+        if matches!(view, View::Logs | View::Tasks) {
+            self.canvas_focus(view);
+            return;
+        }
         self.canvas_save();
-        let index = self.conversation.canvas.active + 1;
-        self.conversation.canvas.columns.insert(
-            index,
-            Column {
-                view,
-                position: None,
-            },
-        );
+        let canvas = &self.conversation.canvas;
+        let mut index = canvas.active + 1;
+        if canvas.columns[canvas.active].view == View::Logs
+            && canvas
+                .columns
+                .get(index)
+                .is_some_and(|column| column.view == View::Tasks)
+        {
+            index += 1;
+        }
+        self.conversation.canvas.insert(index, view);
         self.canvas_restore(index);
     }
 
@@ -212,25 +352,69 @@ impl State {
             return;
         }
         let index = self.conversation.canvas.active;
-        self.conversation.canvas.columns.remove(index);
+        let closed = self.conversation.canvas.columns.remove(index);
+        if self.conversation.canvas.logs_return == Some(closed.id) {
+            self.conversation.canvas.logs_return = None;
+        }
         self.canvas_restore(index.saturating_sub(1));
     }
 
-    pub(super) fn logs_toggle(&mut self) {
-        self.conversation.logs_open = !self.conversation.logs_open;
-        self.raw_logs = self.conversation.logs_open;
+    pub(super) fn logs_open(&mut self) {
+        let canvas = &mut self.conversation.canvas;
+        if canvas.columns[canvas.active].view != View::Logs {
+            canvas.logs_return = Some(canvas.columns[canvas.active].id);
+        }
+        self.canvas_focus(View::Logs);
+        self.help = false;
         self.notice = None;
         self.dirty = true;
     }
 
-    /// The log panel owns navigation while open; ordinary text returns to the editor.
+    pub(super) fn logs_close_restore(&mut self) {
+        if self.conversation.view != View::Logs {
+            self.canvas_sync_logs();
+            return;
+        }
+        let canvas = &mut self.conversation.canvas;
+        let target = canvas
+            .logs_return
+            .take()
+            .and_then(|id| canvas.index(id))
+            .filter(|&index| canvas.columns[index].view != View::Logs)
+            .or_else(|| {
+                (0..canvas.active)
+                    .rev()
+                    .find(|&index| canvas.columns[index].view != View::Logs)
+            })
+            .or_else(|| {
+                (canvas.active + 1..canvas.columns.len())
+                    .find(|&index| canvas.columns[index].view != View::Logs)
+            });
+        if let Some(index) = target {
+            self.canvas_switch(index);
+        } else {
+            self.canvas_new(View::Activity);
+        }
+    }
+
+    pub(super) fn logs_toggle(&mut self) {
+        if self.conversation.view == View::Logs {
+            self.logs_close_restore();
+        } else {
+            self.logs_open();
+        }
+    }
+
+    /// The log column owns scrolling; horizontal arrows still navigate the canvas.
     pub(super) fn logs_key(&mut self, key: Key) {
         let page = isize::try_from(body_rows(self.geometry.rows))
             .unwrap_or(1)
             .saturating_sub(1)
             .max(1);
         match key {
-            Key::Escape => self.logs_toggle(),
+            Key::Escape => self.logs_close_restore(),
+            Key::Back => self.canvas_move(-1),
+            Key::Open => self.canvas_move(1),
             Key::AuditUp => self.scroll_logs(1),
             Key::AuditDown => self.scroll_logs(-1),
             Key::Up => self.scroll_logs(page),
@@ -337,7 +521,7 @@ mod tests {
         assert_eq!(state.conversation.canvas.active, last);
         state.chat_key(Key::CanvasRight);
         assert_eq!(state.conversation.canvas.active, last);
-        assert_eq!(state.conversation.view, View::History);
+        assert_eq!(state.conversation.view, View::Tasks);
     }
 
     #[test]
@@ -609,6 +793,190 @@ mod tests {
                 ),
                 before
             );
+        }
+    }
+    #[test]
+    fn logs_and_tasks_are_adjacent_real_columns_with_synchronized_navigation() {
+        let mut state = state();
+        assert_eq!(
+            state
+                .conversation
+                .canvas
+                .columns
+                .iter()
+                .map(|column| column.view)
+                .collect::<Vec<_>>(),
+            vec![
+                View::Agents,
+                View::Activity,
+                View::Audit,
+                View::Queue,
+                View::Questions,
+                View::History,
+                View::Logs,
+                View::Tasks
+            ],
+        );
+        state.logs_open();
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(state.conversation.logs_open && state.raw_logs);
+        state.chat_key(Key::Open);
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert!(!state.conversation.logs_open && !state.raw_logs);
+        state.chat_key(Key::Back);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(state.conversation.logs_open && state.raw_logs);
+    }
+
+    #[test]
+    fn logs_return_uses_the_column_id_when_other_columns_shift() {
+        let mut state = state();
+        state.conversation.composer.set_text("保留 draft");
+        state.conversation.target = Some("example-builder".into());
+        let origin = state.conversation.canvas.columns[state.conversation.canvas.active].id;
+        state.logs_open();
+        let logs = state.conversation.canvas.columns[state.conversation.canvas.active].id;
+        state.conversation.canvas.insert(0, View::Audit);
+        assert_eq!(
+            state.conversation.canvas.columns[state.conversation.canvas.active].id,
+            logs
+        );
+        assert_eq!(state.conversation.canvas.logs_return, Some(origin));
+        state.logs_close_restore();
+        assert_eq!(
+            state.conversation.canvas.columns[state.conversation.canvas.active].id,
+            origin
+        );
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.conversation.composer.text(), "保留 draft");
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-builder")
+        );
+    }
+
+    fn canonical_pair(state: &State) -> (usize, usize) {
+        let columns = &state.conversation.canvas.columns;
+        let logs = columns
+            .iter()
+            .position(|column| column.view == View::Logs)
+            .unwrap();
+        let tasks = columns
+            .iter()
+            .position(|column| column.view == View::Tasks)
+            .unwrap();
+        assert_eq!(
+            columns
+                .iter()
+                .filter(|column| column.view == View::Logs)
+                .count(),
+            1
+        );
+        assert_eq!(
+            columns
+                .iter()
+                .filter(|column| column.view == View::Tasks)
+                .count(),
+            1
+        );
+        assert_eq!(tasks, logs + 1);
+        (logs, tasks)
+    }
+
+    #[test]
+    fn new_views_do_not_split_the_canonical_logs_tasks_pair() {
+        let mut state = state();
+        state.logs_open();
+        state.canvas_new(View::Queue);
+        let (_, tasks) = canonical_pair(&state);
+        assert_eq!(state.conversation.canvas.active, tasks + 1);
+        assert_eq!(state.conversation.view, View::Queue);
+        state.canvas_focus(View::Tasks);
+        state.canvas_new(View::Activity);
+        let (_, tasks) = canonical_pair(&state);
+        assert_eq!(state.conversation.canvas.active, tasks + 1);
+        assert_eq!(state.conversation.view, View::Activity);
+    }
+
+    #[test]
+    fn dedicated_entries_restore_closed_system_columns_without_duplicates() {
+        let mut state = state();
+        state.logs_open();
+        state.canvas_close();
+        assert!(
+            !state
+                .conversation
+                .canvas
+                .columns
+                .iter()
+                .any(|column| column.view == View::Logs)
+        );
+        state.canvas_focus(View::Tasks);
+        canonical_pair(&state);
+        assert_eq!(state.conversation.view, View::Tasks);
+        state.canvas_close();
+        assert!(
+            !state
+                .conversation
+                .canvas
+                .columns
+                .iter()
+                .any(|column| column.view == View::Tasks)
+        );
+        state.logs_open();
+        canonical_pair(&state);
+        assert_eq!(state.conversation.view, View::Logs);
+        let count = state.conversation.canvas.columns.len();
+        state.logs_open();
+        state.canvas_focus(View::Tasks);
+        assert_eq!(state.conversation.canvas.columns.len(), count);
+    }
+
+    #[test]
+    fn logs_and_tasks_retain_independent_positions_without_replacing_data() {
+        let mut state = state();
+        state.logs_open();
+        for index in 0..50 {
+            state.log(format!("retained diagnostic {index}\n").as_bytes());
+        }
+        state.scroll_logs(5);
+        state.log_query = "diagnostic".into();
+        state.log_level = 1;
+        state.filter_offset = 7;
+        let logs = (
+            state.logs.screen().scrollback(),
+            state.log_query.clone(),
+            state.log_level,
+            state.filter_offset,
+        );
+        let retained = state.logs.screen().scrollback_len();
+        state.canvas_move(1);
+        assert_eq!(state.conversation.view, View::Tasks);
+        state.conversation.tasks.refresh(true).unwrap();
+        state.conversation.tasks.open();
+        state.conversation.tasks.scroll_by(2);
+        let task = state.conversation.tasks.snapshot();
+        assert_eq!(task["selected_id"], "preview-task-build");
+        assert_eq!(task["detail"], true);
+        assert_eq!(task["detail_scroll"], 2);
+        state.log_query = "temporary other filter".into();
+        state.log_level = 2;
+        state.filter_offset = 0;
+        state.canvas_move(-1);
+        assert_eq!(
+            (
+                state.logs.screen().scrollback(),
+                state.log_query.clone(),
+                state.log_level,
+                state.filter_offset
+            ),
+            logs,
+        );
+        assert_eq!(state.logs.screen().scrollback_len(), retained);
+        state.canvas_move(1);
+        let restored = state.conversation.tasks.snapshot();
+        for field in ["selected_id", "detail", "detail_scroll", "jobs"] {
+            assert_eq!(restored[field], task[field], "{field}");
         }
     }
 }
