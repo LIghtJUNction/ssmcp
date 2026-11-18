@@ -1,6 +1,7 @@
 //! Compose logs and source audit with a configurable observational sidebar.
 //! Only this module writes the physical terminal while a Session is active.
 use super::{
+    account::status::{self as account_status, Status as AccountStatus},
     audit_view::AuditView,
     panel::{self, PanelLayout, PanelSnapshot, PanelTone},
     render::LogFormat,
@@ -53,6 +54,7 @@ pub(crate) struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
     guide_probe: Option<tokio::task::JoinHandle<()>>,
+    account_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -82,6 +84,12 @@ impl Session {
         let guide = endpoint.and_then(guide::Guide::from_endpoint);
         let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
         state.guide = guide.map(guide::Guide::portal);
+        let account_server = endpoint
+            .and_then(account_status::server_from_endpoint)
+            .filter(|_| tokio::runtime::Handle::try_current().is_ok());
+        if account_server.is_some() {
+            state.account = AccountStatus::Loading;
+        }
         state.graphics = images::Graphics::environment(&options);
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
@@ -133,10 +141,39 @@ impl Session {
                         }
                     }))
                 });
+                let account_probe = account_server.and_then(|server| {
+                    let handle = tokio::runtime::Handle::try_current().ok()?;
+                    let display = Arc::downgrade(&shared);
+                    Some(handle.spawn(async move {
+                        loop {
+                            // Resolve this session's selected origin again on each refresh.
+                            // Requests and waits never hold the compositor lock.
+                            let status = AccountStatus::refresh(&server).await;
+                            {
+                                let Some(shared) = display.upgrade() else {
+                                    return;
+                                };
+                                if shared.stop.load(Ordering::Acquire)
+                                    || !shared.alive.load(Ordering::Acquire)
+                                {
+                                    return;
+                                }
+                                let mut state =
+                                    shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                                if !state.preview && state.account != status {
+                                    state.account = status;
+                                    state.dirty = true;
+                                }
+                            }
+                            tokio::time::sleep(Duration::from_secs(60)).await;
+                        }
+                    }))
+                });
                 Ok(Some(Self {
                     shared,
                     thread: Some(thread),
                     guide_probe,
+                    account_probe,
                 }))
             }
             Err(error) => {
@@ -155,6 +192,9 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
         if let Some(probe) = self.guide_probe.take() {
+            probe.abort();
+        }
+        if let Some(probe) = self.account_probe.take() {
             probe.abort();
         }
         if let Some(thread) = self.thread.take() {
@@ -498,6 +538,11 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
     state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
+    state.account = AccountStatus::Ready {
+        login: "example".into(),
+        username: None,
+        traffic: account_status::Traffic::Remaining(750_000_000),
+    };
     state.log_message("user", "Improve the client experience\nKeep commands, results and the original code easy to inspect.", "\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"17","exit_code":0}), "[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"preview-diff","exit_code":0}), "[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
@@ -1046,6 +1091,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     context_label: String,
     guide: Option<guide::Guide>,
+    account: AccountStatus,
     graphics: images::Graphics,
     media: Vec<images::Placement>,
     geometry: Geometry,
@@ -1083,6 +1129,7 @@ impl State {
             events: events::EventView::new(),
             context_label: String::new(),
             guide: None,
+            account: AccountStatus::Unavailable,
             graphics: images::Graphics::default(),
             media: Vec::new(),
             logs: vt100::Parser::new(
@@ -1851,7 +1898,24 @@ impl State {
         }
     }
     fn guide_rows(&mut self, width: u16, height: u16, _row: u16, _col: u16) -> Vec<String> {
-        guide::pet_rows(width, height, &self.ui)
+        let mut rows = Vec::new();
+        // Keep eight rows for the configured panels before reserving account space.
+        if height >= 10 && width >= 20 {
+            for text in self.account.rows() {
+                let text = fit(&text, width);
+                let padded = format!(
+                    "{text}{}",
+                    " ".repeat(usize::from(width).saturating_sub(text.width()))
+                );
+                rows.push(self.tone(PanelTone::Muted, &padded));
+            }
+        }
+        rows.extend(guide::pet_rows(
+            width,
+            height.saturating_sub(rows.len() as u16),
+            &self.ui,
+        ));
+        rows
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
         if !self.ui.color {
@@ -2359,6 +2423,30 @@ impl Drop for PhysicalOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_preview_uses_the_shared_sidebar_and_preserves_the_ascii_pet() {
+        for layout in [Layout::Chat, Layout::Split, Layout::Logs] {
+            let mut ui = Ui {
+                color: false,
+                layout,
+                ..Ui::default()
+            };
+            let mut screen = vt100::Parser::new(nonzero(30), nonzero(120), 0);
+            screen.process(&preview_bytes(&ui, 30, 120));
+            let contents = screen.screen().contents();
+            assert!(contents.contains("账号  example"), "{layout:?}: {contents}");
+            assert!(
+                contents.contains("本月剩余  0.75 GB"),
+                "{layout:?}: {contents}"
+            );
+            assert!(contents.contains("( o.o )"), "{layout:?}: {contents}");
+            ui.sidebar = false;
+            let mut hidden = vt100::Parser::new(nonzero(30), nonzero(120), 0);
+            hidden.process(&preview_bytes(&ui, 30, 120));
+            assert!(!hidden.screen().contents().contains("账号"));
+        }
+    }
 
     fn split_ui() -> Ui {
         Ui {
@@ -3078,6 +3166,7 @@ mod tests {
             shared: shared.clone(),
             thread: Some(thread),
             guide_probe: None,
+            account_probe: None,
         };
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 65536];
