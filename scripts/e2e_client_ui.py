@@ -192,7 +192,7 @@ def main():
                 check("cargo test --lib" in text(shot), f"{name} layout retains the command and result")
             check(not shot["hide_cursor"] and shot["cursor"][0] >= rows - 4,
                   f"{name} cursor belongs to the bottom composer")
-            expected_background = [255, 255, 255] if theme == "light" else [24, 24, 22]
+            expected_background = [255, 255, 255] if theme == "light" else [16, 20, 28]
             check(shot["cells"][0][0]["background"] == expected_background,
                   f"{name} theme supplies the actual terminal background")
             save_shot(args.out, name, shot)
