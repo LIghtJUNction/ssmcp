@@ -1,7 +1,7 @@
 //! Browser account portal, sharing the MCP gateway's verified GitHub identity provider.
 //! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
-mod dashboard;
 mod commerce;
+mod dashboard;
 mod dashboard_view;
 mod guide;
 mod setup;
