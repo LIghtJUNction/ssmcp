@@ -2822,6 +2822,86 @@ mod tests {
     }
 
     #[test]
+    fn an_escape_waiting_in_the_second_decoder_does_not_swallow_shift_up() {
+        use crate::client::input::{InputEvent, SessionKeys};
+
+        fn feed(
+            state: &mut State,
+            session: &mut SessionKeys,
+            text: &str,
+            now: Instant,
+            flush: bool,
+        ) {
+            for event in session.feed(text, now, flush) {
+                match event {
+                    InputEvent::Text(text) => {
+                        assert!(state.chat_keyboard(text.as_bytes(), now, false).is_empty());
+                    }
+                    InputEvent::NextTerminal => panic!("Shift+Up is not terminal switching"),
+                }
+            }
+            if flush {
+                assert!(state.chat_keyboard(&[], now, true).is_empty());
+            }
+        }
+
+        for split in [false, true] {
+            let mut state = preview(24, 80);
+            state.chat_restore_draft(steering::SavedDraft {
+                text: "未提交草稿界".into(),
+                cursor: "未提交草稿".len(),
+                images: vec![test_image("draft.png", 20)],
+                target: None,
+            });
+            let before = state.chat_saved_draft();
+            let mut session = SessionKeys::default();
+            let now = Instant::now();
+            feed(&mut state, &mut session, "\u{1b}", now, false);
+            // The outer decoder releases Escape after 80 ms. The display
+            // decoder has its own timer and still holds it at t=120 ms.
+            feed(
+                &mut state,
+                &mut session,
+                "",
+                now + Duration::from_millis(100),
+                true,
+            );
+            assert_eq!(state.keyboard.pending, b"\x1b");
+            if split {
+                feed(
+                    &mut state,
+                    &mut session,
+                    "\u{1b}[1;",
+                    now + Duration::from_millis(120),
+                    false,
+                );
+                feed(
+                    &mut state,
+                    &mut session,
+                    "2A",
+                    now + Duration::from_millis(125),
+                    false,
+                );
+            } else {
+                feed(
+                    &mut state,
+                    &mut session,
+                    "\u{1b}[1;2A",
+                    now + Duration::from_millis(120),
+                    false,
+                );
+            }
+            assert_eq!(
+                state.chat_saved_draft(),
+                before,
+                "no CSI bytes may enter the draft"
+            );
+            assert!(state.keyboard.pending.is_empty());
+            assert!(state.notice.as_ref().unwrap().contains("Shift+↑"));
+        }
+    }
+
+    #[test]
     fn shift_up_decodes_across_reads_without_recalling_plain_arrow_history() {
         let mut state = preview(24, 40);
         state.conversation.composer.remember("old history");

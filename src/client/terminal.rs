@@ -611,6 +611,19 @@ impl Keyboard {
         let mut output = Vec::new();
         let mut actions = Vec::new();
         for &byte in bytes {
+            // A fresh Escape starts a new sequence even while an earlier
+            // Escape is awaiting its timeout (including the outer input
+            // decoder's delay). Never consume the new prefix as old text.
+            if byte == 0x1b && !self.pasting && !self.pending.is_empty() {
+                if self.logs && self.pending == b"\x1b" {
+                    self.logs = force_logs;
+                    self.pending.clear();
+                    actions.push(Key::Escape);
+                } else {
+                    output.append(&mut self.pending);
+                }
+                self.since = None;
+            }
             if self.pending.is_empty() && byte != 0x1b {
                 if !self.pasting {
                     self.logs = force_logs;
