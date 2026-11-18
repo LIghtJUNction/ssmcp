@@ -28,6 +28,8 @@ pub(super) fn page(title: &str, body: &str) -> String {
   <meta name="description" content="使用用户名连接本机工具。GitHub 自动登录绑定，HTTPS 接入，管理账户与在线连接。">
   <title>{} · ssmcp</title>
   <link rel="stylesheet" href="/portal.css">
+  <link rel="stylesheet" href="/portal-refresh.css">
+  <script defer src="/traffic-meter.js"></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到主要内容</a>
@@ -280,6 +282,7 @@ pub(super) fn home(
     body.push_str(
         r#"</section><div class="workspace-header"><p class="eyebrow">WORKSPACE / 接入配置</p><p>选择用户名，完成 GitHub 绑定，即可连接。</p></div><div class="workspace-flow">"#,
     );
+    body.push_str(include_str!("client-install.html"));
     body.push_str(&connect_panel(account, public_url));
     body.push_str("<details><summary>旧版 SSH 公钥管理</summary>");
     body.push_str(&keys_panel(account, &csrf, enabled));

@@ -1729,6 +1729,8 @@ mod tests {
         let error = super::super::references::expand(draft, &workspace, &context)
             .await
             .unwrap_err();
+        drop(workspace);
+        drop(context);
         fs::remove_dir_all(directory).unwrap();
         manager.fail_unsent(id, &error);
         assert!(manager.pending_command(id).is_none());
