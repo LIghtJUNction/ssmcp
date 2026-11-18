@@ -56,6 +56,7 @@ impl Slot {
             .seen
             .is_some_and(|seen| seen.elapsed() < HEARTBEAT)
     }
+    #[cfg(unix)]
     fn dimensions(&self) -> (u16, u16) {
         let view = self.view.lock().unwrap();
         (view.rows, view.cols)
@@ -92,6 +93,7 @@ impl Lease {
     pub(crate) fn append(&self, bytes: &[u8]) {
         self.slot.append(bytes);
     }
+    #[cfg(unix)]
     pub(crate) fn dimensions(&self) -> (u16, u16) {
         self.slot.dimensions()
     }
@@ -866,7 +868,7 @@ pub(crate) mod pty {
     impl Output {
         pub(crate) fn open(lease: &Lease) -> io::Result<(Self, Stdio, Stdio)> {
             let (rows, cols) = lease.dimensions();
-            let size = libc::winsize {
+            let mut size = libc::winsize {
                 ws_row: rows,
                 ws_col: cols,
                 ws_xpixel: 0,
@@ -879,8 +881,8 @@ pub(crate) mod pty {
                     &mut master,
                     &mut slave,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    &size,
+                    std::ptr::null_mut(),
+                    &raw mut size,
                 )
             } < 0
             {

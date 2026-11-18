@@ -34,8 +34,18 @@
     </ol>
   </section>
 
+  <section id="devices" aria-labelledby="devices-title">
+    <div class="section-heading"><p class="eyebrow">02 / DEVICES &amp; DESKTOPS</p><h2 id="devices-title">Give another device temporary access.</h2></div>
+    <div class="scenarios">
+      <article><h3>Create a device invitation.</h3><p>On a computer where you have already logged in, run <code>ssmcp invite</code>. Copy its generated command to the other device. The command installs the client from the same gateway into the user's directory, checks the download, then starts a temporary connection.</p><pre><code>ssmcp invite
+ssmcp invite --shell powershell</code></pre><p>The invitation is single-use and normally expires in 10 minutes. The resulting connection lasts up to one hour, within the original authorization's lifetime. Stop the connected process to end that device's session. Use <code>--no-bootstrap</code> when a compatible client is already installed.</p><details><summary>Invite from an authorized MCP app</summary><p>Ask your connected app to call the public <code>invite</code> tool. It uses the app's current authorization and needs no online client ID. Choose <code>powershell</code> for a Windows device.</p><pre><code>{"ttl_secs": 600, "session_ttl_secs": 3600, "shell": "sh"}</code></pre></details></article>
+      <article><h3>Use a private desktop for app work.</h3><p>Desktop observation and input default to the connection's private display. On Linux, launching an installed app starts that display when needed. Your usual desktop keeps its mouse position and focus.</p><pre><code>Open the editor in a private desktop.
+Inspect the document and capture the result.</code></pre><p class="note">Private desktops require Linux, Xvfb and the helpers listed by the status tool. Other platforms report the missing support. A caller must explicitly select <code>desktop: "host"</code> to operate the usual desktop. Browser page controls remain a separate option.</p></article>
+    </div>
+  </section>
+
   <section id="basics" aria-labelledby="basics-title">
-    <div class="section-heading"><p class="eyebrow">02 / EVERYDAY INPUT</p><h2 id="basics-title">Write a request. Add the context it needs.</h2></div>
+    <div class="section-heading"><p class="eyebrow">03 / EVERYDAY INPUT</p><h2 id="basics-title">Write a request. Add the context it needs.</h2></div>
     <p>Enter queues your request for the selected member or the next eligible agent interaction. You can keep typing a second draft while work continues. Keep your AI conversation active so the agent can receive queued input.</p>
     <div class="table-wrap"><table><thead><tr><th scope="col">Input</th><th scope="col">What it does</th></tr></thead><tbody>
       <tr><td><code>@src/main.rs</code></td><td>Include a workspace file. Use <code>@"docs/My notes.md"</code> when the path has spaces.</td></tr>
@@ -50,7 +60,7 @@
   </section>
 
   <section id="scenarios" aria-labelledby="scenarios-title">
-    <div class="section-heading"><p class="eyebrow">03 / PUT IT TO WORK</p><h2 id="scenarios-title">Start with a concrete result.</h2></div>
+    <div class="section-heading"><p class="eyebrow">04 / PUT IT TO WORK</p><h2 id="scenarios-title">Start with a concrete result.</h2></div>
     <div class="scenarios">
       <article><h3>Change a project</h3><p>Give the agent a file and a specific outcome. Ask it to inspect the change, run the relevant checks and explain the result.</p><pre><code>@src/main.rs Fix the reported error.
 Run the relevant tests and show the diff.</code></pre></article>
@@ -67,7 +77,7 @@ inspect the latest build result.</code></pre></article>
   </section>
 
   <section id="tools" aria-labelledby="tools-title">
-    <div class="section-heading"><p class="eyebrow">04 / FOR TOOL CALLERS</p><h2 id="tools-title">Discover the live contract.</h2></div>
+    <div class="section-heading"><p class="eyebrow">05 / FOR TOOL CALLERS</p><h2 id="tools-title">Discover the live contract.</h2></div>
     <p>Use <code>list</code> to get the selected client's ID. Inside code_mode, search its registered tools and read the returned schemas before calling them. Installed harnesses keep their native arguments and approval rules.</p>
     <pre><code>const clientId = "ID_FROM_LIST";
 return await tools.search(clientId, {

@@ -56,6 +56,7 @@ pub(super) struct Conversation {
     pub(super) content_focus: bool,
     selected: usize,
     selected_agent: Option<String>,
+    drawn_agents: Vec<String>,
     list_start: usize,
     list_count: usize,
     detail: bool,
@@ -67,8 +68,6 @@ pub(super) struct Conversation {
     text_pending: Vec<u8>,
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
-    paste_png: crate::client::input::paste::PngFraming,
-    paste_last_input: Option<Instant>,
     input_task: Option<attachments::Task>,
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
@@ -133,24 +132,37 @@ fn items(value: &Value, key: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn recipients(value: &Value, observed: Vec<Value>) -> Vec<Value> {
+fn recipients(value: &Value, observed: &[crate::client::render::CallerGroup]) -> Vec<Value> {
     let mut entries = vec![
         json!({"agent_id":"next","name":"Next caller","role":"default recipient","status":"first eligible tool response"}),
     ];
     entries.extend(items(value, "agents"));
-    entries.extend(observed);
+    entries.extend(observed.iter().map(|caller| {
+        json!({
+            "kind":"observed", "targetable":false, "key":caller.key,
+            "name":caller.name, "model":caller.model, "source":caller.source,
+            "run_id":caller.run_id, "tool":caller.tool, "calls":caller.calls,
+            "running":caller.running, "unknown":caller.unknown,
+            "active":caller.running > 0, "status":caller.status,
+        })
+    }));
     entries
 }
 
 fn agent_key(value: &Value) -> String {
     if field(value, "kind") == "observed" {
-        format!("run:{}", field(value, "run_id"))
+        format!("caller:{}", field(value, "key"))
     } else {
         format!("member:{}", field(value, "agent_id"))
     }
 }
 
 impl State {
+    fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
+        let observed = self.audit.observed_controllers();
+        recipients(data, &self.caller_tracker.groups(&observed, data))
+    }
+
     fn chat_saved_draft(&self) -> steering::SavedDraft {
         steering::SavedDraft {
             text: self.conversation.composer.text().into(),
@@ -352,6 +364,7 @@ impl State {
         self.conversation.content_focus = view != View::Activity;
         self.conversation.selected = 0;
         self.conversation.selected_agent = None;
+        self.conversation.drawn_agents.clear();
         self.conversation.list_start = 0;
         self.conversation.list_count = 0;
         self.conversation.detail = false;
@@ -364,7 +377,7 @@ impl State {
     fn chat_agents(&mut self) {
         self.chat_change_view(View::Agents);
         let data = self.chat_data();
-        let entries = recipients(&data, self.audit.observed_controllers());
+        let entries = self.chat_recipients(&data);
         let target = self.conversation.target.as_deref().unwrap_or("next");
         self.conversation.selected = entries
             .iter()
@@ -453,21 +466,19 @@ impl State {
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
             "/logs" => {
-                self.raw_activity = false;
+                self.raw_logs = false;
                 self.chat_change_view(View::Activity);
             }
             "/raw" => {
-                self.raw_activity = !self.raw_activity;
+                if !rest.is_empty() {
+                    return Err(
+                        "Use /raw without arguments to toggle the original transcript".into(),
+                    );
+                }
+                self.raw_logs = !self.raw_logs;
                 self.chat_change_view(View::Activity);
-                self.notice = Some(
-                    if self.raw_activity {
-                        "Raw retained transcript · /raw returns to compact activity"
-                    } else {
-                        "Compact activity · Enter expands the selected tool"
-                    }
-                    .into(),
-                );
             }
+            "/questions" => self.chat_questions(),
             "/sidebar" => self.actions.push("sidebar.toggle"),
             "/theme" => {
                 if rest.is_empty() {
@@ -642,10 +653,10 @@ impl State {
         }
     }
 
-    fn chat_selected(&self) -> Option<Value> {
+    fn chat_selected(&mut self) -> Option<Value> {
         let data = self.chat_data();
         let entries = if self.conversation.view == View::Agents {
-            recipients(&data, self.audit.observed_controllers())
+            self.chat_recipients(&data)
         } else {
             items(&data, "queue")
         };
@@ -714,12 +725,8 @@ impl State {
             }
             View::History => self.chat_resume_selected(),
             View::Activity => {
-                if self.raw_activity {
-                    self.notice = Some("Use /logs to expand individual tool activity".into());
-                    return;
-                }
-                if !self.log_query.is_empty() || self.log_level != 0 {
-                    self.notice = Some("Clear the log filter to expand individual events".into());
+                if self.raw_logs {
+                    self.notice = Some("Raw transcript · /logs returns to tool details".into());
                     return;
                 }
                 if edit {
@@ -736,9 +743,7 @@ impl State {
         match self.conversation.view {
             View::Activity => {
                 self.scroll_logs(-delta);
-                if !self.raw_activity {
-                    self.events.scroll_by(delta);
-                }
+                self.events.scroll_by(delta);
             }
             View::Audit => self.audit.scroll_by(delta),
             View::Agents if self.conversation.detail => self.audit.scroll_by(delta),
@@ -756,7 +761,7 @@ impl State {
             view => {
                 let data = self.chat_data();
                 let entries = if view == View::Agents {
-                    recipients(&data, self.audit.observed_controllers())
+                    self.chat_recipients(&data)
                 } else {
                     items(&data, "queue")
                 };
@@ -782,6 +787,10 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        if matches!(key, Key::Interrupt) {
+            request_interrupt();
+            return;
+        }
         self.chat_refresh_completions();
         if matches!(key, Key::Select) || (self.selection && matches!(key, Key::Escape)) {
             self.selection = !self.selection;
@@ -882,20 +891,12 @@ impl State {
                 self.chat_change_view(View::Activity);
             }
             Key::AuditUp
-                if content
-                    && self.conversation.view == View::Activity
-                    && !self.raw_activity
-                    && self.log_query.is_empty()
-                    && self.log_level == 0 =>
+                if content && self.conversation.view == View::Activity && !self.raw_logs =>
             {
                 self.events.select(-1)
             }
             Key::AuditDown
-                if content
-                    && self.conversation.view == View::Activity
-                    && !self.raw_activity
-                    && self.log_query.is_empty()
-                    && self.log_level == 0 =>
+                if content && self.conversation.view == View::Activity && !self.raw_logs =>
             {
                 self.events.select(1)
             }
@@ -954,10 +955,8 @@ impl State {
                 self.chat_escape();
             }
             Key::Back if self.conversation.view == View::Activity && content => {
-                if self.raw_activity {
-                    self.notice = Some("Use /logs to fold individual tool activity".into());
-                } else if !self.log_query.is_empty() || self.log_level != 0 {
-                    self.notice = Some("Clear the log filter to fold individual events".into());
+                if self.raw_logs {
+                    self.notice = Some("Raw transcript · /logs returns to tool details".into());
                 } else if !self.events.back() {
                     self.chat_agents();
                 }
@@ -1010,9 +1009,8 @@ impl State {
                 } else {
                     self.conversation.content_focus = true;
                     if self.conversation.view == View::Activity
-                        && !self.raw_activity
-                        && self.log_query.is_empty()
-                        && self.log_level == 0
+                        && !self.raw_logs
+                        && !self.events.is_empty()
                     {
                         if let Some(row) = y.checked_sub(body_top(self.geometry.rows))
                             && self.events.mouse_select(row)
@@ -1041,7 +1039,15 @@ impl State {
                             return;
                         };
                         self.conversation.selected = index;
-                        self.conversation.selected_agent = None;
+                        self.conversation.selected_agent = if self.conversation.view == View::Agents
+                        {
+                            let Some(key) = self.conversation.drawn_agents.get(index) else {
+                                return;
+                            };
+                            Some(key.clone())
+                        } else {
+                            None
+                        };
                     }
                     if button == 2 {
                         self.chat_open(false);
@@ -1122,15 +1128,6 @@ impl State {
     }
 
     fn chat_character(&mut self, character: char) {
-        #[cfg(unix)]
-        if character == '\u{3}' {
-            // ISIG is disabled to preserve binary paste; only a real key outside
-            // bracketed paste reaches this path and requests the existing shutdown.
-            if !self.preview {
-                crate::client::input::interrupt();
-            }
-            return;
-        }
         self.chat_refresh_completions();
         if self.selection {
             if character == '\u{1b}' {
@@ -1494,49 +1491,29 @@ impl State {
         Ok(())
     }
 
-    fn chat_expire_image_paste(&mut self, now: Instant) {
-        if self.conversation.paste.is_some()
-            && self.conversation.paste_png.is_png()
-            && self.conversation.paste_last_input.is_some_and(|last| {
-                now.saturating_duration_since(last)
-                    >= crate::client::input::paste::IMAGE_IDLE_TIMEOUT
-            })
-        {
-            self.conversation.paste = None;
-            self.conversation.paste_png = Default::default();
-            self.conversation.paste_last_input = None;
-            self.keyboard.pasting = false;
-            self.keyboard.pending.clear();
-            self.keyboard.since = None;
-            self.notice = Some(if self.conversation.paste_overflow {
-                "Image paste exceeds 16 MiB; draft preserved. Use a smaller image or /attach PATH."
-            } else {
-                "Incomplete image paste discarded; draft preserved. Copy the original image and use Ctrl+V or /paste, or /attach PATH."
-            }.into());
-            self.conversation.paste_overflow = false;
-            self.dirty = true;
+    pub(super) fn chat_discard_image_paste(&mut self) {
+        if self.conversation.paste.take().is_none() {
+            return;
         }
+        self.notice = Some(if self.conversation.paste_overflow {
+            "Image paste exceeds 16 MiB; draft preserved. Use a smaller image or /attach PATH."
+        } else {
+            "Incomplete image paste discarded; draft preserved. Copy the original image and use Ctrl+V or /paste, or /attach PATH."
+        }.into());
+        self.conversation.paste_overflow = false;
     }
 
-    fn chat_output(&mut self, output: &[u8], now: Instant) {
+    fn chat_output(&mut self, output: &[u8]) {
         if output.is_empty() {
             return;
         }
         if output == b"\x1b[200~" && self.conversation.paste.is_none() {
             self.conversation.paste = Some(Vec::new());
             self.conversation.paste_overflow = false;
-            self.conversation.paste_png = Default::default();
-            self.conversation.paste_last_input = Some(now);
             return;
         }
-        if output == b"\x1b[201~" && !self.conversation.paste_png.allows_end() {
-            // The PNG container is not complete: this marker belongs to its bytes.
-            // Keyboard only recognizes framing; keep it in opaque paste mode.
-            self.keyboard.pasting = true;
-        } else if output == b"\x1b[201~" {
+        if output == b"\x1b[201~" && !self.keyboard.pasting {
             if let Some(paste) = self.conversation.paste.take() {
-                self.conversation.paste_png = Default::default();
-                self.conversation.paste_last_input = None;
                 if !paste.is_empty() {
                     if self.conversation.view == View::Agents {
                         self.chat_change_view(View::Activity);
@@ -1568,8 +1545,6 @@ impl State {
             return;
         }
         if let Some(paste) = &mut self.conversation.paste {
-            self.conversation.paste_png.feed(output);
-            self.conversation.paste_last_input = Some(now);
             if !self.conversation.paste_overflow
                 && paste.len().saturating_add(output.len())
                     <= attachments::paste_limit(paste, output)
@@ -1597,24 +1572,26 @@ impl State {
     }
 
     pub(super) fn chat_keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
-        // Recover before accepting new input, so text typed after the deadline is
-        // not swallowed by a truncated binary paste.
-        self.chat_expire_image_paste(now);
-        if !bytes.is_empty() && self.conversation.paste.is_some() {
-            self.conversation.paste_last_input = Some(now);
+        // Run before accepting the next input, including a real Ctrl-C after a
+        // truncated image, and discard only the unfinished paste, never the draft.
+        if self.keyboard.image_paste_expired(now) {
+            self.discard_image_paste();
+        }
+        if !bytes.is_empty() && self.keyboard.pasting {
+            self.keyboard.paste_last_input = Some(now);
         }
         self.chat_updates();
         // Keep text and navigation in their original order, including coalesced reads.
         for byte in bytes {
             let (output, keys) = self.keyboard.feed(&[*byte], now, false, true, false);
-            self.chat_output(&output, now);
+            self.chat_output(&output);
             for key in keys {
                 self.chat_key(key);
             }
         }
-        if flush && self.conversation.paste.is_none() {
+        if flush {
             let (output, keys) = self.keyboard.feed(&[], now, true, true, false);
-            self.chat_output(&output, now);
+            self.chat_output(&output);
             for key in keys {
                 self.chat_key(key);
             }
@@ -1660,22 +1637,156 @@ impl State {
 
     fn chat_agent_list_width(&self) -> u16 {
         let width = self.geometry.left;
-        if width >= 76 {
+        let sidebar = PanelLayout::configured(
+            self.geometry.cols,
+            self.geometry.rows,
+            self.ui.sidebar && !self.ui.panels.is_empty(),
+            self.ui.sidebar_width,
+        )
+        .sidebar
+        .is_some();
+        if !sidebar && width >= 76 {
             (width.saturating_mul(2) / 5).min(40)
         } else {
             width
         }
     }
 
+    fn chat_agent_details(
+        &self,
+        selected: Option<&Value>,
+        data: &Value,
+    ) -> Vec<(String, PanelTone)> {
+        let Some(selected) = selected else {
+            return vec![
+                ("Selection unavailable".into(), PanelTone::Heading),
+                ("".into(), PanelTone::Normal),
+                ("The selected entry left".into(), PanelTone::Normal),
+                ("Your recipient has not changed".into(), PanelTone::Muted),
+                ("↑ / ↓ choose another entry".into(), PanelTone::Muted),
+            ];
+        };
+        let observed = field(selected, "kind") == "observed";
+        let next = field(selected, "agent_id") == "next";
+        let mut details = vec![
+            (
+                (if observed {
+                    "Observed caller"
+                } else if next {
+                    "Message delivery"
+                } else {
+                    "Agent"
+                })
+                .into(),
+                PanelTone::Heading,
+            ),
+            ("".into(), PanelTone::Normal),
+            (field(selected, "name").into(), PanelTone::Accent),
+        ];
+        if observed {
+            let running = selected["running"].as_u64().unwrap_or(0);
+            let calls = selected["calls"].as_u64().unwrap_or(0);
+            let tone = if running > 0 {
+                PanelTone::Accent
+            } else if selected["unknown"] == true {
+                PanelTone::Warning
+            } else {
+                PanelTone::Muted
+            };
+            details.extend([
+                (field(selected, "model").into(), PanelTone::Normal),
+                (
+                    format!("{calls} calls in retained history"),
+                    PanelTone::Muted,
+                ),
+                (
+                    format!("{running} running · {}", field(selected, "status")),
+                    tone,
+                ),
+                ("".into(), PanelTone::Normal),
+                ("Latest tool".into(), PanelTone::Heading),
+                (field(selected, "tool").into(), PanelTone::Normal),
+                ("Enter / → inspect latest call".into(), PanelTone::Muted),
+                ("".into(), PanelTone::Normal),
+                ("Messages".into(), PanelTone::Heading),
+                ("No direct message address".into(), PanelTone::Normal),
+                ("Choose Next caller to queue".into(), PanelTone::Muted),
+                ("for the next eligible response".into(), PanelTone::Muted),
+                ("".into(), PanelTone::Normal),
+                ("Name and model are display labels".into(), PanelTone::Muted),
+            ]);
+        } else {
+            let target = self.conversation.target.as_deref().unwrap_or("next");
+            let id = field(selected, "agent_id");
+            let pending = items(data, "queue")
+                .iter()
+                .filter(|item| {
+                    field(item, "target") == id
+                        && matches!(field(item, "status"), "queued" | "sending" | "editing")
+                })
+                .count();
+            details.extend([
+                (
+                    (if next {
+                        "Automatic delivery"
+                    } else {
+                        field(selected, "role")
+                    })
+                    .into(),
+                    PanelTone::Muted,
+                ),
+                (
+                    (if next {
+                        "Next eligible response"
+                    } else {
+                        field(selected, "status")
+                    })
+                    .into(),
+                    PanelTone::Normal,
+                ),
+                ("".into(), PanelTone::Normal),
+                ("Messages".into(), PanelTone::Heading),
+                (
+                    format!("{pending} pending for this recipient"),
+                    PanelTone::Normal,
+                ),
+            ]);
+            if id == target {
+                details.push(("● Current recipient".into(), PanelTone::Accent));
+            }
+            details.extend([
+                ("Enter / → choose and return".into(), PanelTone::Normal),
+                ("Your draft stays in place".into(), PanelTone::Muted),
+                ("".into(), PanelTone::Normal),
+                (
+                    (if next {
+                        "Any eligible caller may receive it"
+                    } else {
+                        "Only this member receives it"
+                    })
+                    .into(),
+                    PanelTone::Muted,
+                ),
+            ]);
+            if !next {
+                details.push((id.into(), PanelTone::Muted));
+            } else if items(data, "agents").is_empty() {
+                details.extend([
+                    ("".into(), PanelTone::Normal),
+                    ("No registered agents yet".into(), PanelTone::Normal),
+                    (
+                        "Observed callers can still receive".into(),
+                        PanelTone::Muted,
+                    ),
+                    ("requests through Next caller".into(), PanelTone::Muted),
+                ]);
+            }
+        }
+        details
+    }
+
     fn chat_agent_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
-        let observed_calls = self.audit.observed_controllers();
-        let running: usize = self
-            .caller_tracker
-            .groups(&observed_calls, data)
-            .iter()
-            .map(|group| group.running)
-            .sum();
-        let entries = recipients(data, observed_calls);
+        let entries = self.chat_recipients(data);
         if let Some(selected) = &self.conversation.selected_agent {
             if let Some(index) = entries
                 .iter()
@@ -1684,7 +1795,7 @@ impl State {
                 self.conversation.selected = index;
             } else {
                 self.conversation.selected = 0;
-                self.notice = Some("Selected member or call left · choose a recipient".into());
+                self.notice = Some("Selected member or caller left · choose a recipient".into());
             }
         }
         let missing = self
@@ -1693,6 +1804,7 @@ impl State {
             .as_ref()
             .is_some_and(|key| !entries.iter().any(|entry| agent_key(entry) == *key));
         let window = self.chat_list_window(entries.len(), height);
+        self.conversation.drawn_agents = entries.iter().map(agent_key).collect();
         let selected = &entries[self.conversation.selected];
         if !missing {
             self.conversation.selected_agent = Some(agent_key(selected));
@@ -1700,9 +1812,13 @@ impl State {
         let width = self.geometry.left;
         let list_width = self.chat_agent_list_width();
         let target = self.conversation.target.as_deref().unwrap_or("next");
+        let callers = entries
+            .iter()
+            .filter(|entry| field(entry, "kind") == "observed")
+            .count();
         let mut rows = vec![self.chat_line(
             &format!(
-                "  Agents · {} · {running} active calls",
+                "  Agents · {} members · {callers} callers",
                 items(data, "agents").len()
             ),
             PanelTone::Heading,
@@ -1724,22 +1840,17 @@ impl State {
             } else {
                 ""
             };
-            let title = format!(" {marker} {symbol}{}", field(entry, "name"));
-            let subtitle = if observed {
-                let model = field(entry, "model");
+            let title = if observed && !field(entry, "model").is_empty() {
                 format!(
-                    "     {} · {}",
-                    if entry["active"] == true {
-                        "Running"
-                    } else {
-                        "Recent call"
-                    },
-                    if model.is_empty() {
-                        "Model unknown"
-                    } else {
-                        model
-                    }
+                    " {marker} {symbol}{} · {}",
+                    field(entry, "name"),
+                    field(entry, "model")
                 )
+            } else {
+                format!(" {marker} {symbol}{}", field(entry, "name"))
+            };
+            let subtitle = if observed {
+                format!("     {} calls · {}", entry["calls"], field(entry, "status"))
             } else if field(entry, "agent_id") == "next" {
                 "     Next eligible response".into()
             } else {
@@ -1783,116 +1894,7 @@ impl State {
             rows.push(self.chat_line(&subtitle, PanelTone::Muted, list_width));
         }
         if list_width < width {
-            let observed = field(selected, "kind") == "observed";
-            let next = field(selected, "agent_id") == "next";
-            let selected_target = !observed && field(selected, "agent_id") == target;
-            let mut details: Vec<(String, PanelTone)> = vec![
-                (
-                    (if observed {
-                        "Observed call"
-                    } else {
-                        "Message recipient"
-                    })
-                    .into(),
-                    PanelTone::Heading,
-                ),
-                ("".into(), PanelTone::Normal),
-                (field(selected, "name").into(), PanelTone::Accent),
-            ];
-            if missing {
-                details.clear();
-                details.extend([
-                    ("Selection unavailable".into(), PanelTone::Heading),
-                    ("".into(), PanelTone::Normal),
-                    ("The selected member or call left".into(), PanelTone::Normal),
-                    ("Your recipient has not changed".into(), PanelTone::Muted),
-                    ("".into(), PanelTone::Normal),
-                    ("↑ / ↓      choose another entry".into(), PanelTone::Normal),
-                    ("Esc / ←    return to your draft".into(), PanelTone::Muted),
-                ]);
-            } else if observed {
-                details.extend([
-                    (
-                        format!("Model · {}", field(selected, "model")),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        format!("Tool  · {}", field(selected, "tool")),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        (if selected["active"] == true {
-                            "Running now"
-                        } else {
-                            "Retained activity"
-                        })
-                        .into(),
-                        PanelTone::Normal,
-                    ),
-                    ("".into(), PanelTone::Normal),
-                    ("Enter / →  inspect this call".into(), PanelTone::Normal),
-                    ("Esc / ←    back to conversation".into(), PanelTone::Muted),
-                    ("".into(), PanelTone::Normal),
-                    (
-                        "View only · does not change recipient".into(),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        "Name and model are caller reported".into(),
-                        PanelTone::Muted,
-                    ),
-                ]);
-            } else {
-                details.extend([
-                    (
-                        (if next {
-                            "Automatic delivery"
-                        } else {
-                            field(selected, "role")
-                        })
-                        .into(),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        (if selected_target {
-                            "● Current recipient".into()
-                        } else {
-                            format!("Presence · {}", field(selected, "status"))
-                        }),
-                        PanelTone::Normal,
-                    ),
-                    ("".into(), PanelTone::Normal),
-                    ("Enter / →  choose and return".into(), PanelTone::Normal),
-                    ("Esc / ←    back to conversation".into(), PanelTone::Muted),
-                    ("".into(), PanelTone::Normal),
-                    (
-                        (if next {
-                            "Delivered to the next eligible caller"
-                        } else {
-                            "Delivered only to this member ID"
-                        })
-                        .into(),
-                        PanelTone::Muted,
-                    ),
-                    (
-                        (if next {
-                            ""
-                        } else {
-                            field(selected, "agent_id")
-                        })
-                        .into(),
-                        PanelTone::Muted,
-                    ),
-                    ("".into(), PanelTone::Normal),
-                    (
-                        "Your draft and cursor stay in place".into(),
-                        PanelTone::Muted,
-                    ),
-                ]);
-                if next && items(data, "agents").is_empty() {
-                    details.push(("No connected members yet".into(), PanelTone::Muted));
-                }
-            }
+            let details = self.chat_agent_details((!missing).then_some(selected), data);
             rows.resize_with(usize::from(height), || {
                 self.chat_line("", PanelTone::Normal, list_width)
             });
@@ -1991,6 +1993,31 @@ impl State {
         (index < self.conversation.list_count).then_some(self.conversation.list_start + index)
     }
 
+    fn chat_scroll_hint(&self) -> Option<String> {
+        if self.help || self.conversation.view != View::Activity {
+            return None;
+        }
+        if self.raw_logs || self.events.is_empty() {
+            let below = if self.log_query.is_empty() && self.log_level == 0 {
+                self.logs.screen().scrollback()
+            } else {
+                self.filter_offset
+            };
+            return (below > 0)
+                .then(|| format!("↓ {below} rows below · Ctrl+End to return to latest"));
+        }
+        let below = self.events.rows_below();
+        if below > 0 {
+            Some(format!(
+                "↓ {below} rows below · Ctrl+End to return to latest"
+            ))
+        } else if !self.events.is_following() {
+            Some("Paused · Ctrl+End to follow new activity".into())
+        } else {
+            None
+        }
+    }
+
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.chat_updates();
         self.chat_refresh_completions();
@@ -2007,16 +2034,19 @@ impl State {
         let top = body_top(g.rows);
         let height = body_rows(g.rows);
         let mut body = match self.conversation.view {
-            View::Activity => self.filtered_logs().unwrap_or_else(|| {
-                if self.raw_activity || self.events.is_empty() {
-                    (0..height)
-                        .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
-                        .collect()
+            View::Activity => {
+                if self.raw_logs || self.events.is_empty() {
+                    self.filtered_logs().unwrap_or_else(|| {
+                        (0..height)
+                            .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
+                            .collect()
+                    })
                 } else {
+                    self.events.filter(&self.log_query, self.log_level);
                     self.events
                         .render(g.left, height, &self.ui, self.conversation.content_focus)
                 }
-            }),
+            }
             View::History => self.chat_history_rows(height),
             View::Questions => self.question_rows(height),
             View::Audit => self.audit.render(g.left, height, &self.ui),
@@ -2030,6 +2060,11 @@ impl State {
             self.chat_line("", PanelTone::Normal, g.left)
         });
         body.truncate(usize::from(height));
+        let selected_agent = if self.conversation.view == View::Agents {
+            self.chat_selected()
+        } else {
+            None
+        };
         self.chat_fill_body(&mut body, g.left);
         let empty = Composer::default();
         let input = if self.conversation.view == View::Questions {
@@ -2086,7 +2121,13 @@ impl State {
                 } else {
                     "connected"
                 };
-                let hint = self.notice.clone().unwrap_or_else(|| {
+                let scroll_hint = self.chat_scroll_hint();
+                let hint_tone = if scroll_hint.is_some() {
+                    PanelTone::Accent
+                } else {
+                    PanelTone::Muted
+                };
+                let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::History {
                         return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
@@ -2103,7 +2144,11 @@ impl State {
                         return if self.conversation.detail {
                             "← / Esc  back to agents".into()
                         } else {
-                            "↑↓ select · Enter/→ choose · Esc back · ● current recipient".into()
+                            if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
+                                "↑↓ select · Enter latest call · Esc back · view only".into()
+                            } else {
+                                "↑↓ select · Enter/→ message · Esc back · ● current recipient".into()
+                            }
                         };
                     }
                     if let Some(guide) = self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18) {
@@ -2112,17 +2157,17 @@ impl State {
                             else { "F1 · full online guide link".into() };
                     }
                     format!(
-                        "{} · {status} · {} members / {} calls · {pending} queued · ← agents · /help",
+                        "{} · {status} · {} members / {} callers · {pending} queued · ← agents · /help",
                         if self.conversation.content_focus {
                             "browse"
                         } else {
                             "input"
                         },
                         agents.len(),
-                        observed.len()
+                        grouped_callers.len()
                     )
                 });
-                rows.push(self.chat_line(&format!(" {hint}"), PanelTone::Muted, g.cols));
+                rows.push(self.chat_line(&format!(" {hint}"), hint_tone, g.cols));
                 continue;
             } else if top > 0 && index == 0 {
                 let suffix = if !self.log_query.is_empty() || self.log_level != 0 {
@@ -2137,8 +2182,8 @@ impl State {
                 self.chat_line(
                     &format!(
                         "  ssmcp  /  {}{}{suffix}",
-                        if self.raw_activity && self.conversation.view == View::Activity {
-                            "raw activity"
+                        if self.conversation.view == View::Activity && self.raw_logs {
+                            "raw transcript"
                         } else {
                             self.conversation.view.name()
                         },
@@ -2183,8 +2228,16 @@ impl State {
             let limit = usize::from(g.rows.saturating_sub(1));
             let footer = self.guide_rows(rect.width, limit as u16, 0, rect.col);
             let footer_start = limit.saturating_sub(footer.len());
-            let mut sidebar = Vec::new();
-            for kind in &self.ui.panels {
+            let agent_view = self.conversation.view == View::Agents;
+            let mut sidebar = if agent_view {
+                self.chat_agent_details(selected_agent.as_ref(), &data)
+                    .into_iter()
+                    .map(|(text, tone)| (format!(" {text}"), tone))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            for kind in self.ui.panels.iter().filter(|_| !agent_view) {
                 let mut section = match kind {
                     crate::client::ui::Panel::Agents => {
                         let mut section =
@@ -2203,10 +2256,10 @@ impl State {
                                 PanelTone::Heading,
                             ));
                             for controller in grouped_callers.iter().take(3) {
-                                let tone = if controller.unknown {
-                                    PanelTone::Warning
-                                } else if controller.running > 0 {
+                                let tone = if controller.running > 0 {
                                     PanelTone::Accent
+                                } else if controller.unknown {
+                                    PanelTone::Warning
                                 } else {
                                     PanelTone::Muted
                                 };
@@ -2307,215 +2360,6 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
-    }
-
-    #[test]
-    fn raw_activity_shows_retained_output_and_preserves_the_draft_and_compact_state() {
-        let mut state = State::new(24, 100, &Ui::default());
-        state.preview = true;
-        let event = json!({"type":"ssmcp.exec.started","job_id":"raw-test"});
-        let bytes = b"[RUN] raw-test\nraw-only-detail-marker\n";
-        state.log_raw(bytes);
-        state.events.ingest_event("shell", &event, bytes);
-        assert!(state.conversation.composer.insert("unfinished draft"));
-        state.conversation.composer.left();
-        let before = (
-            state.conversation.composer.text().to_owned(),
-            state.conversation.composer.cursor(),
-            state.events.snapshot(),
-        );
-        assert!(
-            !display(&mut state)
-                .screen()
-                .contents()
-                .contains("raw-only-detail-marker")
-        );
-        assert!(state.chat_command("/raw").unwrap());
-        assert!(state.raw_activity);
-        assert!(
-            display(&mut state)
-                .screen()
-                .contents()
-                .contains("raw-only-detail-marker")
-        );
-        state.chat_move(-1);
-        assert_eq!(state.events.snapshot(), before.2);
-        assert!(state.chat_command("/logs").unwrap());
-        assert!(!state.raw_activity);
-        assert_eq!(state.conversation.composer.text(), before.0);
-        assert_eq!(state.conversation.composer.cursor(), before.1);
-        assert_eq!(state.events.snapshot()["retained_events"], 1);
-        assert!(
-            !display(&mut state)
-                .screen()
-                .contents()
-                .contains("raw-only-detail-marker")
-        );
-    }
-
-    #[test]
-    fn caller_groups_preserve_authenticated_recipients_and_each_exact_audit_run() {
-        let mut state = preview(24, 120);
-        state.audit = super::super::AuditView::default();
-        state.conversation.composer.set_text("保留用户草稿");
-        state.conversation.target = Some("example-builder".into());
-        let live = json!({"connected":true,"room_id":"fixture-room"});
-        for run in ["alpha", "beta"] {
-            let event = json!({
-                "type":"ssmcp.code_mode","phase":"started","run_id":run,
-                "code":format!("return '{run}';"),
-                "controller":{"name":"Builder","model":"Shared model","source":"caller-reported"}
-            });
-            assert!(state.audit.ingest(&event));
-            state.caller_tracker.observe(&event, &live);
-        }
-        let data = state.chat_data();
-        let observed = state.audit.observed_controllers();
-        let before = recipients(&data, observed.clone());
-        let audit_before = state.audit.snapshot();
-        let groups = state.caller_tracker.groups(&observed, &live);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].calls, 2);
-        assert_eq!(groups[0].running, 2);
-        state.chat_agents();
-        state.chat_agent_rows(&data, 20);
-        assert_eq!(
-            recipients(&data, state.audit.observed_controllers()),
-            before
-        );
-        assert_eq!(state.audit.snapshot(), audit_before);
-        assert_eq!(items(&data, "agents").len(), 2);
-        assert_eq!(observed.len(), 2);
-        assert!(
-            observed
-                .iter()
-                .all(|entry| entry["targetable"] == false && entry["agent_id"].is_null())
-        );
-        for run in ["alpha", "beta"] {
-            state.conversation.view = View::Agents;
-            state.conversation.selected_agent = Some(format!("run:{run}"));
-            state.chat_agent_rows(&data, 20);
-            assert_eq!(field(&state.chat_selected().unwrap(), "run_id"), run);
-            state.chat_open(false);
-            assert_eq!(state.audit.snapshot()["selected"]["run_id"], run);
-            assert_eq!(
-                state.audit.snapshot()["selected"]["code"],
-                format!("return '{run}';")
-            );
-            assert_eq!(
-                state.conversation.target.as_deref(),
-                Some("example-builder")
-            );
-            assert_eq!(state.conversation.composer.text(), "保留用户草稿");
-        }
-        state.conversation.detail = false;
-        state.conversation.view = View::Agents;
-        state.conversation.selected_agent = Some("member:example-reviewer".into());
-        state.chat_agent_rows(&data, 20);
-        state.chat_open(false);
-        assert_eq!(
-            state.conversation.target.as_deref(),
-            Some("example-reviewer")
-        );
-        assert_eq!(state.conversation.composer.text(), "保留用户草稿");
-        assert_eq!(state.audit.observed_controllers(), observed);
-    }
-
-    #[test]
-    fn binary_png_paste_keeps_controls_delimiters_and_following_text_separate() {
-        let png = crate::client::input::paste::fixture_png();
-        for size in [1, 3, 17, 4096] {
-            let mut state = preview(24, 100);
-            state.conversation.composer.set_text("保留草稿");
-            state.conversation.target = Some("agent-fixture".into());
-            let now = Instant::now();
-            input(&mut state, b"\x1b[200~");
-            for part in png.chunks(size) {
-                assert!(state.chat_keyboard(part, now, false).is_empty());
-            }
-            assert_eq!(state.conversation.paste.as_deref(), Some(png.as_slice()));
-            assert!(state.conversation.paste_png.allows_end());
-            assert!(state.keyboard.pasting);
-            assert_eq!(state.conversation.composer.text(), "保留草稿");
-            assert_eq!(state.conversation.target.as_deref(), Some("agent-fixture"));
-            assert!(state.actions.is_empty());
-            assert!(state.conversation.input_task.is_none());
-            assert!(state.conversation.submitting.is_none());
-            let tail = [b"\x1b[201~".as_slice(), " 继续中文".as_bytes()].concat();
-            assert!(state.chat_keyboard(&tail, now, false).is_empty());
-            assert!(state.conversation.paste.is_none());
-            assert!(!state.keyboard.pasting);
-            assert_eq!(state.conversation.composer.text(), "保留草稿 继续中文");
-            assert!(state.notice.as_deref().unwrap().contains("Preview"));
-            assert!(state.actions.is_empty());
-        }
-    }
-
-    #[test]
-    fn truncated_png_paste_recovers_before_new_text_without_replaying_bytes() {
-        let png = crate::client::input::paste::fixture_png();
-        let mut state = preview(24, 100);
-        state.conversation.composer.set_text("原草稿");
-        state.conversation.target = Some("agent-fixture".into());
-        let now = Instant::now();
-        let incomplete = [
-            b"\x1b[200~".as_slice(),
-            &png[..png.len() - 8],
-            b"\x1b[201~\r\x1b[15~\x03",
-        ]
-        .concat();
-        assert!(state.chat_keyboard(&incomplete, now, false).is_empty());
-        assert_eq!(state.conversation.composer.text(), "原草稿");
-        assert!(state.actions.is_empty());
-        assert!(state.conversation.submitting.is_none());
-        // Pending ESC bytes must not leak into the next ordinary input.
-        assert!(state.chat_keyboard(b"\x1b[", now, false).is_empty());
-        let later = now + crate::client::input::paste::IMAGE_IDLE_TIMEOUT;
-        assert!(
-            state
-                .chat_keyboard(" 后续文字".as_bytes(), later, false)
-                .is_empty()
-        );
-        assert_eq!(state.conversation.composer.text(), "原草稿 后续文字");
-        assert_eq!(state.conversation.target.as_deref(), Some("agent-fixture"));
-        assert!(state.conversation.paste.is_none());
-        assert!(!state.keyboard.pasting);
-        assert!(state.keyboard.pending.is_empty());
-        assert!(
-            state
-                .notice
-                .as_deref()
-                .unwrap()
-                .contains("Incomplete image paste")
-        );
-        assert!(state.actions.is_empty());
-    }
-
-    #[test]
-    fn damaged_png_paste_is_rejected_without_text_attachment_or_draft_change() {
-        let png = crate::client::input::paste::fixture_png();
-        let damaged = String::from_utf8_lossy(&png);
-        // Remove terminal delimiters here: this regression is the original lossy
-        // UTF-8 header, independent from the valid raw PNG framing regression.
-        let mut bad = damaged.as_bytes()[..16].to_vec();
-        bad.extend_from_slice(b"IHDR");
-        bad.resize(9 * 1024, b'x');
-        let mut state = preview(24, 100);
-        state.conversation.composer.set_text("不改变草稿");
-        input(&mut state, b"\x1b[200~");
-        input(&mut state, &bad);
-        input(&mut state, b"\x1b[201~");
-        assert_eq!(state.conversation.composer.text(), "不改变草稿");
-        assert!(state.conversation.input_task.is_none());
-        assert!(state.conversation.submitting.is_none());
-        assert!(
-            state
-                .notice
-                .as_deref()
-                .unwrap()
-                .contains("terminal altered image bytes")
-        );
-        assert!(state.notice.as_deref().unwrap().contains("Ctrl+V"));
     }
 
     #[cfg(unix)]
@@ -2773,6 +2617,112 @@ mod tests {
         let rows = state.chat_agent_rows(&data, 18).join("\n");
         assert!(rows.contains("…11111111"));
         assert!(rows.contains("…22222222"));
+    }
+
+    #[test]
+    fn agent_roster_groups_calls_and_preserves_selection_when_another_call_arrives() {
+        let mut state = preview(32, 120);
+        state.audit = Default::default();
+        for id in ["one", "two", "three"] {
+            state.audit.ingest(&json!({
+                "type":"ssmcp.code_mode", "run_id":id, "phase":"started",
+                "controller":{"name":"Repeated caller","model":"Model","source":"caller-reported"}
+            }));
+        }
+        state.chat_agents();
+        let data = state.chat_data();
+        let entries = state.chat_recipients(&data);
+        assert_eq!(entries.len(), 4, "next + two members + one observed caller");
+        let caller = entries
+            .iter()
+            .position(|entry| field(entry, "kind") == "observed")
+            .unwrap();
+        assert_eq!(entries[caller]["calls"], 3);
+        state.chat_move(caller as isize);
+        let selected = state.conversation.selected_agent.clone();
+        state.audit.ingest(&json!({
+            "type":"ssmcp.code_mode", "run_id":"four", "phase":"started",
+            "controller":{"name":"Repeated caller","model":"Model","source":"caller-reported"}
+        }));
+        let rows = state.chat_agent_rows(&data, 24).join("\n");
+        assert_eq!(rows.matches("Repeated caller").count(), 1);
+        assert!(rows.contains("4 calls"));
+        assert_eq!(state.conversation.selected_agent, selected);
+        assert_eq!(state.chat_selected().unwrap()["calls"], 4);
+        assert_eq!(state.chat_selected().unwrap()["run_id"], "four");
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("No direct message address"));
+        assert!(!screen.contains("Recent commits"));
+        assert!(!screen.contains("Last controller"));
+    }
+
+    #[test]
+    fn sidebar_inspects_selected_member_and_keeps_its_message_count_scoped() {
+        let mut state = preview(32, 120);
+        state.chat_agents();
+        state.chat_move(1);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("Only this member receives it"));
+        assert!(screen.contains("example-builder"));
+        assert!(!screen.contains("Recent commits"));
+        let data = json!({"queue":[
+            {"target":"example-builder","status":"queued"},
+            {"target":"example-builder","status":"delivered"},
+            {"target":"example-reviewer","status":"queued"}
+        ]});
+        let entry = state.chat_selected().unwrap();
+        let details = state.chat_agent_details(Some(&entry), &data);
+        assert!(
+            details
+                .iter()
+                .any(|(text, _)| text == "1 pending for this recipient")
+        );
+    }
+
+    #[test]
+    fn mouse_uses_the_drawn_caller_identity_when_new_activity_reorders_the_list() {
+        let mut state = preview(32, 120);
+        state.audit = Default::default();
+        state.audit.ingest(&json!({
+            "type":"ssmcp.code_mode", "run_id":"drawn", "phase":"started",
+            "controller":{"name":"Original caller","model":"A","source":"caller-reported"}
+        }));
+        state.chat_agents();
+        let data = state.chat_data();
+        state.chat_agent_rows(&data, 24);
+        let index = state
+            .chat_recipients(&data)
+            .iter()
+            .position(|entry| field(entry, "run_id") == "drawn")
+            .unwrap();
+        state.audit.ingest(&json!({
+            "type":"ssmcp.code_mode", "run_id":"new-first-row", "phase":"started",
+            "controller":{"name":"Another caller","model":"B","source":"caller-reported"}
+        }));
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 2,
+            y: body_top(state.geometry.rows) + 1 + index as u16 * 2,
+            release: false,
+        });
+        assert_eq!(state.audit.snapshot()["selected"]["run_id"], "drawn");
+        assert!(state.conversation.target.is_none());
+    }
+
+    #[test]
+    fn narrow_agent_list_keeps_different_models_visible() {
+        let mut state = preview(24, 70);
+        state.audit = Default::default();
+        for model in ["Model A", "Model B"] {
+            state.audit.ingest(&json!({
+                "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
+                "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
+            }));
+        }
+        state.chat_agents();
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("ChatGPT · Model A"));
+        assert!(screen.contains("ChatGPT · Model B"));
     }
 
     #[test]
@@ -3159,6 +3109,150 @@ mod tests {
     }
 
     #[test]
+    fn binary_bracketed_paste_preserves_every_byte_across_read_boundaries() {
+        let png = crate::client::input::paste::fixture_png();
+        let mut bytes = b"\x1b[200~".to_vec();
+        bytes.extend_from_slice(&png);
+        for chunk in 1..=bytes.len() {
+            let mut state = preview(28, 120);
+            state.conversation.composer.set_text("保留原稿");
+            for part in bytes.chunks(chunk) {
+                input(&mut state, part);
+            }
+            assert_eq!(state.conversation.paste.as_deref(), Some(png.as_slice()));
+            assert_eq!(state.conversation.composer.text(), "保留原稿");
+            input(&mut state, b"\x1b[201~");
+            assert!(state.conversation.paste.is_none());
+            assert_eq!(state.conversation.composer.text(), "保留原稿");
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("Preview cannot"),
+                "recognized images must reach the guarded import path before UTF-8 decoding"
+            );
+        }
+    }
+
+    #[test]
+    fn image_idle_recovery_discards_only_the_paste_and_accepts_the_next_text() {
+        use crate::client::input::paste::{IMAGE_IDLE_TIMEOUT, fixture_png};
+        let png = fixture_png();
+        for payload in [&png[..1], &png[..png.len() - 1], png.as_slice()] {
+            let now = Instant::now();
+            let mut state = preview(28, 120);
+            state.conversation.composer.set_text("保留原稿");
+            let source = [b"\x1b[200~".as_slice(), payload].concat();
+            state.keyboard(&source, now, false);
+            assert!(state.conversation.paste.is_some());
+            state.keyboard(b" next", now + IMAGE_IDLE_TIMEOUT, false);
+            assert!(state.conversation.paste.is_none());
+            assert!(!state.keyboard.pasting);
+            assert_eq!(state.conversation.composer.text(), "保留原稿 next");
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .unwrap()
+                    .contains("Incomplete image paste")
+            );
+            assert!(state.conversation.input_task.is_none());
+        }
+    }
+
+    #[test]
+    fn split_image_end_uses_raw_input_progress_across_graphics_and_keyboard() {
+        use crate::client::input::paste::fixture_png;
+        let now = Instant::now();
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("draft");
+        let source = [b"\x1b[200~".as_slice(), &fixture_png()].concat();
+        state.keyboard(&source, now, false);
+        // Graphics holds this prefix. The composer must still see its progress.
+        state.keyboard(b"\x1b", now + Duration::from_millis(1500), false);
+        state.keyboard(&[], now + Duration::from_millis(2200), true);
+        assert!(state.keyboard.pasting);
+        assert!(state.conversation.paste.is_some());
+        state.keyboard(b"[201~", now + Duration::from_millis(2500), false);
+        assert!(!state.keyboard.pasting);
+        assert!(state.conversation.paste.is_none());
+        assert_eq!(state.conversation.composer.text(), "draft");
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .starts_with("Preview cannot")
+        );
+    }
+
+    #[test]
+    fn attach_buffered_image_end_progress_keeps_the_compositor_paste_alive() {
+        use crate::client::input::paste::fixture_png;
+        use crate::session::attach::input::{Decoder, Event};
+        fn deliver(state: &mut State, events: Vec<Event>, now: Instant) {
+            for event in events {
+                match event {
+                    Event::Bytes(bytes) | Event::PasteBytes(bytes) => {
+                        state.keyboard(&bytes, now, false);
+                    }
+                    Event::InputProgress(at) => state.paste_input_progress(at),
+                    Event::PasteExpired => state.discard_image_paste(),
+                    _ => panic!("image bytes must not become attach commands"),
+                }
+            }
+        }
+
+        let now = Instant::now();
+        let mut state = preview(28, 120);
+        let mut outer = Decoder::default();
+        state.conversation.composer.set_text("draft");
+        let source = [b"\x1b[200~".as_slice(), &fixture_png()].concat();
+        deliver(&mut state, outer.feed_at(&source, false, now), now);
+        let progress = now + Duration::from_millis(1900);
+        let events = outer.feed_at(b"\x1b", false, progress);
+        assert!(matches!(events.as_slice(), [Event::InputProgress(at)] if *at == progress));
+        deliver(&mut state, events, progress);
+        // The outer has retained every byte in the new chunk. A display tick
+        // after the old deadline must still retain the entire image.
+        state.keyboard(&[], now + Duration::from_millis(2100), true);
+        assert!(state.conversation.paste.is_some());
+        assert!(state.keyboard.pasting);
+        let end = now + Duration::from_secs(3);
+        deliver(&mut state, outer.feed_at(b"[201~", false, end), end);
+        assert!(state.conversation.paste.is_none());
+        assert!(!state.keyboard.pasting);
+        assert_eq!(state.conversation.composer.text(), "draft");
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .starts_with("Preview cannot")
+        );
+        state.keyboard(b" next", end + Duration::from_millis(1), false);
+        assert_eq!(state.conversation.composer.text(), "draft next");
+    }
+
+    #[test]
+    fn explicit_attach_recovery_resets_all_compositor_layers_before_new_input() {
+        use crate::client::input::paste::fixture_png;
+        let now = Instant::now();
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("draft");
+        let source = [b"\x1b[200~".as_slice(), &fixture_png()].concat();
+        state.keyboard(&source, now, false);
+        state.keyboard(b"\x1b[20", now + Duration::from_millis(1), false);
+        // The outer reader can reach its deadline slightly before this layer.
+        state.discard_image_paste();
+        state.keyboard(b" next", now + Duration::from_millis(2), false);
+        assert_eq!(state.conversation.composer.text(), "draft next");
+        assert!(state.conversation.paste.is_none());
+        assert!(!state.keyboard.pasting);
+    }
+
+    #[test]
     fn coalesced_utf8_navigation_and_multiline_paste_keep_input_local() {
         let mut state = preview(36, 120);
         input(&mut state, "修复界面".as_bytes());
@@ -3384,12 +3478,15 @@ mod tests {
         input(&mut state, b"/filter cargo test --lib\r");
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("cargo test --lib"));
+        assert!(!screen.contains("A quieter workspace"));
+        state.events.open();
+        let screen = display(&mut state).screen().contents();
         assert!(screen.contains("exit=0"));
         assert!(screen.contains("custom_colors ... ok"));
         assert!(!screen.contains("A quieter workspace"));
         assert!(
-            !screen.contains("[RUN]"),
-            "conversation presentation uses quiet headings"
+            screen.contains("[RUN]"),
+            "filtered activity keeps the same semantic command heading"
         );
     }
     #[test]
@@ -3407,7 +3504,8 @@ mod tests {
         state.conversation.composer.insert("draft stays here");
         state.chat_change_view(View::Agents);
         let data = state.chat_data();
-        let first_observed = recipients(&data, state.audit.observed_controllers())
+        let first_observed = state
+            .chat_recipients(&data)
             .iter()
             .position(|entry| field(entry, "kind") == "observed")
             .unwrap();
@@ -3446,7 +3544,7 @@ mod tests {
         state.audit.ingest(&json!({"type":"ssmcp.code_mode","run_id":"new-call","phase":"started","code":"return 3;"}));
         state.chat_list_rows(&data, body_rows(state.geometry.rows));
         assert_eq!(field(&state.chat_selected().unwrap(), "run_id"), selected);
-        state.chat_move(1);
+        state.chat_move(-1);
         assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
     }
     #[tokio::test]
@@ -3656,5 +3754,72 @@ mod tests {
             Err("File not found".into()),
         );
         assert_eq!(state.conversation.composer.text(), "新的要求");
+    }
+    #[test]
+    fn scrolling_shows_return_hint_and_control_end_preserves_the_draft() {
+        for end in [b"\x1b[1;5F".as_slice(), b"\x1b[4;5~", b"\x1b[8;5~"] {
+            let mut state = preview(30, 120);
+            state.conversation.composer.set_text("keep this draft");
+            for index in 0..80 {
+                state.log(format!("\n[INFO] retained event {index}\n").as_bytes());
+            }
+            display(&mut state);
+            input(&mut state, b"\x1b[1;5H");
+            let scrolled = display(&mut state);
+            assert!(scrolled.screen().contents().contains("Ctrl+End"));
+            assert!(state.events.rows_below() > 0);
+            input(&mut state, end);
+            display(&mut state);
+            assert!(state.events.is_following());
+            assert_eq!(state.events.rows_below(), 0);
+            assert!(state.chat_scroll_hint().is_none());
+            assert_eq!(state.conversation.composer.text(), "keep this draft");
+        }
+    }
+
+    #[test]
+    fn explicit_diagnostics_open_original_output_and_allow_compact_navigation() {
+        for ui in [
+            Ui {
+                log_format: super::super::LogFormat::PrettyVerbose,
+                ..Ui::default()
+            },
+            Ui {
+                show_raw_json: true,
+                ..Ui::default()
+            },
+        ] {
+            let mut state = super::super::preview_state(40, 120, &ui);
+            let original = display(&mut state).screen().contents();
+            assert!(original.contains("raw transcript"));
+            assert!(original.contains("Command completed successfully."));
+            state.chat_command("/logs").unwrap();
+            assert!(
+                !display(&mut state)
+                    .screen()
+                    .contents()
+                    .contains("raw transcript")
+            );
+        }
+    }
+
+    #[test]
+    fn raw_transcript_toggle_keeps_draft_and_returns_to_compact_activity() {
+        let mut state = preview(30, 120);
+        state.conversation.composer.set_text("unsent request");
+        assert!(state.chat_command("/raw").unwrap());
+        assert!(state.raw_logs);
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("raw transcript")
+        );
+        assert_eq!(state.conversation.composer.text(), "unsent request");
+        assert!(state.chat_command("/raw unexpected").is_err());
+        assert!(state.raw_logs);
+        assert!(state.chat_command("/logs").unwrap());
+        assert!(!state.raw_logs);
+        assert_eq!(state.conversation.composer.text(), "unsent request");
     }
 }

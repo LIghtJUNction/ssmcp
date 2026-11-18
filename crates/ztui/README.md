@@ -4,6 +4,13 @@ ztui 是 Project Z 的文本 TUI 基础库。它只负责显示单元几何、�
 
 库源码使用 `#![no_std]` 和 `#![forbid(unsafe_code)]`，只引用 `core`，没有 normal、dev、build 或 optional 依赖。行、上一帧、输出缓冲都由调用方拥有。测试、示例和基准程序使用 Rust 工具链自带的 `std`，没有额外 crate。
 
+发布包名为 `ztui-core`，Rust 库名保留 `ztui`。crates.io 上现有的 [ztui](https://crates.io/crates/ztui) 是其他作者的 ZeroTier 工具；SSMCP 用精确版本和包别名接入本库：
+
+~~~toml
+[dependencies]
+ztui = { package = "ztui-core", version = "=0.1.0" }
+~~~
+
 ## 接口与职责
 
 | 接口 | 用途 | 边界 |
@@ -40,7 +47,7 @@ Kitty 图像协议、图片解码、图层 placement 及清理属于上层独立
 
 ```sh
 cargo test -p ztui-core
-cargo run -p ztui --example fixed_buffer
+cargo run -p ztui-core --example fixed_buffer
 cargo bench -p ztui-core --bench diff -- 50000
 ```
 
@@ -50,4 +57,24 @@ cargo bench -p ztui-core --bench diff -- 50000
 
 详细输出约定见 [docs/contracts.md](docs/contracts.md)。需要 Rust 1.100 或更新版本，许可证为 MIT。
 
-The registry package is `ztui-core`; the Rust library name remains `ztui`. The `ztui` registry name belongs to an [existing ZeroTier TUI project](https://crates.io/crates/ztui).
+## 本轮测量
+
+2026-11-18，在 x86_64 Linux 开发机使用 Rust 1.100.0、`opt-level=z`，每种场景各运行两轮 10,000 帧，第二轮交换旧、新实现的顺序。每组计时前先验证 ANSI 输出逐字节相同；七组均通过。
+
+| 场景 | 旧实现 ns/帧 | ztui ns/帧 | ztui / 旧实现 |
+|---|---:|---:|---:|
+| 首帧，64×160 | 3120.52 | 3289.01 | 1.0540 |
+| 不变画面 | 449.83 | 520.12 | 1.1563 |
+| 单行修改 | 753.81 | 642.40 | 0.8522 |
+| 全部行修改 | 3553.55 | 3842.52 | 1.0813 |
+| 尺寸变化，64×180 | 3649.31 | 4044.52 | 1.1083 |
+| 仅光标变化 | 1292.26 | 629.15 | 0.4869 |
+| 仅模式变化 | 1535.95 | 1321.99 | 0.8607 |
+
+该次测量中，单行、光标和模式更新更快，首帧、全量与尺寸重绘略慢。开发机同期有其他构建，计时用于记录本轮实验；应用交互还取决于上层排版和终端绘制。[机器与测量记录](docs/benchmark-20261118.json)。
+
+## 联合发布
+
+SSMCP 的 Release 工作流用 `cargo package --workspace --locked` 联合验证两个包，保留完整归档，再按 `ztui-core` → `ssmcp` 的顺序发布并检查注册表校验和。发布前先检查全部包的归档、版本冲突和凭据，防止已知错误造成半次发布。
+
+首个库版本为 0.1.0。之后通过 `python scripts/release.py bump patch|minor|major` 更新应用时，脚本同时递增本库的 patch 版本，更新精确依赖和锁文件；所有版本校验完成后才写文件。相同 tag 重试会跳过已经发布且字节相同的包。

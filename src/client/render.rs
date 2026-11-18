@@ -18,8 +18,8 @@ mod command_process_tests;
 #[cfg(test)]
 #[path = "readable_log_fixture.rs"]
 mod readable_log_fixture;
-pub(crate) use activity::CallerTracker;
 use activity::{Activities, key as activity_key, short_id};
+pub(crate) use activity::{CallerGroup, CallerTracker};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
@@ -291,13 +291,7 @@ pub(crate) fn event(label: &str, value: &Value) {
             .then(|| renderer.panel_snapshot(Instant::now()));
         (snapshot, renderer.auth_diagnostics.take_updates())
     };
-    if super::terminal::log_event(label, value, &bytes) {
-        if let Some(snapshot) = snapshot {
-            super::terminal::set_panel(snapshot);
-        }
-    } else {
-        publish(&bytes, snapshot);
-    }
+    publish_event(label, value, &bytes, snapshot);
     super::terminal::diagnostics(&diagnostics);
 }
 
@@ -355,6 +349,17 @@ pub(super) fn set_git_status(snapshot: Arc<GitSnapshot>) {
     };
     if let Some(panel) = panel {
         super::terminal::set_panel(panel);
+    }
+}
+
+fn publish_event(label: &str, value: &Value, bytes: &[u8], snapshot: Option<PanelSnapshot>) {
+    if !super::terminal::log_event(label, value, bytes) && !bytes.is_empty() {
+        let mut out = io::stderr().lock();
+        let _ = out.write_all(bytes);
+        let _ = out.flush();
+    }
+    if let Some(snapshot) = snapshot {
+        super::terminal::set_panel(snapshot);
     }
 }
 
@@ -3317,6 +3322,42 @@ mod tests {
             decoded, original,
             "all 28 native records remain in explicit raw mode"
         );
+    }
+
+    #[test]
+    fn assembled_auth_diagnostics_mask_credentials_at_every_native_chunk_boundary() {
+        for password in ["fixture'pw", "fixture)pw", "fixture-secret"] {
+            let line = format!(
+                "ERROR AuthRequired HTTPS://alice:{password}@api.example/resource?token=fixture-query\n"
+            );
+            for split in 0..=line.len() {
+                let mut renderer = Renderer::new(false, false, 120);
+                renderer.dashboard_active = true;
+                let mut out = Vec::new();
+                for chunk in [&line[..split], &line[split..]] {
+                    renderer
+                        .event(
+                            &mut out,
+                            "codex",
+                            &json!({
+                                "type":"stderr","text":chunk
+                            }),
+                        )
+                        .unwrap();
+                }
+                let updates = renderer.auth_diagnostics.take_updates();
+                assert_eq!(updates.len(), 1, "split {split}");
+                let display = format!("{}{}", updates[0].text(), renderer.snapshot(Instant::now()));
+                assert!(
+                    display.contains("https://api.example"),
+                    "split {split}: {display}"
+                );
+                for secret in ["alice", "fixture", "token="] {
+                    assert!(!display.contains(secret), "split {split}: {display}");
+                }
+                assert!(out.is_empty());
+            }
+        }
     }
 
     #[test]

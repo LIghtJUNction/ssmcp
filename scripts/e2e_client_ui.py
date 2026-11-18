@@ -228,12 +228,12 @@ def main():
             preview.send(b"\x1b")
             preview.until(lambda s: not s["hide_cursor"], "input focus after compact navigation")
             slash(preview, "/raw")
-            raw = preview.until(lambda s: "raw activity" in s["rows"][0]
+            raw = preview.until(lambda s: "raw transcript" in s["rows"][0]
                                 and "test client::ui::custom_colors" in body_text(s),
                                 "original unfolded transcript")
             save_shot(args.out, "raw-activity", raw)
             slash(preview, "/raw")
-            preview.until(lambda s: "raw activity" not in s["rows"][0]
+            preview.until(lambda s: "raw transcript" not in s["rows"][0]
                           and "exit=0" in body_text(s),
                           "raw toggle returning to compact activity")
             check(True, "/raw toggles the original transcript and compact display")
@@ -311,7 +311,7 @@ def main():
             preview.until(lambda s: "errors /" not in s["rows"][0], "category clear")
 
             slash(preview, "/raw")
-            preview.until(lambda s: "raw activity" in s["rows"][0], "raw scrolling fixture")
+            preview.until(lambda s: "raw transcript" in s["rows"][0], "raw scrolling fixture")
             preview.resize(18, 120)
             live = preview.until(lambda s: "Write a requirement below" in body_text(s)
                                  and prompt_start(s) == 13, "compact live activity")
@@ -319,13 +319,23 @@ def main():
             preview.until(lambda s: "wheel draft" in prompt_text(s), "draft before direct scrolling")
             before_scroll = body_text(live)
             preview.send(b"\x1b[<64;3;2M")
-            scrolled = preview.until(lambda s: body_text(s) != before_scroll, "wheel scroll without F6")
+            scrolled = preview.until(lambda s: body_text(s) != before_scroll
+                                     and "rows below" in text(s)
+                                     and "Ctrl+End to return to latest" in text(s),
+                                     "wheel scroll and return-to-latest hint without F6")
             check("wheel draft" in prompt_text(scrolled) and not scrolled["hide_cursor"],
                   "wheel scrolls activity directly while preserving composer text and focus")
+            check("rows below" in text(scrolled) and "Ctrl+End to return to latest" in text(scrolled),
+                  "scrolled output shows remaining rows and its return-to-latest shortcut")
+            save_shot(args.out, "scroll-hint", scrolled)
             preview.send(b"\x1b[<64;3;2M" * 8)
             preview.until(lambda s: "Improve the client experience" in body_text(s), "retained activity history")
             preview.send(b"\x1b[1;5F")
-            preview.until(lambda s: "Write a requirement below" in body_text(s), "Ctrl+End following live output")
+            following = preview.until(lambda s: "Write a requirement below" in body_text(s)
+                                      and "rows below" not in text(s),
+                                      "Ctrl+End following live output")
+            check("wheel draft" in prompt_text(following) and not following["hide_cursor"],
+                  "Ctrl+End resumes following without changing the draft or composer focus")
             clear_draft(preview)
             slash(preview, "/logs")
             preview.resize(30, 120)

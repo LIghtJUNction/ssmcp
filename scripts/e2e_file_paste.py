@@ -11,6 +11,8 @@ File copies use current wire7 @references and the rooted native image reader.
 import argparse
 import base64
 import hashlib
+from fractions import Fraction
+import math
 import json
 import os
 from pathlib import Path
@@ -25,7 +27,7 @@ import tempfile
 import time
 import zlib
 
-from e2e_dashboard import sha256, text
+from e2e_dashboard import Frontend, sha256, text
 from e2e_input_history import InputHistory, png_fixture
 
 
@@ -70,6 +72,167 @@ def large_png_fixture():
     return (b"\x89PNG\r\n\x1a\n"
             + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(scanlines)) + chunk(b"IEND", b""))
+
+
+class GraphicsFrontend(Frontend):
+    """Answer graphics discovery inside one owned PTY and inspect its real wire bytes."""
+
+    def __init__(self, *args, **kwargs):
+        self.protocol_cursor = 0
+        self.protocol_pending = bytearray()
+        self.screen_cursor = (1, 1)
+        self.probes = 0
+        self.cell_queries = 0
+        self.native_uploads = []
+        self.native_placements = []
+        self.native_deletions = []
+        self.transfer = None
+        super().__init__(*args, **kwargs)
+
+    def pump(self, seconds=0.05):
+        super().pump(seconds)
+        self.protocol_pending.extend(self.transcript[self.protocol_cursor:])
+        self.protocol_cursor = len(self.transcript)
+        pending = self.protocol_pending
+        while pending:
+            starts = [(pending.find(marker), marker) for marker in
+                      (b"\x1b_G", b"\x1b[16t", b"\x1b[c")]
+            starts = [(offset, marker) for offset, marker in starts if offset >= 0]
+            if not starts:
+                self.observe_cursor(pending[:-16] if len(pending) > 16 else b"")
+                if len(pending) > 16:
+                    del pending[:-16]
+                break
+            offset, marker = min(starts)
+            self.observe_cursor(pending[:offset])
+            if marker == b"\x1b_G":
+                end = pending.find(b"\x1b\\", offset + 3)
+                if end < 0:
+                    del pending[:offset]
+                    if len(pending) > 8192:
+                        raise AssertionError("one Kitty protocol chunk exceeds its 4096-byte payload bound")
+                    break
+                body = bytes(pending[offset + 3:end])
+                del pending[:end + 2]
+                self.graphics_command(body)
+            else:
+                del pending[:offset + len(marker)]
+                if marker == b"\x1b[16t":
+                    self.cell_queries += 1
+                    self.send(b"\x1b[6;20;10t")
+                else:
+                    self.send(b"\x1b[?62;4c")
+
+    def observe_cursor(self, data):
+        positions = re.findall(rb"\x1b\[(\d+);(\d+)H", data)
+        if positions:
+            self.screen_cursor = tuple(int(value) for value in positions[-1])
+
+    def graphics_command(self, body):
+        header, separator, payload = body.partition(b";")
+        values = dict(field.decode("ascii").split("=", 1) for field in header.split(b",") if b"=" in field)
+        action = values.get("a")
+        if action == "q":
+            self.probes += 1
+            self.send(("\x1b_Gi=" + values["i"] + ";OK\x1b\\").encode("ascii"))
+        elif action == "t" or (action is None and "m" in values):
+            if not separator or len(payload) > 4096 or len(payload) % 4:
+                raise AssertionError("native upload violates the observed Kitty base64 chunk contract")
+            if action == "t":
+                if self.transfer is not None or values.get("f") != "100" or values.get("t") != "d":
+                    raise AssertionError("native upload must be a complete direct-data PNG transfer")
+                self.transfer = {"id": int(values["i"]), "data": bytearray(), "chunks": 0}
+            if self.transfer is None:
+                raise AssertionError("continuation arrived without a native upload")
+            self.transfer["data"].extend(payload)
+            self.transfer["chunks"] += 1
+            if len(self.transfer["data"]) > 8 * 1024 * 1024:
+                raise AssertionError("native image transfer exceeded the fixture's bounded receive buffer")
+            if values.get("m") == "0":
+                png = base64.b64decode(self.transfer["data"], validate=True)
+                width, height, pixels = self.decode_rgba(png)
+                self.native_uploads.append({
+                    "id": self.transfer["id"], "width": width, "height": height,
+                    "chunks": self.transfer["chunks"], "bytes": len(png),
+                    "rgba_sha256": hashlib.sha256(pixels).hexdigest(),
+                })
+                self.transfer = None
+        elif action == "p":
+            source_width, source_height = int(values["w"]), int(values["h"])
+            axes = {key: int(values[key]) for key in ("c", "r") if key in values}
+            scales = ([Fraction(axes["c"] * 10, source_width)] if "c" in axes else [])
+            scales += ([Fraction(axes["r"] * 20, source_height)] if "r" in axes else [])
+            scale = min(scales) if scales else Fraction(1)
+            pixel_width, pixel_height = source_width * scale, source_height * scale
+            self.native_placements.append({
+                **{key: int(values[key]) for key in ("i", "p", "x", "y", "w", "h") if key in values},
+                "row": self.screen_cursor[0], "col": self.screen_cursor[1],
+                "axes": axes,
+                "pixel_width": float(pixel_width), "pixel_height": float(pixel_height),
+                "columns": math.ceil(pixel_width / 10),
+                "rows": math.ceil(pixel_height / 20),
+            })
+        elif action == "d":
+            if "i" not in values or values.get("d") not in ("i", "I"):
+                raise AssertionError("native cleanup must delete only the client's exact image IDs")
+            self.native_deletions.append(int(values["i"]))
+
+    @staticmethod
+    def decode_rgba(png):
+        if png[:8] != b"\x89PNG\r\n\x1a\n":
+            raise AssertionError("native upload is not PNG data")
+        offset, compressed, dimensions = 8, bytearray(), None
+        while offset < len(png):
+            length = struct.unpack(">I", png[offset:offset + 4])[0]
+            kind = png[offset + 4:offset + 8]
+            data = png[offset + 8:offset + 8 + length]
+            checksum = struct.unpack(">I", png[offset + 8 + length:offset + 12 + length])[0]
+            if checksum != zlib.crc32(kind + data) & 0xFFFFFFFF:
+                raise AssertionError("native PNG chunk checksum mismatch")
+            if kind == b"IHDR":
+                width, height, depth, color, compression, filtering, interlace = struct.unpack(">IIBBBBB", data)
+                if (depth, color, compression, filtering, interlace) != (8, 6, 0, 0, 0):
+                    raise AssertionError("native PNG does not use bounded noninterlaced RGBA8")
+                if not (0 < width <= 1024 and 0 < height <= 1024):
+                    raise AssertionError("native PNG exceeds the renderer dimension limit")
+                dimensions = (width, height)
+            elif kind == b"IDAT":
+                compressed.extend(data)
+            offset += length + 12
+            if kind == b"IEND":
+                break
+        if dimensions is None or offset != len(png):
+            raise AssertionError("native PNG has incomplete framing")
+        width, height = dimensions
+        stride = width * 4
+        raw = zlib.decompress(compressed)
+        if len(raw) != (stride + 1) * height:
+            raise AssertionError("native RGBA rows have the wrong length")
+        previous, pixels = bytes(stride), bytearray()
+        for y in range(height):
+            start = y * (stride + 1)
+            mode, row = raw[start], bytearray(raw[start + 1:start + stride + 1])
+            if mode not in range(5):
+                raise AssertionError("native PNG uses an invalid row filter")
+            for i in range(stride):
+                left = row[i - 4] if i >= 4 else 0
+                above, upper_left = previous[i], previous[i - 4] if i >= 4 else 0
+                if mode == 1:
+                    prediction = left
+                elif mode == 2:
+                    prediction = above
+                elif mode == 3:
+                    prediction = (left + above) // 2
+                elif mode == 4:
+                    estimate = left + above - upper_left
+                    distances = (abs(estimate - left), abs(estimate - above), abs(estimate - upper_left))
+                    prediction = (left, above, upper_left)[distances.index(min(distances))]
+                else:
+                    prediction = 0
+                row[i] = (row[i] + prediction) & 255
+            pixels.extend(row)
+            previous = row
+        return width, height, pixels
 
 
 class FilePaste(InputHistory):
@@ -257,6 +420,64 @@ class FilePaste(InputHistory):
         self.unchanged_queue(self.target)
         self.save_shot("direct-image", front, cells=True)
 
+    def binary_bracketed_paste(self, front):
+        self.clear_draft(front)
+        # A legal private PNG chunk forces signal/control bytes and several stdin
+        # reads without altering the image's actual pixels.
+        data = (b"\x00\x1b[201~\x03\x1d\x11\x13\xff\x1b[18~"
+                b"\x1b_Gi=4294967295;OK\x1b\\\x1b[200~" + bytes(range(256)) * 40)
+        kind = b"raWp"
+        chunk = (struct.pack(">I", len(data)) + kind + data
+                 + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+        original = png_fixture()
+        source = original[:-12] + chunk + original[-12:]
+        self.check(4096 < len(source) < 400 * 1024
+                   and all(marker in source for marker in (b"\x1b[201~", b"\x03", b"\x1d", b"\x1b_G")),
+                   "the legal raw PNG spans stdin reads and embeds paste-end, Ctrl-C, detach and graphics markers")
+        before_reads = self.reads()
+        packet = b"\x1b[200~" + source + b"\x1b[201~"
+        previous = 0
+        for boundary in (6, 7, 8, 11, 14, 15, len(packet) - 3, len(packet)):
+            self.send_stream(front, packet[previous:boundary])
+            previous = boundary
+        state = self.wait_state(front, lambda current: current["draft"]["text"].startswith('\n@"'),
+                                "raw bracketed PNG bytes did not become a private image reference")
+        paths = self.references(state["draft"]["text"])
+        self.check(len(paths) == 1 and re.fullmatch(r"\.ssmcp/inputs/image-[0-9a-f]{32}\.png", paths[0]),
+                   "raw image bytes enter the same private reference path as clipboard images")
+        copied = self.workspace / paths[0]
+        self.check(copied.read_bytes() == source and stat.S_IMODE(copied.stat().st_mode) == 0o600,
+                   "raw PNG paste preserves every original byte, including controls, with private file permissions")
+        self.check(self.reads() == before_reads and front.process.poll() is None,
+                   "binary paste does not consult the clipboard or trigger the outer terminal interrupt")
+        self.read_native_image(paths[0], source)
+        self.unchanged_queue(self.target)
+        self.save_shot("raw-png-paste", front, cells=True)
+
+        self.clear_draft(front)
+        draft = "保留原稿与收件人 界"
+        front.send(draft)
+        before = self.wait_state(front, lambda current: current["draft"]["text"] == draft,
+                                 "the malformed PNG test draft did not arrive")
+        files = self.inputs()
+        self.send_stream(front, b"\x1b[200~" + source[:24] + b"\x1b[201~")
+        front.until(lambda shot: "Incomplete image paste discarded; draft preserved." in text(shot),
+                    "a truncated PNG reaches bounded recovery and preserves the draft")
+        self.check(self.unchanged_queue(self.target)["draft"] == before["draft"]
+                   and self.inputs() == files and front.process.poll() is None,
+                   "malformed PNG recovery preserves the draft, recipient and client without creating a private file")
+
+        self.clear_draft(front)
+        literal = "普通文字\n/paste 保持原文 界"
+        payload = b"\x1b[200~" + literal.encode("utf-8") + b"\x1b[201~"
+        for offset in range(0, len(payload), 3):
+            self.send_stream(front, payload[offset:offset + 3])
+        self.wait_state(front, lambda current: current["draft"]["text"] == literal,
+                        "fragmented UTF-8 bracketed paste did not remain exact text")
+        self.check(self.inputs() == files and self.reads() == before_reads,
+                   "ordinary pasted text keeps Unicode and newlines without importing files or running /paste")
+        self.unchanged_queue(self.target)
+
     def rejected_batch(self, front, valid, invalid, marker, label):
         self.clear_draft(front)
         draft = "保留原稿 " + label + " 界"
@@ -277,6 +498,144 @@ class FilePaste(InputHistory):
         self.check(self.inputs() == before_files,
                    label + " leaves no partial batch and preserves existing private copies")
         self.save_shot(label, front)
+
+    def native_graphics(self):
+        front = GraphicsFrontend(self, "native-graphics", self.config("native-graphics"), self.decoder,
+                                 rows=28, cols=100)
+        self.frontends.append(front)
+        self.last_frontend = front
+        self.client_id = front.client_id
+        self.oauth_login(front.credentials)
+        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+                    "the independent native-graphics composer")
+        self.check(front.probes == 1 and front.cell_queries >= 1,
+                   "native graphics starts only after the real PTY capability and cell-size queries")
+        self.clear_draft(front)
+
+        width, height = 512, 128
+        rgb = bytes(channel for y in range(height) for x in range(width)
+                    for channel in ((x * 17 + y) % 256, (y * 31 + x // 2) % 256, (x ^ y) % 256))
+        rgba = b"".join(rgb[i:i + 3] + b"\xff" for i in range(0, len(rgb), 3))
+        def chunk(kind, data):
+            return (struct.pack(">I", len(data)) + kind + data
+                    + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+        rows = b"".join(b"\x00" + rgb[y * width * 3:(y + 1) * width * 3] for y in range(height))
+        source = (b"\x89PNG\r\n\x1a\n"
+                  + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                  + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+        path = "native-graphics.png"
+        (self.workspace / path).write_bytes(source)
+        self.read_native_image(path, source)
+        front.until(lambda _shot: bool(front.native_uploads and front.native_placements),
+                    "a real native PNG upload and placement")
+        upload = front.native_uploads[-1]
+        image_id = upload["id"]
+        self.check(upload["width"] == width and upload["height"] == height
+                   and upload["rgba_sha256"] == hashlib.sha256(rgba).hexdigest()
+                   and upload["chunks"] > 1,
+                   "the terminal receives every original pixel through multiple real Kitty PNG chunks")
+        self.check(all(1 <= item["row"] and item["row"] + item["rows"] - 1 <= 28
+                       and 1 <= item["col"] and item["col"] + item["columns"] - 1 <= 100
+                       for item in front.native_placements),
+                   "every initial native placement fits the physical terminal bounds")
+        self.save_shot("native-graphics", front, cells=True)
+
+        deletions = len(front.native_deletions)
+        self.focus_input(front)
+        front.send("/help\r")
+        front.until(lambda _shot: len(front.native_deletions) > deletions,
+                    "hiding activity removes its native placements")
+        self.check(image_id in front.native_deletions[deletions:],
+                   "help removes only the owned image instead of painting over stale graphics")
+        uploads = len(front.native_uploads)
+        front.send(b"\x1b")
+        front.until(lambda _shot: len(front.native_uploads) > uploads,
+                    "closing help restores the retained native image")
+        self.check(front.native_uploads[-1]["rgba_sha256"] == upload["rgba_sha256"],
+                   "reopening activity restores the same retained pixels")
+
+        placements = len(front.native_placements)
+        front.resize(18, 48)
+        front.until(lambda _shot: len(front.native_placements) > placements,
+                    "resizing redraws bounded native placements")
+        resized = front.native_placements[-1]
+        self.check(resized["row"] + resized["rows"] - 1 <= 18
+                   and resized["col"] + resized["columns"] - 1 <= 48,
+                   "native graphics remain inside the smaller terminal after resize")
+
+        self.check(set(resized["axes"]) == {"c"} and resized["y"] == 0
+                   and resized["h"] == height,
+                   "a width-limited image uses one scale axis without a letterboxing rectangle")
+        columns = resized["axes"]["c"]
+        source_per_row = Fraction(20 * width, columns * 10)
+        occupied_rows = math.ceil(Fraction(height) / source_per_row)
+        last_y = int((occupied_rows - 1) * source_per_row)
+        self.check(0 < (height - last_y) * Fraction(columns * 10, width) < 20,
+                   "the scaled fixture has a final image row shorter than one terminal cell")
+        uploads_before_crop = len(front.native_uploads)
+        crop = None
+        for index in range(8):
+            before = len(front.native_placements)
+            self.call("ssmcp.ui.message", {
+                "text": f"Owned crop viewport fixture {index + 1}", "kind": "progress",
+            })
+            front.pump(0.15)
+            crop = next((item for item in reversed(front.native_placements[before:])
+                         if item["i"] == image_id and item["y"] > 0), None)
+            if crop is not None:
+                break
+        self.check(crop is not None,
+                   "actual new activity clips the scaled image at the top of the viewport")
+        pixel_boundaries = {int(row * source_per_row) for row in range(1, occupied_rows)}
+        self.check(crop["y"] in pixel_boundaries
+                   and crop["y"] + crop["h"] == height
+                   and crop["axes"] == {"c": columns}
+                   and len(front.native_uploads) == uploads_before_crop,
+                   "viewport cropping uses pixel row boundaries and unchanged scale, without recentering or reupload")
+        self.metrics["native_crop"] = {
+            "source": [width, height], "cell": [10, 20], "full": resized, "cropped": crop,
+            "last_source_row": last_y,
+        }
+
+        uploads, deletions = len(front.native_uploads), len(front.native_deletions)
+        front.send(f"\x1b_Gi={image_id};ENOSPC:owned fixture failure\x1b\\")
+        front.until(lambda shot: len(front.native_deletions) > deletions
+                    and any("▀" in row for row in shot["rows"]),
+                    "a native graphics error selects readable cell fallback")
+        self.read_native_image(path, source)
+        front.until(lambda shot: any("▀" in row for row in shot["rows"]),
+                    "subsequent image output remains visible after native failure")
+        self.check(len(front.native_uploads) == uploads,
+                   "native errors stop subsequent PNG encoding/upload while preserving image fallback")
+        self.metrics["native_graphics"] = {
+            "probes": front.probes, "cell_queries": front.cell_queries,
+            "uploads": len(front.native_uploads), "placements": len(front.native_placements),
+            "scoped_deletions": len(front.native_deletions),
+            "rgba_sha256": upload["rgba_sha256"],
+        }
+        final, restored = front.disconnect()
+        self.check(not final["alternate_screen"] and restored == front.original_termios,
+                   "native-graphics shutdown restores the terminal and leaves no active image transport")
+
+    def logs_interrupt(self):
+        config = self.config("logs-interrupt")
+        config.write_text(config.read_text().replace('layout="chat"', 'layout="logs"'))
+        front = self.frontend("logs-interrupt", config)
+        self.oauth_login(front.credentials)
+        front.until(lambda shot: shot["alternate_screen"] and "ssmcp" in text(shot),
+                    "the isolated logs layout")
+        image = png_fixture()
+        kind, controls = b"raWp", b"\x03\x1d\xff"
+        chunk = (struct.pack(">I", len(controls)) + kind + controls
+                 + struct.pack(">I", zlib.crc32(kind + controls) & 0xFFFFFFFF))
+        complete = image[:-12] + chunk + image[-12:]
+        self.send_stream(front, b"\x1b[200~" + complete + b"\x1b[201~")
+        front.pump(0.15)
+        self.check(front.process.poll() is None,
+                   "logs-layout bracketed paste retains literal control bytes without disconnecting")
+        final, restored = front.disconnect()
+        self.check(not final["alternate_screen"] and restored == front.original_termios,
+                   "logs-layout Ctrl-C outside paste disconnects and restores exact termios")
 
     def run(self):
         self.prepare()
@@ -312,6 +671,7 @@ class FilePaste(InputHistory):
         self.read_native_image(paths[1], source_bytes[png])
         self.save_shot("uri-list", front, cells=True)
         self.direct_image(front)
+        self.binary_bracketed_paste(front)
 
         self.clear_draft(front)
         self.paste_success(front, "x-special/gnome-copied-files",
@@ -372,6 +732,12 @@ class FilePaste(InputHistory):
                    "all source files remain byte-for-byte unchanged after every clipboard scenario")
         self.save_shot("stale-draft", front, cells=True)
 
+        final, restored = front.disconnect()
+        self.check(not final["alternate_screen"] and restored == front.original_termios,
+                   "Ctrl-C outside pasted data gracefully disconnects and restores the exact owned terminal mode")
+        self.native_graphics()
+        self.logs_interrupt()
+
 
 def main():
     def interrupted(_signal, _frame):
@@ -397,7 +763,7 @@ def main():
         "status": "failed", "platform": platform.system(),
         "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
         "clipboard": "private PATH fake wl-paste; no real desktop clipboard or shared frontend",
-        "scope": "direct oversized image MIME, file MIME priority, UTF-8/PNG @references, GNOME cut copy, native image read, literal text, atomic invalid batches and async draft rollback; no models",
+        "scope": "raw PNG paste and exact MCP image readback, malformed input, UTF-8, Ctrl-C/termios restoration, private file batches, real Kitty probe/upload/pixel integrity/placement/hide/resize/error fallback; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_file_paste.py", "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",

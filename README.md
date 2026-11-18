@@ -134,7 +134,7 @@ ssmcp ui init
 ssmcp ui check
 ```
 
-内置 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题。通过 `[ui]` 配置调整侧栏、面板顺序和颜色，F5 应用显示配置；`/reload` 则重新启动客户端。右侧栏空间足够时显示教程二维码，窄窗口显示同一链接；教程提供英文和中文入口。[界面配置](docs/client-ui.md)
+内置 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题。通过 `[ui]` 配置调整侧栏、面板顺序和颜色，F5 应用显示配置；`/reload` 则重新启动客户端。终端支持原生图片且侧栏空间足够时显示方形像素二维码，窄窗口显示完整链接；网关提供教程时进入中英文指南，旧网关暂未提供教程时进入门户首页。[界面配置](docs/client-ui.md)
 
 ## 复用现有工具
 

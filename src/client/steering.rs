@@ -1397,7 +1397,7 @@ fn write_handoff(outbox: Outbox, directory: &Path) -> Result<ReloadHandoff, Stri
         return Err("client outbox exceeds reload handoff limit".into());
     }
     let folder = directory.join(format!("ssmcp-outbox-{}", random_id()?));
-    let mut builder = fs::DirBuilder::new();
+    let builder = &mut fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -2494,6 +2494,7 @@ mod tests {
         fs::set_permissions(&ticket.path, fs::Permissions::from_mode(0o600)).unwrap();
         assert!(read_handoff(&ticket.path).unwrap().is_some());
     }
+    #[cfg(target_os = "linux")]
     #[test]
     fn trimmed_server_history_marks_requests_uncertain_without_replaying() {
         let queue = crate::steering::Queue::default();

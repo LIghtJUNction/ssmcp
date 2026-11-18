@@ -79,6 +79,10 @@ mod tests {
                 "tools.search",
                 "/handoff",
                 "/resume",
+                "ssmcp invite --shell powershell",
+                "--no-bootstrap",
+                "session_ttl_secs",
+                r#"desktop: "host""#,
             ] {
                 assert!(html.contains(expected), "missing {expected}");
             }
@@ -101,8 +105,8 @@ mod tests {
     async fn guide_routes_are_public_without_displacing_the_guide_account_endpoint() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let public_origin = "https://relay.example";
-        let broker = Arc::new(Broker::new(public_origin.into()));
+        let public_url = "https://ssmcp.test";
+        let broker = Arc::new(Broker::new(public_url.into()));
         let router = crate::http::router(broker);
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let client = reqwest::Client::new();
@@ -114,6 +118,7 @@ mod tests {
             let response = client
                 .get(format!("{base}{path}"))
                 .header(header::ACCEPT_LANGUAGE, "zh-CN")
+                .header(header::HOST, "untrusted.invalid")
                 .send()
                 .await
                 .unwrap();
@@ -134,7 +139,8 @@ mod tests {
             );
             let html = response.text().await.unwrap();
             assert!(html.contains(&format!("<html lang=\"{language}\">")));
-            assert!(html.contains(&format!("{public_origin}/mcp")));
+            assert!(html.contains(&format!("{public_url}/mcp")));
+            assert!(!html.contains("untrusted.invalid"));
         }
         let css = client
             .get(format!("{base}/guide/style.css"))
