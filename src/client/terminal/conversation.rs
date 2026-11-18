@@ -373,9 +373,11 @@ impl State {
                 self.filter_offset = 0;
                 self.chat_change_view(View::Activity);
             }
-            "/reload" => {
+            "/reload" | "/restart" => {
                 if !rest.is_empty() {
-                    return Err("Use /reload without arguments to restart this session".into());
+                    return Err(format!(
+                        "Use {command} without arguments to restart this session"
+                    ));
                 }
                 if self.preview {
                     return Err("Preview has no connected session to restart".into());
@@ -403,19 +405,37 @@ impl State {
         Ok(true)
     }
 
+    fn chat_menu_visible(&self) -> bool {
+        !self.conversation.content_focus
+            && self.conversation.editing.is_none()
+            && self
+                .conversation
+                .composer
+                .menu_visible(self.geometry.left, prompt_rows(self.geometry.rows))
+    }
+
     fn chat_submit(&mut self) {
         if self.conversation.submitting.is_some() {
             self.notice = Some("Waiting for queue confirmation · your draft is preserved".into());
             return;
         }
-        let text = self.conversation.composer.text().to_owned();
+        let text = if self.chat_menu_visible() {
+            self.conversation
+                .composer
+                .selected_suggestion()
+                .expect("a visible command menu has a selection")
+                .name
+                .to_owned()
+        } else {
+            self.conversation.composer.text().to_owned()
+        };
         if text.trim().is_empty() {
             return;
         }
         if self.conversation.editing.is_none() {
             match self.chat_command(&text) {
                 Ok(true) => {
-                    if text.split_whitespace().next() != Some("/reload") {
+                    if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart")) {
                         self.conversation.composer.take_text();
                     }
                     return;
@@ -590,12 +610,17 @@ impl State {
             Key::AuditUp if content => self.chat_move(-1),
             Key::AuditDown if content => self.chat_move(1),
             Key::AuditUp => {
+                if self.chat_menu_visible() {
+                    self.conversation.composer.move_suggestion(-1);
+                    self.dirty = true;
+                    return;
+                }
                 if self.conversation.submitting.is_some() {
                     self.notice =
                         Some("Waiting for queue confirmation · your draft is preserved".into());
                     return;
                 }
-                if !self.conversation.composer.up() {
+                if !self.conversation.composer.up(self.geometry.left) {
                     if self.conversation.editing.is_none() && self.conversation.parked.is_some() {
                         self.chat_block_replacement();
                         return;
@@ -618,7 +643,14 @@ impl State {
                 }
             }
             Key::AuditDown => {
-                if !self.conversation.composer.down() && self.conversation.editing.is_none() {
+                if self.chat_menu_visible() {
+                    self.conversation.composer.move_suggestion(1);
+                    self.dirty = true;
+                    return;
+                }
+                if !self.conversation.composer.down(self.geometry.left)
+                    && self.conversation.editing.is_none()
+                {
                     if self.conversation.parked.is_some() {
                         self.chat_block_replacement();
                     } else {
@@ -700,6 +732,11 @@ impl State {
 
     fn chat_escape(&mut self) {
         self.dirty = true;
+        if !self.help && self.chat_menu_visible() {
+            self.conversation.composer.dismiss_suggestions();
+            self.notice = None;
+            return;
+        }
         if self.help {
             self.help = false;
             self.conversation.content_focus = false;
@@ -791,9 +828,9 @@ impl State {
             }
             '\u{1b}' => self.chat_escape(),
             '\t' => {
-                let suggestions = self.conversation.composer.suggestions();
-                if !self.conversation.content_focus && !suggestions.is_empty() {
-                    let completion = format!("{} ", suggestions[0].name);
+                if self.chat_menu_visible() {
+                    let selected = self.conversation.composer.selected_suggestion().unwrap();
+                    let completion = format!("{} ", selected.name);
                     self.conversation.composer.set_text(&completion);
                 } else {
                     self.conversation.content_focus = !self.conversation.content_focus;
@@ -1127,9 +1164,9 @@ impl State {
                 "  ssmcp · keyboard and commands",
                 "",
                 "  Enter      Queue a new requirement",
-                "  Up         Recall queued text or input history",
+                "  Up/Down    Move within input · select commands or history",
                 "  Ctrl+J     New line · pasted text stays in the draft",
-                "  Tab        Switch input / content focus",
+                "  Tab        Complete command · switch input / content focus",
                 "  Esc        Restore a parked draft when input is focused",
                 "  Ctrl+O     Source audit · Enter/→ open · ← back",
                 "  F2         Activity / audit / agents / queue",
@@ -1153,10 +1190,12 @@ impl State {
             self.chat_line("", PanelTone::Normal, g.left)
         });
         body.truncate(usize::from(height));
-        let prompt = self
-            .conversation
-            .composer
-            .rows(g.left, prompt_rows(g.rows).max(1), &self.ui);
+        let prompt = self.conversation.composer.rows(
+            g.left,
+            prompt_rows(g.rows).max(1),
+            &self.ui,
+            !self.conversation.content_focus && self.conversation.editing.is_none(),
+        );
         let label = self
             .conversation
             .target
@@ -1658,6 +1697,98 @@ mod tests {
         input(&mut state, b"\x1b[D\x1b[C\x0f");
         assert_eq!(state.conversation.view, View::Activity);
         assert_eq!(state.conversation.composer.text(), "new requirement");
+    }
+
+    #[test]
+    fn wrapped_input_arrows_move_the_cursor_before_recalling_history() {
+        let mut state = preview(24, 30);
+        state.conversation.composer.remember("previous request");
+        let text = "界".repeat(40);
+        input(&mut state, text.as_bytes());
+        input(&mut state, b"\x1b[A");
+        assert_eq!(state.conversation.composer.text(), text);
+        assert!(state.conversation.composer.cursor() < text.len());
+        assert!(state.conversation.composer.cursor() > 0);
+        input(&mut state, b"\x1b[H\x1b[A");
+        assert_eq!(state.conversation.composer.text(), "previous request");
+    }
+
+    #[test]
+    fn slash_menu_arrows_do_not_replace_drafts_and_tab_uses_the_selected_item() {
+        let mut state = preview(36, 120);
+        state.conversation.composer.remember("previous request");
+        input(&mut state, b"/a\x1b[A");
+        assert_eq!(state.conversation.composer.text(), "/a");
+        assert_eq!(
+            state
+                .conversation
+                .composer
+                .selected_suggestion()
+                .unwrap()
+                .name,
+            "/audit"
+        );
+        assert!(state.conversation.editing.is_none());
+        assert!(state.conversation.target.is_none());
+        assert!(display(&mut state).screen().contents().contains("› /audit"));
+        input(&mut state, b"\t");
+        assert_eq!(state.conversation.composer.text(), "/audit ");
+        assert!(!state.conversation.content_focus);
+        assert!(!state.chat_menu_visible());
+
+        state.conversation.composer.set_text("/a");
+        input(&mut state, b"\x1b[B\r");
+        assert_eq!(state.conversation.view, View::Audit);
+        assert!(state.conversation.composer.is_empty());
+    }
+
+    #[test]
+    fn escape_closes_command_menu_without_restoring_or_overwriting_a_draft() {
+        let mut state = preview(36, 120);
+        state.conversation.composer.set_text("/re");
+        state.conversation.parked = Some(steering::SavedDraft {
+            text: "parked request".into(),
+            cursor: 6,
+            target: None,
+        });
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.composer.text(), "/re");
+        assert!(state.conversation.parked.is_some());
+        assert!(!state.chat_menu_visible());
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.composer.text(), "parked request");
+
+        // Re-editing a user requirement beginning with '/' is plain text,
+        // including Tab: local command selection must not rewrite its body.
+        state.conversation.composer.set_text("/re");
+        state.conversation.editing = Some("request-being-edited".into());
+        assert!(!state.chat_menu_visible());
+        input(&mut state, b"\t");
+        assert_eq!(state.conversation.composer.text(), "/re");
+    }
+
+    #[test]
+    fn restart_alias_uses_the_same_validation_and_preview_guard_as_reload() {
+        let mut state = preview(36, 120);
+        assert_eq!(
+            state.chat_command("/restart"),
+            state.chat_command("/reload")
+        );
+        assert!(
+            state
+                .chat_command("/restart extra")
+                .unwrap_err()
+                .contains("without arguments")
+        );
+        input(&mut state, b"/re\x1b[B\r");
+        assert!(
+            state
+                .notice
+                .as_ref()
+                .unwrap()
+                .contains("no connected session")
+        );
+        assert_eq!(state.conversation.composer.text(), "/re");
     }
 
     #[test]
