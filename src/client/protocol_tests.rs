@@ -281,7 +281,14 @@ async fn explicit_rejections_use_fresh_transports_and_remember_the_legacy_versio
             .iter()
             .map(|value| value["version"].as_u64().unwrap())
             .collect::<Vec<_>>(),
-        [7, 6, 5, 4, 4]
+        [
+            VERSION,
+            QUEUE_VERSION,
+            CODE_VERSION,
+            CONTROLLER_VERSION,
+            LEGACY_VERSION,
+            LEGACY_VERSION
+        ]
     );
     close(registration).await;
 }
