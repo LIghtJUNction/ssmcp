@@ -1527,6 +1527,16 @@ impl State {
         Vec::new()
     }
 
+    /// Reuse one bounded row parser; serialize cells, never cursor/erase controls.
+    fn chat_fill_body(&self, rows: &mut [String], width: u16) {
+        let mut parser = vt100::Parser::new(nonzero(1), nonzero(width), 0);
+        for row in rows {
+            parser.process(b"\x1b[0m\x1b[2J\x1b[H");
+            parser.process(row.as_bytes());
+            *row = screen_row(parser.screen(), 0, width, &self.ui);
+        }
+    }
+
     fn chat_line(&self, text: &str, tone: PanelTone, width: u16) -> String {
         let plain = fit(text, width);
         self.tone(
@@ -1921,6 +1931,7 @@ impl State {
             self.chat_line("", PanelTone::Normal, g.left)
         });
         body.truncate(usize::from(height));
+        self.chat_fill_body(&mut body, g.left);
         let empty = Composer::default();
         let input = if self.conversation.view == View::Questions {
             self.question_editor().unwrap_or(&empty)
@@ -2967,6 +2978,56 @@ mod tests {
         assert_eq!(state.conversation.composer.text(), "unfinished");
         input(&mut state, b"\x1b[1;5F");
         assert_eq!(state.logs.screen().scrollback(), 0);
+    }
+
+    #[test]
+    fn activity_body_keeps_sidebar_columns_and_theme_background_with_short_unicode_rows() {
+        for sidebar in [false, true] {
+            let ui = Ui {
+                color: true,
+                sidebar,
+                panels: vec![crate::client::ui::Panel::Agents],
+                ..Ui::default()
+            };
+            let mut state = super::super::preview_state(18, 120, &ui);
+            state.events.clear();
+            state.log(b"\x1b[38;2;20;40;60mshort\x1b[0m\n");
+            state.log("中文界\n".as_bytes());
+            state.log(b"\x1b[38;2;255;0;0;48;2;0;0;255m\xe2\x96\x80\x1b[0m\n");
+            let g = state.geometry;
+            let screen = display(&mut state);
+            let screen = screen.screen();
+            let mut theme = vt100::Parser::new(nonzero(1), nonzero(1), 0);
+            theme.process(format!("\x1b[{}m ", ui.background()).as_bytes());
+            let background = theme.screen().cell(0, 0).unwrap().bgcolor();
+            for row in body_top(g.rows)..body_top(g.rows) + body_rows(g.rows) {
+                assert_eq!(
+                    screen.cell(row, g.left - 1).unwrap().bgcolor(),
+                    background,
+                    "body padding must paint the theme background at row {row}"
+                );
+                if sidebar {
+                    assert_eq!(
+                        screen.cell(row, g.left).unwrap().contents(),
+                        "│",
+                        "the sidebar must start at its fixed column on row {row}"
+                    );
+                }
+            }
+            let top = body_top(g.rows);
+            assert_eq!(
+                screen.cell(top, 4).unwrap().fgcolor(),
+                vt100::Color::Rgb(20, 40, 60)
+            );
+            assert_eq!(screen.cell(top + 1, 4).unwrap().contents(), "中");
+            assert_eq!(screen.cell(top + 1, 6).unwrap().contents(), "文");
+            assert_eq!(screen.cell(top + 1, 8).unwrap().contents(), "界");
+            assert_eq!(
+                screen.cell(top + 2, 4).unwrap().bgcolor(),
+                vt100::Color::Rgb(0, 0, 255)
+            );
+            assert_eq!(screen.cell(top + 3, 4).unwrap().bgcolor(), background);
+        }
     }
 
     #[test]
