@@ -2518,6 +2518,25 @@ fn render_source(
     writeln!(out)
 }
 
+/// Render code fences in agent replies with the same safe syntax colors as tool output.
+/// Ordinary prose and links retain their text; only presentation receives ANSI styling.
+pub(super) fn message_body(text: &str, ui: &Ui, color: bool) -> String {
+    let mut output = Vec::new();
+    let mut lines = Lines::default();
+    let width = terminal_width();
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    for line in normalized.split('\n') {
+        let safe = super::panel::safe_text(line);
+        if lines.fence.is_some() || CodeFence::opening(&safe).is_some() {
+            render_line(&mut output, color, width, &mut lines, &safe, ui)
+                .expect("rendering to a byte vector cannot fail");
+        } else {
+            writeln!(&mut output, "  {safe}").expect("writing to a byte vector cannot fail");
+        }
+    }
+    String::from_utf8(output).expect("message rendering only writes UTF-8")
+}
+
 fn render_line(
     out: &mut impl Write,
     color: bool,
