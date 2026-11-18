@@ -1,0 +1,567 @@
+{
+  "after": {
+    "active": "active",
+    "binary_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+    "client_sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
+    "disk": {
+      "free": 17498570752,
+      "total": 26526855168,
+      "used": 8832483328
+    },
+    "package": "ssmcp-git 0.8.0.r266.g7867cb8-1",
+    "pid": 337744,
+    "registry_private": true,
+    "runner_sha256": "57f014501bf0313f966935fbe1a05613aaf75816a569b65ff15346cc9d2a8bdf",
+    "running_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+    "version": "ssmcpd 0.8.0"
+  },
+  "archived_source_bytes": 211025267,
+  "archives": [
+    {
+      "archive_bytes": 363,
+      "archive_sha256": "2076efa05686115a838f1c86f90a559b81e1609e63723909a68c5281fd88d566",
+      "batch": "batch-02",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 3
+      },
+      "elapsed_seconds": 16.12,
+      "entries": 3,
+      "manifest_sha256": "a8f702b9c91f072506eeef6b09a177989d41b2d4a75bd518cee3cf2302d00e41",
+      "paths": [
+        "/var/lib/ssmcp-stage-458ba09a"
+      ],
+      "source_bytes": 291,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 359,
+      "archive_sha256": "e1227f0f36fd8ccde6bf7869cff4e216e543d47f9315fe49a3041924424fc702",
+      "batch": "batch-03",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 3
+      },
+      "elapsed_seconds": 16.12,
+      "entries": 3,
+      "manifest_sha256": "54b06076c553f678fa6a9a92027234961b976783025653882e7e900a42d925b5",
+      "paths": [
+        "/var/lib/ssmcp-stage-fff47d19"
+      ],
+      "source_bytes": 291,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 97,
+      "archive_sha256": "1de9dd071411ee2e06afefbe02d4db5fb049d63522d8049257bb293cf35a1fbd",
+      "batch": "batch-01",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 1
+      },
+      "elapsed_seconds": 16.12,
+      "entries": 1,
+      "manifest_sha256": "272f5ce979fc9b73fa2bdb374480d65cfc8f45a025460d0178ee77df69b7988b",
+      "paths": [
+        "/var/lib/ssmcp-stage-94b4a45a"
+      ],
+      "source_bytes": 0,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 493,
+      "archive_sha256": "6b2333d31eeab18059371c2dde54a7e97fa5b596925ea0af6e67e3b672096a1a",
+      "batch": "batch-04",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 8
+      },
+      "elapsed_seconds": 3.27,
+      "entries": 8,
+      "manifest_sha256": "48dcadcdaa984bbe2f02e23e4910d7e1106f8ddbaa4499a7bb85554e07ad0f78",
+      "paths": [
+        "/var/lib/ssmcp-stage-12e1d57e"
+      ],
+      "source_bytes": 317,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 494,
+      "archive_sha256": "691da25f35fa8a471c9286985061597442e6d4739f9f723b2c84b3ba35529f09",
+      "batch": "batch-06",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 8
+      },
+      "elapsed_seconds": 3.61,
+      "entries": 8,
+      "manifest_sha256": "8935d30daa5ddcbd9fe531d7e8994ce444c703a343592c4e288845b489865ca6",
+      "paths": [
+        "/var/lib/ssmcp-stage-7867cb8f"
+      ],
+      "source_bytes": 317,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 493,
+      "archive_sha256": "d47d610f01c3e232d496a2c8b5e2e3aa42b0e2af379b82a81a8063f37fd7f64c",
+      "batch": "batch-05",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 8
+      },
+      "elapsed_seconds": 3.4,
+      "entries": 8,
+      "manifest_sha256": "9282ef4a2621ab55410941bd2de37ca22cf86cd49f9832392bf4894e925e7c56",
+      "paths": [
+        "/var/lib/ssmcp-stage-555307f8"
+      ],
+      "source_bytes": 317,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 499,
+      "archive_sha256": "96abd1cfadd053b5dc57f991ad0aae15555aea0fb904f99fdde14508892a488d",
+      "batch": "batch-07",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 8
+      },
+      "elapsed_seconds": 2.26,
+      "entries": 8,
+      "manifest_sha256": "563f85121aab219f7f59e0058e983b68d1a529aedeb51d001e4426c904aced1e",
+      "paths": [
+        "/var/lib/ssmcp-stage-b929a3c4"
+      ],
+      "source_bytes": 317,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 425,
+      "archive_sha256": "999bf0e33dbe22972b085166b48dee644b8e764e3d6d4c81c05106ec04d132e8",
+      "batch": "batch-08",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 3
+      },
+      "elapsed_seconds": 2.74,
+      "entries": 3,
+      "manifest_sha256": "582b31d29dfc60a0cd0ff2b06773c554a31ef246dd6fee23c214f5ed52098c76",
+      "paths": [
+        "/var/lib/ssmcp-stage-3e3b7b6f"
+      ],
+      "source_bytes": 536,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 3038568,
+      "archive_sha256": "119cc17b3f9d9940560ac16760640973b6417e89a6529bbfb32bfdd39efbb270",
+      "batch": "batch-09",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 7
+      },
+      "elapsed_seconds": 10.78,
+      "entries": 7,
+      "manifest_sha256": "b59879fdb361a0c1139510f680303ba18cc722ddb4bcd22a4eed972eec54829f",
+      "paths": [
+        "/opt/ssmcp/releases/66cce3c136fa0a3acc18cea7a6c6d970a837e1fe"
+      ],
+      "source_bytes": 6777386,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 8079556,
+      "archive_sha256": "840d0ce714fe53a1679d0ec4d5821f42ca97149cacb75e7b4becc55ecd87cd8e",
+      "batch": "batch-11",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 1
+      },
+      "elapsed_seconds": 142.09,
+      "entries": 1,
+      "manifest_sha256": "38676ce6800781fa5402036c29189a9b3862e79e05d5584e0917e413210d8027",
+      "paths": [
+        "/var/lib/ssmcp-rollouts/13a0ac72786f70dc381b5d08bd40ff75a1357db0/ssmcp-git-0.7.2.r182.g13a0ac7-1-x86_64.pkg.tar.zst"
+      ],
+      "source_bytes": 8076528,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 4636199,
+      "archive_sha256": "f4f20d7f019b20f3d98346c0fb1362e7f5426817ca26fc263cbd1d3c1adcceef",
+      "batch": "batch-12",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 1
+      },
+      "elapsed_seconds": 141.63,
+      "entries": 1,
+      "manifest_sha256": "eac59b65fa74ee91fff007868378c7ee3e86a446f6b8cb7c041fb44afdbc0b04",
+      "paths": [
+        "/var/lib/ssmcp-rollouts/fff47d191136198b38f154804115c9e9f9f89b35/files-before.tar"
+      ],
+      "source_bytes": 10086400,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 8061119,
+      "archive_sha256": "9414be43be49dd6b5cf76dcecbda7731bfe2cca256ed983d6d14ea29ef65869c",
+      "batch": "batch-10",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 1
+      },
+      "elapsed_seconds": 152.82,
+      "entries": 1,
+      "manifest_sha256": "3ee25aeb84d9044ba595e311ae7f9695502f791ab0ec1bfa84dd3ba588159dab",
+      "paths": [
+        "/var/lib/ssmcp-rollouts/6d2802b8533314fb8a43a962d88d74165c026b0c-0.7.0-final/ssmcp-git-0.7.0.r171.g6d2802b-1-x86_64.pkg.tar.zst"
+      ],
+      "source_bytes": 8059338,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 4762071,
+      "archive_sha256": "7b881e2f5bd7c24fe5763480e2aa2554e93859679e24b37fba1967c18439c767",
+      "batch": "batch-14",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 8
+      },
+      "elapsed_seconds": 33.21,
+      "entries": 8,
+      "manifest_sha256": "777bbdea5fe6babb3f31522848bef7b64fe46341a877b09af864b4737c5ba0d1",
+      "paths": [
+        "/opt/ssmcp/releases/94b4a45a6e60a657382e23c2e2df63f297f0e5ef"
+      ],
+      "source_bytes": 10400215,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 4762057,
+      "archive_sha256": "8f668bc4215bef19b125f4947b409786a0d221a51d901cf9b48f6abfb4aa5327",
+      "batch": "batch-13",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 8
+      },
+      "elapsed_seconds": 42.92,
+      "entries": 8,
+      "manifest_sha256": "837eb315bbeeacd6c78deee5f9d6ae97012ab595672d10c3f9c31abafe32af52",
+      "paths": [
+        "/opt/ssmcp/releases/458ba09ad02824df52a3b7c0fd303d2f1ed01fa1"
+      ],
+      "source_bytes": 10400215,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 4762071,
+      "archive_sha256": "d6e8daadf727bf3bccdae77863a56b38952225bef705ae58aa80540e91357241",
+      "batch": "batch-15",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 8
+      },
+      "elapsed_seconds": 33.56,
+      "entries": 8,
+      "manifest_sha256": "28f6bd9b4fe7105ad7d1420710ec95d257a5e39a4cbda4a9dcd78de3c7457217",
+      "paths": [
+        "/opt/ssmcp/releases/fff47d191136198b38f154804115c9e9f9f89b35"
+      ],
+      "source_bytes": 10400215,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 11982721,
+      "archive_sha256": "dd16389a300ecdf3541edd05de5ab409ccc2ed28bd743d3e5c564747f574709b",
+      "batch": "batch-16",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 3
+      },
+      "elapsed_seconds": 32.23,
+      "entries": 3,
+      "manifest_sha256": "f7de8c25b95acf467b8dd86b2a4f337102936772377bb33144156ba4968a0083",
+      "paths": [
+        "/var/tmp/ssmcp-release/555307f8ceb70c729762bc11ea099360e87e5dee"
+      ],
+      "source_bytes": 11990490,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 12184652,
+      "archive_sha256": "84af1bcc63afe72d1fbfbde080709900b2a6b5c484bdf990511759dbcfdc077b",
+      "batch": "batch-17",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 3
+      },
+      "elapsed_seconds": 29.42,
+      "entries": 3,
+      "manifest_sha256": "e53e5290d09430a536b2fd65c5e352f9129f1bcdc9964e00d477564f1a67ab31",
+      "paths": [
+        "/var/tmp/ssmcp-release/b929a3c4c49128f21bce947545a3f77838500325"
+      ],
+      "source_bytes": 12192549,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 12210384,
+      "archive_sha256": "3bdf8dca73df3c2a97d81d92dd294f78b606bbe49eecc00eac865a1dad94f6b3",
+      "batch": "batch-18",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 3
+      },
+      "elapsed_seconds": 29.35,
+      "entries": 3,
+      "manifest_sha256": "7d2fcd45c53b8eef47f2cbd337a0c2251d2f86e26c1714b002e08fb98f9e00e9",
+      "paths": [
+        "/var/tmp/ssmcp-release/7867cb8fd42f2f62aae61b38f87baf92c9b6846b"
+      ],
+      "source_bytes": 12218208,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 6506519,
+      "archive_sha256": "b4c370c7a748bf1c392d2aed36b84e52014762b773bff00c28b4f9285c10f617",
+      "batch": "batch-20",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 9
+      },
+      "elapsed_seconds": 13.34,
+      "entries": 9,
+      "manifest_sha256": "b4ad6694b494cf03d0f2a5afcd50fd7330f73e6d0ea18739d448d1e290bcd2bc",
+      "paths": [
+        "/opt/ssmcp/releases/b929a3c4c49128f21bce947545a3f77838500325"
+      ],
+      "source_bytes": 13435787,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 6348633,
+      "archive_sha256": "469862d6aac7bd9e898dc21b53f5715b1f0e18c55fd56aa1fb4b861d533f838f",
+      "batch": "batch-19",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 9
+      },
+      "elapsed_seconds": 13.93,
+      "entries": 9,
+      "manifest_sha256": "1b0f9b1f8a8bdfe56dc310aa7b304aa3640a70b14abdfab055438799cbbe30bf",
+      "paths": [
+        "/opt/ssmcp/releases/555307f8ceb70c729762bc11ea099360e87e5dee"
+      ],
+      "source_bytes": 13057639,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 6518178,
+      "archive_sha256": "040263ebd246432b4f5315c4bfcca3f267ca3c90c0caef084ba3f99d73a5adcb",
+      "batch": "batch-21",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 9
+      },
+      "elapsed_seconds": 13.78,
+      "entries": 9,
+      "manifest_sha256": "93f9589563a9ba00dea4e7701d6e028777f84069370549ca9558e4a6f2c65b74",
+      "paths": [
+        "/opt/ssmcp/releases/7867cb8fd42f2f62aae61b38f87baf92c9b6846b"
+      ],
+      "source_bytes": 13453547,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 7925640,
+      "archive_sha256": "5e3b907f1ed5474d7c2c92bf5a9775b5045dbb41be184f148cc0bc2adc3b12bc",
+      "batch": "batch-23",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 1
+      },
+      "elapsed_seconds": 41.95,
+      "entries": 1,
+      "manifest_sha256": "17d5c8182ec085bb260ce2dc44060847b728dd5315d9aa5328058a09ae58de89",
+      "paths": [
+        "/var/lib/ssmcp-rollouts/13a0ac72786f70dc381b5d08bd40ff75a1357db0/files-before.tar"
+      ],
+      "source_bytes": 17981440,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 7933063,
+      "archive_sha256": "e70c706002ba5d699529adb8713a993ec31a05c244b63ed684d1e00a5c09685b",
+      "batch": "batch-24",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 1
+      },
+      "elapsed_seconds": 42.09,
+      "entries": 1,
+      "manifest_sha256": "fcea63d83c4adc74130e2eef542771a275e0bd49b758f7f43b08eaf3c41e3571",
+      "paths": [
+        "/var/lib/ssmcp-rollouts/7867cb8fd42f2f62aae61b38f87baf92c9b6846b/files-before.tar"
+      ],
+      "source_bytes": 18001920,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 14082069,
+      "archive_sha256": "14305105ea404f7047871e353acf0c299f73529624b2d0481cd20cd05dfc5102",
+      "batch": "batch-22",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 3
+      },
+      "elapsed_seconds": 48.03,
+      "entries": 3,
+      "manifest_sha256": "a35e774936864f20ae199eda0cad43ff4e9481e0b26422f42fba4e30552f9f44",
+      "paths": [
+        "/var/tmp/ssmcp-release/12e1d57e6c39af4f1a5a66282752cb1b06bd6225"
+      ],
+      "source_bytes": 14089765,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    },
+    {
+      "archive_bytes": 8894961,
+      "archive_sha256": "e0fd410f07a8bd8dddf70dfecee566253509d31d4783091233ef640e155d7548",
+      "batch": "batch-25",
+      "cleanup": {
+        "remaining": 0,
+        "removed_roots": 1,
+        "verified_entries": 9
+      },
+      "elapsed_seconds": 15.84,
+      "entries": 9,
+      "manifest_sha256": "3348bd6b37bd2aa843293805219e2fe54fbd2d8d4a0c3e4cf9dcfb915f4c7ba0",
+      "paths": [
+        "/opt/ssmcp/releases/12e1d57e6c39af4f1a5a66282752cb1b06bd6225"
+      ],
+      "source_bytes": 20401239,
+      "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+      "verified": true
+    }
+  ],
+  "before": {
+    "active": "active",
+    "binary_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+    "client_sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
+    "disk": {
+      "free": 17328316416,
+      "total": 26526855168,
+      "used": 9003130880
+    },
+    "package": "ssmcp-git 0.8.0.r266.g7867cb8-1",
+    "pid": 337744,
+    "registry_private": true,
+    "runner_sha256": "57f014501bf0313f966935fbe1a05613aaf75816a569b65ff15346cc9d2a8bdf",
+    "running_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+    "version": "ssmcpd 0.8.0"
+  },
+  "cleanup_only": true,
+  "completed_batches": 25,
+  "compressed_archive_bytes": 132691684,
+  "default_client": {
+    "entry": "/home/lightjunction/.cargo/bin/ssmcp",
+    "package": "ssmcp-git 0.8.0.r266.g7867cb8-1",
+    "resolved_entry": "/usr/bin/ssmcp",
+    "sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
+    "version": "ssmcp 0.8.0"
+  },
+  "disk_free_delta_bytes": 170254336,
+  "finished_utc": "2026-11-18T06:40:34+00:00",
+  "original_failed_archive": {
+    "archive": "retired-server-artifacts.tar",
+    "bytes": 25266176,
+    "classification": "incomplete_or_manifest_mismatch",
+    "manifest_sha256": "ae2c6ab2ebcf1c08b471987863e556fd5a4385c5fa4c9c797a4767082673bbf9",
+    "preserved": true,
+    "sha256": "56d464b5d1a793e08670c859470c383989c95f159134bd209fb935f746723269",
+    "used_for_cleanup": false,
+    "verification_error_type": "ReadError"
+  },
+  "plan": {
+    "batches": 25,
+    "deletion": "sequential after each verified batch and fresh manifest/live-reference checks",
+    "entries": 126,
+    "parallel_archive_streams": 3,
+    "roots": 25,
+    "source_bytes": 211025267
+  },
+  "predeployment_archive_reverified": {
+    "bytes": 26081280,
+    "entries": 14,
+    "manifest_sha256": "5ae6c725f7171b802fd9e6a4d444e4f67132b961fbe39fbd74cadf56b98da9d5",
+    "preserved": true,
+    "roots": 10,
+    "sha256": "7a60fe3c030846f40b970744ac2915b92ed27aad5dad7c0ba18063bff61142e4",
+    "verified": true
+  },
+  "production_config_unchanged": true,
+  "production_pid_unchanged": true,
+  "public_health": {
+    "body": "ok",
+    "http_status": 200
+  },
+  "remaining_eligible_roots": 0,
+  "remaining_in_use": [],
+  "removed_roots": 25,
+  "schema": "ssmcp.cleanup-recovery.v1",
+  "server_restarted": false,
+  "skipped_in_use": [],
+  "source_commit": "7867cb8fd42f2f62aae61b38f87baf92c9b6846b",
+  "started_utc": "2026-11-18T06:34:28+00:00",
+  "status": "completed",
+  "updated_utc": "2026-11-18T06:40:34+00:00"
+}
