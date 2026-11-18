@@ -22,6 +22,7 @@ struct Event {
     cache: Option<(usize, String, Vec<String>)>,
     meta: Meta,
     image: Option<images::Preview>,
+    diagnostic: Option<(u64, u64)>,
 }
 
 impl Event {
@@ -89,6 +90,52 @@ impl EventView {
 
     pub(crate) fn ingest(&mut self, bytes: &[u8]) {
         self.ingest_inner(bytes, Meta::default());
+    }
+
+    /// Keep one bounded warning card per renderer diagnostic. Repeated updates
+    /// preserve its position, expansion and the reader's current viewport.
+    pub(crate) fn ingest_diagnostic(
+        &mut self,
+        update: &super::super::render::DiagnosticUpdate,
+    ) -> bool {
+        let (text, truncated) = retained_text(update.text().as_bytes());
+        let inserted = if let Some(event) = self
+            .events
+            .iter_mut()
+            .find(|event| event.diagnostic.is_some_and(|(id, _)| id == update.id))
+        {
+            event.text = text;
+            event.summary = super::super::panel::fit(&update.heading(), 200);
+            event.lines = unstyled(&event.text).lines().count().max(1);
+            event.truncated = truncated;
+            event.cache = None;
+            event.diagnostic = Some((update.id, update.occurrences));
+            false
+        } else {
+            self.ingest(text.as_bytes());
+            if let Some(event) = self.events.back_mut() {
+                event.summary = super::super::panel::fit(&update.heading(), 200);
+                event.expanded = false;
+                event.truncated |= truncated;
+                event.tone = "warning";
+                event.diagnostic = Some((update.id, update.occurrences));
+            }
+            true
+        };
+        self.prune();
+        if !self
+            .events
+            .iter()
+            .any(|event| Some(event.id) == self.selected)
+        {
+            self.selected = self
+                .events
+                .iter()
+                .find(|event| event.matches(&self.query, self.level))
+                .map(|event| event.id);
+            self.reveal = true;
+        }
+        inserted
     }
 
     /// Correlate only registered event identities. Text is never an identity.
@@ -225,15 +272,10 @@ impl EventView {
                 meta,
                 cache: None,
                 image: None,
+                diagnostic: None,
             });
         }
-        self.bytes = self.events.iter().map(Event::retained_bytes).sum();
-        while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
-            if let Some(event) = self.events.pop_front() {
-                self.bytes -= event.retained_bytes();
-                self.dropped = self.dropped.saturating_add(1);
-            }
-        }
+        self.prune();
         if follow {
             self.selected = self
                 .events
@@ -255,6 +297,16 @@ impl EventView {
             self.reveal = true;
         }
         // Updating a correlated row does not move a reader away from their viewport.
+    }
+
+    fn prune(&mut self) {
+        self.bytes = self.events.iter().map(Event::retained_bytes).sum();
+        while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
+            if let Some(event) = self.events.pop_front() {
+                self.bytes -= event.retained_bytes();
+                self.dropped = self.dropped.saturating_add(1);
+            }
+        }
     }
 
     pub(crate) fn filter(&mut self, query: &str, level: u8) {
@@ -454,7 +506,8 @@ impl EventView {
                 "id":event.id,"summary":event.summary,"lines":event.lines,
                 "bytes":event.text.len(),"expanded":event.expanded,"truncated":event.truncated,
                 "selected":Some(event.id)==self.selected,
-                "status":event.meta.status.map(Status::label),"command":event.meta.command
+                "status":event.meta.status.map(Status::label),"command":event.meta.command,
+                "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count)
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
@@ -1000,6 +1053,82 @@ fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn auth_update(
+        id: u64,
+        count: u64,
+        origin: &str,
+    ) -> super::super::super::render::DiagnosticUpdate {
+        super::super::super::render::DiagnosticUpdate {
+            id,
+            source: "codex".into(),
+            summary: format!("MCP sign-in required ({origin})"),
+            message: "Sign in to the backend connector.\nOriginal diagnostics: --raw-events."
+                .into(),
+            preview: format!("AuthRequired {origin}"),
+            occurrences: count,
+        }
+    }
+
+    #[test]
+    fn interleaved_auth_cards_update_in_place_and_preserve_expansion_and_selection() {
+        let mut view = EventView::new();
+        for update in [
+            auth_update(10, 1, "https://api.x.com"),
+            auth_update(11, 1, "https://api.lmm.best"),
+            auth_update(10, 2, "https://api.x.com"),
+            auth_update(11, 2, "https://api.lmm.best"),
+        ] {
+            view.ingest_diagnostic(&update);
+        }
+        assert_eq!(view.events.len(), 2);
+        assert!(view.events.iter().all(|event| !event.expanded));
+        assert_eq!(view.events[0].diagnostic, Some((10, 2)));
+        assert_eq!(view.events[1].diagnostic, Some((11, 2)));
+        let rendered = view.render(120, 8, &plain_ui(), true).join("\n");
+        assert_eq!(rendered.matches("[WARN]").count(), 2);
+        assert_eq!(rendered.matches("×2").count(), 2);
+        view.select(-1);
+        let selected = view.selected;
+        view.open();
+        assert!(view.events[0].expanded);
+        view.ingest_diagnostic(&auth_update(10, 3, "https://api.x.com"));
+        assert_eq!(view.selected, selected);
+        assert!(view.events[0].expanded);
+        assert_eq!(view.events[0].diagnostic, Some((10, 3)));
+        assert_eq!(
+            view.bytes,
+            view.events.iter().map(Event::retained_bytes).sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn auth_card_reappears_after_clear_or_eviction_without_resetting_backend_count() {
+        let mut view = EventView::new();
+        view.ingest_diagnostic(&auth_update(10, 1, "https://api.x.com"));
+        view.clear();
+        view.ingest_diagnostic(&auth_update(10, 2, "https://api.x.com"));
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].diagnostic, Some((10, 2)));
+        for index in 0..MAX_EVENTS {
+            view.ingest(format!("[READ] unrelated {index}\n").as_bytes());
+        }
+        assert!(view.events.iter().all(|event| event.diagnostic.is_none()));
+        view.ingest_diagnostic(&auth_update(10, 3, "https://api.x.com"));
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert_eq!(view.events.back().unwrap().diagnostic, Some((10, 3)));
+        view.ingest_diagnostic(&auth_update(12, 1, "https://api.x.com"));
+        assert_eq!(
+            view.events.back().unwrap().diagnostic,
+            Some((12, 1)),
+            "a different diagnostic ID remains a separate card"
+        );
+        assert!(view.bytes <= MAX_BYTES);
+        assert_eq!(
+            view.bytes,
+            view.events.iter().map(Event::retained_bytes).sum::<usize>()
+        );
+    }
 
     fn plain_ui() -> Ui {
         Ui {

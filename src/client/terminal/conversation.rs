@@ -1468,13 +1468,28 @@ impl State {
         Ok(())
     }
 
+    pub(super) fn chat_discard_image_paste(&mut self) {
+        if self.conversation.paste.take().is_none() {
+            return;
+        }
+        self.notice = Some(if self.conversation.paste_overflow {
+            "Image paste exceeds 16 MiB; draft preserved. Use a smaller image or /attach PATH."
+        } else {
+            "Incomplete image paste discarded; draft preserved. Copy the original image and use Ctrl+V or /paste, or /attach PATH."
+        }.into());
+        self.conversation.paste_overflow = false;
+    }
+
     fn chat_output(&mut self, output: &[u8]) {
-        if output == b"\x1b[200~" {
+        if output.is_empty() {
+            return;
+        }
+        if output == b"\x1b[200~" && self.conversation.paste.is_none() {
             self.conversation.paste = Some(Vec::new());
             self.conversation.paste_overflow = false;
             return;
         }
-        if output == b"\x1b[201~" {
+        if output == b"\x1b[201~" && !self.keyboard.pasting {
             if let Some(paste) = self.conversation.paste.take() {
                 if !paste.is_empty() {
                     if self.conversation.view == View::Agents {
@@ -1488,10 +1503,10 @@ impl State {
                 let result = if self.selection {
                     Err("Leave copy mode before pasting".into())
                 } else if self.conversation.paste_overflow {
-                    Err(format!(
-                        "Paste exceeds {} MiB; save it as a file and use @path",
-                        attachments::paste_limit(&paste) / (1024 * 1024)
-                    ))
+                    Err(
+                        "Paste exceeds its limit (4 MiB text / 16 MiB image); use /attach PATH"
+                            .into(),
+                    )
                 } else {
                     match attachments::paste_source(paste) {
                         Ok(attachments::Source::Text(text)) => self.chat_paste_text(&text),
@@ -1507,7 +1522,10 @@ impl State {
             return;
         }
         if let Some(paste) = &mut self.conversation.paste {
-            if paste.len().saturating_add(output.len()) <= attachments::paste_limit(paste) {
+            if !self.conversation.paste_overflow
+                && paste.len().saturating_add(output.len())
+                    <= attachments::paste_limit(paste, output)
+            {
                 paste.extend_from_slice(output);
             } else {
                 self.conversation.paste_overflow = true;
@@ -1531,6 +1549,14 @@ impl State {
     }
 
     pub(super) fn chat_keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        // Run before accepting the next input, including a real Ctrl-C after a
+        // truncated image, and discard only the unfinished paste, never the draft.
+        if self.keyboard.image_paste_expired(now) {
+            self.discard_image_paste();
+        }
+        if !bytes.is_empty() && self.keyboard.pasting {
+            self.keyboard.paste_last_input = Some(now);
+        }
         self.chat_updates();
         // Keep text and navigation in their original order, including coalesced reads.
         for byte in bytes {
@@ -2141,7 +2167,7 @@ impl State {
         );
         if let Some(rect) = layout.sidebar {
             let limit = usize::from(g.rows.saturating_sub(1));
-            let footer = self.guide_rows(rect.width, limit as u16);
+            let footer = self.guide_rows(rect.width, limit as u16, 0, rect.col);
             let footer_start = limit.saturating_sub(footer.len());
             let mut sidebar = Vec::new();
             for kind in &self.ui.panels {
@@ -2911,9 +2937,9 @@ mod tests {
 
     #[test]
     fn binary_bracketed_paste_preserves_every_byte_across_read_boundaries() {
-        let png = b"\x89PNG\r\n\x1a\n\x00\x03\x11\x13\xff\x1b[18~";
+        let png = crate::client::input::paste::fixture_png();
         let mut bytes = b"\x1b[200~".to_vec();
-        bytes.extend_from_slice(png);
+        bytes.extend_from_slice(&png);
         for chunk in 1..=bytes.len() {
             let mut state = preview(28, 120);
             state.conversation.composer.set_text("保留原稿");
@@ -2934,6 +2960,123 @@ mod tests {
                 "recognized images must reach the guarded import path before UTF-8 decoding"
             );
         }
+    }
+
+    #[test]
+    fn image_idle_recovery_discards_only_the_paste_and_accepts_the_next_text() {
+        use crate::client::input::paste::{IMAGE_IDLE_TIMEOUT, fixture_png};
+        let png = fixture_png();
+        for payload in [&png[..1], &png[..png.len() - 1], png.as_slice()] {
+            let now = Instant::now();
+            let mut state = preview(28, 120);
+            state.conversation.composer.set_text("保留原稿");
+            let source = [b"\x1b[200~".as_slice(), payload].concat();
+            state.keyboard(&source, now, false);
+            assert!(state.conversation.paste.is_some());
+            state.keyboard(b" next", now + IMAGE_IDLE_TIMEOUT, false);
+            assert!(state.conversation.paste.is_none());
+            assert!(!state.keyboard.pasting);
+            assert_eq!(state.conversation.composer.text(), "保留原稿 next");
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .unwrap()
+                    .contains("Incomplete image paste")
+            );
+            assert!(state.conversation.input_task.is_none());
+        }
+    }
+
+    #[test]
+    fn split_image_end_uses_raw_input_progress_across_graphics_and_keyboard() {
+        use crate::client::input::paste::fixture_png;
+        let now = Instant::now();
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("draft");
+        let source = [b"\x1b[200~".as_slice(), &fixture_png()].concat();
+        state.keyboard(&source, now, false);
+        // Graphics holds this prefix. The composer must still see its progress.
+        state.keyboard(b"\x1b", now + Duration::from_millis(1500), false);
+        state.keyboard(&[], now + Duration::from_millis(2200), true);
+        assert!(state.keyboard.pasting);
+        assert!(state.conversation.paste.is_some());
+        state.keyboard(b"[201~", now + Duration::from_millis(2500), false);
+        assert!(!state.keyboard.pasting);
+        assert!(state.conversation.paste.is_none());
+        assert_eq!(state.conversation.composer.text(), "draft");
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .starts_with("Preview cannot")
+        );
+    }
+
+    #[test]
+    fn attach_buffered_image_end_progress_keeps_the_compositor_paste_alive() {
+        use crate::client::input::paste::fixture_png;
+        use crate::session::attach::input::{Decoder, Event};
+        fn deliver(state: &mut State, events: Vec<Event>, now: Instant) {
+            for event in events {
+                match event {
+                    Event::Bytes(bytes) | Event::PasteBytes(bytes) => {
+                        state.keyboard(&bytes, now, false);
+                    }
+                    Event::InputProgress(at) => state.paste_input_progress(at),
+                    Event::PasteExpired => state.discard_image_paste(),
+                    _ => panic!("image bytes must not become attach commands"),
+                }
+            }
+        }
+
+        let now = Instant::now();
+        let mut state = preview(28, 120);
+        let mut outer = Decoder::default();
+        state.conversation.composer.set_text("draft");
+        let source = [b"\x1b[200~".as_slice(), &fixture_png()].concat();
+        deliver(&mut state, outer.feed_at(&source, false, now), now);
+        let progress = now + Duration::from_millis(1900);
+        let events = outer.feed_at(b"\x1b", false, progress);
+        assert!(matches!(events.as_slice(), [Event::InputProgress(at)] if *at == progress));
+        deliver(&mut state, events, progress);
+        // The outer has retained every byte in the new chunk. A display tick
+        // after the old deadline must still retain the entire image.
+        state.keyboard(&[], now + Duration::from_millis(2100), true);
+        assert!(state.conversation.paste.is_some());
+        assert!(state.keyboard.pasting);
+        let end = now + Duration::from_secs(3);
+        deliver(&mut state, outer.feed_at(b"[201~", false, end), end);
+        assert!(state.conversation.paste.is_none());
+        assert!(!state.keyboard.pasting);
+        assert_eq!(state.conversation.composer.text(), "draft");
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .starts_with("Preview cannot")
+        );
+        state.keyboard(b" next", end + Duration::from_millis(1), false);
+        assert_eq!(state.conversation.composer.text(), "draft next");
+    }
+
+    #[test]
+    fn explicit_attach_recovery_resets_all_compositor_layers_before_new_input() {
+        use crate::client::input::paste::fixture_png;
+        let now = Instant::now();
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("draft");
+        let source = [b"\x1b[200~".as_slice(), &fixture_png()].concat();
+        state.keyboard(&source, now, false);
+        state.keyboard(b"\x1b[20", now + Duration::from_millis(1), false);
+        // The outer reader can reach its deadline slightly before this layer.
+        state.discard_image_paste();
+        state.keyboard(b" next", now + Duration::from_millis(2), false);
+        assert_eq!(state.conversation.composer.text(), "draft next");
+        assert!(state.conversation.paste.is_none());
+        assert!(!state.keyboard.pasting);
     }
 
     #[test]

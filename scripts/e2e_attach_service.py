@@ -267,7 +267,7 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
         # A legal ancillary PNG chunk carries bytes that are not UTF-8 and
         # resemble terminal shortcuts. Make it larger than a single stdin read.
         # The observer must keep them as paste data and never detach on its 0x03.
-        payload = b"raw\x00\xff\x03\x1d\x11\x13\x1b[18~" * 400
+        payload = b"raw\x00\xff\x1b[200~\x1b[201~\x03\x1d\x11\x13\x1b[18~\x1b_Gi=1;OK\x1b\\" * 400
         chunk_type = b"raWp"
         chunk = (struct.pack(">I", len(payload)) + chunk_type + payload
                  + struct.pack(">I", zlib.crc32(chunk_type + payload) & 0xFFFFFFFF))
@@ -293,8 +293,27 @@ def exercise_attach(binary, env, cwd, name, status_callback, *, artifacts_dir=No
               "attach imports into the session workspace instead of its frontend launch directory")
         check(saved_image.name in text(records["chat_png"])
               and chat.process.poll() is None,
-              "pasted Ctrl-C, Ctrl-] and F7 bytes stay literal in read-only attach")
-        chat.detach()
+              "embedded paste markers, Ctrl-C, Ctrl-], F7 and Kitty bytes stay literal in read-only attach")
+        # Both a truncated image and a complete PNG missing the terminal's end
+        # marker must stop capturing input after the shared two-second deadline.
+        image_set = set(input_directory.glob("image-*.png"))
+        for index, unfinished in enumerate((pasted_png[:45], original)):
+            chat.send(b"\x1b[200~" + unfinished)
+            chat.pump(2.2)
+            recovered = f"PNG_IDLE_RECOVERED_{index}"
+            chat.send(" " + recovered)
+            records[f"chat_png_idle_{index}"] = chat.until(
+                lambda s: recovered in text(s), "typing after incomplete PNG idle recovery",
+            )
+            check(chat.process.poll() is None
+                  and set(input_directory.glob("image-*.png")) == image_set,
+                  "PNG idle recovery preserves the draft and creates no incomplete image")
+        chat.send(b"\x1b[200~\x89")
+        chat.pump(2.2)
+        chat.send(b"\x03")
+        check(chat.wait_exit() == 0
+              and termios.tcgetattr(chat.slave) == chat.original_termios,
+              "Ctrl-C detaches an observer after a truncated image signature times out")
         chat_status = status_callback()
         check(chat_status.get("manager_pid") == pid
               and chat_status.get("generation") == before.get("generation")

@@ -11,6 +11,8 @@ File copies use current wire7 @references and the rooted native image reader.
 import argparse
 import base64
 import hashlib
+from fractions import Fraction
+import math
 import json
 import os
 from pathlib import Path
@@ -156,11 +158,19 @@ class GraphicsFrontend(Frontend):
                 })
                 self.transfer = None
         elif action == "p":
+            source_width, source_height = int(values["w"]), int(values["h"])
+            axes = {key: int(values[key]) for key in ("c", "r") if key in values}
+            scales = ([Fraction(axes["c"] * 10, source_width)] if "c" in axes else [])
+            scales += ([Fraction(axes["r"] * 20, source_height)] if "r" in axes else [])
+            scale = min(scales) if scales else Fraction(1)
+            pixel_width, pixel_height = source_width * scale, source_height * scale
             self.native_placements.append({
                 **{key: int(values[key]) for key in ("i", "p", "x", "y", "w", "h") if key in values},
                 "row": self.screen_cursor[0], "col": self.screen_cursor[1],
-                "columns": int(values.get("c", (int(values["w"]) + 9) // 10)),
-                "rows": int(values.get("r", (int(values["h"]) + 19) // 20)),
+                "axes": axes,
+                "pixel_width": float(pixel_width), "pixel_height": float(pixel_height),
+                "columns": math.ceil(pixel_width / 10),
+                "rows": math.ceil(pixel_height / 20),
             })
         elif action == "d":
             if "i" not in values or values.get("d") not in ("i", "I"):
@@ -500,7 +510,7 @@ class FilePaste(InputHistory):
                    "native graphics starts only after the real PTY capability and cell-size queries")
         self.clear_draft(front)
 
-        width, height = 400, 300
+        width, height = 512, 128
         rgb = bytes(channel for y in range(height) for x in range(width)
                     for channel in ((x * 17 + y) % 256, (y * 31 + x // 2) % 256, (x ^ y) % 256))
         rgba = b"".join(rgb[i:i + 3] + b"\xff" for i in range(0, len(rgb), 3))
@@ -550,6 +560,40 @@ class FilePaste(InputHistory):
         self.check(resized["row"] + resized["rows"] - 1 <= 18
                    and resized["col"] + resized["columns"] - 1 <= 48,
                    "native graphics remain inside the smaller terminal after resize")
+
+        self.check(set(resized["axes"]) == {"c"} and resized["y"] == 0
+                   and resized["h"] == height,
+                   "a width-limited image uses one scale axis without a letterboxing rectangle")
+        columns = resized["axes"]["c"]
+        source_per_row = Fraction(20 * width, columns * 10)
+        occupied_rows = math.ceil(Fraction(height) / source_per_row)
+        last_y = int((occupied_rows - 1) * source_per_row)
+        self.check(0 < (height - last_y) * Fraction(columns * 10, width) < 20,
+                   "the scaled fixture has a final image row shorter than one terminal cell")
+        uploads_before_crop = len(front.native_uploads)
+        crop = None
+        for index in range(8):
+            before = len(front.native_placements)
+            self.call("ssmcp.ui.message", {
+                "text": f"Owned crop viewport fixture {index + 1}", "kind": "progress",
+            })
+            front.pump(0.15)
+            crop = next((item for item in reversed(front.native_placements[before:])
+                         if item["i"] == image_id and item["y"] > 0), None)
+            if crop is not None:
+                break
+        self.check(crop is not None,
+                   "actual new activity clips the scaled image at the top of the viewport")
+        pixel_boundaries = {int(row * source_per_row) for row in range(1, occupied_rows)}
+        self.check(crop["y"] in pixel_boundaries
+                   and crop["y"] + crop["h"] == height
+                   and crop["axes"] == {"c": columns}
+                   and len(front.native_uploads) == uploads_before_crop,
+                   "viewport cropping uses pixel row boundaries and unchanged scale, without recentering or reupload")
+        self.metrics["native_crop"] = {
+            "source": [width, height], "cell": [10, 20], "full": resized, "cropped": crop,
+            "last_source_row": last_y,
+        }
 
         uploads, deletions = len(front.native_uploads), len(front.native_deletions)
         front.send(f"\x1b_Gi={image_id};ENOSPC:owned fixture failure\x1b\\")

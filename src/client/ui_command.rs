@@ -210,9 +210,11 @@ async fn preview(ui: Ui, explicit: Option<&Path>) -> crate::Result<()> {
     loop {
         tokio::select! {
             event = keyboard.next() => match event? {
-                Event::Bytes(bytes) => {
+                Event::Bytes(bytes) | Event::PasteBytes(bytes) => {
                     let _ = super::terminal::keyboard_bytes(&bytes);
                 }
+                Event::InputProgress(now) => super::terminal::paste_input_progress(now),
+                Event::PasteExpired => super::terminal::discard_image_paste(),
                 Event::Resize(rows, cols) => {
                     if rows > 0 && cols > 0 {
                         super::terminal::physical_resize(rows, cols);
