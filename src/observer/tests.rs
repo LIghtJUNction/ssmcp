@@ -8,7 +8,7 @@ fn fixture(count: usize) -> Arc<Pool> {
     ));
     crate::platform::private_directory(&directory).unwrap();
     let pool = Arc::new(Pool {
-        terminal: PathBuf::from("/bin/false"),
+        terminal: PathBuf::from("/usr/bin/false"),
         helper: std::env::current_exe().unwrap(),
         directory,
         allocation: tokio::sync::Mutex::new(()),
@@ -90,6 +90,7 @@ async fn closed_interactive_terminals_release_stream_counters_and_reuse_the_slot
     assert_eq!(state.slots.len(), 1);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn failed_view_prevents_command_start_and_releases_slot() {
     let pool = fixture(1);
@@ -345,15 +346,16 @@ async fn native_parallel_streams_and_background_output_keep_their_own_windows() 
     .unwrap();
     assert!(output.contains("alpha"));
     assert!(!output.contains("beta"));
+    let background = cwd.join("provider-task.output");
     pool.native_finish(
         one,
-        &Ok(json!({"structuredContent":{"backgroundOutputPath":"/tmp/provider-task.output"}})),
+        &Ok(json!({"structuredContent":{"backgroundOutputPath":background}})),
     );
     assert!(pool.state.lock().unwrap().active.contains_key("native:10"));
-    pool.native_event("claude",&json!({"type":"background_output","path":"/tmp/provider-task.output","data_base64":STANDARD.encode("background continued")}));
+    pool.native_event("claude",&json!({"type":"background_output","path":background,"data_base64":STANDARD.encode("background continued")}));
     pool.native_event(
         "claude",
-        &json!({"type":"background_output_closed","path":"/tmp/provider-task.output"}),
+        &json!({"type":"background_output_closed","path":background}),
     );
     assert!(!pool.state.lock().unwrap().active.contains_key("native:10"));
     assert!(pool.state.lock().unwrap().active.contains_key("native:11"));

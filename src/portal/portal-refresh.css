@@ -13,7 +13,7 @@ body { background: #0b0d0f; }
 .site-header { border: 0; }
 .site-nav { min-height: 100px; }
 .brand { gap: 14px; }
-.brand-mark { color: #e1e7e3; font-size: 22px; }
+.brand-mark { display: block; width: 36px; height: 36px; padding: 0; }
 .brand-name { font-size: 20px; font-weight: 500; }
 .brand-label { border: 0; padding-left: 14px; font: 10px var(--mono); letter-spacing: .14em; color: #818b90; }
 .nav-links { gap: 32px; }
