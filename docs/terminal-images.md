@@ -8,7 +8,7 @@ The client queries Kitty graphics support after the raw input pump is ready. Nat
 
 Image data travels through the PTY using the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/). This permits a direct SSH connection without a shared filesystem or terminal-side temporary image files. The implementation uses direct PNG transmission, bounded source crops and deletion of its own placements.
 
-Ordinary terminals use a colored half-block preview. `NO_COLOR` uses a plain-text luminance preview. tmux and screen use the fallback in this version; passthrough wrappers and Unicode image placeholders are not implemented. These choices are made by [the graphics adapter](../src/client/terminal/images/kitty.rs) and [the cell renderer](../src/client/terminal/images.rs).
+Ordinary terminals use a colored half-block preview. `NO_COLOR` uses a plain-text luminance preview. Activity labels this fallback **Low-resolution thumbnail** because it cannot preserve small text in a screenshot. tmux and screen use the fallback in this version; passthrough wrappers and Unicode image placeholders are not implemented. These choices are made by [the graphics adapter](../src/client/terminal/images/kitty.rs) and [the cell renderer](../src/client/terminal/images.rs).
 
 ## Limits and image ownership
 
@@ -20,10 +20,12 @@ The native image envelope, decoding buffer and retained preview have separate li
 | Preview dimensions | 4096 pixels per side | [image decoder](../src/client/terminal/images.rs) |
 | Decoded preview output | 64 MiB before pixel allocation | [image decoder](../src/client/terminal/images.rs) |
 | Retained cell preview | At most 128 × 128 RGBA pixels | [image decoder](../src/client/terminal/images.rs) |
-| Retained native preview | Static PNG, at most 1024 pixels per side | [native image preparation](../src/client/terminal/images/kitty.rs) |
+| Retained native preview | Static PNG, original pixels up to 4096 per side when the encoded PNG fits 4 MiB + 64 KiB; otherwise one resize to at most 1024 per side | [native image preparation](../src/client/terminal/images/kitty.rs) |
 | Encoded native payloads in Activity | 12 MiB across retained events | [Activity retention](../src/client/terminal/events.rs) |
 
-Decoder allocation accounting is best effort in addition to the explicit dimension and output-buffer checks. Native previews preserve aspect ratio and do not enlarge source pixels while preparing the cache. Small images use their natural size; larger images fit the visible Activity area. GIF and WebP previews use one decoded frame. See [decoding](../src/client/terminal/images.rs) and [placement geometry](../src/client/terminal/images/kitty.rs).
+Decoder allocation accounting is best effort in addition to the explicit dimension and output-buffer checks. Native preparation first streams the original pixels into a lossless PNG with a bounded output buffer; it does not collect a second whole-image compressed buffer. If that exceeds the existing per-image payload budget, it makes one attempt at a reduced size; a further failure keeps only the cell thumbnail. Activity shows both preview and source dimensions when they differ. GIF and WebP previews use one decoded frame. See [decoding](../src/client/terminal/images.rs) and [native image preparation](../src/client/terminal/images/kitty.rs).
+
+Native images fit the Activity pane's width without enlarging source pixels. Tall screenshots retain their proportional height in the transcript instead of shrinking into an 18-row box. When a new tall image arrives while following output, Activity starts at its heading and pauses automatic following so later tool output cannot pull it away. Scroll to inspect the image; **Ctrl+End** returns to the latest output and resumes following. The compositor crops only the visible source rows and reuses the uploaded pixels. The cell fallback uses the available pane height while keeping its 128 × 128 pixel storage limit. See [Activity layout](../src/client/terminal/events.rs) and [placement geometry](../src/client/terminal/images/kitty.rs).
 
 Each Activity image belongs to its retained event. Scrolling changes the source crop, and folding, clearing or leaving the view removes the associated placement. Resizing recalculates placement geometry. Reload and interrupted-transfer cleanup delete IDs owned by this client. PNG preparation occurs outside the display-state lock, while the compositor coordinates image operations with the normal text-frame update. See [event ownership](../src/client/terminal/events.rs) and [the graphics compositor](../src/client/terminal/images/kitty.rs).
 

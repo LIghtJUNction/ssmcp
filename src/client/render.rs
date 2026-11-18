@@ -18,8 +18,8 @@ mod command_process_tests;
 #[cfg(test)]
 #[path = "readable_log_fixture.rs"]
 mod readable_log_fixture;
-pub(crate) use activity::CallerTracker;
 use activity::{Activities, key as activity_key, short_id};
+pub(crate) use activity::{CallerGroup, CallerTracker};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
