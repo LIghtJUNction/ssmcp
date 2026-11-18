@@ -407,7 +407,7 @@ async fn webhook(State(broker): State<Arc<Broker>>, request: Request) -> Respons
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
     match commerce.accept_webhook(&body, &signature).await {
-        Ok(Settlement::Grant(order)) => match grant(&broker, commerce, order).await {
+        Ok(Settlement::Grant(order)) => match grant(&broker, commerce, *order).await {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },

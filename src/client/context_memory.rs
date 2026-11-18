@@ -1087,11 +1087,20 @@ mod tests {
             crate::platform::private_directory(&root).unwrap();
             Self(root)
         }
+        fn workspace_path(&self, name: &str) -> String {
+            self.0
+                .join(name.trim_start_matches('/'))
+                .to_string_lossy()
+                .into_owned()
+        }
         fn store(&self, workspace: &str) -> Store {
-            Store::at(self.0.join("memory"), workspace.into()).unwrap()
+            Store::at(self.0.join("memory"), self.workspace_path(workspace)).unwrap()
         }
         fn state_path(&self, workspace: &str) -> PathBuf {
-            self.0.join("memory").join(digest(workspace)).join(FILE)
+            self.0
+                .join("memory")
+                .join(digest(&self.workspace_path(workspace)))
+                .join(FILE)
         }
     }
     impl Drop for Temporary {
