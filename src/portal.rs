@@ -1,6 +1,7 @@
 //! Browser account portal, sharing the MCP gateway's verified GitHub identity provider.
 //! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
 mod dashboard;
+mod commerce;
 mod dashboard_view;
 mod guide;
 mod setup;
@@ -49,6 +50,7 @@ pub struct Portal {
     store: Option<Arc<Mutex<Store>>>,
     credentials: Option<Arc<Mutex<crate::device::Credentials>>>,
     management: Option<ManagementClient>,
+    commerce: Option<Arc<crate::commerce::Commerce>>,
 }
 
 #[derive(Default)]
@@ -255,6 +257,7 @@ impl Portal {
                 path,
             )?))),
             management: None,
+            commerce: None,
         })
     }
     /// The private socket carries only requests authenticated by this portal's sessions.
@@ -432,6 +435,7 @@ pub fn routes() -> Router<Arc<Broker>> {
         .merge(guide::routes())
         .merge(setup::routes())
         .merge(dashboard::routes())
+        .merge(commerce::routes())
         .layer(middleware::map_response(security_headers))
 }
 
