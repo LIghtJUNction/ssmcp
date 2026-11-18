@@ -54,6 +54,240 @@ pub(super) struct Conversation {
     images_changed: bool,
     image_task: Option<attachments::Task>,
     persisted_context: Option<Value>,
+    activity_header: ActivityHeader,
+}
+
+#[derive(Default)]
+struct ActivityHeader {
+    // A run ID belongs to its first observed connection. The display never
+    // promotes an unfinished historical run after the client reconnects.
+    runs: std::collections::VecDeque<(String, String)>,
+    stale: std::collections::BTreeSet<String>,
+}
+
+#[derive(Default, Debug)]
+struct ActivitySummary {
+    active: Vec<String>,
+    idle: Vec<String>,
+    unknown: Vec<String>,
+    reported: Vec<String>,
+    offline: bool,
+}
+
+impl ActivityHeader {
+    fn observe(&mut self, event: &Value, data: &Value) {
+        let run = field(event, "run_id");
+        if field(event, "phase") != "started"
+            || run.is_empty()
+            || run.len() > 256
+            || !data["connected"].as_bool().unwrap_or(false)
+            || self.runs.iter().any(|(id, _)| id == run)
+        {
+            return;
+        }
+        self.runs
+            .push_back((run.into(), field(data, "room_id").into()));
+        while self.runs.len() > 256 {
+            if let Some((id, _)) = self.runs.pop_front() {
+                self.stale.remove(&id);
+            }
+        }
+    }
+
+    fn summarize(&mut self, observed: &[Value], data: &Value) -> ActivitySummary {
+        let mut summary = ActivitySummary::default();
+        let preview = data["preview"].as_bool().unwrap_or(false);
+        if !preview && !data["connected"].as_bool().unwrap_or(false) {
+            self.stale
+                .extend(self.runs.iter().map(|(id, _)| id.clone()));
+            summary.offline = true;
+            return summary;
+        }
+
+        // Names/model labels are display groups only, never collaboration IDs.
+        // Missing names stay separate by run; repeated calls with known labels
+        // contribute one group, and any current active call keeps it active.
+        let mut groups =
+            std::collections::BTreeMap::<(String, String, String), (String, bool)>::new();
+        let mut unknown = std::collections::BTreeSet::new();
+        for entry in observed {
+            let run = field(entry, "run_id");
+            let name = field(entry, "name");
+            let model = field(entry, "model");
+            let source = field(entry, "source");
+            let known =
+                !name.is_empty() && name != "Unknown controller" && source != "metadata missing";
+            let label = if known {
+                panel::safe_text(name)
+            } else {
+                format!("Unknown #{}", run.chars().take(6).collect::<String>())
+            };
+            let current = preview
+                || (!self.stale.contains(run)
+                    && self
+                        .runs
+                        .iter()
+                        .any(|(id, room)| id == run && room == field(data, "room_id")));
+            if !current {
+                if entry["active"].as_bool().unwrap_or(false) {
+                    unknown.insert(label);
+                }
+                continue;
+            }
+            let key = if known {
+                (source.into(), name.into(), model.into())
+            } else {
+                (String::new(), run.into(), String::new())
+            };
+            let group = groups.entry(key).or_insert((label, false));
+            group.1 |= entry["active"].as_bool().unwrap_or(false);
+        }
+        let mut name_counts = std::collections::BTreeMap::<String, usize>::new();
+        for (label, _) in groups.values() {
+            *name_counts.entry(label.clone()).or_default() += 1;
+        }
+        for ((_, _, model), (mut label, active)) in groups {
+            if name_counts[&label] > 1 && !model.is_empty() {
+                label.push_str(&format!(" ({})", panel::safe_text(&model)));
+            }
+            if active {
+                summary.active.push(label);
+            } else {
+                summary.idle.push(label);
+            }
+        }
+        summary.unknown = unknown.into_iter().collect();
+        let mut members = std::collections::BTreeSet::new();
+        for member in items(data, "agents") {
+            if members.insert(field(&member, "agent_id").to_owned()) {
+                let name = field(&member, "name");
+                summary.reported.push(panel::safe_text(if name.is_empty() {
+                    field(&member, "agent_id")
+                } else {
+                    name
+                }));
+            }
+        }
+        summary
+    }
+}
+
+fn activity_segments(
+    summary: &ActivitySummary,
+    title: &str,
+    width: usize,
+) -> Vec<(PanelTone, String)> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if summary.offline {
+        return vec![(
+            PanelTone::Warning,
+            panel::fit(
+                &if width >= 64 {
+                    format!("{title} · Offline · activity unknown")
+                } else {
+                    "Offline · activity unknown".into()
+                },
+                width,
+            ),
+        )];
+    }
+    let mut groups = vec![
+        (
+            PanelTone::Success,
+            format!("● Active {}", summary.active.len()),
+            &summary.active,
+        ),
+        (
+            PanelTone::Muted,
+            format!("○ Idle {}", summary.idle.len()),
+            &summary.idle,
+        ),
+    ];
+    if !summary.unknown.is_empty() {
+        groups.push((
+            PanelTone::Warning,
+            format!("? Unknown {}", summary.unknown.len()),
+            &summary.unknown,
+        ));
+    }
+    if !summary.reported.is_empty() {
+        groups.push((
+            PanelTone::Accent,
+            format!("◇ Reported {}", summary.reported.len()),
+            &summary.reported,
+        ));
+    }
+    let separator = " · ";
+    let mut result = Vec::new();
+    let mut available = width;
+    if width >= 64 {
+        let title = panel::fit(title, (width / 3).min(32));
+        available = available.saturating_sub(title.width() + separator.width());
+        result.push((PanelTone::Heading, title));
+        result.push((PanelTone::Muted, separator.into()));
+    }
+    let required = |groups: &[(PanelTone, String, &Vec<String>)]| {
+        groups
+            .iter()
+            .map(|(_, label, _)| label.width())
+            .sum::<usize>()
+            + groups.len().saturating_sub(1) * separator.width()
+    };
+    while groups.len() > 2 && required(&groups) + 8 > available {
+        groups.pop();
+    }
+    if required(&groups) > available {
+        groups[0].1 = format!("● {}", summary.active.len());
+        groups[1].1 = format!("○ {}", summary.idle.len());
+    }
+    let mut remaining = available.saturating_sub(required(&groups));
+    let mut budgets = groups
+        .iter()
+        .map(|(_, label, _)| label.width())
+        .collect::<Vec<_>>();
+    let wanted = groups
+        .iter()
+        .map(|(_, label, names)| {
+            label.width()
+                + if names.is_empty() {
+                    0
+                } else {
+                    1 + names.join(", ").width()
+                }
+        })
+        .collect::<Vec<_>>();
+    while remaining > 0 {
+        let mut changed = false;
+        for (budget, desired) in budgets.iter_mut().zip(&wanted) {
+            if remaining > 0 && *budget < *desired {
+                *budget += 1;
+                remaining -= 1;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut used = 0;
+    for (index, ((tone, label, names), budget)) in groups.into_iter().zip(budgets).enumerate() {
+        if index > 0 {
+            let part = fit(separator, available.saturating_sub(used) as u16);
+            used += part.width();
+            result.push((PanelTone::Muted, part));
+        }
+        let text = if names.is_empty() {
+            label
+        } else {
+            format!("{label} {}", names.join(", "))
+        };
+        let text = panel::fit(&text, budget.min(available.saturating_sub(used)));
+        used += text.width();
+        result.push((tone, text));
+    }
+    result
 }
 
 impl Conversation {
@@ -125,6 +359,37 @@ fn agent_key(value: &Value) -> String {
 }
 
 impl State {
+    pub(super) fn chat_observe_run(&mut self, event: &Value) {
+        self.conversation
+            .activity_header
+            .observe(event, &steering::snapshot());
+    }
+
+    fn chat_activity_header(&mut self, data: &Value, observed: &[Value], width: u16) -> String {
+        let summary = self.conversation.activity_header.summarize(observed, data);
+        let suffix = if !self.log_query.is_empty() || self.log_level != 0 {
+            format!(
+                " · {} /{}",
+                ["all", "commands", "errors"][usize::from(self.log_level)],
+                self.log_query
+            )
+        } else {
+            String::new()
+        };
+        let title = format!("  ssmcp  /  {}{suffix}", self.conversation.view.name());
+        let segments = activity_segments(&summary, &title, usize::from(width));
+        let occupied = segments.iter().map(|(_, text)| text.width()).sum::<usize>();
+        let mut line = segments
+            .into_iter()
+            .map(|(tone, text)| self.tone(tone, &text))
+            .collect::<String>();
+        line.push_str(&self.tone(
+            PanelTone::Normal,
+            &" ".repeat(usize::from(width).saturating_sub(occupied)),
+        ));
+        line
+    }
+
     fn chat_saved_draft(&self) -> steering::SavedDraft {
         steering::SavedDraft {
             text: self.conversation.composer.text().into(),
@@ -1640,20 +1905,7 @@ impl State {
                 rows.push(self.chat_footer(&hint, g.cols));
                 continue;
             } else if top > 0 && index == 0 {
-                let suffix = if !self.log_query.is_empty() || self.log_level != 0 {
-                    format!(
-                        " · {} /{}",
-                        ["all", "commands", "errors"][usize::from(self.log_level)],
-                        self.log_query
-                    )
-                } else {
-                    String::new()
-                };
-                self.chat_line(
-                    &format!("  ssmcp  /  {}{suffix}", self.conversation.view.name()),
-                    PanelTone::Heading,
-                    g.left,
-                )
+                self.chat_activity_header(&data, &observed, g.left)
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g.rows) && prompt_rows(g.rows) > 0 {
@@ -1826,6 +2078,114 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
+    }
+
+    fn activity_event(run: &str, phase: &str, name: &str) -> Value {
+        json!({"type":"ssmcp.code_mode","run_id":run,"phase":phase,"success":phase=="finished",
+            "controller":{"name":name,"model":"model-x","source":"caller-reported"}})
+    }
+
+    #[test]
+    fn activity_groups_remain_active_until_every_observed_call_finishes() {
+        let mut audit = AuditView::default();
+        let mut header = ActivityHeader::default();
+        let data = json!({"connected":true,"room_id":"room-a",
+            "agents":[{"agent_id":"member","name":"Reported worker","status":"working"}]});
+        for run in ["one", "two"] {
+            let event = activity_event(run, "started", "Builder");
+            audit.ingest(&event);
+            header.observe(&event, &data);
+        }
+        let summary = header.summarize(&audit.observed_controllers(), &data);
+        assert_eq!(summary.active, ["Builder"]);
+        assert!(summary.idle.is_empty());
+        assert_eq!(summary.reported, ["Reported worker"]);
+        audit.ingest(&activity_event("one", "finished", "Builder"));
+        assert_eq!(
+            header
+                .summarize(&audit.observed_controllers(), &data)
+                .active,
+            ["Builder"]
+        );
+        audit.ingest(&activity_event("two", "finished", "Builder"));
+        let summary = header.summarize(&audit.observed_controllers(), &data);
+        assert!(summary.active.is_empty());
+        assert_eq!(summary.idle, ["Builder"]);
+    }
+
+    #[test]
+    fn disconnected_and_historical_runs_do_not_become_idle_or_active_after_reconnect() {
+        let mut header = ActivityHeader::default();
+        let mut audit = AuditView::default();
+        let old = json!({"connected":true,"room_id":"old"});
+        let event = activity_event("old-run", "started", "Old caller");
+        audit.ingest(&event);
+        header.observe(&event, &old);
+        let offline = header.summarize(&audit.observed_controllers(), &json!({"connected":false}));
+        assert!(offline.offline);
+        assert!(offline.active.is_empty() && offline.idle.is_empty());
+        // Same-room recovery is conservative if a disconnect was observed.
+        let recovered = header.summarize(&audit.observed_controllers(), &old);
+        assert!(recovered.active.is_empty());
+        assert_eq!(recovered.unknown, ["Old caller"]);
+        let new = json!({"connected":true,"room_id":"new"});
+        let event = activity_event("new-run", "started", "New caller");
+        audit.ingest(&event);
+        header.observe(&event, &new);
+        let summary = header.summarize(&audit.observed_controllers(), &new);
+        assert_eq!(summary.active, ["New caller"]);
+        assert!(summary.idle.is_empty());
+        assert_eq!(summary.unknown, ["Old caller"]);
+        // A duplicated historical start cannot acquire the new room.
+        header.observe(&activity_event("old-run", "started", "Old caller"), &new);
+        assert_eq!(
+            header.summarize(&audit.observed_controllers(), &new).active,
+            ["New caller"]
+        );
+    }
+
+    #[test]
+    fn activity_header_preserves_counts_and_clips_long_unicode_names_at_all_widths() {
+        let summary = ActivitySummary {
+            active: vec!["正在修复终端界面和处理大量任务".repeat(4)],
+            idle: vec!["空闲审查者".repeat(4)],
+            reported: vec!["未实测成员".repeat(4)],
+            ..ActivitySummary::default()
+        };
+        for width in 0..=160 {
+            let segments = activity_segments(&summary, "  ssmcp  /  activity", width);
+            let text = segments
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<String>();
+            assert!(text.width() <= width, "width {width}: {text:?}");
+            assert!(!text.chars().any(char::is_control));
+            if width >= 32 {
+                assert!(text.contains("● Active 1"));
+                assert!(text.contains("○ Idle 1"));
+            }
+        }
+        let segments = activity_segments(&summary, "ssmcp", 160);
+        assert!(
+            segments
+                .iter()
+                .any(|(tone, text)| matches!(tone, PanelTone::Success)
+                    && text.starts_with("● Active"))
+        );
+        assert!(
+            segments
+                .iter()
+                .any(|(tone, text)| matches!(tone, PanelTone::Muted) && text.starts_with("○ Idle"))
+        );
+        for (rows, cols) in [(6, 20), (12, 40), (24, 100), (36, 160)] {
+            let mut state = preview(rows, cols);
+            input(&mut state, "输入\n第二行".as_bytes());
+            let before = (state.geometry.pty_rows, prompt_top(rows));
+            let parser = display(&mut state);
+            assert_eq!(parser.screen().size(), (rows, cols));
+            assert_eq!((state.geometry.pty_rows, prompt_top(rows)), before);
+            assert!(!parser.screen().hide_cursor());
+        }
     }
 
     #[test]
