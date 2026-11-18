@@ -71,12 +71,25 @@ test('CUA routes desktop and browser operations through the existing native brid
     ['type', { text: '中文 ` $() \\ Unicode' }],
     ['scroll', { direction: 'down', steps: 2 }],
   ];
+  const browserCommands = [
+    ['launch', {}],
+    ['open', { url: 'about:blank' }],
+    ['navigate', { target_id: 't', url: 'about:blank' }],
+    ['act', { target_id: 't', actions: [
+      { type: 'fill', ref: 's1e1', text: '中文表单' },
+      { type: 'click', ref: 's1e2' },
+      { type: 'wait', selector: '#result', text: 'Ready', timeout_ms: 5000 },
+    ] }],
+    ['wait', { target_id: 't', selector: '#result', state: 'visible' }],
+  ];
   const record = await run(`
     const answers = [];
     for (const [name, args] of ${JSON.stringify(commands)}) {
       answers.push(await cua[name]('one', args));
     }
-    answers.push(await cua.browser.navigate('one', {target_id:'t',url:'about:blank'}));
+    for (const [name, args] of ${JSON.stringify(browserCommands)}) {
+      answers.push(await cua.browser[name]('one', args));
+    }
     return answers;
   `, request => ({
     ok: true,
@@ -87,18 +100,51 @@ test('CUA routes desktop and browser operations through the existing native brid
     },
   }));
   assert.equal(record.exitCode, 0, record.stderr || error(record));
-  const expectedNames = [...commands.map(([name]) => 'ssmcp.computer.' + name), 'ssmcp.browser.navigate'];
+  const expectedNames = [
+    ...commands.map(([name]) => 'ssmcp.computer.' + name),
+    ...browserCommands.map(([name]) => 'ssmcp.browser.' + name),
+  ];
   assert.deepEqual(record.requests.map(request => request.name), expectedNames);
   record.requests.forEach(request => {
     assert.equal(request.op, 'call');
     assert.equal(request.client_id, 'one');
   });
   commands.forEach(([, args], index) => assert.deepEqual(record.requests[index].arguments, args));
+  browserCommands.forEach(([, args], index) => {
+    assert.deepEqual(record.requests[commands.length + index].arguments, args);
+  });
   result(record).forEach(value => {
     assert.equal(value.isError, false);
     assert.deepEqual(value._meta, { native: ['kept', 1] });
     assert.deepEqual(value.futureField, { version: 2 });
   });
+});
+
+test('CUA preserves partial browser batch errors without replay or desktop fallback', async () => {
+  const native = {
+    isError: true,
+    content: [{ type: 'text', text: 'ref is not from the latest snapshot' }],
+    structuredContent: {
+      target_id: 't', completed_count: 1,
+      completed: [{ index: 0, type: 'click', result: { clicked: true } }],
+      phase: 'actions', failed_index: 1, replay_safe: false,
+    },
+  };
+  const actions = [
+    { type: 'click', ref: 's1e1' },
+    { type: 'click', ref: 'stale-ref' },
+    { type: 'click', ref: 's1e2' },
+  ];
+  const record = await run(`
+    return await cua.browser.act('one', {target_id:'t', actions:${JSON.stringify(actions)}});
+  `, request => {
+    assert.equal(request.name, 'ssmcp.browser.act');
+    return { ok: true, value: native };
+  });
+  assert.equal(record.exitCode, 0, record.stderr || error(record));
+  assert.deepEqual(result(record), native);
+  assert.deepEqual(record.requests.map(request => request.name), ['ssmcp.browser.act']);
+  assert.deepEqual(record.requests[0].arguments, { target_id: 't', actions });
 });
 
 test('CUA screenshots keep image bytes out of text logs and preserve coordinate metadata', async () => {

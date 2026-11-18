@@ -99,6 +99,11 @@ external process did not change that launch-time setting. ssmcp reports the
 capture failure and does not activate a tab to conceal it. Use an owned browser
 or private desktop when that external configuration cannot provide an image.
 
+Ordered fill/click/key/scroll/wait sequences use `browser.act`; selector and text
+conditions use `browser.wait`. See [batch actions and condition waits](background-control.md)
+for deadlines, fresh snapshots and partial-failure handling. Existing
+`browser.wait_for` keeps its text present/absent behavior.
+
 ## Native desktop input without using the host pointer
 
 Linux clients can allocate one private Xvfb desktop on demand. Its X server
