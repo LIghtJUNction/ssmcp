@@ -46,6 +46,14 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Open code audit",
     },
     SlashCommand {
+        name: "/diff",
+        description: "Choose diff layout: single or split; narrow screens use single",
+    },
+    SlashCommand {
+        name: "/login",
+        description: "Sign in with GitHub; open a browser, copy the link or show the link",
+    },
+    SlashCommand {
         name: "/logs",
         description: "Open the diagnostic log panel; Esc returns",
     },

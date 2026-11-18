@@ -17,6 +17,8 @@ use std::{
 };
 use tokio::process::Command;
 
+pub(super) mod login;
+
 pub(super) const DEFAULT_SERVER: &str = "https://ssmcp.lmm.best";
 const STORE_LIMIT: usize = 32 * 1024;
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
@@ -649,7 +651,22 @@ async fn open_browser(url: &Url) -> Result<()> {
     Ok(())
 }
 
-async fn authorize_at(root: &Path, args: &Arguments, username: Option<&str>) -> Result<Credential> {
+struct Authorization {
+    api: Api,
+    server: String,
+    code: String,
+    url: Url,
+    user_code: Option<String>,
+    username: Option<String>,
+    interval: u64,
+    deadline: tokio::time::Instant,
+}
+
+async fn begin_authorization(
+    root: &Path,
+    args: &Arguments,
+    username: Option<&str>,
+) -> Result<Authorization> {
     let username = username.map(crate::username::normalize).transpose()?;
     if root.exists() {
         verify_directory(root)?;
@@ -673,27 +690,47 @@ async fn authorize_at(root: &Path, args: &Arguments, username: Option<&str>) -> 
     let code = start["device_code"]
         .as_str()
         .filter(|v| valid_secret(v))
-        .ok_or("invalid device login code")?;
+        .ok_or("invalid device login code")?
+        .to_owned();
     let raw_url = start["verification_uri_complete"]
         .as_str()
         .or_else(|| start["verification_uri"].as_str())
         .ok_or("server omitted the login URL")?;
-    let url = verification_url(&server, raw_url, code)?;
+    let url = verification_url(&server, raw_url, &code)?;
     let expires = start["expires_in"]
         .as_u64()
         .filter(|n| (1..=1800).contains(n))
         .ok_or("invalid device login lifetime")?;
-    let mut interval = start["interval"].as_u64().unwrap_or(2).clamp(1, 60);
-    eprintln!("Open this link to sign in with GitHub:\n{url}");
-    if let Some(user_code) = start["user_code"].as_str() {
-        eprintln!("Confirmation code: {}", safe(user_code));
-    }
-    if !args.no_browser && open_browser(&url).await.is_err() {
-        eprintln!("Open the printed link in your browser.");
-    }
+    let interval = start["interval"].as_u64().unwrap_or(2).clamp(1, 60);
+    // Removing controls must not reassemble the private polling code for display.
+    let user_code = start["user_code"]
+        .as_str()
+        .map(safe)
+        .filter(|value| !value.contains(code.as_str()));
+    Ok(Authorization {
+        api,
+        server,
+        code,
+        url,
+        user_code,
+        username,
+        interval,
+        deadline: tokio::time::Instant::now() + Duration::from_secs(expires),
+    })
+}
+
+async fn finish_authorization(root: &Path, authorization: Authorization) -> Result<Credential> {
+    let Authorization {
+        api,
+        server,
+        code,
+        username,
+        mut interval,
+        deadline,
+        ..
+    } = authorization;
     let mut interrupt = platform::interrupt_signal()?;
     let mut terminate = platform::terminate_signal()?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(expires);
     let response = loop {
         let reply = tokio::select! {
             result = api.request(Method::POST, "/api/client/login/poll", None, Some(json!({"device_code":code}))) => result?,
@@ -758,6 +795,21 @@ async fn authorize_at(root: &Path, args: &Arguments, username: Option<&str>) -> 
     };
     save_at(root, &credential)?;
     Ok(credential)
+}
+
+async fn authorize_at(root: &Path, args: &Arguments, username: Option<&str>) -> Result<Credential> {
+    let authorization = begin_authorization(root, args, username).await?;
+    eprintln!(
+        "Open this link to sign in with GitHub:\n{}",
+        authorization.url
+    );
+    if let Some(user_code) = &authorization.user_code {
+        eprintln!("Confirmation code: {user_code}");
+    }
+    if !args.no_browser && open_browser(&authorization.url).await.is_err() {
+        eprintln!("Open the printed link in your browser.");
+    }
+    finish_authorization(root, authorization).await
 }
 
 async fn login(args: &Arguments) -> Result<()> {

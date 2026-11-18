@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod correlation;
+mod diff;
 use correlation::{Kind, Meta, Status};
+pub(crate) use diff::DiffMode;
 
 /// Both panes share retained events; this changes only which rows are visible.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -153,6 +155,7 @@ pub(crate) struct EventView {
     query: String,
     level: u8,
     scope: EventScope,
+    diff_mode: DiffMode,
 }
 
 impl EventView {
@@ -161,6 +164,25 @@ impl EventView {
             follow: true,
             ..Self::default()
         }
+    }
+
+    pub(crate) fn diff_mode(&self) -> DiffMode {
+        self.diff_mode
+    }
+
+    pub(crate) fn set_diff_mode(&mut self, mode: DiffMode) {
+        if self.diff_mode == mode {
+            return;
+        }
+        self.diff_mode = mode;
+        for event in &mut self.events {
+            if event.meta.diff {
+                event.cache = None;
+            }
+        }
+        self.hit_rows.clear();
+        self.placements.clear();
+        self.reveal = !self.follow;
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -200,6 +222,7 @@ impl EventView {
 
     /// Only explicit local conversation producers may use this entry point.
     /// Plain log text, including a literal "[AGENT]", stays in the log pane.
+    #[cfg(test)]
     pub(crate) fn ingest_conversation(&mut self, bytes: &[u8]) {
         let text = String::from_utf8_lossy(bytes);
         let user = text
@@ -728,7 +751,7 @@ impl EventView {
                 "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count)
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
-            "event_scope":self.scope.label(),
+            "event_scope":self.scope.label(),"diff_mode":self.diff_mode().name(),
             "visible_events":self.events.iter().filter(|event| event.matches(&self.query,self.level,self.scope)).count(),
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
             "selected":self.selected,"scroll":self.scroll,
@@ -764,7 +787,12 @@ impl EventView {
         let new_image = self.new_image.take();
         let mut new_images = false;
         let mut image_anchor = None;
-        let palette = format!("{}:{}", palette_key(ui), self.scope.label());
+        let palette = format!(
+            "{}:{}:{}",
+            palette_key(ui),
+            self.scope.label(),
+            self.diff_mode.name()
+        );
         for event in &mut self.events {
             if !event.matches(&self.query, self.level, self.scope) {
                 continue;
@@ -929,21 +957,22 @@ impl EventView {
                             super::markdown::rows(&event.text, body_width as u16, ui)
                         }
                     } else {
-                        styled_rows(
-                            &semantic_text(
-                                if chat {
-                                    conversation_body(&event.text)
-                                } else if correlated {
-                                    event.text.split_once('\n').map_or("", |(_, body)| body)
-                                } else {
-                                    &event.text
-                                },
-                                ui,
-                                event.meta.language,
-                            ),
-                            body_width,
-                            ui.color,
-                        )
+                        let body = if chat {
+                            conversation_body(&event.text)
+                        } else if correlated {
+                            event.text.split_once('\n').map_or("", |(_, body)| body)
+                        } else {
+                            &event.text
+                        };
+                        if event.meta.diff {
+                            diff::rows(body, body_width, ui, event.meta.language, self.diff_mode)
+                        } else {
+                            styled_rows(
+                                &semantic_text(body, ui, event.meta.language),
+                                body_width,
+                                ui.color,
+                            )
+                        }
                     };
                     event.cache = Some((body_width, palette.clone(), lines));
                 }
@@ -1435,6 +1464,41 @@ fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diff_modes_reflow_existing_events_without_changing_retained_content() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.ingest_event(
+            "files",
+            &json!({"type":"ssmcp.file.diff","path":"example.rs"}),
+            b"[DIFF] example.rs\n@@ -1 +1 @@\n-old value\n+new value\n",
+        );
+        assert_eq!(view.diff_mode(), DiffMode::Single);
+        assert!(view.open());
+        let retained = (view.events.len(), view.bytes);
+        let single = view.render(120, 30, &plain_ui(), true);
+        view.set_diff_mode(DiffMode::Split);
+        assert!(
+            !view.mouse_select(0),
+            "old row hit targets must be invalidated"
+        );
+        let split = view.render(120, 30, &plain_ui(), true).join("\n");
+        assert!(split.contains("Old") && split.contains("New"));
+        assert!(
+            split
+                .lines()
+                .any(|row| row.contains("- old value") && row.contains("+ new value"))
+        );
+        assert_eq!(view.snapshot()["diff_mode"], "split");
+        assert_eq!((view.events.len(), view.bytes), retained);
+        view.set_diff_mode(DiffMode::Single);
+        assert_eq!(view.render(120, 30, &plain_ui(), true), single);
+        let narrow_single = view.render(40, 30, &plain_ui(), true);
+        view.set_diff_mode(DiffMode::Split);
+        assert_eq!(view.render(40, 30, &plain_ui(), true), narrow_single);
+        assert_eq!((view.events.len(), view.bytes), retained);
+    }
 
     #[test]
     fn native_prose_uses_original_markdown_instead_of_pre_wrapped_log_rows() {
