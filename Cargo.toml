@@ -130,6 +130,7 @@ include = [
     "/packaging/sshd-ssmcp-portal.conf",
     "/docs/backends.md",
     "/docs/configuration.md",
+    "/docs/commerce.md",
     "/docs/deployment.md",
     "/docs/validation.md",
     "/docs/validation-portal.md",
