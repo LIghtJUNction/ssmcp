@@ -1897,7 +1897,9 @@ mod tests {
     #[test]
     fn version_seven_clients_keep_text_requests_and_reject_image_publication() {
         let mut subject = session("queue-version-test", "secret");
-        subject.wire_version = wire::QUEUE_VERSION;
+        Arc::get_mut(&mut subject)
+            .expect("unique test session")
+            .wire_version = wire::QUEUE_VERSION;
         let text = wire::SteeringCommand::Publish {
             command_id: "text".into(),
             message_id: "text".into(),
