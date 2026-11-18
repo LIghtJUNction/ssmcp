@@ -148,6 +148,8 @@ fn native_limits() -> Value {
                 "max_result_bytes":131072,
                 "description_code_points":240,
                 "include_schemas":"complete unchanged native descriptor",
+                "name_prefix":"optional case-insensitive registered-name prefix; combined with query",
+                "max_name_prefix_bytes":128,
                 "namespace":"observed registered-name prefix; not authoritative provider metadata",
                 "pagination":"existing authorized native snapshots; no helper-added cache",
                 "oversized_descriptor":"explicit error; use original tools() without truncating schema"
@@ -312,7 +314,7 @@ impl Runtime {
         });
         manifest["code_mode"] = json!({
             "call":"call(clientId, nativeToolName, arguments)",
-            "discovery":"tools.search(clientId, {query, include_schemas:true})",
+            "discovery":"tools.search(clientId, {query, name_prefix, include_schemas:true})",
             "dynamic_api":"native(clientId).ssmcp.browser.snapshot(arguments)",
             "routing":"client_registry","server_provider_catalog":false
         });
@@ -440,7 +442,7 @@ and receive with wait_ms up to 30000. Receive is non-destructive; ack through ne
 processing the returned messages. Direct waits do not occupy code_mode workers. The collab.* helpers \
 inside code_mode accept clientId first and limit receive waits to 1000ms. Read ssmcp://collaboration \
 for identity binding, retry deduplication, queue bounds and the connection lifetime.\n\n\
-Use tools.search(clientId,{query:'browser',limit:20}) in code_mode for a focused lookup. It returns registered names, routing namespaces, short descriptions and nextCursor. Set include_schemas:true for complete native descriptors unchanged. Continue with the same client, query, limit and schema mode; restart if a cursor expires or a resumed page changes. Search retains native catalog snapshot semantics and checks authorization on every page. It reduces model-visible output and manual pagination, not the first native page scan.\n\n\
+Use tools.search(clientId,{query:'browser',limit:20}) in code_mode for a focused lookup. Add name_prefix:'ssmcp.browser.' to match registered names only; the optional prefix is case-insensitive and combines with query. It returns registered names, routing namespaces, short descriptions and nextCursor. Set include_schemas:true for complete native descriptors unchanged. exec.run is a JavaScript helper composing ssmcp.exec.start/wait/read, not a registered tool. Continue with the same client, query, name_prefix, limit and schema mode; restart if a cursor expires or a resumed page changes. Search retains native catalog snapshot semantics and checks authorization on every page. It reduces model-visible output and manual pagination, not the first native page scan.\n\n\
 New clients always provide a shell and automatically discover installed Codex, Claude Code, \
 Pi, OpenCode and Playwright MCP tools. ssmcp.harnesses.list reports status and registered tool counts.\n\n\
 Use code_mode with clients, await call(clientId, toolName, arguments), \

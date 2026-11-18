@@ -1703,7 +1703,11 @@ impl State {
                     String::new()
                 };
                 self.chat_line(
-                    &format!("  ssmcp  /  {}{suffix}", self.conversation.view.name()),
+                    &format!(
+                        "  ssmcp  /  {}{}{suffix}",
+                        self.conversation.view.name(),
+                        self.context_label,
+                    ),
                     PanelTone::Heading,
                     g.left,
                 )
@@ -1858,6 +1862,67 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
+    }
+
+    #[test]
+    fn header_shows_startup_project_and_optional_custom_title() {
+        let ui = Ui {
+            sidebar: false,
+            ..Ui::default()
+        };
+        let mut state = super::super::preview_state(24, 100, &ui);
+        for (cwd, title, expected) in [
+            (
+                "/workspace/alpha-project/",
+                None,
+                "  ssmcp  /  activity  /  alpha-project",
+            ),
+            (
+                "/workspace/终端",
+                Some("修复输入框"),
+                "  ssmcp  /  activity  /  终端  /  修复输入框",
+            ),
+            ("", None, "  ssmcp  /  activity"),
+        ] {
+            state.set_context(cwd, title);
+            let screen = display(&mut state).screen().contents();
+            assert_eq!(screen.lines().next().unwrap().trim_end(), expected);
+        }
+        state.set_context("/workspace/alpha-project", Some("Review uploads"));
+        state.conversation.view = View::Queue;
+        let screen = display(&mut state).screen().contents();
+        assert_eq!(
+            screen.lines().next().unwrap().trim_end(),
+            "  ssmcp  /  queue  /  alpha-project  /  Review uploads",
+        );
+    }
+
+    #[test]
+    fn header_is_one_safe_row_with_narrow_and_unicode_content() {
+        let ui = Ui {
+            sidebar: false,
+            ..Ui::default()
+        };
+        for cols in [20, 40, 80, 100] {
+            let mut state = super::super::preview_state(24, cols, &ui);
+            let before = display(&mut state).screen().contents();
+            state.set_context(
+                "/workspace/项目\nname",
+                Some("修改标题\r\u{1b}[2J\u{202e}extra-long-title"),
+            );
+            let after = display(&mut state).screen().contents();
+            assert_eq!(
+                after.lines().skip(1).collect::<Vec<_>>(),
+                before.lines().skip(1).collect::<Vec<_>>(),
+                "header must not wrap or inject controls at {cols} columns",
+            );
+            let header = after.lines().next().unwrap();
+            assert!(header.width() <= usize::from(cols));
+            if cols == 100 {
+                assert!(header.contains(r"项目\nname"));
+                assert!(header.contains(r"修改标题\r\x1b[2J\u{202e}extra-long-title"));
+            }
+        }
     }
 
     #[test]
