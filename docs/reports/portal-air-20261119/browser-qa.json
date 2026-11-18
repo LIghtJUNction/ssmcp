@@ -1,0 +1,2584 @@
+{
+  "clipboardMethod": "Synthetic clipboard success/rejection in owned test tab; actual buttons clicked; system clipboard unchanged",
+  "failures": [],
+  "finishedAt": "2026-11-18T18:26:23.794Z",
+  "interactions": [
+    {
+      "accountTarget": {
+        "bottom": 437.9375,
+        "class": "account-panel",
+        "top": 108.046875
+      },
+      "name": "Account anchor at 1440px",
+      "passed": true
+    },
+    {
+      "accountTarget": {
+        "bottom": 427.515625,
+        "class": "account-panel",
+        "top": 108
+      },
+      "name": "Account anchor at 768px",
+      "passed": true
+    },
+    {
+      "accountTarget": {
+        "bottom": 423,
+        "class": "account-panel",
+        "top": 108.078125
+      },
+      "name": "Account anchor at 390px",
+      "passed": true
+    },
+    {
+      "accountTarget": {
+        "bottom": 423,
+        "class": "account-panel",
+        "top": 108.078125
+      },
+      "name": "Account anchor at 320px",
+      "passed": true
+    },
+    {
+      "name": "POST and CSRF /account/logout",
+      "passed": true
+    },
+    {
+      "name": "POST and CSRF /account/login",
+      "passed": true
+    },
+    {
+      "name": "POST and CSRF /account/username",
+      "passed": true
+    },
+    {
+      "name": "Username constraints",
+      "passed": true
+    },
+    {
+      "name": "Exhausted account traffic link",
+      "passed": true
+    },
+    {
+      "name": "Quota details opens",
+      "passed": true
+    },
+    {
+      "name": "Quota details closes",
+      "passed": true
+    },
+    {
+      "copied": "ssmcp developer@ssmcp.lmm.best",
+      "expected": "ssmcp developer@ssmcp.lmm.best",
+      "name": "Copy success client-command",
+      "passed": true,
+      "status": "已复制命令"
+    },
+    {
+      "copied": "curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh",
+      "expected": "curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh",
+      "name": "Copy success install-unix",
+      "passed": true,
+      "status": "已复制安装命令"
+    },
+    {
+      "copied": "irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex",
+      "expected": "irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex",
+      "name": "Copy success install-windows",
+      "passed": true,
+      "status": "已复制安装命令"
+    },
+    {
+      "expected": "ssmcp developer@ssmcp.lmm.best",
+      "name": "Copy fallback client-command",
+      "passed": true,
+      "selected": "ssmcp developer@ssmcp.lmm.best",
+      "status": "已选中命令，请手动复制"
+    },
+    {
+      "expected": "curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh",
+      "name": "Copy fallback install-unix",
+      "passed": true,
+      "selected": "curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh",
+      "status": "已选中命令，请手动复制"
+    },
+    {
+      "expected": "irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex",
+      "name": "Copy fallback install-windows",
+      "passed": true,
+      "selected": "irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex",
+      "status": "已选中命令，请手动复制"
+    }
+  ],
+  "noJavaScript": [
+    {
+      "accountTarget": {
+        "bottom": 755,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": true,
+          "id": "install-unix",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "install-windows",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "copy-client-command",
+          "visible": false
+        }
+      ],
+      "documentWidth": 390,
+      "forms": [
+        {
+          "action": "/account/login",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "index",
+      "traffic": [],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      }
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": true,
+          "id": "install-unix",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "install-windows",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "copy-client-command",
+          "visible": false
+        }
+      ],
+      "documentWidth": 390,
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "account",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      }
+    },
+    {
+      "accountTarget": {
+        "bottom": 1195.1875,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": true,
+          "id": "install-unix",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "install-windows",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "copy-client-command",
+          "visible": false
+        }
+      ],
+      "documentWidth": 390,
+      "forms": [
+        {
+          "action": "/account/username",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "registration",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      }
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": true,
+          "id": "install-unix",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "install-windows",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "copy-client-command",
+          "visible": false
+        }
+      ],
+      "documentWidth": 390,
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "exhausted",
+      "traffic": [
+        {
+          "text": "0 字节",
+          "title": "0 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      }
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": true,
+          "id": "install-unix",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "install-windows",
+          "visible": false
+        },
+        {
+          "hidden": true,
+          "id": "copy-client-command",
+          "visible": false
+        }
+      ],
+      "documentWidth": 390,
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "admin",
+      "traffic": [
+        {
+          "text": "无限",
+          "title": ""
+        },
+        {
+          "text": "2 GB",
+          "title": "2000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      }
+    }
+  ],
+  "passed": true,
+  "responsive": [
+    {
+      "accountTarget": {
+        "bottom": 540.9375,
+        "class": "account-panel",
+        "top": 211.046875
+      },
+      "bodyWidth": 1425,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 1425,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/login",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1100,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "index",
+      "traffic": [],
+      "viewport": {
+        "height": 1100,
+        "width": 1440
+      },
+      "width": 1440
+    },
+    {
+      "accountTarget": {
+        "bottom": 688.546875,
+        "class": "account-panel",
+        "top": 184
+      },
+      "bodyWidth": 1425,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 1425,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1100,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "account",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1100,
+        "width": 1440
+      },
+      "width": 1440
+    },
+    {
+      "accountTarget": {
+        "bottom": 688.546875,
+        "class": "account-panel",
+        "top": 184
+      },
+      "bodyWidth": 1425,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 1425,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1100,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "admin",
+      "traffic": [
+        {
+          "text": "无限",
+          "title": ""
+        },
+        {
+          "text": "2 GB",
+          "title": "2000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1100,
+        "width": 1440
+      },
+      "width": 1440
+    },
+    {
+      "accountTarget": {
+        "bottom": 933.078125,
+        "class": "account-panel",
+        "top": 184
+      },
+      "bodyWidth": 1425,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 1425,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/username",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1100,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "registration",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1100,
+        "width": 1440
+      },
+      "width": 1440
+    },
+    {
+      "accountTarget": {
+        "bottom": 688.546875,
+        "class": "account-panel",
+        "top": 184
+      },
+      "bodyWidth": 1425,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 1425,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1100,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 100%",
+        "max": 1000000000,
+        "value": 1000000000
+      },
+      "state": "exhausted",
+      "traffic": [
+        {
+          "text": "0 字节",
+          "title": "0 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1100,
+        "width": 1440
+      },
+      "width": 1440
+    },
+    {
+      "accountTarget": {
+        "bottom": 490.59375,
+        "class": "account-panel",
+        "top": 261.390625
+      },
+      "bodyWidth": 1425,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 1425,
+      "exceptions": [],
+      "forms": [],
+      "height": 1100,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "disabled",
+      "traffic": [],
+      "viewport": {
+        "height": 1100,
+        "width": 1440
+      },
+      "width": 1440
+    },
+    {
+      "accountTarget": {
+        "bottom": 731.3125,
+        "class": "account-panel",
+        "top": 184
+      },
+      "bodyWidth": 1425,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 1425,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1100,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "long-name",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1100,
+        "width": 1440
+      },
+      "width": 1440
+    },
+    {
+      "accountTarget": {
+        "bottom": 688.546875,
+        "class": "account-panel",
+        "top": 184
+      },
+      "bodyWidth": 1425,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 1425,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1100,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 >99.9%",
+        "max": 1000000000,
+        "value": 999999999
+      },
+      "state": "one-byte",
+      "traffic": [
+        {
+          "text": "1 字节",
+          "title": "1 字节"
+        },
+        {
+          "text": "999.99 MB",
+          "title": "999999999 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1100,
+        "width": 1440
+      },
+      "width": 1440
+    },
+    {
+      "accountTarget": {
+        "bottom": 483.515625,
+        "class": "account-panel",
+        "top": 164
+      },
+      "bodyWidth": 753,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 753,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/login",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1024,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "index",
+      "traffic": [],
+      "viewport": {
+        "height": 1024,
+        "width": 768
+      },
+      "width": 768
+    },
+    {
+      "accountTarget": {
+        "bottom": 658.171875,
+        "class": "account-panel",
+        "top": 164
+      },
+      "bodyWidth": 753,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 753,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1024,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "account",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1024,
+        "width": 768
+      },
+      "width": 768
+    },
+    {
+      "accountTarget": {
+        "bottom": 658.171875,
+        "class": "account-panel",
+        "top": 164
+      },
+      "bodyWidth": 753,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 753,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1024,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "admin",
+      "traffic": [
+        {
+          "text": "无限",
+          "title": ""
+        },
+        {
+          "text": "2 GB",
+          "title": "2000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1024,
+        "width": 768
+      },
+      "width": 768
+    },
+    {
+      "accountTarget": {
+        "bottom": 923.703125,
+        "class": "account-panel",
+        "top": 164
+      },
+      "bodyWidth": 753,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 753,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/username",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1024,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "registration",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1024,
+        "width": 768
+      },
+      "width": 768
+    },
+    {
+      "accountTarget": {
+        "bottom": 658.171875,
+        "class": "account-panel",
+        "top": 164
+      },
+      "bodyWidth": 753,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 753,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1024,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 100%",
+        "max": 1000000000,
+        "value": 1000000000
+      },
+      "state": "exhausted",
+      "traffic": [
+        {
+          "text": "0 字节",
+          "title": "0 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1024,
+        "width": 768
+      },
+      "width": 768
+    },
+    {
+      "accountTarget": {
+        "bottom": 427.625,
+        "class": "account-panel",
+        "top": 184.109375
+      },
+      "bodyWidth": 753,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 753,
+      "exceptions": [],
+      "forms": [],
+      "height": 1024,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "disabled",
+      "traffic": [],
+      "viewport": {
+        "height": 1024,
+        "width": 768
+      },
+      "width": 768
+    },
+    {
+      "accountTarget": {
+        "bottom": 710.359375,
+        "class": "account-panel",
+        "top": 164
+      },
+      "bodyWidth": 753,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 753,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1024,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "long-name",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1024,
+        "width": 768
+      },
+      "width": 768
+    },
+    {
+      "accountTarget": {
+        "bottom": 658.171875,
+        "class": "account-panel",
+        "top": 164
+      },
+      "bodyWidth": 753,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 753,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 1024,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 >99.9%",
+        "max": 1000000000,
+        "value": 999999999
+      },
+      "state": "one-byte",
+      "traffic": [
+        {
+          "text": "1 字节",
+          "title": "1 字节"
+        },
+        {
+          "text": "999.99 MB",
+          "title": "999999999 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 1024,
+        "width": 768
+      },
+      "width": 768
+    },
+    {
+      "accountTarget": {
+        "bottom": 755,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 390,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/login",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 844,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "index",
+      "traffic": [],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "width": 390
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 390,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 844,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "account",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "width": 390
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 390,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 844,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "admin",
+      "traffic": [
+        {
+          "text": "无限",
+          "title": ""
+        },
+        {
+          "text": "2 GB",
+          "title": "2000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "width": 390
+    },
+    {
+      "accountTarget": {
+        "bottom": 1195.1875,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 390,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/username",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 844,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "registration",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "width": 390
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 390,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 844,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 100%",
+        "max": 1000000000,
+        "value": 1000000000
+      },
+      "state": "exhausted",
+      "traffic": [
+        {
+          "text": "0 字节",
+          "title": "0 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "width": 390
+    },
+    {
+      "accountTarget": {
+        "bottom": 679,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 390,
+      "exceptions": [],
+      "forms": [],
+      "height": 844,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "disabled",
+      "traffic": [],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "width": 390
+    },
+    {
+      "accountTarget": {
+        "bottom": 987.25,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 390,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 844,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "long-name",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "width": 390
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 390,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 390,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 844,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 >99.9%",
+        "max": 1000000000,
+        "value": 999999999
+      },
+      "state": "one-byte",
+      "traffic": [
+        {
+          "text": "1 字节",
+          "title": "1 字节"
+        },
+        {
+          "text": "999.99 MB",
+          "title": "999999999 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "width": 390
+    },
+    {
+      "accountTarget": {
+        "bottom": 755,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 320,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 320,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/login",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 740,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "index",
+      "traffic": [],
+      "viewport": {
+        "height": 740,
+        "width": 320
+      },
+      "width": 320
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 320,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 320,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 740,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "account",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 740,
+        "width": 320
+      },
+      "width": 320
+    },
+    {
+      "accountTarget": {
+        "bottom": 997.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 320,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 320,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 740,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "admin",
+      "traffic": [
+        {
+          "text": "无限",
+          "title": ""
+        },
+        {
+          "text": "2 GB",
+          "title": "2000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 740,
+        "width": 320
+      },
+      "width": 320
+    },
+    {
+      "accountTarget": {
+        "bottom": 1195.1875,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 320,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 320,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/username",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 740,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "registration",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 740,
+        "width": 320
+      },
+      "width": 320
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 320,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 320,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 740,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 100%",
+        "max": 1000000000,
+        "value": 1000000000
+      },
+      "state": "exhausted",
+      "traffic": [
+        {
+          "text": "0 字节",
+          "title": "0 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 740,
+        "width": 320
+      },
+      "width": 320
+    },
+    {
+      "accountTarget": {
+        "bottom": 716.796875,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 320,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 320,
+      "exceptions": [],
+      "forms": [],
+      "height": 740,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": null,
+      "state": "disabled",
+      "traffic": [],
+      "viewport": {
+        "height": 740,
+        "width": 320
+      },
+      "width": 320
+    },
+    {
+      "accountTarget": {
+        "bottom": 987.25,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 320,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 320,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 740,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 25%",
+        "max": 1000000000,
+        "value": 250000000
+      },
+      "state": "long-name",
+      "traffic": [
+        {
+          "text": "750 MB",
+          "title": "750000000 字节"
+        },
+        {
+          "text": "250 MB",
+          "title": "250000000 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 740,
+        "width": 320
+      },
+      "width": 320
+    },
+    {
+      "accountTarget": {
+        "bottom": 929.65625,
+        "class": "account-panel",
+        "top": 440.078125
+      },
+      "bodyWidth": 320,
+      "brand": {
+        "icon": "/favicon.svg",
+        "loaded": true,
+        "width": 150
+      },
+      "copyButtons": [
+        {
+          "hidden": false,
+          "id": "install-unix",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "install-windows",
+          "visible": true
+        },
+        {
+          "hidden": false,
+          "id": "copy-client-command",
+          "visible": true
+        }
+      ],
+      "documentWidth": 320,
+      "exceptions": [],
+      "forms": [
+        {
+          "action": "/account/logout",
+          "csrf": true,
+          "method": "post"
+        },
+        {
+          "action": "/account/keys",
+          "csrf": true,
+          "method": "post"
+        }
+      ],
+      "height": 740,
+      "networkErrors": [],
+      "overflow": [],
+      "passed": true,
+      "progress": {
+        "aria": "已用 >99.9%",
+        "max": 1000000000,
+        "value": 999999999
+      },
+      "state": "one-byte",
+      "traffic": [
+        {
+          "text": "1 字节",
+          "title": "1 字节"
+        },
+        {
+          "text": "999.99 MB",
+          "title": "999999999 字节"
+        },
+        {
+          "text": "1 GB",
+          "title": "1000000000 字节"
+        }
+      ],
+      "viewport": {
+        "height": 740,
+        "width": 320
+      },
+      "width": 320
+    }
+  ],
+  "screenshots": [
+    {
+      "bytes": 96553,
+      "file": "desktop-guest.png",
+      "name": "desktop-guest"
+    },
+    {
+      "bytes": 81947,
+      "file": "desktop-account.png",
+      "name": "desktop-account"
+    },
+    {
+      "bytes": 77634,
+      "file": "desktop-install.png",
+      "name": "desktop-install"
+    },
+    {
+      "bytes": 34009,
+      "file": "mobile-account.png",
+      "name": "mobile-account"
+    },
+    {
+      "bytes": 32048,
+      "file": "mobile-exhausted.png",
+      "name": "mobile-exhausted"
+    },
+    {
+      "bytes": 34457,
+      "file": "small-mobile-registration.png",
+      "name": "small-mobile-registration"
+    }
+  ],
+  "source": "Rust-rendered fixtures; synthetic accounts",
+  "startedAt": "2026-11-18T18:26:18.157Z"
+}
