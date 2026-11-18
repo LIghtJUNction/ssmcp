@@ -96,7 +96,7 @@ Usage: ssmcp username@server [options]
   --no-watchdog        Disable automatic reconnects (enabled by default)
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
-  --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
+  --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (SSH sharing; at most 32 users; your logged-in account is automatic)
   --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
@@ -856,6 +856,23 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
         );
     }
     Ok(())
+}
+
+/// Read display metadata without reopening optional context roots or transports.
+pub(crate) fn session_title(spec: &crate::session::SessionSpec) -> crate::Result<Option<String>> {
+    let mut args = spec.args.iter();
+    let mut title = None;
+    while let Some(arg) = args.next() {
+        if arg == "--title" {
+            title = Some(args.next().ok_or("saved session title is missing")?.clone());
+        } else if let Some(value) = arg.strip_prefix("--title=") {
+            title = Some(value.to_owned());
+        } else if connection_option_takes_value(arg) {
+            args.next();
+        }
+    }
+    validate_title(title.as_deref())?;
+    Ok(title)
 }
 
 /// Child sessions inherit connection identity, but not host-management authority.
@@ -1886,17 +1903,18 @@ async fn connect(
     };
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
-    let display_session = match terminal::Session::start(ui) {
-        Ok(session) => session,
-        Err(error) => {
-            render::status(
-                "display",
-                "Warning",
-                &format!("Dashboard unavailable: {error}"),
-            );
-            None
-        }
-    };
+    let display_session =
+        match terminal::Session::start(ui, &metadata.cwd, metadata.title.as_deref()) {
+            Ok(session) => session,
+            Err(error) => {
+                render::status(
+                    "display",
+                    "Warning",
+                    &format!("Dashboard unavailable: {error}"),
+                );
+                None
+            }
+        };
     let mut incoming = Incoming::start(reader);
     render::status(
         "shell",
@@ -2545,6 +2563,7 @@ mod tests {
         assert!(spec.cwd.is_absolute());
         assert!(spec.watchdog);
         assert_eq!(spec.reconnect_delay_secs, 7);
+        assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
         let restored = Options::parse(spec.args.into_iter().map(OsString::from))
             .unwrap()
             .unwrap();
@@ -2695,6 +2714,12 @@ mod tests {
         let metadata = options.metadata().unwrap();
         assert_eq!(metadata.name, "workstation");
         assert_eq!(metadata.title.as_deref(), Some(title));
+        assert_eq!(
+            session_title(&options.session_spec().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some(title)
+        );
         assert!(
             !options
                 .command()
@@ -2712,11 +2737,41 @@ mod tests {
             .unwrap();
         assert!(absent.title.is_none());
         assert!(
+            session_title(&absent.session_spec().unwrap())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
             serde_json::to_value(absent.metadata().unwrap())
                 .unwrap()
                 .get("title")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn session_title_reads_saved_display_metadata_without_context_root_validation() {
+        let spec = crate::session::SessionSpec {
+            name: "fixture".into(),
+            cwd: std::env::temp_dir(),
+            args: [
+                "--context-root",
+                "/unused/display/metadata-only",
+                "--name",
+                "--title",
+                "--title=修复客户端",
+                "--title",
+                "--daemon",
+                "--ssh",
+                "fixture.invalid",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            watchdog: true,
+            reconnect_delay_secs: 5,
+        };
+        assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
     }
 
     #[test]
