@@ -28,6 +28,7 @@ struct Call {
 #[derive(Clone, Debug)]
 struct Entry {
     run_id: String,
+    controller: Option<crate::wire::Controller>,
     code: String,
     timestamp_ms: u64,
     running: bool,
@@ -55,6 +56,10 @@ impl Entry {
     }
     fn bytes(&self) -> usize {
         self.run_id.len()
+            + self.controller.as_ref().map_or(0, |controller| {
+                controller.name.as_ref().map_or(0, String::len)
+                    + controller.model.as_ref().map_or(0, String::len)
+            })
             + self.code.len()
             + self.error.as_ref().map_or(0, String::len)
             + self
@@ -72,7 +77,7 @@ impl Entry {
     }
     fn metadata(&self) -> Value {
         json!({
-            "run_id":self.run_id,"timestamp_ms":self.timestamp_ms,"status":self.status(),
+            "run_id":self.run_id,"controller":self.controller,"timestamp_ms":self.timestamp_ms,"status":self.status(),
             "success":self.success,"error":self.error,"duration_ms":self.duration_ms,"timed_out":self.timed_out,
             "code_bytes":self.code.len(),"truncated":self.truncated,
             "calls":self.calls.iter().map(|(id,call)| json!({"request_id":id,"tool":call.tool,"finished":call.finished,"success":call.success,"error":call.error,"duration_ms":call.duration_ms,"exit_code":call.exit_code,"job_id":call.job_id,"state":call.state})).collect::<Vec<_>>()
@@ -132,6 +137,7 @@ impl AuditView {
                 });
             self.entries.push_front(Entry {
                 run_id: id,
+                controller: None,
                 code: String::new(),
                 timestamp_ms,
                 running: true,
@@ -145,6 +151,16 @@ impl AuditView {
             0
         };
         let entry = &mut self.entries[index];
+        if phase == "started" {
+            // Attribution belongs to this run. Never inherit another caller's
+            // name/model when the gateway has no metadata for this request.
+            entry.controller = value
+                .get("controller")
+                .and_then(|value| {
+                    serde_json::from_value::<crate::wire::Controller>(value.clone()).ok()
+                })
+                .filter(|controller| controller.validate().is_ok());
+        }
         if let Some(timestamp) = value.get("timestamp_ms").and_then(Value::as_u64) {
             entry.timestamp_ms = timestamp;
         }
@@ -302,6 +318,48 @@ impl AuditView {
             };
         }
     }
+    /// Observed calls are display rows, not authenticated collaboration members.
+    /// Keep equal names separate by their server-issued run IDs.
+    pub(super) fn observed_controllers(&self) -> Vec<Value> {
+        let mut entries = self.entries.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| !entry.running);
+        entries
+            .into_iter()
+            .take(32)
+            .map(|entry| {
+                let controller = entry.controller.as_ref();
+                let source = match controller.map(|controller| controller.source) {
+                    Some(crate::wire::ControllerSource::CallerReported) => "caller-reported",
+                    Some(crate::wire::ControllerSource::McpClientInfo) => "MCP clientInfo",
+                    None => "metadata missing",
+                };
+                let call = entry
+                    .calls
+                    .values()
+                    .rev()
+                    .find(|call| !call.finished)
+                    .or_else(|| entry.calls.values().next_back());
+                json!({
+                    "kind":"observed","targetable":false,"run_id":entry.run_id,
+                    "name":controller.and_then(|controller|controller.name.as_deref()).unwrap_or("Unknown controller"),
+                    "model":controller.and_then(|controller|controller.model.as_deref()).unwrap_or("Model unknown"),
+                    "role":"observed call","status":entry.status(),"source":source,
+                    "tool":call.map(|call|call.tool.as_str()).unwrap_or("code_mode"),
+                    "active":entry.running
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn open_run(&mut self, run_id: &str) -> bool {
+        let Some(index) = self.entries.iter().position(|entry| entry.run_id == run_id) else {
+            return false;
+        };
+        self.selected = index;
+        self.open();
+        true
+    }
+
     pub(super) fn open(&mut self) {
         if self.selected_entry().is_some() {
             self.detail = true;
@@ -425,7 +483,16 @@ impl AuditView {
         };
         let mut rows = vec![row(
             &[(
-                format!(" #{} · {} · Esc back", entry.run_id, entry.status()),
+                if let Some(controller) = &entry.controller {
+                    format!(
+                        " {} · {} · {} · ← back",
+                        controller.name.as_deref().unwrap_or("Unknown controller"),
+                        controller.model.as_deref().unwrap_or("Model unknown"),
+                        entry.status()
+                    )
+                } else {
+                    format!(" #{} · {} · Esc back", entry.run_id, entry.status())
+                },
                 "heading",
             )],
             width,
@@ -781,5 +848,46 @@ mod tests {
                 .code
                 .is_char_boundary(view.entries[0].code.len())
         );
+    }
+    #[test]
+    fn observed_controllers_keep_equal_names_separate_and_open_the_exact_run() {
+        let mut view = AuditView::default();
+        for id in ["alpha", "beta"] {
+            view.ingest(&json!({
+                "type":"ssmcp.code_mode","run_id":id,"phase":"started",
+                "code":format!("return '{id}';"),
+                "controller":{"name":"ChatGPT","model":"Declared model","source":"caller-reported"}
+            }));
+        }
+        view.ingest(&json!({"type":"ssmcp.code_mode","run_id":"alpha","phase":"call-started","request_id":1,"tool":"ssmcp.exec.start"}));
+        view.ingest(
+            &json!({"type":"ssmcp.code_mode","run_id":"beta","phase":"finished","success":true}),
+        );
+        let observed = view.observed_controllers();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0]["run_id"], "alpha");
+        assert_eq!(observed[0]["active"], true);
+        assert_eq!(observed[0]["tool"], "ssmcp.exec.start");
+        assert_eq!(observed[1]["run_id"], "beta");
+        assert_eq!(observed[1]["status"], "done");
+        assert!(
+            observed
+                .iter()
+                .all(|entry| entry["targetable"] == false && entry["agent_id"].is_null())
+        );
+        assert!(view.open_run("beta"));
+        assert_eq!(view.snapshot()["selected"]["code"], "return 'beta';");
+        assert!(!view.open_run("missing"));
+        assert_eq!(view.snapshot()["selected"]["run_id"], "beta");
+
+        view.ingest(&json!({"type":"ssmcp.code_mode","run_id":"unknown","phase":"started","code":"return 0;"}));
+        let unknown = view
+            .observed_controllers()
+            .into_iter()
+            .find(|entry| entry["run_id"] == "unknown")
+            .unwrap();
+        assert_eq!(unknown["name"], "Unknown controller");
+        assert_eq!(unknown["model"], "Model unknown");
+        assert_eq!(unknown["source"], "metadata missing");
     }
 }

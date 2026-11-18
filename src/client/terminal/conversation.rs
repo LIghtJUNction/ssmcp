@@ -36,6 +36,7 @@ pub(super) struct Conversation {
     pub(super) view: View,
     pub(super) content_focus: bool,
     selected: usize,
+    selected_agent: Option<String>,
     list_start: usize,
     list_count: usize,
     detail: bool,
@@ -54,7 +55,7 @@ impl Conversation {
     pub(super) fn snapshot(&self) -> Value {
         json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue" },
             "focus":if self.content_focus {"content"} else {"input"},
-            "selected":self.selected,"target":self.target,"editing":self.editing,
+            "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
 }
@@ -100,12 +101,21 @@ fn items(value: &Value, key: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn recipients(value: &Value) -> Vec<Value> {
+fn recipients(value: &Value, observed: Vec<Value>) -> Vec<Value> {
     let mut entries = vec![
         json!({"agent_id":"next","name":"Next caller","role":"default recipient","status":"first eligible tool response"}),
     ];
     entries.extend(items(value, "agents"));
+    entries.extend(observed);
     entries
+}
+
+fn agent_key(value: &Value) -> String {
+    if field(value, "kind") == "observed" {
+        format!("run:{}", field(value, "run_id"))
+    } else {
+        format!("member:{}", field(value, "agent_id"))
+    }
 }
 
 impl State {
@@ -298,6 +308,7 @@ impl State {
         self.conversation.view = view;
         self.conversation.content_focus = view != View::Activity;
         self.conversation.selected = 0;
+        self.conversation.selected_agent = None;
         self.conversation.list_start = 0;
         self.conversation.list_count = 0;
         self.conversation.detail = false;
@@ -437,10 +448,16 @@ impl State {
     fn chat_selected(&self) -> Option<Value> {
         let data = self.chat_data();
         let entries = if self.conversation.view == View::Agents {
-            recipients(&data)
+            recipients(&data, self.audit.observed_controllers())
         } else {
             items(&data, "queue")
         };
+        if self.conversation.view == View::Agents
+            && let Some(selected) = &self.conversation.selected_agent
+            && let Some(entry) = entries.iter().find(|entry| agent_key(entry) == *selected)
+        {
+            return Some(entry.clone());
+        }
         entries.get(self.conversation.selected).cloned()
     }
 
@@ -458,6 +475,19 @@ impl State {
             View::Audit => self.audit.open(),
             View::Agents => {
                 if let Some(agent) = self.chat_selected() {
+                    if field(&agent, "kind") == "observed" {
+                        if self.audit.open_run(field(&agent, "run_id")) {
+                            self.conversation.detail = true;
+                            self.conversation.content_focus = true;
+                            self.notice = Some(
+                                "Observed call · ← / Esc / left click returns to agents".into(),
+                            );
+                        } else {
+                            self.notice =
+                                Some("This call is no longer in the retained audit history".into());
+                        }
+                        return;
+                    }
                     self.conversation.target = (field(&agent, "agent_id") != "next")
                         .then(|| field(&agent, "agent_id").into());
                     self.conversation.content_focus = false;
@@ -487,22 +517,35 @@ impl State {
         match self.conversation.view {
             View::Activity => self.scroll_logs(-delta),
             View::Audit => self.audit.scroll_by(delta),
+            View::Agents if self.conversation.detail => self.audit.scroll_by(delta),
             View::Queue if self.conversation.detail => {
                 self.conversation.detail_scroll =
                     self.conversation.detail_scroll.saturating_add_signed(delta);
             }
             view => {
                 let data = self.chat_data();
-                let count = if view == View::Agents {
-                    recipients(&data).len()
+                let entries = if view == View::Agents {
+                    recipients(&data, self.audit.observed_controllers())
                 } else {
-                    items(&data, "queue").len()
+                    items(&data, "queue")
                 };
+                if view == View::Agents
+                    && let Some(selected) = &self.conversation.selected_agent
+                    && let Some(index) = entries
+                        .iter()
+                        .position(|entry| agent_key(entry) == *selected)
+                {
+                    self.conversation.selected = index;
+                }
                 self.conversation.selected = self
                     .conversation
                     .selected
                     .saturating_add_signed(delta)
-                    .min(count.saturating_sub(1));
+                    .min(entries.len().saturating_sub(1));
+                if view == View::Agents {
+                    self.conversation.selected_agent =
+                        entries.get(self.conversation.selected).map(agent_key);
+                }
             }
         }
     }
@@ -637,11 +680,16 @@ impl State {
                             return;
                         };
                         self.conversation.selected = index;
+                        self.conversation.selected_agent = None;
                     }
                     if button == 2 {
                         self.chat_open(false);
-                    } else if button == 0 && self.conversation.view == View::Audit {
+                    } else if button == 0
+                        && (self.conversation.view == View::Audit
+                            || (self.conversation.view == View::Agents && self.conversation.detail))
+                    {
                         self.audit.back();
+                        self.conversation.detail = false;
                     }
                 }
             }
@@ -671,6 +719,9 @@ impl State {
         self.help = false;
         if self.conversation.detail {
             self.conversation.detail = false;
+            if self.conversation.view == View::Agents {
+                self.audit.back();
+            }
         } else {
             self.audit.back();
             self.conversation.content_focus = false;
@@ -892,17 +943,29 @@ impl State {
         let entries = if queue {
             items(data, "queue")
         } else {
-            recipients(data)
+            recipients(data, self.audit.observed_controllers())
         };
+        if !queue
+            && let Some(selected) = &self.conversation.selected_agent
+            && let Some(index) = entries
+                .iter()
+                .position(|entry| agent_key(entry) == *selected)
+        {
+            self.conversation.selected = index;
+        }
         self.conversation.selected = self
             .conversation
             .selected
             .min(entries.len().saturating_sub(1));
+        if !queue {
+            self.conversation.selected_agent =
+                entries.get(self.conversation.selected).map(agent_key);
+        }
         let mut rows = vec![self.chat_line(
             if queue {
                 "  Requests · Enter edit · → details · Delete cancel · R resend"
             } else {
-                "  Connected agents · Enter chooses a recipient"
+                "  Agents · Enter inspects calls or chooses a registered recipient"
             },
             PanelTone::Muted,
             width,
@@ -979,6 +1042,12 @@ impl State {
                     field(entry, "status"),
                     message_id(entry)
                 )
+            } else if field(entry, "kind") == "observed" {
+                format!(
+                    "{marker} {}  ·  {}",
+                    field(entry, "name"),
+                    field(entry, "model")
+                )
             } else {
                 format!(
                     "{marker} {}  ·  {}",
@@ -997,6 +1066,18 @@ impl State {
             ));
             let subtitle = if queue {
                 format!("  {}", field(entry, "text").lines().next().unwrap_or(""))
+            } else if field(entry, "kind") == "observed" {
+                format!(
+                    "  {} · {} · #{} · {}",
+                    if entry["active"] == true {
+                        "active call"
+                    } else {
+                        "recent call"
+                    },
+                    field(entry, "status"),
+                    panel::fit(field(entry, "run_id"), 12),
+                    field(entry, "tool")
+                )
             } else {
                 format!(
                     "  {} · reported {}",
@@ -1023,6 +1104,7 @@ impl State {
         let g = self.geometry;
         let data = self.chat_data();
         let agents = items(&data, "agents");
+        let observed = self.audit.observed_controllers();
         let queue = items(&data, "queue");
         let pending = queue
             .iter()
@@ -1037,6 +1119,7 @@ impl State {
                     .collect()
             }),
             View::Audit => self.audit.render(g.left, height, &self.ui),
+            View::Agents if self.conversation.detail => self.audit.render(g.left, height, &self.ui),
             _ => self.chat_list_rows(&data, height),
         };
         if self.help {
@@ -1054,7 +1137,7 @@ impl State {
                 "  F3         Collapse sidebar · F4 change theme",
                 "  F5         Reload appearance · F8 save appearance",
                 "  /filter    Text search · F9 all / commands / errors",
-                "  /agents    Select a real registered recipient",
+                "  /agents    Inspect observed calls or select a registered recipient",
                 "  /queue     Inspect, take back, edit or cancel requests",
                 "  /reload    Restart client session and restore pending work",
                 "",
@@ -1171,9 +1254,28 @@ impl State {
                                 PanelTone::Muted,
                             ));
                         }
-                        if agents.is_empty() {
-                            section
-                                .push((" /agents to choose a recipient".into(), PanelTone::Muted));
+                        if !observed.is_empty() {
+                            section.push((
+                                format!(" Observed calls · {}", observed.len()),
+                                PanelTone::Heading,
+                            ));
+                            for controller in observed.iter().take(3) {
+                                section.push((
+                                    format!(" ↳ {}", field(controller, "name")),
+                                    PanelTone::Accent,
+                                ));
+                                section.push((
+                                    format!(
+                                        "   {} · {}",
+                                        field(controller, "model"),
+                                        field(controller, "status")
+                                    ),
+                                    PanelTone::Muted,
+                                ));
+                            }
+                        }
+                        if agents.is_empty() && observed.is_empty() {
+                            section.push((" Waiting for agent activity".into(), PanelTone::Muted));
                         }
                         section
                     }
@@ -1609,5 +1711,62 @@ mod tests {
             !screen.contains("[RUN]"),
             "conversation presentation uses quiet headings"
         );
+    }
+    #[test]
+    fn observed_agent_calls_open_audit_without_changing_the_message_recipient() {
+        let mut state = preview(28, 120);
+        state.audit = Default::default();
+        for id in ["alpha", "beta"] {
+            state.audit.ingest(&json!({
+                "type":"ssmcp.code_mode","run_id":id,"phase":"started",
+                "code":format!("return '{id}';"),
+                "controller":{"name":"ChatGPT","model":"Declared model","source":"caller-reported"}
+            }));
+        }
+        state.conversation.target = Some("chosen-recipient".into());
+        state.conversation.composer.insert("draft stays here");
+        state.chat_change_view(View::Agents);
+        let data = state.chat_data();
+        let first_observed = recipients(&data, state.audit.observed_controllers())
+            .iter()
+            .position(|entry| field(entry, "kind") == "observed")
+            .unwrap();
+        state.chat_move(first_observed as isize);
+        let selected = field(&state.chat_selected().unwrap(), "run_id").to_owned();
+        state.chat_open(true);
+        assert!(state.conversation.detail);
+        assert_eq!(state.audit.snapshot()["selected"]["run_id"], selected);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("chosen-recipient")
+        );
+        assert_eq!(state.conversation.composer.text(), "draft stays here");
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("Declared model")
+        );
+        state.chat_key(Key::Back);
+        assert_eq!(state.conversation.view, View::Agents);
+        assert!(!state.conversation.detail);
+        state.chat_open(false);
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: 2,
+            release: false,
+        });
+        assert!(!state.conversation.detail);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("chosen-recipient")
+        );
+
+        state.audit.ingest(&json!({"type":"ssmcp.code_mode","run_id":"new-call","phase":"started","code":"return 3;"}));
+        state.chat_list_rows(&data, body_rows(state.geometry.rows));
+        assert_eq!(field(&state.chat_selected().unwrap(), "run_id"), selected);
+        state.chat_move(1);
+        assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
     }
 }
