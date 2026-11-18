@@ -88,6 +88,8 @@ impl AuditRun {
         crate::platform::random_bytes(&mut bytes)
             .map_err(|_| "cannot allocate code audit run ID")?;
         let context = crate::wire::CodeContext {
+            session_id: None,
+            thread_id: None,
             run_id: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
             code: code.into(),
             timestamp_ms: SystemTime::now()

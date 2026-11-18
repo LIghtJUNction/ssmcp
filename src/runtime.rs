@@ -853,6 +853,8 @@ mod tests {
 
     fn code_context(code: &str) -> crate::wire::CodeContext {
         crate::wire::CodeContext {
+            session_id: None,
+            thread_id: None,
             run_id: "a".repeat(32),
             code: code.into(),
             timestamp_ms: 1234,
