@@ -1,0 +1,110 @@
+{
+  "schema": "ssmcp.client-memory-release-build.v1",
+  "status": "passed",
+  "source_commit": "51ec5adcc166d8d10748732d8f62948341a860d9",
+  "source_tree": "1ccec52505bd3798b47c9c714af3e9b7a3852908",
+  "integrated_main": "a9fbd53c4d52c8e178cbb32defc297defe135a3f",
+  "started_at": "2026-11-17T21:49:23.953854+00:00",
+  "target_dir": "${BUILD_ROOT}",
+  "installed_prefix": "${INSTALLED_PREFIX}",
+  "prerequisite_report": "${REPORT_ROOT}/client-080-memory-gates.json",
+  "results": [
+    {
+      "stage": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--bins",
+        "--example",
+        "vt_snapshot",
+        "-j1"
+      ],
+      "scope_unit": "ssmcp-memory-accept-release-1312886.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 342.953,
+      "log": "${REPORT_ROOT}/client-080-memory-release-build.log"
+    },
+    {
+      "stage": "install",
+      "command": [
+        "make",
+        "install",
+        "DESTDIR=${INSTALLED_PREFIX}",
+        "PREFIX=/usr"
+      ],
+      "scope_unit": "ssmcp-memory-accept-install-1312886.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.066,
+      "log": "${REPORT_ROOT}/client-080-memory-prefix-install.log"
+    }
+  ],
+  "prerequisite_completed_stages": [
+    "fmt",
+    "clippy",
+    "fixture",
+    "rust",
+    "http",
+    "code_mode",
+    "context_helpers"
+  ],
+  "source_archive": {
+    "path": "${ARTIFACT_ROOT}/client-080-memory-source-51ec5ad.tar",
+    "sha256": "87b8ba55974067d4a46b13c14d99a9c319964192b993af5d035e27db329c058d",
+    "bytes": 13219840
+  },
+  "finished_at": "2026-11-17T21:55:07.752485+00:00",
+  "artifacts": {
+    "ssmcp": {
+      "built_or_source_path": "${BUILD_ROOT}/release/ssmcp",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/ssmcp",
+      "sha256": "eddf5b9b988a37bc397ee0a0ae84022a8a3d519cddc06a5391e1cc10af9797a0",
+      "bytes": 7610048,
+      "matches": true
+    },
+    "ssmcpd": {
+      "built_or_source_path": "${BUILD_ROOT}/release/ssmcpd",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/ssmcpd",
+      "sha256": "a8330214a507293131a97092f4940bab8b47f8abd3f4e2367a2db1768d750cd3",
+      "bytes": 5410976,
+      "matches": true
+    },
+    "code_mode_js": {
+      "built_or_source_path": "${SOURCE_ROOT}/src/code_mode.js",
+      "installed_path": "${INSTALLED_PREFIX}/usr/libexec/ssmcp/code-mode.js",
+      "sha256": "0a4902726c7098036db84186c1e3aeb84d7ab335571f87def891632cc28bca99",
+      "bytes": 35967,
+      "matches": true
+    },
+    "vt_snapshot": {
+      "built_or_source_path": "${BUILD_ROOT}/release/examples/vt_snapshot",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+      "sha256": "409e630cd3390d105f7de74200b1cdb97fecbe0cadd9da50ef2ef63b3572e58b",
+      "bytes": 438592,
+      "matches": true
+    }
+  },
+  "versions": {
+    "ssmcp": "ssmcp 0.8.0",
+    "ssmcpd": "ssmcpd 0.8.0"
+  },
+  "fixture": {
+    "binary": "${BUILD_ROOT}/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+    "sha256": "d4beac4a13959267802ca980eaee3f3a8145a001c42d6fb4c7947393959f7c6c",
+    "source_commit": "51ec5adcc166d8d10748732d8f62948341a860d9"
+  },
+  "source_clean_after_build": true
+}

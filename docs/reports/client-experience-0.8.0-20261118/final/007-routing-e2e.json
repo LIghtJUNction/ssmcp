@@ -1,0 +1,50 @@
+{
+  "schema": "ssmcp.007.e2e.v1",
+  "binary": "$INSTALLED_PREFIX/usr/bin/ssmcp",
+  "binary_sha256": "53882aa0fc9d8c95a6966c6191771931194858a3df6f586fb0644d92db815b50",
+  "fixture": "loopback synthetic relay Hello and real-router code_mode connection regression",
+  "native_systemd_units_tested": false,
+  "real_credentials_used": false,
+  "routing_only": true,
+  "real_router": {
+    "requested": true,
+    "success": true,
+    "fixture_binary": "$TARGET/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+    "fixture_binary_sha256": "5716476f9fb7f44d82100300d72b25146e61164090b38db0e7d2e4ca048ceffd",
+    "scope": "production Broker and HTTP router in a library test executable; synthetic GitHub; loopback HTTP/WS",
+    "tls_tested": false,
+    "real_credentials_used": false,
+    "fixture_exit_code": 0,
+    "check_count": 15
+  },
+  "checks": [
+    "the actual recovery Hello advertises v5 without full-client audit or steering",
+    "idle 007 starts no relay child, PTY or tool backend",
+    "007 exposes exactly five narrow recovery tools",
+    "007 status returns an object",
+    "the bounded recovery protocol fixture observed no errors",
+    "the owned router fixture exposes credentials only in a private ready file",
+    "the isolated named account has the expected stable identity and handle",
+    "the real production router is healthy",
+    "the real router registers an MCP OAuth client",
+    "the shared identity endpoint requires provider consent instead of a connection login code",
+    "the real identity exchange validates synthetic GitHub PKCE and requires explicit consent",
+    "OAuth consent returns the registered consumer callback with state and issuer binding",
+    "the real OAuth endpoint issues an identity-scoped MCP access token",
+    "the account relay credential is not mistaken for an MCP access token",
+    "real-router 007 reports the owned process and one live connection",
+    "the actual account endpoint discovers the recovery connection",
+    "the first real HTTP code_mode call reaches 007 and returns its native status",
+    "a second real code_mode request reaches the original 007 connection after completion",
+    "completed code_mode calls preserve the same recovery process and broker client ID",
+    "real gateway dispatch leaves recovery without a PTY, backend, or child process"
+  ],
+  "success": true,
+  "cleanup_errors": [],
+  "_publication": {
+    "private_paths_normalized": true,
+    "source_object_sha256": "f7d59d11be4e18ae23e2ecc1019b2ed64d2d46439e98a39b6a8b9a8f05800706",
+    "source_object_digest_algorithm": "SHA-256 of UTF-8 json.dumps(original, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
+    "note": "Nested report_sha256 fields identify the original private files, before publication path normalization."
+  }
+}

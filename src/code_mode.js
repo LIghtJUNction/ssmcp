@@ -453,7 +453,7 @@ const bootstrap = `(() => {
 
   const builtin = (name, args = {}) => dispatch('builtin', '_', name, args);
   const collab = freeze(Object.fromEntries(
-    ['join', 'list', 'update', 'send', 'receive', 'ack', 'leave'].map(action => [
+    ['join', 'list', 'update', 'send', 'receive', 'ack', 'leave', 'bind'].map(action => [
       action, (clientId, args = {}) => {
         if (!args || typeof args !== 'object' || isArray(args)) {
           throw new Failure('collab arguments must be an object');
@@ -476,6 +476,10 @@ const bootstrap = `(() => {
   };
   const file = (name, id, args) => workspaceResult(id, 'ssmcp.fs.' + name, args);
   const reload = id => workspaceResult(id, 'ssmcp.client.reload');
+  const ui = freeze(Object.fromEntries(
+    ['get', 'set', 'action', 'filter'].map(name =>
+      [name, (id, args = {}) => workspaceResult(id, 'ssmcp.ui.' + name, args)])
+  ));
   const sessions = freeze(Object.fromEntries(
     ['list', 'status', 'create', 'restart', 'close'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.session.' + name, args)])
@@ -712,6 +716,7 @@ const bootstrap = `(() => {
     cua: { value: cua, enumerable: true },
     omarchy: { value: omarchy, enumerable: true },
     reload: { value: reload, enumerable: true },
+    ui: { value: ui, enumerable: true },
     sessions: { value: sessions, enumerable: true },
     collab: { value: collab, enumerable: true },
     outputs: { value: outputs, enumerable: true },

@@ -12,6 +12,7 @@ use std::{
 pub enum Provider {
     Client,
     Terminal,
+    Ui,
     Exec,
     Browser,
     Computer,
@@ -35,6 +36,7 @@ impl Provider {
         match self {
             Self::Client => "client",
             Self::Terminal => "terminal",
+            Self::Ui => "ui",
             Self::Exec => "exec",
             Self::Browser => "browser",
             Self::Computer => "computer",
@@ -314,6 +316,7 @@ fn prepare(
                 id == "ssmcp.client.capabilities" || id.starts_with("ssmcp.resources.")
             }
             Provider::Terminal => id.starts_with("terminal."),
+            Provider::Ui => id.starts_with("ssmcp.ui."),
             Provider::Exec => id.starts_with("ssmcp.exec."),
             Provider::Browser => id.starts_with("ssmcp.browser."),
             Provider::Computer => id.starts_with("ssmcp.computer."),

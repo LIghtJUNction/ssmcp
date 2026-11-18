@@ -1,4 +1,4 @@
-//! Local human input belongs to the interactive PTY, never the command executor.
+//! Dashboard input belongs to its composer and navigation; fallback input uses the selected PTY.
 //! Keep the outer terminal's interrupt handling: Ctrl-C disconnects the client.
 use crate::{
     pty::Terminal,
@@ -102,9 +102,17 @@ async fn forward_keys(terminals: &Terminals, events: Vec<InputEvent>) -> Result<
         match event {
             InputEvent::Text(text) => {
                 let text = super::terminal::keyboard(&text);
+                apply_display_changes(terminals).await?;
                 forward_local(terminals, &text).await;
             }
-            InputEvent::NextTerminal => terminals.cycle()?,
+            InputEvent::NextTerminal => {
+                if super::terminal::active() {
+                    let _ = super::terminal::keyboard("\x1b[18~");
+                    apply_display_changes(terminals).await?;
+                } else {
+                    terminals.cycle()?;
+                }
+            }
         }
     }
     Ok(())
@@ -121,6 +129,7 @@ async fn forward_human(
 async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Result<(), String> {
     forward_keys(terminals, keys.feed("", Instant::now(), true)).await?;
     let keyboard = super::terminal::take_keyboard();
+    apply_display_changes(terminals).await?;
     if !keyboard.is_empty() {
         forward_local(terminals, &keyboard).await;
     }
@@ -137,11 +146,22 @@ async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Resul
     Ok(())
 }
 
+async fn apply_display_changes(terminals: &Terminals) -> Result<(), String> {
+    if super::interface::apply_pending()?.is_some() {
+        super::interface::sync_terminal_sizes(terminals).await?;
+    }
+    Ok(())
+}
+
 async fn resize(terminals: &Terminals, rows: u16, cols: u16) -> Result<(), String> {
     // Some terminals report 0 while being created or minimized.
     if rows > 0 && cols > 0 {
         let (rows, cols) = super::terminal::physical_resize(rows, cols);
-        terminals.resize_all(rows.min(1000), cols.min(1000)).await?;
+        if super::terminal::active() {
+            super::interface::sync_terminal_sizes(terminals).await?;
+        } else {
+            terminals.resize_all(rows.min(1000), cols.min(1000)).await?;
+        }
     }
     Ok(())
 }
@@ -153,7 +173,7 @@ pub(crate) enum InputEvent {
 }
 
 /// Preserve ordering around F7 even when one stdin read contains input for two
-/// terminals. Paste markers stay in the stream for the existing F6 handler.
+/// terminals in fallback mode. Dashboard and paste input remain in their original order.
 #[derive(Default)]
 pub(crate) struct SessionKeys {
     pending: Vec<u8>,
@@ -843,8 +863,8 @@ mod platform {
             ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_WINDOW_INPUT, GetConsoleMode,
             GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD,
             KEY_EVENT, KEY_EVENT_RECORD, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, RIGHT_ALT_PRESSED,
-            RIGHT_CTRL_PRESSED, ReadConsoleInputW, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
-            SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
+            RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED, STD_ERROR_HANDLE,
+            STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
         },
     };
 
@@ -1026,8 +1046,18 @@ mod platform {
             let unit = unsafe { key.uChar.UnicodeChar };
             let ctrl = key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0;
             let alt = key.dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED) != 0 && !ctrl;
+            let shift = key.dwControlKeyState & SHIFT_PRESSED != 0;
             let mut text = String::new();
-            if unit != 0 {
+            if shift && matches!(key.wVirtualKeyCode, 0x09 | 0x0d) {
+                let sequence = if key.wVirtualKeyCode == 0x09 {
+                    "\x1b[Z"
+                } else {
+                    "\x1b[13;2u"
+                };
+                for _ in 0..key.wRepeatCount.max(1) {
+                    text.push_str(sequence);
+                }
+            } else if unit != 0 {
                 for _ in 0..key.wRepeatCount.max(1) {
                     if let Some(high) = self.high.take() {
                         if (0xdc00..=0xdfff).contains(&unit) {
@@ -1058,8 +1088,15 @@ mod platform {
                     0x26 if application_cursor => "\x1bOA",
                     0x27 if application_cursor => "\x1bOC",
                     0x28 if application_cursor => "\x1bOB",
+                    0x70 => "\x1bOP",
+                    0x71 => "\x1bOQ",
+                    0x72 => "\x1bOR",
+                    0x73 => "\x1bOS",
+                    0x74 => "\x1b[15~",
                     0x75 => "\x1b[17~",
                     0x76 => "\x1b[18~",
+                    0x77 => "\x1b[19~",
+                    0x78 => "\x1b[20~",
                     0x21 => "\x1b[5~",
                     0x22 => "\x1b[6~",
                     0x23 => "\x1b[F",

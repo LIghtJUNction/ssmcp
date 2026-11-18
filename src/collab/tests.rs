@@ -119,6 +119,40 @@ async fn discovery_is_public_but_mailbox_credentials_bind_owner_and_agent() {
 }
 
 #[tokio::test]
+async fn local_presence_and_run_binding_expose_no_participant_credentials() {
+    let hub = Hub::default();
+    let member = join(&hub, "owner", "reviewer").await;
+    let id = member["agent_id"].as_str().unwrap();
+    let token = member["token"].as_str().unwrap();
+    assert!(hub.bind("another-owner", id, token).is_err());
+    assert!(hub.bind("owner", id, &"0".repeat(64)).is_err());
+    action(
+        &hub,
+        "owner",
+        "update",
+        &member,
+        json!({"status":"reviewing"}),
+    )
+    .await
+    .unwrap();
+    let bound = hub.bind("owner", id, token).unwrap();
+    assert_eq!(bound.agent_id, id);
+    assert_eq!(bound.name, "reviewer");
+    assert_eq!(bound.status, "reviewing");
+    let presence = serde_json::to_value(hub.presence().unwrap()).unwrap();
+    assert_eq!(presence[0]["agent_id"], id);
+    assert_eq!(presence[0]["status"], "reviewing");
+    assert!(!presence.to_string().contains(token));
+    assert!(presence[0].get("owner").is_none());
+    assert!(presence[0].get("inbox").is_none());
+    action(&hub, "owner", "leave", &member, json!({}))
+        .await
+        .unwrap();
+    assert!(hub.bind("owner", id, token).is_err());
+    assert!(hub.presence().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn private_messages_replay_until_ack_and_reject_skipping_unread_data() {
     let hub = Hub::default();
     let a = join(&hub, "owner", "a").await;

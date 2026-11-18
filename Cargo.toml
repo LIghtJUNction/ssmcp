@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.7.4"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -57,6 +57,9 @@ include = [
     "/docs/commands.md",
     "/docs/client-accounts.md",
     "/docs/client-server.md",
+    "/docs/client-ui.md",
+    "/docs/reports/client-experience-20261118/**",
+    "/docs/reports/client-experience-0.8.0-20261118/**",
     "/docs/validation-client-accounts.md",
     "/scripts/test_client_bootstrap.py",
     "/scripts/e2e_account_relay.py",
@@ -90,6 +93,10 @@ include = [
     "/scripts/e2e_unified.py",
     "/scripts/e2e_daemon.py",
     "/scripts/e2e_dashboard.py",
+    "/scripts/e2e_client_ui.py",
+    "/scripts/e2e_composer.py",
+    "/scripts/e2e_relay_composer.py",
+    "/scripts/render_ui_snapshot.py",
     "/examples/vt_snapshot.rs",
     "/docs/validation-0.6.0.md",
     "/scripts/smoke_pi.py",

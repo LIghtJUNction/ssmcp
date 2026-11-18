@@ -1,0 +1,334 @@
+{
+  "schema": "ssmcp.client-memory-ui-recheck.v1",
+  "status": "passed",
+  "binary_source_commit": "51ec5adcc166d8d10748732d8f62948341a860d9",
+  "test_source_commit": "54f90d250a520ca54778d4f0da0bce2700e0064c",
+  "test_source_tree": "1166dc75eaa2d5999b209208f8e3652623086062",
+  "started_at": "2026-11-17T22:03:47.767162+00:00",
+  "release_build_report": "${REPORT_ROOT}/client-080-memory-release-build.json",
+  "installed_prefix": "${INSTALLED_PREFIX}",
+  "results": [
+    {
+      "stage": "dashboard",
+      "command": [
+        "python3",
+        "scripts/e2e_dashboard.py",
+        "--bin-dir",
+        "${INSTALLED_PREFIX}/usr/bin",
+        "--decoder",
+        "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui-recheck/dashboard.json"
+      ],
+      "scope_unit": "ssmcp-memory-recheck-dashboard-1498196.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 25.867,
+      "log": "${REPORT_ROOT}/client-080-memory-ui-recheck/dashboard.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui-recheck/dashboard.json",
+      "expected_checks": 84,
+      "script_sha256": "2854397117622191320ebec782b1cf6c467857f517647da5abf4211e293cd65c",
+      "actual_checks": 84,
+      "report_passed": true,
+      "report_sha256": "a50208550498b6ecc9c3b3312ebc410aaec808d88072af6abc74ba8fe6a5c965"
+    },
+    {
+      "stage": "account-relay",
+      "command": [
+        "python3",
+        "scripts/e2e_account_relay.py",
+        "--binary",
+        "${INSTALLED_PREFIX}/usr/bin/ssmcp",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui-recheck/account-relay.json"
+      ],
+      "scope_unit": "ssmcp-memory-recheck-account-relay-1498196.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 5.127,
+      "log": "${REPORT_ROOT}/client-080-memory-ui-recheck/account-relay.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui-recheck/account-relay.json",
+      "expected_checks": 37,
+      "script_sha256": "93c84978426608e15783014e7bb457578742f8d982efdb993f96caec90c49adf",
+      "actual_checks": 37,
+      "report_passed": true,
+      "report_sha256": "68c64100f4ff7a097892d814ec219ddd98934bfb8b5a3f2a2aef02b0ad011568"
+    },
+    {
+      "stage": "relay-composer",
+      "command": [
+        "python3",
+        "scripts/e2e_relay_composer.py",
+        "--bin-dir",
+        "${INSTALLED_PREFIX}/usr/bin",
+        "--decoder",
+        "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+        "--fixture-binary",
+        "${BUILD_ROOT}/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui-recheck/relay-composer.json"
+      ],
+      "scope_unit": "ssmcp-memory-recheck-relay-composer-1498196.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 6.276,
+      "log": "${REPORT_ROOT}/client-080-memory-ui-recheck/relay-composer.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui-recheck/relay-composer.json",
+      "expected_checks": 45,
+      "script_sha256": "b95e8c484becb1247a2b756454bfcc01cd1f902d45ebf9730ce07c5ea38731ea",
+      "actual_checks": 45,
+      "report_passed": true,
+      "report_sha256": "22d021e2a4f39b1a6d19986d05ae5a7d53166e03af4e24211e7d7cffcbfb6533"
+    },
+    {
+      "stage": "observer",
+      "command": [
+        "python3",
+        "scripts/e2e_tty_observer.py",
+        "--binary",
+        "${INSTALLED_PREFIX}/usr/bin/ssmcp",
+        "--hold",
+        "0",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui-recheck/observer.json"
+      ],
+      "scope_unit": "ssmcp-memory-recheck-observer-1498196.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 12.74,
+      "log": "${REPORT_ROOT}/client-080-memory-ui-recheck/observer.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui-recheck/observer.json",
+      "expected_checks": 7,
+      "script_sha256": "9fc9de47d7fa7e65a4e612b0c61f00c12b2befbbb2c1ab5790b9492b9796f274",
+      "actual_checks": 7,
+      "report_passed": true,
+      "report_sha256": "4ab91a3767e7f6e472b5593d2a44748c04bdb11e69434d0ed4d90da6e4debe68"
+    },
+    {
+      "stage": "benchmark-synthetic",
+      "command": [
+        "python3",
+        "scripts/benchmark_client_memory.py",
+        "--binary",
+        "${INSTALLED_PREFIX}/usr/bin/ssmcp",
+        "--providers",
+        "synthetic",
+        "--tools",
+        "500",
+        "--scans",
+        "2",
+        "--commands",
+        "8",
+        "--idle-seconds",
+        "0.5",
+        "--timeout",
+        "90",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui-recheck/benchmark-synthetic.json"
+      ],
+      "scope_unit": "ssmcp-memory-recheck-benchmark-synthetic-1498196.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 2.47,
+      "log": "${REPORT_ROOT}/client-080-memory-ui-recheck/benchmark-synthetic.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui-recheck/benchmark-synthetic.json",
+      "expected_checks": null,
+      "script_sha256": "a5a383ad3c6b3454119a61544b3087eabeda159c0a91c84a8dddb5007d207f5e",
+      "interpretation": "One synthetic protocol/workflow compatibility sample; no performance threshold and no improvement claim.",
+      "actual_checks": null,
+      "report_passed": true,
+      "report_sha256": "76179c1954798bd60bc05cd7e46b5bb7572e4822a7ff46c97cad770002cb53f4"
+    }
+  ],
+  "source_diff": [
+    "README.md",
+    "docs/reports/client-experience-0.8.0-20261118/RELEASE-CANDIDATE.md",
+    "docs/reports/client-experience-0.8.0-20261118/ROLLOUT.md",
+    "docs/reports/client-experience-0.8.0-20261118/arch-package.json",
+    "docs/reports/client-experience-0.8.0-20261118/release-build.json",
+    "docs/reports/client-experience-0.8.0-20261118/release-composer-e2e.json",
+    "docs/reports/client-experience-0.8.0-20261118/release-initial-attempt.json",
+    "docs/reports/client-experience-0.8.0-20261118/release-installed-gates.json",
+    "docs/reports/client-experience-0.8.0-20261118/release-observer-e2e.json",
+    "docs/reports/client-experience-0.8.0-20261118/release-relay-composer-e2e.json",
+    "docs/reports/client-experience-0.8.0-20261118/release-ui-smoke.json",
+    "docs/reports/client-experience-0.8.0-20261118/rollback-archive.json",
+    "docs/reports/client-experience-0.8.0-20261118/server-stage.json",
+    "docs/reports/client-experience-0.8.0-20261118/source-manifest.json",
+    "docs/reports/client-experience-0.8.0-20261118/versioned-install.json",
+    "scripts/e2e_dashboard.py"
+  ],
+  "runtime_inputs_unchanged": true,
+  "artifacts": {
+    "ssmcp": {
+      "built_or_source_path": "${BUILD_ROOT}/release/ssmcp",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/ssmcp",
+      "sha256": "eddf5b9b988a37bc397ee0a0ae84022a8a3d519cddc06a5391e1cc10af9797a0",
+      "bytes": 7610048,
+      "matches": true
+    },
+    "ssmcpd": {
+      "built_or_source_path": "${BUILD_ROOT}/release/ssmcpd",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/ssmcpd",
+      "sha256": "a8330214a507293131a97092f4940bab8b47f8abd3f4e2367a2db1768d750cd3",
+      "bytes": 5410976,
+      "matches": true
+    },
+    "code_mode_js": {
+      "built_or_source_path": "${SOURCE_ROOT}/src/code_mode.js",
+      "installed_path": "${INSTALLED_PREFIX}/usr/libexec/ssmcp/code-mode.js",
+      "sha256": "0a4902726c7098036db84186c1e3aeb84d7ab335571f87def891632cc28bca99",
+      "bytes": 35967,
+      "matches": true
+    },
+    "vt_snapshot": {
+      "built_or_source_path": "${BUILD_ROOT}/release/examples/vt_snapshot",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+      "sha256": "409e630cd3390d105f7de74200b1cdb97fecbe0cadd9da50ef2ef63b3572e58b",
+      "bytes": 438592,
+      "matches": true
+    }
+  },
+  "fixture": {
+    "binary": "${BUILD_ROOT}/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+    "sha256": "d4beac4a13959267802ca980eaee3f3a8145a001c42d6fb4c7947393959f7c6c",
+    "source_commit": "51ec5adcc166d8d10748732d8f62948341a860d9"
+  },
+  "dashboard_fixture": {
+    "sha256": "2854397117622191320ebec782b1cf6c467857f517647da5abf4211e293cd65c",
+    "git_blob": "efb9151d91e8e0bc0dc189e1f095918cf1de322e"
+  },
+  "reused_passes": [
+    {
+      "stage": "preview",
+      "command": [
+        "python3",
+        "scripts/e2e_client_ui.py",
+        "--bin-dir",
+        "${INSTALLED_PREFIX}/usr/bin",
+        "--out",
+        "${REPORT_ROOT}/client-080-memory-ui/preview"
+      ],
+      "scope_unit": "ssmcp-memory-accept-preview-1312886.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 3.872,
+      "log": "${REPORT_ROOT}/client-080-memory-ui/preview.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui/preview/ui-smoke.json",
+      "script_sha256": "43337393a700eddc731581546098411f52c636a11a9603ef96b0e046805b576e",
+      "expected_checks": 38,
+      "actual_checks": 38,
+      "report_passed": true,
+      "report_sha256": "16b879cb92300569b214057ca99b0a0c27659cd2107f0297e48569de0885d138"
+    },
+    {
+      "stage": "composer",
+      "command": [
+        "python3",
+        "scripts/e2e_composer.py",
+        "--bin-dir",
+        "${INSTALLED_PREFIX}/usr/bin",
+        "--decoder",
+        "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui/composer.json"
+      ],
+      "scope_unit": "ssmcp-memory-accept-composer-1312886.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 15.094,
+      "log": "${REPORT_ROOT}/client-080-memory-ui/composer.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui/composer.json",
+      "script_sha256": "63286822fce02356337d8be388a36790bbde09c3f1348c53a073056e625161f7",
+      "expected_checks": 88,
+      "actual_checks": 88,
+      "report_passed": true,
+      "report_sha256": "4692f7c0d720f86624bffd801107e3e5d5908fb1d0d79b9de542596aeeddc5c9"
+    }
+  ],
+  "prior_failure": {
+    "aggregate": "${REPORT_ROOT}/client-080-memory-ui-gates.json",
+    "stage": {
+      "stage": "dashboard",
+      "command": [
+        "python3",
+        "scripts/e2e_dashboard.py",
+        "--bin-dir",
+        "${INSTALLED_PREFIX}/usr/bin",
+        "--decoder",
+        "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui/dashboard.json"
+      ],
+      "scope_unit": "ssmcp-memory-accept-dashboard-1312886.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 1,
+      "timed_out": false,
+      "seconds": 29.726,
+      "log": "${REPORT_ROOT}/client-080-memory-ui/dashboard.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui/dashboard.json",
+      "script_sha256": "042e10992599e2619cbc2a72722cf553adf2bcc3bd893fac6013b174e268d232",
+      "expected_checks": 84,
+      "actual_checks": 54,
+      "report_passed": false,
+      "report_sha256": "3d5f50fac4f0c75619d7d779c36dfa0f8d814f9fda02ca04d5611c8828054ed2"
+    },
+    "diagnosis": "The previous fixture required a record below 300 after Home, assuming 512 history rows. The integrated client retains 128 rows. The fixture now checks the exact observed retained boundary, repeated Home clamping, and End returning to zero offset."
+  },
+  "preserved_evidence_sha256": {
+    "${REPORT_ROOT}/client-080-memory-ui-gates.json": "6f150a74ae8c06ef28e5b89d523bd96bc9e6a474c8dbb9b68134a0b964802600",
+    "${REPORT_ROOT}/client-080-memory-ui/dashboard.json": "3d5f50fac4f0c75619d7d779c36dfa0f8d814f9fda02ca04d5611c8828054ed2",
+    "${REPORT_ROOT}/client-080-memory-ui/dashboard.log": "5317d2aede4e9486cb96fcfd8c49d019995e871b6e292505b43800e8d3a1ed7b"
+  },
+  "environment": {
+    "inherited_ssmcp_removed": true,
+    "proxy_variables_removed": true,
+    "loopback_no_proxy": true,
+    "models_invoked": false
+  },
+  "rebuilt": false,
+  "current_stage": null,
+  "finished_at": "2026-11-17T22:04:41.955236+00:00",
+  "total_functional_checks": 299,
+  "source_clean_after_tests": true,
+  "preserved_evidence_unchanged": true
+}

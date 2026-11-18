@@ -1,3 +1,4 @@
+# Save as ~/.config/ssmcp/config.toml or select with --ui-config FILE.
 # Set the default relay with: ssmcp config set server https://relay.example.com
 # Find this file with: ssmcp config path
 # --server overrides this setting; omitting it preserves the last-login default.
@@ -10,15 +11,39 @@
 
 [ui]
 color = true
-# On a real terminal, isolate logs/Shell and show tasks plus Git in a sidebar.
 dashboard = true
 log_format = "pretty"
-theme = "codex-dark"
-timestamps = true
+# Built-in palettes: dark, codex-dark, nord, solarized, light, minimal.
+# minimal follows your terminal's colors; others include background/foreground.
+theme = "dark"
+
+# chat shows the event flow with a fixed request composer.
+# split adds the code_mode audit browser; audit or logs expands that view.
+# terminal.* stays available separately.
+layout = "chat"
+log_height_percent = 60 # 10..80; controls the log height in split layout only.
+sidebar = true
+sidebar_width = 30 # 20..60 columns; hides when the terminal is too narrow.
+# Omit, reorder, or remove panels. [] hides all sidebar content.
+panels = ["agents", "queue", "controller", "tasks", "progress", "git", "history"]
+hide_empty = true
+
+timestamps = false
 show_request_id = true
 show_raw_json = false
 max_inline_output = 12
-
-# Quiet-task cadence for the line transcript; the dashboard stays live.
-# 0 disables periodic transcript status only.
+# Quiet-task cadence for the line transcript; 0 disables periodic status only.
 activity_interval_secs = 5
+
+[ui.colors]
+# Omitted colors (or "") inherit the selected theme. "default" follows the
+# terminal's own colors. Values accept #RRGGBB or ANSI names (black, red, green,
+# yellow, blue, magenta, cyan, white; bright- variants).
+# background = "#101214"
+# foreground = "#E8EAED"
+# muted = "#9AA0A6"
+# accent = "#8AB4F8"
+# success = "#81C995"
+# warning = "#FDD663"
+# error = "#F28B82"
+# heading = "#E8EAED"

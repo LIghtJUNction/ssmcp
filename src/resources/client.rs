@@ -74,8 +74,7 @@ pub(super) async fn read(
     authorization: &Authorization,
     session: &Session,
     kind: &str,
-    uri: &str,
-    base: &str,
+    (uri, base): (&str, &str),
     query: &Query,
 ) -> Result<Value, ResourceError> {
     let (name, arguments) = match kind {

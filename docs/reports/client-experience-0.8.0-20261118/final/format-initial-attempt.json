@@ -1,0 +1,79 @@
+{
+  "validation": {
+    "schema": "ssmcp.client-main-validation.v1",
+    "status": "failed",
+    "source_commit": "6777ea894d8465dacdeaac4796de168988662d29",
+    "source_tree": "b3ea9038dfc662245703d8255ff62ffd3c80e7a8",
+    "integrated_main": "95b5f26125ede8825f12feb79b7f870055d004b5",
+    "started_at": "2026-11-17T22:25:47.051868+00:00",
+    "driver_sha256": "9ee278f96d18b78b9739772e4b5308698914b706c30a3c46946c56fea2093ffd",
+    "resource_limits": {
+      "MemoryMax": "2G",
+      "MemorySwapMax": "1G",
+      "CPUQuota": "200%"
+    },
+    "target_dir": "${BUILD_ROOT}",
+    "reports": {
+      "rust": "${REPORT_ROOT}/client-080-main-gates.json",
+      "build": "${REPORT_ROOT}/client-080-main-release-build.json",
+      "ui": "${REPORT_ROOT}/client-080-main-ui-gates.json",
+      "fixture": "${REPORT_ROOT}/client-080-main-fixture-binary.json"
+    },
+    "environment": {
+      "inherited_ssmcp_removed": true,
+      "proxy_variables_removed": true,
+      "loopback_no_proxy": true,
+      "models_invoked": false
+    },
+    "source_archive": {
+      "path": "${ARTIFACT_ROOT}/client-080-main-source-6777ea8.tar",
+      "sha256": "ffcb28047766316518aae71565a4192d871b402345a26e225d4c99fa9492949b",
+      "bytes": 13957120
+    },
+    "phase": "rust",
+    "current_stage": "fmt",
+    "updated_at": "2026-11-17T22:25:47.315803+00:00",
+    "finished_at": "2026-11-17T22:25:49.335055+00:00",
+    "error": "RuntimeError: fmt exited 1; see ${REPORT_ROOT}/client-080-main-gates/fmt.log"
+  },
+  "gates": {
+    "schema": "ssmcp.client-main-rust-gates.v1",
+    "status": "failed",
+    "source_commit": "6777ea894d8465dacdeaac4796de168988662d29",
+    "source_tree": "b3ea9038dfc662245703d8255ff62ffd3c80e7a8",
+    "integrated_main": "95b5f26125ede8825f12feb79b7f870055d004b5",
+    "started_at": "2026-11-17T22:25:47.308793+00:00",
+    "source_archive": {
+      "path": "${ARTIFACT_ROOT}/client-080-main-source-6777ea8.tar",
+      "sha256": "ffcb28047766316518aae71565a4192d871b402345a26e225d4c99fa9492949b",
+      "bytes": 13957120
+    },
+    "results": [
+      {
+        "stage": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "scope_unit": "ssmcp-main-accept-fmt-1780564.scope",
+        "resource_limits": {
+          "MemoryMax": "2G",
+          "MemorySwapMax": "1G",
+          "CPUQuota": "200%"
+        },
+        "exit_code": 1,
+        "timed_out": false,
+        "seconds": 2.019,
+        "log": "${REPORT_ROOT}/client-080-main-gates/fmt.log",
+        "summary": [],
+        "test_groups": []
+      }
+    ],
+    "current_stage": "fmt",
+    "finished_at": "2026-11-17T22:25:49.334966+00:00",
+    "error": "RuntimeError: fmt exited 1; see ${REPORT_ROOT}/client-080-main-gates/fmt.log"
+  }
+}
