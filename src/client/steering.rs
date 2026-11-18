@@ -86,6 +86,23 @@ impl Record {
             SteeringState::Delivered | SteeringState::Cancelled
         )
     }
+    /// Resume only a takeback confirmed for this reload in the still-current room.
+    /// An uncertain outcome must remain available for explicit operator review.
+    fn resume_reclaimed(&mut self, room_id: Option<&str>) {
+        if self.resume_after_reload
+            && room_id.is_some()
+            && self.room_id.as_deref() == room_id
+            && self.message.state == SteeringState::Editing
+            && self.safe_to_publish
+            && self.pending.is_none()
+            && !self.uncertain
+            && !self.retarget_required
+        {
+            self.message.state = SteeringState::Queued;
+            self.error = None;
+        }
+    }
+
     fn status(&self, connected: bool) -> &'static str {
         if self.message.state == SteeringState::Delivered {
             return "delivered";
@@ -249,6 +266,13 @@ struct Request {
     command: SteeringCommand,
     queued_at: Instant,
     sent: bool,
+    prepared: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AcceptedHistory {
+    id: String,
+    text: String,
 }
 
 #[derive(Default)]
@@ -264,6 +288,9 @@ struct Manager {
     requests: BTreeMap<u64, Request>,
     next_request: u64,
     events: VecDeque<UiEvent>,
+    // Drained by transport replies even when no terminal frontend is running.
+    // Pure Manager operations never perform history I/O.
+    accepted_history: Vec<AcceptedHistory>,
     frozen: bool,
     reload_requested: bool,
     error: Option<String>,
@@ -587,9 +614,11 @@ impl Manager {
         }
         if record.safe_to_publish {
             self.outbox.records[index].message.state = SteeringState::Editing;
+            self.outbox.records[index].resume_after_reload = false;
             self.event(UiEvent::Editable {
                 id: id.into(),
-                text: self.outbox.records[index].message.text.clone(),
+                text: super::references::source(&self.outbox.records[index].message.text)
+                    .to_owned(),
                 images: self.outbox.records[index].message.images.clone(),
             });
             return Ok(());
@@ -647,7 +676,7 @@ impl Manager {
         record.retarget_required = false;
         record.resume_after_reload = false;
         record.error = None;
-        let text = record.message.text.clone();
+        let text = super::references::source(&record.message.text).to_owned();
         let images = record.message.images.clone();
         self.event(UiEvent::Editable {
             id: id.into(),
@@ -680,6 +709,7 @@ impl Manager {
                 command,
                 queued_at: Instant::now(),
                 sent: false,
+                prepared: false,
             },
         );
         Ok(id)
@@ -726,6 +756,8 @@ impl Manager {
             expected_revision,
             for_reload,
         });
+        self.outbox.records[index].resume_after_reload =
+            for_reload && kind == MutationKind::Takeback;
         self.outbox.records[index].error = None;
         Ok(())
     }
@@ -814,11 +846,139 @@ impl Manager {
         self.requests.clear();
     }
 
+    fn pending_command(&self, id: u64) -> Option<SteeringCommand> {
+        self.requests
+            .get(&id)
+            .filter(|request| !request.sent)
+            .map(|request| request.command.clone())
+    }
+
+    fn prepare_publish(
+        &mut self,
+        id: u64,
+        expanded: String,
+    ) -> Result<Option<SteeringCommand>, String> {
+        let Some(request) = self.requests.get(&id).filter(|request| !request.sent) else {
+            return Ok(None);
+        };
+        if request.prepared {
+            return Ok(Some(request.command.clone()));
+        }
+        let SteeringCommand::Publish {
+            command_id,
+            message_id,
+            expected_revision,
+            ..
+        } = &request.command
+        else {
+            return Ok(Some(request.command.clone()));
+        };
+        validate_message(
+            &expanded,
+            &self.outbox.records[self.index(message_id)?].message.images,
+        )?;
+        let index = self.index(message_id)?;
+        let record = &self.outbox.records[index];
+        if record.room_id != self.outbox.room_id
+            || record.terminal()
+            || record.message.revision != *expected_revision
+            || !record
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.command_id == *command_id)
+        {
+            return Err(
+                "The request changed while its references were prepared; review it before sending."
+                    .into(),
+            );
+        }
+        let used = self
+            .outbox
+            .records
+            .iter()
+            .map(|record| record.message.text.len())
+            .sum::<usize>();
+        if used - record.message.text.len() + expanded.len() > MAX_TEXT_BYTES {
+            return Err("The expanded references exceed the local queue's text limit; cancel a queued request or use fewer references.".into());
+        }
+        let request = self.requests.get_mut(&id).expect("validated request");
+        let SteeringCommand::Publish { text, .. } = &mut request.command else {
+            unreachable!();
+        };
+        text.clone_from(&expanded);
+        request.prepared = true;
+        self.outbox.records[index].message.text = expanded;
+        Ok(Some(request.command.clone()))
+    }
+
+    /// A local preparation failure proves that this revision was never written.
+    /// Keep prior server identity/revision and the exact edit for another attempt.
+    fn fail_unsent(&mut self, id: u64, error: &str) {
+        if !self.requests.get(&id).is_some_and(|request| !request.sent) {
+            return;
+        }
+        let request = self.requests.remove(&id).expect("validated request");
+        let SteeringCommand::Publish {
+            command_id,
+            message_id,
+            expected_revision,
+            text,
+            target,
+            images,
+        } = request.command
+        else {
+            return;
+        };
+        let Ok(index) = self.index(&message_id) else {
+            return;
+        };
+        let record = &mut self.outbox.records[index];
+        if !record
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.command_id == command_id)
+        {
+            return;
+        }
+        record.pending = None;
+        let editable = record.room_id == self.outbox.room_id
+            && record.message.revision == expected_revision
+            && !record.terminal();
+        let text = super::references::source(&text).to_owned();
+        let error = bounded_error(error);
+        if editable {
+            record.message.text.clone_from(&text);
+            record.message.images.clone_from(&images);
+            record.message.target = target;
+            record.message.state = SteeringState::Editing;
+            record.safe_to_publish = true;
+            record.uncertain = false;
+            record.retarget_required = false;
+            record.resume_after_reload = false;
+            record.error = Some(error.clone());
+        }
+        self.event(UiEvent::Failed {
+            id: message_id.clone(),
+            message: error,
+        });
+        if editable {
+            self.event(UiEvent::Editable {
+                id: message_id,
+                text,
+                images,
+            });
+        }
+    }
+
     fn sent(&mut self, id: u64) -> bool {
         let Some(request) = self.requests.get_mut(&id) else {
             return false;
         };
+        if request.sent {
+            return false;
+        }
         request.sent = true;
+        request.queued_at = Instant::now();
         if let Some(message_id) = command_message(&request.command)
             && let Some(record) = self
                 .outbox
@@ -887,7 +1047,23 @@ impl Manager {
                         && message.revision <= mutation.expected_revision
                 });
                 if message.revision >= record.message.revision && !predates_publish {
-                    record.message.clone_from(message);
+                    let keep_local_edit = message.state == SteeringState::Editing
+                        && message.revision == record.message.revision
+                        && !record.terminal()
+                        && (record.safe_to_publish
+                            || record
+                                .pending
+                                .as_ref()
+                                .is_some_and(|pending| pending.kind == MutationKind::Publish));
+                    if keep_local_edit {
+                        // A failed or still-preparing local edit has the same
+                        // server revision as the original taken-back contents.
+                        record.message.state = message.state;
+                        record.message.updated_at_ms = message.updated_at_ms;
+                        record.message.delivery.clone_from(&message.delivery);
+                    } else {
+                        record.message.clone_from(message);
+                    }
                     record.ever_sent = true;
                     record.uncertain = false;
                     record.safe_to_publish = message.state == SteeringState::Editing;
@@ -955,6 +1131,12 @@ impl Manager {
                 record.resume_after_reload = false;
                 record.error = Some("Server no longer retains this request; previous delivery cannot be confirmed. Review it before resending.".into());
             }
+            if !self.frozen {
+                // A prior snapshot may arrive after the reclaim ACK. Retain the
+                // resume intent until publish is queued, rather than reverting
+                // the operator's request to an unattended editing state.
+                record.resume_reclaimed(self.outbox.room_id.as_deref());
+            }
         }
         Ok(())
     }
@@ -995,6 +1177,11 @@ impl Manager {
                             let SteeringCommand::Publish { text, .. } = request.command else {
                                 unreachable!()
                             };
+                            let text = super::references::source(&text).to_owned();
+                            self.accepted_history.push(AcceptedHistory {
+                                id: message_id.clone(),
+                                text: text.clone(),
+                            });
                             self.event(UiEvent::Accepted {
                                 id: message_id,
                                 text,
@@ -1005,11 +1192,17 @@ impl Manager {
                         {
                             self.outbox.records[index].safe_to_publish = true;
                             if pending.for_reload {
-                                self.outbox.records[index].resume_after_reload = self.frozen;
+                                self.outbox.records[index].resume_after_reload = true;
+                                if !self.frozen {
+                                    // The reload may have timed out while this takeback
+                                    // was in flight. Its successful ACK now makes retry safe.
+                                    self.outbox.records[index]
+                                        .resume_reclaimed(self.outbox.room_id.as_deref());
+                                }
                             } else {
                                 self.event(UiEvent::Editable {
                                     id: message_id,
-                                    text: message.text.clone(),
+                                    text: super::references::source(&message.text).to_owned(),
                                     images: message.images.clone(),
                                 });
                             }
@@ -1057,7 +1250,7 @@ impl Manager {
         let expired = self
             .requests
             .iter()
-            .filter(|(_, request)| request.queued_at.elapsed() >= REQUEST_TIMEOUT)
+            .filter(|(_, request)| request.sent && request.queued_at.elapsed() >= REQUEST_TIMEOUT)
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
         for id in expired {
@@ -1098,6 +1291,18 @@ impl Manager {
             self.request_snapshot()?;
         }
         Ok(())
+    }
+
+    fn abort_reload(&mut self, error: &str) {
+        self.frozen = false;
+        self.reload_requested = false;
+        for record in &mut self.outbox.records {
+            record.resume_reclaimed(self.outbox.room_id.as_deref());
+        }
+        self.event(UiEvent::Failed {
+            id: String::new(),
+            message: bounded_error(error),
+        });
     }
 
     fn reload_ready(&mut self) -> Result<bool, String> {
@@ -1259,11 +1464,35 @@ pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport>
 pub(super) fn disconnect() {
     with(Manager::disconnect);
 }
+pub(super) fn pending_command(id: u64) -> Option<SteeringCommand> {
+    with(|manager| manager.pending_command(id))
+}
+pub(super) fn prepare_publish(id: u64, text: String) -> Result<Option<SteeringCommand>, String> {
+    with(|manager| manager.prepare_publish(id, text))
+}
+pub(super) fn fail_unsent(id: u64, error: &str) {
+    with(|manager| manager.fail_unsent(id, error));
+}
 pub(super) fn sent(id: u64) -> bool {
     with(|manager| manager.sent(id))
 }
 pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
-    with(|manager| manager.reply(id, result))
+    let (outcome, accepted) = with(|manager| {
+        let outcome = manager.reply(id, result);
+        (outcome, std::mem::take(&mut manager.accepted_history))
+    });
+    // Disk and display work happen after releasing the request manager lock.
+    // A history error cannot change an acknowledged publication to failed.
+    for message in accepted {
+        if let Err(error) = super::interface::history::record_request(&message.id, &message.text) {
+            super::render::status(
+                "history",
+                "Warning",
+                &format!("Request was accepted, but its history could not be saved: {error}"),
+            );
+        }
+    }
+    outcome
 }
 pub(super) fn poll() -> Result<(), String> {
     with(Manager::poll)
@@ -1275,17 +1504,7 @@ pub(super) fn reload_ready() -> Result<bool, String> {
     with(Manager::reload_ready)
 }
 pub(super) fn abort_reload(error: &str) {
-    with(|manager| {
-        manager.frozen = false;
-        manager.reload_requested = false;
-        for record in &mut manager.outbox.records {
-            record.resume_after_reload = false;
-        }
-        manager.event(UiEvent::Failed {
-            id: String::new(),
-            message: bounded_error(error),
-        });
-    });
+    with(|manager| manager.abort_reload(error));
 }
 pub(super) fn request_reload() -> Result<(), String> {
     with(|manager| {
@@ -1538,6 +1757,271 @@ mod tests {
     }
 
     #[test]
+    fn headless_publish_ack_produces_one_history_record_without_consuming_ui_events() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let text = "Native UI request with no terminal";
+        let message_id = manager.submit(text, None).unwrap();
+        assert!(manager.accepted_history.is_empty());
+        let (request_id, _) = command(&mut manager, &mut receiver);
+        assert!(manager.accepted_history.is_empty());
+        let mut accepted = manager.outbox.records[0].message.clone();
+        accepted.revision = 1;
+        let snapshot = snapshot_for("room_one", 1, vec![accepted]);
+        manager.reply(request_id, Ok(snapshot.clone())).unwrap();
+        assert_eq!(manager.events.len(), 1, "no frontend consumed the UI event");
+        assert_eq!(
+            std::mem::take(&mut manager.accepted_history),
+            vec![AcceptedHistory {
+                id: message_id,
+                text: text.into(),
+            }]
+        );
+        manager.reply(request_id, Ok(snapshot)).unwrap();
+        assert!(
+            manager.accepted_history.is_empty(),
+            "duplicate ACK does not create history"
+        );
+        assert_eq!(manager.events.len(), 1, "history does not drain UI events");
+    }
+
+    #[tokio::test]
+    async fn reference_parse_failure_never_becomes_sendable_and_preserves_chinese_draft() {
+        let directory = std::env::temp_dir().join(format!(
+            "ssmcp-steering-reference-test-{}",
+            random_id().unwrap()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let workspace = crate::workspace::Workspace::new(directory.clone()).unwrap();
+        let context = crate::context::Context::new(directory.clone(), vec![]).unwrap();
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let draft = "保留这份中文原稿 @\"未闭合";
+        let message_id = manager.submit(draft, Some("agent_one")).unwrap();
+        let Transport::Wire { id, .. } = receiver.try_recv().unwrap() else {
+            panic!("publish required");
+        };
+        let error = super::super::references::expand(draft, &workspace, &context)
+            .await
+            .unwrap_err();
+        fs::remove_dir_all(directory).unwrap();
+        manager.fail_unsent(id, &error);
+        assert!(manager.pending_command(id).is_none());
+        assert!(
+            !manager.sent(id),
+            "the sender cannot write a failed request"
+        );
+        let record = &manager.outbox.records[manager.index(&message_id).unwrap()];
+        assert_eq!(record.message.text, draft);
+        assert_eq!(record.message.target, "agent_one");
+        assert_eq!(record.message.revision, 0);
+        assert_eq!(record.message.state, SteeringState::Editing);
+        assert!(!record.ever_sent);
+        assert!(!record.uncertain);
+        assert!(record.safe_to_publish);
+        assert!(record.pending.is_none());
+        assert!(
+            matches!(manager.events.pop_front(), Some(UiEvent::Failed { id, .. }) if id == message_id)
+        );
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                id: message_id,
+                text: draft.into(),
+                images: Vec::new(),
+            })
+        );
+        manager.poll().unwrap();
+        while let Ok(transport) = receiver.try_recv() {
+            assert!(
+                matches!(
+                    transport,
+                    Transport::Wire {
+                        command: SteeringCommand::Snapshot {},
+                        ..
+                    }
+                ),
+                "local validation failure must not automatically retry"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_reference_edit_keeps_revision_target_and_draft_through_old_snapshots() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let mut old = publish(&mut manager, &mut receiver, "earlier contents", None);
+        manager.take_back(&old.id).unwrap();
+        let (takeback_id, _) = command(&mut manager, &mut receiver);
+        old.state = SteeringState::Editing;
+        old.revision = 2;
+        manager
+            .reply(
+                takeback_id,
+                Ok(snapshot_for("room_one", 2, vec![old.clone()])),
+            )
+            .unwrap();
+        manager.events.clear();
+        let draft = "新的中文要求 @missing.txt";
+        manager
+            .publish_edit(&old.id, draft, Some("agent_one"))
+            .unwrap();
+        let Transport::Wire { id, .. } = receiver.try_recv().unwrap() else {
+            panic!("publish required");
+        };
+        // An unrelated snapshot can arrive while asynchronous reference reads run.
+        manager
+            .merge(&snapshot_for("room_one", 2, vec![old.clone()]))
+            .unwrap();
+        assert_eq!(manager.outbox.records[0].message.text, draft);
+        manager.fail_unsent(id, "Referenced file was not found.");
+        manager
+            .merge(&snapshot_for("room_one", 2, vec![old.clone()]))
+            .unwrap();
+        let record = &manager.outbox.records[0];
+        assert!(
+            record.ever_sent,
+            "prior accepted revisions retain their identity"
+        );
+        assert!(!record.uncertain);
+        assert!(record.safe_to_publish);
+        assert_eq!(record.message.revision, 2);
+        assert_eq!(record.message.target, "agent_one");
+        assert_eq!(record.message.text, draft);
+        assert_eq!(record.message.state, SteeringState::Editing);
+        assert_eq!(record.room_id.as_deref(), Some("room_one"));
+        assert!(!manager.sent(id));
+        old.state = SteeringState::Delivered;
+        old.revision = 3;
+        manager
+            .merge(&snapshot_for("room_one", 3, vec![old.clone()]))
+            .unwrap();
+        assert_eq!(
+            manager.outbox.records[0].message, old,
+            "new authoritative revisions still win over local edits"
+        );
+    }
+
+    fn expanded_reference_fixture(text: &str, preview: &str) -> String {
+        use sha2::{Digest, Sha256};
+        format!(
+            "{text}\n\n<ssmcp-references-v1>\n{}\n</ssmcp-references-v1>",
+            json!({
+                "schema_version": 1,
+                "source_sha256": format!("{:x}", Sha256::digest(text.as_bytes())),
+                "references": [{"kind": "text", "path": "notes.txt", "preview": preview}],
+            })
+        )
+    }
+
+    #[test]
+    fn prepared_publish_freezes_command_payload_and_ui_events_keep_the_source() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let draft = "阅读这份笔记 @notes.txt";
+        let message_id = manager.submit(draft, None).unwrap();
+        let Transport::Wire { id, .. } = receiver.try_recv().unwrap() else {
+            panic!("publish required");
+        };
+        manager.requests.get_mut(&id).unwrap().queued_at = Instant::now() - REQUEST_TIMEOUT * 2;
+        manager.poll().unwrap();
+        assert!(
+            manager.requests.contains_key(&id),
+            "preparation time cannot consume the server acknowledgement deadline"
+        );
+        assert!(manager.events.is_empty());
+        let (snapshot_id, snapshot) = command(&mut manager, &mut receiver);
+        assert_eq!(snapshot, SteeringCommand::Snapshot {});
+        manager
+            .reply(snapshot_id, Ok(snapshot_for("room_one", 0, vec![])))
+            .unwrap();
+
+        let expanded = expanded_reference_fixture(draft, "first file contents");
+        let prepared_command = manager
+            .prepare_publish(id, expanded.clone())
+            .unwrap()
+            .unwrap();
+        let second = expanded_reference_fixture(draft, "changed file contents");
+        assert_eq!(
+            manager.prepare_publish(id, second).unwrap(),
+            Some(prepared_command.clone())
+        );
+        assert_eq!(manager.pending_command(id), Some(prepared_command));
+        assert_eq!(manager.outbox.records[0].message.text, expanded);
+        let started = Instant::now();
+        assert!(manager.sent(id));
+        assert!(manager.requests[&id].queued_at >= started);
+        assert!(!manager.sent(id), "one transport frame per queued request");
+        let mut accepted = manager.outbox.records[0].message.clone();
+        accepted.revision = 1;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 1, vec![accepted.clone()])))
+            .unwrap();
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Accepted {
+                id: message_id.clone(),
+                text: draft.into()
+            })
+        );
+        manager.take_back(&message_id).unwrap();
+        let (takeback_id, _) = command(&mut manager, &mut receiver);
+        accepted.state = SteeringState::Editing;
+        accepted.revision = 2;
+        manager
+            .reply(takeback_id, Ok(snapshot_for("room_one", 2, vec![accepted])))
+            .unwrap();
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                id: message_id,
+                text: draft.into(),
+                images: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn prepared_publish_survives_handoff_and_cancelled_transport_cannot_send() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let draft = "重启后仍然是同一份 @notes.txt";
+        manager.submit(draft, None).unwrap();
+        let Transport::Wire { id, .. } = receiver.try_recv().unwrap() else {
+            panic!("publish required");
+        };
+        let frozen = expanded_reference_fixture(draft, "contents when first prepared");
+        manager
+            .prepare_publish(id, frozen.clone())
+            .unwrap()
+            .unwrap();
+        manager.disconnect();
+        assert!(manager.pending_command(id).is_none());
+        assert!(
+            manager
+                .prepare_publish(id, "late completion".into())
+                .unwrap()
+                .is_none()
+        );
+        assert!(!manager.sent(id));
+        let outbox = serde_json::from_slice(&serde_json::to_vec(&manager.outbox).unwrap()).unwrap();
+        let mut restored = Manager {
+            outbox,
+            ..Manager::default()
+        };
+        let mut receiver = restored.connect("room_two", 7);
+        ready(&mut restored, &mut receiver, "room_two");
+        restored.poll().unwrap();
+        let (_, request) = command(&mut restored, &mut receiver);
+        assert!(matches!(request, SteeringCommand::Publish { text, .. } if text == frozen));
+    }
+
+    #[test]
     fn enqueue_ack_and_edit_use_the_same_message_and_expected_revision() {
         let mut manager = Manager::default();
         let mut receiver = manager.connect("room_one", 7);
@@ -1762,6 +2246,196 @@ mod tests {
         assert_eq!(restored.snapshot()["queue"][0]["status"], "queued");
     }
 
+    fn pending_reload_takeback(
+        manager: &mut Manager,
+        receiver: &mut mpsc::Receiver<Transport>,
+        message: &SteeringMessage,
+    ) -> u64 {
+        manager.begin_reload().unwrap();
+        let (id, request) = command(manager, receiver);
+        assert_eq!(request, SteeringCommand::Snapshot {});
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 1, vec![message.clone()])))
+            .unwrap();
+        assert!(!manager.reload_ready().unwrap());
+        let (id, request) = command(manager, receiver);
+        assert!(matches!(
+            request,
+            SteeringCommand::Takeback {
+                message_id,
+                expected_revision: 1,
+                ..
+            } if message_id == message.id
+        ));
+        id
+    }
+
+    #[test]
+    fn aborted_reload_requeues_confirmed_reclaims_without_replacing_the_draft() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let mut message = publish(&mut manager, &mut receiver, "keep this request", None);
+        manager.outbox.draft = Draft {
+            text: "正在编写的新要求".into(),
+            cursor: "正在编写".len(),
+        };
+        manager.outbox.context = DraftContext {
+            target: Some("agent_one".into()),
+            ..DraftContext::default()
+        };
+        let original_draft = manager.outbox.draft.clone();
+        let original_context = manager.outbox.context.clone();
+        let id = pending_reload_takeback(&mut manager, &mut receiver, &message);
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 2, vec![message.clone()])))
+            .unwrap();
+        assert!(manager.reload_ready().unwrap());
+
+        manager.abort_reload("server did not confirm reload");
+        assert!(!manager.frozen);
+        assert!(!manager.reload_requested);
+        assert_eq!(manager.snapshot()["queue"][0]["status"], "sending");
+        assert_eq!(manager.outbox.draft.text, original_draft.text);
+        assert_eq!(manager.outbox.draft.cursor, original_draft.cursor);
+        assert_eq!(manager.outbox.context, original_context);
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Failed {
+                id: String::new(),
+                message: "server did not confirm reload".into()
+            })
+        );
+        assert!(manager.events.is_empty());
+
+        manager.poll().unwrap();
+        let (id, request) = command(&mut manager, &mut receiver);
+        assert!(matches!(
+            request,
+            SteeringCommand::Publish {
+                message_id,
+                expected_revision: 2,
+                text,
+                target,
+                ..
+            } if message_id == message.id && text == message.text && target == "next"
+        ));
+        message.state = SteeringState::Queued;
+        message.revision = 3;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 3, vec![message])))
+            .unwrap();
+        assert_eq!(manager.snapshot()["queue"][0]["status"], "queued");
+        assert!(!manager.outbox.records[0].resume_after_reload);
+        assert!(matches!(
+            command(&mut manager, &mut receiver).1,
+            SteeringCommand::Snapshot {}
+        ));
+        manager.poll().unwrap();
+        assert!(
+            receiver.try_recv().is_err(),
+            "the request must be republished once"
+        );
+    }
+
+    #[test]
+    fn aborted_reload_waits_for_a_late_takeback_ack_before_republishing() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let mut message = publish(&mut manager, &mut receiver, "wait for the receipt", None);
+        let id = pending_reload_takeback(&mut manager, &mut receiver, &message);
+
+        manager.abort_reload("reclamation timed out");
+        manager.poll().unwrap();
+        let (snapshot_id, request) = command(&mut manager, &mut receiver);
+        assert_eq!(request, SteeringCommand::Snapshot {});
+        assert!(
+            receiver.try_recv().is_err(),
+            "an unconfirmed takeback must not resend"
+        );
+        assert!(!manager.outbox.records[0].safe_to_publish);
+        assert!(manager.outbox.records[0].pending.is_some());
+
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 2, vec![message.clone()])))
+            .unwrap();
+        manager
+            .reply(
+                snapshot_id,
+                Ok(snapshot_for("room_one", 2, vec![message.clone()])),
+            )
+            .unwrap();
+        manager.poll().unwrap();
+        assert!(matches!(
+            command(&mut manager, &mut receiver).1,
+            SteeringCommand::Publish {
+                message_id,
+                expected_revision: 2,
+                ..
+            } if message_id == message.id
+        ));
+        assert!(!manager.outbox.records[0].resume_after_reload);
+    }
+
+    #[test]
+    fn aborted_reload_preserves_manual_edits_and_uncertain_takebacks() {
+        for uncertain in [false, true] {
+            let mut manager = Manager::default();
+            let mut receiver = manager.connect("room_one", 7);
+            ready(&mut manager, &mut receiver, "room_one");
+            let mut message = publish(&mut manager, &mut receiver, "review explicitly", None);
+            if uncertain {
+                let id = pending_reload_takeback(&mut manager, &mut receiver, &message);
+                manager.reply(id, Err("receipt lost".into())).unwrap();
+            } else {
+                manager.take_back(&message.id).unwrap();
+                let (id, _) = command(&mut manager, &mut receiver);
+                message.state = SteeringState::Editing;
+                message.revision = 2;
+                manager
+                    .reply(id, Ok(snapshot_for("room_one", 2, vec![message])))
+                    .unwrap();
+                manager.frozen = true;
+            }
+
+            manager.abort_reload("reload cancelled");
+            manager.poll().unwrap();
+            assert_eq!(
+                manager.snapshot()["queue"][0]["status"],
+                if uncertain { "uncertain" } else { "editing" }
+            );
+            assert_eq!(manager.outbox.records[0].resume_after_reload, uncertain);
+            let (id, request) = command(&mut manager, &mut receiver);
+            assert_eq!(request, SteeringCommand::Snapshot {});
+            assert!(
+                receiver.try_recv().is_err(),
+                "review-required content must not be resent"
+            );
+            if uncertain {
+                // A lost takeback ACK is recoverable once a fresh authoritative
+                // snapshot proves that the same-room request was reclaimed.
+                let mut confirmed = manager.outbox.records[0].message.clone();
+                confirmed.state = SteeringState::Editing;
+                confirmed.revision = 2;
+                manager
+                    .reply(id, Ok(snapshot_for("room_one", 2, vec![confirmed])))
+                    .unwrap();
+                manager.poll().unwrap();
+                assert!(matches!(
+                    command(&mut manager, &mut receiver).1,
+                    SteeringCommand::Publish {
+                        expected_revision: 2,
+                        ..
+                    }
+                ));
+            }
+        }
+    }
     #[test]
     fn exact_agent_targets_need_explicit_retarget_after_a_room_change() {
         let mut manager = Manager::default();
@@ -2001,6 +2675,55 @@ mod tests {
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jU6kAAAAASUVORK5CYII="
         ).unwrap();
         UserImage::from_bytes("screenshot.png", "image/png", &bytes).unwrap()
+    }
+
+    #[test]
+    fn image_payloads_survive_reference_preparation_and_unsent_recovery() {
+        for draft in ["", "查看 @notes.txt"] {
+            let image = test_user_image();
+            let mut manager = Manager::default();
+            let mut receiver = manager.connect("room_one", crate::wire::VERSION);
+            ready(&mut manager, &mut receiver, "room_one");
+            let message_id = manager
+                .submit_with_images(draft, None, vec![image.clone()])
+                .unwrap();
+            let Transport::Wire { id, .. } = receiver.try_recv().unwrap() else {
+                panic!("publish required");
+            };
+            let expanded = if draft.is_empty() {
+                String::new()
+            } else {
+                expanded_reference_fixture(draft, "file contents")
+            };
+            let prepared = manager
+                .prepare_publish(id, expanded.clone())
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(prepared, SteeringCommand::Publish { text, images, .. }
+                if text == expanded && images == vec![image.clone()])
+            );
+            manager.fail_unsent(id, "preparation cancelled before transmission");
+            assert!(manager.pending_command(id).is_none());
+            assert!(!manager.sent(id));
+            let record = &manager.outbox.records[manager.index(&message_id).unwrap()];
+            assert_eq!(record.message.text, draft);
+            assert_eq!(record.message.images, vec![image.clone()]);
+            assert_eq!(record.message.state, SteeringState::Editing);
+            assert!(record.safe_to_publish);
+            assert!(matches!(
+                manager.events.pop_front(),
+                Some(UiEvent::Failed { .. })
+            ));
+            assert_eq!(
+                manager.events.pop_front(),
+                Some(UiEvent::Editable {
+                    id: message_id,
+                    text: draft.into(),
+                    images: vec![image],
+                })
+            );
+        }
     }
 
     #[test]

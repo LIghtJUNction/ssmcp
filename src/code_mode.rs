@@ -109,13 +109,14 @@ impl AuditRun {
 
     /// UI and client metadata queries still carry source audit, but cannot
     /// consume a human requirement merely by refreshing display or discovery.
-    /// Assistant messages are actual interaction and may receive the next user
+    /// Assistant messages and presentations are interaction and may receive the next user
     /// request; message-history reads remain observation. Other read operations
     /// and runs that explicitly bind an agent retain normal delivery semantics.
     pub(crate) fn native_dispatched(&self, client_id: &str, tool: Option<&str>) {
         self.dispatched(client_id);
         if tool.is_some_and(|name| {
-            (name == "ssmcp.ui.message" || !name.starts_with("ssmcp.ui."))
+            (matches!(name, "ssmcp.ui.message" | "ssmcp.ui.present")
+                || !name.starts_with("ssmcp.ui."))
                 && !matches!(
                     name,
                     "ssmcp.client.capabilities"
@@ -992,7 +993,7 @@ mod tests {
             ),
             (
                 "image({type:'image',mimeType:'image/svg+xml',data:'PHN2Zy8+'});".into(),
-                "PNG or JPEG",
+                "PNG, JPEG, GIF or WebP",
             ),
             (
                 "image({type:'image',mimeType:'image/png',data:'not-base64'});".into(),
@@ -1646,15 +1647,23 @@ mod tests {
     }
     #[test]
     fn assistant_replies_are_eligible_for_user_requests_but_history_reads_are_not() {
-        let run = AuditRun::new(
-            "await say('client', {text:'Progress',kind:'progress'});",
-            None,
-        )
-        .unwrap();
-        run.native_dispatched("client", Some("ssmcp.ui.messages"));
-        assert_eq!(run.targets(), ["client"]);
-        assert!(run.steering_targets().is_empty());
-        run.native_dispatched("client", Some("ssmcp.ui.message"));
-        assert_eq!(run.steering_targets(), ["client"]);
+        for tool in ["ssmcp.ui.message", "ssmcp.ui.present"] {
+            let run = AuditRun::new(
+                "await say('client', {text:'Progress',kind:'progress'});",
+                None,
+            )
+            .unwrap();
+            for observation in [
+                "ssmcp.ui.messages",
+                "ssmcp.ui.history",
+                "ssmcp.ui.questions",
+            ] {
+                run.native_dispatched("client", Some(observation));
+                assert_eq!(run.targets(), ["client"]);
+                assert!(run.steering_targets().is_empty());
+            }
+            run.native_dispatched("client", Some(tool));
+            assert_eq!(run.steering_targets(), ["client"], "{tool}");
+        }
     }
 }

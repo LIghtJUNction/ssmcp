@@ -12,6 +12,10 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+pub(crate) mod harness;
+pub(crate) mod history;
+pub(crate) mod questions;
+
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static UPDATES: Mutex<()> = Mutex::new(());
 static RESIZES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -53,6 +57,7 @@ pub(crate) fn get() -> Value {
         "display": terminal::snapshot(),
         "activity": render::snapshot(),
         "steering": super::steering::snapshot(),
+        "questions": questions::snapshot(),
     })
 }
 
@@ -512,9 +517,14 @@ pub(crate) async fn call(
     let size = {
         let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
         match name {
+            "ssmcp.ui.harness" => return harness::call(arguments),
+            "ssmcp.ui.history" => return history::call(arguments),
+            "ssmcp.ui.ask" => return questions::ask(arguments),
+            "ssmcp.ui.questions" => return questions::read(arguments),
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
             "ssmcp.ui.message" => return super::messages::send(arguments),
             "ssmcp.ui.messages" => return super::messages::read(arguments),
+            "ssmcp.ui.present" => return super::presentation::send(arguments),
             "ssmcp.ui.get" => {
                 let projection = parse_get(&arguments)?;
                 return project_snapshot(get(), projection);
@@ -575,6 +585,10 @@ pub(crate) fn tools() -> Vec<Value> {
         json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
     ];
     result.extend(super::messages::tools());
+    result.extend(questions::tools());
+    result.push(history::tool());
+    result.push(harness::tool());
+    result.push(super::presentation::tool());
     result
 }
 
@@ -1003,10 +1017,15 @@ mod tests {
             names,
             std::collections::BTreeSet::from([
                 "ssmcp.ui.action",
+                "ssmcp.ui.ask",
                 "ssmcp.ui.filter",
                 "ssmcp.ui.get",
+                "ssmcp.ui.harness",
+                "ssmcp.ui.history",
                 "ssmcp.ui.message",
                 "ssmcp.ui.messages",
+                "ssmcp.ui.present",
+                "ssmcp.ui.questions",
                 "ssmcp.ui.queue",
                 "ssmcp.ui.set",
             ])

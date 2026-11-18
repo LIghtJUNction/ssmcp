@@ -4,6 +4,7 @@ mod attachments;
 mod audit_view;
 mod browser_setup;
 mod clipboard;
+pub(crate) mod completion;
 mod composer;
 mod config;
 
@@ -20,8 +21,10 @@ pub(crate) mod interface;
 mod messages;
 mod onboarding;
 mod panel;
+mod presentation;
 #[cfg(test)]
 mod protocol_tests;
+pub(crate) mod references;
 mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;
@@ -60,7 +63,31 @@ use tokio::{
     time::timeout,
 };
 
-const HELP: &str = r#"ssmcp — connect your devices and control authorized sessions
+const HELP: &str = r#"ssmcp — connect a device; control its tools remotely
+
+Usage: ssmcp [username@server] [options]
+
+Start
+  ssmcp                         Reuse your last authorized account
+  ssmcp alice@relay.example     Connect and sign in when needed
+  ssmcp list                    List your online devices
+  ssmcp -i                      Open an authorized remote terminal
+
+Manage
+  config · whoami · logout      Account and server settings
+  invite · join                Share a temporary session
+  sessions · attach · service  Saved and background sessions
+  setup · ui · 007             Setup, appearance and recovery
+
+Options
+  --name NAME   --title TEXT   --server URL   --context-root PATH
+  --no-browser  --no-watchdog  --theme NAME   --no-color
+
+Use ssmcp COMMAND --help for command options; --help-full lists all connection flags.
+In a connected chat: /help, @file, $skill, !command; Left opens Agents.
+"#;
+
+const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized sessions
 
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
@@ -113,7 +140,7 @@ Usage: ssmcp username@server [options]
   --ui-config FILE     Local [ui] TOML; default ~/.config/ssmcp/config.toml
   --theme NAME         dark, codex-dark, nord, solarized, light, or minimal
   --timestamps         Show UTC timestamps on event headings
-  --max-inline-output N  Maximum lines per buffered output block (default 12)
+  --max-inline-output N  Maximum lines per buffered output block (default 8)
   --list-tools         Discover native and workspace tools as JSON, then exit without SSH
 
 The client always connects as shell. Installed Codex, Claude Code, Pi and OpenCode
@@ -405,6 +432,10 @@ impl Options {
             match arg.to_str() {
                 Some("-h" | "--help") => {
                     print!("{HELP}");
+                    return Ok(None);
+                }
+                Some("--help-full") => {
+                    print!("{HELP_FULL}");
                     return Ok(None);
                 }
                 Some("-V" | "--version") => {
@@ -836,7 +867,10 @@ impl Options {
 pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate::Result<()> {
     let mut args = spec.args.iter();
     while let Some(arg) = args.next() {
-        if matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V") {
+        if matches!(
+            arg.as_str(),
+            "--help" | "--help-full" | "-h" | "--version" | "-V"
+        ) {
             return Err("saved sessions cannot contain help or version actions".into());
         }
         if connection_option_takes_value(arg) {
@@ -937,7 +971,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help for SSH options."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help-full for SSH options."
         );
         return Ok(());
     }
@@ -1780,13 +1814,36 @@ async fn register_ssh(
 async fn send_steering(
     writer: &Arc<Mutex<tokio::process::ChildStdin>>,
     id: u64,
-    command: crate::wire::SteeringCommand,
+    backend: &Runtime,
 ) -> crate::Result<()> {
-    if !steering::sent(id) {
+    let Some(command) = steering::pending_command(id) else {
         return Ok(());
-    }
+    };
+    let command = if let crate::wire::SteeringCommand::Publish { text, .. } = &command {
+        let prepared = match timeout(Duration::from_secs(5), backend.expand_references(text)).await {
+            Ok(Ok(text)) => steering::prepare_publish(id, text),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err("Preparing the file or skill references timed out. The request was not sent; review the retained draft and retry.".into()),
+        };
+        match prepared {
+            Ok(Some(command)) => command,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                steering::fail_unsent(id, &error);
+                terminal::notice(&error);
+                return Ok(());
+            }
+        }
+    } else {
+        command
+    };
     timeout(Duration::from_secs(10), async {
         let mut writer = writer.lock().await;
+        // Preparation and lock acquisition cannot consume the reply deadline.
+        // A cancelled or superseded request must never reach the wire.
+        if !steering::sent(id) {
+            return Ok(());
+        }
         write_frame(&mut *writer, &Frame::Steering { id, command }).await
     })
     .await
@@ -1808,7 +1865,7 @@ async fn reclaim_steering(
             if steering::reload_ready()? { return Ok::<(), crate::Error>(()); }
             tokio::select! {
                 command = commands.recv() => match command {
-                    Some(steering::Transport::Wire { id, command }) => send_steering(writer, id, command).await?,
+                    Some(steering::Transport::Wire { id, .. }) => send_steering(writer, id, backend).await?,
                     Some(steering::Transport::Reload) => {},
                     None => return Err("client control channel ended while preparing reload".into()),
                 },
@@ -2077,8 +2134,8 @@ async fn connect(
                 if let Err(error) = steering::poll() { terminal::notice(&error); }
             },
             command = steering_commands.recv() => match command {
-                Some(steering::Transport::Wire { id, command }) => {
-                    if let Err(error) = send_steering(&writer, id, command).await { break Err(error); }
+                Some(steering::Transport::Wire { id, .. }) => {
+                    if let Err(error) = send_steering(&writer, id, &backend).await { break Err(error); }
                 },
                 Some(steering::Transport::Reload) => {
                     while let Some(completed) = requests.try_join_next() {

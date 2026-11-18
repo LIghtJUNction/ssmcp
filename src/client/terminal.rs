@@ -21,6 +21,9 @@ use std::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
+mod events;
+mod images;
+pub(crate) mod markdown;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -126,8 +129,19 @@ impl Drop for Session {
     }
 }
 
-pub(super) fn active() -> bool {
+pub(crate) fn active() -> bool {
     shared().is_some_and(|shared| shared.alive.load(Ordering::Acquire))
+}
+
+/// Wake the display after asynchronous local discovery without publishing a log.
+pub(super) fn invalidate() {
+    if let Some(shared) = shared() {
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .dirty = true;
+    }
 }
 
 pub(super) fn log_width() -> Option<usize> {
@@ -154,6 +168,37 @@ pub(super) fn log(bytes: &[u8]) -> bool {
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     state.log(bytes);
     true
+}
+
+/// Decode outside the State lock; preview failures do not alter native output.
+pub(crate) fn image(block: &serde_json::Value) {
+    let Some(shared) = shared() else {
+        return;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return;
+    }
+    let preview = match images::decode(block) {
+        Ok(preview) => preview,
+        Err(error) => {
+            notice(&format!("Image preview unavailable: {error}"));
+            return;
+        }
+    };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    let width = usize::from(state.geometry.left.saturating_sub(4).max(1));
+    let height = usize::from(state.geometry.log_rows.saturating_sub(3).clamp(1, 18));
+    let mut text = format!(
+        "\n[IMAGE] {} × {} · {}\n",
+        preview.width,
+        preview.height,
+        block["mimeType"].as_str().unwrap_or("image")
+    );
+    for row in preview.render(width, height, &state.ui) {
+        let _ = writeln!(text, "  {row}");
+    }
+    text.push('\n');
+    state.log(text.as_bytes());
 }
 
 /// Every PTY has its own parser, including terminals that are not on screen.
@@ -221,6 +266,7 @@ pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
     let shared = shared()?;
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     state.ui = ui.clone();
+    state.conversation.history_width = 0;
     state.ui.color &= std::env::var_os("NO_COLOR").is_none();
     let (rows, cols) = (state.geometry.rows, state.geometry.cols);
     state.resize(rows, cols);
@@ -283,9 +329,18 @@ pub(crate) fn browse(action: &str) -> Result<(), String> {
         "audit.down" => state.audit.down(),
         "audit.open" => state.audit.open(),
         "audit.back" => state.audit.back(),
-        "logs.page-up" => state.scroll_logs(page),
-        "logs.page-down" => state.scroll_logs(-page),
-        "logs.end" => state.scroll_logs(isize::MIN),
+        "logs.page-up" => {
+            state.scroll_logs(page);
+            state.events.scroll_by(-page);
+        }
+        "logs.page-down" => {
+            state.scroll_logs(-page);
+            state.events.scroll_by(page);
+        }
+        "logs.end" => {
+            state.scroll_logs(isize::MIN);
+            state.events.latest();
+        }
         _ => return Err("unknown display browsing action".into()),
     }
     state.dirty = true;
@@ -311,6 +366,7 @@ pub(crate) fn notice(message: &str) {
 pub(crate) fn clear_logs() {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.events.clear();
         state.logs = vt100::Parser::new(
             nonzero(state.geometry.log_rows),
             nonzero(state.geometry.left),
@@ -337,7 +393,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "focus":if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
-        "conversation":conversation,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
+        "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
     })
 }
 
@@ -345,7 +401,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
 fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
-    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · /agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
+    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
     state.audit.open();
@@ -496,6 +552,7 @@ impl Geometry {
 #[derive(Clone, Copy)]
 enum Key {
     Help,
+    Select,
     Layout,
     Sidebar,
     Theme,
@@ -528,6 +585,7 @@ enum Key {
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[18~", Key::Select),
     (b"\x1b[Z", Key::FocusBack),
     (b"\x1b[3~", Key::Delete),
     (b"\x1b[13;2u", Key::Newline),
@@ -582,6 +640,7 @@ impl Keyboard {
         }
         match key {
             Key::Help
+            | Key::Select
             | Key::Layout
             | Key::Sidebar
             | Key::Theme
@@ -792,6 +851,7 @@ struct State {
     context_label: String,
     geometry: Geometry,
     logs: vt100::Parser,
+    events: events::EventView,
     pty: vt100::Parser<Replies>,
     active_session: String,
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
@@ -800,6 +860,7 @@ struct State {
     project_name: String,
     ui: Ui,
     help: bool,
+    selection: bool,
     audit: AuditView,
     log_query: String,
     log_level: u8,
@@ -818,6 +879,7 @@ impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let geometry = Geometry::new(rows, cols, ui);
         Self {
+            events: events::EventView::new(),
             context_label: String::new(),
             logs: vt100::Parser::new(
                 nonzero(geometry.log_rows),
@@ -845,6 +907,7 @@ impl State {
                 .unwrap_or_else(|| "workspace".into()),
             ui: ui.clone(),
             help: false,
+            selection: false,
             audit: AuditView::default(),
             log_query: String::new(),
             log_level: 0,
@@ -952,6 +1015,7 @@ impl State {
         replies
     }
     fn log(&mut self, bytes: &[u8]) {
+        self.events.ingest(bytes);
         let mut normalized = Vec::with_capacity(bytes.len());
         for &byte in bytes {
             if byte == b'\n' && !self.previous_cr {
@@ -1456,6 +1520,7 @@ impl State {
             application_cursor: false,
             application_keypad: false,
             bracketed_paste: true,
+            mouse_capture: !self.selection,
         }
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
@@ -1643,6 +1708,7 @@ struct Frame {
     application_cursor: bool,
     application_keypad: bool,
     bracketed_paste: bool,
+    mouse_capture: bool,
 }
 impl Frame {
     fn diff(&self, previous: Option<&Self>) -> Vec<u8> {
@@ -1668,6 +1734,13 @@ impl Frame {
                 "\x1b="
             } else {
                 "\x1b>"
+            });
+        }
+        if previous.is_none_or(|old| old.mouse_capture != self.mouse_capture) {
+            output.push_str(if self.mouse_capture {
+                "\x1b[?1000h\x1b[?1006h"
+            } else {
+                "\x1b[?1000l\x1b[?1006l"
             });
         }
         if previous.is_none_or(|old| old.bracketed_paste != self.bracketed_paste) {
@@ -1739,7 +1812,13 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
                 state.dirty = true;
                 last_panel = Instant::now();
             }
-            if state.dirty {
+            // Freeze the visible frame while the host terminal owns selection.
+            if state.dirty
+                && !(state.selection
+                    && previous
+                        .as_ref()
+                        .is_some_and(|old: &Frame| !old.mouse_capture))
+            {
                 let frame = state.frame(Instant::now());
                 pending = frame.diff(previous.as_ref());
                 previous = Some(frame);

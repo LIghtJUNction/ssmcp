@@ -15,7 +15,7 @@ const [browser, providers] = await Promise.all([
 return { browser, providers };
 ```
 
-`ssmcp.browser.discover` 只读浏览器、扩展和本机入口元数据，不启动、重启或连接浏览器。扩展清单存在只证明安装文件存在，不能证明启用、配对或授权。`ssmcp.harnesses.list` 报告原生提供者的实际发现状态；CLI 存在、MCP 服务握手成功和浏览器已连接是三个不同结果。[发现与注册](../src/backend/mod.rs)
+`ssmcp.browser.discover` 只读浏览器、扩展和本机入口元数据，不启动、重启或连接浏览器。扩展清单存在只证明安装文件存在，不能证明启用、配对或授权。`ssmcp.harnesses.list` 报告原生提供者的实际发现状态；CLI 存在、MCP 服务握手成功和浏览器已连接是三个不同结果。[发现与注册](../src/backend.rs)
 
 | 可用证据 | 后续操作 |
 | --- | --- |
