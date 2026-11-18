@@ -39,7 +39,7 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 默认目标为 `Next caller`，即下一次实际访问本客户端、且仍有授权的 `code_mode` 调用方；也可以通过 `/agents` 选择明确的成员 ID。要求只附加到符合目标的响应，不广播给全部成员。
 
-自定义界面刷新 `ssmcp.ui.*`、查询工具目录，或调用 `capabilities(clientId)` 与 `resources.forClient(clientId)` 的 `list/templates/read` 时，默认不领取这些要求，避免界面轮询抢先消耗队列。后两者对应 `ssmcp.client.capabilities` 和 `ssmcp.resources.list/templates/read` 四个观测原语，原生调用仍记录源码审计。显式通过 `collab.bind` 绑定成员的编排仍可领取符合目标的要求。
+自定义界面刷新 `ssmcp.ui.*`（发送 Agent 消息的 `ssmcp.ui.message` 除外）、查询工具目录，或调用 `capabilities(clientId)` 与 `resources.forClient(clientId)` 的 `list/templates/read` 时，默认不领取这些要求，避免界面轮询抢先消耗队列。后两者对应 `ssmcp.client.capabilities` 和 `ssmcp.resources.list/templates/read` 四个观测原语，原生调用仍记录源码审计。显式通过 `collab.bind` 绑定成员的编排仍可领取符合目标的要求。
 
 `/queue` 打开队列。内容区中 ↑/↓ 选择记录，Enter 请求取回尚未交付的要求，→ 只读查看详情，← 返回列表，Delete 取消可撤回的待交付项。取回获得服务器确认后，文字与图片一起进入输入框，修改后按 Enter 重新提交同一条要求。输入框与内容区通过 Tab 或 Shift-Tab 切换。 Shift+↑ 可在输入框或内容区直接请求取回最新待交付项；服务器确认前保留当前草稿，已交付内容不能撤回，发送确认或取回正在进行时会提示稍后重试。当前草稿的文字、图片、收件人和光标会一起暂存。取回后尚未修改时按 Esc 可恢复原草稿，取回项仍保留在队列的 Editing 状态；若已修改正文、图片或收件人，Esc 会保留两份内容并提示先完成或取消当前编辑，提交后自动恢复原草稿。
 
@@ -97,7 +97,7 @@ return await say(clientId, {
 
 进度消息使用 `kind:"progress"`；`say` 调用原生 `ssmcp.ui.message`。自行封装控制器时，也可以直接调用该工具，并用 `ssmcp.ui.messages` 分页读取消息历史。发送返回 `accepted` 和 `message_id`，表示客户端已记录消息；可选 `idempotency_key` 用于重试去重。仅使用 `print` 或编排返回值输出诊断信息，不会把它自动变成会话中的 Agent 答复。
 
-单条消息最多 16 KiB UTF-8，历史保留当前客户端进程中的最近 64 条、合计最多 256 KiB。重启后的消息历史从新进程开始；用户输入草稿和要求队列按 `/reload` 的交接规则恢复。发送或读取这些 UI 消息默认不领取用户要求队列，已认证并显式绑定的 agent 仍按原有交付规则处理。
+单条消息最多 16 KiB UTF-8，历史保留当前客户端进程中的最近 64 条、合计最多 256 KiB。重启后的消息历史从新进程开始；用户输入草稿和要求队列按 `/reload` 的交接规则恢复。`say` / `ssmcp.ui.message` 属于实际交互，可在本次 `code_mode` 响应接收符合目标的用户新要求；`ssmcp.ui.messages` 历史读取和其他界面刷新默认不领取。已认证并显式绑定成员的编排继续按该成员的交付规则处理。
 
 ## Agent 列表与普通调用
 
@@ -248,6 +248,8 @@ hide_empty = true
 ## 源码审计与运行状态
 
 审计区按运行 ID 保留调用方提交的 `code_mode.code`，源码经过现有审计脱敏处理。使用 `/audit` 或 Ctrl-O 打开审计，内容区中的 ↑/↓ 选择运行记录，Enter 或 → 展开带行号与语法颜色的源码；详情中继续用 ↑/↓ 滚动，← 返回列表。Tab 切回输入框后，方向键用于文字编辑和历史浏览。
+
+源码审计、Agent 答复与工具输出中带支持语言标记的代码块，以及 `--verbose` 展开的脚本正文，会区分关键词、字符串、注释和数字。diff 保留旧、新行号与 `+`、`-`、`@@` 标记，分别为新增行、删除行和变更区段使用主题语义色。长源码按窗口宽度折行，原始审计内容和 `/copy` 复制的答复原文保持不变；设置 `color = false` 后仍保留文字、行号和增删标记。
 
 ![源码审计详情：行号与语法颜色](assets/client-audit.png)
 
