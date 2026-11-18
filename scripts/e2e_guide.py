@@ -4,6 +4,7 @@ import argparse, base64, contextlib, json, os, shutil, signal, subprocess, tempf
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
+import e2e
 from e2e_native_images import Window, binary_identity, export_logs
 from e2e_input_history import InputHistory
 from e2e_dashboard import sha256
@@ -116,6 +117,9 @@ def main():
         window = None
         ready = False
         try:
+            # The anonymous discovery request must reach this fixture's actual
+            # gateway, rather than the shared harness's reserved example domain.
+            e2e.PUBLIC_URL = f"http://127.0.0.1:{h.http_port}"
             h.prepare()
             routes = []
             for path, title, language in [
@@ -131,7 +135,7 @@ def main():
                 if title:
                     h.check("text/html" in content_type and "<title>" + title + "</title>" in body
                             and '<html lang="' + language + '">' in body, path + " returns the correct localized guide")
-                    h.check("{{" not in body and "https://ssmcp.example/mcp" in body
+                    h.check("{{" not in body and e2e.PUBLIC_URL + "/mcp" in body
                             and "ssmcp.fs.read_image" in body, path + " renders real gateway examples")
                     file = "guide-zh.html" if language == "zh-CN" else "guide-en.html"
                 else:
@@ -175,11 +179,17 @@ def main():
             if not zbar:
                 raise RuntimeError("zbarimg is required for a real QR decode")
             shot = output / "sidebar-120x30.png"
+            last_decoded = None
             def decoded():
+                nonlocal last_decoded
                 window.image().save(shot)
                 r = subprocess.run([zbar, "--quiet", "--raw", str(shot)], capture_output=True, text=True, timeout=4)
-                return r.stdout.strip() if r.returncode == 0 else None
-            value = window.wait(decoded, "QR decoder reads the sidebar", 10)
+                last_decoded = r.stdout.strip() if r.returncode == 0 else None
+                return last_decoded if last_decoded == expected else None
+            try:
+                value = window.wait(decoded, "QR decoder reads the available guide URL", 10)
+            except AssertionError as error:
+                raise AssertionError(f"{error}; expected={expected!r}; last decoded={last_decoded!r}") from error
             h.check(value == expected, "actual 120x30 sidebar QR decodes exactly to the credential-free gateway guide URL")
             (output / "qr-decoded.txt").write_text(value + "\n")
             report["qr_url"] = value

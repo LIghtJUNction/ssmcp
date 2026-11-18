@@ -461,11 +461,11 @@ class FilePaste(InputHistory):
                                  "the malformed PNG test draft did not arrive")
         files = self.inputs()
         self.send_stream(front, b"\x1b[200~" + source[:24] + b"\x1b[201~")
-        front.until(lambda shot: "Local input failed:" in text(shot) and "image" in text(shot),
-                    "a truncated PNG reports an image import error")
+        front.until(lambda shot: "Incomplete image paste discarded; draft preserved." in text(shot),
+                    "a truncated PNG reaches bounded recovery and preserves the draft")
         self.check(self.unchanged_queue(self.target)["draft"] == before["draft"]
-                   and self.inputs() == files,
-                   "malformed PNG paste preserves the draft and recipient and creates no private file")
+                   and self.inputs() == files and front.process.poll() is None,
+                   "malformed PNG recovery preserves the draft, recipient and client without creating a private file")
 
         self.clear_draft(front)
         literal = "普通文字\n/paste 保持原文 界"
