@@ -1,0 +1,104 @@
+{
+  "validation": {
+    "schema": "ssmcp.client-main-validation.v1",
+    "status": "failed",
+    "source_commit": "9aaaa991ff0e5f78870b6281a6e594d17e00ddc1",
+    "source_tree": "f2f4806770901b54d18e41da49b0d7a25815d832",
+    "integrated_main": "95b5f26125ede8825f12feb79b7f870055d004b5",
+    "started_at": "2026-11-17T22:28:37.204447+00:00",
+    "driver_sha256": "9ee278f96d18b78b9739772e4b5308698914b706c30a3c46946c56fea2093ffd",
+    "resource_limits": {
+      "MemoryMax": "2G",
+      "MemorySwapMax": "1G",
+      "CPUQuota": "200%"
+    },
+    "target_dir": "${BUILD_ROOT}",
+    "reports": {
+      "rust": "${REPORT_ROOT}/client-080-main-r1-gates.json",
+      "build": "${REPORT_ROOT}/client-080-main-r1-release-build.json",
+      "ui": "${REPORT_ROOT}/client-080-main-r1-ui-gates.json",
+      "fixture": "${REPORT_ROOT}/client-080-main-r1-fixture-binary.json"
+    },
+    "environment": {
+      "inherited_ssmcp_removed": true,
+      "proxy_variables_removed": true,
+      "loopback_no_proxy": true,
+      "models_invoked": false
+    },
+    "source_archive": {
+      "path": "${ARTIFACT_ROOT}/client-080-main-source-9aaaa99.tar",
+      "sha256": "4005a89f4046a91214d3ecc8cdf61c7145c8aa908560cca1b408dd2f20d774e7",
+      "bytes": 13957120
+    },
+    "phase": "rust",
+    "current_stage": "clippy",
+    "updated_at": "2026-11-17T22:28:39.802671+00:00",
+    "finished_at": "2026-11-17T22:28:53.445908+00:00",
+    "error": "RuntimeError: clippy exited 101; see ${REPORT_ROOT}/client-080-main-r1-gates/clippy.log"
+  },
+  "gates": {
+    "schema": "ssmcp.client-main-rust-gates.v1",
+    "status": "failed",
+    "source_commit": "9aaaa991ff0e5f78870b6281a6e594d17e00ddc1",
+    "source_tree": "f2f4806770901b54d18e41da49b0d7a25815d832",
+    "integrated_main": "95b5f26125ede8825f12feb79b7f870055d004b5",
+    "started_at": "2026-11-17T22:28:37.463140+00:00",
+    "source_archive": {
+      "path": "${ARTIFACT_ROOT}/client-080-main-source-9aaaa99.tar",
+      "sha256": "4005a89f4046a91214d3ecc8cdf61c7145c8aa908560cca1b408dd2f20d774e7",
+      "bytes": 13957120
+    },
+    "results": [
+      {
+        "stage": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "scope_unit": "ssmcp-main-accept-fmt-1813536.scope",
+        "resource_limits": {
+          "MemoryMax": "2G",
+          "MemorySwapMax": "1G",
+          "CPUQuota": "200%"
+        },
+        "exit_code": 0,
+        "timed_out": false,
+        "seconds": 2.32,
+        "log": "${REPORT_ROOT}/client-080-main-r1-gates/fmt.log",
+        "summary": [],
+        "test_groups": []
+      },
+      {
+        "stage": "clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--all-targets",
+          "-j1",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "scope_unit": "ssmcp-main-accept-clippy-1813536.scope",
+        "resource_limits": {
+          "MemoryMax": "2G",
+          "MemorySwapMax": "1G",
+          "CPUQuota": "200%"
+        },
+        "exit_code": 101,
+        "timed_out": false,
+        "seconds": 13.642,
+        "log": "${REPORT_ROOT}/client-080-main-r1-gates/clippy.log",
+        "summary": [],
+        "test_groups": []
+      }
+    ],
+    "current_stage": "clippy",
+    "finished_at": "2026-11-17T22:28:53.445801+00:00",
+    "error": "RuntimeError: clippy exited 101; see ${REPORT_ROOT}/client-080-main-r1-gates/clippy.log"
+  }
+}

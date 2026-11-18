@@ -6,6 +6,7 @@ use super::activity;
 pub(super) struct Command<'a> {
     pub invocation: String,
     pub script: Option<&'a str>,
+    summary_invocation: String,
 }
 
 impl<'a> Command<'a> {
@@ -16,11 +17,13 @@ impl<'a> Command<'a> {
                 Self {
                     invocation: "shell script".into(),
                     script: Some(text),
+                    summary_invocation: "shell script".into(),
                 }
             } else {
                 Self {
                     invocation: text.into(),
                     script: None,
+                    summary_invocation: text.into(),
                 }
             };
         };
@@ -56,6 +59,13 @@ impl<'a> Command<'a> {
         Self {
             invocation,
             script: script_index.and_then(|index| args[index].as_str()),
+            summary_invocation: args
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| Some(*index) != script_index)
+                .map(|(_, value)| quote(value.as_str().unwrap_or("")))
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
 
@@ -63,22 +73,14 @@ impl<'a> Command<'a> {
         let Some(script) = self.script else {
             return activity::single_line(&self.invocation, 160);
         };
-        // This is a literal source excerpt, not a claim that a file was read or
-        // changed. Prefer an action over import boilerplate when one exists.
-        let useful = |line: &&str| {
-            let line = line.trim();
-            !line.is_empty()
-                && !line.starts_with('#')
-                && !line.starts_with("import ")
-                && !line.starts_with("from ")
-                && !line.starts_with("using ")
-        };
-        let hint = script
-            .lines()
-            .find(useful)
-            .or_else(|| script.lines().find(|line| !line.trim().is_empty()))
-            .unwrap_or("");
-        activity::single_line(&format!("{} · {}", self.invocation, hint.trim()), 160)
+        // The interpreter and source size identify an inline command without
+        // mistaking setup statements for a description of its actual effects.
+        let lines = script.lines().count().max(1);
+        let unit = if lines == 1 { "line" } else { "lines" };
+        activity::single_line(
+            &format!("{} · {lines} {unit}", self.summary_invocation),
+            160,
+        )
     }
 }
 
@@ -124,7 +126,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn exposes_script_actions_and_preserves_trailing_arguments() {
+    fn labels_inline_scripts_without_guessing_effects_and_preserves_arguments() {
         let value = json!([
             "/usr/bin/python3",
             "-c",
@@ -136,7 +138,11 @@ mod tests {
             command.invocation,
             "/usr/bin/python3 -c <script> 'file with spaces'"
         );
-        assert!(command.summary().contains("Path('Cargo.toml')"));
+        assert_eq!(
+            command.summary(),
+            "/usr/bin/python3 -c 'file with spaces' · 3 lines"
+        );
+        assert!(!command.summary().contains("Path("));
         assert!(command.script.unwrap().contains("print(p.read_text())"));
     }
 
@@ -167,5 +173,8 @@ mod tests {
         }
         let value = json!("git status\ngit diff --stat");
         assert_eq!(Command::new(&value).script, value.as_str());
+        assert_eq!(Command::new(&value).summary(), "shell script · 2 lines");
+        let value = json!(["node", "-e", "x".repeat(101)]);
+        assert_eq!(Command::new(&value).summary(), "node -e · 1 line");
     }
 }

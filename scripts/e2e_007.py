@@ -4,6 +4,12 @@
 Python standard library only. The default fixture uses an independent temporary
 session manager so no installed unit or real account is changed. Native systemd
 unit/cgroup validation must be recorded separately on the target Linux machine.
+
+Add --fixture-binary PATH to also call the recovery client through the production
+Broker and HTTP router in an already-built library test executable. For the
+bounded protocol regression alone, also pass --routing-only. This reuses the
+relay composer fixture's synthetic GitHub provider and loopback HTTP/WS; it does
+not validate TLS, a real GitHub account, or an installed gateway daemon.
 """
 from __future__ import annotations
 
@@ -94,7 +100,10 @@ class Socket(relay.WebSocket):
         try:
             self.hello = self.read()
             assert self.hello["type"] == "hello"
-            assert self.hello["version"] == 5
+            if self.hello["metadata"]["name"] == self.state.recovery_name:
+                assert self.hello["version"] == 5, "007 must advertise its implemented v5 protocol"
+            else:
+                assert self.hello["version"] in relay.SUPPORTED_WIRE_VERSIONS
             assert self.hello["mode"] == "shell"
             assert self.hello["metadata"].get("allow", []) in ([], [relay.IDENTITY["principal"]])
             self.send({"type": "ready", "url": self.state.origin + "/mcp",
@@ -104,6 +113,17 @@ class Socket(relay.WebSocket):
                 self.state.connections.setdefault(self.token, []).append(self)
             while True:
                 frame = self.read()
+                if frame["type"] == "steering":
+                    # Woken full clients use v7 presence polling. This recovery
+                    # fixture has no queue: do not simulate publication or delivery.
+                    assert self.hello["version"] == 7
+                    assert self.hello["metadata"]["name"] != self.state.recovery_name
+                    assert frame["command"] == {"op": "snapshot"}
+                    self.send({"type": "steering_reply", "id": frame["id"], "result": {"Ok": {
+                        "schema_version": 1, "client_id": self.id, "revision": 0,
+                        "agents": [], "messages": [],
+                    }}})
+                    continue
                 assert frame["type"] == "reply"
                 with self.state.lock:
                     result = self.pending.get(frame["id"])
@@ -191,6 +211,7 @@ class Fixture:
             "format": 1, "server": self.state.origin, "name": "007-fixture",
             "cwd": str(self.workspace), "client": str(self.installed),
         }
+        self.state.recovery_name = self.config["name"]
         self.private_json(self.home / "config.json", self.config)
         self.write_credential()
         self.environment = {
@@ -317,14 +338,19 @@ class Fixture:
             return
         raise AssertionError(description)
 
-    def run(self, idle_timeout=False):
-        connection = self.start()
+    def run(self, idle_timeout=False, routing_only=False):
+        connection = self.start_zero() if routing_only else self.start()
+        self.check(connection.hello["version"] == 5,
+                   "the actual recovery Hello advertises v5 without full-client audit or steering")
         self.check(relay.descendants(self.zero.pid) == [], "idle 007 starts no relay child, PTY or tool backend")
         listed = connection.operation({"op": "list_tools", "cursor": None})
         self.check({item["name"] for item in listed["tools"]} == TOOLS,
                    "007 exposes exactly five narrow recovery tools")
         status = connection.tool("ssmcp.007.status", {})
         self.check(isinstance(status, dict), "007 status returns an object")
+        if routing_only:
+            self.check(not self.state.errors, "the bounded recovery protocol fixture observed no errors")
+            return
         self.native_failure(connection, "terminal.run", {"command": "true"},
                             "007 rejects general command execution")
         self.native_failure(connection, "ssmcp.007.wake", {"name": "bad", "args": ["sh"]},
@@ -507,6 +533,112 @@ class Fixture:
         return failures
 
 
+def gateway_regression(binary, fixture_binary):
+    """Use real dispatch/completion ordering, not a mock Call/Reply exchange."""
+    from e2e_relay_composer import RelayComposer, direct_loopback, private_json
+
+    result = {
+        "requested": True, "success": False,
+        "fixture_binary": str(fixture_binary),
+        "fixture_binary_sha256": hashlib.sha256(fixture_binary.read_bytes()).hexdigest(),
+        "scope": "production Broker and HTTP router in a library test executable; synthetic GitHub; loopback HTTP/WS",
+        "tls_tested": False, "real_credentials_used": False,
+    }
+    checks = []
+    with tempfile.TemporaryDirectory(prefix="ssmcp-007-router-e2e-") as directory:
+        root = Path(directory)
+        # Only the router/OAuth harness is reused. No frontend is created and
+        # this unused decoder path need not exist; 007 never creates a PTY.
+        harness = RelayComposer(root, binary.parent, binary.parent / "examples/vt_snapshot", fixture_binary)
+
+        def redacted(error):
+            message = f"{type(error).__name__}: {error}"
+            for secret in [harness.secret, *harness.sensitive]:
+                if secret:
+                    message = message.replace(secret, "[fixture-secret]")
+            return message.replace(str(root), "<fixture>")
+
+        try:
+            harness.prepare()
+            harness.authenticate_mcp()
+            workspace, home, auth = root / "workspace", root / "007", root / "auth"
+            for path in (workspace, home, auth, home / "sessions", root / "minimal-path"):
+                path.mkdir(mode=0o700)
+            shutil.copy2(binary, home / "ssmcp")
+            name = "007-real-router"
+            private_json(home / "config.json", {
+                "format": 1, "server": harness.origin, "name": name,
+                "cwd": str(workspace), "client": str(binary),
+            })
+            private_json(auth / (hashlib.sha256(harness.origin.encode()).hexdigest() + ".json"), {
+                "server": harness.origin, "token": harness.account_token,
+                "principal": harness.identity["principal"], "subject": harness.identity["subject"],
+                "username": harness.identity["username"], "expires_at": harness.account_expires_at,
+            })
+            environment = direct_loopback({key: value for key, value in os.environ.items()
+                                           if not key.startswith("SSMCP_")})
+            environment.update(
+                PATH=str(root / "minimal-path"), ENV="/dev/null", BASH_ENV="/dev/null",
+                SSMCP_007_HOME=str(home), SSMCP_AUTH_HOME=str(auth),
+                SSMCP_SESSION_HOME=str(home / "sessions"), XDG_CONFIG_HOME=str(root / "config"),
+                NO_COLOR="1", TERM="dumb",
+            )
+            process = harness.spawn("007-router-client", [str(binary), "007", "run"],
+                                    cwd=workspace, env=environment)
+
+            def observation():
+                if process.poll() is not None:
+                    raise AssertionError("007 exited during the real-router regression")
+                path = home / "state.json"
+                return json.loads(path.read_text()) if path.is_file() else {}
+
+            def connected():
+                value = observation()
+                return value if value.get("state") == "connected" and value.get("client_id") else None
+
+            state = relay.wait_for(connected, "007 connected to the real router", timeout=12)
+            harness.client_id = state["client_id"]
+            harness.check(state.get("pid") == process.pid,
+                          "real-router 007 reports the owned process and one live connection")
+            clients = harness.account("/api/client/sessions")["clients"]
+            harness.check(any(item["id"] == harness.client_id and item["name"] == name for item in clients),
+                          "the actual account endpoint discovers the recovery connection")
+            first = harness.call("ssmcp.007.status", {})
+            harness.check(first.get("mode") == "007" and first.get("pid") == process.pid,
+                          "the first real HTTP code_mode call reaches 007 and returns its native status")
+            # A v7-advertising recovery client closes on CodeModeFinished here.
+            # A second real request to the ORIGINAL ID must still succeed; a
+            # reconnect with a different broker identity does not satisfy this.
+            second = harness.call("ssmcp.007.list", {})
+            harness.check(second.get("sessions") == [],
+                          "a second real code_mode request reaches the original 007 connection after completion")
+            final = observation()
+            clients = harness.account("/api/client/sessions")["clients"]
+            harness.check(final.get("state") == "connected" and final.get("client_id") == harness.client_id
+                          and final.get("pid") == process.pid
+                          and any(item["id"] == harness.client_id for item in clients),
+                          "completed code_mode calls preserve the same recovery process and broker client ID")
+            harness.check(relay.descendants(process.pid) == [],
+                          "real gateway dispatch leaves recovery without a PTY, backend, or child process")
+            result["success"] = True
+        except Exception as error:
+            result["error"] = redacted(error)
+            print(result["error"], file=sys.stderr)
+        finally:
+            try:
+                harness.cleanup()
+                result["fixture_exit_code"] = harness.fixture_exit_code
+                if harness.fixture_exit_code != 0:
+                    result["success"] = False
+                    result["cleanup_error"] = "the owned router fixture did not exit cleanly"
+            except Exception as error:
+                result["success"] = False
+                result["cleanup_error"] = redacted(error)
+            checks = list(harness.checks)
+    result["check_count"] = len(checks)
+    return result, checks
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -515,23 +647,33 @@ def main():
                         help="create isolated real systemd user session units")
     parser.add_argument("--idle-timeout", action="store_true",
                         help="also wait for the 75-second silent-peer deadline")
+    parser.add_argument("--fixture-binary", type=Path,
+                        help="already-built library test executable containing the real relay router fixture")
+    parser.add_argument("--routing-only", action="store_true",
+                        help="check actual Hello and real code_mode connection retention; requires --fixture-binary")
     args = parser.parse_args()
     if sys.platform != "linux":
         parser.error("007 integration requires Linux")
+    if args.routing_only and (not args.fixture_binary or args.native_systemd or args.idle_timeout):
+        parser.error("--routing-only requires --fixture-binary and excludes --native-systemd/--idle-timeout")
     binary = args.binary.resolve(strict=True)
+    fixture_binary = args.fixture_binary.resolve(strict=True) if args.fixture_binary else None
     report = {
         "schema": "ssmcp.007.e2e.v1", "binary": str(binary),
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-        "fixture": ("loopback synthetic account relay and isolated systemd user units"
+        "fixture": ("loopback synthetic relay Hello and real-router code_mode connection regression"
+                    if args.routing_only else
+                    "loopback synthetic account relay and isolated systemd user units"
                     if args.native_systemd else
                     "loopback synthetic account relay and independent private session manager"),
         "native_systemd_units_tested": args.native_systemd, "real_credentials_used": False,
+        "routing_only": args.routing_only, "real_router": {"requested": fixture_binary is not None},
         "checks": [], "success": False,
     }
     with tempfile.TemporaryDirectory(prefix="ssmcp-007-e2e-") as directory:
         fixture = Fixture(Path(directory), binary, args.native_systemd)
         try:
-            fixture.run(args.idle_timeout)
+            fixture.run(args.idle_timeout, args.routing_only)
             report["success"] = True
         except Exception as error:
             report["error"] = f"{type(error).__name__}: {error}"
@@ -545,6 +687,10 @@ def main():
             report["cleanup_errors"] = fixture.cleanup()
             if report["cleanup_errors"]:
                 report["success"] = False
+    if report["success"] and fixture_binary is not None:
+        report["real_router"], gateway_checks = gateway_regression(binary, fixture_binary)
+        report["checks"].extend(gateway_checks)
+        report["success"] = report["real_router"]["success"]
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({"success": report["success"], "checks": len(report["checks"]),

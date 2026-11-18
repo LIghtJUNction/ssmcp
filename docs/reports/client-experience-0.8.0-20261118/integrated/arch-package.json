@@ -1,0 +1,80 @@
+{
+  "source_commit": "555307f8ceb70c729762bc11ea099360e87e5dee",
+  "binary_build_commit": "51ec5adcc166d8d10748732d8f62948341a860d9",
+  "runtime_inputs_unchanged": true,
+  "profile": "release",
+  "test_source_commit": "54f90d250a520ca54778d4f0da0bce2700e0064c",
+  "runtime_input_comparison": {
+    "against": "51ec5adcc166d8d10748732d8f62948341a860d9",
+    "non_runtime_changes": [
+      "README.md",
+      "docs/reports/client-experience-0.8.0-20261118/RELEASE-CANDIDATE.md",
+      "docs/reports/client-experience-0.8.0-20261118/ROLLOUT.md",
+      "docs/reports/client-experience-0.8.0-20261118/arch-package.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/README.md",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/account-relay-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/composer-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/dashboard-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/dashboard-initial-attempt.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/observer-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/preview-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/relay-composer-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/release-build.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/release-initial-attempt.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/release-ui-gates.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/rust-gates.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/source-manifest.json",
+      "docs/reports/client-experience-0.8.0-20261118/integrated/synthetic-benchmark.json",
+      "docs/reports/client-experience-0.8.0-20261118/release-build.json",
+      "docs/reports/client-experience-0.8.0-20261118/release-composer-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/release-initial-attempt.json",
+      "docs/reports/client-experience-0.8.0-20261118/release-installed-gates.json",
+      "docs/reports/client-experience-0.8.0-20261118/release-observer-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/release-relay-composer-e2e.json",
+      "docs/reports/client-experience-0.8.0-20261118/release-ui-smoke.json",
+      "docs/reports/client-experience-0.8.0-20261118/rollback-archive.json",
+      "docs/reports/client-experience-0.8.0-20261118/server-stage.json",
+      "docs/reports/client-experience-0.8.0-20261118/source-manifest.json",
+      "docs/reports/client-experience-0.8.0-20261118/versioned-install.json",
+      "scripts/e2e_dashboard.py"
+    ],
+    "reviewed_test_file": "scripts/e2e_dashboard.py",
+    "reviewed_test_sha256": "2854397117622191320ebec782b1cf6c467857f517647da5abf4211e293cd65c"
+  },
+  "status": "passed",
+  "started_utc": "2026-11-17T22:08:41Z",
+  "stages": [
+    {
+      "stage": "prepare",
+      "exit_code": 0,
+      "seconds": 3.97
+    },
+    {
+      "stage": "package",
+      "exit_code": 0,
+      "seconds": 5.98
+    }
+  ],
+  "package_path": "${ARTIFACT_ROOT}/arch-555307f8ceb70c729762bc11ea099360e87e5dee/packages/ssmcp-git-0.8.0.r240.g555307f-1-x86_64.pkg.tar.zst",
+  "package_name": "ssmcp-git 0.8.0.r240.g555307f-1",
+  "bytes": 11973352,
+  "sha256": "6193aad06a98cd8b0103bfe4030793e34d7106ab865693946ad28a741d65de54",
+  "required_members_present": [
+    "usr/bin/ssmcp",
+    "usr/bin/ssmcpd",
+    "usr/libexec/ssmcp/code-mode.js",
+    "usr/share/doc/ssmcp/README.md",
+    "usr/share/doc/ssmcp/docs/assets/ssmcp-eclipse.mp4",
+    "usr/share/doc/ssmcp/docs/reports/client-experience-0.8.0-20261118/README.md",
+    "usr/share/doc/ssmcp/docs/reports/client-experience-0.8.0-20261118/relay-composer-e2e.json",
+    "usr/share/doc/ssmcp/docs/reports/client-experience-0.8.0-20261118/integrated/README.md",
+    "usr/share/doc/ssmcp/docs/reports/client-experience-0.8.0-20261118/integrated/rust-gates.json",
+    "usr/share/doc/ssmcp/docs/reports/client-experience-0.8.0-20261118/integrated/release-build.json",
+    "usr/share/doc/ssmcp/docs/reports/client-experience-0.8.0-20261118/integrated/release-ui-gates.json"
+  ],
+  "binary_sha256": {
+    "ssmcp": "eddf5b9b988a37bc397ee0a0ae84022a8a3d519cddc06a5391e1cc10af9797a0",
+    "ssmcpd": "a8330214a507293131a97092f4940bab8b47f8abd3f4e2367a2db1768d750cd3"
+  },
+  "runner_sha256": "0a4902726c7098036db84186c1e3aeb84d7ab335571f87def891632cc28bca99"
+}

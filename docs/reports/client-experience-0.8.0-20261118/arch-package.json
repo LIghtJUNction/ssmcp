@@ -1,0 +1,39 @@
+{
+  "source_commit": "12e1d57e6c39af4f1a5a66282752cb1b06bd6225",
+  "binary_build_commit": "0efb04bfbd7f7b0f616f03a6123608cbffc3643e",
+  "runtime_inputs_unchanged": true,
+  "profile": "release",
+  "status": "passed",
+  "started_utc": "2026-11-17T21:21:28Z",
+  "stages": [
+    {
+      "stage": "prepare",
+      "exit_code": 0,
+      "seconds": 5.23
+    },
+    {
+      "stage": "package",
+      "exit_code": 0,
+      "seconds": 4.12
+    }
+  ],
+  "package_name": "ssmcp-git 0.8.0.r227.g12e1d57-1",
+  "bytes": 14072627,
+  "sha256": "1c3d156faa29eccb47e4f0c2aa70f6526f409519e223f3aa029023f9910ade02",
+  "required_members_present": [
+    "usr/bin/ssmcp",
+    "usr/bin/ssmcpd",
+    "usr/libexec/ssmcp/code-mode.js",
+    "usr/share/doc/ssmcp/README.md",
+    "usr/share/doc/ssmcp/docs/assets/ssmcp-eclipse.mp4",
+    "usr/share/doc/ssmcp/docs/reports/client-experience-0.8.0-20261118/README.md",
+    "usr/share/doc/ssmcp/docs/reports/client-experience-0.8.0-20261118/relay-composer-e2e.json"
+  ],
+  "binary_sha256": {
+    "ssmcp": "732c1b4873d31887390ba06b3d2bc890dc231a1f440526df728eb12164b2d1ae",
+    "ssmcpd": "711aebe278162c7f5633c863dcbda8bceb17c925eb3531b51ba349bfab420e87"
+  },
+  "runner_sha256": "0a4902726c7098036db84186c1e3aeb84d7ab335571f87def891632cc28bca99",
+  "package_file": "ssmcp-git-0.8.0.r227.g12e1d57-1-x86_64.pkg.tar.zst",
+  "publication_note": "Derived from the recorded operation; private filesystem paths normalized or omitted. Server configuration fingerprints are omitted; their equality is recorded separately. Numeric results, binary hashes, and package hashes are unchanged."
+}

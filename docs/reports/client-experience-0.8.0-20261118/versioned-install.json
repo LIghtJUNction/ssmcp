@@ -1,0 +1,15 @@
+{
+  "status": "installed_versioned_candidate",
+  "version": "0.8.0",
+  "source_commit": "12e1d57e6c39af4f1a5a66282752cb1b06bd6225",
+  "binary_sha256": "732c1b4873d31887390ba06b3d2bc890dc231a1f440526df728eb12164b2d1ae",
+  "package_sha256": "1c3d156faa29eccb47e4f0c2aa70f6526f409519e223f3aa029023f9910ade02",
+  "entrypoint": "~/.local/bin/ssmcp-0.8.0",
+  "candidate_prefix": "${CLIENT_DATA}/candidates/0.8.0-12e1d57",
+  "default_entrypoint_replaced": false,
+  "observed_default_sha256": "2f40a5c2d61586171d3243f8fd453c48af403255ab4238b6ed731cd1f7818436",
+  "live_connections_reloaded": false,
+  "services_restarted": false,
+  "verified_utc": "2026-11-17T21:25:12Z",
+  "publication_note": "Derived from the recorded operation; private filesystem paths normalized or omitted. Server configuration fingerprints are omitted; their equality is recorded separately. Numeric results, binary hashes, and package hashes are unchanged."
+}

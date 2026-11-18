@@ -1,0 +1,14 @@
+{
+  "status": "verified_archived",
+  "package_sha256": "b18dc05729dbd602e646e7af641527b20f8531623ad39054e57844628f36a6fe",
+  "bytes": 8076528,
+  "mode": "0o600",
+  "binary_sha256": {
+    "ssmcp": "f685725b975ad4cc46f1eb28833b1a74c876e87dda18f3ce898fbc5195191cca",
+    "ssmcpd": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28"
+  },
+  "production_modified": false,
+  "verified_utc": "2026-11-17T21:14:26Z",
+  "archive_location": "private developer backup area; original verified server rollback retained",
+  "publication_note": "Derived from the recorded operation; private filesystem paths normalized or omitted. Server configuration fingerprints are omitted; their equality is recorded separately. Numeric results, binary hashes, and package hashes are unchanged."
+}

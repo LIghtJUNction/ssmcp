@@ -36,6 +36,7 @@ type CallResult = std::result::Result<Value, String>;
 struct Call {
     operation: Operation,
     controller: Option<Controller>,
+    code_context: Option<wire::CodeContext>,
     reply: oneshot::Sender<CallResult>,
 }
 
@@ -76,12 +77,14 @@ struct LoginCode {
 
 pub struct Session {
     pub(crate) collaboration: crate::collab::Hub,
+    pub(crate) steering: crate::steering::Queue,
     login: Mutex<Option<LoginCode>>,
     // Resolved provider subject IDs are immutable for this SSH connection.
     allow: Vec<Identity>,
     info: ClientInfo,
     wire_version: u32,
     sender: mpsc::Sender<Call>,
+    reports: mpsc::Sender<wire::CodeCompletion>,
     slots: Semaphore,
     alive: AtomicBool,
     ssh_user: String,
@@ -107,7 +110,33 @@ impl Session {
     }
 
     pub fn supports_controller(&self) -> bool {
-        self.wire_version >= wire::VERSION
+        self.wire_version >= wire::CONTROLLER_VERSION
+    }
+
+    fn supports_code_context(&self) -> bool {
+        self.wire_version >= wire::CODE_VERSION
+    }
+
+    /// Called only after the HTTP caller rechecks its current token and ACL.
+    pub(crate) fn report_code_mode(&self, completion: wire::CodeCompletion) -> Result<(), String> {
+        completion.validate()?;
+        if !self.is_alive() || !self.supports_code_context() {
+            return Err("client cannot receive code audit completion".into());
+        }
+        self.reports
+            .try_send(completion)
+            .map_err(|_| "code audit completion queue unavailable".into())
+    }
+
+    fn steering_command(
+        &self,
+        command: wire::SteeringCommand,
+    ) -> Result<wire::SteeringSnapshot, String> {
+        if !self.is_alive() || self.wire_version < wire::VERSION {
+            return Err("the local composer requires wire protocol version 7".into());
+        }
+        self.steering
+            .command(self.client_id(), self.collaboration.presence()?, command)
     }
 
     pub async fn call(&self, operation: Operation) -> CallResult {
@@ -154,12 +183,20 @@ impl Session {
         audit_required: bool,
     ) -> CallResult {
         operation.validate()?;
+        let audit_run = crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok();
+        let controller =
+            controller.or_else(|| audit_run.as_ref().and_then(|run| run.controller.clone()));
         if let Some(controller) = &controller {
             controller.validate()?;
         }
         // An older client uses a strict frame parser. Omit the new field
         // entirely; never corrupt its connection merely to improve display.
         let controller = controller.filter(|_| self.supports_controller());
+        let code_context = audit_run
+            .as_ref()
+            .filter(|_| self.supports_code_context())
+            .map(|run| (*run.context).clone());
+        let carries_source = code_context.is_some();
         if !self.alive.load(Ordering::Acquire) {
             return Err("client disconnected".into());
         }
@@ -191,6 +228,7 @@ impl Session {
             .try_send(Call {
                 operation,
                 controller,
+                code_context,
                 reply,
             })
             .is_err()
@@ -205,6 +243,9 @@ impl Session {
                     .await;
             }
             return Err("client disconnected or busy; tool was not dispatched".into());
+        }
+        if carries_source && let Some(run) = audit_run {
+            run.native_dispatched(self.client_id(), audit_tool.as_deref());
         }
         let started = std::time::Instant::now();
         let result = match timeout(duration, response).await {
@@ -377,9 +418,11 @@ impl Broker {
     #[cfg(test)]
     pub(crate) async fn test_register(&self, user: &str, login_code: &str) -> Arc<Session> {
         let (sender, _rx) = mpsc::channel(1);
+        let (reports, _reports_rx) = mpsc::channel(1);
         let id = generate_secret().unwrap();
         let session = Arc::new(Session {
             collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -395,6 +438,7 @@ impl Broker {
             },
             wire_version: wire::VERSION,
             sender,
+            reports,
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
             ssh_user: user.into(),
@@ -525,14 +569,21 @@ impl Broker {
                 version,
                 mode,
                 metadata,
-            }) if matches!(version, wire::VERSION | wire::LEGACY_VERSION) => {
+            }) if matches!(
+                version,
+                wire::VERSION
+                    | wire::CODE_VERSION
+                    | wire::CONTROLLER_VERSION
+                    | wire::LEGACY_VERSION
+            ) =>
+            {
                 (version, mode, metadata)
             }
             _ => {
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)".into(),
+                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5, v6 and v7)".into(),
                     },
                 )
                 .await?;
@@ -623,8 +674,10 @@ impl Broker {
         let resource = if restricted { IDENTITY_RESOURCE } else { &user };
         let client_id = generate_secret()?;
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
+        let (reports, mut code_reports) = mpsc::channel::<wire::CodeCompletion>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
             collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -640,6 +693,7 @@ impl Broker {
             },
             wire_version,
             sender,
+            reports,
             slots: Semaphore::new(wire::MAX_INFLIGHT),
             alive: AtomicBool::new(true),
             ssh_user: user.clone(),
@@ -737,6 +791,7 @@ impl Broker {
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone() }).await?;
             let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant, bool)> = HashMap::new();
             let mut next_id = 0u64;
+            let mut delivered_runs = std::collections::VecDeque::<String>::new();
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
             loop {
                 // Keep the same read future across requests/ticks: partial JSON frames
@@ -755,12 +810,30 @@ impl Broker {
                             next_id = next_id.checked_add(1).ok_or("request id exhausted")?;
                             let reload = crate::client::reload::is_reload(&call.operation);
                             pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation), reload));
-                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller };
+                            let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
+                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, code_context:call.code_context };
                             if let Some(budget) = &legacy_bandwidth {
                                 budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
                                     .map_err(|_| "account is banned")?;
                             }
                             timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                            if let Some(run_id) = run_id && !delivered_runs.contains(&run_id) {
+                                if delivered_runs.len() >= 256 { delivered_runs.pop_front(); }
+                                delivered_runs.push_back(run_id);
+                            }
+                        }
+                        Some(completion) = code_reports.recv() => {
+                            // A cancelled, queued call may never have reached the
+                            // client. Do not send a source-less run to that client.
+                            if let Some(index) = delivered_runs.iter().position(|id| *id == completion.run_id) {
+                                delivered_runs.remove(index);
+                                let frame = Frame::CodeModeFinished { completion };
+                                if let Some(budget) = &legacy_bandwidth {
+                                    budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
+                                        .map_err(|_| "account is banned")?;
+                                }
+                                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                            }
                         }
                         _ = expiry.tick() => {
                             if pending.values().any(|(_, deadline, _)| Instant::now() >= *deadline) {
@@ -774,6 +847,15 @@ impl Broker {
                         .map_err(|_| "account is banned")?;
                 }
                 match received {
+                    Some(Frame::Steering { id, command }) => {
+                        let result = session.steering_command(command);
+                        let frame = Frame::SteeringReply { id, result };
+                        if let Some(budget) = &legacy_bandwidth {
+                            budget.charge(true, serde_json::to_vec(&frame)?.len() + 1).await
+                                .map_err(|_| "account is banned")?;
+                        }
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                    }
                     Some(Frame::Reply {id, result}) => {
                         if let Some((reply, _, reload)) = pending.remove(&id) {
                             if reload && result.as_ref().is_ok_and(crate::client::reload::accepted) {
@@ -945,8 +1027,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn controller_attribution_negotiates_real_version_four_and_five_connections() {
-        for version in [wire::LEGACY_VERSION, wire::VERSION] {
+    async fn controller_and_code_audit_negotiate_real_version_four_five_and_six_connections() {
+        for version in [
+            wire::LEGACY_VERSION,
+            wire::CONTROLLER_VERSION,
+            wire::CODE_VERSION,
+            wire::VERSION,
+        ] {
             let broker = Arc::new(Broker::new("https://example.test".into()));
             let (server, client) = UnixStream::pair().unwrap();
             let server_task = tokio::spawn(broker.clone().attach(server));
@@ -973,24 +1060,36 @@ mod tests {
             };
             let user = url.rsplit('/').next().unwrap();
             let subject = broker.redeem_login(user, &login_code).await.unwrap();
-            assert_eq!(subject.supports_controller(), version == wire::VERSION);
-            let request = tokio::spawn(async move {
-                subject
-                    .call_with_controller(
-                        Operation::Status {},
-                        Some(wire::Controller {
-                            name: Some("ChatGPT".into()),
-                            model: Some("test-model".into()),
-                            source: wire::ControllerSource::CallerReported,
-                        }),
-                    )
-                    .await
-            });
-            let Some(Frame::Call { id, controller, .. }) =
-                timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
-                    .await
-                    .unwrap()
-                    .unwrap()
+            assert_eq!(
+                subject.supports_controller(),
+                version >= wire::CONTROLLER_VERSION
+            );
+            let reports = subject.clone();
+            let code =
+                "// preserve source spacing\n  return await exec.run('one', {command:['true']});\n";
+            let run = crate::code_mode::AuditRun::new(code, None).unwrap();
+            let request =
+                tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+                    subject
+                        .call_with_controller(
+                            Operation::Status {},
+                            Some(wire::Controller {
+                                name: Some("ChatGPT".into()),
+                                model: Some("test-model".into()),
+                                source: wire::ControllerSource::CallerReported,
+                            }),
+                        )
+                        .await
+                }));
+            let Some(Frame::Call {
+                id,
+                controller,
+                code_context,
+                ..
+            }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
             else {
                 panic!("missing call");
             };
@@ -998,6 +1097,13 @@ mod tests {
                 assert!(controller.is_none());
             } else {
                 assert_eq!(controller.unwrap().model.as_deref(), Some("test-model"));
+            }
+            if version >= wire::CODE_VERSION {
+                assert_eq!(code_context.unwrap().code, code);
+                assert_eq!(run.targets(), vec![reports.client_id().to_owned()]);
+            } else {
+                assert!(code_context.is_none());
+                assert!(run.targets().is_empty());
             }
             wire::write_frame(
                 &mut writer,
@@ -1008,7 +1114,21 @@ mod tests {
             )
             .await
             .unwrap();
-            assert!(request.await.unwrap().unwrap()["ok"] == true);
+            let result = request.await.unwrap();
+            assert!(result.as_ref().unwrap()["ok"] == true);
+            if version >= wire::CODE_VERSION {
+                reports.report_code_mode(run.completion(&result)).unwrap();
+                let Some(Frame::CodeModeFinished { completion }) =
+                    timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                else {
+                    panic!("missing run completion");
+                };
+                assert_eq!(completion.run_id, run.context.run_id);
+                assert!(completion.success);
+            }
             drop(reader);
             drop(writer);
             timeout(Duration::from_secs(2), server_task)
@@ -1020,8 +1140,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn code_source_is_scoped_to_queued_target_and_never_changes_native_arguments() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let mut target = session("target", "secret");
+        Arc::get_mut(&mut target).unwrap().sender = sender;
+        let (untouched_sender, mut untouched_receiver) = mpsc::channel(4);
+        let mut untouched = session("untouched", "secret");
+        Arc::get_mut(&mut untouched).unwrap().sender = untouched_sender;
+        let source = "return await call('target', 'tool.run', {value: 3});\n";
+        let run = crate::code_mode::AuditRun::new(
+            source,
+            Some(wire::Controller {
+                name: Some("caller".into()),
+                model: None,
+                source: wire::ControllerSource::CallerReported,
+            }),
+        )
+        .unwrap();
+        let called = target.clone();
+        let request = tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+            called
+                .call(Operation::CallTool {
+                    name: "tool.run".into(),
+                    arguments: serde_json::json!({"value":3}),
+                })
+                .await
+        }));
+        let call = receiver.recv().await.unwrap();
+        assert_eq!(call.code_context.unwrap().code, source);
+        assert_eq!(call.controller.unwrap().name.as_deref(), Some("caller"));
+        let Operation::CallTool { arguments, .. } = call.operation else {
+            panic!("expected a tool call");
+        };
+        assert_eq!(arguments, serde_json::json!({"value":3}));
+        call.reply.send(Ok(Value::Null)).unwrap();
+        request.await.unwrap().unwrap();
+        assert_eq!(run.targets(), ["target"]);
+        assert!(matches!(
+            untouched_receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        untouched.alive.store(false, Ordering::Release);
+        assert!(
+            crate::code_mode::AUDIT_RUN
+                .scope(run.clone(), untouched.call(Operation::Status {}))
+                .await
+                .is_err()
+        );
+        assert_eq!(run.targets(), ["target"]);
+        let request = tokio::spawn(async move { target.call(Operation::Status {}).await });
+        let call = receiver.recv().await.unwrap();
+        assert!(call.code_context.is_none());
+        call.reply.send(Ok(Value::Null)).unwrap();
+        request.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn controller_metadata_is_per_call_and_omitted_for_version_four_clients() {
-        for version in [wire::LEGACY_VERSION, wire::VERSION] {
+        for version in [
+            wire::LEGACY_VERSION,
+            wire::CONTROLLER_VERSION,
+            wire::CODE_VERSION,
+            wire::VERSION,
+        ] {
             let (sender, mut receiver) = mpsc::channel(4);
             let mut subject = session("controller-test", "secret");
             let mutable = Arc::get_mut(&mut subject).unwrap();
@@ -1101,8 +1282,10 @@ mod tests {
 
     fn allowed_session(id: &str, secret: &str, allow: Vec<Identity>) -> Arc<Session> {
         let (sender, _rx) = mpsc::channel(1);
+        let (reports, _reports_rx) = mpsc::channel(1);
         Arc::new(Session {
             collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1118,6 +1301,7 @@ mod tests {
             },
             wire_version: wire::VERSION,
             sender,
+            reports,
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
             ssh_user: "test".into(),

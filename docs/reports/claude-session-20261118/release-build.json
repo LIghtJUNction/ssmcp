@@ -1,0 +1,70 @@
+{
+  "source_commit": "9f1008e3966542a8f4d1134451573a605cf29e39",
+  "phase": "release",
+  "started_at": "2026-11-18T05:30:40.269532+00:00",
+  "results": [
+    {
+      "stage": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--bins",
+        "--example",
+        "vt_snapshot",
+        "-j1"
+      ],
+      "exit_code": 0,
+      "seconds": 213.42,
+      "summary": [
+        "   Compiling ssmcp v0.8.0 (${SOURCE_ROOT})",
+        "    Finished `release` profile [optimized] target(s) in 3m 33s"
+      ]
+    },
+    {
+      "stage": "install",
+      "command": [
+        "make",
+        "install",
+        "DESTDIR=${ARTIFACT_ROOT}/installed",
+        "PREFIX=/usr",
+        "CARGO_TARGET_DIR=${BUILD_ROOT}"
+      ],
+      "exit_code": 0,
+      "seconds": 0.07,
+      "summary": [
+        "install -d ${ARTIFACT_ROOT}/installed/usr/libexec/ssmcp",
+        "install -m 0644 src/code_mode.js ${ARTIFACT_ROOT}/installed/usr/libexec/ssmcp/code-mode.js",
+        "install -m 0644 packaging/man/ssmcp.1 ${ARTIFACT_ROOT}/installed/usr/share/man/man1/",
+        "install -m 0644 packaging/man/ssmcpd.8 ${ARTIFACT_ROOT}/installed/usr/share/man/man8/",
+        "install -d ${ARTIFACT_ROOT}/installed/usr/share/doc/ssmcp/examples ${ARTIFACT_ROOT}/installed/usr/share/doc/ssmcp/docs",
+        "install -m 0644 README.md ${ARTIFACT_ROOT}/installed/usr/share/doc/ssmcp/",
+        "install -d ${ARTIFACT_ROOT}/installed/usr/share/doc/ssmcp/skills/ssmcp",
+        "install -m 0644 skills/ssmcp/SKILL.md ${ARTIFACT_ROOT}/installed/usr/share/doc/ssmcp/skills/ssmcp/",
+        "cp -R docs/. \"${ARTIFACT_ROOT}/installed/usr/share/doc/ssmcp/docs/\"",
+        "install -m 0644 packaging/sshd-ssmcp.conf packaging/Caddyfile packaging/nginx-ssmcp.conf.example packaging/ssmcp-client.toml.example packaging/ssmcpd.env packaging/ssmcpd.toml.example ${ARTIFACT_ROOT}/installed/usr/share/doc/ssmcp/examples/"
+      ]
+    }
+  ],
+  "artifacts": {
+    "ssmcp": {
+      "sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
+      "bytes": 8039288
+    },
+    "ssmcpd": {
+      "sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+      "bytes": 5375864
+    },
+    "code-mode.js": {
+      "sha256": "57f014501bf0313f966935fbe1a05613aaf75816a569b65ff15346cc9d2a8bdf",
+      "bytes": 37747
+    }
+  },
+  "versions": {
+    "ssmcp": "ssmcp 0.8.0",
+    "ssmcpd": "ssmcpd 0.8.0"
+  },
+  "status": "passed",
+  "finished_at": "2026-11-18T05:34:13.803369+00:00"
+}

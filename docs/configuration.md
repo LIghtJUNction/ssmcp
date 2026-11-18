@@ -42,7 +42,7 @@ ssmcp invite
 | --- | --- | --- |
 | 本机电脑 | 项目、OpenSSH 私钥、harness 原生配置 | 在项目目录启动 `ssmcp`，运行 shell 与自动发现的原生工具，通过 SSH 连到服务器 |
 | SSH 服务器 | 用户公钥、`ssmcpd`、HTTPS 入口 | OpenSSH 验证本机身份，`ssmcpd` 转发 MCP 调用 |
-| MCP 客户端，例如 ChatGPT | MCP URL、OAuth 令牌 | 用户授权后调用 `list` 与 `code_mode` |
+| MCP 客户端，例如 ChatGPT | MCP URL、OAuth 令牌 | 用户授权后调用 `list`、`code_mode` 与 `collab` |
 
 SSH 公钥确认本机能以哪个服务器账户接入。`--allow` 指定允许操作该连接的 GitHub 身份，浏览器中的 OAuth 流程再取得用户对当前 MCP 客户端的同意。未登录 CLI 的 SSH 连接省略 `--allow` 时继续使用同一 SSH 账户下的登录码授权。[客户端实现](../src/client.rs) · [授权实现](../src/oauth.rs)
 
@@ -298,7 +298,7 @@ GitHub 模式只输出连接信息与允许列表，不生成登录码。实时�
 
 确认页的同意针对当前 OAuth/MCP 客户端，允许它使用当前以及随后明确允许这个 GitHub 身份的连接。允许列表由本机启动参数管理，页面没有逐个后端的勾选配置。没有获准访问的在线客户端时也可完成登录，`list` 会返回空列表；以后出现匹配的在线客户端即可被发现。[授权页面与令牌](../src/oauth.rs) · [按连接检查访问](../src/broker.rs)
 
-服务端在每条连接接入时，把允许列表中的 GitHub 用户名解析为稳定用户 ID；后续按 ID 判断权限。用户名在这条连接在线期间改名，已有的 ID 绑定仍有效。重新启动会再次解析参数中的用户名，因此改名后应更新 `--allow`；当前没有跨连接持久保存的用户名与 ID 绑定。[GitHub 身份解析](../src/identity.rs)
+对于 SSH `--allow` 列表，服务端在每条连接接入时把其中的 GitHub 登录名解析为稳定用户 ID，后续按 ID 判断权限。GitHub 登录名在这条连接在线期间改变时，已有 ID 绑定仍有效；重启会再次解析参数中的名字，因此改名后应更新 `--allow`。这条连接的解析结果不跨连接保存；它与具名账号中持久保存的服务器用户名绑定分别管理。[GitHub 身份解析](../src/identity.rs)
 
 ### 登录码模式：保留现有使用方法
 
@@ -310,7 +310,7 @@ ssmcp --ssh --name ssmcp-project my-ssmcp
 
 该授权绑定签发登录码的 SSH 连接，只能发现和调用同一 SSH 账号下未设置 `--allow` 的连接。即使使用同一个 SSH 账户，登录码授权也不能访问设置了 `--allow` 的客户端。签发连接退出会撤销对应授权。[授权隔离](../src/broker.rs)
 
-远程 MCP 的工具列表包含 `list`、`code_mode` 和 `collab`。`collab` 管理同一在线连接内的 agent 身份与消息，本机 `--list-tools` 展示后端原生工具；远程调用原生工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[MCP 接口](../README.md#mcp-接口) · [Agent 协作](agent-collaboration.md)
+远程 MCP 的工具列表包含 `list`、`code_mode` 和 `collab`。`collab` 管理同一在线连接内的 agent 身份与消息，本机 `--list-tools` 展示后端原生工具；远程调用原生工具时使用 `code_mode` 中的 `call(clientId, toolName, arguments)`。[原子接口](../README.md#原子接口) · [Agent 协作](agent-collaboration.md)
 
 两种方式都要求 MCP 客户端支持 Authorization Code、S256 PKCE 和动态客户端注册（DCR）。注册时省略 `grant_types` 默认获得 `authorization_code` 与 `refresh_token`，响应返回实际登记类型；显式只请求 `["authorization_code"]` 的客户端只获得访问令牌。注册、资源绑定及回调细节见 [OAuth 兼容性](deployment.md#oauth-兼容性)。
 
@@ -433,11 +433,15 @@ ssmcp --ssh --name ssmcp-project my-ssmcp
 
 ## 本地显示与重载
 
-真实交互终端默认启用 `[ui] dashboard = true`：宽窗口左侧分别显示后台日志和交互 Shell，右侧固定显示并行任务、原生进度与 Git 状态。少于 96 列或少于 18 行时会收起右栏；窗口调整会同步更新布局和 PTY 尺寸。`NO_COLOR` 只影响颜色。可在本地 TOML 中设 `dashboard = false` 恢复行式显示；JSONL 或重定向 stderr 也使用行式输出。任务没有原生总量时仅显示活动和耗时，不生成估算百分比。Git 查询只观察授权启动目录，查询失败会标明过期或未知；未跟踪目录可能作为一项计数。[面板布局与配置](logging.md#固定状态区与窗口尺寸)
+真实交互终端默认启用 `[ui] dashboard = true` 和 `layout = "chat"`。主区域连续展示调用、输出与结果，底部输入框用于追加用户要求；要求进入可编辑队列，在后续工具响应中交付。`/audit` 打开源码审计，`/agents` 查看登记成员，`/queue` 查看要求队列，`/filter 文本` 筛选日志。F3 或 `/sidebar` 收起侧栏，窄窗口会自动调整可用区域。[输入、队列与界面配置](client-ui.md)
 
-默认显示留白较多的 `minimal` 界面，连接摘要给出 MCP URL 和登录方式，活动记录写入 stderr。请求、完成、错误和超时使用不同颜色；独立命令按任务标识区分，stdout 与 stderr 分开显示。请求 ID、方法和耗时用于对应同一次调用，统一 diff 显示增加、删除及原始行号。[本地渲染](../src/client/render.rs)
+默认使用 `dark` 深色主题，也可选择 `codex-dark`、`nord`、`solarized`、`light` 或跟随终端颜色的 `minimal`，并逐项覆盖语义颜色。输入框的文字不会发给后台 PTY；直接交互使用另一个终端中的 `ssmcp -i` 或 `terminal.*`。`NO_COLOR` 只关闭颜色，`dashboard = false`、JSONL 或重定向 stderr 使用行式输出。任务进度来自原生数据，Git 状态来自授权启动目录的实际观察。[面板布局与配置](logging.md#固定状态区与窗口尺寸)
 
-`--log-format pretty-verbose` 展开脱敏后的详细元数据，`--log-format jsonl` 输出脱敏事件 JSON；`--verbose` 是详细事件的别名，`--raw` 与 `--raw-events` 是 JSONL 的别名。重定向 stdout 时，连接信息始终是 JSON。`--no-color`、`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 会禁用 ANSI 颜色。这些配色设置不影响真实终端的交互式 PTY 字节透传。后台 stdout/stderr 按任务和流实时显示，读取历史 `wait/read` 结果不再重复打印正文。默认 pretty 使用短任务号和相对工作区路径，折叠内联脚本与 JSON stdout；完整值保留在事件和输出中。`[ui] activity_interval_secs = 5` 控制静默活动提示，设为 0 只关闭周期提示；只有原生事件提供真实总量时才显示百分比。主题、时间戳、折叠行数和 TOML 配置见[日志与显示说明](logging.md)。
+`--log-format pretty-verbose` 展开脱敏后的详细元数据，`--log-format jsonl` 输出脱敏事件 JSON；`--verbose` 是详细事件的别名，`--raw` 与 `--raw-events` 是 JSONL 的别名。重定向 stdout 时，连接信息始终是 JSON。`--no-color`、`NO_COLOR=1`、`TERM=dumb` 或重定向 stderr 会禁用 ANSI 颜色。stdout/stderr 按任务和流分别显示，结束记录包含实际退出状态与耗时；读取历史 `wait/read` 结果不重复打印正文。内联脚本默认以解释器和行数识别，正文可在详细日志中展开。`[ui] activity_interval_secs = 5` 控制行式日志的活动提示，设为 0 关闭该提示。[日志与输出保留](logging.md)
+
+F5 或 `ssmcp.ui.action` 的 `reload` 只重载本地显示配置；输入框中的 `/reload` 请求重新启动客户端，两者的作用不同。主题、配色和布局可直接重载，`dashboard` 与 `log_format` 需要重新启动。
+
+用户要求队列与本地成员目标需要协议 v7，源码审计需要 v6 或更新版本。队列中的已交付表示附加到符合目标的 `code_mode` 响应，不表示模型已经阅读或执行。受控重启通过私有、单次读取的交接文件保留草稿与队列；交付不确定或接收目标已变化的记录需要用户复核，不会自动重发。[队列状态与恢复](client-ui.md#输入要求与队列)
 
 ```sh
 ssmcp --ssh --title "检查构建与测试" --allow octocat@github my-ssmcp

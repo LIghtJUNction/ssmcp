@@ -1,0 +1,13 @@
+{
+  "staging_port_free": true,
+  "stage_unit_load": "not-found",
+  "stage_unit_active": "inactive",
+  "production_pid": 10549,
+  "production_sha256": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28",
+  "production_version": "ssmcpd 0.7.2",
+  "status": "passed",
+  "source_commit": "555307f8ceb70c729762bc11ea099360e87e5dee",
+  "production_unchanged": true,
+  "production_apply": false,
+  "verified_utc": "2026-11-17T22:10:41Z"
+}

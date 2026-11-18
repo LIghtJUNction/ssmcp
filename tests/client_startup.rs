@@ -31,6 +31,23 @@ print(json.dumps({"type":"ready", "url":"https://ssmcp.example/mcp" if github el
                   "login_code":code, "login_expires_in":expires,
                   "client_id":"b"*64}), flush=True)
 
+def receive(identifier):
+    while True:
+        line = sys.stdin.readline()
+        assert line, "client closed SSH before delivering a reply"
+        reply = json.loads(line)
+        if reply["type"] == "steering":
+            # Presence polling is independent of the native startup/catalog
+            # traffic under test. This peer has an empty user request queue.
+            assert hello["version"] >= 7, hello
+            assert reply["command"] == {"op":"snapshot"}, reply
+            print(json.dumps({"type":"steering_reply", "id":reply["id"], "result":{"Ok":{
+                "schema_version":1, "client_id":"b"*64, "revision":0,
+                "agents":[], "messages":[]}}}), flush=True)
+            continue
+        assert reply["type"] == "reply" and reply["id"] == identifier, reply
+        return reply
+
 def wait_for(predicate, description):
     deadline = time.monotonic() + 4
     while not predicate():
@@ -46,7 +63,7 @@ if scenario.endswith("healthy"):
     wait_for(lambda: (directory / "native-request").read_text() in ("startup", "discovery"),
              "background native handshake was never reached")
     sys.stdout.write(frame[split:]); sys.stdout.flush()
-    reply = json.loads(sys.stdin.readline())
+    reply = receive(7)
     (directory / "reply.json").write_text(json.dumps(reply))
     page = reply["result"]["Ok"]
     catalog = list(page["tools"])
@@ -58,8 +75,7 @@ if scenario.endswith("healthy"):
         cursors.add(cursor)
         print(json.dumps({"type":"call", "id":identifier, "operation":{
             "op":"list_tools", "cursor":cursor}}), flush=True)
-        continuation = json.loads(sys.stdin.readline())
-        assert continuation["type"] == "reply" and continuation["id"] == identifier
+        continuation = receive(identifier)
         page = continuation["result"]["Ok"]
         catalog.extend(page["tools"])
         identifier += 1
@@ -80,7 +96,7 @@ if scenario.endswith("healthy"):
         assert time.monotonic() < deadline, "background discovery did not settle"
         print(json.dumps({"type":"call","id":identifier,"operation":{
             "op":"call_tool","name":"ssmcp.harnesses.list","arguments":{}}}), flush=True)
-        response = json.loads(sys.stdin.readline())
+        response = receive(identifier)
         result = response["result"]["Ok"]
         data = result.get("structuredContent", result)
         state = next(item for item in data["harnesses"] if item["provider"] == provider)
@@ -193,6 +209,10 @@ impl Fixture {
             // configured relay while exercising this local transport fixture.
             .env("SSMCP_AUTH_HOME", self.0.join("auth"))
             .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
+            .env("SSMCP_SESSION_HOME", self.0.join("sessions"))
+            .env_remove("SSMCP_SESSION_GENERATION")
+            .env_remove("SSMCP_CLIENT_OUTBOX")
+            .env_remove("SSMCP_OUTPUT_RELOAD")
             .env_remove("SSMCP_UI_CONFIG")
             .env("SSMCP_STARTUP_DIR", &self.0)
             .env("SSMCP_STARTUP_SCENARIO", scenario)
