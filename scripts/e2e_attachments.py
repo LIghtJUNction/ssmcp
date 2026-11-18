@@ -25,7 +25,7 @@ import tempfile
 import time
 import zlib
 
-from e2e_composer import Composer, ENTER, LEFT, UP, input_text, visible_record
+from e2e_composer import Composer, ENTER, LEFT, input_text, visible_record
 from e2e_dashboard import sha256, text
 
 
@@ -193,14 +193,20 @@ class Attachments(Composer):
 
     def take_back(self, front, record):
         self.focus_input(front)
-        front.send(UP)
+        # Write the real modified-arrow sequence in two pieces, within the
+        # terminal decoder's Escape timeout; ordinary Up history is not used.
+        front.send(b"\x1b[1;")
+        time.sleep(0.005)
+        front.send(b"2A")
         state = self.wait_ui(
             front, lambda current: current["editing"] == record["id"],
-            "Up reclaiming the latest queued image request",
+            "Shift+Up reclaiming the latest queued image request",
         )
         self.metadata(state["draft"]["images"], "reclaimed request")
-        self.check(self.record(self.queue(), message_id=record["id"])["status"] == "editing",
-                   "takeback suspends image delivery before the draft is replaced")
+        held_record = self.record(self.queue(), message_id=record["id"])
+        self.check(held_record["status"] == "editing"
+                   and held_record["revision"] > record["revision"],
+                   "Shift+Up enters the editor after the server confirms CAS takeback")
         held = self.work()
         self.check(not self.messages(held)
                    and not any(block.get("type") == "image" for block in held["content"]),
@@ -283,14 +289,42 @@ class Attachments(Composer):
         first = self.submit(front, "ATTACHMENT_EDIT_ORIGINAL")
         self.metadata(first["images"], "queued image")
         self.no_payload(self.queue(), "queue snapshot")
+        # A second, unfinished text-and-image draft must survive taking back
+        # the first request, including the cursor inside a UTF-8 logical line.
+        self.attach(front)
+        pending_text = "SHIFT_UP_PARKED_DRAFT 界"
+        front.send(pending_text.encode() + LEFT)
+        pending_state = self.wait_ui(
+            front, lambda current: current["draft"]["text"] == pending_text
+            and current["draft"]["cursor"] == len(pending_text.encode()) - len("界".encode()),
+            "the independent image draft before Shift+Up",
+        )
+        pending_draft = pending_state["draft"]
         self.take_back(front, first)
+        parked_draft = self.queue()["draft_context"]["parked"]
+        self.check(parked_draft is not None
+                   and all(parked_draft[key] == pending_draft[key]
+                           for key in ("text", "cursor", "images")),
+                   "confirmed Shift+Up parks the current text, image and UTF-8 cursor")
+        self.metadata(parked_draft["images"], "Shift+Up parked draft")
         revised = "ATTACHMENT_EDIT_REVISED"
-        self.submit(front, revised)
+        # The editor already owns focus. Sending Escape here would deliberately
+        # restore an unchanged parked draft, so submit the actual edit directly.
+        front.send(CLEAR_LINE + revised.encode() + ENTER)
+        front.until(lambda shot: visible_record(shot, revised, "queued", first["id"]),
+                    "the Shift+Up edit being acknowledged under its original identity")
+        self.wait_ui(front, lambda current: current["draft"] == pending_draft
+                     and current["editing"] is None,
+                     "the parked image draft restored after submitting the edit")
         edited = self.record(self.queue(), message_id=first["id"])
         self.check(edited["revision"] > first["revision"], "editing retains identity and advances revision")
         self.metadata(edited["images"], "edited queue item")
         self.delivery(self.work(), first, revised)
         self.wait_delivered(front, first, revised)
+        front.send(CLEAR_LINE + b"/detach all\r")
+        self.wait_ui(front, lambda current: not current["draft"]["text"]
+                     and not current["draft"].get("images"),
+                     "clearing only the restored test-owned draft for the next scenario")
 
         self.attach(front)
         removed = self.submit(front, "ATTACHMENT_REMOVE_ORIGINAL")
