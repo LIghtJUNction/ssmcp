@@ -35,7 +35,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/tasks",
-        description: "List local command jobs; cancel an exact job ID",
+        description: "Open Tasks beside Logs; browse jobs or cancel an exact ID",
     },
     SlashCommand {
         name: "/queue",
@@ -55,7 +55,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/logs",
-        description: "Open the diagnostic log panel; Esc returns",
+        description: "Open the Logs canvas panel; Esc returns to the previous panel",
     },
     SlashCommand {
         name: "/raw",

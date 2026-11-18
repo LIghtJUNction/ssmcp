@@ -470,8 +470,9 @@ pub(crate) fn snapshot() -> serde_json::Value {
     let conversation = state.conversation.snapshot();
     serde_json::json!({
         "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
-        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.logs_open},
-            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":g.pty_rows,"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.log_rows},"cols":g.left,"visible":!chat || state.conversation.logs_open},
+            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+            "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":conversation::body_rows(g.rows),"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
             "input":{"row":conversation::prompt_top(g.rows)+1,"col":0,"rows":conversation::prompt_rows(g.rows),"cols":g.left,"visible":chat && conversation::prompt_rows(g.rows)>0}},
         "focus":if chat && state.conversation.logs_open {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
@@ -1064,9 +1065,8 @@ struct State {
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let geometry = Geometry::new(rows, cols, ui);
-        let mut conversation = conversation::Conversation::default();
-        conversation.logs_open = ui.log_format == LogFormat::PrettyVerbose || ui.show_raw_json;
-        Self {
+        let conversation = conversation::Conversation::default();
+        let mut state = Self {
             events: events::EventView::new(),
             context_label: String::new(),
             guide: None,
@@ -1109,7 +1109,11 @@ impl State {
                 ..Keyboard::default()
             },
             conversation,
+        };
+        if ui.log_format == LogFormat::PrettyVerbose || ui.show_raw_json {
+            state.chat_initial_logs();
         }
+        state
     }
     fn set_context(&mut self, cwd: &str, title: Option<&str>) {
         let project = std::path::Path::new(cwd)
