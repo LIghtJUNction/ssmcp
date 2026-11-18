@@ -17,7 +17,7 @@ a, button, input { -webkit-tap-highlight-color: transparent; }
 a, button { touch-action: manipulation; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
 ::selection { background: var(--accent); color: #132019; }
-.container { width: min(1120px, calc(100% - 96px)); margin-inline: auto; }
+.container, #pricing { width: min(1120px, calc(100% - 96px)); margin-inline: auto; }
 .oauth-header { min-height: 108px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .brand { display: inline-flex; align-items: center; gap: 14px; color: #ecefed; text-decoration: none; }
 .brand svg { flex: 0 0 auto; width: 36px; height: 36px; }
@@ -56,7 +56,7 @@ button[value=deny]:hover { background: #1a231e; color: #eff8f2; }
 #pricing { margin: 0 auto 64px; padding-top: 40px; }
 #pricing p { max-width: 70em; }
 @media (max-width: 760px) {
-  .container { width: calc(100% - 48px); }
+  .container, #pricing { width: calc(100% - 48px); }
   .oauth-header { min-height: 88px; }
   .brand svg { width: 32px; height: 32px; }
   .brand-name { font-size: 19px; }
@@ -69,7 +69,7 @@ button[value=deny]:hover { background: #1a231e; color: #eff8f2; }
   .oauth-footer { flex-direction: column; padding-bottom: 28px; }
 }
 @media (max-width: 380px) {
-  .container, .oauth-shell { width: calc(100% - 40px); }
+  .container, .oauth-shell, #pricing { width: calc(100% - 40px); }
   .header-label { display: none; }
   .oauth-shell { margin-top: 40px; }
   dl { padding: 22px; }
