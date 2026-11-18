@@ -2210,11 +2210,12 @@ mod tests {
             let destination = root.join(&imported.entries[0].path);
             let references = imported.references();
             let mut state = super::super::preview_state(24, 100, &Ui::default());
-            state.conversation.composer.set_text(if mode == "full" {
-                &"x".repeat(crate::client::composer::MAX_DRAFT_BYTES)
+            let initial = if mode == "full" {
+                "x".repeat(crate::client::composer::MAX_DRAFT_BYTES)
             } else {
-                "中文草稿"
-            });
+                "中文草稿".to_owned()
+            };
+            state.conversation.composer.set_text(&initial);
             let expected = state.chat_input_stamp().unwrap();
             if mode == "changed" {
                 state.conversation.composer.set_text("更新后的草稿");
