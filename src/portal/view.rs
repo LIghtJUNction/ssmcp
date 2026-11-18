@@ -137,6 +137,12 @@ fn account_panel(
     );
     if let Some(a) = account {
         let traffic_html = traffic.map(traffic_panel).unwrap_or_default();
+        let admin_link =
+            if management_enabled && traffic.is_some_and(|quota| quota.limit_bytes.is_none()) {
+                r#"<a class="button secondary" href="/account/admin#registered-users">用户管理</a>"#
+            } else {
+                ""
+            };
         let username_form = if a.handle.is_none() {
             format!(
                 r#"<form class="key-form" method="post" action="/account/username"><input type="hidden" name="csrf" value="{csrf}"><label for="account-username">服务器用户名<input id="account-username" name="username" required minlength="3" maxlength="32" autocapitalize="none" spellcheck="false" aria-describedby="username-help"></label><small id="username-help">3–32 个英文字母、数字、下划线或连字符。以字母开头，以字母或数字结尾。登记后绑定当前 GitHub 账号。</small><button type="submit">注册用户名</button></form>"#
@@ -147,7 +153,7 @@ fn account_panel(
         html.push_str(&format!(
             r##"<h2 id="account-title">{}</h2><p class="account-description">在项目目录运行连接命令，即可使用已授权的工具。</p>
 <dl class="account-facts"><div><dt>服务器用户名</dt><dd class="mono">{}</dd></div><div><dt>GitHub 账户</dt><dd>{}</dd></div></dl>
-{username_form}{traffic_html}<div class="account-actions"><a class="button secondary" href="/account/traffic">流量与订单</a><a class="button" href="#connect">连接这台电脑 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出门户</button></form></div>
+{username_form}{traffic_html}<div class="account-actions">{admin_link}<a class="button secondary" href="/account/traffic">流量与订单</a><a class="button" href="#connect">连接这台电脑 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出门户</button></form></div>
 <small class="account-note">用户名绑定 GitHub 账号编号，GitHub 改名后保持不变。</small>"##,
             escape(a.handle.as_deref().unwrap_or(&a.github_login)),
             escape(a.handle.as_deref().unwrap_or("尚未注册")),
