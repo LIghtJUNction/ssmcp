@@ -840,7 +840,8 @@ mod tests {
 
     #[test]
     fn commerce_defaults_keep_sales_closed_at_the_requested_rmb_price() {
-        let config = parse_file_config("[commerce]\nenabled = false\nmonthly_sellable_gb = 0\n").unwrap();
+        let config =
+            parse_file_config("[commerce]\nenabled = false\nmonthly_sellable_gb = 0\n").unwrap();
         assert!(!config.commerce.enabled);
         assert_eq!(config.commerce.currency, "CNY");
         assert_eq!(config.commerce.price_per_gb_minor, Some(100));
