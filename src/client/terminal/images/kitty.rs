@@ -22,11 +22,14 @@ const FALLBACK_SIDE: u32 = 1024;
 const PNG_BYTES: usize = (FALLBACK_SIDE * FALLBACK_SIDE * 4) as usize + 64 * 1024;
 const QUERY_ID: u32 = u32::MAX;
 const IMAGE_PREFIX: u32 = 0x5353_0000;
+// Terminal replies are untrusted and may arrive in a single large input batch.
+// Keep enough IDs for the retained Activity images and guide, with a hard cap.
+const REJECTED_IMAGES: usize = 256;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 static NEXT_IMAGE: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) struct Native {
-    pub(crate) id: u32,
+    id: u32,
     pub(crate) width: u32,
     pub(crate) height: u32,
     encoded: String,
@@ -90,7 +93,10 @@ impl Native {
         let mut encoder = png::Encoder::new(&mut buffer, width, height);
         encoder.set_color(color);
         encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Fast);
+        // png's Fast streaming mode can substantially expand incompressible
+        // data. Level 1 retains a small streaming buffer while allowing even
+        // a noisy 1024-square RGBA fallback to fit the existing PNG budget.
+        encoder.set_deflate_compression(png::DeflateCompression::Level(1));
         encoder.set_filter(png::Filter::Adaptive);
         let mut writer = encoder.write_header().ok()?;
         {
@@ -110,6 +116,10 @@ impl Native {
 
     pub(crate) fn bytes(&self) -> usize {
         self.encoded.len()
+    }
+
+    pub(crate) fn id(&self) -> u32 {
+        self.id
     }
 
     /// Fit only the available width. A tall image remains tall in the event
@@ -391,6 +401,7 @@ pub(crate) struct Graphics {
     paste_last: Option<Instant>,
     discard_apc: bool,
     requests: Vec<u8>,
+    rejected_images: Vec<u32>,
     changed: bool,
 }
 
@@ -435,6 +446,10 @@ impl Graphics {
 
     pub(crate) fn take_requests(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.requests)
+    }
+
+    pub(crate) fn take_rejected_images(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.rejected_images)
     }
 
     pub(crate) fn resized(&mut self) {
@@ -639,9 +654,17 @@ impl Graphics {
                     }
                     return true;
                 }
-                if id.is_some_and(|id| id & 0xffff_0000 == IMAGE_PREFIX) {
+                if let Some(id) = id.filter(|id| id & 0xffff_0000 == IMAGE_PREFIX) {
                     if status != "OK" {
-                        self.failed = true;
+                        // A terminal may reject one image because of its own
+                        // decoded-pixel or storage limits while continuing to
+                        // accept other images. Retire only the rejected ID.
+                        if !self.rejected_images.contains(&id) {
+                            if self.rejected_images.len() == REJECTED_IMAGES {
+                                self.rejected_images.remove(0);
+                            }
+                            self.rejected_images.push(id);
+                        }
                         self.changed = true;
                     }
                     return true;
@@ -958,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_and_native_errors_keep_the_fallback_available() {
+    fn probe_failures_disable_native_but_image_errors_are_scoped() {
         let now = Instant::now();
         let mut graphics = probe();
         graphics.input(b"", now, true);
@@ -1007,8 +1030,63 @@ mod tests {
                 )
                 .is_empty()
         );
-        assert_eq!(graphics.cell(), None);
+        assert!(graphics.cell().is_some());
+        assert!(graphics.prepare_native());
+        assert_eq!(graphics.take_rejected_images(), [IMAGE_PREFIX | 1]);
+        assert!(graphics.take_rejected_images().is_empty());
+
+        let mut graphics = probe();
+        let rejected_probe = format!("\x1b_Gi={QUERY_ID};ENOTSUP:graphics unavailable\x1b\\");
+        assert!(
+            graphics
+                .input(rejected_probe.as_bytes(), now, false)
+                .is_empty()
+        );
+        assert!(graphics.failed);
         assert!(!graphics.prepare_native());
+        assert!(graphics.take_rejected_images().is_empty());
+    }
+
+    #[test]
+    fn image_rejection_queue_is_scoped_deduplicated_and_bounded() {
+        let now = Instant::now();
+        let mut graphics = probe();
+        let response = format!("\x1b_Gi={QUERY_ID};OK\x1b\\\x1b[6;16;8t");
+        assert!(graphics.input(response.as_bytes(), now, false).is_empty());
+        graphics.take_changed();
+        let first = IMAGE_PREFIX | 1;
+        let second = IMAGE_PREFIX | 2;
+        let replies = format!(
+            "\x1b_Gi={first};E2BIG:image exceeds decoded size limit\x1b\\\
+             \x1b_Gi={first};ENOENT:image was rejected\x1b\\\
+             \x1b_Gi={second};ENOSPC:image storage is full\x1b\\\
+             \x1b_Gi={};OK\x1b\\",
+            IMAGE_PREFIX | 3
+        );
+        for part in replies.as_bytes().chunks(3) {
+            assert!(graphics.input(part, now, false).is_empty());
+        }
+        assert_eq!(graphics.take_rejected_images(), [first, second]);
+        assert!(graphics.take_changed());
+        assert!(graphics.prepare_native());
+        assert!(!graphics.failed);
+        let unrelated = b"\x1b_Gi=17;E2BIG:another application\x1b\\";
+        assert_eq!(graphics.input(unrelated, now, false), unrelated);
+        assert!(graphics.take_rejected_images().is_empty());
+
+        for offset in 1..=REJECTED_IMAGES + 7 {
+            let id = IMAGE_PREFIX | offset as u32;
+            let reply = format!("\x1b_Gi={id};EINVAL:rejected\x1b\\");
+            assert!(graphics.input(reply.as_bytes(), now, false).is_empty());
+        }
+        assert_eq!(
+            graphics.take_rejected_images(),
+            (8..=REJECTED_IMAGES + 7)
+                .map(|id| IMAGE_PREFIX | id as u32)
+                .collect::<Vec<_>>()
+        );
+        assert!(graphics.prepare_native());
+        assert!(graphics.take_rejected_images().is_empty());
     }
 
     #[test]
@@ -1143,29 +1221,33 @@ mod tests {
 
     #[test]
     fn noisy_native_images_fall_back_without_increasing_the_payload_budget() {
-        let mut state = 0x3141_5926u32;
-        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1200, 1000, |_, _| {
-            image::Rgba(std::array::from_fn(|_| {
-                state ^= state << 13;
-                state ^= state >> 17;
-                state ^= state << 5;
-                state as u8
-            }))
-        }));
-        assert!(Native::encode(&source).is_none());
-        let native = Native::prepare(&source).unwrap();
-        assert!(native.width <= FALLBACK_SIDE && native.height <= FALLBACK_SIDE);
-        assert!(native.width < source.width() && native.height < source.height());
-        let png = STANDARD.decode(&native.encoded).unwrap();
-        assert!(png.len() <= PNG_BYTES);
-        assert!(native.bytes() <= PNG_BYTES.div_ceil(3) * 4);
-        assert_eq!(
-            image::load_from_memory(&png)
-                .unwrap()
-                .into_rgba8()
-                .dimensions(),
-            (native.width, native.height)
-        );
+        // Cover the observed wide-image failure and the maximum-area fallback.
+        for (width, height) in [(1200, 1000), (1200, 1200)] {
+            let mut state = 0x3141_5926u32;
+            let source =
+                DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |_, _| {
+                    image::Rgba(std::array::from_fn(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 17;
+                        state ^= state << 5;
+                        state as u8
+                    }))
+                }));
+            assert!(Native::encode(&source).is_none());
+            let native = Native::prepare(&source).unwrap();
+            assert!(native.width <= FALLBACK_SIDE && native.height <= FALLBACK_SIDE);
+            assert!(native.width < source.width() && native.height < source.height());
+            let png = STANDARD.decode(&native.encoded).unwrap();
+            assert!(png.len() <= PNG_BYTES);
+            assert!(native.bytes() <= PNG_BYTES.div_ceil(3) * 4);
+            assert_eq!(
+                image::load_from_memory(&png)
+                    .unwrap()
+                    .into_rgba8()
+                    .dimensions(),
+                (native.width, native.height)
+            );
+        }
     }
 
     #[test]

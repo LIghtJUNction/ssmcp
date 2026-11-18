@@ -1,0 +1,22 @@
+{
+  "records": [
+    {
+      "image_id": 1397948417,
+      "source": "source-grid.png",
+      "png_bytes": 335,
+      "reply": "\u001b_Gi=1397948417;OK\u001b\\"
+    },
+    {
+      "image_id": 1397948418,
+      "source": "wide-native.png",
+      "png_bytes": 238935,
+      "reply": "\u001b_Gi=1397948418;E2BIG:image exceeds decoded size limit\u001b\\"
+    },
+    {
+      "image_id": 1397948419,
+      "source": "source-grid.png",
+      "png_bytes": 335,
+      "reply": "\u001b_Gi=1397948419;OK\u001b\\"
+    }
+  ]
+}
