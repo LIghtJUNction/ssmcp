@@ -1,0 +1,72 @@
+{
+  "source_revision": "d4eed29657bda8ea5d2de2ac212df69c3fa51e21",
+  "workspace": {
+    "command": "cargo test --workspace --locked -- --test-threads=2",
+    "suites": 26,
+    "passed": 1161,
+    "failed": 0,
+    "ignored": 26,
+    "log_sha256": "70fb5280c8d175ab10eaa8d1ddc45f02539ba5ba90654d0f6853b831b16a3696"
+  },
+  "clippy": {
+    "command": "cargo clippy --workspace --locked --all-targets -- -D warnings",
+    "exit_code": 0,
+    "log_sha256": "c290c1307f15fa2003cf03e0452a33c492c4d7fbc5689a1dd3451bfed0a4831e"
+  },
+  "ci": {
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44320086144",
+    "jobs": [
+      {
+        "name": "native-lifecycle (windows-2025)",
+        "id": 134856589992,
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44320086144/job/134856589992"
+      },
+      {
+        "name": "native-lifecycle (macos-15)",
+        "id": 134856590558,
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44320086144/job/134856590558"
+      },
+      {
+        "name": "native-lifecycle (ubuntu-24.04)",
+        "id": 134856590754,
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44320086144/job/134856590754"
+      }
+    ]
+  },
+  "javascript_helpers": {
+    "passed": 63,
+    "failed": 0,
+    "log_sha256": "5bce7c5eed60d469b26431258d396937ae17e6f6a42e1ab0943ffdb8b4aef2a9",
+    "scope": "Earlier unchanged JavaScript helper source in this iteration"
+  },
+  "release_tooling": {
+    "passed": 58,
+    "failed": 0,
+    "log_sha256": "02f17c943ba83e734e4b1fb2383cdc64e50af41ff4b79f56f9ef169eb25608ba",
+    "scope": "Publication script unit tests; no registry publication"
+  },
+  "cargo_package": {
+    "revision": "ee052440ba9f4af80f7a6a2f96b4b4b4e1e7e40e",
+    "command": [
+      "cargo",
+      "package",
+      "--workspace",
+      "--locked"
+    ],
+    "exit_code": 0,
+    "published": false
+  },
+  "release_ui": {
+    "source_revision": "d4eed29657bda8ea5d2de2ac212df69c3fa51e21",
+    "ssmcp_sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13",
+    "exit_code": 0,
+    "seconds": 6.084,
+    "checks": 47
+  }
+}
