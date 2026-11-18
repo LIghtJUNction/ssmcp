@@ -91,6 +91,11 @@ impl Broker {
                 .len(),
         };
         let page = self.management_audit(actor, scope, 50, None).await?;
+        let traffic = match self.traffic_quota(&actor.subject).await {
+            Ok(quota) => Some(quota),
+            Err(crate::portal::Problem::Disabled) => None,
+            Err(_) => return Err(ManagementError::Unavailable),
+        };
         Ok(DashboardSnapshot {
             is_admin: state.policy.is_admin(actor),
             scope,
@@ -101,6 +106,7 @@ impl Broker {
             audit_next_before: page.next_before,
             retention_days: state.audit.retention_days(),
             default_rate_limit_bps: self.user_policies.default_rate(),
+            traffic,
         })
     }
 
@@ -224,13 +230,21 @@ impl Broker {
             .map_err(|_| ManagementError::Unavailable)?;
 
         let target = subject.to_owned();
+        let policies = self.user_policies.clone();
         let account = self
             .portal
-            .storage(move |store| store.set_policy(&target, banned, rate_limit_bps))
+            .storage(move |store| {
+                let account = store.set_policy(&target, banned, rate_limit_bps)?;
+                policies.apply_account(
+                    &target,
+                    account.banned,
+                    account.rate_limit_bps,
+                    account.has_recharged,
+                );
+                Ok(account)
+            })
             .await
             .map_err(policy_error)?;
-        self.user_policies
-            .set(subject, account.banned, account.rate_limit_bps);
         if account.banned {
             self.oauth.revoke_subject(subject);
             self.portal

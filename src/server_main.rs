@@ -80,6 +80,7 @@ struct Config {
     client_registry: Option<PathBuf>,
     client_download_dir: Option<PathBuf>,
     portal: PortalConfig,
+    commerce: ssmcp::commerce::CommerceConfig,
     portal_only: bool,
 }
 
@@ -92,6 +93,7 @@ struct FileConfig {
     oauth: TokenConfig,
     auth: AuthConfig,
     portal: PortalConfig,
+    commerce: ssmcp::commerce::CommerceConfig,
 }
 
 #[derive(Deserialize)]
@@ -230,6 +232,7 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
     config.client_registry = file.oauth.client_registry;
     config.client_download_dir = file.server.client_download_dir;
     config.portal = file.portal;
+    config.commerce = file.commerce;
     config.github = file.auth.github;
     Ok(())
 }
@@ -273,6 +276,7 @@ fn run() -> ssmcp::Result<()> {
         client_registry: None,
         client_download_dir: None,
         portal: PortalConfig::default(),
+        commerce: ssmcp::commerce::CommerceConfig::default(),
         portal_only,
     };
     if mode == "serve" {
@@ -422,6 +426,10 @@ fn absolute_path(path: &Path, label: &str) -> ssmcp::Result<()> {
 
 fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
     let portal = &config.portal;
+    config.commerce.validate()?;
+    if config.commerce.enabled && (config.portal_only || portal.state_dir.is_none()) {
+        return Err("commerce requires the gateway process with portal.state_dir; --portal-only cannot own billing".into());
+    }
     if !ssmcp::user_policy::valid_rate(portal.default_rate_limit_bps) {
         return Err(
             "portal.default_rate_limit_bps must be in 1..=1073741824 bytes per second".into(),
@@ -683,6 +691,14 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     }
 
     broker
+        .configure_traffic_timezone(config.commerce.utc_offset_minutes)
+        .map_err(|_| "invalid commerce monthly timezone")?;
+    if let Some(path) = &config.portal.state_dir {
+        broker
+            .portal
+            .configure_commerce(config.commerce.clone(), path)?;
+    }
+    broker
         .configure_user_policies(config.portal.default_rate_limit_bps)
         .await?;
 
@@ -728,6 +744,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     } else {
         None
     };
+    broker.reconcile_commerce().await?;
     let (unix, _socket_file) = if config.portal_only {
         (None, None)
     } else {
@@ -821,6 +838,34 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn commerce_defaults_keep_sales_closed_at_the_requested_rmb_price() {
+        let config =
+            parse_file_config("[commerce]\nenabled = false\nmonthly_sellable_gb = 0\n").unwrap();
+        assert!(!config.commerce.enabled);
+        assert_eq!(config.commerce.currency, "CNY");
+        assert_eq!(config.commerce.price_per_gb_minor, Some(100));
+        assert_eq!(config.commerce.monthly_sellable_gb, 0);
+        assert_eq!(config.commerce.utc_offset_minutes, 480);
+        assert!(parse_file_config("[commerce]\nprice_per_gb_minro = 1\n").is_err());
+    }
+
+    #[test]
+    fn commerce_rejects_a_second_portal_only_billing_writer() {
+        let mut config = portal_config_fixture();
+        config.portal_only = true;
+        config.portal.state_dir = Some("/tmp/accounts".into());
+        config.commerce.enabled = true;
+        config.commerce.merchant_id = "MER_test".into();
+        config.commerce.store_id = "STO_test".into();
+        config.commerce.product_id = "PROD_test".into();
+        config.commerce.checkout_origin = "https://pancake.waffo.ai".into();
+        config.commerce.private_key_file = Some("/tmp/test-private.pem".into());
+        config.commerce.webhook_public_key_file = Some("/tmp/test-public.pem".into());
+        assert!(config.commerce.validate().is_ok());
+        assert!(validate_portal_config(&config).is_err());
+    }
+
     fn portal_config_fixture() -> Config {
         Config {
             listen: "127.0.0.1:8080".parse().unwrap(),
@@ -831,6 +876,7 @@ mod tests {
             client_registry: None,
             client_download_dir: None,
             portal: PortalConfig::default(),
+            commerce: ssmcp::commerce::CommerceConfig::default(),
             portal_only: false,
         }
     }
@@ -971,6 +1017,7 @@ client_secret = "example-test-secret"
             client_registry: None,
             client_download_dir: None,
             portal: PortalConfig::default(),
+            commerce: ssmcp::commerce::CommerceConfig::default(),
             portal_only: false,
         };
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();

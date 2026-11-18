@@ -303,6 +303,7 @@ fn setup_html_escapes_device_names_and_explains_the_exact_permission() {
         handle: None,
         banned: false,
         rate_limit_bps: None,
+        has_recharged: false,
     };
     let page = consent_page(
         "<script>alert('x')</script>",

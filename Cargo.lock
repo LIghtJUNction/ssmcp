@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "ssmcp"
-version = "0.9.1"
+version = "0.9.4"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2218,7 +2218,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "ztui-core"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "zune-core"

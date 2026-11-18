@@ -517,8 +517,8 @@ def main():
     elif args.command == "checksums":
         checksums()
     elif args.command == "check-registry":
-        for package, release_version in publication_packages():
-            check_registry(package=package, release_version=release_version)
+        for package_name, release_version in publication_packages():
+            check_registry(package=package_name, release_version=release_version)
     elif args.command in {"publish", "publish-crate"}:
         publish()
     else:
