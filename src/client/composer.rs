@@ -54,6 +54,22 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "/clear",
         description: "Clear visible logs",
     },
+    SlashCommand {
+        name: "/resume",
+        description: "Resume saved local conversation history",
+    },
+    SlashCommand {
+        name: "/pi",
+        description: "Inspect or call the installed Pi harness",
+    },
+    SlashCommand {
+        name: "/cc",
+        description: "Inspect or call native Claude Code tools",
+    },
+    SlashCommand {
+        name: "/codex",
+        description: "Inspect or call native Codex tools",
+    },
 ];
 
 /// Cursor coordinates are zero based and relative to `lines`.
@@ -425,7 +441,7 @@ impl Composer {
                 _ => "",
             };
             let (body, tone) = if self.text.is_empty() {
-                ("Message the agent · / commands", "muted")
+                ("Message the agent · @file · $skill · / commands", "muted")
             } else {
                 (body.as_str(), "foreground")
             };
@@ -765,13 +781,13 @@ mod tests {
         assert_eq!(draft.text(), "/re");
         draft.set_text("/");
         assert!(draft.move_suggestion(-1));
-        assert_eq!(draft.selected_suggestion().unwrap().name, "/clear");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/codex");
         assert!(
             draft
                 .rows(60, 3, &ui, true)
                 .lines
                 .iter()
-                .any(|line| line.contains("› /clear"))
+                .any(|line| line.contains("› /codex"))
         );
         draft.insert("a");
         assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");
@@ -867,11 +883,11 @@ mod tests {
         assert_eq!(draft.suggestions().len(), SLASH_COMMANDS.len());
         draft.set_text("/re");
         assert_eq!(
-            draft.suggestions(),
-            vec![&SLASH_COMMANDS[1], &SLASH_COMMANDS[2]]
+            draft.suggestions().iter().map(|command| command.name).collect::<Vec<_>>(),
+            vec!["/reload", "/restart", "/resume"]
         );
         let rendered = draft.rows(60, 4, &ui, true);
-        assert_eq!(rendered.lines.len(), 3);
+        assert_eq!(rendered.lines.len(), 4);
         assert!(rendered.lines[1].contains("/reload"));
         assert_eq!(rendered.cursor_col, 5);
         for value in ["/filter cargo", "/unknown", "message /reload", "/\n"] {

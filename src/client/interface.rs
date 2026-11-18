@@ -12,6 +12,10 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+pub(crate) mod harness;
+pub(crate) mod history;
+pub(crate) mod questions;
+
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static UPDATES: Mutex<()> = Mutex::new(());
 static RESIZES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -53,6 +57,7 @@ pub(crate) fn get() -> Value {
         "display": terminal::snapshot(),
         "activity": render::snapshot(),
         "steering": super::steering::snapshot(),
+        "questions": questions::snapshot(),
     })
 }
 
@@ -476,6 +481,15 @@ pub(crate) async fn call(
     let size = {
         let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
         match name {
+            "ssmcp.ui.harness" => return harness::call(arguments),
+            "ssmcp.ui.history" => return history::call(arguments),
+            "ssmcp.ui.ask" => return questions::ask(arguments),
+            "ssmcp.ui.questions" => return questions::read(arguments),
+            "ssmcp.ui.message" => {
+                let text = questions::parse_message(arguments)?;
+                super::terminal::message(&text)?;
+                return Ok(json!({"shown":true}));
+            }
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
             "ssmcp.ui.get" => {
                 let projection = parse_get(&arguments)?;
@@ -535,7 +549,9 @@ pub(crate) fn tools() -> Vec<Value> {
         get_tool(),
         json!({"name":"ssmcp.ui.set","description":"Validate and apply a partial display configuration immediately. Colors merge by key; panels replace the ordered list. Set persist:true to save to this client's UI config. Running jobs and terminal contents are retained.","inputSchema":{"type":"object","required":["patch"],"additionalProperties":false,"properties":{"patch":{"type":"object","properties":properties,"additionalProperties":false},"persist":{"type":"boolean","default":false}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
-    ]
+    ].into_iter().chain(questions::tools())
+    .chain(std::iter::once(history::tool()))
+    .chain(std::iter::once(harness::tool())).collect()
 }
 
 fn get_tool() -> Value {
@@ -951,7 +967,12 @@ mod tests {
         for tool in &catalog {
             assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 10);
+        assert!(names.contains("ssmcp.ui.harness"));
+        assert!(names.contains("ssmcp.ui.history"));
+        for name in ["ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.message"] {
+            assert!(names.contains(name));
+        }
         let schema = catalog
             .iter()
             .find(|tool| tool["name"] == "ssmcp.ui.action")

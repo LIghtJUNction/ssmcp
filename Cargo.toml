@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -58,6 +58,8 @@ include = [
     "/docs/client-accounts.md",
     "/docs/client-server.md",
     "/docs/client-ui.md",
+    "/docs/client-input.md",
+    "/docs/conversation-history.md",
     "/docs/reports/client-experience-20261118/**",
     "/docs/reports/client-experience-0.8.0-20261118/**",
     "/docs/validation-client-accounts.md",
@@ -136,6 +138,7 @@ include = [
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 getrandom = "0.3"
 libc = "0.2"
 miniz_oxide = "0.9.1"

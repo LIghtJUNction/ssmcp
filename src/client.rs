@@ -18,6 +18,7 @@ mod onboarding;
 mod panel;
 #[cfg(test)]
 mod protocol_tests;
+pub(crate) mod references;
 mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;
@@ -1746,13 +1747,36 @@ async fn register_ssh(
 async fn send_steering(
     writer: &Arc<Mutex<tokio::process::ChildStdin>>,
     id: u64,
-    command: crate::wire::SteeringCommand,
+    backend: &Runtime,
 ) -> crate::Result<()> {
-    if !steering::sent(id) {
+    let Some(command) = steering::pending_command(id) else {
         return Ok(());
-    }
+    };
+    let command = if let crate::wire::SteeringCommand::Publish { text, .. } = &command {
+        let prepared = match timeout(Duration::from_secs(5), backend.expand_references(text)).await {
+            Ok(Ok(text)) => steering::prepare_publish(id, text),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err("Preparing the file or skill references timed out. The request was not sent; review the retained draft and retry.".into()),
+        };
+        match prepared {
+            Ok(Some(command)) => command,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                steering::fail_unsent(id, &error);
+                terminal::notice(&error);
+                return Ok(());
+            }
+        }
+    } else {
+        command
+    };
     timeout(Duration::from_secs(10), async {
         let mut writer = writer.lock().await;
+        // Preparation and lock acquisition cannot consume the reply deadline.
+        // A cancelled or superseded request must never reach the wire.
+        if !steering::sent(id) {
+            return Ok(());
+        }
         write_frame(&mut *writer, &Frame::Steering { id, command }).await
     })
     .await
@@ -1774,7 +1798,7 @@ async fn reclaim_steering(
             if steering::reload_ready()? { return Ok::<(), crate::Error>(()); }
             tokio::select! {
                 command = commands.recv() => match command {
-                    Some(steering::Transport::Wire { id, command }) => send_steering(writer, id, command).await?,
+                    Some(steering::Transport::Wire { id, .. }) => send_steering(writer, id, backend).await?,
                     Some(steering::Transport::Reload) => {},
                     None => return Err("client control channel ended while preparing reload".into()),
                 },
@@ -2042,8 +2066,8 @@ async fn connect(
                 if let Err(error) = steering::poll() { terminal::notice(&error); }
             },
             command = steering_commands.recv() => match command {
-                Some(steering::Transport::Wire { id, command }) => {
-                    if let Err(error) = send_steering(&writer, id, command).await { break Err(error); }
+                Some(steering::Transport::Wire { id, .. }) => {
+                    if let Err(error) = send_steering(&writer, id, &backend).await { break Err(error); }
                 },
                 Some(steering::Transport::Reload) => {
                     while let Some(completed) = requests.try_join_next() {
