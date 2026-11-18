@@ -47,15 +47,15 @@ return await exec.read(clientId, jobId, { max_bytes: 16384 });
 
 | 检查 | 结果 | 覆盖范围 |
 | --- | --- | --- |
-| JavaScript worker 回归 | 50 通过，0 失败 | 包括本地错误后继续调度、丢失启动回包后保留名额、新旧参数形式等价 |
-| 无效参数矩阵 | 102 组全部通过 | 无效或歧义参数均未发送原生请求；计入上述测试 |
+| JavaScript 助手回归 | 50 通过，0 失败 | 包括本地错误后继续调度、丢失启动回包后保留名额、新旧参数形式等价 |
+| 无效参数矩阵 | 102 种参数组合，0 次原生请求 | 包含于上述 50 项 JavaScript 测试；覆盖无效或歧义参数 |
 | Rust code mode 回归 | 24 通过，0 失败，0 忽略 | 包含两个新增 Node → Rust Host 边界测试和真实系统隔离验证 |
 | Rust 格式检查 | 通过 | `cargo fmt --all -- --check` |
 | 验证入口检查 | 通过 | `make -n test-code-mode` 指向同一组五个测试文件 |
 | 独立代码审查 | 无阻塞问题 | 并发名额、任务目标、参数兼容、错误传播和文档一致性 |
-| 严格 Clippy | 未取得最终结果 | 等待共享编译锁期间开发机连接中断，未将本项计为通过 |
+| 严格 Clippy | 通过，退出码 0 | `cargo clippy --locked --all-targets -- -D warnings` |
 
-完整已完成测试输出：[JavaScript](https://github.com/LIghtJUNction/ssmcp/blob/fix/execution-helper-contracts-20261118/docs/reports/execution-helper-contracts-20261118/javascript-tests.log) · [Rust](https://github.com/LIghtJUNction/ssmcp/blob/fix/execution-helper-contracts-20261118/docs/reports/execution-helper-contracts-20261118/rust-tests.log)。日志中的工作区绝对路径已替换为占位名称。
+完整已完成测试输出：[JavaScript](https://github.com/LIghtJUNction/ssmcp/blob/8bce82a536ca7de774044d3675d83b45a49d8c6d/docs/reports/execution-helper-contracts-20261118/javascript-tests.log) · [Rust](https://github.com/LIghtJUNction/ssmcp/blob/8bce82a536ca7de774044d3675d83b45a49d8c6d/docs/reports/execution-helper-contracts-20261118/rust-tests.log)。日志中的工作区绝对路径已替换为占位名称。
 
 复现命令：
 
@@ -66,6 +66,15 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
+严格 Clippy 的完整输出（工作区路径已替换为占位名称）：
+
+```text
+Checking ssmcp v0.8.0 (<workspace>)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6m 30s
+exit_code: 0
+```
+
 ## 交付状态
 
-实现、测试、使用说明与 CI 入口已分两次提交推送到 PR #29。开发机连接中断后的在线客户端查询为 0，严格 Clippy 检查需要在连接恢复后补验；PR 保留草稿，待该项结果确认后完成合入。本轮没有切换生产服务版本。
+实现、回归测试、使用说明与 CI 入口均包含在 PR #29，合入状态和记录见该 PR 页面。本次验收已完成。本轮没有切换生产服务版本；线上启用对象参数形式需要部署包含本轮改动的服务端 JavaScript 助手。
+
