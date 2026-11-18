@@ -966,11 +966,19 @@ async fn execute(
     let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
     audit_report.finish(&result).await;
     let response = crate::code_mode::tool_result(result);
-    let messages = claim_user_messages(&audit_report).await;
-    Ok(append_user_messages(response, messages))
+    let (messages, deferred) = claim_user_messages(&audit_report, &response).await;
+    let mut response = append_user_messages(response, messages);
+    if deferred {
+        // Budget reserves space for this notice without altering tool output.
+        response["content"].as_array_mut().expect("MCP content").push(json!({
+            "type":"text",
+            "text":"Some client requests remain queued because this tool result leaves insufficient room within the 4 MiB response limit. Return a smaller result on the next eligible tool call to receive each request with all of its images."
+        }));
+    }
+    Ok(response)
 }
 
-async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
+async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> (Vec<Value>, bool) {
     let mut eligible = Vec::new();
     // Finish all asynchronous authorization lookups before claiming anything.
     // Cancellation while validating leaves every pending record editable.
@@ -980,7 +988,7 @@ async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
             .authenticate(&report.user, &report.access_token)
             .await
         else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
         let Ok(session) = report
             .broker
@@ -1008,7 +1016,7 @@ async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
         eligible.push((session, agent_id));
     }
     let mut messages = Vec::new();
-    let mut bytes = 0usize;
+    let mut budget = crate::steering::DeliveryBudget::for_response(response);
     for (session, agent_id) in eligible {
         if !session.is_alive() {
             continue;
@@ -1017,26 +1025,22 @@ async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
             session.client_id(),
             &report.run.context.run_id,
             agent_id.as_deref(),
-            crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len()),
-            crate::steering::MAX_DELIVERY_BYTES.saturating_sub(bytes),
+            &mut budget,
         );
-        bytes += claimed
-            .iter()
-            .map(|message| message.to_string().len())
-            .sum::<usize>();
         messages.extend(claimed);
     }
-    messages
+    (messages, budget.response_limited)
 }
 
-fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
+fn append_user_messages(mut response: Value, mut messages: Vec<Value>) -> Value {
     if messages.is_empty() {
         return response;
     }
     let mut text = String::from(
         "USER REQUIREMENTS — submitted through the client request queue\nThese requests accompany this tool response; they are separate from tool execution output.\n",
     );
-    for message in &messages {
+    let mut images = Vec::new();
+    for message in &mut messages {
         text.push_str(&format!(
             "\n[Client {} · message {} · revision {}]\n{}\n",
             message["client_id"].as_str().unwrap_or(""),
@@ -1044,6 +1048,45 @@ fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
             message["revision"],
             message["text"].as_str().unwrap_or("")
         ));
+        if let Some(attachments) = message["images"].as_array_mut() {
+            for attachment in attachments {
+                let Some(object) = attachment.as_object_mut() else {
+                    continue;
+                };
+                let Some(data) = object.remove("data") else {
+                    continue;
+                };
+                let encoded = data.as_str().unwrap_or("");
+                let padding = encoded
+                    .bytes()
+                    .rev()
+                    .take_while(|byte| *byte == b'=')
+                    .count();
+                object.insert(
+                    "bytes".into(),
+                    json!((encoded.len() / 4 * 3).saturating_sub(padding)),
+                );
+                object.insert("encoded_bytes".into(), json!(encoded.len()));
+                text.push_str(&format!(
+                    "[Image {}: {} · {} · {} bytes; attached below]\n",
+                    images.len() + 1,
+                    object
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image"),
+                    object
+                        .get("mime_type")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                    object["bytes"]
+                ));
+                images.push(json!({
+                    "type": "image",
+                    "mimeType": object.get("mime_type").and_then(Value::as_str).unwrap_or(""),
+                    "data": data
+                }));
+            }
+        }
     }
     if !response["structuredContent"].is_object() {
         response["structuredContent"] = json!({});
@@ -1051,6 +1094,7 @@ fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
     response["structuredContent"]["user_messages"] = json!(messages);
     if let Some(content) = response["content"].as_array_mut() {
         content.push(json!({"type":"text","text":text}));
+        content.extend(images);
     }
     response
 }
@@ -1075,7 +1119,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Send every user-facing progress update, explanation, question and final answer through await say(clientId,{text,kind:'progress'}), backed by ssmcp.ui.message on updated clients; use kind:'answer' for final answers. The client displays these messages; /copy copies the latest. print/console output is diagnostic output for the caller. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools.search(clientId,{query,limit,include_schemas,cursor}) for bounded discovery, await tools(clientId, cursor?) for original native schema pages, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; rtk.status/run/start for installed RTK command-output compression; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates; collab.join/list/update/send/receive/ack/leave for session agents; collab.bind(clientId,{agent_id,token}) authenticates this run for exact-agent user messages. Check structuredContent.user_messages and the USER REQUIREMENTS text block on each code_mode response for local user instructions. Use the direct collab tool for receive waits over 1 second. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All registered native provider actions run through call over the client's outbound HTTPS/WebSocket or SSH connection. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Send every user-facing progress update, explanation, question and final answer through await say(clientId,{text,kind:'progress'}), backed by ssmcp.ui.message on updated clients; use kind:'answer' for final answers. The client displays these messages; /copy copies the latest. print/console output is diagnostic output for the caller. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools.search(clientId,{query,limit,include_schemas,cursor}) for bounded discovery, await tools(clientId, cursor?) for original native schema pages, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; rtk.status/run/start for installed RTK command-output compression; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates; collab.join/list/update/send/receive/ack/leave for session agents; collab.bind(clientId,{agent_id,token}) authenticates this run for exact-agent user messages. Check structuredContent.user_messages and the USER REQUIREMENTS text block on each code_mode response for local user instructions; explicitly attached images follow as MCP image content blocks in message order, with metadata only in user_messages. Use the direct collab tool for receive waits over 1 second. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All registered native provider actions run through call over the client's outbound HTTPS/WebSocket or SSH connection. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
@@ -1952,6 +1996,63 @@ mod tests {
         ] {
             headers.insert(header::ACCEPT, HeaderValue::from_str(value).unwrap());
             assert!(!accepts_json(&headers));
+        }
+    }
+    #[test]
+    fn queued_images_are_real_mcp_blocks_without_duplicated_metadata_or_changed_output() {
+        use base64::Engine;
+        let encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jU6kAAAAASUVORK5CYII=";
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let image = crate::wire::UserImage::from_bytes("pasted.png", "image/png", &bytes).unwrap();
+        for failed in [false, true] {
+            let original = json!({
+                "content":[{"type":"text","text":"original native result"},
+                    {"type":"image","mimeType":"image/png","data":encoded}],
+                "structuredContent":{"result":{"preserved":true},"logs":["original log"]},
+                "isError":failed,"_meta":{"opaque":"preserved"}
+            });
+            let messages = vec![json!({
+                "source":"client_user","client_id":"room","message_id":"message",
+                "revision":2,"text":"","target":"next","agent_id":null,
+                "images":[image]
+            })];
+            let response = append_user_messages(original.clone(), messages);
+            assert_eq!(
+                &response["content"].as_array().unwrap()[..2],
+                original["content"].as_array().unwrap()
+            );
+            assert_eq!(response["isError"], failed);
+            assert_eq!(response["_meta"], original["_meta"]);
+            assert_eq!(
+                response["structuredContent"]["result"],
+                original["structuredContent"]["result"]
+            );
+            assert_eq!(
+                response["structuredContent"]["logs"],
+                original["structuredContent"]["logs"]
+            );
+            assert_eq!(
+                response["content"][3],
+                json!({"type":"image","mimeType":"image/png","data":encoded})
+            );
+            let metadata = &response["structuredContent"]["user_messages"][0]["images"][0];
+            assert!(metadata.get("data").is_none());
+            assert_eq!(metadata["bytes"], bytes.len());
+            assert_eq!(metadata["encoded_bytes"], encoded.len());
+            assert!(
+                response["content"][2]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("pasted.png")
+            );
+            assert!(
+                !response["content"][2]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains(encoded)
+            );
         }
     }
 }

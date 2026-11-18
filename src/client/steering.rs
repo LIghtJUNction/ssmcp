@@ -1,7 +1,8 @@
 //! Client-owned requests. Broker revisions decide whether an edit won against delivery.
 use crate::wire::{
-    MAX_USER_MESSAGE_BYTES, MAX_USER_MESSAGES, SteeringAgent, SteeringCommand, SteeringMessage,
-    SteeringSnapshot, SteeringState,
+    MAX_USER_IMAGES_BYTES, MAX_USER_MESSAGE_BYTES, MAX_USER_MESSAGES, SteeringAgent,
+    SteeringCommand, SteeringMessage, SteeringSnapshot, SteeringState, UserImage,
+    user_images_bytes, validate_user_images,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,16 +18,28 @@ use tokio::sync::mpsc;
 
 const MAX_RECORDS: usize = 128;
 const MAX_TEXT_BYTES: usize = 512 * 1024;
-const MAX_HANDOFF_BYTES: u64 = 4 * 1024 * 1024;
+// Retain old uncertain receipts alongside the current room without replaying them.
+const MAX_OUTBOX_IMAGE_BYTES: usize = 2 * MAX_USER_IMAGES_BYTES;
+const MAX_HANDOFF_BYTES: u64 = 16 * 1024 * 1024;
 const HANDOFF_ENV: &str = "SSMCP_CLIENT_OUTBOX";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 static STATE: OnceLock<Mutex<Manager>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum UiEvent {
-    Accepted { id: String, text: String },
-    Editable { id: String, text: String },
-    Failed { id: String, message: String },
+    Accepted {
+        id: String,
+        text: String,
+    },
+    Editable {
+        id: String,
+        text: String,
+        images: Vec<UserImage>,
+    },
+    Failed {
+        id: String,
+        message: String,
+    },
 }
 
 pub(super) enum Transport {
@@ -109,6 +122,8 @@ impl Record {
 struct Draft {
     text: String,
     cursor: usize,
+    #[serde(default)]
+    images: Vec<UserImage>,
 }
 
 /// A displaced input is retained separately while a queued request is edited.
@@ -117,6 +132,8 @@ struct Draft {
 pub(super) struct SavedDraft {
     pub text: String,
     pub cursor: usize,
+    #[serde(default)]
+    pub images: Vec<UserImage>,
     #[serde(default)]
     pub target: Option<String>,
 }
@@ -150,6 +167,9 @@ impl DraftContext {
         }) {
             return Err("invalid or oversized parked draft".into());
         }
+        if let Some(draft) = &self.parked {
+            validate_user_images(&draft.images)?;
+        }
         Ok(())
     }
 }
@@ -180,6 +200,7 @@ impl Default for Outbox {
 impl Outbox {
     fn validate(&self) -> Result<(), String> {
         self.context.validate()?;
+        validate_user_images(&self.draft.images)?;
         if self.schema_version != 1
             || self.records.len() > MAX_RECORDS
             || self
@@ -188,6 +209,12 @@ impl Outbox {
                 .map(|record| record.message.text.len())
                 .sum::<usize>()
                 > MAX_TEXT_BYTES
+            || self
+                .records
+                .iter()
+                .map(|record| user_images_bytes(&record.message.images))
+                .sum::<usize>()
+                > MAX_OUTBOX_IMAGE_BYTES
             || self.draft.text.len() > MAX_USER_MESSAGE_BYTES
             || !self.draft.text.is_char_boundary(self.draft.cursor)
             || self.room_id.as_ref().is_some_and(|room| !valid_id(room))
@@ -212,7 +239,7 @@ impl Outbox {
             {
                 return Err("invalid client outbox record".into());
             }
-            validate_text(&message.text)?;
+            validate_message(&message.text, &message.images)?;
         }
         Ok(())
     }
@@ -229,6 +256,7 @@ struct Manager {
     outbox: Outbox,
     connected: bool,
     supported: bool,
+    images_supported: bool,
     ready: bool,
     revision: u64,
     agents: Vec<SteeringAgent>,
@@ -271,13 +299,18 @@ fn random_id() -> Result<String, String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 pub(super) fn validate_text(text: &str) -> Result<(), String> {
-    if text.trim().is_empty()
+    validate_message(text, &[])
+}
+
+pub(super) fn validate_message(text: &str, images: &[UserImage]) -> Result<(), String> {
+    validate_user_images(images)?;
+    if (text.trim().is_empty() && images.is_empty())
         || text.len() > MAX_USER_MESSAGE_BYTES
         || text
             .chars()
             .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\t'))
     {
-        return Err("request must contain 1..=16384 UTF-8 bytes of text; only newline and tab controls are allowed".into());
+        return Err("request needs text or an image; text is limited to 16384 UTF-8 bytes and only newline/tab controls".into());
     }
     Ok(())
 }
@@ -292,12 +325,20 @@ impl Manager {
 
     fn snapshot(&self) -> Value {
         json!({
-            "schema_version":1,"connected":self.connected,"supported":self.supported,
+            "schema_version":1,"connected":self.connected,"supported":self.supported,"images_supported":self.images_supported,
             "room_id":self.outbox.room_id,"revision":self.revision,"agents":self.agents,
-            "draft":{"text":self.outbox.draft.text,"cursor":self.outbox.draft.cursor},
-            "draft_context":self.outbox.context,
+            "draft":{"text":self.outbox.draft.text,"cursor":self.outbox.draft.cursor,
+                "images":self.outbox.draft.images.iter().map(UserImage::metadata).collect::<Vec<_>>()},
+            "draft_context":{
+                "editing":self.outbox.context.editing,"target":self.outbox.context.target,
+                "parked":self.outbox.context.parked.as_ref().map(|draft| json!({
+                    "text":draft.text,"cursor":draft.cursor,"target":draft.target,
+                    "images":draft.images.iter().map(UserImage::metadata).collect::<Vec<_>>()
+                }))
+            },
             "queue":self.outbox.records.iter().map(|record| json!({
                 "id":record.message.id,"text":record.message.text,"target":record.message.target,
+                "images":record.message.images.iter().map(UserImage::metadata).collect::<Vec<_>>(),
                 "revision":record.message.revision,"status":record.status(self.connected),
                 "created_at_ms":record.message.created_at_ms,"updated_at_ms":record.message.updated_at_ms,
                 "delivery":record.message.delivery,"error":record.error,"room_id":record.room_id,
@@ -316,6 +357,39 @@ impl Manager {
                 "this gateway does not support the request queue; update ssmcpd to wire version 7"
                     .into(),
             );
+        }
+        Ok(())
+    }
+
+    fn image_capability(&self, images: &[UserImage]) -> Result<(), String> {
+        if !images.is_empty() && self.connected && !self.images_supported {
+            return Err("image attachments need a version 8 gateway; update ssmcpd or remove the images. Your draft is retained.".into());
+        }
+        Ok(())
+    }
+
+    fn check_image_budget(
+        &self,
+        images: &[UserImage],
+        except: Option<usize>,
+    ) -> Result<(), String> {
+        let mut retained = user_images_bytes(images);
+        let mut pending = retained;
+        for (index, record) in self.outbox.records.iter().enumerate() {
+            if Some(index) == except {
+                continue;
+            }
+            let bytes = user_images_bytes(&record.message.images);
+            retained += bytes;
+            if !record.terminal() && !record.uncertain {
+                pending += bytes;
+            }
+        }
+        if pending > MAX_USER_IMAGES_BYTES {
+            return Err("pending queue images exceed 2 MiB of base64 data; remove an image or finish/cancel a queued request".into());
+        }
+        if retained > MAX_OUTBOX_IMAGE_BYTES {
+            return Err("retained request images exceed 4 MiB; finish queued requests before adding more images".into());
         }
         Ok(())
     }
@@ -352,6 +426,13 @@ impl Manager {
                 .map(|record| record.message.text.len())
                 .sum::<usize>()
                 > MAX_TEXT_BYTES - MAX_USER_MESSAGE_BYTES
+            || self
+                .outbox
+                .records
+                .iter()
+                .map(|record| user_images_bytes(&record.message.images))
+                .sum::<usize>()
+                > MAX_OUTBOX_IMAGE_BYTES - MAX_USER_IMAGES_BYTES
         {
             let Some(index) = self
                 .outbox
@@ -366,10 +447,21 @@ impl Manager {
     }
 
     fn submit(&mut self, text: &str, target: Option<&str>) -> Result<String, String> {
+        self.submit_with_images(text, target, Vec::new())
+    }
+
+    fn submit_with_images(
+        &mut self,
+        text: &str,
+        target: Option<&str>,
+        images: Vec<UserImage>,
+    ) -> Result<String, String> {
         self.mutable()?;
-        validate_text(text)?;
+        validate_message(text, &images)?;
+        self.image_capability(&images)?;
         let target = self.target(target)?;
         self.prune();
+        self.check_image_budget(&images, None)?;
         if self
             .outbox
             .records
@@ -397,6 +489,7 @@ impl Manager {
                 id: id.clone(),
                 revision: 0,
                 text: text.into(),
+                images,
                 target,
                 state: SteeringState::Queued,
                 created_at_ms: now_ms(),
@@ -425,11 +518,24 @@ impl Manager {
     }
 
     fn publish_edit(&mut self, id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
+        let images = self.outbox.records[self.index(id)?].message.images.clone();
+        self.publish_edit_with_images(id, text, target, images)
+    }
+
+    fn publish_edit_with_images(
+        &mut self,
+        id: &str,
+        text: &str,
+        target: Option<&str>,
+        images: Vec<UserImage>,
+    ) -> Result<(), String> {
         self.mutable()?;
-        validate_text(text)?;
+        validate_message(text, &images)?;
+        self.image_capability(&images)?;
         let index = self.index(id)?;
         let target =
             self.target(target.or(Some(self.outbox.records[index].message.target.as_str())))?;
+        self.check_image_budget(&images, Some(index))?;
         let original = self.outbox.records[index].clone();
         if original.message.state != SteeringState::Editing
             || original.pending.is_some()
@@ -452,6 +558,7 @@ impl Manager {
         }
         let record = &mut self.outbox.records[index];
         record.message.text = text.into();
+        record.message.images = images;
         record.message.target = target;
         record.message.state = SteeringState::Queued;
         record.message.updated_at_ms = now_ms();
@@ -483,6 +590,7 @@ impl Manager {
             self.event(UiEvent::Editable {
                 id: id.into(),
                 text: self.outbox.records[index].message.text.clone(),
+                images: self.outbox.records[index].message.images.clone(),
             });
             return Ok(());
         }
@@ -540,9 +648,11 @@ impl Manager {
         record.resume_after_reload = false;
         record.error = None;
         let text = record.message.text.clone();
+        let images = record.message.images.clone();
         self.event(UiEvent::Editable {
             id: id.into(),
             text,
+            images,
         });
         Ok(())
     }
@@ -583,6 +693,9 @@ impl Manager {
         if record.room_id != self.outbox.room_id || record.uncertain || record.retarget_required {
             return Err("this request needs explicit retargeting before it can be changed".into());
         }
+        if kind == MutationKind::Publish {
+            self.image_capability(&record.message.images)?;
+        }
         let command_id = random_id()?;
         let message_id = record.message.id.clone();
         let expected_revision = record.message.revision;
@@ -592,6 +705,7 @@ impl Manager {
                 message_id,
                 expected_revision,
                 text: record.message.text.clone(),
+                images: record.message.images.clone(),
                 target: record.message.target.clone(),
             },
             MutationKind::Takeback => SteeringCommand::Takeback {
@@ -633,7 +747,8 @@ impl Manager {
         let changed = self.outbox.room_id.as_deref() != Some(room_id);
         self.outbox.room_id = Some(room_id.into());
         self.connected = true;
-        self.supported = protocol >= 7;
+        self.supported = protocol >= crate::wire::QUEUE_VERSION;
+        self.images_supported = protocol >= crate::wire::IMAGE_VERSION;
         self.ready = false;
         self.revision = 0;
         self.sender = Some(sender);
@@ -660,6 +775,14 @@ impl Manager {
                 } else {
                     record.uncertain = true;
                     record.error = Some("Previous room ended before delivery could be confirmed. This request will not be replayed automatically.".into());
+                }
+            }
+        }
+        if !self.images_supported {
+            for record in &mut self.outbox.records {
+                if !record.terminal() && !record.message.images.is_empty() && record.safe_to_publish
+                {
+                    record.error = Some("Images need a version 8 gateway; update ssmcpd or take back the request to remove them.".into());
                 }
             }
         }
@@ -722,6 +845,12 @@ impl Manager {
                 .map(|message| message.text.len())
                 .sum::<usize>()
                 > MAX_TEXT_BYTES
+            || snapshot
+                .messages
+                .iter()
+                .map(|message| user_images_bytes(&message.images))
+                .sum::<usize>()
+                > MAX_USER_IMAGES_BYTES
         {
             return Err("invalid request queue snapshot".into());
         }
@@ -734,7 +863,7 @@ impl Manager {
             }
         }
         for message in &snapshot.messages {
-            validate_text(&message.text)?;
+            validate_message(&message.text, &message.images)?;
             if !valid_id(&message.id) || !valid_id(&message.target) {
                 return Err("invalid request identity".into());
             }
@@ -776,6 +905,14 @@ impl Manager {
                         .sum::<usize>()
                         + message.text.len()
                         <= MAX_TEXT_BYTES
+                    && self
+                        .outbox
+                        .records
+                        .iter()
+                        .map(|record| user_images_bytes(&record.message.images))
+                        .sum::<usize>()
+                        + user_images_bytes(&message.images)
+                        <= MAX_OUTBOX_IMAGE_BYTES
                 {
                     self.outbox.records.push(Record {
                         message: message.clone(),
@@ -866,6 +1003,7 @@ impl Manager {
                                 self.event(UiEvent::Editable {
                                     id: message_id,
                                     text: message.text.clone(),
+                                    images: message.images.clone(),
                                 });
                             }
                         }
@@ -936,6 +1074,7 @@ impl Manager {
                         && record.pending.is_none()
                         && !record.uncertain
                         && !record.retarget_required
+                        && (self.images_supported || record.message.images.is_empty())
                 })
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>();
@@ -1018,6 +1157,35 @@ pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String>
 pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
     with(|manager| manager.publish_edit(id, text, target))
 }
+pub(super) fn submit_with_images(
+    text: &str,
+    target: Option<&str>,
+    images: Vec<UserImage>,
+) -> Result<String, String> {
+    with(|manager| manager.submit_with_images(text, target, images))
+}
+pub(super) fn publish_edit_with_images(
+    id: &str,
+    text: &str,
+    target: Option<&str>,
+    images: Vec<UserImage>,
+) -> Result<(), String> {
+    with(|manager| manager.publish_edit_with_images(id, text, target, images))
+}
+pub(super) fn draft_images() -> Vec<UserImage> {
+    with(|manager| manager.outbox.draft.images.clone())
+}
+pub(super) fn message_images(id: &str) -> Vec<UserImage> {
+    with(|manager| {
+        manager
+            .outbox
+            .records
+            .iter()
+            .find(|record| record.message.id == id)
+            .map(|record| record.message.images.clone())
+            .unwrap_or_default()
+    })
+}
 pub(super) fn take_back(id: &str) -> Result<(), String> {
     with(|manager| manager.take_back(id))
 }
@@ -1039,19 +1207,39 @@ pub(super) fn draft_context() -> DraftContext {
     with(|manager| manager.outbox.context.clone())
 }
 pub(super) fn set_draft_context(context: DraftContext) -> Result<(), String> {
-    context.validate()?;
-    with(|manager| manager.outbox.context = context);
-    Ok(())
+    with(|manager| {
+        if manager.outbox.context != context {
+            context.validate()?;
+            manager.outbox.context = context;
+        }
+        Ok(())
+    })
 }
 pub(super) fn set_draft(text: &str, cursor: usize) -> Result<(), String> {
     if text.len() > MAX_USER_MESSAGE_BYTES || !text.is_char_boundary(cursor) {
         return Err("invalid or oversized composer draft".into());
     }
     with(|manager| {
+        manager.outbox.draft.text = text.into();
+        manager.outbox.draft.cursor = cursor;
+    });
+    Ok(())
+}
+pub(super) fn set_draft_with_images(
+    text: &str,
+    cursor: usize,
+    images: Vec<UserImage>,
+) -> Result<(), String> {
+    if text.len() > MAX_USER_MESSAGE_BYTES || !text.is_char_boundary(cursor) {
+        return Err("invalid or oversized composer draft".into());
+    }
+    validate_user_images(&images)?;
+    with(|manager| {
         manager.outbox.draft = Draft {
             text: text.into(),
             cursor,
-        }
+            images,
+        };
     });
     Ok(())
 }
@@ -1319,6 +1507,7 @@ mod tests {
         assert_eq!(expected_revision, 0);
         assert_eq!(sent_text, text);
         let message = SteeringMessage {
+            images: Vec::new(),
             id: message_id,
             revision: 1,
             text: text.into(),
@@ -1347,6 +1536,7 @@ mod tests {
         let mut receiver = manager.connect("room_one", 7);
         ready(&mut manager, &mut receiver, "room_one");
         manager.outbox.draft = Draft {
+            images: Vec::new(),
             text: "original request".into(),
             cursor: 16,
         };
@@ -1373,6 +1563,7 @@ mod tests {
         assert_eq!(
             manager.events.pop_front(),
             Some(UiEvent::Editable {
+                images: Vec::new(),
                 id: message.id.clone(),
                 text: message.text.clone()
             })
@@ -1471,6 +1662,7 @@ mod tests {
         ready(&mut manager, &mut receiver, "room_one");
         let mut message = publish(&mut manager, &mut receiver, "known undelivered", None);
         manager.outbox.draft = Draft {
+            images: Vec::new(),
             text: "未发送草稿".into(),
             cursor: "未发送".len(),
         };
@@ -1478,6 +1670,7 @@ mod tests {
             editing: Some(message.id.clone()),
             target: Some("agent_one".into()),
             parked: Some(SavedDraft {
+                images: Vec::new(),
                 text: "parked request".into(),
                 cursor: 6,
                 target: Some("another_agent".into()),
@@ -1643,6 +1836,7 @@ mod tests {
         assert_eq!(
             manager.events.pop_front(),
             Some(UiEvent::Editable {
+                images: Vec::new(),
                 id,
                 text: "review this offline draft".into(),
             })
@@ -1667,6 +1861,7 @@ mod tests {
             },
             DraftContext {
                 parked: Some(SavedDraft {
+                    images: Vec::new(),
                     text: "界".into(),
                     cursor: 1,
                     target: None,
@@ -1675,6 +1870,7 @@ mod tests {
             },
             DraftContext {
                 parked: Some(SavedDraft {
+                    images: Vec::new(),
                     text: "x".repeat(MAX_USER_MESSAGE_BYTES + 1),
                     cursor: 0,
                     target: None,
@@ -1683,6 +1879,7 @@ mod tests {
             },
             DraftContext {
                 parked: Some(SavedDraft {
+                    images: Vec::new(),
                     text: String::new(),
                     cursor: 0,
                     target: Some("bad target".into()),
@@ -1729,7 +1926,12 @@ mod tests {
             manager.events.clear();
         }
         assert_eq!(manager.outbox.records[0].status(true), "queued");
-        let claimed = queue.claim("room_one", "run_one", None, 1, 64 * 1024);
+        let claimed = queue.claim(
+            "room_one",
+            "run_one",
+            None,
+            &mut crate::steering::DeliveryBudget::default(),
+        );
         assert_eq!(claimed[0]["message_id"], first_id);
 
         // The next publish crosses the server's retained-byte limit. Its ACK
@@ -1785,5 +1987,117 @@ mod tests {
         let pending = &manager.outbox.records[manager.index(&pending_id).unwrap()];
         assert!(!pending.uncertain);
         assert_eq!(pending.status(true), "sending");
+    }
+    fn test_user_image() -> UserImage {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jU6kAAAAASUVORK5CYII="
+        ).unwrap();
+        UserImage::from_bytes("screenshot.png", "image/png", &bytes).unwrap()
+    }
+
+    #[test]
+    fn attachment_edits_share_the_text_revision_and_explicit_empty_images_remove_them() {
+        let image = test_user_image();
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", crate::wire::VERSION);
+        ready(&mut manager, &mut receiver, "room_one");
+        let message_id = manager
+            .submit_with_images("", None, vec![image.clone()])
+            .unwrap();
+        let (id, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { images, text, .. } if images == vec![image.clone()] && text.is_empty())
+        );
+        let mut message = manager.outbox.records[0].message.clone();
+        message.revision = 1;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 1, vec![message.clone()])))
+            .unwrap();
+        manager.events.clear();
+        manager.take_back(&message_id).unwrap();
+        let (id, _) = command(&mut manager, &mut receiver);
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(id, Ok(snapshot_for("room_one", 2, vec![message.clone()])))
+            .unwrap();
+        assert!(
+            matches!(manager.events.pop_front(), Some(UiEvent::Editable { images, .. }) if images == vec![image.clone()])
+        );
+        manager
+            .publish_edit_with_images(&message_id, "text replaces picture", None, Vec::new())
+            .unwrap();
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { expected_revision:2, images, text, .. } if images.is_empty() && text == "text replaces picture")
+        );
+    }
+
+    #[test]
+    fn version_seven_connections_retain_images_without_publishing_or_blocking_text() {
+        let mut manager = Manager::default();
+        let image_id = manager
+            .submit_with_images("image", None, vec![test_user_image()])
+            .unwrap();
+        let mut receiver = manager.connect("room_one", crate::wire::QUEUE_VERSION);
+        ready(&mut manager, &mut receiver, "room_one");
+        manager.poll().unwrap();
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert!(matches!(request, SteeringCommand::Snapshot {}));
+        assert!(receiver.try_recv().is_err());
+        assert!(manager.outbox.records[0].safe_to_publish);
+        assert!(
+            manager.outbox.records[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("version 8")
+        );
+        assert!(
+            manager
+                .submit_with_images("another", None, vec![test_user_image()])
+                .unwrap_err()
+                .contains("version 8")
+        );
+        assert!(manager.submit("text still works", None).is_ok());
+        manager.take_back(&image_id).unwrap();
+        assert!(
+            matches!(manager.events.pop_front(), Some(UiEvent::Editable { images, .. }) if images.len() == 1)
+        );
+    }
+
+    #[test]
+    fn image_drafts_parked_input_and_queued_requests_survive_private_reload_handoff() {
+        let image = test_user_image();
+        let mut manager = Manager::default();
+        manager
+            .submit_with_images("", None, vec![image.clone()])
+            .unwrap();
+        manager.outbox.draft = Draft {
+            text: "draft".into(),
+            cursor: 5,
+            images: vec![image.clone()],
+        };
+        manager.outbox.context.parked = Some(SavedDraft {
+            text: "parked".into(),
+            cursor: 6,
+            target: None,
+            images: vec![image.clone()],
+        });
+        let display = manager.snapshot();
+        assert!(!display.to_string().contains(&image.data));
+        assert_eq!(display["queue"][0]["images"][0]["id"], image.id);
+        assert!(
+            display["draft_context"]["parked"]["images"][0]
+                .get("data")
+                .is_none()
+        );
+        let ticket = write_handoff(manager.outbox.clone(), &std::env::temp_dir()).unwrap();
+        let restored = read_handoff(&ticket.path).unwrap().unwrap();
+        assert_eq!(restored.draft.images, vec![image.clone()]);
+        assert_eq!(restored.context.parked.unwrap().images, vec![image.clone()]);
+        assert_eq!(restored.records[0].message.images, vec![image]);
+        assert!(read_handoff(&ticket.path).unwrap().is_none());
     }
 }

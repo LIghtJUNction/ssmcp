@@ -1,11 +1,17 @@
 //! Private, bounded JSON frames carried over outbound HTTPS/WebSocket or SSH connections.
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 7;
-/// Version 6 adds code-mode source auditing; version 7 adds the local composer.
+pub const VERSION: u32 = 8;
+/// Version 8 adds explicitly attached user images to the local composer.
+pub const IMAGE_VERSION: u32 = 8;
+/// Version 7 supports text-only user requests.
+pub const QUEUE_VERSION: u32 = 7;
+/// Version 6 adds code-mode source auditing.
 pub const CODE_VERSION: u32 = 6;
 /// Version 5 supports controller attribution but not code-mode audit metadata.
 pub const CONTROLLER_VERSION: u32 = 5;
@@ -23,6 +29,106 @@ pub const MAX_CODE_BYTES: usize = 64 * 1024;
 pub const MAX_USER_MESSAGE_BYTES: usize = 16 * 1024;
 pub const MAX_USER_MESSAGES: usize = 64;
 
+/// Encoded budgets keep complete request/reply frames below MAX_FRAME.
+pub const MAX_USER_IMAGES: usize = 4;
+pub const MAX_USER_IMAGE_BYTES: usize = 1024 * 1024;
+pub const MAX_USER_IMAGES_BYTES: usize = 2 * 1024 * 1024;
+
+/// Image bytes explicitly selected by the operator. Names are display labels,
+/// never server-side paths. Content hashes bind edits/retries to immutable bytes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UserImage {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub data: String,
+}
+
+impl UserImage {
+    pub fn from_bytes(name: &str, mime_type: &str, bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_USER_IMAGE_BYTES / 4 * 3 {
+            return Err("each image must fit within 1 MiB of base64 data; resize or compress it before attaching".into());
+        }
+        let image = Self {
+            id: format!("{:x}", Sha256::digest(bytes)),
+            name: name.into(),
+            mime_type: mime_type.into(),
+            data: STANDARD.encode(bytes),
+        };
+        image.validate()?;
+        Ok(image)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty()
+            || self.name.len() > 256
+            || self
+                .name
+                .chars()
+                .any(|ch| ch.is_control() || matches!(ch, '/' | '\\'))
+        {
+            return Err("image name must be a display filename of 1..=256 bytes without paths or control characters".into());
+        }
+        if self.data.is_empty() || self.data.len() > MAX_USER_IMAGE_BYTES {
+            return Err("each image must contain at most 1 MiB of base64 data; resize or compress it before attaching".into());
+        }
+        let bytes = STANDARD
+            .decode(&self.data)
+            .map_err(|_| "image data must be valid standard base64")?;
+        let valid_type = match self.mime_type.as_str() {
+            "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
+            "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+            "image/webp" => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
+            _ => return Err("attachments support PNG, JPEG, GIF and WebP images".into()),
+        };
+        if !valid_type {
+            return Err("image bytes do not match the declared PNG, JPEG, GIF or WebP type".into());
+        }
+        if self.id != format!("{:x}", Sha256::digest(&bytes)) {
+            return Err("image content hash does not match its bytes".into());
+        }
+        Ok(())
+    }
+
+    /// Cheap display metadata: never clone base64 into UI polling or JSON text.
+    pub fn metadata(&self) -> Value {
+        let padding = self
+            .data
+            .bytes()
+            .rev()
+            .take_while(|byte| *byte == b'=')
+            .count();
+        serde_json::json!({
+            "id": self.id, "name": self.name, "mime_type": self.mime_type,
+            "bytes": (self.data.len() / 4 * 3).saturating_sub(padding),
+            "encoded_bytes": self.data.len()
+        })
+    }
+}
+
+pub fn user_images_bytes(images: &[UserImage]) -> usize {
+    images.iter().map(|image| image.data.len()).sum()
+}
+
+pub fn validate_user_images(images: &[UserImage]) -> Result<(), String> {
+    if images.len() > MAX_USER_IMAGES {
+        return Err("a request can contain at most 4 image attachments".into());
+    }
+    if user_images_bytes(images) > MAX_USER_IMAGES_BYTES {
+        return Err("image attachments must fit within 2 MiB of base64 data per request".into());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for image in images {
+        image.validate()?;
+        if !ids.insert(&image.id) {
+            return Err("the same image is already attached to this request".into());
+        }
+    }
+    Ok(())
+}
+
 /// Local operator commands act only on the connection that carries the frame.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -33,6 +139,8 @@ pub enum SteeringCommand {
         message_id: String,
         expected_revision: u64,
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<UserImage>,
         /// `next` or an exact registered collaboration agent ID.
         target: String,
     },
@@ -81,6 +189,8 @@ pub struct SteeringMessage {
     pub id: String,
     pub revision: u64,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<UserImage>,
     pub target: String,
     pub state: SteeringState,
     pub created_at_ms: u64,
@@ -880,5 +990,68 @@ mod tests {
             .is_err()
         );
         assert!(Operation::Resize { rows: 0, cols: 80 }.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod user_image_tests {
+    use super::*;
+
+    fn png() -> Vec<u8> {
+        STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jU6kAAAAASUVORK5CYII=").unwrap()
+    }
+
+    #[test]
+    fn user_images_bind_type_and_identity_to_explicit_bytes() {
+        let image = UserImage::from_bytes("screen.png", "image/png", &png()).unwrap();
+        validate_user_images(std::slice::from_ref(&image)).unwrap();
+        assert_eq!(image.metadata()["bytes"], png().len());
+        assert!(image.metadata().get("data").is_none());
+        let mut damaged = image.clone();
+        damaged.mime_type = "image/jpeg".into();
+        assert!(damaged.validate().is_err());
+        damaged = image.clone();
+        damaged.data = "not base64".into();
+        assert!(damaged.validate().is_err());
+        damaged = image.clone();
+        damaged.id = "0".repeat(64);
+        assert!(damaged.validate().is_err());
+        assert!(UserImage::from_bytes("../private.png", "image/png", &png()).is_err());
+        assert!(UserImage::from_bytes("file.svg", "image/svg+xml", b"<svg/>").is_err());
+        assert!(validate_user_images(&[image.clone(), image]).is_err());
+    }
+
+    #[test]
+    fn user_image_encoded_budgets_are_enforced_before_large_decode() {
+        let mut bytes = png();
+        bytes.resize(MAX_USER_IMAGE_BYTES / 4 * 3, 0);
+        let first = UserImage::from_bytes("first.png", "image/png", &bytes).unwrap();
+        assert_eq!(first.data.len(), MAX_USER_IMAGE_BYTES);
+        *bytes.last_mut().unwrap() = 1;
+        let second = UserImage::from_bytes("second.png", "image/png", &bytes).unwrap();
+        validate_user_images(&[first.clone(), second.clone()]).unwrap();
+        let third = UserImage::from_bytes("small.png", "image/png", &png()).unwrap();
+        assert!(
+            validate_user_images(&[first, second, third])
+                .unwrap_err()
+                .contains("2 MiB")
+        );
+        bytes.push(0);
+        assert!(
+            UserImage::from_bytes("large.png", "image/png", &bytes)
+                .unwrap_err()
+                .contains("1 MiB")
+        );
+    }
+
+    #[test]
+    fn version_seven_text_commands_omit_the_optional_image_field() {
+        let legacy = serde_json::json!({
+            "op":"publish","command_id":"c","message_id":"m",
+            "expected_revision":0,"text":"hello","target":"next"
+        });
+        let command: SteeringCommand = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(matches!(&command, SteeringCommand::Publish { images, .. } if images.is_empty()));
+        assert_eq!(serde_json::to_value(command).unwrap(), legacy);
     }
 }

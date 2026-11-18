@@ -109,12 +109,13 @@ impl AuditRun {
 
     /// UI and client metadata queries still carry source audit, but cannot
     /// consume a human requirement merely by refreshing display or discovery.
-    /// Only these explicit observation APIs are exempt; other read operations
+    /// Assistant messages are actual interaction and may receive the next user
+    /// request; message-history reads remain observation. Other read operations
     /// and runs that explicitly bind an agent retain normal delivery semantics.
     pub(crate) fn native_dispatched(&self, client_id: &str, tool: Option<&str>) {
         self.dispatched(client_id);
         if tool.is_some_and(|name| {
-            !name.starts_with("ssmcp.ui.")
+            (name == "ssmcp.ui.message" || !name.starts_with("ssmcp.ui."))
                 && !matches!(
                     name,
                     "ssmcp.client.capabilities"
@@ -603,9 +604,15 @@ fn validate_request(request: &HostRequest) -> Result<(), String> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
                 || !arguments.is_object()
-                || arguments.to_string().len() > crate::wire::MAX_FRAME / 2
             {
                 return Err("invalid native tool name or arguments".into());
+            }
+            if arguments.to_string().len() > crate::wire::MAX_FRAME / 2 {
+                return Err(if name == "ssmcp.ui.queue" {
+                    "request queue tool arguments exceed 2 MiB including base64 image data and metadata; reduce image count or size. The local composer has a separate 2 MiB image-data budget.".into()
+                } else {
+                    "native tool arguments exceed 2 MiB; send a smaller argument payload".into()
+                });
             }
             client_id
         }
@@ -767,6 +774,7 @@ mod tests {
         let run = AuditRun::new("return await ui.get('display');", None).unwrap();
         for tool in [
             "ssmcp.ui.get",
+            "ssmcp.ui.messages",
             "ssmcp.ui.queue",
             "ssmcp.ui.set",
             "ssmcp.ui.action",
@@ -1624,5 +1632,29 @@ mod tests {
             "--share-net" | "--proc" | "/proc" | "/etc" | "/home" | "/run" | "/usr"
         )));
         assert_eq!(command.as_std().get_envs().count(), 0);
+    }
+    #[test]
+    fn oversized_native_queue_arguments_explain_the_image_metadata_budget() {
+        let request = HostRequest::Call {
+            client_id: "a".repeat(64),
+            name: "ssmcp.ui.queue".into(),
+            arguments: json!({"text":"x".repeat(crate::wire::MAX_FRAME / 2)}),
+        };
+        let error = validate_request(&request).unwrap_err();
+        assert!(error.contains("2 MiB including base64 image data and metadata"));
+        assert!(error.contains("reduce image count or size"));
+    }
+    #[test]
+    fn assistant_replies_are_eligible_for_user_requests_but_history_reads_are_not() {
+        let run = AuditRun::new(
+            "await say('client', {text:'Progress',kind:'progress'});",
+            None,
+        )
+        .unwrap();
+        run.native_dispatched("client", Some("ssmcp.ui.messages"));
+        assert_eq!(run.targets(), ["client"]);
+        assert!(run.steering_targets().is_empty());
+        run.native_dispatched("client", Some("ssmcp.ui.message"));
+        assert_eq!(run.steering_targets(), ["client"]);
     }
 }

@@ -132,8 +132,13 @@ impl Session {
         &self,
         command: wire::SteeringCommand,
     ) -> Result<wire::SteeringSnapshot, String> {
-        if !self.is_alive() || self.wire_version < wire::VERSION {
+        if !self.is_alive() || self.wire_version < wire::QUEUE_VERSION {
             return Err("the local composer requires wire protocol version 7".into());
+        }
+        if self.wire_version < wire::IMAGE_VERSION
+            && matches!(&command, wire::SteeringCommand::Publish { images, .. } if !images.is_empty())
+        {
+            return Err("image attachments require wire protocol version 8".into());
         }
         self.steering
             .command(self.client_id(), self.collaboration.presence()?, command)
@@ -572,6 +577,7 @@ impl Broker {
             }) if matches!(
                 version,
                 wire::VERSION
+                    | wire::QUEUE_VERSION
                     | wire::CODE_VERSION
                     | wire::CONTROLLER_VERSION
                     | wire::LEGACY_VERSION
@@ -583,7 +589,7 @@ impl Broker {
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5, v6 and v7)".into(),
+                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5, v6, v7 and v8)".into(),
                     },
                 )
                 .await?;
@@ -1033,6 +1039,7 @@ mod tests {
             wire::CONTROLLER_VERSION,
             wire::CODE_VERSION,
             wire::VERSION,
+            wire::QUEUE_VERSION,
         ] {
             let broker = Arc::new(Broker::new("https://example.test".into()));
             let (server, client) = UnixStream::pair().unwrap();
@@ -1202,6 +1209,7 @@ mod tests {
             wire::CONTROLLER_VERSION,
             wire::CODE_VERSION,
             wire::VERSION,
+            wire::QUEUE_VERSION,
         ] {
             let (sender, mut receiver) = mpsc::channel(4);
             let mut subject = session("controller-test", "secret");
@@ -1885,5 +1893,43 @@ mod tests {
             &broker.redeem_login(&user, &"a".repeat(64)).await.unwrap(),
             &anchor
         ));
+    }
+    #[test]
+    fn version_seven_clients_keep_text_requests_and_reject_image_publication() {
+        let mut subject = session("queue-version-test", "secret");
+        subject.wire_version = wire::QUEUE_VERSION;
+        let text = wire::SteeringCommand::Publish {
+            command_id: "text".into(),
+            message_id: "text".into(),
+            expected_revision: 0,
+            text: "still supported".into(),
+            images: Vec::new(),
+            target: "next".into(),
+        };
+        assert_eq!(subject.steering_command(text).unwrap().messages.len(), 1);
+        let image =
+            wire::UserImage::from_bytes("image.png", "image/png", b"\x89PNG\r\n\x1a\n").unwrap();
+        let image = wire::SteeringCommand::Publish {
+            command_id: "image".into(),
+            message_id: "image".into(),
+            expected_revision: 0,
+            text: "".into(),
+            images: vec![image],
+            target: "next".into(),
+        };
+        assert!(
+            subject
+                .steering_command(image)
+                .unwrap_err()
+                .contains("version 8")
+        );
+        assert_eq!(
+            subject
+                .steering_command(wire::SteeringCommand::Snapshot {})
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
     }
 }

@@ -55,6 +55,8 @@ if scenario == "timeout":
 if scenario == "reject-all" or (scenario.startswith("legacy") and hello["version"] != 4):
     reject(unsupported)
 
+if scenario == "queue-only" and hello["version"] > 7:
+    reject(unsupported + "; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5, v6 and v7)")
 if scenario == "code-only" and hello["version"] > 6:
     reject(unsupported)
 if scenario == "controller-only" and hello["version"] > 5:
@@ -231,7 +233,7 @@ async fn explicit_rejections_use_fresh_transports_and_remember_the_legacy_versio
         )
         .await;
     let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(attempts, 4);
+    assert_eq!(attempts, 5);
     assert_eq!(protocol, LEGACY_VERSION);
     assert!(registered);
     assert!(registration.ready.1.is_empty());
@@ -242,20 +244,21 @@ async fn explicit_rejections_use_fresh_transports_and_remember_the_legacy_versio
     );
     let hellos = fixture.hellos();
     assert_eq!(hellos[0]["version"], VERSION);
+    assert_eq!(hellos[1]["version"], QUEUE_VERSION);
     assert_eq!(
         hellos[0]["metadata"]["title"],
         original.title.as_ref().unwrap().as_str()
     );
-    assert_eq!(hellos[1]["version"], CODE_VERSION);
+    assert_eq!(hellos[2]["version"], CODE_VERSION);
     assert_eq!(
-        hellos[1]["metadata"]["title"],
+        hellos[2]["metadata"]["title"],
         original.title.as_ref().unwrap().as_str()
     );
-    assert_eq!(hellos[2]["version"], CONTROLLER_VERSION);
-    assert_eq!(hellos[3]["version"], LEGACY_VERSION);
-    assert!(hellos[3]["metadata"].get("title").is_none());
+    assert_eq!(hellos[3]["version"], CONTROLLER_VERSION);
+    assert_eq!(hellos[4]["version"], LEGACY_VERSION);
+    assert!(hellos[4]["metadata"].get("title").is_none());
     assert_eq!(
-        hellos[3]["metadata"]["allow"],
+        hellos[4]["metadata"]["allow"],
         serde_json::to_value(&original.allow).unwrap()
     );
     close(registration).await;
@@ -299,7 +302,7 @@ async fn version_six_gateway_keeps_code_audit_without_sending_steering_frames() 
         )
         .await;
     let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(attempts, 2);
+    assert_eq!(attempts, 3);
     assert_eq!(protocol, CODE_VERSION);
     assert!(registered);
     assert_eq!(
@@ -325,15 +328,16 @@ async fn known_version_five_gateway_rejection_preserves_controller_protocol_and_
         )
         .await;
     let registration = result.unwrap().expect("registration was cancelled");
-    assert_eq!(attempts, 3);
+    assert_eq!(attempts, 4);
     assert_eq!(protocol, CONTROLLER_VERSION);
     assert!(registered);
     let hellos = fixture.hellos();
     assert_eq!(hellos[0]["version"], VERSION);
-    assert_eq!(hellos[1]["version"], CODE_VERSION);
-    assert_eq!(hellos[2]["version"], CONTROLLER_VERSION);
+    assert_eq!(hellos[1]["version"], QUEUE_VERSION);
+    assert_eq!(hellos[2]["version"], CODE_VERSION);
+    assert_eq!(hellos[3]["version"], CONTROLLER_VERSION);
     assert_eq!(
-        hellos[2]["metadata"]["title"],
+        hellos[3]["metadata"]["title"],
         metadata.title.as_ref().unwrap().as_str()
     );
     close(registration).await;
@@ -355,10 +359,10 @@ async fn explicit_legacy_rejection_is_terminal_after_all_supported_versions() {
         .await;
     let error = registration_error(result);
     assert!(error.downcast_ref::<UnsupportedWireProtocol>().is_some());
-    assert_eq!(attempts, 4);
+    assert_eq!(attempts, 5);
     assert_eq!(protocol, LEGACY_VERSION);
     assert!(!registered);
-    assert_eq!(fixture.hellos().len(), 4);
+    assert_eq!(fixture.hellos().len(), 5);
 }
 
 #[tokio::test]
@@ -426,7 +430,7 @@ async fn compatibility_preserves_both_allow_checks_and_login_code_requirement() 
             .await;
         let error = registration_error(result);
         assert!(error.to_string().contains(expected), "{scenario}: {error}");
-        assert_eq!(attempts, 4);
+        assert_eq!(attempts, 5);
         assert_eq!(protocol, LEGACY_VERSION);
         assert!(
             registered,
@@ -469,4 +473,28 @@ async fn handshake_deadline_never_selects_a_legacy_protocol() {
     assert_eq!(attempts, 1);
     assert_eq!(protocol, VERSION);
     assert!(!registered);
+}
+
+#[tokio::test]
+async fn version_seven_gateway_accepts_text_queue_after_explicit_v8_rejection() {
+    let fixture = Fixture::new();
+    let mut protocol = VERSION;
+    let mut registered = false;
+    let (result, attempts) = fixture
+        .register(
+            "queue-only",
+            &metadata(false),
+            &mut protocol,
+            &mut registered,
+            READY_LIMIT,
+        )
+        .await;
+    let registration = result.unwrap().expect("registration was cancelled");
+    assert_eq!(attempts, 2);
+    assert_eq!(protocol, QUEUE_VERSION);
+    assert!(registered);
+    let hellos = fixture.hellos();
+    assert_eq!(hellos[0]["version"], VERSION);
+    assert_eq!(hellos[1]["version"], QUEUE_VERSION);
+    close(registration).await;
 }
