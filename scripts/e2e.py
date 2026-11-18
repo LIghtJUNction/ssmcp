@@ -361,9 +361,27 @@ class Harness:
                    == ["Parent rule.\n", "Nested rule.\n"]
                    and result["instruction"]["content"] == "Parent rule.\n",
                    f"{label}: AGENTS resolution keeps parent-to-target order and exact text")
-        self.check(result["skillResource"]["skills"][0]["name"] == "ssh-skill"
-                   and result["ruleResource"]["files"] == result["rules"]["files"],
-                   f"{label}: dynamic skill and instruction resources route across actual SSH")
+        recipient = client_id or self.client_id
+        for resource_key, native_key, field, kind in (
+            ("skillResource", "index", "skills", "skills"),
+            ("ruleResource", "rules", "files", "agents"),
+        ):
+            native = result[native_key]
+            expected = [
+                {
+                    **row,
+                    "readUri": f"ssmcp://clients/{recipient}/{kind}/read?"
+                    + urlencode({"root": row.get("root", native["root"])["id"],
+                                 "path": row["path"]}),
+                }
+                for row in native[field]
+            ]
+            resource = result[resource_key]
+            self.check(resource["client"]["id"] == recipient
+                       and resource["root"] == native["root"]
+                       and resource[field] == expected,
+                       f"{label}: dynamic {kind} resource preserves source metadata "
+                       "and binds content links to the exact client and root")
 
     def read_until(self, pattern, *, cursor=0, timeout=5.0, client_id=None):
         deadline = time.monotonic() + timeout

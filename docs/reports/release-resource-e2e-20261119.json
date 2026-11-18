@@ -1,0 +1,24 @@
+{
+  "schema": "ssmcp.release-resource-e2e.v1",
+  "fixture_commit": "59ef9c6c367029dbcf20721aa5a63aa69cfc7ef1",
+  "scope": "isolated loopback SSH/OAuth, existing installed binaries; not full candidate acceptance",
+  "binary_sha256": {
+    "ssmcp": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13",
+    "ssmcpd": "99a237b1c1c93193c0168f240a7035a7a9f4d56da43dca8e5915b3020aec7a1e"
+  },
+  "original": {
+    "original_assertion": "failed",
+    "error": "resource probe: dynamic skill and instruction resources route across actual SSH",
+    "cleanup": "completed",
+    "skill_first_name_matches": true,
+    "rule_files_exact_equal": false,
+    "rule_files_equal_ignoring_readUri": true,
+    "checks_before_failure": 26
+  },
+  "patched": {
+    "original_assertion": "passed",
+    "cleanup": "completed",
+    "checks_before_failure": 28
+  },
+  "patch_sha256": "2ae91aaea2358870e32d1251261089cf078c578afa888e649fe5fde00154d208"
+}
