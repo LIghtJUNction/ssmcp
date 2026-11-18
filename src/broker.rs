@@ -223,10 +223,10 @@ impl Session {
                     .await
                     .map_err(|_| "thread scope capability probe timed out")?
                     .map_err(|_| "client disconnected during thread scope capability probe")?;
-                let value = match result {
-                    Ok(value) => value,
-                    Err(_) => return Ok(false),
-                };
+                let value = result?;
+                if value["isError"].as_bool() == Some(true) {
+                    return Err("thread scope capability query failed; retry the call".into());
+                }
                 let native = value.get("structuredContent").unwrap_or(&value);
                 Ok(native["thread_scope"].as_u64() == Some(1))
             })
@@ -2140,5 +2140,96 @@ mod tests {
             &broker.redeem_login(&user, &"a".repeat(64)).await.unwrap(),
             &anchor
         ));
+    }
+    #[tokio::test]
+    async fn native_thread_scope_is_bound_and_capability_gated_once() {
+        for supported in [false, true] {
+            let mut session = session("session_one", "unused");
+            let (sender, mut receiver) = mpsc::channel::<Call>(4);
+            Arc::get_mut(&mut session).unwrap().sender = sender;
+            let joined = session
+                .collaboration
+                .dispatch("owner", "join", serde_json::json!({"name":"worker"}))
+                .await
+                .unwrap();
+            let thread = joined["thread_id"].as_str().unwrap().to_owned();
+            let run = crate::code_mode::AuditRun::new("return true;", None).unwrap();
+            run.bind(
+                "session_one",
+                "owner",
+                &thread,
+                joined["token"].as_str().unwrap(),
+            )
+            .unwrap();
+            let expected = thread.clone();
+            let client = tokio::spawn(async move {
+                let probe = receiver.recv().await.unwrap();
+                assert!(probe.code_context.is_none());
+                assert!(
+                    matches!(probe.operation,Operation::CallTool{name,..} if name == "ssmcp.client.capabilities")
+                );
+                probe.reply.send(Ok(serde_json::json!({"structuredContent":{"thread_scope":if supported {1} else {0}}}))).unwrap();
+                for _ in 0..2 {
+                    let call = receiver.recv().await.unwrap();
+                    let context = call.code_context.unwrap();
+                    assert_eq!(
+                        context.session_id.as_deref(),
+                        supported.then_some("session_one")
+                    );
+                    assert_eq!(
+                        context.thread_id.as_deref(),
+                        supported.then_some(expected.as_str())
+                    );
+                    call.reply.send(Ok(serde_json::json!({"ok":true}))).unwrap();
+                }
+            });
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                crate::code_mode::AUDIT_RUN.scope(run, async {
+                    assert_eq!(
+                        session.call(Operation::Status {}).await.unwrap()["ok"],
+                        true
+                    );
+                    assert_eq!(
+                        session.call(Operation::Status {}).await.unwrap()["ok"],
+                        true
+                    );
+                    client.await.unwrap();
+                }),
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn scope_probe_errors_are_retryable_and_do_not_cache_a_false_capability() {
+        let mut session = session("session_retry", "unused");
+        let (sender, mut receiver) = mpsc::channel::<Call>(4);
+        Arc::get_mut(&mut session).unwrap().sender = sender;
+        let client = tokio::spawn(async move {
+            receiver
+                .recv()
+                .await
+                .unwrap()
+                .reply
+                .send(Err("temporarily busy".into()))
+                .unwrap();
+            receiver
+                .recv()
+                .await
+                .unwrap()
+                .reply
+                .send(Ok(serde_json::json!({"thread_scope":1})))
+                .unwrap();
+        });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            assert!(session.supports_thread_scope().await.is_err());
+            assert!(session.supports_thread_scope().await.unwrap());
+            assert!(session.supports_thread_scope().await.unwrap());
+            client.await.unwrap();
+        })
+        .await
+        .unwrap();
     }
 }
