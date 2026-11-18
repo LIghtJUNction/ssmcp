@@ -332,7 +332,25 @@ impl State {
             "/agents" => self.chat_change_view(View::Agents),
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
-            "/logs" => self.chat_change_view(View::Activity),
+            "/logs" => {
+                self.raw_activity = false;
+                self.chat_change_view(View::Activity);
+            }
+            "/raw" => {
+                if !rest.is_empty() {
+                    return Err("Use /raw without arguments".into());
+                }
+                self.raw_activity = !self.raw_activity;
+                self.chat_change_view(View::Activity);
+                self.notice = Some(
+                    if self.raw_activity {
+                        "Original transcript · /raw or /logs returns to compact activity"
+                    } else {
+                        "Compact activity · Tab then Up/Down selects · Enter expands"
+                    }
+                    .into(),
+                );
+            }
             "/sidebar" => self.actions.push("sidebar.toggle"),
             "/theme" => {
                 if rest.is_empty() {
@@ -360,6 +378,7 @@ impl State {
                     self.log_query = rest.into();
                 }
                 self.filter_offset = 0;
+                self.compact_log.filter(&self.log_query, self.log_level);
                 self.chat_change_view(View::Activity);
             }
             "/clear" => {
@@ -368,6 +387,8 @@ impl State {
                     nonzero(self.geometry.left),
                     SCROLLBACK_ROWS,
                 );
+                self.compact_log = compact_log::CompactLog::default();
+                self.previous_cr = false;
                 self.log_query.clear();
                 self.log_level = 0;
                 self.filter_offset = 0;
@@ -529,12 +550,27 @@ impl State {
                     }
                 }
             }
+            View::Activity if !self.raw_activity => self.compact_log.toggle(),
             View::Activity => {}
         }
     }
 
     fn chat_move(&mut self, delta: isize) {
         match self.conversation.view {
+            View::Activity if !self.raw_activity => {
+                if delta.unsigned_abs() <= 1 || delta == isize::MAX || delta == isize::MIN + 1 {
+                    self.compact_log.select(delta);
+                } else {
+                    let _ = self.compact_log.rows(
+                        self.geometry.left,
+                        body_rows(self.geometry.rows),
+                        &self.log_query,
+                        self.log_level,
+                        self.conversation.content_focus,
+                    );
+                    self.compact_log.scroll(delta);
+                }
+            }
             View::Activity => self.scroll_logs(-delta),
             View::Audit => self.audit.scroll_by(delta),
             View::Agents if self.conversation.detail => self.audit.scroll_by(delta),
@@ -591,6 +627,7 @@ impl State {
             Key::Filter => {
                 self.log_level = (self.log_level + 1) % 3;
                 self.filter_offset = 0;
+                self.compact_log.filter(&self.log_query, self.log_level);
             }
             Key::FocusBack => self.conversation.content_focus = !content,
             Key::Up => self.chat_move(
@@ -600,11 +637,19 @@ impl State {
                 (isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
             ),
             Key::HistoryStart => {
-                self.scroll_logs(isize::MAX);
+                if self.raw_activity {
+                    self.scroll_logs(isize::MAX);
+                } else {
+                    self.compact_log.select(isize::MIN);
+                }
                 self.chat_change_view(View::Activity);
             }
             Key::HistoryEnd => {
-                self.scroll_logs(isize::MIN);
+                if self.raw_activity {
+                    self.scroll_logs(isize::MIN);
+                } else {
+                    self.compact_log.select(isize::MAX);
+                }
                 self.chat_change_view(View::Activity);
             }
             Key::AuditUp if content => self.chat_move(-1),
@@ -659,6 +704,9 @@ impl State {
                 }
             }
             Key::Back if content => {
+                if self.conversation.view == View::Activity && !self.raw_activity {
+                    self.compact_log.collapse();
+                }
                 self.audit.back();
                 self.conversation.detail = false;
                 self.conversation.detail_scroll = 0;
@@ -714,7 +762,12 @@ impl State {
                         self.conversation.selected = index;
                         self.conversation.selected_agent = None;
                     }
-                    if button == 2 {
+                    if button == 0 && self.conversation.view == View::Activity && !self.raw_activity
+                    {
+                        if let Some(row) = y.checked_sub(body_top(self.geometry.rows)) {
+                            self.compact_log.click(usize::from(row));
+                        }
+                    } else if button == 2 {
                         self.chat_open(false);
                     } else if button == 0
                         && (self.conversation.view == View::Audit
@@ -1150,6 +1203,18 @@ impl State {
         let top = body_top(g.rows);
         let height = body_rows(g.rows);
         let mut body = match self.conversation.view {
+            View::Activity if !self.raw_activity => {
+                let rows = self.compact_log.rows(
+                    g.left,
+                    height,
+                    &self.log_query,
+                    self.log_level,
+                    self.conversation.content_focus,
+                );
+                rows.into_iter()
+                    .map(|(text, tone)| self.chat_line(&text, tone, g.left))
+                    .collect()
+            }
             View::Activity => self.filtered_logs().unwrap_or_else(|| {
                 (0..height)
                     .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
@@ -1173,6 +1238,8 @@ impl State {
                 "  Wheel      Scroll directly · PgUp/PgDn also work",
                 "  F3         Collapse sidebar · F4 change theme",
                 "  F5         Reload appearance · F8 save appearance",
+                "  Enter/→    Expand selected tool · ← collapse · diffs stay open",
+                "  /raw       Toggle original unfolded activity · /logs compact",
                 "  /filter    Text search · F9 all / commands / errors",
                 "  /agents    Inspect observed calls or select a registered recipient",
                 "  /queue     Inspect, take back, edit or cancel requests",
@@ -1247,7 +1314,11 @@ impl State {
                 self.chat_line(
                     &format!(
                         "  ssmcp  /  {}{}{suffix}",
-                        self.conversation.view.name(),
+                        if self.conversation.view == View::Activity && self.raw_activity {
+                            "raw activity"
+                        } else {
+                            self.conversation.view.name()
+                        },
                         self.context_label,
                     ),
                     PanelTone::Heading,
@@ -1859,18 +1930,26 @@ mod tests {
 
     #[test]
     fn mouse_wheel_scrolls_without_focus_switch_or_draft_loss() {
-        let mut state = preview(24, 100);
-        for index in 0..80 {
-            state.log(format!("event {index}\n").as_bytes());
+        for raw in [false, true] {
+            let mut state = preview(24, 100);
+            state.raw_activity = raw;
+            for index in 0..80 {
+                state.log(format!("event {index}\n").as_bytes());
+            }
+            input(&mut state, b"unfinished");
+            let before = display(&mut state).screen().contents();
+            input(&mut state, b"\x1b[<64;10;5M");
+            let after = display(&mut state).screen().contents();
+            assert_ne!(
+                before, after,
+                "wheel must move the visible transcript in raw={raw}"
+            );
+            assert!(!state.conversation.content_focus);
+            assert_eq!(state.conversation.composer.text(), "unfinished");
+            input(&mut state, b"\x1b[1;5F");
+            let end = display(&mut state).screen().contents();
+            assert!(end.contains("event 79"), "{end}");
         }
-        input(&mut state, b"unfinished");
-        assert_eq!(state.logs.screen().scrollback(), 0);
-        input(&mut state, b"\x1b[<64;10;5M");
-        assert!(state.logs.screen().scrollback() > 0);
-        assert!(!state.conversation.content_focus);
-        assert_eq!(state.conversation.composer.text(), "unfinished");
-        input(&mut state, b"\x1b[1;5F");
-        assert_eq!(state.logs.screen().scrollback(), 0);
     }
 
     #[test]
@@ -1965,5 +2044,69 @@ mod tests {
         assert_eq!(field(&state.chat_selected().unwrap(), "run_id"), selected);
         state.chat_move(1);
         assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
+    }
+    #[test]
+    fn compact_activity_expands_by_keyboard_and_raw_restores_original_transcript() {
+        let mut state = preview(30, 120);
+        assert!(!state.raw_activity);
+        let compact = display(&mut state).screen().contents();
+        assert!(
+            compact.contains("cargo test") && compact.contains("exit=0"),
+            "{compact}"
+        );
+        assert!(
+            !compact.contains("test client::ui::custom_colors"),
+            "{compact}"
+        );
+        assert!(
+            compact.contains("- let expanded = true") && compact.contains("+ let expanded = false")
+        );
+        state.conversation.composer.insert("unfinished requirement");
+        state.conversation.content_focus = true;
+        state.compact_log.select(isize::MIN);
+        state.compact_log.select(1);
+        state.chat_key(Key::Open);
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("test client::ui::custom_colors")
+        );
+        state.chat_key(Key::Back);
+        assert!(
+            !display(&mut state)
+                .screen()
+                .contents()
+                .contains("test client::ui::custom_colors")
+        );
+        assert!(state.chat_command("/raw").unwrap());
+        assert!(state.raw_activity);
+        let raw = display(&mut state).screen().contents();
+        assert!(
+            raw.contains("raw activity") && raw.contains("custom_colors"),
+            "{raw}"
+        );
+        assert_eq!(state.conversation.composer.text(), "unfinished requirement");
+        assert!(state.chat_command("/raw").unwrap());
+        assert!(!state.raw_activity);
+        state.chat_command("/raw").unwrap();
+        state.chat_command("/logs").unwrap();
+        assert!(!state.raw_activity);
+        assert!(state.chat_command("/raw extra").is_err());
+    }
+
+    #[test]
+    fn compact_clear_removes_details_and_raw_history_together() {
+        let mut state = preview(30, 120);
+        state.chat_command("/clear").unwrap();
+        let compact = display(&mut state).screen().contents();
+        assert!(!compact.contains("cargo test") && !compact.contains("expanded ="));
+        state.chat_command("/raw").unwrap();
+        assert!(
+            !display(&mut state)
+                .screen()
+                .contents()
+                .contains("cargo test")
+        );
     }
 }

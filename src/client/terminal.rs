@@ -20,6 +20,7 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod compact_log;
 mod conversation;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
@@ -153,6 +154,22 @@ pub(super) fn log(bytes: &[u8]) -> bool {
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     state.log(bytes);
+    true
+}
+
+/// Feed the same safe transcript into the original log and the foldable view.
+pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) -> bool {
+    let Some(shared) = shared() else {
+        return false;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.log_raw(bytes);
+    state
+        .compact_log
+        .event(label, &crate::audit::event(value.clone()), bytes);
     true
 }
 
@@ -316,6 +333,7 @@ pub(crate) fn clear_logs() {
             SCROLLBACK_ROWS,
         );
         state.previous_cr = false;
+        state.compact_log = compact_log::CompactLog::default();
         state.dirty = true;
     }
 }
@@ -336,7 +354,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "focus":if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
-        "conversation":conversation,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
+        "conversation":conversation,"activity_mode":if state.raw_activity {"raw"} else {"compact"},"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),
     })
 }
 
@@ -345,6 +363,25 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
     state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · /agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
+    state.compact_log = compact_log::CompactLog::default();
+    state.compact_log.notice(b"[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n");
+    state.compact_log.event("shell", &serde_json::json!({"type":"ssmcp.exec.started","job_id":"preview","command":["cargo","test","--lib"]}), b"[RUN] cargo test --lib\n  cwd ~/project/ssmcp\n");
+    state.compact_log.event(
+        "shell",
+        &serde_json::json!({"type":"ssmcp.exec.stdout","job_id":"preview"}),
+        b"test client::ui::custom_colors ... ok\ntest client::audit_view::browse ... ok\n",
+    );
+    state.compact_log.event(
+        "shell",
+        &serde_json::json!({"type":"ssmcp.exec.exited","job_id":"preview","exit_code":0}),
+        b"[OK] Command completed successfully.\n",
+    );
+    state.compact_log.event(
+        "fs",
+        &serde_json::json!({"type":"ssmcp.file.diff","path":"src/main.rs"}),
+        b"[DIFF] src/main.rs\n- let expanded = true;\n+ let expanded = false;\n",
+    );
+    state.compact_log.notice(b"[READY] A quieter workspace, with the details one key away.\n  Scroll directly - /filter cargo - /agents - /queue\n");
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
     state.audit.open();
@@ -795,6 +832,8 @@ struct State {
     dirty: bool,
     keyboard: Keyboard,
     conversation: conversation::Conversation,
+    compact_log: compact_log::CompactLog,
+    raw_activity: bool,
 }
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
@@ -835,6 +874,8 @@ impl State {
                 ..Keyboard::default()
             },
             conversation: conversation::Conversation::default(),
+            compact_log: compact_log::CompactLog::default(),
+            raw_activity: false,
         }
     }
     fn set_context(&mut self, cwd: &str, title: Option<&str>) {
@@ -926,6 +967,10 @@ impl State {
         replies
     }
     fn log(&mut self, bytes: &[u8]) {
+        self.log_raw(bytes);
+        self.compact_log.notice(bytes);
+    }
+    fn log_raw(&mut self, bytes: &[u8]) {
         let mut normalized = Vec::with_capacity(bytes.len());
         for &byte in bytes {
             if byte == b'\n' && !self.previous_cr {
@@ -1515,6 +1560,23 @@ impl Style {
     }
 }
 
+fn chat_heading(text: &str) -> Option<(usize, &'static str, &'static str)> {
+    if !text.starts_with('[') {
+        return None;
+    }
+    let close = text.find(']')?;
+    let (label, tone) = match text[1..close].trim() {
+        "RUN" | "CALL" => ("  ●", "accent"),
+        "OK" | "READY" => ("  ●", "success"),
+        "ERR" | "ERROR" | "FAIL" => ("  ●", "error"),
+        "USER" => ("  ❯", "foreground"),
+        "STDOUT" => ("  stdout", "muted"),
+        "STDERR" => ("  stderr", "warning"),
+        _ => return None,
+    };
+    (label.width() <= close + 1).then_some((close + 1, label, tone))
+}
+
 // Serialize cells ourselves. rows_formatted may include cursor/erase sequences
 // relative to its own screen; forwarding those would escape the pane.
 fn screen_row(screen: &vt100::Screen, row: u16, width: u16, ui: &Ui) -> String {
@@ -1530,33 +1592,19 @@ fn screen_row(screen: &vt100::Screen, row: u16, width: u16, ui: &Ui) -> String {
             .filter_map(|index| screen.cell(row, index))
             .map(|cell| cell.contents())
             .collect();
-        if let Some(close) = prefix.find(']') {
-            let replacement = match prefix[..=close].trim_matches(['[', ']']).trim() {
-                "RUN" | "CALL" => Some(("  ●", "accent")),
-                "OK" | "READY" => Some(("  ●", "success")),
-                "ERR" | "ERROR" | "FAIL" => Some(("  ●", "error")),
-                "USER" => Some(("  ❯", "foreground")),
-                "STDOUT" => Some(("  stdout", "muted")),
-                "STDERR" => Some(("  stderr", "warning")),
-                _ => None,
-            };
-            if prefix.starts_with('[')
-                && let Some((label, semantic)) = replacement
-                && label.width() <= close + 1
-            {
-                if ui.color {
-                    let _ = write!(
-                        text,
-                        "\x1b[{}m{label}\x1b[{}m",
-                        ui.color(semantic),
-                        ui.color("foreground")
-                    );
-                } else {
-                    text.push_str(label);
-                }
-                col = u16::try_from(close + 1).unwrap_or(0);
-                padding = close + 1 - label.width();
+        if let Some((end, label, semantic)) = chat_heading(&prefix) {
+            if ui.color {
+                let _ = write!(
+                    text,
+                    "\x1b[{}m{label}\x1b[{}m",
+                    ui.color(semantic),
+                    ui.color("foreground")
+                );
+            } else {
+                text.push_str(label);
             }
+            col = u16::try_from(end).unwrap_or(0);
+            padding = end - label.width();
         }
     }
     while col < width {
