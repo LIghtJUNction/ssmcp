@@ -1,0 +1,198 @@
+{
+  "after": {
+    "active": "active",
+    "binary_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+    "client_sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
+    "disk": {
+      "free": 17329225728,
+      "total": 26526855168,
+      "used": 9002483712
+    },
+    "package": "ssmcp-git 0.8.0.r266.g7867cb8-1",
+    "pid": 337744,
+    "registry_private": true,
+    "runner_sha256": "57f014501bf0313f966935fbe1a05613aaf75816a569b65ff15346cc9d2a8bdf",
+    "running_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+    "version": "ssmcpd 0.8.0"
+  },
+  "apply": {
+    "binary_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+    "checks": {
+      "checkpoint_created": true,
+      "checkpoint_unused": true,
+      "configuration_unchanged": true,
+      "github_configured": true,
+      "installed_version": true,
+      "issuer_https": true,
+      "matching_stage_receipt": true,
+      "package_name": true,
+      "package_sha256": true,
+      "package_version": true,
+      "production_DCR_survives_restart": true,
+      "production_lease": true,
+      "production_registry_permissions": true,
+      "public_health_discovery_and_auth_rejection": true,
+      "public_homepage": true,
+      "rollback_available": true,
+      "running_binary_matches_install": true
+    },
+    "commit": "7867cb8fd42f2f62aae61b38f87baf92c9b6846b",
+    "expected_version": "0.8.0",
+    "finished_unix": 1794980706,
+    "package": "ssmcp-git 0.8.0.r266.g7867cb8-1",
+    "phase": "apply",
+    "server_version": "ssmcpd 0.8.0",
+    "started_unix": 1794980684,
+    "state": "deployed"
+  },
+  "before": {
+    "active": "active",
+    "binary_sha256": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28",
+    "client_sha256": "f685725b975ad4cc46f1eb28833b1a74c876e87dda18f3ce898fbc5195191cca",
+    "disk": {
+      "free": 17371906048,
+      "total": 26526855168,
+      "used": 8958984192
+    },
+    "package": "ssmcp-git 0.7.2.r182.g13a0ac7-1",
+    "pid": 10549,
+    "registry_private": true,
+    "runner_sha256": "260b06a3d82b848ac6f00c9c979560b681c1033704a1343064bfa45882846a58",
+    "running_sha256": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28",
+    "version": "ssmcpd 0.7.2"
+  },
+  "bootstrap_download": {
+    "configuration_changed": false,
+    "configured": false,
+    "public_unconfigured_503_verified": true
+  },
+  "cleanup_failure": {
+    "step": "verified_space_cleanup",
+    "type": "FileExistsError"
+  },
+  "client_installation_performed_by_helper": false,
+  "coordinator_sha256": "48d465f8f8d407640fa3e4ac8b507d9c9251fb72326943fad61eafb0c5ee28a3",
+  "default_client": {
+    "matches_package": true,
+    "sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
+    "version": "ssmcp 0.8.0"
+  },
+  "deploy_script_sha256": "3918ce063baec726dc628ba1bf0cfef0d4b164a4505be2c8d73faec32fe81b2e",
+  "evidence_repository_path": "docs/reports/claude-session-20261118/production/7867cb8fd42f/deployment.json",
+  "expected_binary_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+  "expected_runner_sha256": "57f014501bf0313f966935fbe1a05613aaf75816a569b65ff15346cc9d2a8bdf",
+  "expected_version": "0.8.0",
+  "failure": {
+    "step": "verified_space_cleanup",
+    "type": "TimeoutExpired"
+  },
+  "finished_utc": "2026-11-18T05:51:42+00:00",
+  "mcp_authorization_survives_restart": false,
+  "package_sha256": "cc74de563471a2f98e2413ad06555cd343ff08231194f30e22d703f179f1f4df",
+  "package_version": "0.8.0.r266.g7867cb8-1",
+  "postcheck": {
+    "bootstrap_directory_configuration_preserved": true,
+    "dcr_persistence_checked_by_apply": true,
+    "expected_version": true,
+    "installed_client_matches_package": true,
+    "installed_daemon_matches_package": true,
+    "installed_runner_matches_package": true,
+    "issuer_preserved": true,
+    "oauth_registration_private": true,
+    "private_config_preserved": true,
+    "public_bootstrap_unconfigured": true,
+    "public_health": true,
+    "public_metadata": true,
+    "public_unauthenticated_rejected": true,
+    "running_daemon_matches_package": true,
+    "service_active": true
+  },
+  "predeployment_evidence_files": [
+    {
+      "bytes": 10589,
+      "name": "check.json",
+      "sha256": "e9010fb7340db918287ec42619e4d80f3b4fd0a1b12713751bbf2bcaf31d2dce"
+    },
+    {
+      "bytes": 4868,
+      "name": "ui.json",
+      "sha256": "dfd95ee30a58436a10d58876b253bcd70e9b835180640375eaf64635d2568a1e"
+    },
+    {
+      "bytes": 1542,
+      "name": "client-install.json",
+      "sha256": "8559915b401e366d91864706e020b104b26c3accceda22055218f509980932f9"
+    }
+  ],
+  "private_predeployment_backup": {
+    "bytes": 26081280,
+    "entries": 14,
+    "manifest_sha256": "5ae6c725f7171b802fd9e6a4d444e4f67132b961fbe39fbd74cadf56b98da9d5",
+    "roots": 10,
+    "sha256": "7a60fe3c030846f40b970744ac2915b92ed27aad5dad7c0ba18063bff61142e4",
+    "verified": true
+  },
+  "production_probe_sha256": "965d5aa8e3ea7faf787a3be7c039e2ebe6b41cbd7f21187e705cefc339a934ed",
+  "production_queue_after_restart": {
+    "authentication": "existing SSH key, fresh one-time login code, normal HTTPS OAuth PKCE",
+    "checks": {
+      "authenticated_native_tool_roundtrip": true,
+      "authorized_isolated_client_visible": true,
+      "cancelled_payload_absent": true,
+      "csrf_bound_login_form": true,
+      "edited_request_keeps_identity": true,
+      "https_oauth_discovery": true,
+      "isolated_client_stopped": true,
+      "next_tool_delivers_revised_only": true,
+      "next_tool_does_not_repeat_delivery": true,
+      "normal_dynamic_client_registration": true,
+      "normal_login_form": true,
+      "normal_pkce_token_exchange": true,
+      "oauth_state_and_issuer_bound": true,
+      "one_time_login_code": true,
+      "original_payload_absent": true,
+      "other_member_cannot_consume_targeted_request": true,
+      "queue_protocol_supported": true,
+      "separate_user_requirement_text_block": true,
+      "ssh_login_code_authorized": true,
+      "ssh_registration_expected_origin": true,
+      "target_member_receives_own_request": true,
+      "target_recipient_identity_preserved": true,
+      "two_registered_members_visible": true,
+      "ui_observation_does_not_claim_messages": true
+    },
+    "credential_storage": "memory only",
+    "duration_seconds": 51.79,
+    "models_started": false,
+    "schema": "ssmcp.production-queue-acceptance.v1",
+    "scope": "actual production queue and two logical members",
+    "status": "passed",
+    "tls_verified": true
+  },
+  "schema": "ssmcp.production-rollout.v1",
+  "source_commit": "7867cb8fd42f2f62aae61b38f87baf92c9b6846b",
+  "stage": {
+    "checks": {
+      "github_configured": true,
+      "issuer_https": true,
+      "package_name": true,
+      "package_sha256": true,
+      "package_version": true,
+      "production_not_changed": true,
+      "stage_unit_unused": true,
+      "staged_DCR_survives_restart": true,
+      "staged_authorization_before_restart": true,
+      "staged_binary_version": true,
+      "staged_health_and_discovery": true,
+      "staged_private_registry": true
+    },
+    "commit": "7867cb8fd42f2f62aae61b38f87baf92c9b6846b",
+    "expected_version": "0.8.0",
+    "finished_unix": 1794980683,
+    "phase": "stage",
+    "started_unix": 1794980681,
+    "state": "prepared"
+  },
+  "started_utc": "2026-11-18T05:44:03+00:00",
+  "status": "deployed_followup_failed"
+}
