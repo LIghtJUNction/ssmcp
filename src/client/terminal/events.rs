@@ -372,6 +372,27 @@ impl EventView {
             .sum()
     }
 
+    /// A terminal can reject one image while still supporting other images.
+    /// Keep that event's cell preview and release only its native payload.
+    pub(crate) fn reject_image(&mut self, id: u32) {
+        for event in &mut self.events {
+            if let Some(image) = event.image.as_mut()
+                && image
+                    .native
+                    .as_ref()
+                    .is_some_and(|native| native.id() == id)
+            {
+                image.native = None;
+                if self.new_image == Some(event.id) {
+                    self.new_image = None;
+                }
+                if self.selected == Some(event.id) && !self.follow {
+                    self.reveal = true;
+                }
+            }
+        }
+    }
+
     pub(crate) fn image_cells(&mut self, cells: Option<images::CellSize>) {
         self.image_cells = cells;
     }
@@ -638,6 +659,17 @@ impl EventView {
                         image_spans.push((rows.len(), (indent + inset) as u16, native, area));
                         rows.extend((0..area.rows).map(|_| (event.id, String::new())));
                     } else {
+                        if new_images
+                            && self.follow
+                            && ui.color
+                            && self.image_cells.is_none()
+                            && image.native.is_some()
+                        {
+                            // Resize briefly removes cell measurements. Keep
+                            // the first unseen native image pending until its
+                            // real height is known, without pausing text output.
+                            self.new_image.get_or_insert(event.id);
+                        }
                         for row in
                             image.render(usize::from(image_width), usize::from(image_height), ui)
                         {
@@ -1264,6 +1296,49 @@ mod tests {
         assert!(view.is_following());
         assert!(unstyled(&latest).contains("Later progress"));
         assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn native_image_arriving_during_resize_waits_for_cell_measurement() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        for explicit_latest in [false, true] {
+            let mut view = EventView::new();
+            view.ingest(b"[IMAGE] during-resize.png\n");
+            view.attach_image(image_preview(400, 2400, true));
+            let fallback = view.render(66, 20, &ui, true).join("\n");
+            assert!(unstyled(&fallback).contains("Low-resolution thumbnail"));
+            assert!(view.new_image.is_some());
+            assert!(view.is_following());
+            assert!(view.image_placements(0).is_empty());
+
+            view.ingest(b"[AGENT] Later progress\n");
+            let pending = view.render(66, 20, &ui, true).join("\n");
+            assert!(unstyled(&pending).contains("Later progress"));
+            assert!(view.new_image.is_some());
+            if explicit_latest {
+                view.latest();
+            }
+            view.image_cells(Some(images::CellSize {
+                width: 10,
+                height: 20,
+            }));
+            let native = view.render(66, 20, &ui, true).join("\n");
+            assert!(view.new_image.is_none());
+            if explicit_latest {
+                assert!(view.is_following());
+                assert_eq!(view.rows_below(), 0);
+                assert!(unstyled(&native).contains("Later progress"));
+            } else {
+                assert!(unstyled(&native).contains("during-resize.png"));
+                assert!(unstyled(&native).contains("scroll to inspect"));
+                assert!(!view.is_following());
+                assert_eq!(view.scroll, 0);
+                assert!(view.rows_below() > 0);
+            }
+        }
     }
 
     #[test]

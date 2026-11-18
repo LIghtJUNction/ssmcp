@@ -1,0 +1,41 @@
+{
+  "status": "passed",
+  "terminal": {
+    "path": "/usr/bin/ztty",
+    "version": "ztty 0.1.2",
+    "sha256": "64d40492718253831287763f298c25e0cbd030526c395a0738078b876e5bff8c"
+  },
+  "display": "independent Xvfb",
+  "source": "synthetic text and 1px stripes",
+  "original_crop_visible": false,
+  "source_pixels": [
+    600,
+    2400
+  ],
+  "following": true,
+  "screenshot": "legacy-character-thumbnail.png",
+  "visual_review": "Inspect screenshot for the low-resolution thumbnail caption.",
+  "checks": [
+    "effective sshd config permits public keys only",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "old terminal receives the same unchanged original MCP image",
+    "old terminal does not display the full-resolution source crop"
+  ],
+  "duration_seconds": 5.653
+}
