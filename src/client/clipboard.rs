@@ -1,4 +1,4 @@
-//! Read the explicitly requested system clipboard; never poll or modify it.
+//! Read or write the system clipboard only on an explicit local action; never poll.
 use std::{path::Path, time::Duration};
 pub(super) enum Content {
     Image {
@@ -117,7 +117,7 @@ async fn read_unix(program: &str, wayland: bool) -> Result<Content, String> {
     } else {
         vec!["-selection", "clipboard", "-o", "-t", target]
     };
-    text(helper(program, &args, super::composer::MAX_DRAFT_BYTES).await?)
+    text(helper(program, &args, super::references::paste::MAX_PASTE_BYTES).await?)
 }
 #[cfg(target_os = "macos")]
 pub(super) async fn read() -> Result<Content, String> {
@@ -141,7 +141,7 @@ pub(super) async fn read() -> Result<Content, String> {
             helper(
                 "pbpaste",
                 &["-Prefer", "txt"],
-                super::composer::MAX_DRAFT_BYTES,
+                super::references::paste::MAX_PASTE_BYTES,
             )
             .await?,
         );
@@ -189,7 +189,7 @@ pub(super) async fn read() -> Result<Content, String> {
         helper(
             "powershell.exe",
             &["-NoProfile", "-NonInteractive", "-STA", "-Command", TEXT],
-            super::composer::MAX_DRAFT_BYTES,
+            super::references::paste::MAX_PASTE_BYTES,
         )
         .await?,
     )

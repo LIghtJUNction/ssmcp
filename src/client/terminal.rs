@@ -280,7 +280,6 @@ pub(crate) fn audit(value: &serde_json::Value) {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.audit.ingest(value) {
-            state.chat_observe_run(value);
             state.dirty = true;
         }
     }
@@ -566,7 +565,6 @@ enum Key {
     Escape,
     AuditUp,
     AuditDown,
-    Takeback,
     Open,
     Back,
     Filter,
@@ -592,7 +590,6 @@ const KEYS: &[(&[u8], Key)] = &[
     (b"\x1b[27;2;13~", Key::Newline),
     (b"\x1b[1;5H", Key::HistoryStart),
     (b"\x1b[1;5F", Key::HistoryEnd),
-    (b"\x1b[1;2A", Key::Takeback),
     (b"\x1b[A", Key::AuditUp),
     (b"\x1bOA", Key::AuditUp),
     (b"\x1b[B", Key::AuditDown),
@@ -648,7 +645,6 @@ impl Keyboard {
             | Key::Save
             | Key::AuditUp
             | Key::AuditDown
-            | Key::Takeback
             | Key::Open
             | Key::Back
             | Key::Filter
@@ -676,9 +672,8 @@ impl Keyboard {
         let mut output = Vec::new();
         let mut actions = Vec::new();
         for &byte in bytes {
-            // A fresh Escape starts a new sequence even while an earlier
-            // Escape is awaiting its timeout (including the outer input
-            // decoder's delay). Never consume the new prefix as old text.
+            // A fresh ESC starts a new key. Resolve a preceding standalone ESC
+            // immediately, even when both keys arrive in one terminal read.
             if byte == 0x1b && !self.pasting && !self.pending.is_empty() {
                 if self.logs && self.pending == b"\x1b" {
                     self.logs = force_logs;
@@ -857,7 +852,6 @@ struct State {
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
     session_titles: BTreeMap<String, String>,
     panel: PanelSnapshot,
-    project_name: String,
     ui: Ui,
     help: bool,
     selection: bool,
@@ -897,14 +891,6 @@ impl State {
             session_titles: BTreeMap::from([("main".into(), "main".into())]),
             geometry,
             panel: PanelSnapshot::default(),
-            project_name: std::env::current_dir()
-                .ok()
-                .and_then(|path| {
-                    path.file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                })
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| "workspace".into()),
             ui: ui.clone(),
             help: false,
             selection: false,
@@ -1015,7 +1001,11 @@ impl State {
         replies
     }
     fn log(&mut self, bytes: &[u8]) {
-        self.events.ingest(bytes);
+        if self.ui.log_format != LogFormat::Pretty || self.ui.show_raw_json {
+            self.events.ingest_expanded(bytes);
+        } else {
+            self.events.ingest(bytes);
+        }
         let mut normalized = Vec::with_capacity(bytes.len());
         for &byte in bytes {
             if byte == b'\n' && !self.previous_cr {
@@ -1532,7 +1522,6 @@ impl State {
             PanelTone::Muted => "muted",
             PanelTone::Heading => "heading",
             PanelTone::Accent => "accent",
-            PanelTone::Agent => "purple",
             PanelTone::Success => "success",
             PanelTone::Warning => "warning",
             PanelTone::Error => "error",
@@ -1719,7 +1708,7 @@ impl Frame {
         let resized = previous.is_none_or(|old| old.geometry != self.geometry);
         for (row, line) in self.rows.iter().enumerate() {
             if resized || previous.and_then(|old| old.rows.get(row)) != Some(line) {
-                let _ = write!(output, "\x1b[{};1H\x1b[0m{line}", row + 1);
+                let _ = write!(output, "\x1b[{};1H\x1b[0m\x1b[2K{line}", row + 1);
             }
         }
         if previous.is_none_or(|old| old.application_cursor != self.application_cursor) {
@@ -2017,6 +2006,30 @@ impl Drop for PhysicalOutput {
 mod tests {
     use super::*;
 
+    #[test]
+    fn compact_event_defaults_respect_explicit_verbose_and_raw_display() {
+        let bytes = b"[READ] file\nretained tool detail\n";
+        let mut compact = State::new(20, 80, &Ui::default());
+        compact.log(bytes);
+        assert_eq!(compact.events.snapshot()["events"][0]["expanded"], false);
+        for format in [LogFormat::PrettyVerbose, LogFormat::Jsonl] {
+            let ui = Ui {
+                log_format: format,
+                ..Ui::default()
+            };
+            let mut state = State::new(20, 80, &ui);
+            state.log(bytes);
+            assert_eq!(state.events.snapshot()["events"][0]["expanded"], true);
+        }
+        let ui = Ui {
+            show_raw_json: true,
+            ..Ui::default()
+        };
+        let mut state = State::new(20, 80, &ui);
+        state.log(bytes);
+        assert_eq!(state.events.snapshot()["events"][0]["expanded"], true);
+    }
+
     fn split_ui() -> Ui {
         Ui {
             layout: Layout::Split,
@@ -2033,6 +2046,40 @@ mod tests {
         parser.process(&frame.diff(None));
         parser
     }
+    #[test]
+    fn frame_diff_erases_old_text_when_a_row_shrinks_or_becomes_empty() {
+        let mut state = State::new(12, 40, &split_ui());
+        let mut before = state.frame(Instant::now());
+        before.rows[0] = "\x1b[31mold text including a wide 界 suffix".into();
+        before.rows[1] = "a row that disappears".into();
+        let mut screen = physical(&before);
+        let mut after = before.clone();
+        after.rows[0] = "new".into();
+        after.rows[1].clear();
+        screen.process(&after.diff(Some(&before)));
+        let rows: Vec<_> = screen.screen().rows(0, 40).collect();
+        assert_eq!(rows[0], "new");
+        assert_eq!(rows[1], "");
+        assert_eq!(screen.screen().cell(0, 8).unwrap().contents(), "");
+        assert!(after.diff(Some(&after)).is_empty());
+    }
+
+    #[test]
+    fn escape_followed_by_an_arrow_remains_two_keys_at_every_read_boundary() {
+        let bytes = b"\x1b\x1b[D";
+        for split in 0..=bytes.len() {
+            let mut keyboard = Keyboard::default();
+            let now = Instant::now();
+            let (mut output, mut keys) = keyboard.feed(&bytes[..split], now, false, true, false);
+            let (rest, more) = keyboard.feed(&bytes[split..], now, false, true, false);
+            output.extend(rest);
+            keys.extend(more);
+            assert_eq!(output, b"\x1b");
+            assert!(matches!(keys.as_slice(), [Key::Back]));
+            assert!(keyboard.pending.is_empty());
+        }
+    }
+
     #[test]
     fn geometry_reserves_real_panes_and_survives_narrow_resize() {
         let mut state = State::new(58, 106, &split_ui());

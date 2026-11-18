@@ -226,7 +226,7 @@ fn token(text: &str, start: usize) -> Result<(String, usize), String> {
     }
 }
 
-fn relative_path(value: &str, root: &Path) -> Result<String, String> {
+pub(crate) fn relative_path(value: &str, root: &Path) -> Result<String, String> {
     let path = Path::new(value);
     let path = if path.is_absolute() {
         path.strip_prefix(root)

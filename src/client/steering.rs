@@ -43,7 +43,7 @@ pub(super) enum UiEvent {
 }
 
 pub(super) enum Transport {
-    Wire { id: u64, command: SteeringCommand },
+    Wire { id: u64 },
     Reload,
 }
 
@@ -706,10 +706,7 @@ impl Manager {
         self.sender
             .as_ref()
             .ok_or("request queue is not connected")?
-            .try_send(Transport::Wire {
-                id,
-                command: command.clone(),
-            })
+            .try_send(Transport::Wire { id })
             .map_err(|_| "request transport is busy; the draft has been retained")?;
         self.next_request = id;
         self.requests.insert(
@@ -1738,7 +1735,8 @@ mod tests {
         receiver: &mut mpsc::Receiver<Transport>,
     ) -> (u64, SteeringCommand) {
         match receiver.try_recv().unwrap() {
-            Transport::Wire { id, command } => {
+            Transport::Wire { id } => {
+                let command = manager.requests[&id].command.clone();
                 assert!(manager.sent(id));
                 (id, command)
             }
@@ -1963,10 +1961,7 @@ mod tests {
             assert!(
                 matches!(
                     transport,
-                    Transport::Wire {
-                        command: SteeringCommand::Snapshot {},
-                        ..
-                    }
+                    Transport::Wire { id } if matches!(manager.requests[&id].command, SteeringCommand::Snapshot {})
                 ),
                 "local validation failure must not automatically retry"
             );

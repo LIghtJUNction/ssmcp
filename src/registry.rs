@@ -261,6 +261,28 @@ impl Registry {
         }
         Ok(())
     }
+    /// Bounded cached route names, without materializing or changing native schemas.
+    pub(crate) fn provider_catalog_summary(&self, provider: Provider) -> Result<Value, String> {
+        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        if state.closed {
+            return Err("client connection is closed".into());
+        }
+        let mut names = Vec::new();
+        let mut count = 0usize;
+        for (name, tool) in &state.tools {
+            if tool.provider == provider {
+                count += 1;
+                if names.len() < 32 {
+                    names.push(name.clone());
+                }
+            }
+        }
+        Ok(serde_json::json!({
+            "provider":provider.label(), "generation":state.generation,
+            "tool_count":count, "truncated":count>names.len(), "tool_names":names
+        }))
+    }
+
     /// Small, atomic capability summary; native schemas remain on the client.
     pub fn capabilities(&self) -> Result<Value, String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());

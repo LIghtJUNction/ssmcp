@@ -129,8 +129,9 @@ impl AuditRun {
     /// UI and client metadata queries still carry source audit, but cannot
     /// consume a human requirement merely by refreshing display or discovery.
     /// Assistant messages and presentations are interaction and may receive the next user
-    /// request; message-history reads remain observation. Other read operations
-    /// and runs that explicitly bind an agent retain normal delivery semantics.
+    /// request; message-history and context reads remain observation. Exact-agent
+    /// delivery still requires an explicit binding. Other read operations and runs
+    /// that bind an agent retain normal delivery semantics.
     pub(crate) fn native_dispatched(&self, client_id: &str, tool: Option<&str>) {
         self.dispatched(client_id);
         if tool.is_some_and(|name| {
@@ -959,11 +960,14 @@ mod tests {
         let run = AuditRun::new("return await ui.get('display');", None).unwrap();
         for tool in [
             "ssmcp.ui.get",
-            "ssmcp.ui.messages",
             "ssmcp.ui.queue",
             "ssmcp.ui.set",
             "ssmcp.ui.action",
             "ssmcp.ui.filter",
+            "ssmcp.ui.questions",
+            "ssmcp.ui.history",
+            "ssmcp.ui.harness",
+            "ssmcp.ui.messages",
             "ssmcp.client.capabilities",
             "ssmcp.resources.list",
             "ssmcp.resources.templates",
@@ -987,6 +991,30 @@ mod tests {
             .unwrap();
         assert_eq!(run.steering_targets(), ["display", "files", "worker"]);
         assert_eq!(run.context.code, "return await ui.get('display');");
+    }
+
+    #[test]
+    fn agent_messages_receive_next_caller_without_fabricating_an_exact_agent_binding() {
+        let run = AuditRun::new("return await say('work', 'Ready');", None).unwrap();
+        run.native_dispatched("observed", Some("ssmcp.ui.history"));
+        run.native_dispatched("work", Some("ssmcp.ui.message"));
+        assert_eq!(run.targets(), ["observed", "work"]);
+        assert_eq!(run.steering_targets(), ["work"]);
+        assert!(run.binding("work").is_none());
+
+        run.bind("work", "owner", "agent_one", "private-token")
+            .unwrap();
+        run.native_dispatched("work", Some("ssmcp.ui.message"));
+        let bound = run.binding("work").unwrap();
+        assert_eq!(bound.owner, "owner");
+        assert_eq!(bound.agent_id, "agent_one");
+        assert_eq!(bound.token, "private-token");
+        assert!(
+            run.bind("work", "owner", "agent_two", "other-token")
+                .is_err()
+        );
+        assert_eq!(run.binding("work").unwrap().agent_id, "agent_one");
+        assert_eq!(run.steering_targets(), ["work"]);
     }
 
     // Fixed test programs verify the runner/pipe protocol; execute() always requires bubblewrap.

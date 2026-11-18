@@ -2,11 +2,13 @@
 //! The browser is a system dependency; no model or external MCP process is involved.
 mod actions;
 mod discovery;
+mod routing;
 use crate::backend::{process::Managed, result};
 use actions::{Act, WaitArgs};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
+pub(crate) use routing::control_routes;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -385,7 +387,7 @@ impl Browser {
         let mut out = vec![
             tool(
                 "discover",
-                "Read bounded browser process and extension-manifest metadata. Distinguish Google Chrome from Chromium; installed files do not prove enabled extensions, native approval or a usable connection. No browser, MCP server or installer is started.",
+                "Read bounded browser metadata and cached native control routes. Prefer an available caller-owned ChatGPT Browser plugin, then actual registered Playwright extension tools, then explicitly selected CDP. Installed manifests do not prove a connection or approval; the client cannot invoke the ChatGPT plugin API. No browser, MCP server or installer is started.",
                 json!({}),
                 &[],
                 true,

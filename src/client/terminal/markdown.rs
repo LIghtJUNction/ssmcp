@@ -1,5 +1,5 @@
 //! Bounded, terminal-safe Markdown. Unsupported syntax remains readable.
-use crate::client::{panel, ui::Ui};
+use crate::client::{highlight::Lexer, panel, ui::Ui};
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -21,6 +21,7 @@ fn inline(mut text: &str, face: Face, depth: u8, out: &mut Vec<(char, Face)>) {
         plain(text, face, out);
         return;
     }
+    let source = text;
     while !text.is_empty() {
         if let Some(rest) = text.strip_prefix('\\')
             && let Some(c) = rest.chars().next()
@@ -60,22 +61,43 @@ fn inline(mut text: &str, face: Face, depth: u8, out: &mut Vec<(char, Face)>) {
         }
         let mut matched = false;
         for marker in ["**", "__", "*", "_"] {
-            if let Some(rest) = text.strip_prefix(marker)
-                && let Some(end) = rest.find(marker).filter(|end| *end > 0)
-            {
-                let next = if marker.len() == 2 {
-                    Face { bold: true, ..face }
-                } else {
-                    Face {
-                        italic: true,
-                        ..face
-                    }
-                };
-                inline(&rest[..end], next, depth + 1, out);
-                text = &rest[end + marker.len()..];
-                matched = true;
-                break;
+            let underscore = marker.starts_with('_');
+            // Underscores inside identifiers cannot open emphasis. Use source
+            // context rather than emitted cells, including within nested spans.
+            let before = source[..source.len() - text.len()].chars().next_back();
+            if underscore && before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                continue;
             }
+            let Some(rest) = text.strip_prefix(marker) else {
+                continue;
+            };
+            let Some(end) = rest.match_indices(marker).map(|(end, _)| end).find(|&end| {
+                end > 0
+                    && (!underscore
+                        || (rest.chars().next().is_some_and(|c| !c.is_whitespace())
+                            && rest[..end]
+                                .chars()
+                                .next_back()
+                                .is_some_and(|c| !c.is_whitespace())
+                            && rest[end + marker.len()..]
+                                .chars()
+                                .next()
+                                .is_none_or(|c| !c.is_alphanumeric() && c != '_')))
+            }) else {
+                continue;
+            };
+            let next = if marker.len() == 2 {
+                Face { bold: true, ..face }
+            } else {
+                Face {
+                    italic: true,
+                    ..face
+                }
+            };
+            inline(&rest[..end], next, depth + 1, out);
+            text = &rest[end + marker.len()..];
+            matched = true;
+            break;
         }
         if !matched {
             let c = text.chars().next().unwrap();
@@ -85,490 +107,10 @@ fn inline(mut text: &str, face: Face, depth: u8, out: &mut Vec<(char, Face)>) {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Language {
-    Plain,
-    Diff,
-    Rust,
-    Javascript,
-    Json,
-    Python,
-    Shell,
-}
-
-struct Quote {
-    end: String,
-    escapes: bool,
-    multiline: bool,
-}
-
-struct Highlight {
-    language: Language,
-    block_depth: usize,
-    quote: Option<Quote>,
-}
-
 struct Fence {
     marker: char,
     length: usize,
-    highlight: Highlight,
-}
-
-impl Highlight {
-    fn new(label: &str) -> Self {
-        let language = match label
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "diff" | "patch" => Language::Diff,
-            "rust" | "rs" => Language::Rust,
-            "javascript" | "js" | "jsx" | "mjs" | "cjs" | "typescript" | "ts" | "tsx" => {
-                Language::Javascript
-            }
-            "json" => Language::Json,
-            "python" | "py" | "python3" => Language::Python,
-            "shell" | "sh" | "bash" | "zsh" => Language::Shell,
-            _ => Language::Plain,
-        };
-        Self {
-            language,
-            block_depth: 0,
-            quote: None,
-        }
-    }
-
-    fn keyword(&self, word: &str) -> bool {
-        match self.language {
-            Language::Rust => matches!(
-                word,
-                "as" | "async"
-                    | "await"
-                    | "break"
-                    | "const"
-                    | "continue"
-                    | "crate"
-                    | "dyn"
-                    | "else"
-                    | "enum"
-                    | "extern"
-                    | "false"
-                    | "fn"
-                    | "for"
-                    | "if"
-                    | "impl"
-                    | "in"
-                    | "let"
-                    | "loop"
-                    | "match"
-                    | "mod"
-                    | "move"
-                    | "mut"
-                    | "pub"
-                    | "ref"
-                    | "return"
-                    | "self"
-                    | "Self"
-                    | "static"
-                    | "struct"
-                    | "super"
-                    | "trait"
-                    | "true"
-                    | "type"
-                    | "unsafe"
-                    | "use"
-                    | "where"
-                    | "while"
-            ),
-            Language::Javascript => matches!(
-                word,
-                "abstract"
-                    | "any"
-                    | "as"
-                    | "async"
-                    | "await"
-                    | "boolean"
-                    | "break"
-                    | "case"
-                    | "catch"
-                    | "class"
-                    | "const"
-                    | "continue"
-                    | "declare"
-                    | "default"
-                    | "delete"
-                    | "do"
-                    | "else"
-                    | "enum"
-                    | "export"
-                    | "extends"
-                    | "false"
-                    | "finally"
-                    | "for"
-                    | "from"
-                    | "function"
-                    | "if"
-                    | "implements"
-                    | "import"
-                    | "in"
-                    | "instanceof"
-                    | "interface"
-                    | "keyof"
-                    | "let"
-                    | "namespace"
-                    | "never"
-                    | "new"
-                    | "null"
-                    | "number"
-                    | "of"
-                    | "private"
-                    | "protected"
-                    | "public"
-                    | "readonly"
-                    | "return"
-                    | "satisfies"
-                    | "static"
-                    | "string"
-                    | "super"
-                    | "switch"
-                    | "this"
-                    | "throw"
-                    | "true"
-                    | "try"
-                    | "type"
-                    | "typeof"
-                    | "undefined"
-                    | "unknown"
-                    | "var"
-                    | "void"
-                    | "while"
-                    | "yield"
-            ),
-            Language::Json => matches!(word, "true" | "false" | "null"),
-            Language::Python => matches!(
-                word,
-                "and"
-                    | "as"
-                    | "assert"
-                    | "async"
-                    | "await"
-                    | "break"
-                    | "case"
-                    | "class"
-                    | "continue"
-                    | "def"
-                    | "del"
-                    | "elif"
-                    | "else"
-                    | "except"
-                    | "False"
-                    | "finally"
-                    | "for"
-                    | "from"
-                    | "global"
-                    | "if"
-                    | "import"
-                    | "in"
-                    | "is"
-                    | "lambda"
-                    | "match"
-                    | "None"
-                    | "nonlocal"
-                    | "not"
-                    | "or"
-                    | "pass"
-                    | "raise"
-                    | "return"
-                    | "True"
-                    | "try"
-                    | "while"
-                    | "with"
-                    | "yield"
-            ),
-            Language::Shell => matches!(
-                word,
-                "case"
-                    | "cd"
-                    | "declare"
-                    | "do"
-                    | "done"
-                    | "echo"
-                    | "elif"
-                    | "else"
-                    | "esac"
-                    | "exec"
-                    | "export"
-                    | "false"
-                    | "fi"
-                    | "for"
-                    | "function"
-                    | "if"
-                    | "in"
-                    | "local"
-                    | "printf"
-                    | "read"
-                    | "readonly"
-                    | "select"
-                    | "set"
-                    | "source"
-                    | "test"
-                    | "then"
-                    | "time"
-                    | "trap"
-                    | "true"
-                    | "until"
-                    | "unset"
-                    | "while"
-            ),
-            Language::Plain | Language::Diff => false,
-        }
-    }
-
-    fn quote_start(&self, text: &str) -> Option<(usize, Quote)> {
-        if self.language == Language::Rust {
-            let prefix = if text.starts_with("br") {
-                2
-            } else if text.starts_with('r') {
-                1
-            } else {
-                0
-            };
-            if prefix != 0 {
-                let hashes = text[prefix..].bytes().take_while(|c| *c == b'#').count();
-                if text.as_bytes().get(prefix + hashes) == Some(&b'"') {
-                    return Some((
-                        prefix + hashes + 1,
-                        Quote {
-                            end: format!("\"{}", "#".repeat(hashes)),
-                            escapes: false,
-                            multiline: true,
-                        },
-                    ));
-                }
-            }
-        }
-        let character = text.chars().next()?;
-        if !matches!(character, '\'' | '"' | '`')
-            || (self.language == Language::Json && character != '"')
-            || (character == '`' && self.language != Language::Javascript)
-        {
-            return None;
-        }
-        // Rust lifetimes such as 'a and 'static are identifiers, not strings.
-        if self.language == Language::Rust && character == '\'' {
-            let next = text[1..].chars().next()?;
-            if next != '\\' && !text[1 + next.len_utf8()..].starts_with('\'') {
-                return None;
-            }
-        }
-        let triple = self.language == Language::Python
-            && text
-                .as_bytes()
-                .iter()
-                .take(3)
-                .filter(|c| **c == character as u8)
-                .count()
-                == 3;
-        let length = if triple { 3 } else { 1 };
-        Some((
-            length,
-            Quote {
-                end: character.to_string().repeat(length),
-                escapes: !(self.language == Language::Shell && character == '\''),
-                multiline: triple
-                    || character == '`'
-                    || matches!(self.language, Language::Rust | Language::Shell),
-            },
-        ))
-    }
-
-    fn block_end(&mut self, text: &str, mut at: usize) -> usize {
-        while at < text.len() {
-            if self.language == Language::Rust && text[at..].starts_with("/*") {
-                self.block_depth += 1;
-                at += 2;
-            } else if text[at..].starts_with("*/") {
-                self.block_depth -= 1;
-                at += 2;
-                if self.block_depth == 0 {
-                    break;
-                }
-            } else {
-                at += text[at..].chars().next().unwrap().len_utf8();
-            }
-        }
-        at
-    }
-
-    fn line(&mut self, text: &str, out: &mut Vec<(char, Face)>) {
-        if self.language == Language::Plain {
-            plain(text, Face::default(), out);
-            return;
-        }
-        if self.language == Language::Diff {
-            let (tone, bold) = if text.starts_with("diff --git") {
-                ("heading", true)
-            } else if text.starts_with("@@") {
-                ("accent", true)
-            } else if text.starts_with('+') {
-                ("success", false)
-            } else if text.starts_with('-') {
-                ("error", false)
-            } else if text.starts_with("index ") || text.starts_with("\\ No newline") {
-                ("muted", false)
-            } else {
-                ("foreground", false)
-            };
-            syntax(text, tone, bold, out);
-            return;
-        }
-        let mut at = 0;
-        while at < text.len() {
-            let rest = &text[at..];
-            if let Some(quote) = self.quote.take() {
-                let (end, closed) = quoted_end(rest, &quote);
-                syntax(&rest[..end], "success", false, out);
-                if !closed && quote.multiline {
-                    self.quote = Some(quote);
-                }
-                at += end;
-                continue;
-            }
-            if self.block_depth != 0 {
-                let end = self.block_end(rest, 0);
-                syntax(&rest[..end], "muted", false, out);
-                at += end;
-                continue;
-            }
-            let c_comments = matches!(self.language, Language::Rust | Language::Javascript);
-            let hash_comment = self.language == Language::Python
-                || (self.language == Language::Shell
-                    && text[..at]
-                        .chars()
-                        .next_back()
-                        .is_none_or(|c| c.is_whitespace() || ";|&()".contains(c)));
-            if (c_comments && rest.starts_with("//")) || (hash_comment && rest.starts_with('#')) {
-                syntax(rest, "muted", false, out);
-                break;
-            }
-            if c_comments && rest.starts_with("/*") {
-                self.block_depth = 1;
-                let end = self.block_end(rest, 2);
-                syntax(&rest[..end], "muted", false, out);
-                at += end;
-                continue;
-            }
-            if let Some((opening, quote)) = self.quote_start(rest) {
-                let (end, closed) = quoted_end(&rest[opening..], &quote);
-                let end = opening + end;
-                let color = if self.language == Language::Json
-                    && closed
-                    && rest[end..].trim_start().starts_with(':')
-                {
-                    "heading"
-                } else {
-                    "success"
-                };
-                syntax(&rest[..end], color, false, out);
-                if !closed && quote.multiline {
-                    self.quote = Some(quote);
-                }
-                at += end;
-                continue;
-            }
-            if self.language == Language::Shell && rest.starts_with('$') {
-                let end = if rest.as_bytes().starts_with(b"$\x7b") {
-                    rest.find('}').map_or(rest.len(), |end| end + 1)
-                } else {
-                    let name = rest[1..]
-                        .chars()
-                        .take_while(|c| c.is_alphanumeric() || *c == '_')
-                        .map(char::len_utf8)
-                        .sum::<usize>();
-                    if name == 0 {
-                        1 + rest[1..]
-                            .chars()
-                            .next()
-                            .filter(|c| "?@*#!-$".contains(*c))
-                            .map_or(0, char::len_utf8)
-                    } else {
-                        1 + name
-                    }
-                };
-                syntax(&rest[..end], "accent", false, out);
-                at += end;
-                continue;
-            }
-            let first = rest.chars().next().unwrap();
-            if first.is_ascii_digit() {
-                let bytes = rest.as_bytes();
-                let mut end = 1;
-                while end < bytes.len() {
-                    let byte = bytes[end];
-                    let decimal =
-                        byte == b'.' && bytes.get(end + 1).is_some_and(u8::is_ascii_digit);
-                    let exponent_sign = matches!(byte, b'+' | b'-')
-                        && matches!(bytes[end - 1], b'e' | b'E' | b'p' | b'P');
-                    if !byte.is_ascii_alphanumeric() && byte != b'_' && !decimal && !exponent_sign {
-                        break;
-                    }
-                    end += 1;
-                }
-                syntax(&rest[..end], "warning", false, out);
-                at += end;
-                continue;
-            }
-            if first.is_alphabetic() || first == '_' {
-                let end = rest
-                    .chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_')
-                    .map(char::len_utf8)
-                    .sum::<usize>();
-                let word = &rest[..end];
-                if self.keyword(word) {
-                    syntax(word, "accent", true, out);
-                } else {
-                    plain(word, Face::default(), out);
-                }
-                at += end;
-                continue;
-            }
-            out.push((first, Face::default()));
-            at += first.len_utf8();
-        }
-    }
-}
-
-fn quoted_end(text: &str, quote: &Quote) -> (usize, bool) {
-    let mut at = 0;
-    while at < text.len() {
-        if text[at..].starts_with(&quote.end) {
-            return (at + quote.end.len(), true);
-        }
-        let character = text[at..].chars().next().unwrap();
-        at += character.len_utf8();
-        if quote.escapes
-            && character == '\\'
-            && let Some(escaped) = text[at..].chars().next()
-        {
-            at += escaped.len_utf8();
-        }
-    }
-    (at, false)
-}
-
-fn syntax(text: &str, color: &'static str, bold: bool, out: &mut Vec<(char, Face)>) {
-    plain(
-        text,
-        Face {
-            syntax: Some(color),
-            bold,
-            ..Face::default()
-        },
-        out,
-    );
+    highlight: Lexer,
 }
 
 fn paint(cells: &[(char, Face)], width: usize, ui: &Ui) -> String {
@@ -685,7 +227,7 @@ pub(crate) fn rows(text: &str, width: u16, ui: &Ui) -> Vec<String> {
                 fence = Some(Fence {
                     marker,
                     length: count,
-                    highlight: Highlight::new(label),
+                    highlight: Lexer::for_language(label),
                 });
                 let mut cells = Vec::new();
                 plain(
@@ -734,7 +276,17 @@ pub(crate) fn rows(text: &str, width: u16, ui: &Ui) -> Vec<String> {
         }
         let mut cells = Vec::new();
         if let Some(fence) = fence.as_mut() {
-            fence.highlight.line(body, &mut cells);
+            for token in fence.highlight.line(body) {
+                plain(
+                    token.text,
+                    Face {
+                        syntax: Some(token.tone),
+                        bold: token.bold,
+                        ..Face::default()
+                    },
+                    &mut cells,
+                );
+            }
         } else {
             inline(body, face, 0, &mut cells);
         }
@@ -779,7 +331,6 @@ mod tests {
         ui.colors.accent = "#112233".into();
         ui.colors.success = "#445566".into();
         ui.colors.warning = "#778899".into();
-        ui.colors.error = "#bb1122".into();
         ui.colors.muted = "#99aabb".into();
         ui.colors.heading = "#ccddee".into();
         ui.colors.foreground = "#010203".into();
@@ -805,33 +356,6 @@ mod tests {
             vt100::Color::Rgb(color.0, color.1, color.2),
             "{context}: {token}"
         );
-    }
-
-    #[test]
-    fn diff_fences_preserve_markers_and_use_semantic_line_colors() {
-        for label in ["diff", "patch"] {
-            let body = "diff --git a/界 b/界\nindex 123..456 100644\n--- a/界\n+++ b/界\n@@ -1 +1 @@\n-old 界\n+new 界\n context\n\\ No newline at end of file";
-            let source = format!("\u{60}\u{60}\u{60}{label}\n{body}\n\u{60}\u{60}\u{60}");
-            let screen = colored_screen(&source, 100);
-            for (token, color) in [
-                ("diff --git", (204, 221, 238)),
-                ("index 123", (153, 170, 187)),
-                ("--- a/界", (187, 17, 34)),
-                ("+++ b/界", (68, 85, 102)),
-                ("@@ -1 +1 @@", (17, 34, 51)),
-                ("-old 界", (187, 17, 34)),
-                ("+new 界", (68, 85, 102)),
-                ("context", (1, 2, 3)),
-                ("\\ No newline", (153, 170, 187)),
-            ] {
-                assert_color(&screen, token, token, color);
-            }
-            let plain = plain_rows(&source, 100).join("\n");
-            assert!(!plain.contains('\x1b'));
-            for line in body.lines() {
-                assert!(plain.contains(line), "{line}");
-            }
-        }
     }
 
     #[test]
@@ -938,6 +462,33 @@ mod tests {
         assert!(styled.contains(";1m"));
         assert!(styled.contains(&Ui::default().color("accent")));
     }
+    #[test]
+    fn intraword_underscores_stay_literal_while_word_emphasis_renders() {
+        for identifier in [
+            "DETAIL_OPTIONS_FIRST",
+            "NAME__PART__VALUE",
+            "snake_case_name",
+            "中文_选项_末尾",
+        ] {
+            let plain = plain_rows(identifier, 80).join("\n");
+            assert!(plain.contains(identifier), "{plain}");
+            assert!(
+                colored_screen(identifier, 80)
+                    .contents()
+                    .contains(identifier)
+            );
+        }
+        let source = "_emphasis_ __strong__ _snake_case_ (__nested_word__)";
+        let plain = plain_rows(source, 80).join("\n");
+        assert!(
+            plain.contains("emphasis strong snake_case (nested_word)"),
+            "{plain}"
+        );
+        let screen = colored_screen(source, 80);
+        assert!(screen.cell(0, 0).unwrap().italic());
+        assert!(screen.cell(0, 9).unwrap().bold());
+    }
+
     #[test]
     fn fenced_code_keeps_markers_and_terminal_controls_are_literal() {
         let source = "```rust\n**literal**\n\tlet s = \"\u{1b}[2J\u{202e}unsafe\";\n```";

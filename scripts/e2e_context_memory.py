@@ -21,7 +21,16 @@ from e2e_dashboard import sha256, text
 
 class ContextMemory(Presentations):
     def context(self, action, arguments=None):
-        outer, native = self.native("ssmcp.context." + action, arguments or {})
+        if action == "read":
+            outer = self.response("return await context.read(%s, %s);" % (
+                json.dumps(self.client_id), json.dumps(arguments or {}),
+            ))
+            return outer, outer["structuredContent"]["result"]
+        elif action == "status":
+            outer = self.response("return await context.status(%s);" % json.dumps(self.client_id))
+            return outer, outer["structuredContent"]["result"]
+        else:
+            outer, native = self.native("ssmcp.context." + action, arguments or {})
         if native.get("isError"):
             raise AssertionError(f"context {action} failed: {native}")
         return outer, native["structuredContent"]
@@ -37,14 +46,15 @@ class ContextMemory(Presentations):
         program = """
 try {
   const result = await call(%s, %s, %s);
-  return {rejected: result.isError === true};
+  return {rejected: result.isError === true, error: JSON.stringify(result.content || [])};
 } catch (error) {
   return {rejected: true, error: String(error)};
 }
 """ % (json.dumps(self.client_id), json.dumps("ssmcp.context." + action),
        json.dumps(arguments))
         result = self.response(program)["structuredContent"]["result"]
-        self.check(result.get("rejected") is True,
+        self.check(result.get("rejected") is True
+                   and "context revision changed" in result.get("error", ""),
                    "a stale workspace revision is rejected without changing the checkpoint")
 
     def wait_context(self, front, predicate, description):
@@ -58,7 +68,7 @@ try {
 
     def work_with_only_stdout(self):
         return self.response("""
-const response = await exec.run(%s, {command:["printf","CONTEXT_WORK_OK\\n"],wait_ms:1000});
+const response = await exec.run(%s, {command:["/bin/sh","-c","printf 'CONTEXT_WORK_OK\\n'"],wait_ms:1000});
 return {stdout:response.stdout};
 """ % json.dumps(self.client_id))
 
@@ -90,6 +100,8 @@ return {stdout:response.stdout};
             cwd=self.workspace, env={**os.environ, **self.safe_git_env},
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5,
         )
+        self.fixture = self.workspace / "capture one.png"
+        self.fixture.write_bytes(self.png)
         front = self.frontend("context-memory", self.config("context-memory"))
         self.oauth_login(front.credentials)
         front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
@@ -98,7 +110,7 @@ return {stdout:response.stdout};
         original_id = initial["branch"]["id"]
         self.check(initial["active"] is True
                    and Path(initial["workspace"]["path"]) == self.workspace.resolve(),
-                   "context is initialized in the exact startup workspace")
+                   "the real context.read helper resolves the initialized startup workspace")
 
         source_text = "CONTEXT_SOURCE: implement the native conversation and preserve Unicode 界面."
         _, answer = self.native("ssmcp.ui.message", {
@@ -132,6 +144,42 @@ return {stdout:response.stdout};
         self.check(saved_history.get("isError") is not True,
                    "the original durable conversation remains readable after compaction")
 
+        # A real registered recipient is enough to exercise isolation; no model
+        # or secondary process is spawned. Binding only affects this tool run.
+        member = self.public_call("collab", {
+            "action": "join", "client_id": self.client_id,
+            "name": "Context private fixture", "role": "memory isolation test",
+        })
+        self.sensitive.append(member["token"])
+        private_text = "CONTEXT_TARGETED_DO_NOT_SHARE"
+        submitted = self.observe("ssmcp.ui.queue", {
+            "action": "submit", "text": private_text, "target": member["agent_id"],
+        })
+        private = self.wait_queue_state(front, submitted["id"], "queued")
+        for action in ("status", "read", "list"):
+            response, _ = self.context(action)
+            self.check(not self.messages(response)
+                       and private_text not in json.dumps(response, ensure_ascii=False),
+                       f"context {action} keeps a pending recipient-specific request private")
+        unbound = self.work()
+        self.check(not self.messages(unbound)
+                   and private_text not in json.dumps(unbound, ensure_ascii=False)
+                   and self.record(self.queue(), message_id=private["id"])["status"] == "queued",
+                   "an ordinary caller neither claims nor receives targeted text through automatic memory")
+        bound = self.work(member=member)
+        self.expect_delivery(bound, private, agent_id=member["agent_id"])
+        self.wait_queue_state(front, private["id"], "delivered")
+        self.check(private_text not in json.dumps(
+            bound["structuredContent"].get("context_memories", []), ensure_ascii=False),
+            "targeted text is delivered only as a requirement, never as shared automatic memory")
+        response, compacted = self.context("compact", {
+            "expected_revision": self.current()["revision"],
+        })
+        self.check(not self.messages(response)
+                   and compacted["mode"] == "local_extractive"
+                   and private_text not in json.dumps(response, ensure_ascii=False),
+                   "even a delivered targeted request stays out of local extractive and restored context")
+
         queued_text = "CONTEXT_PENDING_DO_NOT_BROADCAST"
         submitted = self.observe("ssmcp.ui.queue", {"action": "submit", "text": queued_text})
         queued = self.wait_queue_state(front, submitted["id"], "queued")
@@ -151,7 +199,18 @@ return {stdout:response.stdout};
         self.check(compacted["mode"] == "provided_summary" and compacted["summary"] == summary,
                    "explicit Agent compaction preserves the complete supplied summary and mode")
         self.expect_delivery(response, queued)
-        self.wait_queue_state(front, queued["id"], "delivered")
+        delivered = self.wait_queue_state(front, queued["id"], "delivered")
+        remembered = self.wait_context(
+            front, lambda value: any(
+                row.get("role") == "user" and row.get("text") == queued_text
+                and row.get("delivery", {}).get("request_id") == queued["id"]
+                and row["delivery"].get("revision") == delivered["revision"]
+                and row["delivery"].get("target") == "next"
+                for row in value["recent"]
+            ), "the confirmed next-caller delivery did not enter source-backed memory",
+        )
+        self.check(private_text not in json.dumps(remembered, ensure_ascii=False),
+                   "only the confirmed next-caller receipt enters automatic user memory")
 
         # Use the normal attachment path; context operations must not consume this draft.
         self.attach(front)
@@ -269,7 +328,10 @@ def main():
             "scripts/e2e_context_memory.py", "scripts/e2e_presentations.py",
             "scripts/e2e_attachments.py", "scripts/e2e_composer.py",
             "scripts/e2e_dashboard.py", "scripts/e2e.py",
-            "src/client/context_memory.rs", "src/code_mode.rs", "src/http.rs", "src/runtime.rs",
+            "src/client/context_memory.rs", "src/code_mode.js", "src/code_mode.rs",
+            "src/http.rs", "src/runtime.rs",
+            "src/client/steering.rs", "src/client/interface/history.rs",
+            "src/client/messages.rs", "src/client/terminal/conversation.rs",
         )},
     }
     with tempfile.TemporaryDirectory(prefix="ssmcp-context-e2e-") as directory:
@@ -286,8 +348,19 @@ def main():
             print(description, flush=True)
             harness.diagnostics()
         finally:
-            harness.close_frontends()
-            harness.cleanup()
+            cleanup_errors = []
+            for cleanup in (harness.stop_clipboard, harness.close_frontends, harness.cleanup):
+                try:
+                    cleanup()
+                except Exception as error:
+                    description = f"{cleanup.__name__}: {type(error).__name__}: {error}"
+                    for secret in [harness.secret, *harness.sensitive]:
+                        if secret:
+                            description = description.replace(secret, "[redacted]")
+                    cleanup_errors.append(description)
+            if cleanup_errors:
+                report["status"] = "failed"
+            report["cleanup_errors"] = cleanup_errors
             report.update(checks=harness.checks, metrics=harness.metrics,
                           duration_seconds=round(time.monotonic() - started, 3))
             args.report.parent.mkdir(parents=True, exist_ok=True)

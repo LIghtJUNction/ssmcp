@@ -861,8 +861,8 @@ cursor preserved. The local /agents command is no longer used.
 Requirements remain queued until an eligible code_mode response carries them,
 separately from native execution output. Delivered means attached to a response,
 not proof that a model has read or executed it. Exact recipients bind their
-collaboration identity for that run. Queue support requires protocol 7 on both
-ends. Local attach remains observational; use the foreground client or the
+collaboration identity for that run. Client and server accept only protocol 7;
+a different version is rejected without legacy downgrade. Local attach remains observational; use the foreground client or the
 ssmcp.ui.queue primitive to manage requirements.
 .PP
 Requirements from both the foreground editor and background ssmcp.ui.queue
@@ -893,6 +893,34 @@ Local logs do not print the base64 payload. Preview decoding is limited to
 PNG and JPEG remain compatible with older relays. Passing GIF or WebP through
 image() also requires the relay's updated MIME validator; reloading only the
 client does not update that validator. No wire-protocol upgrade is required.
+.SS "Clipboard and file import"
+Ctrl-V or /paste reads the local operating-system clipboard asynchronously.
+Small text enters the active draft or answer; text over 8 KiB and images become
+private files referenced by ordinary @ notation. Terminal-handled paste remains
+available; use /paste if the terminal intercepts Ctrl-V.
+.PP
+Use /attach PATH for one regular workspace file; quote paths containing spaces.
+Ordinary files retain their path reference. Images are validated and, when
+needed, resized or re-encoded into a private .ssmcp/inputs/image-* copy.
+Input images are bounded to 16 MiB, 33,554,432 pixels and 16384 pixels per side.
+Prepared files fit within 400 KiB of raw image bytes and 4096 pixels per side.
+PNG alpha is preserved. Processing reports changed dimensions or encoding;
+GIF/WebP converted to PNG/JPEG retain only the first frame and report that limit.
+The source image is not overwritten.
+.PP
+These actions prepare an editable draft without sending it, changing its
+recipient or invoking a model. A changed draft, answer or recipient rejects
+a late insertion; an already saved file is identified for manual recovery.
+Only one local input job runs at a time. Errors preserve new user input.
+Private image, long-text and handoff storage currently requires Unix.
+Plain clipboard text is never implicitly treated as a file path.
+.PP
+/copy copies the latest displayed Agent message as original Markdown text,
+up to the 16 KiB latest-message cache, using the operating-system clipboard.
+An oversized latest reply clears the cache instead of copying an older reply.
+A helper failure reports
+an error instead of claiming successful copying. Native clipboard helpers
+are used only on explicit user action and are not installed automatically.
 .SS "Long paste"
 On Unix, a bracketed paste exceeding 8 KiB is saved as a private
 \&.ssmcp/inputs/paste-<random-id>.txt file and inserted as a quoted @file reference.
@@ -945,8 +973,17 @@ F1 or /help opens full, scrollable help: use arrows, wheel, PageUp/PageDown or
 Home/End. F2 cycles activity, audit, agents, queue, questions and history.
 .PP
 /audit or Ctrl-O opens source audit; Up/Down browses runs, Enter/Right opens
-syntax-highlighted source, and Left returns to the list. Source audit requires
-protocol 6 or later.
+syntax-highlighted source, and Left returns to the list. Source audit uses the
+same current protocol 7; older protocol connections are no longer accepted.
+.SS "Context handoff"
+Use /handoff [note] to prepare a bounded Markdown snapshot of the current
+conversation, pending requests and questions. It is saved privately as
+\&.ssmcp/inputs/handoff-*.md and inserted as an editable @file draft.
+The current recipient is retained; no requirement is automatically sent,
+model invoked or external session switched. The document is limited to
+2 MiB and the optional note to 16 KiB; omitted content is identified.
+It does not include the unsent normal draft or credentials. Retain the file
+until later readers no longer need it. See docs/conversation-history.md.
 .SS "History and reload"
 Use /resume to select saved conversation text for the current workspace and
 continue appending to it. The versioned JSONL schema is ssmcp.conversation.v1,
@@ -959,6 +996,9 @@ for storage paths, capacity limits and schema details.
 draft/queue handoff. Existing connection-owned tasks end according to the
 session lifecycle. Uncertain delivery is not replayed automatically.
 F5 and the native UI action named reload only reload appearance.
+.SS "Local execution tasks"
+/tasks displays the actual local execution jobs. Use /tasks cancel JOB_ID only
+when explicitly cancelling that exact job. Listing tasks does not cancel them.
 .SS "Actual harness tools"
 The local /pi, /cc and /codex commands display the current installed registry.
 Adding tools OFFSET pages the directory; adding TOOL alone inspects that
