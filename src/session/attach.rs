@@ -675,6 +675,7 @@ async fn attached(
                     }
                 }
                 _ = tick.tick() => {
+                    if terminal::exit_requested() { break; }
                     apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed("",Instant::now(),true),read_only,backend_generation).await?;
                     let queued = terminal::take_keyboard();
                     if let Some((rows,cols)) = crate::client::interface::apply_pending()? {
