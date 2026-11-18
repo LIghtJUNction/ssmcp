@@ -1,12 +1,12 @@
 # ssmcp 客户端整合与验收记录
 
-日期：2026-11-18。状态：**验收通过，正在交付**。工作分支：`fix/complete-client-20261118`。
+日期：2026-11-18。状态：**本轮验收与本机交付完成**。整合分支：`fix/complete-client-20261118`，已合入 `main`。
 
-本轮已整合图片输入与显示、活动区呈现、会话 attach、调用归组和终端回复提醒。固定源码通过 strict Clippy、完整 workspace 测试及三平台 Session service CI；同版候选的真实原生图片、文件粘贴、教程二维码、composer、attach 和私有桌面验证均已有通过记录。正式安装、合入 main 和云盘归档尚未完成。以下分别记录实现、验证和交付状态，避免用局部通过替代完整交付。[验证摘要][validation] · [E2E 摘要][e2e]
+本轮已整合图片输入与显示、活动区呈现、会话 attach、调用归组和终端回复提醒。固定源码通过 strict Clippy、完整 workspace 测试及三平台 Session service CI；同版候选的真实原生图片、文件粘贴、教程二维码、composer、attach 和私有桌面验证均已有通过记录。本机 `ssmcp` / `ssmcpd` 已安装为 0.9.1，并通过版本与 release 哈希核对；整合 PR 和三个待合并 PR 均已合并关闭。报告及交付摘要已保存至 Google Drive。以下记录本轮实现、验证范围和实际交付回执。[验证摘要][validation] · [E2E 摘要][e2e]
 
 ## 1. 固定版本与 PR 适配
 
-本报告的源码锚点为 [`d4eed29657bda8ea5d2de2ac212df69c3fa51e21`](https://github.com/LIghtJUNction/ssmcp/commit/d4eed29657bda8ea5d2de2ac212df69c3fa51e21)。适配实现先落入整合分支，再以 `ours` 合并记录确认三个 PR head 的祖先关系；记录前后的 tree 均为 `16ad3c8529c69ad155bc7e200612d494a1df8529`。这证明记录祖先时没有再次改变代码，功能覆盖仍由下表和实际测试说明。**main 尚未合入本轮整合提交。**[祖先关系][ancestry]
+本报告的源码锚点为 [`d4eed29657bda8ea5d2de2ac212df69c3fa51e21`](https://github.com/LIghtJUNction/ssmcp/commit/d4eed29657bda8ea5d2de2ac212df69c3fa51e21)。适配实现先落入整合分支，再以 `ours` 合并记录确认三个 PR head 的祖先关系；记录前后的 tree 均为 `16ad3c8529c69ad155bc7e200612d494a1df8529`。这证明记录祖先时没有再次改变代码，功能覆盖仍由下表和实际测试说明。本轮经 [#32](https://github.com/LIghtJUNction/ssmcp/pull/32) 合入 `main`，实际合并提交为 [`5ce6618325647beae46879fd6afcec2231ca5904`](https://github.com/LIghtJUNction/ssmcp/commit/5ce6618325647beae46879fd6afcec2231ca5904)。GitHub 已确认 #25、#26、#30、#32 均为 `closed` 且 `merged=true`。[祖先关系][ancestry]
 
 | PR 与最终适配 head | 保留的有效增量 | 适配方式 |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ PNG 必须先按二进制处理，再决定哪些字节可以进入文本输入�
 
 恢复以真实输入进展计时：图像粘贴连续 2 秒没有新输入，清理该次未完成的二进制状态。完整 PNG 缺少外层粘贴结束标记、截断签名和损坏 chunk 都需要退出等待。attach 外层缓存部分结束标记时，会把实际进展传给 Graphics 和 Keyboard，避免内外层在不同时间结束；普通 tick 不延长等待。超时后的输入可重新作为文本处理，未完成图像不会落成附件。[输入状态](../../src/client/input.rs) · [attach decoder](../../src/session/attach/input.rs)
 
-attach 的附件目录绑定到已连接会话的工作目录，即使启动前台的目录不同，也写入会话自己的私有输入位置。为此补充的是附件导入所需的 workspace scope，没有顺带授予 harness、Context 或 Handoff 能力。只读 observer 不能输入命令或改变 writer 的 PTY 尺寸；writer 的 Ctrl-C 送到内层 PTY 中断前台任务，observer 的 Ctrl-C 则 detach。两条路径都恢复物理终端模式，并保持服务 worker 的身份与存续。[attach 实现](../../src/session/attach.rs)
+attach 的附件目录绑定到已连接会话的工作目录，即使启动前台的目录不同，也写入会话自己的私有输入位置。为此补充的是附件导入所需的 workspace scope，没有顺带授予 harness、Context 或 Handoff 能力。只读 observer 不能输入命令或改变 writer 的 PTY 尺寸；writer 的 Ctrl-C 送到内层 PTY 中断前台任务，observer 的 Ctrl-C 则 detach。writer 中断后 attach 保持连接；detach 或退出时恢复物理终端模式，并保持服务 worker 的身份与存续。[attach 实现](../../src/session/attach.rs)
 
 真实 attach 套件已验证分块 PNG 原字节、私有权限、不同启动目录、图片内控制序列、超时后恢复、writer 中断及 observer detach。raw/headless 路径继续遵循既有 UTF-8 文本传输契约，粘贴正文绕过快捷键重解析；本报告不将其描述为原生二进制附件导入接口。[attach 验证](../../scripts/e2e_attach_service.py) · [E2E 摘要][e2e]
 
@@ -58,6 +58,8 @@ caller 归组只合并展示，仍保留真实成员、收件人及单次审计�
 | 检查 | 已确认结果 | 证据边界 |
 | --- | --- | --- |
 | 完整 Rust workspace | **1,161 passed，0 failed，26 ignored** | d4 源码；ignored 未执行，不计入通过。 |
+| Release 实际 UI | **47 checks，通过** | 已安装的 release 二进制，隔离真实 PTY；哈希 `59f29540…`。 |
+| Cargo 打包 | **workspace --locked 通过** | `ztui-core 0.1.0` 与 `ssmcp 0.9.1`，未执行 crates.io 发布。 |
 | Strict all-target Clippy | **通过** | d4 本地日志；三平台另有独立 CI。 |
 | Session service CI | **Windows 2025、macOS 15、Ubuntu 24.04 全部通过** | [run 44320086144](https://github.com/LIghtJUNction/ssmcp/actions/runs/44320086144)，对应 d4。 |
 | JavaScript helpers | **63 passed** | 本轮既有 helper 日志，单独记录执行范围。 |
@@ -74,15 +76,21 @@ caller 归组只合并展示，仍保留真实成员、收件人及单次审计�
 
 ## 6. 交付状态
 
-release 构建流水线已完成并生成清单；当前通过的主要 E2E 绑定 validated 候选。cargo package --workspace --locked 已通过，验证 ztui-core 0.1.0 和 ssmcp 0.9.1 两个 crate；本地 Arch 安装包 0.9.1.r377.gee05244-1 已生成，包内两支二进制与 release 清单逐字节一致。release 二进制另通过 47 项真实 PTY UI 检查。正式替换前需要记录 release 对应验收、安装路径、安装后哈希和实际运行前台，才能证明用户正在使用这轮代码。候选教程页面可访问不代表公网 `/guide/` 已部署，当前客户端保留同源根路径回退。[产物清单][artifacts]
+release 构建和 `cargo package --workspace --locked` 均已通过。本地 Arch 安装包 `0.9.1.r377.gee05244-1` 于 **2026-11-18 22:39（Asia/Taipei）** 安装完成；包内二进制及安装后的三个路径均与固定 release 清单一致。release 客户端另通过 47 项真实 PTY UI 检查。[产物清单][artifacts] · [交付回执][delivery]
 
-| 待补项目 | 需要填写的事实 |
+| 交付项 | 实际结果 |
 | --- | --- |
-| 最终证据归档 | 各套件摘要、实际脚本哈希、源码与候选清单的对应关系。 |
-| Release 与安装 | 正式文件、SHA-256、运行进程版本、实际前台核验及回退位置。 |
-| 合入 main / PR 状态 | 实际合并提交、main head、三个远端 PR 的最终状态。 |
-| 公网教程 | 实际 URL、HTTP 状态与访问证据；未部署时保留回退说明。 |
-| Google Drive | 保存成功的文件或目录链接；目前不填写成功位置。 |
+| GitHub | #25、#26、#30、#32 均已合并并关闭；本地 main 已快进至合并提交 `5ce6618325647beae46879fd6afcec2231ca5904`，随后仅补充本报告与交付回执。 |
+| 系统客户端 | `/usr/bin/ssmcp` → `ssmcp 0.9.1`，SHA-256 `59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13`。 |
+| 用户客户端 | `~/.cargo/bin/ssmcp` → `ssmcp 0.9.1`，与系统客户端逐字节一致，避免 PATH 仍选中旧版。 |
+| 系统服务程序 | `/usr/bin/ssmcpd` → `ssmcpd 0.9.1`，SHA-256 `99a237b1c1c93193c0168f240a7035a7a9f4d56da43dca8e5915b3020aec7a1e`。 |
+| 回退文件 | 替换前的三支二进制已按 SHA-256 留存于开发机本轮 `out/completion-20261118/backup/`，没有覆盖旧备份。 |
+| 证据归档 | 验证矩阵、脚本/产物哈希、PR 祖先关系、E2E 摘要与图像均已提交仓库。 |
+| Google Drive | `ChatGPT` 目录保存 `ssmcp-client-completion-20261118.md` 与 `ssmcp-client-completion-20261118-evidence.json`；私人访问链接由交付消息提供。 |
+
+安装结果证明磁盘上的文件已更新。没有把旧前台进程仍在运行时，磁盘文件替换成功当成前台已重新加载的证据；本轮未确认用户当前前台已完成切换。原生像素验收使用私有 Xvfb 内的 **ztty 0.2.1**，不等同于用户原有 **ztty 0.1.2** 前台已升级。
+
+本轮没有重启或部署公网 relay / portal，没有执行 crates.io 发布。候选教程的四个本地路由、移动布局与根路径 QR 回退已有实际通过证据；本报告不据此断言公网 `/guide/` 的当前部署状态。安装后本机 `ssmcpd` 与 `ssmcp-portal` 服务仍为 inactive。
 
 ### 界面证据
 
@@ -94,7 +102,7 @@ release 构建流水线已完成并生成清单；当前通过的主要 E2E 绑�
 
 ## 7. 证据索引
 
-以下摘要文件已经归档；delivery.json 会在安装、合并和云盘保存完成后补入实际回执。原始记录位于开发机私有目录 `/home/lightjunction/Documents/GITHUB/ssmcp/out/completion-20261118/`，用于追溯，不作为仓库内可下载附件。失败批次保留原状态，最终重跑应新增或明确指向新报告。
+以下摘要文件已经归档；delivery.json 已记录安装、合并和云盘保存的实际回执。原始记录位于开发机私有目录 `/home/lightjunction/Documents/GITHUB/ssmcp/out/completion-20261118/`，用于追溯，不作为仓库内可下载附件。失败批次保留原状态，最终重跑应新增或明确指向新报告。
 
 | 仓库摘要 | 对应原始证据 |
 | --- | --- |
@@ -102,7 +110,7 @@ release 构建流水线已完成并生成清单；当前通过的主要 E2E 绑�
 | [artifacts.json][artifacts] | `validated-bins-manifest.json`、`release-bins-manifest.json`、`pipeline-state.json`。 |
 | [integration-ancestry.json][ancestry] | 同名原始记录，含三个完整 head 与一致 tree。 |
 | [e2e-summary.json][e2e] | `native-images-final/report.json`、`composer-final.json`、`final-session-attach/`、`client-ui-verified/ui-smoke.json`、`private-desktop-final.json`，`file-paste-final-v2/report.json`、`guide-final-v2/report.json`；旧失败批次保留。 |
-| [delivery.json][delivery] | 待生成：最终安装、main 合并、公网入口及云盘回执。 |
+| [delivery.json][delivery] | `install-result.json`、GitHub PR 状态、Google Drive 上传确认；明确未执行的公网部署和 crates.io 发布。 |
 
 [validation]: client-completion-20261118/validation.json
 [artifacts]: client-completion-20261118/artifacts.json

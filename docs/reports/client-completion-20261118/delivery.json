@@ -1,10 +1,102 @@
 {
-  "recorded_at": "2026-11-18T22:21:19.044364+08:00",
-  "status": "validation_complete_delivery_in_progress",
+  "recorded_at": "2026-11-18T14:50:06.241Z",
+  "user_timezone": "Asia/Taipei",
+  "status": "validated_merged_installed_archived",
   "source_revision": "d4eed29657bda8ea5d2de2ac212df69c3fa51e21",
+  "main_merged": true,
+  "main_merge": "5ce6618325647beae46879fd6afcec2231ca5904",
+  "pull_requests": [
+    {
+      "number": 25,
+      "state": "closed",
+      "merged": true,
+      "head": "aa8b95d66655adfd4d97ac8191e2b935bcd57c44",
+      "merge_commit": "d4eed29657bda8ea5d2de2ac212df69c3fa51e21",
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/25"
+    },
+    {
+      "number": 26,
+      "state": "closed",
+      "merged": true,
+      "head": "8253343710373f6906d6b99423015553696fdaa1",
+      "merge_commit": "3a12170e6c97967aa43ada3547c0e163f10504d9",
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/26"
+    },
+    {
+      "number": 30,
+      "state": "closed",
+      "merged": true,
+      "head": "c27502879a05c24e2e4495be45d9083548d2b32f",
+      "merge_commit": "3078d145920383507da701fa291d171dc7e9c74d",
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/30"
+    },
+    {
+      "number": 32,
+      "state": "closed",
+      "merged": true,
+      "head": "8de59153b749ffd74e4987a09f083b2eabd15be2",
+      "merge_commit": "5ce6618325647beae46879fd6afcec2231ca5904",
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/32"
+    }
+  ],
+  "local_install_verified": true,
+  "install": {
+    "installed_at": "2026-11-18T22:39:41.300718+08:00",
+    "package": "ssmcp-git 0.9.1.r377.gee05244-1",
+    "package_sha256": "d0da242e239eef5e87c371762b78f2dad62b83dc8536dca821c22360fe95f335",
+    "installed": {
+      "system_ssmcp": {
+        "path": "/usr/bin/ssmcp",
+        "sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13",
+        "version": "ssmcp 0.9.1"
+      },
+      "cargo_ssmcp": {
+        "path": "/home/lightjunction/.cargo/bin/ssmcp",
+        "sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13",
+        "version": "ssmcp 0.9.1"
+      },
+      "system_ssmcpd": {
+        "path": "/usr/bin/ssmcpd",
+        "sha256": "99a237b1c1c93193c0168f240a7035a7a9f4d56da43dca8e5915b3020aec7a1e",
+        "version": "ssmcpd 0.9.1"
+      }
+    },
+    "backups": [
+      {
+        "name": "system-ssmcp",
+        "sha256": "96982543f6cb430306e6b0fdffc141d0de17b4bb87ec2c08398bb085c6155d04",
+        "backup": "out/completion-20261118/backup/system-ssmcp-pre-final-96982543f6cb"
+      },
+      {
+        "name": "system-ssmcpd",
+        "sha256": "4eb7610f71768fed716397da9e0cbfcb282307c9b2536a31764a71f4f99519c4",
+        "backup": "out/completion-20261118/backup/system-ssmcpd-pre-final-4eb7610f7176"
+      },
+      {
+        "name": "cargo-ssmcp",
+        "sha256": "96982543f6cb430306e6b0fdffc141d0de17b4bb87ec2c08398bb085c6155d04",
+        "backup": "out/completion-20261118/backup/cargo-ssmcp-pre-final-96982543f6cb"
+      }
+    ]
+  },
+  "drive_report_uploaded": true,
+  "drive_evidence_uploaded": true,
+  "google_drive": {
+    "folder_name": "ChatGPT",
+    "files": [
+      "ssmcp-client-completion-20261118.md",
+      "ssmcp-client-completion-20261118-evidence.json"
+    ],
+    "private_links_delivered_separately": true
+  },
+  "foreground_reload_verified": false,
+  "native_pixel_test_terminal": "ztty 0.2.1 in isolated Xvfb",
+  "original_foreground_terminal": "ztty 0.1.2; not upgraded by this task",
   "crate_publication_performed": false,
   "public_service_restart_performed": false,
-  "main_merged": false,
-  "local_install_verified": false,
-  "drive_report_uploaded": false
+  "public_guide_deployment_performed": false,
+  "local_service_states_after_install": {
+    "ssmcpd": "inactive",
+    "ssmcp_portal": "inactive"
+  }
 }
