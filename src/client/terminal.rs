@@ -187,8 +187,7 @@ pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) ->
         return false;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.events.ingest_event(label, value, bytes);
-    state.log_raw(bytes);
+    state.log_event(label, value, bytes);
     true
 }
 
@@ -421,7 +420,7 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     state.preview = true;
     state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
     state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
-    state.log("[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
+    state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"17","exit_code":0}), "[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
     state.log("[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
@@ -1077,6 +1076,10 @@ impl State {
 
     fn log(&mut self, bytes: &[u8]) {
         self.events.ingest(bytes);
+        self.log_raw(bytes);
+    }
+    fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
+        self.events.ingest_event(label, value, bytes);
         self.log_raw(bytes);
     }
     fn log_raw(&mut self, bytes: &[u8]) {
