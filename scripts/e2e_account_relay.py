@@ -25,6 +25,7 @@ import time
 
 IDENTITY = {"provider": "github", "subject": "123", "login": "fixture", "principal": "fixture@github"}
 MAX_FRAME = 4 * 1024 * 1024
+SUPPORTED_WIRE_VERSIONS = (4, 5, 6, 7)
 
 def wait_for(predicate, description, timeout=8):
     deadline = time.monotonic() + timeout
@@ -139,7 +140,7 @@ class WebSocket:
         try:
             self.hello = self.read()
             assert self.hello["type"] == "hello"
-            assert self.hello["version"] == 5
+            assert self.hello["version"] in SUPPORTED_WIRE_VERSIONS
             assert self.hello["mode"] == "shell"
             assert self.hello["metadata"]["allow"] == [IDENTITY["principal"]]
             self.send({"type": "ready", "url": self.state.origin + "/mcp",
@@ -151,6 +152,17 @@ class WebSocket:
                 self.close(4001)
             while True:
                 frame = self.read()
+                if frame["type"] == "steering":
+                    # Account lifecycle tests have no user requirements. Only
+                    # v7 presence polling is valid here; never simulate queue
+                    # publication, editing, or response-boundary delivery.
+                    assert self.hello["version"] == 7
+                    assert frame["command"] == {"op": "snapshot"}
+                    self.send({"type": "steering_reply", "id": frame["id"], "result": {"Ok": {
+                        "schema_version": 1, "client_id": self.id, "revision": 0,
+                        "agents": [], "messages": [],
+                    }}})
+                    continue
                 assert frame["type"] == "reply"
                 with self.state.lock:
                     result = self.pending.get(frame["id"])
@@ -418,8 +430,9 @@ class Harness:
         token = wait_for(lambda: next(iter(self.state.devices), None), "B consumes invitation")
         wait_for(lambda: self.state.connections.get(token), "B opens outbound WebSocket")
         connection = self.state.connections[token][-1]
-        self.check(self.state.enroll_count == 1 and connection.hello["version"] == 5,
-                   "B joins with one enrollment and a version 5 WebSocket handshake")
+        self.check(self.state.enroll_count == 1
+                   and connection.hello["version"] in SUPPORTED_WIRE_VERSIONS,
+                   "B joins with one enrollment and a supported v4-v7 WebSocket handshake")
         self.check(not list((self.root / "B/auth").iterdir()),
                    "temporary B session never saves A's account credentials")
         listing = json.loads(self.cli("A", "list", "--json").stdout)

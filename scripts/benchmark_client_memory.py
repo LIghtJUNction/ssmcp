@@ -102,16 +102,24 @@ def relay():
         nonlocal identifier
         identifier += 1
         send({"type": "call", "id": identifier, "operation": operation})
-        line = sys.stdin.readline()
-        if not line:
-            raise RuntimeError("client closed the local transport")
-        response = json.loads(line)
-        if response.get("type") != "reply" or response.get("id") != identifier:
-            raise RuntimeError("unexpected reply envelope")
-        result = response["result"]
-        if "Err" in result:
-            raise RuntimeError(result["Err"])
-        return result["Ok"]
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                raise RuntimeError("client closed the local transport")
+            response = json.loads(line)
+            if response.get("type") == "steering":
+                if hello.get("version", 0) < 7 or response.get("command") != {"op": "snapshot"}:
+                    raise RuntimeError("unexpected steering command")
+                send({"type": "steering_reply", "id": response["id"], "result": {"Ok": {
+                    "schema_version": 1, "client_id": "b" * 64, "revision": 0,
+                    "agents": [], "messages": []}}})
+                continue
+            if response.get("type") != "reply" or response.get("id") != identifier:
+                raise RuntimeError("unexpected reply envelope")
+            result = response["result"]
+            if "Err" in result:
+                raise RuntimeError(result["Err"])
+            return result["Ok"]
 
     def call(name, arguments=None):
         result = request({"op": "call_tool", "name": name, "arguments": arguments or {}})
@@ -150,7 +158,8 @@ def relay():
             cursors.add(cursor)
 
     try:
-        if json.loads(sys.stdin.readline()).get("type") != "hello":
+        hello = json.loads(sys.stdin.readline())
+        if hello.get("type") != "hello":
             raise RuntimeError("expected client hello")
         phase("discovery")
         send({"type": "ready", "url": "https://ssmcp.example/memory", "login_code": "a" * 64,

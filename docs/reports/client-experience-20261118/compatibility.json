@@ -1,0 +1,392 @@
+{
+  "schema": "ssmcp.client-experience.compatibility.v1",
+  "schema_version": 1,
+  "collected_at_utc": "2026-11-17T20:25:04.750327+00:00",
+  "platform": "Linux",
+  "sanitization": {
+    "raw_terminal_output_included": false,
+    "authentication_values_included": false,
+    "path_redactions": [
+      "developer build-output prefix",
+      "ephemeral reload fixture directory"
+    ],
+    "original_report_hashes_refer_to_unmodified_source_files": true
+  },
+  "status": "passed",
+  "scope": "Executable reload/startup plus merged main configuration, context, helper, runtime and resource compatibility.",
+  "final_coverage": {
+    "passed": 45,
+    "failed": 0,
+    "initially_ignored": 2,
+    "explicitly_rerun_helpers_passed": 2,
+    "remaining_ignored": 0,
+    "breakdown": {
+      "cli": 15,
+      "configuration_and_context": 28,
+      "explicit_context_helpers": 2
+    },
+    "counting_note": "The 2 context_helpers cases were ignored in the broad run, then explicitly executed with --ignored. They count once among the 45 passing cases. The earlier failed reload attempt is separate historical evidence."
+  },
+  "runs": [
+    {
+      "stage": "cli",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "client_reload",
+        "--test",
+        "client_startup",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 11.52,
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.59s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.81s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.00s"
+      ],
+      "tail": [],
+      "status": "passed",
+      "provenance": {
+        "source_file": "/tmp/client-final-compatibility.json",
+        "original_sha256": "75a58e20e23469f247fc7d36ebd2a1987a4883a0118c573dfb83a0e0ef23136f",
+        "original_bytes": 1140,
+        "source_file_modified_at_utc": "2026-11-17T20:22:11.930882+00:00"
+      },
+      "test_counts": {
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered_out": 0
+      },
+      "suites": [
+        {
+          "target": "client_reload",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "client_startup",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "stage": "configuration_and_context",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "client_server_config",
+        "--test",
+        "context",
+        "--test",
+        "context_helpers",
+        "--test",
+        "context_runtime",
+        "--test",
+        "resources",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "exit_code": 0,
+      "seconds": 2.98,
+      "summary": [
+        "     Running tests/client_server_config.rs (<build-output>/debug/build/ssmcp/17250abc85b0bf82/out/client_server_config-17250abc85b0bf82)",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+        "     Running tests/context.rs (<build-output>/debug/build/ssmcp/48a0d2369f978641/out/context-48a0d2369f978641)",
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s",
+        "     Running tests/context_helpers.rs (<build-output>/debug/build/ssmcp/e326ccf826f076ba/out/context_helpers-e326ccf826f076ba)",
+        "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "     Running tests/context_runtime.rs (<build-output>/debug/build/ssmcp/e0cc4f50157cc821/out/context_runtime-e0cc4f50157cc821)",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s",
+        "     Running tests/resources.rs (<build-output>/debug/build/ssmcp/30407021fbb37987/out/resources-30407021fbb37987)",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s"
+      ],
+      "tail": [],
+      "status": "passed",
+      "provenance": {
+        "source_file": "/tmp/client-integrated-context.json",
+        "original_sha256": "b8bcbfefff33dc618ef05c21c3752282ed801ca2adeaf48d1afb5a8cac68e6dc",
+        "original_bytes": 1817,
+        "source_file_modified_at_utc": "2026-11-17T20:16:56.835533+00:00"
+      },
+      "test_counts": {
+        "passed": 28,
+        "failed": 0,
+        "ignored": 2,
+        "measured": 0,
+        "filtered_out": 0
+      },
+      "suites": [
+        {
+          "target": "client_server_config",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "context",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "context_helpers",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 2,
+          "rechecked_by": "context_helpers_linux"
+        },
+        {
+          "target": "context_runtime",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "resources",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "stage": "context_helpers_linux",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "context_helpers",
+        "-j1",
+        "--",
+        "--ignored",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 2.09,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s"
+      ],
+      "tail": [],
+      "status": "passed",
+      "provenance": {
+        "source_file": "/tmp/client-integrated-context-helpers.json",
+        "original_sha256": "51325df676563acadc2b29611e6f14e2edd3fe1b83c36c5797bc9a3caa960280",
+        "original_bytes": 368,
+        "source_file_modified_at_utc": "2026-11-17T20:18:10.908347+00:00"
+      },
+      "test_counts": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered_out": 0
+      }
+    }
+  ],
+  "history": [
+    {
+      "stage": "compatibility",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "client_startup",
+        "--test",
+        "client_reload",
+        "--test",
+        "client_server_config",
+        "--test",
+        "context",
+        "--test",
+        "context_helpers",
+        "--test",
+        "context_runtime",
+        "--test",
+        "resources",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "exit_code": 101,
+      "seconds": 23.23,
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.13s",
+        "     Running tests/client_reload.rs (<build-output>/debug/build/ssmcp/537f33e373867dba/out/client_reload-537f33e373867dba)",
+        "test reload_executes_updated_installation_and_preserves_launch_context ... FAILED",
+        "test reload_rejects_an_inflight_call_and_allows_it_to_finish ... FAILED",
+        "test reload_does_not_exec_when_ssh_closes_before_commit ... FAILED",
+        "test reload_ignores_an_exec_a_display_name_that_matches_another_program ... FAILED",
+        "test reload_rejects_arguments_without_disconnect_or_restart ... FAILED",
+        "test reload_resolves_updated_symlink_from_path_and_keeps_github_acl ... FAILED",
+        "test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s"
+      ],
+      "tail": [
+        "thread 'reload_does_not_exec_when_ssh_closes_before_commit' (109330) panicked at tests/client_reload.rs:180:17:",
+        "missing fixture result <isolated-reload-fixture>/reload-reply.json: No such file or directory (os error 2)",
+        "",
+        "---- reload_ignores_an_exec_a_display_name_that_matches_another_program stdout ----",
+        "",
+        "thread 'reload_ignores_an_exec_a_display_name_that_matches_another_program' (109332) panicked at tests/client_reload.rs:180:17:",
+        "missing fixture result <isolated-reload-fixture>/reload-reply.json: No such file or directory (os error 2)",
+        "",
+        "---- reload_rejects_arguments_without_disconnect_or_restart stdout ----",
+        "",
+        "thread 'reload_rejects_arguments_without_disconnect_or_restart' (109453) panicked at tests/client_reload.rs:180:17:",
+        "missing fixture result <isolated-reload-fixture>/invalid-replies.json: No such file or directory (os error 2)",
+        "",
+        "---- reload_resolves_updated_symlink_from_path_and_keeps_github_acl stdout ----",
+        "",
+        "thread 'reload_resolves_updated_symlink_from_path_and_keeps_github_acl' (109544) panicked at tests/client_reload.rs:180:17:",
+        "missing fixture result <isolated-reload-fixture>/reload-reply.json: No such file or directory (os error 2)",
+        "",
+        "",
+        "failures:",
+        "    reload_does_not_exec_when_ssh_closes_before_commit",
+        "    reload_executes_updated_installation_and_preserves_launch_context",
+        "    reload_ignores_an_exec_a_display_name_that_matches_another_program",
+        "    reload_rejects_an_inflight_call_and_allows_it_to_finish",
+        "    reload_rejects_arguments_without_disconnect_or_restart",
+        "    reload_resolves_updated_symlink_from_path_and_keeps_github_acl",
+        "",
+        "test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s",
+        "",
+        "error: test failed, to rerun pass `--test client_reload`"
+      ],
+      "status": "failed",
+      "provenance": {
+        "source_file": "/tmp/client-integrated-gates.json",
+        "original_sha256": "8900ded373a9e5719060b9a3155aca5da52c54c01f06028ded50c3d5af92e8aa",
+        "original_bytes": 5430,
+        "source_file_modified_at_utc": "2026-11-17T20:14:55.902792+00:00"
+      },
+      "test_counts": {
+        "passed": 0,
+        "failed": 6,
+        "ignored": 0,
+        "measured": 0,
+        "filtered_out": 0
+      },
+      "id": "initial_integrated_mock_compatibility",
+      "test_execution": {
+        "completed_targets": [
+          "client_reload"
+        ],
+        "stopped_after_first_failed_target": true,
+        "not_run_by_this_attempt": [
+          "client_startup",
+          "client_server_config",
+          "context",
+          "context_helpers",
+          "context_runtime",
+          "resources"
+        ]
+      },
+      "diagnosis": {
+        "status": "confirmed",
+        "cause": "The mock SSH peer expected the next frame to be a native Reply. Protocol v7 sent a Steering Snapshot first; the fixture asserted and exited, leaving the expected result files absent.",
+        "observed_frame": {
+          "type": "steering",
+          "id": 1,
+          "command": {
+            "op": "snapshot"
+          }
+        },
+        "reproduction": "An isolated run against the final binary reproduced this exact assertion after clearing inherited session and reload handoff environment variables.",
+        "inherited_environment_was_direct_cause": false,
+        "changes": [
+          "Both reload and startup mock peers now strictly acknowledge empty-queue v7 Snapshot frames while validating native reply types and request IDs.",
+          "The in-flight reload test accepts interleaved snapshots without discarding or weakening its native-call assertions.",
+          "Fixture launches use a private session home and remove inherited session generation, queue handoff, and output handoff variables."
+        ],
+        "production_source_changed_for_this_fix": false,
+        "successful_recheck": "cli",
+        "diagnostic_checks": [
+          "All four invalid reload argument payloads were rejected while the terminal remained running.",
+          "Healthy startup preserved a partial SSH frame, served the shell catalog before native startup finished, and subsequently reported the native provider ready."
+        ]
+      }
+    },
+    {
+      "id": "integrated_dashboard_escape_timing",
+      "status": "failed",
+      "provenance": {
+        "source_file": "/tmp/ssmcp-dashboard-merged-escape-failure.json",
+        "original_sha256": "ab8acd7f061027712d82fc59a3be60ed7097889c295b1503c58096d72aff922d",
+        "original_bytes": 11875,
+        "source_file_modified_at_utc": "2026-11-17T20:19:30.393067+00:00"
+      },
+      "duration_seconds": 32.037,
+      "passed_checks_before_failure": 56,
+      "error_first_line": "AssertionError: timed out waiting for coalesced PageUp and text retaining scroll position",
+      "aborted": true,
+      "last_completed_checks": [
+        "the wheel scrolls real log history directly without F6 or a focus switch",
+        "PageUp reveals prior output while the audit interface retains input ownership",
+        "Home moves to retained audit history without rewriting raw output",
+        "End restores live logs and Escape never focuses a hidden shell"
+      ],
+      "binaries": {
+        "ssmcp": "6bbf52440b805b8f99fab1996933cb1678f2c92363ccf96ef4147a1ebdee3532",
+        "ssmcpd": "b58bc751b5ea80e0ad44c2880f1ca24389902a0354b1b76f3e79eaa522b584f9",
+        "vt_snapshot": "506771b40bf40f98499fd17ce2a076ea76d8acbcb83dd380bb4cfb3c450d2413"
+      },
+      "sources": {
+        "e2e_dashboard.py": "483a9c1a7e03d2d6518fe432a8cd676f4642465c6286c628790fc858a00ca787",
+        "e2e.py": "b6b78f033d174f916a6e202aa625f1cf892102b024f4a201b957a78f22c9c59a"
+      },
+      "raw_error_and_terminal_snapshot_omitted": true,
+      "diagnosis": {
+        "status": "confirmed",
+        "cause": "The fixture sent a new PageUp sequence after a fixed 120 ms pause following a standalone Escape. Both session and display decoders defer an ambiguous Escape prefix; the footer condition was already true and did not prove that Escape had completed.",
+        "diagnostic": {
+          "escape_visible_seconds": [
+            0.255,
+            0.258,
+            0.209,
+            0.205,
+            0.255
+          ],
+          "status": "passed",
+          "cycles": 5,
+          "provenance": {
+            "source_file": "/tmp/ssmcp-dashboard-escape-diagnostic.json",
+            "original_sha256": "ec441c7c807a4be503750fe38eba43a50fdff8759c6656cb6ea830471e3792ae",
+            "original_bytes": 129,
+            "source_file_modified_at_utc": "2026-11-17T20:22:47.348582+00:00"
+          },
+          "observation": "Five isolated cycles observed the visible Escape state change after 205–258 ms."
+        },
+        "changes": [
+          "scripts/e2e_dashboard.py now opens the filter first, sends Escape, and observes the filter closing before sending PageUp."
+        ],
+        "production_source_changed": false,
+        "fixture_fix_commit": "940c636a275fe5dfeb039ee0dce3f9b6743b42ae",
+        "successful_recheck": {
+          "evidence": "dashboard.json",
+          "status": "passed",
+          "check_count": 84,
+          "duration_seconds": 25.888
+        }
+      }
+    }
+  ],
+  "source_revisions": {
+    "production": "1eca0e97ea7e457a2dea6b4991c0d2e7a3f29092",
+    "test_fixture_fix": "940c636a275fe5dfeb039ee0dce3f9b6743b42ae"
+  }
+}

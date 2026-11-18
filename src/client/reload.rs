@@ -109,6 +109,7 @@ impl Restart {
         let mut command = std::process::Command::new(&self.program);
         command.args(&self.arguments).current_dir(&self.cwd);
         let _resume = output.prepare_reload(&mut command)?;
+        let _steering = super::steering::prepare_reload(&mut command)?;
         #[cfg(windows)]
         {
             // Windows has no exec. All old backends have already stopped; keep

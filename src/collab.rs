@@ -206,6 +206,39 @@ impl State {
 }
 
 impl Hub {
+    /// Public roster for the connected local client's UI. Mailboxes, owner keys
+    /// and private participant tokens never cross this interface.
+    pub(crate) fn presence(&self) -> Result<Vec<crate::wire::SteeringAgent>, String> {
+        let state = self.locked()?;
+        Ok(state
+            .agents
+            .values()
+            .map(|agent| crate::wire::SteeringAgent {
+                agent_id: agent.id.clone(),
+                name: agent.name.clone(),
+                role: agent.role.clone(),
+                status: agent.status.clone(),
+            })
+            .collect())
+    }
+
+    pub(crate) fn bind(
+        &self,
+        owner: &str,
+        id: &str,
+        token: &str,
+    ) -> Result<crate::wire::SteeringAgent, String> {
+        let mut state = self.locked()?;
+        let agent = state.authenticated(owner, id, token)?;
+        agent.renew();
+        Ok(crate::wire::SteeringAgent {
+            agent_id: agent.id.clone(),
+            name: agent.name.clone(),
+            role: agent.role.clone(),
+            status: agent.status.clone(),
+        })
+    }
+
     fn locked(&self) -> Result<MutexGuard<'_, State>, String> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.closed {

@@ -3,14 +3,14 @@ use crate::backend::process::Managed;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     io,
     path::{Path, PathBuf},
     pin::Pin,
     process::Stdio,
-    sync::Arc,
-    time::Duration,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -19,7 +19,7 @@ use tokio::{
     task::JoinSet,
 };
 
-pub const MAX_CODE_BYTES: usize = 64 * 1024;
+pub const MAX_CODE_BYTES: usize = crate::wire::MAX_CODE_BYTES;
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 pub const MAX_TIMEOUT_MS: u64 = 900_000;
 pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
@@ -32,6 +32,201 @@ pub const MAX_CONCURRENT: usize = 4;
 const MAX_ERROR_BYTES: usize = 4096;
 static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
 static PREPARATIONS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
+
+/// Scoped around each host callback, including built-in workspace bridges. A
+/// client receives source only when an authorized native call is dispatched to
+/// that client; discovery inventory alone never broadcasts the program.
+#[derive(Clone)]
+pub(crate) struct AuditRun {
+    pub context: Arc<crate::wire::CodeContext>,
+    pub controller: Option<crate::wire::Controller>,
+    targets: Arc<Mutex<HashSet<String>>>,
+    steering_targets: Arc<Mutex<HashSet<String>>>,
+    finished: Arc<Mutex<Option<crate::wire::CodeCompletion>>>,
+    bindings: Arc<Mutex<HashMap<String, RunBinding>>>,
+    started: Instant,
+}
+
+/// Private server-side proof for one room, never serialized to a native client.
+#[derive(Clone)]
+pub(crate) struct RunBinding {
+    pub owner: String,
+    pub agent_id: String,
+    pub token: String,
+}
+
+tokio::task_local! {
+    pub(crate) static AUDIT_RUN: AuditRun;
+}
+
+impl AuditRun {
+    pub(crate) fn new(
+        code: &str,
+        controller: Option<crate::wire::Controller>,
+    ) -> Result<Self, String> {
+        let mut bytes = [0u8; 16];
+        crate::platform::random_bytes(&mut bytes)
+            .map_err(|_| "cannot allocate code audit run ID")?;
+        let context = crate::wire::CodeContext {
+            run_id: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+            code: code.into(),
+            timestamp_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+        };
+        context.validate()?;
+        Ok(Self {
+            context: Arc::new(context),
+            controller,
+            targets: Arc::new(Mutex::new(HashSet::new())),
+            steering_targets: Arc::new(Mutex::new(HashSet::new())),
+            finished: Arc::new(Mutex::new(None)),
+            bindings: Arc::new(Mutex::new(HashMap::new())),
+            started: Instant::now(),
+        })
+    }
+
+    pub(crate) fn dispatched(&self, client_id: &str) {
+        self.targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(client_id.into());
+    }
+
+    pub(crate) fn targets(&self) -> Vec<String> {
+        let mut targets = self
+            .targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets
+    }
+
+    /// UI and client metadata queries still carry source audit, but cannot
+    /// consume a human requirement merely by refreshing display or discovery.
+    /// Only these explicit observation APIs are exempt; other read operations
+    /// and runs that explicitly bind an agent retain normal delivery semantics.
+    pub(crate) fn native_dispatched(&self, client_id: &str, tool: Option<&str>) {
+        self.dispatched(client_id);
+        if tool.is_some_and(|name| {
+            !name.starts_with("ssmcp.ui.")
+                && !matches!(
+                    name,
+                    "ssmcp.client.capabilities"
+                        | "ssmcp.resources.list"
+                        | "ssmcp.resources.templates"
+                        | "ssmcp.resources.read"
+                )
+        }) {
+            self.interacted(client_id);
+        }
+    }
+
+    pub(crate) fn interacted(&self, client_id: &str) {
+        self.dispatched(client_id);
+        self.steering_targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(client_id.into());
+    }
+
+    pub(crate) fn steering_targets(&self) -> Vec<String> {
+        let mut targets = self
+            .steering_targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets
+    }
+
+    pub(crate) fn completion(&self, result: &Result<Value, String>) -> crate::wire::CodeCompletion {
+        let completion = crate::wire::CodeCompletion {
+            run_id: self.context.run_id.clone(),
+            success: result.is_ok(),
+            status: if result.is_ok() {
+                "completed"
+            } else if result
+                .as_ref()
+                .is_err_and(|error| error.starts_with("code_mode timed out"))
+            {
+                "timeout"
+            } else {
+                "failed"
+            }
+            .into(),
+            duration_ms: self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            error: result
+                .as_ref()
+                .err()
+                .map(|error| bounded(error.clone(), 4000)),
+        };
+        *self
+            .finished
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(completion.clone());
+        completion
+    }
+
+    pub(crate) fn completed(&self) -> Option<crate::wire::CodeCompletion> {
+        self.finished
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn bind(
+        &self,
+        client_id: &str,
+        owner: &str,
+        agent_id: &str,
+        token: &str,
+    ) -> Result<(), String> {
+        let mut bindings = self
+            .bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(existing) = bindings.get(client_id) {
+            if existing.owner != owner || existing.agent_id != agent_id || existing.token != token {
+                return Err(
+                    "a code_mode run cannot switch its bound agent within the same room".into(),
+                );
+            }
+        } else {
+            if bindings.len() >= MAX_CALLS {
+                return Err("too many agent bindings in one code_mode run".into());
+            }
+            bindings.insert(
+                client_id.into(),
+                RunBinding {
+                    owner: owner.into(),
+                    agent_id: agent_id.into(),
+                    token: token.into(),
+                },
+            );
+        }
+        drop(bindings);
+        // Explicitly binding a room is an authorized interaction with it, even
+        // if this program only checks messages and makes no native tool call.
+        self.interacted(client_id);
+        Ok(())
+    }
+
+    pub(crate) fn binding(&self, client_id: &str) -> Option<RunBinding> {
+        self.bindings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(client_id)
+            .cloned()
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -567,6 +762,40 @@ mod tests {
 
     static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    #[test]
+    fn ui_observation_retains_source_audit_without_claiming_user_requirements() {
+        let run = AuditRun::new("return await ui.get('display');", None).unwrap();
+        for tool in [
+            "ssmcp.ui.get",
+            "ssmcp.ui.queue",
+            "ssmcp.ui.set",
+            "ssmcp.ui.action",
+            "ssmcp.ui.filter",
+            "ssmcp.client.capabilities",
+            "ssmcp.resources.list",
+            "ssmcp.resources.templates",
+            "ssmcp.resources.read",
+        ] {
+            run.native_dispatched("display", Some(tool));
+            assert!(
+                run.steering_targets().is_empty(),
+                "unbound observation {tool} must not claim a user requirement"
+            );
+        }
+        run.native_dispatched("catalog", None);
+        assert_eq!(run.targets(), ["catalog", "display"]);
+        assert!(run.steering_targets().is_empty());
+
+        run.native_dispatched("worker", Some("terminal.status"));
+        run.native_dispatched("files", Some("ssmcp.fs.read_text"));
+        assert_eq!(run.steering_targets(), ["files", "worker"]);
+
+        run.bind("display", "owner", "agent_one", "private-token")
+            .unwrap();
+        assert_eq!(run.steering_targets(), ["display", "files", "worker"]);
+        assert_eq!(run.context.code, "return await ui.get('display');");
+    }
+
     // Fixed test programs verify the runner/pipe protocol; execute() always requires bubblewrap.
     async fn trusted_execute(
         code: String,
@@ -922,17 +1151,20 @@ mod tests {
         let _guard = TESTS.lock().await;
         let output = run_code(r#"
             const joined = await collab.join('room',{name:'writer',client_id:'cannot-override'});
+            const bound = await collab.bind('room',{agent_id:'a',token:'private',client_id:'cannot-override'});
             const messages = await collab.receive('room',{agent_id:'a',token:'private',after:7,wait_ms:1000});
             const sent = await collab.send('room',{agent_id:'a',token:'private',to:'b',payload:{file:'src/lib.rs'},idempotency_key:'handoff-1'});
             const acked = await collab.ack('room',{agent_id:'a',token:'private',through:8});
             let rejected = '';
             try { await collab.receive('room',{agent_id:'a',token:'private',wait_ms:30000}); }
             catch (error) { rejected = error.message; }
-            return {joined,messages,sent,acked,rejected,frozen:Object.isFrozen(collab)};
+            return {joined,bound,messages,sent,acked,rejected,frozen:Object.isFrozen(collab)};
         "#).await.unwrap();
         let result = &output["result"];
         assert_eq!(result["joined"]["name"], "collab.join");
         assert_eq!(result["joined"]["arguments"]["client_id"], "room");
+        assert_eq!(result["bound"]["name"], "collab.bind");
+        assert_eq!(result["bound"]["arguments"]["client_id"], "room");
         assert_eq!(result["messages"]["name"], "collab.receive");
         assert_eq!(result["messages"]["arguments"]["after"], 7);
         assert_eq!(result["sent"]["arguments"]["payload"]["file"], "src/lib.rs");
@@ -965,6 +1197,37 @@ mod tests {
             "old-generation"
         );
         assert_eq!(output["result"]["closed"]["name"], "ssmcp.session.close");
+        assert_eq!(output["result"]["frozen"], true);
+    }
+
+    #[tokio::test]
+    async fn ui_helpers_dispatch_atomic_client_operations_without_rewriting_arguments() {
+        let _guard = TESTS.lock().await;
+        let output = run_code(
+            r#"
+            return {
+                state: await ui.get('one'),
+                theme: await ui.set('one',{theme:'nord'}),
+                action: await ui.action('one',{action:'audit.open'}),
+                filter: await ui.filter('one',{text:'cargo',level:'commands'}),
+                frozen: Object.isFrozen(ui)
+            };
+        "#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(output["result"]["state"]["name"], "ssmcp.ui.get");
+        assert_eq!(output["result"]["state"]["arguments"], json!({}));
+        assert_eq!(output["result"]["theme"]["arguments"]["theme"], "nord");
+        assert_eq!(
+            output["result"]["action"]["arguments"]["action"],
+            "audit.open"
+        );
+        assert_eq!(output["result"]["filter"]["name"], "ssmcp.ui.filter");
+        assert_eq!(
+            output["result"]["filter"]["arguments"],
+            json!({"text":"cargo","level":"commands"})
+        );
         assert_eq!(output["result"]["frozen"], true);
     }
 

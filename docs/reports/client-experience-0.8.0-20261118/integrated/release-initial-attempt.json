@@ -1,0 +1,140 @@
+{
+  "schema": "ssmcp.client-memory-ui-gates.v1",
+  "status": "failed",
+  "source_commit": "51ec5adcc166d8d10748732d8f62948341a860d9",
+  "source_tree": "1ccec52505bd3798b47c9c714af3e9b7a3852908",
+  "started_at": "2026-11-17T21:55:07.752906+00:00",
+  "installed_prefix": "${INSTALLED_PREFIX}",
+  "release_build_report": "${REPORT_ROOT}/client-080-memory-release-build.json",
+  "artifacts": {
+    "ssmcp": {
+      "built_or_source_path": "${BUILD_ROOT}/release/ssmcp",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/ssmcp",
+      "sha256": "eddf5b9b988a37bc397ee0a0ae84022a8a3d519cddc06a5391e1cc10af9797a0",
+      "bytes": 7610048,
+      "matches": true
+    },
+    "ssmcpd": {
+      "built_or_source_path": "${BUILD_ROOT}/release/ssmcpd",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/ssmcpd",
+      "sha256": "a8330214a507293131a97092f4940bab8b47f8abd3f4e2367a2db1768d750cd3",
+      "bytes": 5410976,
+      "matches": true
+    },
+    "code_mode_js": {
+      "built_or_source_path": "${SOURCE_ROOT}/src/code_mode.js",
+      "installed_path": "${INSTALLED_PREFIX}/usr/libexec/ssmcp/code-mode.js",
+      "sha256": "0a4902726c7098036db84186c1e3aeb84d7ab335571f87def891632cc28bca99",
+      "bytes": 35967,
+      "matches": true
+    },
+    "vt_snapshot": {
+      "built_or_source_path": "${BUILD_ROOT}/release/examples/vt_snapshot",
+      "installed_path": "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+      "sha256": "409e630cd3390d105f7de74200b1cdb97fecbe0cadd9da50ef2ef63b3572e58b",
+      "bytes": 438592,
+      "matches": true
+    }
+  },
+  "fixture": {
+    "binary": "${BUILD_ROOT}/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+    "sha256": "d4beac4a13959267802ca980eaee3f3a8145a001c42d6fb4c7947393959f7c6c",
+    "source_commit": "51ec5adcc166d8d10748732d8f62948341a860d9"
+  },
+  "environment": {
+    "inherited_ssmcp_removed": true,
+    "proxy_variables_removed": true,
+    "loopback_no_proxy": true,
+    "models_invoked": false
+  },
+  "results": [
+    {
+      "stage": "preview",
+      "command": [
+        "python3",
+        "scripts/e2e_client_ui.py",
+        "--bin-dir",
+        "${INSTALLED_PREFIX}/usr/bin",
+        "--out",
+        "${REPORT_ROOT}/client-080-memory-ui/preview"
+      ],
+      "scope_unit": "ssmcp-memory-accept-preview-1312886.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 3.872,
+      "log": "${REPORT_ROOT}/client-080-memory-ui/preview.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui/preview/ui-smoke.json",
+      "script_sha256": "43337393a700eddc731581546098411f52c636a11a9603ef96b0e046805b576e",
+      "expected_checks": 38,
+      "actual_checks": 38,
+      "report_passed": true,
+      "report_sha256": "16b879cb92300569b214057ca99b0a0c27659cd2107f0297e48569de0885d138"
+    },
+    {
+      "stage": "composer",
+      "command": [
+        "python3",
+        "scripts/e2e_composer.py",
+        "--bin-dir",
+        "${INSTALLED_PREFIX}/usr/bin",
+        "--decoder",
+        "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui/composer.json"
+      ],
+      "scope_unit": "ssmcp-memory-accept-composer-1312886.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 15.094,
+      "log": "${REPORT_ROOT}/client-080-memory-ui/composer.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui/composer.json",
+      "script_sha256": "63286822fce02356337d8be388a36790bbde09c3f1348c53a073056e625161f7",
+      "expected_checks": 88,
+      "actual_checks": 88,
+      "report_passed": true,
+      "report_sha256": "4692f7c0d720f86624bffd801107e3e5d5908fb1d0d79b9de542596aeeddc5c9"
+    },
+    {
+      "stage": "dashboard",
+      "command": [
+        "python3",
+        "scripts/e2e_dashboard.py",
+        "--bin-dir",
+        "${INSTALLED_PREFIX}/usr/bin",
+        "--decoder",
+        "${INSTALLED_PREFIX}/usr/bin/examples/vt_snapshot",
+        "--report",
+        "${REPORT_ROOT}/client-080-memory-ui/dashboard.json"
+      ],
+      "scope_unit": "ssmcp-memory-accept-dashboard-1312886.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 1,
+      "timed_out": false,
+      "seconds": 29.726,
+      "log": "${REPORT_ROOT}/client-080-memory-ui/dashboard.log",
+      "report": "${REPORT_ROOT}/client-080-memory-ui/dashboard.json",
+      "script_sha256": "042e10992599e2619cbc2a72722cf553adf2bcc3bd893fac6013b174e268d232",
+      "expected_checks": 84,
+      "actual_checks": 54,
+      "report_passed": false,
+      "report_sha256": "3d5f50fac4f0c75619d7d779c36dfa0f8d814f9fda02ca04d5611c8828054ed2"
+    }
+  ],
+  "current_stage": "dashboard",
+  "finished_at": "2026-11-17T21:55:56.941523+00:00",
+  "error": "RuntimeError: dashboard exited 1; see ${REPORT_ROOT}/client-080-memory-ui/dashboard.log"
+}

@@ -27,7 +27,19 @@ def wait_for(check, seconds=10):
 def peer():
     root=Path(os.environ["SSMCP_TTY_FIXTURE"])
     checks=[]
-    hello=json.loads(sys.stdin.readline())
+    pending=bytearray()
+    def receive(deadline):
+        while b"\n" not in pending:
+            remaining=deadline-time.monotonic()
+            if remaining<=0 or not select.select([sys.stdin],[],[],remaining)[0]:
+                raise AssertionError("native reply timed out")
+            chunk=os.read(sys.stdin.fileno(),65536)
+            assert chunk,"client closed before delivering a reply"
+            pending.extend(chunk)
+        line,_,rest=pending.partition(b"\n")
+        pending[:]=rest
+        return json.loads(line)
+    hello=receive(time.monotonic()+30)
     assert hello["type"]=="hello"
     print(json.dumps({"type":"ready","url":"https://fixture.invalid/mcp","login_code":"",
         "login_expires_in":0,"client_id":"b"*64}),flush=True)
@@ -37,9 +49,17 @@ def peer():
         sequence+=1
         print(json.dumps({"type":"call","id":sequence,
             "operation":{"op":"call_tool","name":name,"arguments":arguments or {}}}),flush=True)
-        if not select.select([sys.stdin],[],[],30)[0]:raise AssertionError("native reply timed out: "+name)
-        frame=json.loads(sys.stdin.readline())
-        assert frame["id"]==sequence,frame
+        deadline=time.monotonic()+30
+        while True:
+            frame=receive(deadline)
+            if frame["type"]=="steering":
+                assert hello["version"]>=7 and frame["command"]=={"op":"snapshot"},frame
+                print(json.dumps({"type":"steering_reply","id":frame["id"],"result":{"Ok":{
+                    "schema_version":1,"client_id":"b"*64,"revision":0,
+                    "agents":[],"messages":[]}}}),flush=True)
+                continue
+            assert frame["type"]=="reply" and frame["id"]==sequence,frame
+            break
         result=frame["result"]
         assert "Ok" in result,result
         result=result["Ok"]
@@ -154,7 +174,12 @@ os.execv(args[0],args)
             terminal=shutil.which(terminal)
             if terminal is None:raise SystemExit("requested terminal is not installed")
         env=os.environ.copy()
+        (root/"config.toml").write_text("")
+        for key in ("SSMCP_UI_CONFIG","SSMCP_SESSION_GENERATION","SSMCP_CLIENT_OUTBOX","SSMCP_OUTPUT_RELOAD"):
+            env.pop(key,None)
         env.update(PATH=str(bin_dir),XDG_CONFIG_HOME=str(root/"config"),XDG_STATE_HOME=str(root/"state"),
+            SSMCP_AUTH_HOME=str(root/"auth"),SSMCP_CLIENT_CONFIG=str(root/"config.toml"),
+            SSMCP_SESSION_HOME=str(root/"sessions"),
             SSMCP_TTY_FIXTURE=str(root),SSMCP_TTY_HOLD=str(args.hold))
         if not args.terminal:env["SSMCP_TTY_FAKE"]="1"
         log=root/"client.log"
