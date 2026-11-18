@@ -34,6 +34,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Restart this client session (alias of /reload)",
     },
     SlashCommand {
+        name: "/computer",
+        description: "Local host-input handoff: status, host [1..60 seconds], stop",
+    },
+    SlashCommand {
         name: "/tasks",
         description: "List local command jobs; cancel an exact job ID",
     },
