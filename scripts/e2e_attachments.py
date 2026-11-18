@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise image attachments, session messages and /copy in an owned POSIX PTY.
+"""Exercise image/file pastes, session messages and /copy in an owned POSIX PTY.
 
 Build ssmcp, ssmcpd and examples/vt_snapshot first, then run:
   python3 scripts/e2e_attachments.py --bin-dir target/release --report /tmp/attachments.json
@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import signal
 import socket
 import struct
@@ -91,6 +92,23 @@ finally:
     os._exit(0)
 '''
 
+# Read-side fixture for the actual Rust wl-paste adapter; no desktop connection.
+PASTE_READER = r'''#!/usr/bin/env python3
+import base64, json, os, sys, time
+from pathlib import Path
+root = Path(os.environ["SSMCP_E2E_CLIPBOARD"])
+selection = json.loads((root / "selection.json").read_text())
+if "--list-types" in sys.argv:
+    print("\n".join(selection["payloads"]))
+else:
+    flag = "--type" if "--type" in sys.argv else "-t"
+    target = sys.argv[sys.argv.index(flag) + 1]
+    with (root / "reads.log").open("a") as log:
+        log.write(target + "\n")
+    time.sleep(selection.get("delay", 0))
+    sys.stdout.buffer.write(base64.b64decode(selection["payloads"][target], validate=True))
+'''
+
 
 def png_fixture():
     """A precise 2x2 RGBA PNG made with the standard library, including alpha."""
@@ -112,6 +130,7 @@ class Attachments(Composer):
         self.clipboard.mkdir(mode=0o700)
         self.png = png_fixture()
         self.image_id = hashlib.sha256(self.png).hexdigest()
+        self.select_clipboard("text/plain;charset=utf-8", b"")
 
     def config(self, name, **_options):
         path = self.directory / f"{name}.toml"
@@ -135,7 +154,148 @@ class Attachments(Composer):
             program = Path(environment["PATH"]) / name
             program.write_text(COPY_OWNER)
             program.chmod(0o700)
+        reader = Path(environment["PATH"]) / "wl-paste"
+        reader.write_text(PASTE_READER)
+        reader.chmod(0o700)
         return environment
+
+    def select_clipboard(self, mime, data, *, delay=0):
+        (self.clipboard / "selection.json").write_text(json.dumps({
+            "payloads": {mime: base64.b64encode(data).decode()}, "delay": delay,
+        }))
+
+    def paste_reads(self):
+        path = self.clipboard / "reads.log"
+        return len(path.read_text().splitlines()) if path.exists() else 0
+
+    def send_file_draft(self, front, sources, *, image):
+        draft = self.ui("/display/conversation")["draft"]["text"]
+        before = {item["id"] for item in self.queue()["queue"]}
+        self.check(not self.messages(self.work()),
+                   "pasted files stay local until the user presses Enter")
+        front.send(ENTER)
+        self.wait_ui(front, lambda state: not state["draft"]["text"]
+                     and not state["draft"].get("images"), "file request acknowledgement")
+        deadline = time.monotonic() + 10
+        record = None
+        while time.monotonic() < deadline:
+            added = [item for item in self.queue()["queue"] if item["id"] not in before]
+            if len(added) == 1 and added[0]["status"] == "queued":
+                record = added[0]
+                break
+            front.pump(0.05)
+        self.check(record is not None, "Enter queues one complete file request")
+        response = self.work()
+        messages = self.messages(response)
+        self.check(len(messages) == 1 and messages[0]["message_id"] == record["id"],
+                   "the next eligible tool receives the submitted file request once")
+        original, encoded = messages[0]["text"].rsplit("\n\n<ssmcp-references-v1>\n", 1)
+        payload = json.loads(encoded.removesuffix("\n</ssmcp-references-v1>"))
+        self.check(original == draft and payload["source_sha256"] == hashlib.sha256(draft.encode()).hexdigest(),
+                   "file expansion preserves the user's exact draft and its identity")
+        entries = payload["references"]
+        self.check(len(entries) == len(sources), "each ordinary file becomes one bounded reference")
+        for entry, source in zip(entries, sources):
+            copied = self.workspace / entry["path"]
+            self.check(copied.name == source.name and copied.read_bytes() == source.read_bytes()
+                       and entry["size"] == source.stat().st_size
+                       and copied.stat().st_mode & 0o777 == 0o600
+                       and copied.parent.stat().st_mode & 0o777 == 0o700,
+                       "imported names, exact file bytes, sizes and private permissions are retained")
+            native = self.response("return await call(%s, 'ssmcp.fs.read', %s);" % (
+                json.dumps(self.client_id), json.dumps({"path": entry["path"], "max_bytes": 65536}),
+            ))["structuredContent"]["result"]
+            self.check(not native.get("isError")
+                       and base64.b64decode(native["structuredContent"]["data_base64"], validate=True) == source.read_bytes(),
+                       "the delivered reference can be read through the client's normal workspace API")
+        blocks = [block for block in response["content"] if block.get("type") == "image"]
+        self.check((len(blocks) == 1 and blocks[0]["mimeType"] == "image/png"
+                    and base64.b64decode(blocks[0]["data"], validate=True) == self.png) if image else not blocks,
+                   "mixed clipboard files retain the exact PNG as an MCP image block")
+        self.no_payload(messages, "file request metadata")
+        self.check(not self.messages(self.work()), "the file request is not replayed")
+
+    def file_pastes(self, front):
+        self.local(front, "/queue", view="queue")
+        external = self.directory / "copied files"
+        external.mkdir()
+        note = external / 'notes "中文" draft.txt'
+        binary = external / "sample report.pdf"
+        note.write_text("Explicit copied file; original source remains untouched.\n")
+        binary.write_bytes(b"%PDF-1.4\nfixture\x00bytes\n")
+        originals = {path: path.read_bytes() for path in (note, binary, self.fixture)}
+
+        self.select_clipboard("image/png", self.png)
+        front.send(b"\x16")
+        state = self.wait_ui(front, lambda current: not current.get("loading_image")
+                             and len(current["draft"].get("images", [])) == 1,
+                             "Ctrl+V reading a PNG from the private clipboard")
+        self.metadata(state["draft"]["images"], "raw clipboard PNG")
+        self.local(front, "/detach all")
+
+        self.select_clipboard("text/uri-list", (
+            "# copied files\r\n" + "\r\n".join(path.as_uri() for path in (note, binary, self.fixture)) + "\r\n"
+        ).encode(), delay=0.2)
+        prefix = "FILE_PASTE_KEEP 界"
+        front.send(prefix.encode() + LEFT)
+        self.wait_ui(front, lambda state: state["draft"]["text"] == prefix,
+                     "an existing Unicode draft before importing files")
+        front.send(b"\x16AFTER")
+        state = self.wait_ui(front, lambda current: not current.get("loading_image")
+                             and '@".ssmcp/inputs/files-' in current["draft"]["text"]
+                             and len(current["draft"].get("images", [])) == 1,
+                             "mixed URI file and PNG import into the live composer")
+        draft = state["draft"]
+        self.check(draft["text"].startswith("FILE_PASTE_KEEP ") and draft["text"].endswith("AFTER界")
+                   and draft["cursor"] == len(draft["text"].encode()) - len("界".encode()),
+                   "async file paste retains the anchor, later typing and UTF-8 cursor")
+        references = re.findall(r'@"((?:\\.|[^"\\])*)"', draft["text"])
+        self.check(len(references) == 2 and all(
+            (self.workspace / re.sub(r'\\([\\"])', r'\1', path)).is_file() for path in references
+        ), "quoted filenames with spaces and literal quotes remain valid workspace references")
+        self.send_file_draft(front, (note, binary), image=True)
+
+        self.select_clipboard("x-special/gnome-copied-files", ("cut\n" + note.as_uri() + "\n").encode())
+        front.send(b"/paste\r")
+        self.wait_ui(front, lambda state: not state.get("loading_image")
+                     and '@".ssmcp/inputs/files-' in state["draft"]["text"],
+                     "/paste importing a GNOME cut selection without moving its source")
+        self.send_file_draft(front, (note,), image=False)
+        self.check(note.read_bytes() == originals[note], "GNOME cut selections are copied without deleting sources")
+
+        front.send(b"\x1b[200~" + json.dumps(str(binary), ensure_ascii=False).encode() + b"\x1b[201~")
+        self.wait_ui(front, lambda state: not state.get("loading_image")
+                     and '@".ssmcp/inputs/files-' in state["draft"]["text"],
+                     "a bracketed full file path reusing the same safe import")
+        self.send_file_draft(front, (binary,), image=False)
+
+        self.select_clipboard("image/png", self.png)
+        front.send(b"\x16")
+        self.wait_ui(front, lambda state: not state.get("loading_image")
+                     and len(state["draft"].get("images", [])) == 1, "an image draft before file errors")
+        front.send(b"FILE_PASTE_FAILURE_KEEP" + LEFT)
+        before = self.wait_ui(front, lambda state: state["draft"]["text"] == "FILE_PASTE_FAILURE_KEEP",
+                              "the draft to preserve through file import errors")["draft"]
+        existing = sorted(str(path) for path in (self.workspace / ".ssmcp/inputs").glob("files-*"))
+        link = external / "symlink.txt"
+        link.symlink_to(note)
+        for uri in (link.as_uri(), "https://example.invalid/do-not-download"):
+            reads = self.paste_reads()
+            self.select_clipboard("text/uri-list", (uri + "\n").encode(), delay=0.1)
+            front.send(b"\x16")
+            state = self.wait_ui(front, lambda state: self.paste_reads() > reads
+                                 and not state.get("loading_image"), "safe file-paste rejection")
+            self.check(state["draft"] == before, "rejected file pastes preserve existing text, cursor and images")
+        self.check(existing == sorted(str(path) for path in (self.workspace / ".ssmcp/inputs").glob("files-*")),
+                   "rejected file selections leave no new import directories")
+        self.check(all(path.read_bytes() == original for path, original in originals.items()),
+                   "all copied and cut source files remain unchanged")
+        front.send(CLEAR_LINE + b"/detach all\r")
+        self.wait_ui(front, lambda state: not state["draft"]["text"] and not state["draft"].get("images"),
+                     "clearing only the test-owned failure draft")
+        self.local(front, "/logs", view="activity")
+        self.metrics["file_pastes"] = {"requests": 3, "clipboard_reads": self.paste_reads(),
+                                       "sources_preserved": True, "network_downloads": False}
 
     def wait_ui(self, front, predicate, description, *, timeout=10):
         deadline = time.monotonic() + timeout
@@ -284,6 +444,8 @@ class Attachments(Composer):
         front.until(self.footer_has_project, "project name retained at the lower right after folding")
         self.check(True, "the footer project name is independent of sidebar visibility")
 
+        self.file_pastes(front)
+
         self.attach(front)
         self.local(front, "/queue", view="queue")
         first = self.submit(front, "ATTACHMENT_EDIT_ORIGINAL")
@@ -431,7 +593,7 @@ class Attachments(Composer):
             "pty_sha256": hashlib.sha256(front.transcript).hexdigest(),
             "png_bytes": len(self.png), "png_sha256": self.image_id,
             "copied_bytes": owner["bytes"], "copied_sha256": owner["sha256"],
-            "request_count": 3,
+            "request_count": 6,
         }
         front.close()
 
@@ -454,7 +616,7 @@ def main():
     report = {
         "status": "failed", "platform": platform.system(),
         "transport": "isolated OpenSSH + OAuth + owned PTY + independent VT decoder",
-        "scope": "real image composer, edit/reload, MCP image delivery, native messages and isolated clipboard; no models",
+        "scope": "real image/file composer, URI/GNOME/path paste, edit/reload, MCP images and file references, native messages and isolated clipboard; no models",
         "clipboard": "private fake Unix-socket owner; no desktop clipboard is accessed",
         "binaries": {name: sha256(path) for name, path in (
             ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"),

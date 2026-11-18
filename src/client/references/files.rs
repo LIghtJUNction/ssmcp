@@ -4,7 +4,9 @@
 use std::path::{Path, PathBuf};
 
 pub(crate) const MAX_FILES: usize = 8;
+#[cfg(unix)]
 pub(crate) const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(unix)]
 pub(crate) const MAX_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_PATH_LIST_BYTES: usize = 64 * 1024;
 
@@ -149,6 +151,9 @@ pub(crate) fn pasted_paths(text: &str) -> Option<Vec<PathBuf>> {
     let text = text.trim();
     if text.is_empty() || text.len() > MAX_PATH_LIST_BYTES {
         return None;
+    }
+    if text.starts_with("file:") && text.contains('\n') {
+        return clipboard_paths("text/uri-list", text).ok();
     }
     let mut parts = Vec::new();
     let mut part = String::new();
@@ -585,7 +590,8 @@ mod tests {
             let path = source.0.join(name);
             let text = "Explicit file paste\n".repeat(80);
             fs::write(&path, &text).unwrap();
-            let mut imported = import(&workspace.0, read(&[path.clone()]).unwrap()).unwrap();
+            let mut imported =
+                import(&workspace.0, read(std::slice::from_ref(&path)).unwrap()).unwrap();
             let entry = &imported.entries[0];
             assert_eq!(entry.name, name);
             assert_eq!(entry.bytes, text.len() as u64);
@@ -658,7 +664,7 @@ mod tests {
             let link = source.0.join("link.txt");
             std::os::unix::fs::symlink(&ordinary, &link).unwrap();
             assert!(read(&[link]).is_err());
-            assert!(read(&[source.0.clone()]).is_err());
+            assert!(read(std::slice::from_ref(&source.0)).is_err());
             let parent_link = source.0.join("alias");
             std::os::unix::fs::symlink(&source.0, &parent_link).unwrap();
             assert!(read(&[parent_link.join("original.txt")]).is_err());
