@@ -179,7 +179,7 @@ pub async fn list(
         entries.push(descriptor(
             format!("ssmcp://clients/{id}/context"),
             format!("{}: context roots", info.name),
-            "Configured read-only context roots. Additional roots require an explicit --context-root.",
+            "Read-only context and skill sources. Installed global skills use exact skill-directory or package roots; ordinary filesystem access stays inside the workspace.",
             "application/json",
         ));
         entries.push(descriptor(
@@ -257,7 +257,7 @@ pub fn templates() -> Value {
         {
             "uriTemplate":"ssmcp://clients/{client_id}/context",
             "name":"Client context roots",
-            "description":"Read explicitly configured context roots without starting a model.",
+            "description":"Read configured context roots and exact installed or embedded skill sources without starting a model.",
             "mimeType":"application/json"
         },
         {
@@ -339,7 +339,7 @@ fn limits() -> Value {
             },
             "context":{
                 "model_invocation":false,
-                "additional_roots":"explicit --context-root directories; read-only context access",
+                "additional_roots":"explicit --context-root directories plus exact global skill directories and linked packages; skill-only grants do not extend ordinary files or instructions",
                 "skill_overlay":"project skills override same-named skills in explicitly granted roots; fresh scan per read"
             }
         },

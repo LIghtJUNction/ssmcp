@@ -3,6 +3,8 @@ use super::render::LogFormat;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub(crate) mod pet;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Theme {
@@ -240,6 +242,7 @@ pub(crate) struct Ui {
     pub log_format: LogFormat,
     pub theme: Theme,
     pub colors: Colors,
+    pub pet: pet::Pet,
     pub layout: Layout,
     pub log_height_percent: u16,
     pub sidebar: bool,
@@ -262,6 +265,7 @@ impl Default for Ui {
             log_format: LogFormat::Pretty,
             theme: Theme::default(),
             colors: Colors::default(),
+            pet: pet::Pet::default(),
             layout: Layout::default(),
             log_height_percent: 60,
             sidebar: true,
@@ -305,6 +309,7 @@ impl Ui {
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.pet.validate()?;
         if !(1..=10000).contains(&self.max_inline_output) {
             return Err("ui.max_inline_output must be in 1..=10000".into());
         }
@@ -440,6 +445,34 @@ impl Ui {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pet_configuration_roundtrips_and_partial_updates_preserve_custom_text() {
+        use super::pet::Preset;
+        assert_eq!(Ui::parse("").unwrap().pet.preset, Preset::Cat);
+        let custom =
+            Ui::parse("[ui.pet]\npreset = 'custom'\ntext = '''\n /\\_/\\\n( o.o )\n > ^ <\n'''\n")
+                .unwrap();
+        assert_eq!(custom.pet.preset, Preset::Custom);
+        assert_eq!(custom.pet.lines(), [" /\\_/\\", "( o.o )", " > ^ <"]);
+        assert_eq!(Ui::parse(&custom.to_toml().unwrap()).unwrap(), custom);
+        let off = custom.merge_json(json!({"pet":{"preset":"off"}})).unwrap();
+        assert_eq!(off.pet.preset, Preset::Off);
+        assert_eq!(off.pet.text, custom.pet.text);
+        let robot = custom
+            .merge_json(json!({"pet":{"preset":"robot"}}))
+            .unwrap();
+        assert_eq!(robot.pet.preset, Preset::Robot);
+        for patch in [
+            json!({"pet":null}),
+            json!({"pet":{"preset":"unknown"}}),
+            json!({"pet":{"preset":"custom","text":""}}),
+            json!({"pet":{"preset":"custom","text":"\u{1b}[2J"}}),
+            json!({"pet":{"command":"run something"}}),
+        ] {
+            assert!(custom.merge_json(patch).is_err());
+        }
+    }
 
     #[test]
     fn validated_ui_config_and_themes() {
