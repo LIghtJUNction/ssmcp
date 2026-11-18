@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise shell and automatic harness discovery through local SSH/MCP/OAuth.
+"""Exercise native-only startup and explicit harness loading through local SSH/MCP/OAuth.
 
 Shell uses a real PTY. Harnesses use deterministic local protocol fixtures;
 no installed agent, model account, existing SSH identity or paid API is used.
@@ -215,26 +215,40 @@ def pi_call(harness, command, arguments=None):
     return harness.call("pi.rpc", {"type": command, "args": arguments or {}})
 
 
-def catalog(harness, mode):
+def native_defaults(harness, label, context):
+    rows = harness.call("ssmcp.harnesses.list")["harnesses"]
+    names = {"codex", "claude", "pi", "opencode", "playwright"}
+    providers = {row["provider"]: row for row in rows}
+    harness.check(len(rows) == len(providers) == 5 and set(providers) == names,
+                  f"{context}: all five optional providers have distinct lazy state records")
+    harness.check(all(row["status"] == "not_loaded" and row["tools"] == 0
+                      and "executable" in row and row["executable"] is None
+                      and "version" in row and row["version"] is None for row in rows),
+                  f"{context}: startup and provider listing neither load nor probe optional programs")
+    harness.check(harness.external_invocations(label) == [],
+                  f"{context}: startup and observation execute zero external argv, including --version")
+    full_call(harness, "unknown.fixture", expect_error=True)
+    full_call(harness, "codex.definitely_missing", expect_error=True)
+    harness.check(harness.external_invocations(label) == [],
+                  f"{context}: unknown and unloaded prefixed tools cannot trigger discovery")
+    return providers
+
+
+def catalog(harness, mode, label):
     harness_names = ("codex", "claude", "pi", "opencode")
-    # Connection readiness does not wait on optional providers.
     expected = ({"codex", "claude", "pi", "opencode"} if mode == "all"
                 else ({"claude" if mode == "cc" else mode} if mode != "shell" else set()))
-
-    def discovered():
-        rows = harness.call("ssmcp.harnesses.list")["harnesses"]
-        if any(row["status"] == "discovering" for row in rows):
-            return None
-        ready = {row["provider"] for row in rows if row["status"] == "ready"}
-        if ready != expected:
-            raise AssertionError(f"{mode}: unexpected provider discovery: {rows}")
-        return rows
-
-    diagnostics = wait_for(discovered, description=f"{mode} asynchronous native discovery")
+    native_defaults(harness, label, mode)
+    for provider in sorted(expected):
+        harness.call("ssmcp.harnesses.load", {"provider": provider})
+    diagnostics = harness.call("ssmcp.harnesses.list")["harnesses"]
     providers = {row["provider"]: row for row in diagnostics}
-    harness.check(len(providers) == len(diagnostics)
-                  and set(providers) == set(harness_names) | {"playwright"},
-                  f"{mode}: four Harnesses and the optional Playwright provider have distinct discovery records")
+    harness.check({row["provider"] for row in diagnostics if row["status"] == "ready"} == expected,
+                  f"{mode}: explicit load activates exactly the requested fixture providers")
+    harness.check(all(row["status"] == "not_loaded" and row["tools"] == 0
+                      and row.get("executable") is None and row.get("version") is None
+                      for row in diagnostics if row["provider"] not in expected),
+                  f"{mode}: unrelated providers remain unprobed after explicit loading")
     status, value, _ = harness.rpc("tools/list", modern=True)
     harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode"],
                   f"{mode}: public MCP catalog contains exactly list and code_mode")
@@ -295,14 +309,15 @@ def catalog(harness, mode):
         for name in harness_names
     }, f"{mode}: harness counts match the complete registered catalog")
     playwright = providers["playwright"]
-    harness.check(playwright["status"] == "unavailable" and playwright["tools"] == 0
+    harness.check(playwright["status"] == "not_loaded" and playwright["tools"] == 0
                   and not any(name.startswith("playwright.") for name in names),
-                  f"{mode}: the absent optional Playwright MCP provider contributes no native tools")
+                  f"{mode}: the unloaded optional Playwright MCP provider contributes no native tools")
     harness.check({name for name, count in counts.items() if count} == expected,
-                  f"{mode}: automatic discovery reports exactly the installed fixture harnesses")
-    other_tool = "unknown.fixture" if mode == "all" else ("pi.get_state" if mode != "pi" else "codex.thread_start")
-    full_call(harness, other_tool, expect_error=True)
-    harness.check(True, f"{mode}: unavailable native capabilities are rejected")
+                  f"{mode}: explicit loading reports exactly the requested fixture harnesses")
+    invocations = harness.external_invocations(label)
+    full_call(harness, "unknown.fixture", expect_error=True)
+    harness.check(harness.external_invocations(label) == invocations,
+                  f"{mode}: an unknown tool never scans or starts another provider")
     return tools, pages
 
 
@@ -558,6 +573,116 @@ CHECKERS = {
 }
 
 
+def native_only_and_cached_failure(harness):
+    started = time.monotonic()
+    before = len(harness.checks)
+    label = "client-native-lazy"
+    directory = harness.directory / "fixture-native-lazy"
+    directory.mkdir(mode=0o700)
+    rejected = directory / "reject-provider.py"
+    rejected.write_text("import sys\nprint('fixture: deliberate initialization failure', file=sys.stderr)\nraise SystemExit(91)\n")
+    installed = [("codex", FIXTURES / "codex_rpc.py", ())]
+    installed.extend((kind, rejected, ()) for kind in ("cc", "pi", "opencode", "playwright"))
+    client, credentials = harness.start_client(
+        label, name="native-lazy-fixture", cwd=directory, harnesses=installed,
+        extra_env={"SSMCP_PLAYWRIGHT_MCP": str(harness.directory / f"{label}-bin" / "playwright-mcp")},
+    )
+    harness.client = client
+    harness.client_id = credentials["client_id"]
+    harness.oauth_login(credentials)
+    base_tools, pages = catalog(harness, "shell", label)
+    harness.call("ssmcp.client.capabilities")
+    original = "native fixture 中文\n"
+    (directory / "native-only.txt").write_text(original)
+    text = harness.call("ssmcp.fs.read_text", {"path": "native-only.txt", "max_bytes": 128})
+    harness.check(text["text"] == original, "native-only: filesystem text remains readable before any optional load")
+    job = harness.call("ssmcp.exec.start", {
+        "command": ["/bin/sh", "-c", "printf native-only"], "cwd": str(directory), "timeout_ms": 10000,
+    })
+    def completed():
+        result = harness.call("ssmcp.exec.read", {"job_id": job["job_id"], "wait_ms": 0})
+        return result if not result["running"] else None
+    result = wait_for(completed, timeout=10, description="native-only independent command")
+    harness.check(result["exit_code"] == 0 and result["stdout"] == "native-only",
+                  "native-only: exec starts and completes without an external provider")
+    full_call(harness, "ssmcp.harnesses.load", {"provider": "unknown"}, expect_error=True)
+    native_defaults(harness, label, "native-only after catalog/capabilities/exec/fs")
+    harness.check(harness.external_invocations(label) == [],
+                  "native-only: installed optional programs receive zero argv after native I/O and invalid loading")
+
+    full_call(harness, "ssmcp.harnesses.load", {"provider": "claude"}, expect_error=True)
+    first_calls = harness.external_invocations(label)
+    harness.check(bool(first_calls) and {row["provider"] for row in first_calls} == {"claude"}
+                  and any(row["argv"] == ["--version"] for row in first_calls)
+                  and any(row["argv"] != ["--version"] for row in first_calls),
+                  "lazy failure: only explicitly requested Claude is version-probed and started")
+    first_rows = {row["provider"]: row for row in harness.call("ssmcp.harnesses.list")["harnesses"]}
+    failure = first_rows["claude"]
+    harness.check(failure["status"] == "unavailable" and failure["tools"] == 0
+                  and isinstance(failure.get("reason"), str) and bool(failure["reason"]),
+                  "lazy failure: the requested provider reports its actual initialization error")
+    harness.check(all(row["status"] == "not_loaded" and row["tools"] == 0
+                      and row.get("version") is None and row.get("executable") is None
+                      for name, row in first_rows.items() if name != "claude"),
+                  "lazy failure: unrelated optional providers remain unprobed")
+    full_call(harness, "ssmcp.harnesses.load", {"provider": "claude"}, expect_error=True)
+    cached_rows = {row["provider"]: row for row in harness.call("ssmcp.harnesses.list")["harnesses"]}
+    harness.check(harness.external_invocations(label) == first_calls
+                  and cached_rows["claude"]["reason"] == failure["reason"],
+                  "lazy failure: repeated load and list reuse the failed attempt without another argv")
+    full_call(harness, "unknown.fixture", expect_error=True)
+    full_call(harness, "codex.definitely_missing", expect_error=True)
+    harness.check(harness.external_invocations(label) == first_calls,
+                  "lazy failure: unknown tools do not scan or retry providers")
+    full_call(harness, "ssmcp.harnesses.load", {"provider": "claude", "refresh": True}, expect_error=True)
+    retried = harness.external_invocations(label)
+    attempts = lambda rows: sum(row["provider"] == "claude" and row["argv"] != ["--version"] for row in rows)
+    harness.check(attempts(retried) == attempts(first_calls) + 1
+                  and {row["provider"] for row in retried} == {"claude"},
+                  "lazy failure: explicit refresh makes exactly one new requested initialization attempt")
+    harness.check(harness.call("terminal.status")["running"]
+                  and harness.call("ssmcp.fs.read_text", {"path": "native-only.txt", "max_bytes": 128})["text"] == original,
+                  "lazy failure: native shell and filesystem remain available")
+
+    harness.call("ssmcp.harnesses.load", {"provider": "codex"})
+    ready = {row["provider"]: row for row in harness.call("ssmcp.harnesses.list")["harnesses"]}
+    harness.check(ready["codex"]["status"] == "ready" and ready["codex"]["tools"] > 0
+                  and ready["claude"]["status"] == "unavailable",
+                  "lazy isolation: a healthy provider loads independently of another provider's cached failure")
+    diagnostics = harness.call("codex.server_diagnostics")
+    harness.check(diagnostics["model_requests"] == 0, "lazy isolation: protocol loading invokes no model")
+    current, cursor, seen = [], None, set()
+    while True:
+        args = {"client_id": harness.client_id}
+        if cursor is not None:
+            args["cursor"] = cursor
+        page = harness.public_call("list", args)
+        current.extend(page["tools"])
+        cursor = page.get("nextCursor")
+        if cursor is None:
+            break
+        if cursor in seen or len(seen) >= 100:
+            raise AssertionError("lazy isolation: invalid repeated catalog cursor")
+        seen.add(cursor)
+    baseline = {tool["name"]: tool for tool in base_tools}
+    registered = {tool["name"]: tool for tool in current}
+    added = set(registered) - set(baseline)
+    harness.check(all(registered.get(name) == descriptor for name, descriptor in baseline.items())
+                  and bool(added) and all(name.startswith(("codex.", "ssmcp.codex.")) for name in added),
+                  "lazy isolation: catalog increments preserve every native descriptor and add only real Codex routes")
+    before_observation = harness.external_invocations(label)
+    harness.call("ssmcp.harnesses.list")
+    harness.call("ssmcp.harnesses.load", {"provider": "codex"})
+    harness.check(harness.external_invocations(label) == before_observation,
+                  "lazy isolation: ready-provider observations and repeated load do not restart or re-probe")
+    owned_pids = [harness.call("terminal.status")["pid"], diagnostics["pid"]]
+    harness.stop(client)
+    wait_for(lambda: all(not process_running(pid) for pid in owned_pids), description="lazy fixture cleanup")
+    harness.secret = ""
+    return {"mode": "native-only-and-cached-failure", "tools": len(current), "catalog_pages": pages,
+            "checks": len(harness.checks) - before, "duration_seconds": round(time.monotonic() - started, 3)}
+
+
 def unconfigured_external_services(harness):
     started = time.monotonic()
     before = len(harness.checks)
@@ -571,12 +696,14 @@ def unconfigured_external_services(harness):
     harness.client = client
     harness.client_id = credentials["client_id"]
     harness.oauth_login(credentials)
-    tools, pages = catalog(harness, "shell")
+    tools, pages = catalog(harness, "shell", "client-unconfigured")
+    for provider in ("pi", "opencode"):
+        full_call(harness, "ssmcp.harnesses.load", {"provider": provider}, expect_error=True)
     diagnostics = harness.call("ssmcp.harnesses.list")["harnesses"]
-    harness.check(all(row["status"] == "unavailable" and row.get("version")
-                      and isinstance(row.get("reason"), str)
+    harness.check(all(row["status"] == "unavailable" and row["tools"] == 0
+                      and isinstance(row.get("reason"), str) and row["reason"]
                       for row in diagnostics if row["provider"] in ("pi", "opencode")),
-                  "external services: installed binaries without explicit existing endpoints remain unavailable")
+                  "external services: explicit loading without existing endpoints fails clearly")
     services.check_no_launch()
     pid = harness.call("terminal.status")["pid"]
     harness.stop(client)
@@ -615,7 +742,7 @@ def combined_harnesses_and_commands(harness):
     harness.client = client
     harness.client_id = credentials["client_id"]
     harness.oauth_login(credentials)
-    tools, pages = catalog(harness, "all")
+    tools, pages = catalog(harness, "all", "client-combined")
     services.check_no_launch()
     # The Claude fixture changes its DynamicN tool on every fresh native scan.
     # Two interleaved public scans must each keep one generation across pages.
@@ -647,7 +774,8 @@ def combined_harnesses_and_commands(harness):
         names = {name for name in finish_catalog(candidate) if name.startswith("claude.Dynamic")}
         return candidate if names and names != old_dynamic else None
 
-    newer = wait_for(changed_catalog, description="background native catalog refresh")
+    harness.call("ssmcp.harnesses.load", {"provider": "claude", "refresh": True})
+    newer = wait_for(changed_catalog, description="explicit native catalog refresh")
     # Re-read the older cursor after a new generation appeared.
     older_names = finish_catalog(older)
     newer_names = finish_catalog(newer)
@@ -763,7 +891,7 @@ def run(harness):
                       and credentials["url"] == f"{PUBLIC_URL}/{harness.user}",
                       f"{mode}: SSH registers shell and discovered tools at its authenticated user path")
         harness.oauth_login(credentials)
-        tools, pages = catalog(harness, mode)
+        tools, pages = catalog(harness, mode, label)
         services.check_no_launch()
         if mode == "opencode":
             harness.check(pages >= 2, "opencode: list actually traverses more than one native capability page")
@@ -800,6 +928,7 @@ def run(harness):
             "checks": len(harness.checks) - before,
             "duration_seconds": round(time.monotonic() - started, 3),
         })
+    summaries.append(native_only_and_cached_failure(harness))
     summaries.append(unconfigured_external_services(harness))
     summaries.append(combined_harnesses_and_commands(harness))
     return summaries
@@ -825,13 +954,13 @@ def main():
             "duration_seconds": round(time.monotonic() - started, 3),
             "transport": "real OpenSSH public-key + OAuth Authorization Code/S256 + HTTP MCP",
             "backends": "real Linux PTY; deterministic Codex, Claude Code, Pi and OpenCode protocol fixtures",
-            "external_service_contract": "Pi JSONL session initialized before Unix socket publication; OpenCode HTTP server started before discovery; only the test owner terminates these services",
+            "external_service_contract": "Pi JSONL session initialized before Unix socket publication; OpenCode HTTP server started before explicit loading; only the test owner terminates these services",
             "model_calls": False,
         }
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-        print(f"\nPassed {len(harness.checks)} checks across {len(modes)} discovery scenarios in {report['duration_seconds']}s")
+        print(f"\nPassed {len(harness.checks)} checks across {len(modes)} lazy-provider scenarios in {report['duration_seconds']}s")
 
 
 if __name__ == "__main__":
