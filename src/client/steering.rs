@@ -879,7 +879,14 @@ impl Manager {
             if let Some(record) = self.outbox.records.iter_mut().find(|record| {
                 record.message.id == message.id && record.room_id == self.outbox.room_id
             }) {
-                if message.revision >= record.message.revision {
+                // A snapshot taken before an in-flight edit has the edit's
+                // base revision. Keep the proposed content and its reserved
+                // image quota until a newer revision acknowledges publication.
+                let predates_publish = record.pending.as_ref().is_some_and(|mutation| {
+                    mutation.kind == MutationKind::Publish
+                        && message.revision <= mutation.expected_revision
+                });
+                if message.revision >= record.message.revision && !predates_publish {
                     record.message.clone_from(message);
                     record.ever_sent = true;
                     record.uncertain = false;
@@ -2099,5 +2106,154 @@ mod tests {
         assert_eq!(restored.context.parked.unwrap().images, vec![image.clone()]);
         assert_eq!(restored.records[0].message.images, vec![image]);
         assert!(read_handoff(&ticket.path).unwrap().is_none());
+    }
+    #[test]
+    fn pending_image_edits_reserve_quota_until_ack_and_allow_large_reload_handoffs() {
+        use base64::Engine;
+
+        fn large_image(seed: u8) -> UserImage {
+            let mut bytes = base64::engine::general_purpose::STANDARD
+                .decode(test_user_image().data)
+                .unwrap();
+            bytes.resize(crate::wire::MAX_USER_IMAGE_BYTES / 4 * 3 - 1, 0);
+            bytes.push(seed);
+            let image =
+                UserImage::from_bytes(&format!("large-{seed}.png"), "image/png", &bytes).unwrap();
+            assert_eq!(image.data.len(), crate::wire::MAX_USER_IMAGE_BYTES);
+            image
+        }
+
+        fn round_trip(
+            manager: &mut Manager,
+            receiver: &mut mpsc::Receiver<Transport>,
+            queue: &crate::steering::Queue,
+        ) {
+            let (id, request) = command(manager, receiver);
+            let snapshot = queue.command("room_one", vec![], request).unwrap();
+            manager.reply(id, Ok(snapshot)).unwrap();
+        }
+
+        let images = (0..6).map(large_image).collect::<Vec<_>>();
+        let mut manager = Manager::default();
+        let mut old_receiver = manager.connect("old_room", crate::wire::VERSION);
+        ready(&mut manager, &mut old_receiver, "old_room");
+        let uncertain = manager
+            .submit_with_images(
+                "Previous publication lost its acknowledgement",
+                None,
+                images[..2].to_vec(),
+            )
+            .unwrap();
+        let _ = command(&mut manager, &mut old_receiver);
+        let mut receiver = manager.connect("room_one", crate::wire::VERSION);
+        ready(&mut manager, &mut receiver, "room_one");
+        assert!(manager.outbox.records[manager.index(&uncertain).unwrap()].uncertain);
+
+        let queue = crate::steering::Queue::default();
+        let edited = manager
+            .submit_with_images("Original picture", None, vec![images[2].clone()])
+            .unwrap();
+        round_trip(&mut manager, &mut receiver, &queue);
+        manager.take_back(&edited).unwrap();
+        round_trip(&mut manager, &mut receiver, &queue);
+        manager.request_snapshot().unwrap();
+        let (snapshot_id, snapshot_request) = command(&mut manager, &mut receiver);
+        let older_snapshot = queue.command("room_one", vec![], snapshot_request).unwrap();
+
+        manager
+            .publish_edit_with_images(&edited, "Two larger pictures", None, images[2..4].to_vec())
+            .unwrap();
+        manager.reply(snapshot_id, Ok(older_snapshot)).unwrap();
+        let record = &manager.outbox.records[manager.index(&edited).unwrap()];
+        assert_eq!(record.message.text, "Two larger pictures");
+        assert_eq!(
+            user_images_bytes(&record.message.images),
+            MAX_USER_IMAGES_BYTES
+        );
+        assert!(
+            record
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.kind == MutationKind::Publish)
+        );
+
+        // Without the merge guard, the old snapshot replaces 2 MiB with 1 MiB.
+        // This extra request is then admitted and the edit ACK grows records to
+        // 5 MiB, causing the 4 MiB outbox validation to reject a later /reload.
+        let rejected = manager
+            .submit_with_images(
+                "There is no free image quota",
+                None,
+                vec![images[4].clone()],
+            )
+            .unwrap_err();
+        assert!(rejected.contains("2 MiB"));
+        assert_eq!(manager.outbox.records.len(), 2);
+        round_trip(&mut manager, &mut receiver, &queue);
+        assert_eq!(
+            manager
+                .outbox
+                .records
+                .iter()
+                .map(|record| user_images_bytes(&record.message.images))
+                .sum::<usize>(),
+            MAX_OUTBOX_IMAGE_BYTES
+        );
+
+        manager.outbox.draft = Draft {
+            text: "Active draft".into(),
+            cursor: 12,
+            images: images[4..6].to_vec(),
+        };
+        manager.outbox.context.parked = Some(SavedDraft {
+            text: "Parked draft".into(),
+            cursor: 12,
+            target: None,
+            images: images[..2].to_vec(),
+        });
+        manager.begin_reload().unwrap();
+        round_trip(&mut manager, &mut receiver, &queue);
+        assert!(!manager.reload_ready().unwrap());
+        round_trip(&mut manager, &mut receiver, &queue);
+        assert!(manager.reload_ready().unwrap());
+        let edited_record = &manager.outbox.records[manager.index(&edited).unwrap()];
+        assert!(edited_record.safe_to_publish && edited_record.resume_after_reload);
+
+        let ticket = write_handoff(manager.outbox.clone(), &std::env::temp_dir()).unwrap();
+        let size = fs::metadata(&ticket.path).unwrap().len();
+        assert!(size > (4 * MAX_USER_IMAGES_BYTES) as u64);
+        assert!(size < MAX_HANDOFF_BYTES);
+        let restored = read_handoff(&ticket.path).unwrap().unwrap();
+        assert_eq!(
+            restored
+                .records
+                .iter()
+                .map(|record| user_images_bytes(&record.message.images))
+                .sum::<usize>(),
+            MAX_OUTBOX_IMAGE_BYTES
+        );
+        assert_eq!(
+            user_images_bytes(&restored.draft.images),
+            MAX_USER_IMAGES_BYTES
+        );
+        assert_eq!(
+            user_images_bytes(&restored.context.parked.unwrap().images),
+            MAX_USER_IMAGES_BYTES
+        );
+        let restored_edit = restored
+            .records
+            .iter()
+            .find(|record| record.message.id == edited)
+            .unwrap();
+        assert_eq!(restored_edit.message.images[0].id, images[2].id);
+        assert_eq!(restored_edit.message.images[1].id, images[3].id);
+        assert!(
+            restored
+                .records
+                .iter()
+                .find(|record| record.message.id == uncertain)
+                .unwrap()
+                .uncertain
+        );
     }
 }
