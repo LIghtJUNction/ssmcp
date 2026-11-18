@@ -91,12 +91,22 @@ class Questions(Composer):
             "Shift+Up opening the expected question with its answer input",
         )
 
-    def native_rejected(self, name, arguments):
-        response = self.response("return await call(%s, %s, %s);" % (
-            json.dumps(self.client_id), json.dumps(name), json.dumps(arguments)
-        ))
-        native = response["structuredContent"]["result"]
-        self.check(bool(native.get("isError")), f"{name} rejects unsupported message input")
+    def native_rejected(self, name, arguments, expected_error):
+        # A native validation failure may reject call() before producing an MCP
+        # envelope. Catch only to inspect it; unrelated transport failures must
+        # still fail the exact expected-message assertion below.
+        response = self.response(
+            "try { const native = await call(%s, %s, %s); "
+            "return {rejected: native.isError === true, "
+            "error: (native.content || []).map(item => item.text || '').join(' ')}; "
+            "} catch (error) { return {rejected: true, error: String(error)}; }" % (
+                json.dumps(self.client_id), json.dumps(name), json.dumps(arguments)
+            )
+        )
+        rejection = response["structuredContent"]["result"]
+        self.check(rejection.get("rejected") is True
+                   and expected_error in rejection.get("error", ""),
+                   f"{name} rejects unsupported message input with the expected validation error")
         self.check(not self.messages(response), "a rejected UI call does not consume user requirements")
 
     def run(self):
@@ -260,8 +270,10 @@ class Questions(Composer):
         self.check(self.record(self.queue(), message_id=request_id)["status"] == "editing",
                    "question Enter never republishes the normal request held for editing")
 
-        self.native_rejected("ssmcp.ui.message", {"text": "INJECTION\x1b[2J\x1b[?1049l"})
-        self.native_rejected("ssmcp.ui.message", {"text": "Cannot impersonate", "role": "user"})
+        self.native_rejected("ssmcp.ui.message", {"text": "INJECTION\x1b[2J\x1b[?1049l"},
+                             "message contains unsupported control characters")
+        self.native_rejected("ssmcp.ui.message", {"text": "Cannot impersonate", "role": "user"},
+                             "message requires text and accepts kind and idempotency_key")
         front.pump(0.15)
         shot = front.snapshot()
         self.check(shot["alternate_screen"]

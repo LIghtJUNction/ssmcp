@@ -505,16 +505,34 @@ class ComputerUse(Harness):
                    "control works without a coding-agent provider")
         self.browser_checks(self.start_fixture())
         self.attached_browser_checks()
-        events, cursor = [], 0
-        while True:
+        events, cursor, audit_end = [], 0, None
+        # Each read is itself audited before its snapshot. The first read's
+        # call-started cursor marks the end of the control evidence; waiting for
+        # an empty page would keep chasing the reads' own events forever.
+        for _ in range(256):
             page = self.call("ssmcp.audit.events", {"cursor": cursor, "max_events": 16})
             if page["truncated"]:
                 raise AssertionError("control audit lost events during the bounded test")
-            events.extend(page["events"])
-            cursor = page["next_cursor"]
-            if not page["events"]:
+            previous = cursor
+            for entry in page["events"]:
+                if entry["cursor"] != cursor:
+                    raise AssertionError("control audit has a gap before its observation watermark")
+                event = entry["event"]
+                if (event.get("type") == "ssmcp.code_mode" and event.get("phase") == "call-started"
+                        and event.get("tool") == "ssmcp.audit.events"):
+                    audit_end = entry["cursor"]
+                    break
+                events.append(entry)
+                cursor += 1
+            if audit_end is not None:
                 break
-        self.check(True, "control audit retains the complete requested event range")
+            if cursor <= previous or page["next_cursor"] != cursor:
+                raise AssertionError("control audit did not advance to its observation watermark")
+        if audit_end is None:
+            raise AssertionError("control audit watermark was not reached within 256 pages")
+        self.check(len(events) == audit_end, "control audit retains every event through its observed watermark")
+        self.metrics["audit_end_cursor"] = audit_end
+        self.metrics["audit_event_count"] = len(events)
         completed = [entry["event"] for entry in events if entry["event"].get("type") == "ssmcp.control.completed"]
         self.check(any(event["provider"] == "browser" and event["success"] for event in completed), "native control calls produce completion audit events")
         self.check(any(event["provider"] == "omarchy" and event["success"] for event in completed),

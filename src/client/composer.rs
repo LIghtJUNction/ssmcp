@@ -555,7 +555,7 @@ impl Composer {
             height.saturating_sub(wrapped.len().min(height))
         };
         let notice = (show_suggestions && self.reference_active())
-            .then(|| self.references.notice.as_deref())
+            .then_some(self.references.notice.as_deref())
             .flatten();
         let notice_rows =
             usize::from(notice.is_some() && (suggestions.is_empty() || available > 1))

@@ -329,9 +329,13 @@ fn omit_binary(value: &mut Value) -> bool {
             }
             omitted
         }
-        Value::Array(values) => values
-            .iter_mut()
-            .fold(false, |omitted, item| omit_binary(item) || omitted),
+        Value::Array(values) => {
+            let mut omitted = false;
+            for item in values {
+                omitted |= omit_binary(item);
+            }
+            omitted
+        }
         _ => false,
     }
 }

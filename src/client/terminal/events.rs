@@ -311,10 +311,10 @@ impl EventView {
         if self.follow {
             self.scroll = max_scroll;
         } else if self.reveal {
-            if let Some(selected_row) = selected_row {
-                if selected_row < self.scroll || selected_row >= self.scroll.saturating_add(page) {
-                    self.scroll = selected_row;
-                }
+            if let Some(selected_row) = selected_row
+                && (selected_row < self.scroll || selected_row >= self.scroll.saturating_add(page))
+            {
+                self.scroll = selected_row;
             }
             self.reveal = false;
         }

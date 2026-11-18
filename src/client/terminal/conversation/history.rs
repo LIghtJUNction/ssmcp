@@ -75,10 +75,12 @@ impl State {
 
     pub(super) fn chat_history_rows(&mut self, height: u16) -> Vec<String> {
         let width = self.geometry.left;
-        if self.conversation.detail && self.conversation.history.is_some() {
+        if self.conversation.detail
+            && let Some(history) = self.conversation.history.as_ref()
+        {
             if self.conversation.history_width != width {
                 let mut rows = Vec::new();
-                for message in &self.conversation.history.as_ref().unwrap().messages {
+                for message in &history.messages {
                     let label = match message.role.as_str() {
                         "assistant" => "Agent",
                         "user" => "You",

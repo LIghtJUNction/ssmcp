@@ -968,13 +968,13 @@ impl State {
                         && self.log_query.is_empty()
                         && self.log_level == 0
                     {
-                        if let Some(row) = y.checked_sub(body_top(self.geometry.rows)) {
-                            if self.events.mouse_select(row) {
-                                if button == 0 {
-                                    self.events.toggle();
-                                } else if button == 2 {
-                                    self.events.open();
-                                }
+                        if let Some(row) = y.checked_sub(body_top(self.geometry.rows))
+                            && self.events.mouse_select(row)
+                        {
+                            if button == 0 {
+                                self.events.toggle();
+                            } else if button == 2 {
+                                self.events.open();
                             }
                         }
                         self.dirty = true;

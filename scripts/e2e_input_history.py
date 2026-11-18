@@ -285,6 +285,45 @@ class InputHistory(Composer):
         self.save_shot("image", front, cells=True)
         return source
 
+    def read_text_pages(self, path, expected):
+        """Use native UTF-8 cursors; even newline-only pages stay below 500 lines."""
+        offset, chunks, finished = 0, [], False
+        page_limit = 256
+        for _ in range(len(expected) + 1):
+            page = self.call("ssmcp.fs.read_text", {
+                "path": path, "offset": offset, "max_bytes": page_limit,
+            })
+            if page.get("spilled") or not isinstance(page.get("text"), str):
+                raise AssertionError("bounded UTF-8 page did not return inline text: "
+                                     + json.dumps(page, ensure_ascii=False))
+            raw = page["text"].encode("utf-8")
+            end = offset + len(raw)
+            if (page["path"] != path or page["offset"] != offset
+                    or page["bytes"] != len(raw) or len(raw) > page_limit
+                    or page["next_offset"] != end or page["size"] != len(expected)
+                    or not isinstance(page["eof"], bool)
+                    or not isinstance(page["truncated"], bool)
+                    or page["truncated"] == page["eof"]
+                    or end > len(expected)):
+                raise AssertionError("native UTF-8 page changed its size, cursor or EOF contract")
+            digest = hashlib.sha256(raw).hexdigest() if offset == 0 and page["eof"] else None
+            if page["sha256"] != digest:
+                raise AssertionError("native text page misreported its whole-file digest")
+            chunks.append(raw)
+            if page["eof"]:
+                if end != len(expected):
+                    raise AssertionError("native UTF-8 read reached EOF before the original byte length")
+                finished = True
+                break
+            if not raw or end >= len(expected):
+                raise AssertionError("native UTF-8 pagination stalled or missed EOF")
+            offset = end
+        actual = b"".join(chunks)
+        self.check(finished and actual == expected and len(actual) == len(expected)
+                   and hashlib.sha256(actual).digest() == hashlib.sha256(expected).digest(),
+                   "native UTF-8 pages preserve every original byte, length and SHA-256 through EOF")
+        return actual.decode("utf-8")
+
     def paste_scenario(self, front, member):
         prefix, suffix = "PASTE_REQUEST 分析 ", " 保留用户后缀界"
         front.send(prefix + suffix)
@@ -321,7 +360,12 @@ class InputHistory(Composer):
         self.check(len(references) == 1 and references[0]["path"] == match.group(1),
                    "the complete pasted draft delivers exactly its saved file reference")
         read = self.call(references[0]["read"]["tool"], references[0]["read"]["arguments"])
-        self.check(read["text"].encode("utf-8") == pasted and read["eof"],
+        self.metrics["long_paste_first_read"] = read
+        self.check(read.get("spilled") is True and read.get("format") == "mcp_tool_result_json"
+                   and isinstance(read.get("artifact"), dict),
+                   "the 600-line native result exposes the existing output artifact boundary")
+        complete = self.read_text_pages(references[0]["path"], pasted)
+        self.check(complete.encode("utf-8") == pasted,
                    "the receiving agent can read the whole saved paste through its native action")
 
     def attachment_handoff_scenario(self, front, member):
@@ -330,10 +374,10 @@ class InputHistory(Composer):
         self.check(target == member["agent_id"], "attachment fixture starts with the exact selected recipient")
         front.send('/attach "资料/红蓝.png"' + "\r")
         state = self.wait_state(front, lambda state: re.fullmatch(
-            r'@\"\.ssmcp/inputs/image-[0-9a-f]{32}\.png\"\s*', state["draft"]["text"]) is not None,
+            r'\n@\"\.ssmcp/inputs/image-[0-9a-f]{32}\.png\"\n', state["draft"]["text"]) is not None,
             "/attach did not prepare an editable private PNG reference")
         image_draft = state["draft"]["text"]
-        image_path = re.fullmatch(r'@\"([^\"]+)\"\s*', image_draft).group(1)
+        image_path = re.fullmatch(r'\n@\"([^\"]+)\"\n', image_draft).group(1)
         saved_image = self.workspace / image_path
         self.check(saved_image.read_bytes() == png_fixture()
                    and saved_image.stat().st_mode & 0o777 == 0o600,
@@ -346,7 +390,11 @@ class InputHistory(Composer):
                    and image["sha256"] == hashlib.sha256(png_fixture()).hexdigest(),
                    "the imported image remains readable through the existing rooted native image tool")
         self.save_shot("attached-image", front)
-        front.send(b"\x01\x0b")
+        attached = self.ui("/display/conversation")
+        self.check(attached["draft"] == state["draft"]
+                   and attached["draft"]["cursor"] == len(image_draft.encode("utf-8")),
+                   "the private image reference is inserted between exact newlines with the cursor at its end")
+        front.send(b"\x7f" * len(image_draft))
         self.wait_state(front, lambda state: not state["draft"]["text"], "attachment test draft did not clear")
 
         reply = "## HANDOFF_LATEST_REPLY\n\n刚核对最新上下文，界。"
@@ -377,10 +425,10 @@ class InputHistory(Composer):
         before = {item["id"] for item in self.queue()["queue"]}
         front.send("/handoff " + note + "\r")
         state = self.wait_state(front, lambda state: re.fullmatch(
-            r'@\"\.ssmcp/inputs/handoff-[0-9a-f]{32}\.md\"\s*', state["draft"]["text"]) is not None,
+            r'\n@\"\.ssmcp/inputs/handoff-[0-9a-f]{32}\.md\"\n', state["draft"]["text"]) is not None,
             "/handoff did not produce a reviewable Markdown reference")
         draft = state["draft"]["text"]
-        path = re.fullmatch(r'@\"([^\"]+)\"\s*', draft).group(1)
+        path = re.fullmatch(r'\n@\"([^\"]+)\"\n', draft).group(1)
         saved = self.workspace / path
         exported = saved.read_text(encoding="utf-8")
         self.check(saved.stat().st_mode & 0o777 == 0o600 and len(saved.read_bytes()) <= 2 * 1024 * 1024,
@@ -388,8 +436,8 @@ class InputHistory(Composer):
         for expected in [current["id"], receipt["message_id"], reply, pending_text,
                          question["id"], question["question"]["question"], note]:
             self.check(expected in exported, "handoff contains the actual current context: " + expected[:48])
-        native = self.call("ssmcp.fs.read_text", {"path": path, "max_bytes": 65536})
-        self.check(native["text"] == exported and native["eof"],
+        native = self.read_text_pages(path, exported.encode("utf-8"))
+        self.check(native == exported,
                    "the handoff reference is fully readable through the rooted native text tool")
         after = self.queue()
         self.check(state["target"] == target and {item["id"] for item in after["queue"]} == before
@@ -403,7 +451,9 @@ class InputHistory(Composer):
         self.wait_state(front, lambda state: state["draft"]["text"] == draft + suffix,
                         "the generated handoff reference was not editable")
         self.save_shot("handoff-editable", front)
-        front.send(b"\x01\x0b")
+        self.check(self.ui("/display/conversation")["draft"]["cursor"] == len((draft + suffix).encode("utf-8")),
+                   "editing the multiline handoff reference leaves its UTF-8 cursor at the end")
+        front.send(b"\x7f" * len(draft + suffix))
         self.wait_state(front, lambda state: not state["draft"]["text"], "handoff test draft did not clear")
         self.expect_delivery(self.work(member=member), pending, request_text=pending_text,
                              agent_id=member["agent_id"])
