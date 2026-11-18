@@ -2735,6 +2735,7 @@ mod tests {
         let session = Session {
             shared: shared.clone(),
             thread: Some(thread),
+            guide_probe: None,
         };
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 65536];
