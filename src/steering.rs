@@ -1,7 +1,8 @@
 //! Local operator messages, atomically editable until claimed by an HTTP reply.
 use crate::wire::{
-    MAX_USER_MESSAGE_BYTES, MAX_USER_MESSAGES, SteeringAgent, SteeringCommand, SteeringDelivery,
-    SteeringMessage, SteeringSnapshot, SteeringState,
+    MAX_USER_IMAGES, MAX_USER_IMAGES_BYTES, MAX_USER_MESSAGE_BYTES, MAX_USER_MESSAGES,
+    SteeringAgent, SteeringCommand, SteeringDelivery, SteeringMessage, SteeringSnapshot,
+    SteeringState, UserImage, user_images_bytes, validate_user_images,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -17,6 +18,39 @@ const MAX_COMMANDS: usize = 128;
 const MAX_SEQUENCE: u64 = (1_u64 << 53) - 1;
 pub(crate) const MAX_DELIVERY_MESSAGES: usize = 8;
 pub(crate) const MAX_DELIVERY_BYTES: usize = 64 * 1024;
+
+/// One shared allowance across all clients eligible for a single MCP response.
+pub(crate) struct DeliveryBudget {
+    pub(crate) messages: usize,
+    pub(crate) text_bytes: usize,
+    pub(crate) images: usize,
+    pub(crate) image_bytes: usize,
+    response_bytes: usize,
+    pub(crate) response_limited: bool,
+}
+
+impl Default for DeliveryBudget {
+    fn default() -> Self {
+        Self {
+            messages: MAX_DELIVERY_MESSAGES,
+            text_bytes: MAX_DELIVERY_BYTES,
+            images: MAX_USER_IMAGES,
+            image_bytes: MAX_USER_IMAGES_BYTES,
+            response_bytes: crate::wire::MAX_FRAME - 8192,
+            response_limited: false,
+        }
+    }
+}
+
+impl DeliveryBudget {
+    pub(crate) fn for_response(response: &Value) -> Self {
+        Self {
+            response_bytes: (crate::wire::MAX_FRAME - 8192)
+                .saturating_sub(response.to_string().len()),
+            ..Self::default()
+        }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Queue {
@@ -40,7 +74,9 @@ fn pending(message: &SteeringMessage) -> bool {
 fn cost(message: &SteeringMessage) -> usize {
     // Reserve metadata/delivery overhead now, so marking delivery cannot exceed
     // the queue budget or force eviction of an undelivered message.
-    serde_json::to_string(&message.text).map_or(usize::MAX, |text| text.len().saturating_add(1024))
+    serde_json::to_string(&message.text).map_or(usize::MAX, |text| {
+        text.len().saturating_add(1024 * (1 + message.images.len()))
+    })
 }
 
 fn identifier(value: &str, field: &str) -> Result<(), String> {
@@ -81,6 +117,12 @@ impl State {
             .count()
             > MAX_HISTORY
             || self.messages.iter().map(cost).sum::<usize>() > MAX_RETAINED_BYTES
+            || self
+                .messages
+                .iter()
+                .map(|message| user_images_bytes(&message.images))
+                .sum::<usize>()
+                > MAX_USER_IMAGES_BYTES
         {
             let Some(index) = self.messages.iter().position(|message| !pending(message)) else {
                 break;
@@ -178,16 +220,18 @@ impl Queue {
             SteeringCommand::Publish {
                 message_id,
                 text,
+                images,
                 target,
                 ..
             } => {
-                if text.trim().is_empty()
+                validate_user_images(&images)?;
+                if (text.trim().is_empty() && images.is_empty())
                     || text.len() > MAX_USER_MESSAGE_BYTES
                     || text
                         .chars()
                         .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
                 {
-                    return Err("user message must contain 1..=16384 UTF-8 bytes of text; only newline and tab control characters are allowed".into());
+                    return Err("user message needs text or an image; text is limited to 16384 UTF-8 bytes and only newline/tab control characters".into());
                 }
                 if target != "next" && !agents.iter().any(|agent| agent.agent_id == target) {
                     return Err(
@@ -198,6 +242,7 @@ impl Queue {
                     id: message_id,
                     revision,
                     text,
+                    images,
                     target,
                     state: SteeringState::Queued,
                     created_at_ms: index.map_or(now, |index| state.messages[index].created_at_ms),
@@ -216,6 +261,18 @@ impl Queue {
                     .filter(|(at, message)| Some(*at) != index && pending(message))
                     .map(|(_, message)| cost(message))
                     .sum();
+                let pending_image_bytes: usize = state
+                    .messages
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, message)| Some(*at) != index && pending(message))
+                    .map(|(_, message)| user_images_bytes(&message.images))
+                    .sum();
+                if pending_image_bytes.saturating_add(user_images_bytes(&message.images))
+                    > MAX_USER_IMAGES_BYTES
+                {
+                    return Err("pending queue images exceed 2 MiB of base64 data; remove an image or finish/cancel a queued request".into());
+                }
                 if (index.is_none() && pending_count >= MAX_USER_MESSAGES)
                     || retained_pending.saturating_add(cost(&message)) > MAX_RETAINED_BYTES
                 {
@@ -255,31 +312,60 @@ impl Queue {
         client_id: &str,
         run_id: &str,
         agent_id: Option<&str>,
-        max_messages: usize,
-        max_bytes: usize,
+        budget: &mut DeliveryBudget,
     ) -> Vec<Value> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let mut claimed = Vec::new();
-        let mut used = 0usize;
         for message in &mut state.messages {
             if message.state != SteeringState::Queued
                 || (message.target != "next" && Some(message.target.as_str()) != agent_id)
             {
                 continue;
             }
-            if claimed.len() >= max_messages {
+            if budget.messages == 0 {
                 break;
             }
             let Ok(revision) = next(message.revision) else {
                 break;
             };
-            let value = json!({"source":"client_user","client_id":client_id,"message_id":message.id,
+            let mut value = json!({"source":"client_user","client_id":client_id,"message_id":message.id,
                 "revision":revision,"text":message.text,"target":message.target,"agent_id":agent_id});
+            if !message.images.is_empty() {
+                value["images"] = json!(
+                    message
+                        .images
+                        .iter()
+                        .map(UserImage::metadata)
+                        .collect::<Vec<_>>()
+                );
+            }
             let bytes = value.to_string().len();
-            if used.saturating_add(bytes) > max_bytes {
+            let image_bytes = user_images_bytes(&message.images);
+            if bytes > budget.text_bytes
+                || message.images.len() > budget.images
+                || image_bytes > budget.image_bytes
+            {
+                // A message is atomic: never mark it delivered with omitted images.
                 break;
             }
-            used += bytes;
+            // Metadata is also rendered as a separate text block. Reserve its
+            // escaped form, image envelopes, and separators before changing state.
+            let response_bytes = bytes
+                .saturating_mul(2)
+                .saturating_add(image_bytes)
+                .saturating_add(2048 + 1024 * message.images.len());
+            if response_bytes > budget.response_bytes {
+                budget.response_limited = true;
+                break;
+            }
+            budget.response_bytes -= response_bytes;
+            budget.messages -= 1;
+            budget.text_bytes -= bytes;
+            budget.images -= message.images.len();
+            budget.image_bytes -= image_bytes;
+            if !message.images.is_empty() {
+                value["images"] = json!(message.images);
+            }
             message.state = SteeringState::Delivered;
             message.revision = revision;
             message.updated_at_ms = now_ms();
@@ -313,6 +399,7 @@ mod tests {
             message_id: id.into(),
             expected_revision: revision,
             text: text.into(),
+            images: Vec::new(),
             target: target.into(),
         }
     }
@@ -341,7 +428,7 @@ mod tests {
             .unwrap();
         assert!(
             queue
-                .claim("room", "run", None, 8, MAX_DELIVERY_BYTES)
+                .claim("room", "run", None, &mut DeliveryBudget::default())
                 .is_empty()
         );
         assert!(
@@ -356,7 +443,7 @@ mod tests {
                 publish("four", "m", 2, "edited text", "next"),
             )
             .unwrap();
-        let delivered = queue.claim("room", "run", None, 8, MAX_DELIVERY_BYTES);
+        let delivered = queue.claim("room", "run", None, &mut DeliveryBudget::default());
         assert_eq!(delivered[0]["text"], "edited text");
         assert_eq!(snapshot(&queue).messages[0].state, SteeringState::Delivered);
         assert!(
@@ -375,7 +462,7 @@ mod tests {
         );
         assert!(
             queue
-                .claim("room", "run2", None, 8, MAX_DELIVERY_BYTES)
+                .claim("room", "run2", None, &mut DeliveryBudget::default())
                 .is_empty()
         );
     }
@@ -401,11 +488,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            queue.claim("room", "run", None, 8, MAX_DELIVERY_BYTES)[0]["message_id"],
+            queue.claim("room", "run", None, &mut DeliveryBudget::default())[0]["message_id"],
             "b"
         );
         assert_eq!(
-            queue.claim("room", "run", Some("agent_a"), 8, MAX_DELIVERY_BYTES)[0]["message_id"],
+            queue.claim(
+                "room",
+                "run",
+                Some("agent_a"),
+                &mut DeliveryBudget::default()
+            )[0]["message_id"],
             "a"
         );
         let retry = queue.command("room", agents.clone(), first).unwrap();
@@ -471,5 +563,188 @@ mod tests {
                 .is_err()
         );
         assert_eq!(snapshot(&queue).messages[0].text, "pending");
+    }
+    fn test_image(seed: u8, full: bool) -> UserImage {
+        use base64::Engine;
+        let mut bytes = base64::engine::general_purpose::STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jU6kAAAAASUVORK5CYII="
+        ).unwrap();
+        if full {
+            bytes.resize(crate::wire::MAX_USER_IMAGE_BYTES / 4 * 3 - 1, 0);
+        }
+        bytes.push(seed);
+        UserImage::from_bytes(&format!("image-{seed}.png"), "image/png", &bytes).unwrap()
+    }
+
+    fn publish_images(
+        command: &str,
+        id: &str,
+        revision: u64,
+        text: &str,
+        images: Vec<UserImage>,
+    ) -> SteeringCommand {
+        SteeringCommand::Publish {
+            command_id: command.into(),
+            message_id: id.into(),
+            expected_revision: revision,
+            text: text.into(),
+            images,
+            target: "next".into(),
+        }
+    }
+
+    #[test]
+    fn image_and_text_edits_are_atomic_and_cancelled_images_are_never_claimed() {
+        let queue = Queue::default();
+        let original = test_image(0, false);
+        let edited = test_image(1, false);
+        queue
+            .command(
+                "room",
+                vec![],
+                publish_images("c1", "m", 0, "before", vec![original]),
+            )
+            .unwrap();
+        queue
+            .command(
+                "room",
+                vec![],
+                SteeringCommand::Takeback {
+                    command_id: "c2".into(),
+                    message_id: "m".into(),
+                    expected_revision: 1,
+                },
+            )
+            .unwrap();
+        assert!(
+            queue
+                .claim("room", "run", None, &mut DeliveryBudget::default())
+                .is_empty()
+        );
+        assert!(
+            queue
+                .command(
+                    "room",
+                    vec![],
+                    publish_images("stale", "m", 1, "stale", vec![edited.clone()])
+                )
+                .is_err()
+        );
+        queue
+            .command(
+                "room",
+                vec![],
+                publish_images("c3", "m", 2, "after", vec![edited.clone()]),
+            )
+            .unwrap();
+        queue
+            .command(
+                "room",
+                vec![],
+                publish_images("c4", "cancel", 0, "", vec![test_image(2, false)]),
+            )
+            .unwrap();
+        queue
+            .command(
+                "room",
+                vec![],
+                SteeringCommand::Cancel {
+                    command_id: "c5".into(),
+                    message_id: "cancel".into(),
+                    expected_revision: 1,
+                },
+            )
+            .unwrap();
+        let claimed = queue.claim("room", "run", None, &mut DeliveryBudget::default());
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0]["text"], "after");
+        assert_eq!(claimed[0]["images"][0]["data"], edited.data);
+        assert_eq!(claimed[0]["revision"], 4);
+        assert!(
+            queue
+                .command(
+                    "room",
+                    vec![],
+                    publish_images("late", "m", 4, "late", vec![])
+                )
+                .unwrap_err()
+                .contains("already_delivered")
+        );
+    }
+
+    #[test]
+    fn image_delivery_shares_one_budget_across_clients_and_preserves_deferred_messages() {
+        let first = Queue::default();
+        let second = Queue::default();
+        first
+            .command(
+                "first",
+                vec![],
+                publish_images(
+                    "a",
+                    "a",
+                    0,
+                    "",
+                    vec![test_image(0, true), test_image(1, true)],
+                ),
+            )
+            .unwrap();
+        second
+            .command(
+                "second",
+                vec![],
+                publish_images("b", "b", 0, "", vec![test_image(2, false)]),
+            )
+            .unwrap();
+        assert!(
+            first
+                .command(
+                    "first",
+                    vec![],
+                    publish_images("extra", "extra", 0, "", vec![test_image(3, false)])
+                )
+                .unwrap_err()
+                .contains("2 MiB")
+        );
+        assert_eq!(snapshot(&first).messages.len(), 1);
+        let mut budget = DeliveryBudget::default();
+        let delivered = first.claim("first", "run", None, &mut budget);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(budget.image_bytes, 0);
+        assert!(second.claim("second", "run", None, &mut budget).is_empty());
+        assert_eq!(snapshot(&second).messages[0].state, SteeringState::Queued);
+        assert_eq!(
+            second
+                .claim("second", "next-run", None, &mut DeliveryBudget::default())
+                .len(),
+            1
+        );
+        let frame = crate::wire::Frame::SteeringReply {
+            id: 1,
+            result: Ok(snapshot(&first)),
+        };
+        assert!(serde_json::to_vec(&frame).unwrap().len() < crate::wire::MAX_FRAME);
+    }
+
+    #[test]
+    fn full_original_tool_results_do_not_consume_queued_images() {
+        let queue = Queue::default();
+        queue
+            .command(
+                "room",
+                vec![],
+                publish_images("a", "a", 0, "keep all images", vec![test_image(0, true)]),
+            )
+            .unwrap();
+        let large_result =
+            json!({"content":[{"type":"text","text":"x".repeat(crate::wire::MAX_FRAME - 16384)}]});
+        let mut budget = DeliveryBudget::for_response(&large_result);
+        assert!(queue.claim("room", "run", None, &mut budget).is_empty());
+        assert!(budget.response_limited);
+        let retained = snapshot(&queue);
+        assert_eq!(retained.messages[0].state, SteeringState::Queued);
+        assert_eq!(retained.messages[0].revision, 1);
+        let mut next_budget = DeliveryBudget::for_response(&json!({"content":[]}));
+        assert_eq!(queue.claim("room", "next", None, &mut next_budget).len(), 1);
     }
 }

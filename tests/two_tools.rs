@@ -492,6 +492,7 @@ async fn local_composer_delivers_at_response_boundary_and_exact_targets_require_
     server.attach(Mode::Shell).await;
     let target = server.attach(Mode::Shell).await;
     let publish = |id: &str, text: &str, target: &str| wire::SteeringCommand::Publish {
+        images: Vec::new(),
         command_id: format!("publish_{id}"),
         message_id: id.into(),
         expected_revision: 0,

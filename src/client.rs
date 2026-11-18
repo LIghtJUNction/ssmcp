@@ -36,8 +36,8 @@ use crate::{
     runtime::Runtime,
     wire::{
         CODE_VERSION, CONTROLLER_VERSION, ClientMetadata, Frame, LEGACY_VERSION,
-        MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, canonical_github_principal,
-        read_frame, validate_title, write_frame,
+        MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, QUEUE_VERSION, VERSION,
+        canonical_github_principal, read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -1566,7 +1566,7 @@ impl std::fmt::Display for UnsupportedWireProtocol {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION}, {CODE_VERSION}, {CONTROLLER_VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
+            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION}, {QUEUE_VERSION}, {CODE_VERSION}, {CONTROLLER_VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
         )
     }
 }
@@ -1681,15 +1681,28 @@ async fn register_ssh(
                 if message == UNSUPPORTED_WIRE_PROTOCOL
                     || message
                         == "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)"
+                    || message
+                        == "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5 and v6)"
+                    || message
+                        == "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5, v6 and v7)"
+                    || message
+                        == "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4, v5, v6, v7 and v8)"
                 {
-                    if matches!(*protocol, VERSION | CODE_VERSION | CONTROLLER_VERSION) {
+                    if matches!(
+                        *protocol,
+                        VERSION | QUEUE_VERSION | CODE_VERSION | CONTROLLER_VERSION
+                    ) {
                         let rejected = *protocol;
                         *protocol = match rejected {
-                            VERSION => CODE_VERSION,
+                            VERSION => QUEUE_VERSION,
+                            QUEUE_VERSION => CODE_VERSION,
                             CODE_VERSION => CONTROLLER_VERSION,
                             _ => LEGACY_VERSION,
                         };
                         let limitation = match *protocol {
+                            QUEUE_VERSION => {
+                                "Image attachments require a version 8 gateway; text requests remain available."
+                            }
                             CODE_VERSION => {
                                 "The local request queue requires a version 7 gateway; composer drafts stay local."
                             }

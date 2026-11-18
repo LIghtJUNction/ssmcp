@@ -393,6 +393,8 @@ enum QueueRequest {
     Get {},
     Submit {
         text: String,
+        #[serde(default)]
+        images: Vec<crate::wire::UserImage>,
         #[serde(default, deserialize_with = "present_string")]
         target: Option<String>,
     },
@@ -402,6 +404,8 @@ enum QueueRequest {
     Edit {
         id: String,
         text: String,
+        #[serde(default)]
+        images: Option<Vec<crate::wire::UserImage>>,
         #[serde(default, deserialize_with = "present_string")]
         target: Option<String>,
     },
@@ -421,12 +425,21 @@ fn parse_queue(arguments: Value) -> Result<QueueRequest, String> {
     }
     let request: QueueRequest =
         serde_json::from_value(arguments).map_err(|_| "invalid request queue arguments")?;
-    let (id, text, target) = match &request {
-        QueueRequest::Get {} => (None, None, None),
-        QueueRequest::Submit { text, target } => (None, Some(text), target.as_ref()),
-        QueueRequest::Takeback { id } | QueueRequest::Cancel { id } => (Some(id), None, None),
-        QueueRequest::Edit { id, text, target } => (Some(id), Some(text), target.as_ref()),
-        QueueRequest::Retarget { id, target } => (Some(id), None, target.as_ref()),
+    let (id, text, target, images) = match &request {
+        QueueRequest::Get {} => (None, None, None, None),
+        QueueRequest::Submit {
+            text,
+            target,
+            images,
+        } => (None, Some(text), target.as_ref(), Some(images.as_slice())),
+        QueueRequest::Takeback { id } | QueueRequest::Cancel { id } => (Some(id), None, None, None),
+        QueueRequest::Edit {
+            id,
+            text,
+            target,
+            images,
+        } => (Some(id), Some(text), target.as_ref(), images.as_deref()),
+        QueueRequest::Retarget { id, target } => (Some(id), None, target.as_ref(), None),
     };
     for value in [id, target].into_iter().flatten() {
         if value.is_empty()
@@ -439,7 +452,11 @@ fn parse_queue(arguments: Value) -> Result<QueueRequest, String> {
         }
     }
     if let Some(text) = text {
-        super::steering::validate_text(text)?;
+        if let Some(images) = images {
+            super::steering::validate_message(text, images)?;
+        } else {
+            super::steering::validate_text(text)?;
+        }
     }
     Ok(request)
 }
@@ -447,13 +464,32 @@ fn parse_queue(arguments: Value) -> Result<QueueRequest, String> {
 fn queue_call(request: QueueRequest) -> Result<Value, String> {
     let id = match request {
         QueueRequest::Get {} => return Ok(super::steering::snapshot()),
-        QueueRequest::Submit { text, target } => super::steering::submit(&text, target.as_deref())?,
+        QueueRequest::Submit {
+            text,
+            target,
+            images,
+        } => {
+            if images.is_empty() {
+                super::steering::submit(&text, target.as_deref())?
+            } else {
+                super::steering::submit_with_images(&text, target.as_deref(), images)?
+            }
+        }
         QueueRequest::Takeback { id } => {
             super::steering::take_back(&id)?;
             id
         }
-        QueueRequest::Edit { id, text, target } => {
-            super::steering::publish_edit(&id, &text, target.as_deref())?;
+        QueueRequest::Edit {
+            id,
+            text,
+            target,
+            images,
+        } => {
+            if let Some(images) = images {
+                super::steering::publish_edit_with_images(&id, &text, target.as_deref(), images)?;
+            } else {
+                super::steering::publish_edit(&id, &text, target.as_deref())?;
+            }
             id
         }
         QueueRequest::Cancel { id } => {
@@ -564,7 +600,15 @@ fn queue_tool() -> Value {
     let identifier =
         json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"});
     let target = json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$","description":"next or an exact current agent ID. submit defaults to next; edit keeps its current recipient; retarget defaults explicitly to next."});
-    let text = json!({"type":"string","minLength":1,"maxLength":16384,"description":"Request text: at most 16384 UTF-8 bytes. Newline and tab are the only allowed control characters."});
+    let text = json!({"type":"string","maxLength":16384,"description":"Request text: at most 16384 UTF-8 bytes, or empty when images are supplied. Newline and tab are the only allowed control characters."});
+    let images = json!({"type":"array","maxItems":crate::wire::MAX_USER_IMAGES,
+    "description":"Explicit user-selected image bytes only; never file paths. At most 1 MiB base64 per image and 2 MiB combined. Native API arguments also have a 2 MiB total limit including base64 and metadata; leave room for the JSON fields. Local composer image-data limits are separate. For edit, omission retains current images; [] removes them.",
+    "items":{"type":"object","additionalProperties":false,"required":["id","name","mime_type","data"],"properties":{
+        "id":{"type":"string","pattern":"^[a-f0-9]{64}$","description":"SHA-256 hex of decoded image bytes."},
+        "name":{"type":"string","minLength":1,"maxLength":256,"description":"Display filename, without paths or control characters."},
+        "mime_type":{"enum":["image/png","image/jpeg","image/gif","image/webp"]},
+        "data":{"type":"string","minLength":1,"maxLength":crate::wire::MAX_USER_IMAGE_BYTES,"description":"Standard base64 of the explicitly supplied image bytes."}
+    }}});
     let variant = |action: &str, required: &[&str], mut properties: Value| {
         properties["action"] = json!({"const":action});
         let required = std::iter::once("action")
@@ -577,9 +621,9 @@ fn queue_tool() -> Value {
         "description":"Read or change this client's local request queue without starting a model. submit and edit request asynchronous publication; read state until acknowledged. takeback reclaims a still-queued request using its current revision before editing the same ID. Delivery can win that race; delivered requests cannot be edited or cancelled. A changed room or uncertain delivery requires explicit retarget, then edit to republish. Agents are the actual public collaboration roster. Requests are included at the next eligible tool response, not evidence that an agent has read or executed them.",
         "inputSchema":{"type":"object","oneOf":[
             variant("get", &[], json!({})),
-            variant("submit", &["text"], json!({"text":text,"target":target})),
+            variant("submit", &["text"], json!({"text":text,"target":target,"images":images})),
             variant("takeback", &["id"], json!({"id":identifier})),
-            variant("edit", &["id","text"], json!({"id":identifier,"text":text,"target":target})),
+            variant("edit", &["id","text"], json!({"id":identifier,"text":text,"target":target,"images":images})),
             variant("cancel", &["id"], json!({"id":identifier})),
             variant("retarget", &["id"], json!({"id":identifier,"target":target}))
         ]},

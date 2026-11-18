@@ -116,7 +116,7 @@ class Socket(relay.WebSocket):
                 if frame["type"] == "steering":
                     # Woken full clients use v7 presence polling. This recovery
                     # fixture has no queue: do not simulate publication or delivery.
-                    assert self.hello["version"] == 7
+                    assert self.hello["version"] == 8
                     assert self.hello["metadata"]["name"] != self.state.recovery_name
                     assert frame["command"] == {"op": "snapshot"}
                     self.send({"type": "steering_reply", "id": frame["id"], "result": {"Ok": {

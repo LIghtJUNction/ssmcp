@@ -156,7 +156,7 @@ class WebSocket:
                     # Account lifecycle tests have no user requirements. Only
                     # v7 presence polling is valid here; never simulate queue
                     # publication, editing, or response-boundary delivery.
-                    assert self.hello["version"] == 7
+                    assert self.hello["version"] == 8
                     assert frame["command"] == {"op": "snapshot"}
                     self.send({"type": "steering_reply", "id": frame["id"], "result": {"Ok": {
                         "schema_version": 1, "client_id": self.id, "revision": 0,
