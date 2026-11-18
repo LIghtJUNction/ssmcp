@@ -85,9 +85,23 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 | `exec.status(clientId, jobId)` | 读取一个任务的最新状态 |
 | `exec.wait(clientId, jobId, {wait_ms})` | 等待结束或等待期限到达 |
 | `exec.read(clientId, jobId, options)` | 按字节游标读取两个输出流，可同时短等待 |
+| `exec.write(clientId, jobId, options)` | 向以 `stdin:"pipe"` 启动的任务写入数据或发送 EOF |
 | `exec.cancel(clientId, jobId)` | 请求停止任务及其受管理子进程；重复取消已结束任务可安全返回 |
 | `exec.forget(clientId, jobId)` | 删除已完成的任务记录；运行中任务必须先取消 |
 | `exec.events(clientId, options)` | 读取任务事件；参数以发现的 schema 为准 |
+
+以上六个按任务 ID 操作的接口（`status/wait/read/write/cancel/forget`）也接受与原生 schema 相同的对象参数：
+
+```javascript
+return await exec.read(clientId, {
+  job_id: jobId,
+  stdout_cursor: savedStdoutCursor,
+  stderr_cursor: savedStderrCursor,
+  max_bytes: 16384
+});
+```
+
+对象形式需要含非空字符串 `job_id`，所有选项写在同一个对象中；同时提供第三参数会在调用前报错。原有 `exec.read(clientId, jobId, options)` 继续可用，第三参数中的 `job_id` 仍由第二参数确定的任务 ID 覆盖。参数对象不会被修改，其余字段继续由客户端原生 schema 验证；原生失败保留原错误且不自动重试。对象形式需要更新服务端的 JavaScript 助手，已有原生命令接口的客户端可以直接使用。
 
 任务在当前 `code_mode` 完成后继续存在，但属于这条客户端连接。退出、断开清理或 `reload` 会停止其后台工作；任务 ID 不能迁移到重连后的新客户端。
 
