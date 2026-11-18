@@ -194,12 +194,7 @@ async fn preview(ui: Ui, explicit: Option<&Path>) -> crate::Result<()> {
     super::interface::initialize_path(explicit);
     super::render::configure(ui.clone());
     let cwd = std::env::current_dir()?;
-    let Some(_display) = super::terminal::Session::start(
-        &ui,
-        &cwd.to_string_lossy(),
-        None,
-        Some(super::account::DEFAULT_SERVER),
-    )?
+    let Some(_display) = super::terminal::Session::start(&ui, &cwd.to_string_lossy(), None, None)?
     else {
         return Err("interactive preview requires a foreground terminal with dashboard enabled and a pretty log format; use ssmcp ui preview --static for a single frame".into());
     };
