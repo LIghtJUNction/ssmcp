@@ -49,6 +49,28 @@ def version(root=None):
     return package["version"]
 
 
+
+def publication_packages(root=None):
+    """Dependency-first package order; keep the Rust import name separate."""
+    root = root or ROOT
+    result = [("ssmcp", version(root))]
+    member = root / "crates/ztui/Cargo.toml"
+    if not member.is_file():
+        return result
+    with member.open("rb") as stream:
+        core = tomllib.load(stream)
+    if core["package"]["name"] != "ztui-core" or core.get("lib", {}).get("name") != "ztui":
+        raise ValueError("the Project Z package must be ztui-core with library name ztui")
+    with (root / "Cargo.toml").open("rb") as stream:
+        dependency = tomllib.load(stream).get("dependencies", {}).get("ztui", {})
+    core_version = core["package"]["version"]
+    if (not isinstance(dependency, dict) or dependency.get("package") != "ztui-core"
+            or dependency.get("path") != "crates/ztui"
+            or dependency.get("version") != "=" + core_version):
+        raise ValueError("ssmcp must pin its local ztui-core package by exact version")
+    return [("ztui-core", core_version), *result]
+
+
 def validate_package(tag, root):
     match = TAG.fullmatch(tag)
     if not match or any(part.isdigit() and len(part) > 1 and part.startswith("0")
@@ -58,9 +80,11 @@ def validate_package(tag, root):
     if tag != "v" + actual:
         raise ValueError(f"tag {tag} does not match Cargo.toml version {actual}")
     with (root / "Cargo.lock").open("rb") as stream:
-        locked = [p["version"] for p in tomllib.load(stream)["package"] if p["name"] == "ssmcp"]
-    if locked != [actual]:
-        raise ValueError("Cargo.lock must contain exactly the manifest's ssmcp version")
+        locked_packages = tomllib.load(stream)["package"]
+    for name, package_version in publication_packages(root):
+        locked = [p["version"] for p in locked_packages if p["name"] == name]
+        if locked != [package_version]:
+            raise ValueError(f"Cargo.lock must contain exactly the manifest's {name} version")
     return actual
 
 
@@ -143,16 +167,21 @@ def create_tag(tag, sha, root=None):
     command("git", "push", "origin", "refs/tags/" + tag, cwd=root)
 
 
-def bump(level, root=None):
-    root = root or ROOT
-    old = version(root)
+def bumped_version(old, level):
     if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", old):
         raise ValueError("automatic bump expects a stable package version")
     parts = [int(part) for part in old.split(".")]
     index = {"major": 0, "minor": 1, "patch": 2}[level]
     parts[index] += 1
     parts[index + 1:] = [0] * (2 - index)
-    new = ".".join(map(str, parts))
+    return ".".join(map(str, parts))
+
+
+def bump(level, root=None):
+    root = root or ROOT
+    packages = publication_packages(root)
+    old = version(root)
+    new = bumped_version(old, level)
     manifest_path, lock_path = root / "Cargo.toml", root / "Cargo.lock"
     manifest, manifest_count = re.subn(
         r'(?m)^(version\s*=\s*")' + re.escape(old) + r'("\s*)$',
@@ -162,9 +191,29 @@ def bump(level, root=None):
         lambda match: match[1] + new + match[2], lock_path.read_text(encoding="utf-8"))
     if manifest_count != 1 or lock_count != 1:
         raise ValueError("expected one matching ssmcp version in Cargo.toml and Cargo.lock")
-    manifest_path.write_text(manifest, encoding="utf-8")
-    lock_path.write_text(lock, encoding="utf-8")
-    return emit({"tag": "v" + new, "version": new})
+    writes = {}
+    result = {"tag": "v" + new, "version": new}
+    if packages[0][0] == "ztui-core":
+        core_old = packages[0][1]
+        core_new = bumped_version(core_old, "patch")
+        core_path = root / "crates/ztui/Cargo.toml"
+        core, core_count = re.subn(
+            r'(?m)^(version\s*=\s*")' + re.escape(core_old) + r'("\s*)$',
+            lambda match: match[1] + core_new + match[2], core_path.read_text(encoding="utf-8"), count=1)
+        manifest, dependency_count = re.subn(
+            r'(?m)^(ztui\s*=\s*\{[^\n]*?\bversion\s*=\s*")=' + re.escape(core_old) + r'(")',
+            lambda match: match[1] + "=" + core_new + match[2], manifest)
+        lock, core_lock_count = re.subn(
+            r'(\[\[package\]\]\nname = "ztui-core"\nversion = ")' + re.escape(core_old) + r'("\n)',
+            lambda match: match[1] + core_new + match[2], lock)
+        if (core_count, dependency_count, core_lock_count) != (1, 1, 1):
+            raise ValueError("expected one matching ztui-core version and exact dependency before bumping")
+        writes[core_path] = core
+        result["ztui_core_version"] = core_new
+    writes[manifest_path], writes[lock_path] = manifest, lock
+    for path, text in writes.items():
+        path.write_text(text, encoding="utf-8")
+    return emit(result)
 
 
 def archive_name(target, release_version):
@@ -264,8 +313,8 @@ def checksums(root=None):
     print(f"Verified {len(expected)} target archives and {len(installers)} installers")
 
 
-def registry_checksum(release_version):
-    url = f"https://crates.io/api/v1/crates/ssmcp/{release_version}"
+def registry_checksum(release_version, package="ssmcp"):
+    url = f"https://crates.io/api/v1/crates/{package}/{release_version}"
     request = urllib.request.Request(url, headers={"User-Agent": "ssmcp-release (github.com/LIghtJUNction/ssmcp)"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -275,22 +324,22 @@ def registry_checksum(release_version):
             return None
         raise
     if data["yanked"]:
-        raise ValueError("the requested version is yanked; choose a new version")
+        raise ValueError(f"the requested {package} version is yanked; choose a new version")
     return data["checksum"]
 
 
-def check_registry(root=None):
+def check_registry(root=None, package="ssmcp", release_version=None):
     root = root or ROOT
-    release_version = version(root)
-    path = root / "target/package" / f"ssmcp-{release_version}.crate"
+    release_version = release_version or dict(publication_packages(root))[package]
+    path = root / "target/package" / f"{package}-{release_version}.crate"
     if not path.is_file():
-        raise ValueError("run cargo package --locked before publishing")
+        raise ValueError(f"run cargo package --workspace --locked before publishing {package}")
     checksum = digest(path)
-    existing = registry_checksum(release_version)
+    existing = registry_checksum(release_version, package)
     if existing is not None:
         if existing != checksum:
-            raise ValueError("crates.io already contains different bytes for this version")
-        print(f"crates.io already contains the identical ssmcp {release_version} package")
+            raise ValueError(f"crates.io already contains different bytes for {package} {release_version}")
+        print(f"crates.io already contains the identical {package} {release_version} package")
         return True
     if not os.environ.get("CARGO_REGISTRY_TOKEN"):
         raise ValueError("configure repository secret CARGO_REGISTRY_TOKEN (legacy CARGO_REGISTY_TOKEN is also accepted)")
@@ -299,21 +348,26 @@ def check_registry(root=None):
 
 def publish(root=None):
     root = root or ROOT
-    if check_registry(root):
-        return
-    release_version = version(root)
-    checksum = digest(root / "target/package" / f"ssmcp-{release_version}.crate")
-    # The finalize job already verified this source package with cargo package --locked.
-    subprocess.run(["cargo", "publish", "--locked", "--no-verify"], cwd=root, check=True)
-    for _ in range(18):
-        existing = registry_checksum(release_version)
-        if existing is not None:
-            if existing != checksum:
-                raise ValueError("published crate checksum differs from the verified package")
-            print(f"Verified crates.io publication of ssmcp {release_version}")
-            return
-        time.sleep(10)
-    raise TimeoutError("crates.io has not exposed the uploaded version yet; rerun this tag's release")
+    pending = []
+    # Check the entire verified set before the first irreversible upload.
+    for package, release_version in publication_packages(root):
+        if not check_registry(root, package, release_version):
+            path = root / "target/package" / f"{package}-{release_version}.crate"
+            pending.append((package, release_version, digest(path)))
+    for package, release_version, checksum in pending:
+        # finalize jointly verified unpublished workspace dependencies.
+        subprocess.run(["cargo", "publish", "--locked", "--no-verify", "--package", package],
+                       cwd=root, check=True)
+        for _ in range(18):
+            existing = registry_checksum(release_version, package)
+            if existing is not None:
+                if existing != checksum:
+                    raise ValueError(f"published crate checksum differs from the verified package: {package}")
+                print(f"Verified crates.io publication of {package} {release_version}")
+                break
+            time.sleep(10)
+        else:
+            raise TimeoutError(f"crates.io has not exposed {package} {release_version} yet; rerun this tag's release")
 
 
 def release_notes(root=None):
@@ -321,7 +375,7 @@ def release_notes(root=None):
     release_version = version(root)
     notes = (
         "Download an archive or use the attached installers. The separate `publish_crates` "
-        "job reports crates.io publication status; after that job succeeds, install with "
+        "job publishes ztui-core before ssmcp and verifies both checksums; after it succeeds, install with "
         f"`cargo install ssmcp --version {release_version} --locked --bin ssmcp`.\n\n"
         "Linux / macOS: `curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh`\n\n"
         "Windows PowerShell: `irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex`\n\n"
@@ -462,7 +516,8 @@ def main():
     elif args.command == "checksums":
         checksums()
     elif args.command == "check-registry":
-        check_registry()
+        for package, release_version in publication_packages():
+            check_registry(package=package, release_version=release_version)
     elif args.command in {"publish", "publish-crate"}:
         publish()
     else:
