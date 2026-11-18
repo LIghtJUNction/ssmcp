@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.9.1"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -130,6 +130,10 @@ include = [
     "/packaging/sshd-ssmcp-portal.conf",
     "/docs/backends.md",
     "/docs/optional-harnesses.md",
+    "/docs/dependencies.md",
+    "/docs/native-plugins.md",
+    "/scripts/ssmcp-ztty.sh",
+    "/scripts/test_ztty_launcher.py",
     "/docs/windows-browser-setup.md",
     "/scripts/test_windows_browser_bootstrap.ps1",
     "/docs/configuration.md",
@@ -156,10 +160,13 @@ include = [
 
 [workspace]
 members = ["crates/ztui"]
+exclude = ["crates/zharness", "crates/zplugin"]
 resolver = "3"
 
 [dependencies]
 ztui = { package = "ztui-core", version = "=0.1.0", path = "crates/ztui" }
+zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
+zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
 qrcodegen = "1.8.0"
@@ -195,6 +202,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [dev-dependencies]
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+[patch.crates-io]
+zplugin = { path = "crates/zplugin" }
 
 [profile.release]
 opt-level = "z"
