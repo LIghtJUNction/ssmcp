@@ -454,6 +454,33 @@ pub fn routes() -> Router<Arc<Broker>> {
                 )
             }),
         )
+        .route(
+            "/portal-refresh.css",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                    include_str!("portal/portal-refresh.css"),
+                )
+            }),
+        )
+        .route(
+            "/traffic-meter.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("portal/traffic-meter.js"),
+                )
+            }),
+        )
+        .route(
+            "/client-install-copy.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("portal/client-install-copy.js"),
+                )
+            }),
+        )
         .route("/account/login", post(login))
         .route("/account/logout", post(logout))
         .route("/account/username", post(register_username))
