@@ -216,10 +216,8 @@ impl State {
                         '\u{7f}' | '\u{8}' => {
                             editor.backspace();
                         }
-                        ch if !ch.is_control() => {
-                            if !editor.insert(&ch.to_string()) {
-                                self.notice = Some("Answer limit reached · 16 KiB".into());
-                            }
+                        ch if !ch.is_control() && !editor.insert(&ch.to_string()) => {
+                            self.notice = Some("Answer limit reached · 16 KiB".into());
                         }
                         _ => {}
                     }

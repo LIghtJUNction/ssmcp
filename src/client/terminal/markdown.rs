@@ -485,8 +485,25 @@ mod tests {
             "{plain}"
         );
         let screen = colored_screen(source, 80);
-        assert!(screen.cell(0, 0).unwrap().italic());
-        assert!(screen.cell(0, 9).unwrap().bold());
+        for (token, italic, bold) in [
+            ("emphasis", true, false),
+            ("strong", false, true),
+            ("snake_case", true, false),
+            ("nested_word", false, true),
+        ] {
+            let (row, line) = screen
+                .rows(0, screen.size().1.get())
+                .enumerate()
+                .find(|(_, line)| line.contains(token))
+                .unwrap_or_else(|| panic!("missing {token}: {}", screen.contents()));
+            let start = line.find(token).unwrap();
+            let column = unicode_width::UnicodeWidthStr::width(&line[..start]);
+            for column in column..column + unicode_width::UnicodeWidthStr::width(token) {
+                let cell = screen.cell(row as u16, column as u16).unwrap();
+                assert_eq!(cell.italic(), italic, "{token}");
+                assert_eq!(cell.bold(), bold, "{token}");
+            }
+        }
     }
 
     #[test]

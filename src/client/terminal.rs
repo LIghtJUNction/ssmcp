@@ -170,13 +170,6 @@ pub(super) fn log(bytes: &[u8]) -> bool {
     true
 }
 
-/// Publish a Markdown message to the local user without submitting a requirement.
-pub(crate) fn message(text: &str) -> Result<(), String> {
-    super::steering::validate_text(text)?;
-    super::render::message(text);
-    Ok(())
-}
-
 /// Decode outside the State lock; preview failures do not alter native output.
 pub(crate) fn image(block: &serde_json::Value) {
     let Some(shared) = shared() else {
