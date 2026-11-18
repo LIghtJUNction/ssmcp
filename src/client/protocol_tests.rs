@@ -289,6 +289,7 @@ async fn explicit_rejections_use_fresh_transports_and_remember_the_legacy_versio
             LEGACY_VERSION,
             LEGACY_VERSION
         ]
+        .map(u64::from)
     );
     close(registration).await;
 }
