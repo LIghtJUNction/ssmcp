@@ -1425,6 +1425,7 @@ impl State {
             PanelTone::Muted => "muted",
             PanelTone::Heading => "heading",
             PanelTone::Accent => "accent",
+            PanelTone::Agent => "purple",
             PanelTone::Success => "success",
             PanelTone::Warning => "warning",
             PanelTone::Error => "error",

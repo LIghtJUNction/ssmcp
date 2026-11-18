@@ -57,6 +57,7 @@ pub(super) enum PanelTone {
     Muted,
     Heading,
     Accent,
+    Agent,
     Success,
     Warning,
     Error,
