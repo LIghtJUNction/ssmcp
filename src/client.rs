@@ -1,5 +1,5 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
-mod account;
+pub(crate) mod account;
 pub(crate) mod attachments;
 mod audit_view;
 mod browser_setup;

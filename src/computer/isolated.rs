@@ -200,17 +200,40 @@ fn surface(mut response: Value, desktop: &str) -> Value {
     response
 }
 
-fn is_input(name: &str) -> bool {
-    matches!(
-        name,
-        "ssmcp.computer.focus"
-            | "ssmcp.computer.move"
-            | "ssmcp.computer.click"
-            | "ssmcp.computer.drag"
-            | "ssmcp.computer.key"
-            | "ssmcp.computer.type"
-            | "ssmcp.computer.scroll"
-    )
+fn inactive_status() -> Value {
+    let helpers = required_helpers();
+    let supported = cfg!(target_os = "linux");
+    let can_start = supported
+        && helpers
+            .as_object()
+            .is_some_and(|items| items.values().all(|helper| helper["installed"] == true));
+    json!({
+        "platform":std::env::consts::OS,
+        "available":false,"running":false,"desktop":"isolated",
+        "input_scope":"private_display","moves_host_pointer":false,
+        "host_input_requires_explicit_target":true,
+        "supported":supported,"can_start":can_start,"helpers":helpers,
+        "automatic_start":supported.then_some("computer.app_launch"),
+        "reason":if supported {
+            "No private desktop is running. computer.app_launch starts one automatically; use computer.desktop_start first for a custom size."
+        } else {
+            "Private desktops require Linux and Xvfb on this platform. Use browser background control, or explicitly select desktop: host to inspect or control the operator's desktop."
+        }
+    })
+}
+
+fn launch_executable(argv: &[String]) -> Result<PathBuf, String> {
+    if argv.is_empty()
+        || argv.len() > 128
+        || argv[0].is_empty()
+        || argv
+            .iter()
+            .any(|arg| arg.len() > 4096 || arg.contains('\0'))
+        || argv.iter().map(String::len).sum::<usize>() > 32768
+    {
+        return Err("app_launch requires 1..=128 argv items, at most 4096 bytes each and 32 KiB total, without NUL".into());
+    }
+    crate::program::executable(&argv[0])
 }
 
 pub(super) async fn dispatch(
@@ -255,11 +278,12 @@ pub(super) async fn dispatch(
                 }
                 status
             } else {
-                json!({"running":false,"desktop":"isolated","input_scope":"private_display","moves_host_pointer":false})
+                inactive_status()
             };
             status["supported"] = json!(cfg!(target_os = "linux"));
             status["helpers"] = required_helpers();
-            status["default_input"] = json!("active private desktop; host requires desktop: host");
+            status["default_input"] =
+                json!("isolated; app_launch starts a private desktop; host requires desktop: host");
             Ok(result(status))
         }
         "ssmcp.computer.desktop_stop" => {
@@ -277,12 +301,29 @@ pub(super) async fn dispatch(
         }
         "ssmcp.computer.app_launch" => {
             let launch: Launch = parse(args)?;
+            let executable = launch_executable(&launch.command)?;
             let mut slot = computer.isolated.lock().await;
-            let desktop = slot
-                .as_mut()
-                .ok_or("start a private desktop with computer.desktop_start before app_launch")?;
+            let created = slot.is_none();
+            if created {
+                let mut desktop = Desktop::start(
+                    &computer.root,
+                    Start {
+                        width: default_width(),
+                        height: default_height(),
+                    },
+                )
+                .await?;
+                if computer.closed.load(Ordering::Acquire) {
+                    desktop.shutdown().await;
+                    return Err("computer connection closed during desktop startup".into());
+                }
+                *slot = Some(desktop);
+            }
+            let desktop = slot.as_mut().expect("private desktop initialized");
             desktop.ensure_running()?;
-            desktop.launch(launch.command).await
+            let mut response = desktop.launch(launch.command, executable).await?;
+            response["structuredContent"]["desktop_started"] = json!(created);
+            Ok(surface(response, "isolated"))
         }
         _ => {
             let target = args
@@ -290,13 +331,13 @@ pub(super) async fn dispatch(
                 .ok_or("computer arguments must be an object")?
                 .remove("desktop");
             let target = match target.as_ref() {
-                None => None,
+                None => "isolated",
                 Some(Value::String(target)) if matches!(target.as_str(), "host" | "isolated") => {
-                    Some(target.as_str())
+                    target.as_str()
                 }
                 _ => return Err("desktop must be isolated or host".into()),
             };
-            if target == Some("host") {
+            if target == "host" {
                 return computer
                     .perform_local(name, args)
                     .await
@@ -311,14 +352,11 @@ pub(super) async fn dispatch(
                     .await
                     .map(|r| surface(r, "isolated"));
             }
-            if target == Some("isolated") || is_input(name) {
-                return Err("no private desktop is running; call computer.desktop_start, use browser tools, or explicitly select desktop: host for the operator's desktop".into());
+            if name == "ssmcp.computer.status" {
+                parse::<Empty>(args)?;
+                return Ok(surface(result(inactive_status()), "isolated"));
             }
-            drop(slot);
-            computer
-                .perform_local(name, args)
-                .await
-                .map(|r| surface(r, "host"))
+            Err("no private desktop is running; computer.app_launch starts one automatically, or call computer.desktop_start. Use browser tools for page background control; desktop: host explicitly selects the operator's desktop".into())
         }
     }
 }
@@ -477,23 +515,12 @@ impl Desktop {
         }
     }
 
-    async fn launch(&mut self, argv: Vec<String>) -> Result<Value, String> {
-        if argv.is_empty()
-            || argv.len() > 128
-            || argv[0].is_empty()
-            || argv
-                .iter()
-                .any(|arg| arg.len() > 4096 || arg.contains('\0'))
-            || argv.iter().map(String::len).sum::<usize>() > 32768
-        {
-            return Err("app_launch requires 1..=128 argv items, at most 4096 bytes each and 32 KiB total, without NUL".into());
-        }
+    async fn launch(&mut self, argv: Vec<String>, executable: PathBuf) -> Result<Value, String> {
         self.apps
             .retain_mut(|process| matches!(process.child.try_wait(), Ok(None)));
         if self.apps.len() >= 16 {
             return Err("private desktop already owns 16 applications".into());
         }
-        let executable = crate::program::executable(&argv[0])?;
         let mut command =
             tokio::process::Command::new(crate::program::executable("dbus-run-session")?);
         command.arg("--").arg(&executable).args(&argv[1..]);
@@ -730,6 +757,230 @@ mod tests {
                 .unwrap()["structuredContent"]["stopped"],
             false
         );
+    }
+
+    #[tokio::test]
+    async fn default_observation_and_input_never_enter_the_host_adapter_or_start_a_display() {
+        let computer = Computer::new(std::env::temp_dir()).unwrap();
+        // perform_local acquires this mutex before inspecting any host adapter.
+        // A fallback regression times out here instead of touching the desktop.
+        let host_guard = computer.serial.lock().await;
+        for name in ["ssmcp.computer.status", "ssmcp.computer.desktop_status"] {
+            let response =
+                tokio::time::timeout(Duration::from_secs(1), computer.perform(name, json!({})))
+                    .await
+                    .expect("default status must not enter the host adapter")
+                    .unwrap();
+            let state = &response["structuredContent"];
+            assert_eq!(state["desktop"], "isolated");
+            assert_eq!(state["running"], false);
+            assert_eq!(state["moves_host_pointer"], false);
+            assert!(state["can_start"].is_boolean());
+            assert!(state["helpers"].is_object());
+            assert_eq!(state["supported"], cfg!(target_os = "linux"));
+            assert!(computer.isolated.lock().await.is_none());
+        }
+        for (name, arguments) in [
+            ("monitors", json!({})),
+            ("windows", json!({})),
+            ("screenshot", json!({})),
+            ("focus", json!({"window_id":"1"})),
+            ("move", json!({"x":1,"y":1})),
+            ("click", json!({})),
+            ("drag", json!({"path":[{"x":0,"y":0},{"x":1,"y":1}]})),
+            ("key", json!({"key":"Return"})),
+            ("type", json!({"text":"private fixture"})),
+            ("scroll", json!({"direction":"down"})),
+        ] {
+            for explicit in [false, true] {
+                let mut arguments = arguments.clone();
+                if explicit {
+                    arguments["desktop"] = json!("isolated");
+                }
+                let outcome = tokio::time::timeout(
+                    Duration::from_secs(1),
+                    computer.perform(&format!("ssmcp.computer.{name}"), arguments),
+                )
+                .await
+                .expect("default operations must not enter the host adapter");
+                assert!(
+                    outcome.unwrap_err().contains("no private desktop"),
+                    "{name}"
+                );
+                assert!(computer.isolated.lock().await.is_none());
+            }
+        }
+        drop(host_guard);
+        computer.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_launch_rejects_invalid_argv_and_missing_executable_before_desktop_start() {
+        let computer = Computer::new(std::env::temp_dir()).unwrap();
+        // Startup needs this lock. Invalid requests must fail before acquiring
+        // it, without starting Xvfb or relying on the host's installed helpers.
+        let private_guard = computer.isolated.lock().await;
+        for arguments in [
+            json!({"command":[]}),
+            json!({"command":[""]}),
+            json!({"command":["invalid\0"]}),
+            json!({"command":["unused","x".repeat(4097)]}),
+            json!({"command":vec!["unused";129]}),
+            json!({"command":vec!["x".repeat(4096);9]}),
+            json!({"command":["unused"],"desktop":"host"}),
+            json!({"command":"not-an-argv"}),
+        ] {
+            let error = tokio::time::timeout(
+                Duration::from_secs(1),
+                computer.perform("ssmcp.computer.app_launch", arguments),
+            )
+            .await
+            .expect("invalid argv must fail before locking or starting a desktop")
+            .unwrap_err();
+            assert!(
+                !error.contains("Xvfb"),
+                "argv validation must precede dependency/startup checks"
+            );
+            assert!(private_guard.is_none());
+        }
+        let mut nonce = [0u8; 16];
+        crate::platform::random_bytes(&mut nonce).unwrap();
+        let missing = std::env::temp_dir().join(format!(
+            "ssmcp-missing-app-{}",
+            nonce
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ));
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            computer.perform("ssmcp.computer.app_launch", json!({"command":[missing]})),
+        )
+        .await
+        .expect("an unresolved executable must not acquire the desktop lock")
+        .unwrap_err();
+        assert!(error.contains("not installed") || error.contains("No such file"));
+        assert!(private_guard.is_none());
+        drop(private_guard);
+        computer.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn desktop_schema_keeps_observation_read_only_and_launch_explicitly_mutating() {
+        let tools = Computer::tools();
+        for name in [
+            "status",
+            "desktop_status",
+            "monitors",
+            "windows",
+            "screenshot",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == format!("ssmcp.computer.{name}"))
+                .unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"], true, "{name}");
+            if name != "desktop_status" {
+                assert_eq!(
+                    tool["inputSchema"]["properties"]["desktop"]["default"],
+                    "isolated"
+                );
+            }
+        }
+        for name in [
+            "desktop_start",
+            "desktop_stop",
+            "app_launch",
+            "move",
+            "click",
+            "key",
+            "type",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == format!("ssmcp.computer.{name}"))
+                .unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"], false, "{name}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires installed Xvfb, xdotool, magick, xprop, dbus-run-session and true; private display only"]
+    async fn app_launch_auto_starts_private_display_and_releases_owned_state() {
+        use std::os::unix::fs::MetadataExt;
+        let host_environment: Vec<_> = [
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "DBUS_SESSION_BUS_ADDRESS",
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect();
+        let computer = Computer::new(std::env::temp_dir()).unwrap();
+        assert!(computer.isolated.lock().await.is_none());
+        let executable = crate::program::executable("true").expect("true fixture executable");
+        let started = computer
+            .perform("ssmcp.computer.app_launch", json!({"command":[executable]}))
+            .await
+            .unwrap();
+        assert_eq!(started["structuredContent"]["desktop_started"], true);
+        assert_eq!(started["structuredContent"]["moves_host_pointer"], false);
+        let status = computer
+            .perform("ssmcp.computer.desktop_status", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(status["structuredContent"]["width"], 1280);
+        assert_eq!(status["structuredContent"]["height"], 800);
+        let (directory, display, owned_files) = {
+            let slot = computer.isolated.lock().await;
+            let desktop = slot.as_ref().unwrap();
+            (
+                desktop.directory.0.clone(),
+                desktop
+                    .computer
+                    .environment
+                    .as_ref()
+                    .unwrap()
+                    .display
+                    .clone(),
+                desktop
+                    .x11_files
+                    .entries
+                    .iter()
+                    .map(|file| (file.path.clone(), file.device, file.inode))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_ne!(
+            Some(std::ffi::OsString::from(&display)),
+            std::env::var_os("DISPLAY")
+        );
+        let reused = computer
+            .perform("ssmcp.computer.app_launch", json!({"command":["true"]}))
+            .await
+            .unwrap();
+        assert_eq!(reused["structuredContent"]["desktop_started"], false);
+        assert_eq!(reused["structuredContent"]["display"], display);
+        computer.shutdown().await.unwrap();
+        assert!(
+            !directory.exists(),
+            "owned private files must be removed after shutdown"
+        );
+        for (path, device, inode) in owned_files {
+            if let Ok(metadata) = std::fs::symlink_metadata(path) {
+                assert_ne!(
+                    (metadata.dev(), metadata.ino()),
+                    (device, inode),
+                    "owned X11 files were retained"
+                );
+            }
+        }
+        for (key, expected) in host_environment {
+            assert_eq!(std::env::var_os(key), expected, "{key}");
+        }
+        assert!(computer.isolated.lock().await.is_none());
     }
 
     #[cfg(target_os = "linux")]

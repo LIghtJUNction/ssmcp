@@ -54,6 +54,8 @@ struct Record {
     kind: Kind,
     expires_at: u64,
     parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    oauth_parent: Option<crate::oauth::Delegation>,
     session_ttl_secs: u64,
 }
 
@@ -131,8 +133,12 @@ impl Credentials {
             || records.iter().any(|(key, r)| {
                 !valid_hash(key)
                     || crate::portal::store::stable_username(&r.subject).is_none()
-                    || (r.kind == Kind::Login && (r.parent.is_some() || r.session_ttl_secs != 0))
-                    || (r.kind != Kind::Login && r.parent.as_deref().is_none_or(|p| !valid_hash(p)))
+                    || (r.kind == Kind::Login
+                        && (r.parent.is_some() || r.oauth_parent.is_some() || r.session_ttl_secs != 0))
+                    || (r.kind != Kind::Login
+                        && !matches!((&r.parent, &r.oauth_parent), (Some(parent), None) if valid_hash(parent))
+                        && !matches!((&r.parent, &r.oauth_parent), (None, Some(parent))
+                            if parent.valid_for(&r.subject) && r.expires_at <= parent.expires_at))
                     || (r.kind == Kind::Invite && !(1..=86400).contains(&r.session_ttl_secs))
                     || (r.kind == Kind::Device && r.session_ttl_secs != 0)
             })
@@ -180,9 +186,15 @@ impl Credentials {
             return None;
         }
         let record = self.records.get(key)?;
-        if record.expires_at <= now() {
+        if record.expires_at <= now()
+            || record.oauth_parent.as_ref().is_some_and(|parent| {
+                !parent.valid_for(&record.subject) || parent.expires_at <= now()
+            })
+        {
             return None;
         }
+        // OAuth liveness is checked outside this ledger's lock by every
+        // enrollment/registration boundary, never while saving credentials.
         if let Some(parent) = &record.parent {
             let parent = self.records.get(parent)?;
             if parent.kind != Kind::Login
@@ -206,9 +218,18 @@ impl Credentials {
         subject: String,
         kind: Kind,
         parent: Option<String>,
+        oauth_parent: Option<crate::oauth::Delegation>,
         ttl: u64,
         session_ttl_secs: u64,
     ) -> Result<(String, u64), Problem> {
+        if (kind == Kind::Login && (parent.is_some() || oauth_parent.is_some()))
+            || (kind != Kind::Login && parent.is_some() == oauth_parent.is_some())
+            || oauth_parent
+                .as_ref()
+                .is_some_and(|value| !value.valid_for(&subject))
+        {
+            return Err(Problem::Unauthorized);
+        }
         let mut next = self.pruned();
         if next.len() >= MAX_RECORDS
             || next
@@ -229,6 +250,12 @@ impl Credentials {
             ),
             None => expires_at,
         };
+        let expires_at = oauth_parent
+            .as_ref()
+            .map_or(expires_at, |parent| expires_at.min(parent.expires_at));
+        if expires_at <= now() {
+            return Err(Problem::Unauthorized);
+        }
         let raw = secret(match kind {
             Kind::Login => "cl_",
             Kind::Invite => "ci_",
@@ -245,6 +272,7 @@ impl Credentials {
                 kind,
                 expires_at,
                 parent,
+                oauth_parent,
                 session_ttl_secs,
             },
         );
@@ -252,7 +280,7 @@ impl Credentials {
         Ok((raw, expires_at.saturating_sub(now())))
     }
     pub(crate) fn login(&mut self, subject: String) -> Result<(String, u64), Problem> {
-        self.issue(subject, Kind::Login, None, LOGIN_TTL, 0)
+        self.issue(subject, Kind::Login, None, None, LOGIN_TTL, 0)
     }
     fn authenticate(&self, raw: &str, controller: bool) -> Result<(String, Record), Problem> {
         if !valid_secret(raw) {
@@ -267,26 +295,53 @@ impl Credentials {
     }
     fn invite(&mut self, raw: &str, ttl: u64, session_ttl: u64) -> Result<(String, u64), Problem> {
         let (parent, record) = self.authenticate(raw, true)?;
-        self.issue(record.subject, Kind::Invite, Some(parent), ttl, session_ttl)
+        self.issue(
+            record.subject,
+            Kind::Invite,
+            Some(parent),
+            None,
+            ttl,
+            session_ttl,
+        )
     }
-    fn enroll(&mut self, raw: &str) -> Result<(String, u64, String), Problem> {
+    fn invite_oauth(
+        &mut self,
+        parent: crate::oauth::Delegation,
+        ttl: u64,
+        session_ttl: u64,
+    ) -> Result<(String, u64), Problem> {
+        if !(1..=3600).contains(&ttl) || !(1..=86400).contains(&session_ttl) {
+            return Err(Problem::Invalid);
+        }
+        self.issue(
+            parent.subject.clone(),
+            Kind::Invite,
+            None,
+            Some(parent),
+            ttl,
+            session_ttl,
+        )
+    }
+    fn invitation(&self, raw: &str) -> Result<Record, Problem> {
         if !valid_secret(raw) {
             return Err(Problem::Unauthorized);
         }
-        let key = hash(raw);
-        let record = self
-            .live(&key)
-            .filter(|r| r.kind == Kind::Invite)
+        self.live(&hash(raw))
+            .filter(|record| record.kind == Kind::Invite)
             .cloned()
-            .ok_or(Problem::Unauthorized)?;
-        let parent = record
-            .parent
-            .as_ref()
-            .and_then(|k| self.live(k))
-            .ok_or(Problem::Unauthorized)?;
+            .ok_or(Problem::Unauthorized)
+    }
+    fn enroll(&mut self, raw: &str) -> Result<(String, u64, String), Problem> {
+        let record = self.invitation(raw)?;
+        let key = hash(raw);
+        let parent_expires = match (&record.parent, &record.oauth_parent) {
+            (Some(parent), None) => self.live(parent).ok_or(Problem::Unauthorized)?.expires_at,
+            (None, Some(parent)) if parent.valid_for(&record.subject) => parent.expires_at,
+            _ => return Err(Problem::Unauthorized),
+        };
         let expires_at = now()
             .saturating_add(record.session_ttl_secs)
-            .min(parent.expires_at);
+            .min(parent_expires);
         let device = secret("cd_")?;
         let mut next = self.pruned();
         next.remove(&key);
@@ -301,6 +356,7 @@ impl Credentials {
                 kind: Kind::Device,
                 expires_at,
                 parent: record.parent,
+                oauth_parent: record.oauth_parent,
                 session_ttl_secs: 0,
             },
         );
@@ -342,11 +398,11 @@ impl Registration {
             return false;
         }
         let key = self.key.clone();
-        broker
+        let record = broker
             .portal
-            .client_storage(move |store| Ok(store.live(&key).is_some()))
-            .await
-            == Ok(true)
+            .client_storage(move |store| Ok(store.live(&key).cloned()))
+            .await;
+        matches!(record, Ok(Some(record)) if record_authorized(broker, &record))
     }
     pub(crate) async fn wait_revoked(&self, broker: &Broker) {
         loop {
@@ -357,6 +413,15 @@ impl Registration {
         }
     }
 }
+// Always call after releasing the credential ledger and account storage locks.
+fn record_authorized(broker: &Broker, record: &Record) -> bool {
+    !broker.user_policies.is_banned(&record.subject)
+        && record
+            .oauth_parent
+            .as_ref()
+            .is_none_or(|parent| broker.oauth.delegation_is_live(parent))
+}
+
 pub(crate) fn identity_json(identity: &Identity) -> Value {
     json!({"provider":identity.provider,"subject":identity.subject,"login":identity.login,"principal":format!("{}@github",identity.login.to_ascii_lowercase())})
 }
@@ -434,12 +499,18 @@ async fn authenticate(
         .client_storage(move |s| s.authenticate(&raw, controller))
         .await
         .map_err(problem)?;
-    let subject = record.subject;
+    if !record_authorized(broker, &record) {
+        return Err(problem(Problem::Unauthorized));
+    }
+    let subject = record.subject.clone();
     let account = broker
         .portal
         .storage(move |s| s.account(&subject))
         .await
         .map_err(problem)?;
+    if !record_authorized(broker, &record) {
+        return Err(problem(Problem::Unauthorized));
+    }
     Ok(Registration {
         identity: Identity {
             provider: "github".into(),
@@ -603,15 +674,141 @@ async fn invite(
     if !(1..=3600).contains(&options.ttl_secs) || !(1..=86400).contains(&options.session_ttl_secs) {
         return Err(fail(StatusCode::BAD_REQUEST, "invalid_lifetime"));
     }
-    let (token, expires) = broker
+    let (release, release_error) = match &broker.client_downloads {
+        Some(publication) => match publication.metadata().await {
+            Ok(release) => (Some(release), None),
+            Err(error) => (None, Some(error)),
+        },
+        None => (
+            None,
+            Some("gateway client downloads are not configured".to_owned()),
+        ),
+    };
+    let (token, expires, session_expires) = broker
         .portal
-        .client_storage(move |s| s.invite(&raw, options.ttl_secs, options.session_ttl_secs))
+        .client_storage(move |s| {
+            let (_, parent) = s.authenticate(&raw, true)?;
+            let cap = options
+                .session_ttl_secs
+                .min(parent.expires_at.saturating_sub(now()));
+            let (token, expires) = s.invite(&raw, options.ttl_secs, options.session_ttl_secs)?;
+            Ok((token, expires, cap))
+        })
         .await
         .map_err(problem)?;
     Ok(Json(
-        json!({"token":token,"expires_in":expires,"session_expires_in":options.session_ttl_secs}),
+        json!({"token":token,"expires_in":expires,"session_expires_in":session_expires,
+            "release":release,"release_error":release_error,"wire_version":wire::VERSION,
+            "supported_targets":crate::client_downloads::TARGETS}),
     ))
 }
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum InviteShell {
+    #[default]
+    Sh,
+    PowerShell,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ControllerInvite {
+    #[serde(default = "invite_ttl")]
+    ttl_secs: u64,
+    #[serde(default = "session_ttl")]
+    session_ttl_secs: u64,
+    #[serde(default)]
+    shell: InviteShell,
+}
+
+impl ControllerInvite {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !(1..=3600).contains(&self.ttl_secs) || !(1..=86400).contains(&self.session_ttl_secs) {
+            return Err(
+                "invite ttl_secs must be 1..=3600 and session_ttl_secs must be 1..=86400".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Mint a one-use enrollment command from the caller's existing OAuth grant.
+/// No controller/GitHub token is returned, copied into a command, or stored in
+/// the device ledger. Every OAuth check happens outside its disk transaction.
+pub(crate) async fn controller_invite(
+    broker: &Broker,
+    user: &str,
+    access_token: &str,
+    options: ControllerInvite,
+) -> Result<Value, String> {
+    options.validate()?;
+    if !broker.portal.enabled(broker) {
+        return Err("account invitations are unavailable; configure the existing GitHub identity and account store".into());
+    }
+    let (parent, identity) = broker.oauth.delegation(user, access_token).ok_or(
+        "invite requires a live GitHub OAuth grant for /mcp or this account's own resource",
+    )?;
+    if broker.user_policies.is_banned(&identity.subject) {
+        return Err("account access has been revoked".into());
+    }
+    let publication = broker.client_downloads.as_ref()
+        .ok_or("gateway client downloads are not configured; an installed compatible client may still use ssmcp invite --no-bootstrap")?;
+    let release = publication.metadata().await?;
+    let verified = identity.clone();
+    let account = broker
+        .portal
+        .storage(move |store| store.login(&verified))
+        .await
+        .map_err(|error| format!("account invitation unavailable: {}", problem(error).code))?;
+    if user != IDENTITY_RESOURCE && user != account.username {
+        return Err("this OAuth resource cannot authorize another account's device".into());
+    }
+    if !broker.oauth.delegation_is_live(&parent)
+        || broker.user_policies.is_banned(&identity.subject)
+    {
+        return Err("the original OAuth authorization expired or was revoked".into());
+    }
+    let stored_parent = parent.clone();
+    let (token, expires_in) = broker
+        .portal
+        .client_storage(move |store| {
+            store.invite_oauth(stored_parent, options.ttl_secs, options.session_ttl_secs)
+        })
+        .await
+        .map_err(|error| format!("could not create invitation: {}", problem(error).code))?;
+    if !broker.oauth.delegation_is_live(&parent)
+        || broker.user_policies.is_banned(&identity.subject)
+    {
+        return Err("the original OAuth authorization expired or was revoked".into());
+    }
+    let command_sh = crate::client::account::command(&broker.public_url, &token, true, false)
+        .map_err(|_| "could not format the enrollment command")?;
+    let command_powershell =
+        crate::client::account::command(&broker.public_url, &token, true, true)
+            .map_err(|_| "could not format the enrollment command")?;
+    let selected = match options.shell {
+        InviteShell::Sh => command_sh.clone(),
+        InviteShell::PowerShell => command_powershell.clone(),
+    };
+    Ok(json!({
+        "server": broker.public_url,
+        "command": selected,
+        "command_sh": command_sh,
+        "command_powershell": command_powershell,
+        "expires_in": expires_in,
+        "session_expires_in": options.session_ttl_secs.min(parent.expires_at.saturating_sub(now())),
+        "authorization_expires_at": parent.expires_at,
+        "owner": identity_json(&identity),
+        "resource": format!("{}/{}", broker.public_url.trim_end_matches('/'), parent.user),
+        "release": release,
+        "supported_targets": crate::client_downloads::TARGETS,
+        "supported_os": ["Linux GNU (glibc 2.35+) x86_64/aarch64", "macOS Intel/Apple Silicon", "Windows x64/ARM64"],
+        "installation": "Verify the gateway's currently published compatible release, install in the user's bin directory, then join in the foreground. The exact release is checked again at install time.",
+        "authorization": "One-use invitation; the device needs no GitHub OAuth login. Access is restricted to this verified controller identity and ends no later than the original OAuth grant. Keep the terminal open; Ctrl-C stops the session."
+    }))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Enroll {
@@ -628,6 +825,15 @@ async fn enroll(
         ));
     }
     let input: Enroll = body(request, &broker).await?;
+    let raw = input.token.clone();
+    let record = broker
+        .portal
+        .client_storage(move |store| store.invitation(&raw))
+        .await
+        .map_err(problem)?;
+    if !record_authorized(&broker, &record) {
+        return Err(problem(Problem::Unauthorized));
+    }
     let (token, expires, subject) = broker
         .portal
         .client_storage(move |s| s.enroll(&input.token))
@@ -638,6 +844,11 @@ async fn enroll(
         .identity_for_subject(subject)
         .await
         .map_err(problem)?;
+    // A concurrent family revocation during the disk transaction must not
+    // return a usable credential. Registration and the live watcher recheck it.
+    if !record_authorized(&broker, &record) {
+        return Err(problem(Problem::Unauthorized));
+    }
     Ok(Json(
         json!({"device_token":token,"principal":format!("{}@github",identity.login.to_ascii_lowercase()),"expires_in":expires}),
     ))
@@ -840,6 +1051,218 @@ mod tests {
         )
         .unwrap();
         assert!(Credentials::open(&directory.0).is_err());
+    }
+
+    fn oauth_fixture() -> (Temporary, Broker, String) {
+        let directory = Temporary::new();
+        let mut broker = Broker::with_identity_config(
+            "https://ssmcp.test".into(),
+            crate::oauth::OAuthConfig::default(),
+            Some(crate::identity::GitHubConfig {
+                client_id: "test-client".into(),
+                client_secret: "test-secret".into(),
+            }),
+        )
+        .unwrap();
+        broker.portal = crate::portal::Portal::open(&directory.0).unwrap();
+        let bytes = b"fixture release";
+        let target = "x86_64-unknown-linux-gnu";
+        std::fs::write(directory.0.join(format!("ssmcp-{target}")), bytes).unwrap();
+        std::fs::write(directory.0.join("release.json"), serde_json::to_vec(&json!({
+            "schema":1,"version":"0.9.0","wire_version":wire::VERSION,
+            "targets":{target:{"size":bytes.len(),"sha256":hash(std::str::from_utf8(bytes).unwrap())}}
+        })).unwrap()).unwrap();
+        broker.client_downloads = Some(crate::client_downloads::Publisher::test_fixture(
+            &directory.0,
+        ));
+        let tokens = broker.oauth.test_identity_tokens("mcp", "123");
+        (
+            directory,
+            broker,
+            tokens["access_token"].as_str().unwrap().into(),
+        )
+    }
+
+    #[test]
+    fn oauth_invitation_ledger_has_no_controller_credential_and_keeps_parent_deadline() {
+        let directory = Temporary::new();
+        let oauth = crate::oauth::OAuth::new("https://ssmcp.test".into());
+        let tokens = oauth.test_identity_tokens("mcp", "123");
+        let access = tokens["access_token"].as_str().unwrap();
+        let (parent, _) = oauth.delegation("mcp", access).unwrap();
+        let deadline = parent.expires_at;
+        let mut store = Credentials::open(&directory.0).unwrap();
+        let (invite, _) = store.invite_oauth(parent, 600, 86400).unwrap();
+        assert_eq!(store.records.len(), 1);
+        assert!(
+            store
+                .records
+                .values()
+                .all(|record| record.kind != Kind::Login)
+        );
+        let (device, ttl, subject) = store.enroll(&invite).unwrap();
+        assert_eq!(subject, "123");
+        assert!(ttl <= 8 * 3600);
+        assert!(store.enroll(&invite).is_err());
+        assert!(store.authenticate(&device, true).is_err());
+        let (_, record) = store.authenticate(&device, false).unwrap();
+        assert_eq!(record.expires_at, deadline);
+        assert!(record.parent.is_none());
+        assert!(oauth.delegation_is_live(record.oauth_parent.as_ref().unwrap()));
+        let disk = std::fs::read_to_string(directory.0.join("client-credentials.json")).unwrap();
+        for raw in [access, invite.as_str(), device.as_str()] {
+            assert!(!disk.contains(raw));
+        }
+        assert!(!disk.contains("cl_"));
+        drop(store);
+        let reopened = Credentials::open(&directory.0).unwrap();
+        assert!(reopened.authenticate(&device, false).is_ok());
+        oauth.revoke_subject("123");
+        assert!(!oauth.delegation_is_live(record.oauth_parent.as_ref().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn oauth_mcp_invite_enrollment_and_live_socket_keep_scope_and_revocation() {
+        let (directory, broker, access) = oauth_fixture();
+        let wrong = broker.oauth.test_identity_tokens("gh-456", "123");
+        assert!(
+            controller_invite(
+                &broker,
+                "gh-456",
+                wrong["access_token"].as_str().unwrap(),
+                serde_json::from_value(json!({})).unwrap()
+            )
+            .await
+            .is_err()
+        );
+        let broker = Arc::new(broker);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = crate::http::router(broker.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        let response = client
+            .post(format!("{base}/mcp"))
+            .bearer_auth(&access)
+            .header("accept", "application/json")
+            .header("mcp-protocol-version", "2025-11-25")
+            .json(
+                &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                    "name":"invite","arguments":{"ttl_secs":600,"session_ttl_secs":86400}
+                }}),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let response: Value = response.json().await.unwrap();
+        assert_ne!(response["result"]["isError"], true, "{response}");
+        let invitation = &response["result"]["structuredContent"];
+        assert_eq!(invitation["owner"]["subject"], "123");
+        assert_eq!(invitation["release"]["version"], "0.9.0");
+        assert!(invitation["session_expires_in"].as_u64().unwrap() <= 8 * 3600);
+        let command = invitation["command_sh"].as_str().unwrap();
+        assert!(!command.contains(&access));
+        assert!(!command.contains("cl_"));
+        let raw = command
+            .split('\'')
+            .find(|part| part.starts_with("ci_") && part.len() == 67)
+            .unwrap();
+        let enrolled: Value = client
+            .post(format!("{base}/api/client/enroll"))
+            .json(&json!({"token":raw}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let device = enrolled["device_token"].as_str().unwrap();
+        assert_eq!(
+            client
+                .post(format!("{base}/api/client/enroll"))
+                .json(&json!({"token":raw}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        assert_eq!(
+            client
+                .get(format!("{base}/api/client/whoami"))
+                .bearer_auth(device)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        let mut invalid = open_socket(&base, device, vec!["bob@github".into()]).await;
+        assert!(matches!(
+            receive(&mut invalid).await,
+            Some(wire::Frame::Reject { .. })
+        ));
+        let mut socket = open_socket(&base, device, vec![]).await;
+        assert!(matches!(
+            receive(&mut socket).await,
+            Some(wire::Frame::Ready { .. })
+        ));
+        let pending = controller_invite(
+            &broker,
+            "mcp",
+            &access,
+            serde_json::from_value(json!({})).unwrap(),
+        )
+        .await
+        .unwrap();
+        let pending_token = pending["command_sh"]
+            .as_str()
+            .unwrap()
+            .split('\'')
+            .find(|part| part.starts_with("ci_") && part.len() == 67)
+            .unwrap();
+        broker.oauth.revoke_subject("123");
+        assert_eq!(
+            client
+                .post(format!("{base}/api/client/enroll"))
+                .json(&json!({"token":pending_token}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        assert!(
+            matches!(receive(&mut socket).await, Some(wire::Frame::Reject { message }) if message.contains("revoked"))
+        );
+        let disk = std::fs::read_to_string(directory.0.join("client-credentials.json")).unwrap();
+        assert!(!disk.contains(&access));
+        assert!(!disk.contains("cl_"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn oauth_invite_reports_unconfigured_publication_without_creating_credentials() {
+        let (_directory, mut broker, access) = oauth_fixture();
+        broker.client_downloads = None;
+        let error = controller_invite(
+            &broker,
+            "mcp",
+            &access,
+            serde_json::from_value(json!({})).unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("not configured"));
+        assert_eq!(
+            broker
+                .portal
+                .client_storage(|store| Ok(store.records.len()))
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     type Socket = tokio_tungstenite::WebSocketStream<

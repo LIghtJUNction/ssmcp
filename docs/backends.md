@@ -1,6 +1,6 @@
 # 统一客户端、Harness 与代码模式
 
-ssmcp 对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
+ssmcp 对外提供 `list`、`code_mode`、`collab` 和 `invite` 四个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
 
 <a id="启动参数"></a>
 
@@ -85,7 +85,7 @@ Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST","cursor":"NEXT_CURSOR_FROM_RESULT"}}
 ```
 
-MCP 协议本身的 `tools/list` 返回 `list`、`code_mode` 和 `collab`，没有后续页。`collab` 的 `action` 选择加入、成员发现、发送、收取或确认等协作操作。上述 `list` 工具返回的 `terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
+MCP 协议本身的 `tools/list` 返回 `list`、`code_mode`、`collab` 和 `invite`，没有后续页。`invite` 依据当前已验证的 OAuth 授权生成一次性安装接入命令，详见[控制者邀请](client-accounts.md#已在-mcp-应用授权的控制者)。`collab` 的 `action` 选择加入、成员发现、发送、收取或确认等协作操作。上述 `list` 工具返回的 `terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
 
 ## 3. 用 code_mode 编排调用
 

@@ -20,7 +20,7 @@ ssmcp invite
 | `ssmcp whoami` / `logout` | 确认身份、撤销这次客户端授权 |
 | `ssmcp list` / `ls` / `sessions list --remote` | 当前账号在所选服务器可控的在线会话 |
 | `ssmcp -i` / `list -i` | 选择会话并进入远端终端，Ctrl-] 离开 |
-| `ssmcp invite` | 生成 B 可直接执行的临时接入命令；默认从服务器下载客户端 |
+| `ssmcp invite` | 生成 B 可直接执行的临时接入命令；默认验证并持久安装同源兼容客户端 |
 | `ssmcp invite --shell powershell` | 生成给 Windows PowerShell 的命令 |
 | `ssmcp sessions list` / `attach NAME` | 当前设备保存的本地后台会话 |
 

@@ -270,14 +270,14 @@ impl Computer {
             ),
             tool(
                 "app_launch",
-                "Launch an argv application in the active private desktop with a separate display, runtime directory and D-Bus session. Use browser tools for existing browser sessions.",
-                json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":128}}),
+                "Launch an argv application in a private desktop, starting the desktop automatically when needed. Uses a separate display, runtime directory and D-Bus session; never moves host focus. Use browser tools for existing browser sessions.",
+                json!({"command":{"type":"array","items":{"type":"string","maxLength":4096},"minItems":1,"maxItems":128,"description":"Literal argv: existing executable first, at most 4096 UTF-8 bytes per item and 32 KiB total. Validated before automatic desktop startup."}}),
                 &["command"],
                 false,
             ),
             tool(
                 "status",
-                "Inspect native desktop capabilities and missing system helpers; no screenshot or input is produced.",
+                "Inspect the selected private desktop, or report private-desktop readiness and missing helpers when none is running. Does not start a display. Host inspection requires desktop: host.",
                 json!({}),
                 &[],
                 true,
@@ -363,8 +363,8 @@ impl Computer {
                     | "ssmcp.computer.app_launch"
             ) {
                 descriptor["inputSchema"]["properties"]["desktop"] = json!({
-                    "type":"string", "enum":["isolated","host"],
-                    "description":"Defaults to the active private desktop. Host input requires an explicit host selection; it can move the user's mouse and focus."
+                    "type":"string", "enum":["isolated","host"], "default":"isolated",
+                    "description":"All observation and input defaults to isolated. Without a private desktop, status reports readiness and other operations require app_launch or desktop_start; read-only calls never start one. Host access requires explicit host selection and may move the user's mouse or focus."
                 });
             }
         }
