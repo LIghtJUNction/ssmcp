@@ -1,5 +1,5 @@
 //! Explicit local file and skill references carried by the existing text queue.
-//! Reads use the same rooted capabilities as agents; no implicit home-directory access.
+//! Discovery and reads share the same exact granted file and skill sources as agents.
 pub(crate) mod files;
 pub(crate) mod paste;
 
@@ -104,7 +104,7 @@ pub(crate) async fn expand(
         "schema_version":1,
         "source_sha256":digest(text.as_bytes()),
         "references":expanded,
-        "usage":"These are explicit references to local files, not uploaded copies. Read them with the delivering client's ID. Previews may be partial; read a selected skill in full before applying it."
+        "usage":"These explicitly reference workspace files or installed and embedded skills. Read the selected source with the delivering client's ID. File previews may be partial; read a selected skill in full before applying it."
     });
     let result = format!("{text}{BEGIN}{payload}{END}");
     if result.len() > MAX_USER_MESSAGE_BYTES {
@@ -445,6 +445,8 @@ async fn skill_reference(context: &Context, name: &str, entry: &Value) -> Result
     }
     Ok(json!({
         "kind":"skill","name":name,"root":root,"path":path,
+        "scope":document["scope"],"source":document["source"],"origin":document["root"],
+        "search_path":entry["source"],"shadowed_count":entry["shadowed"].as_array().map_or(0,Vec::len),
         "description":&description[..end],"description_truncated":end < description.len(),
         "size":document["bytes"],"sha256":document["sha256"],
         "read":{"tool":"ssmcp.skills.read","arguments":arguments},

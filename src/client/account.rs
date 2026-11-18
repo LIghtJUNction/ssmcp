@@ -1290,8 +1290,20 @@ fn select_client<'a>(entries: &'a [Value], selected: &str) -> Result<&'a str> {
         .as_str()
         .ok_or_else(|| "session has no ID".into())
 }
+fn interactive_selection_help() -> &'static str {
+    "Choose an online session to open its existing remote terminal.\nEnter a listed number, exact ID or name; Ctrl+C cancels selection.\nOnce connected, Ctrl+] returns to your local terminal; the remote session and its jobs keep running."
+}
+
+fn interactive_connection_hint(id: &str, terminal: &str) -> String {
+    format!(
+        "Connected to {} / {} · Ctrl+] returns to your local terminal; remote session keeps running · Ctrl+C reaches the remote shell",
+        safe(id),
+        safe(terminal)
+    )
+}
+
 async fn prompt_selection() -> Result<String> {
-    eprint!("Session number, ID or name: ");
+    eprint!("Choose a session number, exact ID or name: ");
     io::stderr().flush()?;
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
@@ -1335,6 +1347,7 @@ async fn list(args: &Arguments) -> Result<()> {
             "interactive mode requires a terminal; use ssmcp list --json for scripts".into(),
         );
     }
+    eprintln!("{}", interactive_selection_help());
     if entries.is_empty() {
         print!("{}", list_table(entries));
         return Ok(());
@@ -1374,11 +1387,7 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
     .await?;
     let mut keyboard = input::Keyboard::open(false)?;
     let mut utf8 = input::Utf8Input::default();
-    eprintln!(
-        "Connected to {} / {} · Ctrl-] detaches · Ctrl-C reaches the remote shell",
-        safe(id),
-        safe(terminal)
-    );
+    eprintln!("{}", interactive_connection_hint(id, terminal));
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);
     let (reader_api, reader_credential, reader_id, reader_terminal) = (
         api.clone(),
@@ -1522,6 +1531,18 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interactive_help_explains_selection_and_the_local_detach_key() {
+        let help = interactive_selection_help();
+        assert!(help.contains("online session"));
+        assert!(help.contains("existing remote terminal"));
+        assert!(help.contains("Ctrl+C cancels selection"));
+        assert!(help.contains("Ctrl+] returns to your local terminal"));
+        let connected = interactive_connection_hint("session\u{1b}[31m", "main\n");
+        assert!(!connected.chars().any(char::is_control));
+        assert!(connected.contains("Ctrl+]"));
+        assert!(connected.contains("remote session keeps running"));
+    }
     fn temporary() -> PathBuf {
         let mut random = [0; 16];
         platform::random_bytes(&mut random).unwrap();

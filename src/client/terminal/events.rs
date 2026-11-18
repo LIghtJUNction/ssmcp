@@ -121,6 +121,7 @@ pub(super) struct EventPosition {
     scroll: usize,
     follow: bool,
     reveal: bool,
+    new_image: Option<u64>,
     chat_expanded: Vec<u64>,
 }
 
@@ -131,6 +132,7 @@ impl Default for EventPosition {
             scroll: 0,
             follow: true,
             reveal: false,
+            new_image: None,
             chat_expanded: Vec::new(),
         }
     }
@@ -246,6 +248,7 @@ impl EventView {
             scroll: self.scroll,
             follow: self.follow,
             reveal: self.reveal,
+            new_image: self.new_image,
             chat_expanded: self
                 .events
                 .iter()
@@ -263,7 +266,19 @@ impl EventView {
         for event in &mut self.events {
             event.chat_expanded = position.chat_expanded.contains(&event.id);
         }
-        self.new_image = None;
+        // The deferred first-image anchor belongs to this column's reading
+        // position. Switching columns is not an explicit request for latest.
+        self.new_image = position.new_image.filter(|id| {
+            self.follow
+                && self.events.iter().any(|event| {
+                    event.id == *id
+                        && event.matches(&self.query, self.level, self.scope)
+                        && event
+                            .image
+                            .as_ref()
+                            .is_some_and(|image| image.native.is_some())
+                })
+        });
         self.hit_rows.clear();
         self.placements.clear();
         if !self.events.iter().any(|event| {
@@ -581,6 +596,27 @@ impl EventView {
             .filter_map(|event| event.image.as_ref()?.native.as_ref())
             .map(|native| native.bytes())
             .sum()
+    }
+
+    /// A terminal can reject one image while still supporting other images.
+    /// Keep that event's cell preview and release only its native payload.
+    pub(crate) fn reject_image(&mut self, id: u32) {
+        for event in &mut self.events {
+            if let Some(image) = event.image.as_mut()
+                && image
+                    .native
+                    .as_ref()
+                    .is_some_and(|native| native.id() == id)
+            {
+                image.native = None;
+                if self.new_image == Some(event.id) {
+                    self.new_image = None;
+                }
+                if self.selected == Some(event.id) && !self.follow {
+                    self.reveal = true;
+                }
+            }
+        }
     }
 
     pub(crate) fn image_cells(&mut self, cells: Option<images::CellSize>) {
@@ -924,6 +960,17 @@ impl EventView {
                         image_spans.push((rows.len(), (indent + inset) as u16, native, area));
                         rows.extend((0..area.rows).map(|_| (event.id, String::new())));
                     } else {
+                        if new_images
+                            && self.follow
+                            && ui.color
+                            && self.image_cells.is_none()
+                            && image.native.is_some()
+                        {
+                            // Resize briefly removes cell measurements. Keep
+                            // the first unseen native image pending until its
+                            // real height is known, without pausing text output.
+                            self.new_image.get_or_insert(event.id);
+                        }
                         for row in
                             image.render(usize::from(image_width), usize::from(image_height), ui)
                         {
@@ -1949,6 +1996,162 @@ mod tests {
         assert!(view.is_following());
         assert!(unstyled(&latest).contains("Later progress"));
         assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn pending_image_position_survives_column_restore_resize_and_progress() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        for scope in [EventScope::All, EventScope::Conversation] {
+            for explicit_latest in [false, true] {
+                let mut view = EventView::new();
+                view.set_scope(scope);
+                view.image_cells(Some(images::CellSize {
+                    width: 10,
+                    height: 20,
+                }));
+                view.image_cells(None);
+                view.ingest_event(
+                    "image",
+                    &serde_json::json!({"type":"exec.started","job_id":"column-image"}),
+                    b"[IMAGE] column-resize.png\n",
+                );
+                view.open();
+                view.latest();
+                view.attach_image(image_preview(400, 2400, true));
+                let fallback = view.render(66, 20, &ui, true).join("\n");
+                assert!(unstyled(&fallback).contains("Low-resolution thumbnail"));
+                let pending = view.position();
+                assert!(pending.new_image.is_some());
+                view.latest();
+                let latest = view.position();
+                view.restore_position(&EventPosition::default());
+                view.restore_position(&pending);
+                assert_eq!(view.new_image, pending.new_image);
+                if explicit_latest {
+                    view.restore_position(&latest);
+                    assert!(view.new_image.is_none());
+                }
+
+                view.ingest_event(
+                    "assistant",
+                    &serde_json::json!({"type":"ssmcp.message","text":"Later progress"}),
+                    b"[AGENT] Later progress\n",
+                );
+                let waiting = view.render(66, 20, &ui, true).join("\n");
+                assert!(unstyled(&waiting).contains("Later progress"));
+                assert!(view.is_following());
+                assert_eq!(view.new_image.is_some(), !explicit_latest);
+                let after_progress = view.position();
+                view.restore_position(&EventPosition::default());
+                view.restore_position(&after_progress);
+
+                view.image_cells(Some(images::CellSize {
+                    width: 10,
+                    height: 20,
+                }));
+                let measured = view.render(66, 20, &ui, true).join("\n");
+                assert!(view.new_image.is_none());
+                if explicit_latest {
+                    assert!(view.is_following());
+                    assert_eq!(view.rows_below(), 0);
+                    assert!(unstyled(&measured).contains("Later progress"));
+                } else {
+                    assert!(!view.is_following());
+                    assert_eq!(view.scroll, 0);
+                    assert!(view.rows_below() > 0);
+                    assert!(unstyled(&measured).contains("column-resize.png"));
+                    assert!(unstyled(&measured).contains("scroll to inspect"));
+                    assert!(!view.image_placements(0).is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn position_restore_does_not_revive_paused_rejected_or_removed_image_anchors() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] retained.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        let pending = view.position();
+        let native_id = view
+            .events
+            .back()
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .native
+            .as_ref()
+            .unwrap()
+            .id();
+        view.select(0);
+        let paused = view.position();
+        assert!(!paused.follow);
+        view.restore_position(&pending);
+        assert!(view.new_image.is_some());
+        view.restore_position(&paused);
+        assert!(!view.is_following());
+        assert!(view.new_image.is_none());
+
+        view.reject_image(native_id);
+        view.restore_position(&pending);
+        assert!(
+            view.new_image.is_none(),
+            "a rejected native payload cannot be anchored"
+        );
+        view.clear();
+        view.restore_position(&pending);
+        assert!(
+            view.new_image.is_none(),
+            "a removed event cannot be anchored"
+        );
+        assert!(view.selected.is_none());
+    }
+
+    #[test]
+    fn native_image_arriving_during_resize_waits_for_cell_measurement() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        for explicit_latest in [false, true] {
+            let mut view = EventView::new();
+            view.ingest(b"[IMAGE] during-resize.png\n");
+            view.attach_image(image_preview(400, 2400, true));
+            let fallback = view.render(66, 20, &ui, true).join("\n");
+            assert!(unstyled(&fallback).contains("Low-resolution thumbnail"));
+            assert!(view.new_image.is_some());
+            assert!(view.is_following());
+            assert!(view.image_placements(0).is_empty());
+
+            view.ingest(b"[AGENT] Later progress\n");
+            let pending = view.render(66, 20, &ui, true).join("\n");
+            assert!(unstyled(&pending).contains("Later progress"));
+            assert!(view.new_image.is_some());
+            if explicit_latest {
+                view.latest();
+            }
+            view.image_cells(Some(images::CellSize {
+                width: 10,
+                height: 20,
+            }));
+            let native = view.render(66, 20, &ui, true).join("\n");
+            assert!(view.new_image.is_none());
+            if explicit_latest {
+                assert!(view.is_following());
+                assert_eq!(view.rows_below(), 0);
+                assert!(unstyled(&native).contains("Later progress"));
+            } else {
+                assert!(unstyled(&native).contains("during-resize.png"));
+                assert!(unstyled(&native).contains("scroll to inspect"));
+                assert!(!view.is_following());
+                assert_eq!(view.scroll, 0);
+                assert!(view.rows_below() > 0);
+            }
+        }
     }
 
     #[test]

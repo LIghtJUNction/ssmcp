@@ -1,6 +1,6 @@
 //! Bounded asynchronous completion of explicit workspace and skill references.
 use crate::{context::Context, runtime::Runtime, workspace::Workspace};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, VecDeque},
     sync::{Arc, Mutex, OnceLock, Weak},
@@ -393,6 +393,33 @@ async fn worker(generation: u64) {
     }
 }
 
+/// A compact display label; full source paths remain in the reference manifest.
+fn skill_origin(item: &Value) -> String {
+    let scope = item["scope"].as_str().unwrap_or("skill");
+    let path = item["path"].as_str().unwrap_or("SKILL.md");
+    let source = if scope == "builtin" {
+        format!("embedded {path}")
+    } else if scope == "project" {
+        path.to_owned()
+    } else {
+        let root = std::path::Path::new(item["root"]["path"].as_str().unwrap_or(""));
+        let tail = root
+            .components()
+            .rev()
+            .take(2)
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let directory = tail.into_iter().rev().collect::<Vec<_>>().join("/");
+        format!("{directory}/{path}")
+    };
+    let source = source
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .take(96)
+        .collect::<String>();
+    format!("{scope} · {source}")
+}
+
 /// Enumerate metadata only through the same rooted capabilities as submission.
 pub(crate) async fn enumerate(
     workspace: &Workspace,
@@ -466,7 +493,7 @@ pub(crate) async fn enumerate(
                     if item["metadata_status"] != "ok" {
                         continue;
                     }
-                    let scope = item["scope"].as_str().unwrap_or("skill");
+                    let origin = skill_origin(item);
                     let description = item["description"]
                         .as_str()
                         .unwrap_or("")
@@ -476,7 +503,7 @@ pub(crate) async fn enumerate(
                         .collect::<String>();
                     Entry {
                         name: name.into(),
-                        description: format!("{scope} · {description}"),
+                        description: format!("{origin} · {description}"),
                         directory: false,
                     }
                 }
