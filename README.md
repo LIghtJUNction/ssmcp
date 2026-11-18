@@ -38,6 +38,15 @@ irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 
 
 也可以使用 `cargo install ssmcp --locked --bin ssmcp`。安装脚本获取已发布版本；本文的新会话能力对应仓库中的 **0.9.0 源码**。[平台与安装选项](docs/releases.md)
 
+手动安装的客户端可以直接检查和更新：
+
+~~~sh
+ssmcp update --check   # 只检查最新稳定版
+ssmcp update           # 校验下载后替换当前安装
+~~~
+
+更新使用官方发布的 `SHA256SUMS`，并检查候选程序的版本；下载或校验失败会保留原程序，源码版本较新时不会降级。Cargo、系统包管理器等管理的安装继续使用原来的更新命令。已有会话保持当前程序，重启后使用新版本。[自更新说明](docs/commands.md#更新客户端)
+
 ### 2. 在项目目录连接
 
 ```sh

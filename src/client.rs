@@ -34,6 +34,7 @@ pub(crate) mod terminal;
 mod trust;
 pub(crate) mod ui;
 mod ui_command;
+mod update;
 #[cfg(target_os = "linux")]
 mod zero;
 
@@ -75,6 +76,7 @@ Start
 
 Manage
   config · whoami · logout      Account and server settings
+  update [--check]              Update the installed client
   invite · join                Share a temporary session
   sessions · attach · service  Saved and background sessions
   setup · ui · 007             Setup, appearance and recovery
@@ -96,6 +98,7 @@ Usage: ssmcp username@server [options]
        ssmcp -i [--server URL] [--client ID]
        ssmcp config <set|get|unset> server [URL]
        ssmcp config path
+       ssmcp update [--check]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp invite [--server URL] [--ttl 600] [--session-ttl 3600] [--shell sh|powershell]
                     [--no-bootstrap] [--json]
@@ -1240,6 +1243,9 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "update") {
+        return update::run(args.into_iter().skip(1).collect()).await;
+    }
     if args.first().is_some_and(|arg| arg == "ui") {
         return ui_command::run(args.into_iter().skip(1).collect()).await;
     }
