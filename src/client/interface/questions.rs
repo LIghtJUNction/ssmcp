@@ -531,15 +531,7 @@ pub(super) fn tools() -> Vec<Value> {
             },
             "annotations":{"readOnlyHint":true,"destructiveHint":false}
         }),
-        json!({
-            "name":"ssmcp.ui.message",
-            "description":"After connecting, use this local message channel for progress reports and final results. Display a Markdown message to the local user in this client's retained conversation scrollback. Messages use a fixed Agent label and do not impersonate the user or claim a verified identity. Returns once queued for display, without waiting for a reply. Use ssmcp.ui.ask when you need an answer, then read ssmcp.ui.questions later without blocking. This communication convention does not intercept output in an external harness.",
-            "inputSchema":{
-                "type":"object","additionalProperties":false,"required":["text"],
-                "properties":{"text":{"type":"string","minLength":1,"maxLength":MAX_ANSWER_BYTES,"description":"Markdown text, at most 16384 UTF-8 bytes. Newline and tab are the only permitted control characters."}}
-            },
-            "annotations":{"readOnlyHint":false,"destructiveHint":false}
-        }),
+        super::messages::tool(),
     ]
 }
 

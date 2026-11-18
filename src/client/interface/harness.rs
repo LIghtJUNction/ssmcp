@@ -57,6 +57,18 @@ fn runtime() -> Result<Arc<Runtime>, String> {
     })
 }
 
+pub(crate) fn local_runtime() -> Result<(Arc<Runtime>, tokio::runtime::Handle), String> {
+    let binding = binding()?;
+    let runtime = binding
+        .runtime
+        .upgrade()
+        .ok_or("The client connection has ended; reconnect before importing input")?;
+    let handle = binding
+        .handle
+        .ok_or("Local input requires the interactive client runtime")?;
+    Ok((runtime, handle))
+}
+
 fn provider(value: &str) -> Result<Provider, String> {
     match value {
         "cc" | "claude" => Ok(Provider::Claude),

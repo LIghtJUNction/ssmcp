@@ -98,19 +98,21 @@ return await exec.run(clientId, {
 | --- | --- |
 | 发给指定 Agent | 光标在草稿开头时按 **←**，选择成员，Enter / → 返回 |
 | 引用文件、图片 | 输入 `@` 枚举工作区；支持中文、带空格路径和目录续补 |
+| 粘贴图片 | **Ctrl + V** 或 `/paste`；`/attach PATH` 导入本地图片 |
 | 引用技能 | 输入 `$` 枚举有效技能；项目技能覆盖同名全局技能 |
 | 接受候选 | ↑ / ↓ 选择，Tab / Enter 补全；补全后再 Enter 发送 |
 | 运行本地命令 | `!pwd`、`!cargo test`；输出与退出码回到会话 |
 | 查看任务 | `/tasks`；`/tasks cancel JOB_ID` 停止指定命令任务 |
 | 回答问题 | **Shift + ↑** 打开待答问题，保留普通草稿 |
 | 继续旧会话 | `/resume` 选择本工作区的 JSONL 历史 |
+| 交接给另一个 Agent | `/handoff [备注]` 生成上下文文件与可编辑引用草稿，选好收件人后发送 |
 | 查看原生工具 | `/pi`、`/cc`、`/codex` 列出真实目录；`TOOL {...}` 显式调用 |
 | 浏览长输出 | 选择事件后 Enter 折叠或展开；PgUp / PgDn、滚轮滚动 |
-| 复制与帮助 | **F7** 冻结显示并使用终端原生选择；`/help` 打开完整帮助 |
+| 复制与帮助 | `/copy` 复制最近回复；**F7** 原生选择；`/help` 打开完整帮助 |
 
 回复支持 Markdown 和常见代码块语法高亮。读取图片后，客户端会生成终端缩略图。超过 8 KiB 的整段粘贴会保存为私有工作区文件并插入引用，便于继续补充文字。
 
-Agent 使用 `ssmcp.ui.message` 把回复显示在这个会话里；使用 `ssmcp.ui.ask` 非阻塞提问，再通过 `ssmcp.ui.questions` 读取答案。这些工具提供本地沟通通道，外部聊天应用仍决定自己的消息显示方式。
+Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重试可带幂等键，回执提供消息 ID 与历史保存状态。使用 `ssmcp.ui.ask` 非阻塞提问，再通过 `ssmcp.ui.questions` 读取答案。这些工具提供本地沟通通道，外部聊天应用仍决定自己的消息显示方式。
 
 未选择接收人时，用户要求由下一次符合条件的单个调用领取；选择成员后，仅绑定该成员身份的调用能领取。**已交付**表示要求进入了工具响应，执行进度仍需由接收者反馈。[输入与交付语义](docs/client-input.md) · [成员协作](docs/agent-collaboration.md)
 
@@ -129,11 +131,11 @@ ssmcp ui check
 ssmcp 发现并转发已安装工具的原生能力，保留它们的 schema、会话状态和审批方式。目录查询和原语调用不会自动启动模型回合；显式调用某个 harness 的模型接口仍以该接口的原生行为为准。
 
 - **开发工具**：Codex、Claude Code、Pi、OpenCode；能力以当前成功注册的目录为准。
-- **浏览器**：优先使用已安装 Playwright MCP 的扩展连接复用现有 Chrome；也提供独立 Chromium CDP 控制、批量动作和条件等待。
+- **浏览器**：在 ChatGPT 中优先使用已连接的 Browser 插件；客户端也可转发已注册的 Playwright MCP 扩展工具，并提供独立 Chromium CDP、批量动作和条件等待。
 - **桌面**：按客户端实际平台提供窗口、截图和输入原语，支持独立桌面。
 - **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 
-浏览器扩展的安装记录、MCP 握手和浏览器配对是三个状态。先使用 `ssmcp.browser.discover`、`ssmcp.harnesses.list` 和实际工具目录确认连接，再调用枚举到的原语。ChatGPT 或其他浏览器扩展也遵循这个条件。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/client-input.md)
+ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行连接的扩展端口。客户端浏览器扩展的安装记录、MCP 握手和浏览器配对分别确认；使用 `ssmcp.browser.discover`、`ssmcp.harnesses.list` 和实际工具目录选择可用路线，再调用原生接口。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/client-input.md)
 
 ## 客户端掌握能力，服务端负责连接
 
@@ -157,7 +159,7 @@ hook 默认关闭，不内置额外审核流程，也不改变工具原生权限
 
 本地历史采用版本化 JSONL，`/resume` 恢复文本上下文，不重放工具，也不恢复外部模型线程。问答队列当前保存在进程内；reload 后可从历史查看已记录正文。完整边界见[会话历史](docs/conversation-history.md)。
 
-图片原生读取限制为 400 KiB，支持 PNG / JPEG / GIF / WebP。GIF / WebP 经 `code_mode` 返回时还需要支持这些格式的 relay；旧 relay 的图像通道仍只有 PNG / JPEG。长工具输出保留有界预览与归档，展开界面事件只读取当前保留的显示正文。
+图片导入会在客户端生成有界预览文件，仍以私有文件引用发送；不改变 wire v7。原生图片读取限制为 400 KiB，支持 PNG / JPEG / GIF / WebP。GIF / WebP 经 `code_mode` 返回时还需要支持这些格式的 relay；旧 relay 的图像通道仍只有 PNG / JPEG。长工具输出保留有界预览与归档，展开界面事件只读取当前保留的显示正文。
 
 ## 开发
 

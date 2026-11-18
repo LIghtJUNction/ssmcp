@@ -47,6 +47,26 @@
 
 ## 3. 图片由原生接口读取，本地显示缩略图
 
+### 从剪贴板或文件准备输入
+
+| 入口 | 本地行为 |
+| --- | --- |
+| Ctrl+V 或 `/paste` | 读取操作系统剪贴板；小文本插入当前草稿或答案，超过 8 KiB 的文本和图片保存为私有文件后插入 `@` 引用 |
+| `/attach "images/设计 图.png"` | 导入一个工作区文件；普通文件保留原路径引用，图片经过有界检查与必要处理后保存为私有副本 |
+| `/copy` | 将最近一条已显示的 Agent 消息原文复制到系统剪贴板；可复制缓存最多 16 KiB，原文包含 Markdown 标记 |
+
+这些动作只准备可编辑输入，**不会自动提交要求、改变收件人或调用模型**。操作异步完成；期间若草稿、答案或收件人已改变，结果不会覆盖新内容。已经保存的文件会显示可恢复的引用。剪贴板工具缺失、超时或读取失败会提示；命令失败时，仅在编辑器未改变的情况下恢复原命令，便于重试。终端若自行处理 Ctrl+V，可用 `/paste` 明确读取剪贴板；终端原有的普通文本粘贴仍可使用。
+
+Linux 使用已安装的 Wayland/X11 剪贴板工具，macOS 和 Windows 使用各自的系统接口；不会自动安装工具。**私有图片、长文本和 handoff 文件的自动保存目前只支持 Unix**，Windows 可先保存工作区文件再用 `@path`；普通文件的 `/attach` 不需要另存副本。普通剪贴板文字即使看起来像路径，也保留为文字，不暗中读取该路径。
+
+最近回复超过 16 KiB 时，复制缓存会清空，`/copy` 明确显示无可用回复，不会悄悄复制较旧内容；长回复仍可通过历史或输出归档读取。
+
+图片源文件最多 **16 MiB、33,554,432 像素、单边 16384 像素**。小图保留原字节；需要处理时，将最长边限制到 4096 像素，再按实际编码大小缩小到 **400 KiB 原始文件字节**以内。PNG 透明度保留；处理结果会注明重编码或原始/结果尺寸。GIF/WebP 需要转码时只保存静态首帧，并显示提示。用户源文件不被覆盖。直接键入 `@image` 不触发这一步图像处理，仍适用下面的原生读取限制。
+
+[输入任务与图像边界](../src/client/attachments.rs) · [剪贴板接口](../src/client/clipboard.rs)
+
+### 原生读取与本地缩略图
+
 `@image.png` 等引用提供 `ssmcp.fs.read_image` 读取动作。该接口支持 PNG、JPEG、GIF、WebP，每张压缩文件最多 **400 KiB（409600 字节）**，参数是工作区相对路径，不支持分片或静默缩放：
 
 ```javascript
@@ -84,17 +104,27 @@ return result.structuredContent;
 
 ## 5. Agent 的本地消息与非阻塞提问
 
-连接后的本地沟通采用三个明确接口：**进度与结果发 `ssmcp.ui.message`，问题发 `ssmcp.ui.ask`，随后用 `ssmcp.ui.questions` 读取答案。** 这是本地通信约定；ssmcp 不拦截、禁止或自动搬运外部 ChatGPT、Claude、Codex 等聊天界面的输出。
+连接后的本地沟通采用三个明确接口：**进度与结果发 `ssmcp.ui.message`，问题发 `ssmcp.ui.ask`，随后用 `ssmcp.ui.questions` 读取答案。** 这是本地通信约定；ssmcp 不拦截或自动搬运外部 ChatGPT、Claude、Codex 等聊天界面的输出。
 
-给本机用户发送 Markdown 消息：
+给本机用户发送 Markdown 进度：
 
 ```javascript
 return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.message", {
-  text: "## 进度\n\n正在检查输入恢复和文件引用。下一步核对错误路径。"
+  text: "## 进度\n\n正在检查输入恢复和文件引用。下一步核对错误路径。",
+  kind: "progress",
+  idempotency_key: "input-review-progress-001"
 });
 ```
 
-消息使用固定 Agent 标签，支持当前客户端的 Markdown 排版，不进入用户要求队列。完成时也用此接口给出结果、已做的验证和仍有限制的部分；不要把成功提示当成实际测试证据。
+`kind` 可选，接受 `progress`（默认）或 `answer`；完成时用 `answer` 给出结果、验证和仍存在的限制。两种消息都使用固定 `[AGENT]` 标签和当前客户端的 Markdown 排版，写入同一份 JSONL 历史。API 的 `kind` 用于显示分类，历史记录仍使用 `role: "assistant"`、`kind: "agent_message"`。消息不会作为用户要求入队。
+
+返回值中的 `message_id` 标识该条消息。`history_saved: true` 表示它已保存为同 ID 的 JSONL 记录；保存失败时仍显示消息，并返回 `history_saved: false`。`shown` 和 `accepted` 表示本地接受显示请求，不证明用户已阅读。
+
+需要重试时，使用原来的 `idempotency_key`、`text` 和 `kind`。匹配的重试返回原 ID 和 `duplicate: true`，不重复显示或追加历史；同一 key 搭配不同正文或 kind 会报错。key 限 1–96 个 ASCII 字母、数字、下划线或连字符。缓存最多保留 64 个新增 key，连接重连时保留，客户端进程重启后清空；这不是跨进程的永久去重保证。正文上限为 16 KiB UTF-8，只允许换行、制表符这两种控制字符。
+
+`/copy` 复制最近显示的 Agent 文本。`/resume` 恢复后，复制缓存来自所选 JSONL 会话中最后一条已保存的 assistant 文本；恢复过程不会重新显示为新消息或重复写入历史。大于 16 KiB 的恢复文本不进入复制缓存。
+
+本仓库的 relay 源码还提供 `say(clientId, text)` 和 `say(clientId, {text, kind, idempotency_key})` 简写，以及 `ui.message(clientId, arguments)`。这些 helper 随 relay 代码提供；单独更新客户端不会给已运行的旧 relay 添加 JS 全局。普通 `call(clientId, "ssmcp.ui.message", arguments)` 直接使用已注册的原生工具。当前 relay 源码把 `ui.message` 视为可领取 “next caller” 要求的交互；精确发给某个 Agent 的要求仍需 `collab.bind` 认证，显示名称不能代替绑定。
 
 提问会立即返回问题 ID，agent 可继续不依赖答案的工作：
 
@@ -115,11 +145,11 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.questions", {
 });
 ```
 
-用户按 **Shift+↑** 打开问题，输入选项编号或自由回答，Enter 保存。答案使用独立编辑器，原来的要求草稿、目标和光标保留。Esc 返回问题列表；列表中 Delete 跳过问题，再按 Esc 回到会话。读取返回 `pending`、`answered` 或 `skipped`；重复读取不消耗答案。`idempotency_key` 只用于重试内容完全相同的问题。
+用户按 **Shift+↑** 打开问题，输入选项编号或自由回答，Enter 保存。答案使用独立编辑器，原来的要求草稿、目标和光标保留。Esc 返回问题列表；列表中 Delete 跳过问题，再按 Esc 回到会话。读取返回 `pending`、`answered` 或 `skipped`；重复读取不消耗答案。问题的 `idempotency_key` 只用于重试内容完全相同的问题。
 
-问题队列属于当前客户端进程：连接重连时保留，进程重启（包括 `/reload`）时结束。最多 32 个待答问题、64 条保留记录，共用 256 KiB。回答目前由该客户端的前台 TUI 写入；后台 API 能创建和读取问题，不会使只读 `attach` 获得答题能力。已保存的问题和答案可以出现在会话历史中，但历史不会恢复待答队列。
+问题队列属于当前客户端进程：连接重连时保留，进程重启（包括 `/reload`）时结束。最多 32 个待答问题、64 条保留记录，共用 256 KiB。回答由该客户端的前台 TUI 写入；后台 API 能创建和读取问题，不会使只读 `attach` 获得答题能力。已保存的问题和答案可以出现在会话历史中，但历史不会恢复待答队列。未绑定 Agent 的只读 `ui.questions`、`ui.history` 调用不会领取用户要求。
 
-[本地问答接口](../src/client/interface/questions.rs)
+实现与限制：[消息与去重](../src/client/interface/messages.rs)、[本地问答接口](../src/client/interface/questions.rs)、[历史格式与交接](conversation-history.md)。
 
 ## 6. /pi、/cc、/codex 使用当前真实工具目录
 

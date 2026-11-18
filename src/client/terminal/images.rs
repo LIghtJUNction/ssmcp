@@ -51,7 +51,7 @@ pub(crate) fn decode(block: &Value) -> Result<Preview, String> {
     let decoded =
         DynamicImage::from_decoder(decoder).map_err(|error| format!("image preview: {error}"))?;
     let pixels = decoded
-        .thumbnail(THUMBNAIL_PIXELS, THUMBNAIL_PIXELS)
+        .thumbnail(THUMBNAIL_PIXELS.min(width), THUMBNAIL_PIXELS.min(height))
         .into_rgba8();
     Ok(Preview {
         width,
@@ -68,8 +68,9 @@ impl Preview {
         if columns == 0 || max_rows == 0 {
             return Vec::new();
         }
-        let width = columns.min(THUMBNAIL_PIXELS as usize) as u32;
-        let height = max_rows.min(THUMBNAIL_PIXELS as usize / 2) as u32 * 2;
+        let width = (columns.min(THUMBNAIL_PIXELS as usize) as u32).min(self.pixels.width());
+        let height =
+            (max_rows.min(THUMBNAIL_PIXELS as usize / 2) as u32 * 2).min(self.pixels.height());
         let pixels = image::imageops::thumbnail(&self.pixels, width, height);
         let background = background(ui);
         let mut rows = Vec::with_capacity(pixels.height().div_ceil(2) as usize);
@@ -202,6 +203,35 @@ mod tests {
         assert!(rows[0].ends_with("\x1b[0m"));
         assert_eq!(composite([255, 0, 0, 0], [10, 20, 30]), [10, 20, 30]);
         assert_eq!(composite([255, 0, 0, 128], [0, 0, 255]), [128, 0, 127]);
+    }
+
+    #[test]
+    fn decoding_and_rendering_tiny_images_never_upscale_pixels() {
+        let pixels =
+            image::RgbImage::from_raw(2, 2, vec![255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255])
+                .unwrap();
+        let bytes = encoded(DynamicImage::ImageRgb8(pixels), ImageFormat::Png);
+        let preview = decode(&block("image/png", &bytes)).unwrap();
+        assert_eq!((preview.pixels.width(), preview.pixels.height()), (2, 2));
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        let rows = preview.render(120, 30, &ui);
+        assert_eq!(rows.len(), 1);
+        let mut parser = vt100::Parser::new(
+            std::num::NonZeroU16::new(2).unwrap(),
+            std::num::NonZeroU16::new(128).unwrap(),
+            0,
+        );
+        parser.process(rows[0].as_bytes());
+        for column in 0..2 {
+            let cell = parser.screen().cell(0, column).unwrap();
+            assert_eq!(cell.contents(), "▀");
+            assert_eq!(cell.fgcolor(), vt100::Color::Rgb(255, 0, 0));
+            assert_eq!(cell.bgcolor(), vt100::Color::Rgb(0, 0, 255));
+        }
+        assert!(!parser.screen().cell(0, 2).unwrap().has_contents());
     }
 
     #[test]

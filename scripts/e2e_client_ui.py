@@ -264,13 +264,13 @@ def main():
             preview.until(lambda s: "activity" in s["rows"][0] and not s["hide_cursor"], "Ctrl+O returning to input")
 
             slash(preview, "/filter cargo")
-            filtered = preview.until(lambda s: "activity · all /cargo" in s["rows"][0], "text filter")
+            filtered = preview.until(lambda s: "activity" in s["rows"][0] and "· all /cargo" in s["rows"][0], "text filter")
             check("cargo test --lib" in text(filtered) and "exit=0" in text(filtered),
                   "matching commands retain their result during filtering")
             slash(preview, "/filter")
             preview.until(lambda s: "/cargo" not in s["rows"][0], "cleared filter")
             preview.send(b"\x1b[20~\x1b[20~")
-            preview.until(lambda s: "activity · errors /" in s["rows"][0], "error category filter")
+            preview.until(lambda s: "activity" in s["rows"][0] and "· errors /" in s["rows"][0], "error category filter")
             check(True, "F9 selects command and error categories")
             slash(preview, "/filter --all")
             preview.until(lambda s: "errors /" not in s["rows"][0], "category clear")

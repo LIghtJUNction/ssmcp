@@ -1,5 +1,5 @@
 //! Bounded code_mode history and a terminal-independent source viewer.
-use super::ui::Ui;
+use super::{highlight::Lexer, ui::Ui};
 use serde_json::{Value, json};
 use std::{
     cell::Cell,
@@ -622,131 +622,6 @@ fn row(parts: &[(String, &str)], width: usize, ui: &Ui) -> String {
 }
 
 type Spans = Vec<(String, &'static str)>;
-#[derive(Default)]
-struct Lexer {
-    block: bool,
-    quote: Option<char>,
-    escaped: bool,
-}
-impl Lexer {
-    fn line(&mut self, line: &str) -> Spans {
-        let mut spans = Vec::new();
-        let mut index = 0;
-        while index < line.len() {
-            let tail = &line[index..];
-            if self.block {
-                let length = tail.find("*/").map_or(tail.len(), |end| {
-                    self.block = false;
-                    end + 2
-                });
-                spans.push((tail[..length].into(), "muted"));
-                index += length;
-                continue;
-            }
-            if let Some(quote) = self.quote {
-                let mut length = 0;
-                for ch in tail.chars() {
-                    length += ch.len_utf8();
-                    if self.escaped {
-                        self.escaped = false;
-                    } else if ch == '\\' {
-                        self.escaped = true;
-                    } else if ch == quote {
-                        self.quote = None;
-                        break;
-                    }
-                }
-                spans.push((tail[..length].into(), "success"));
-                index += length;
-                continue;
-            }
-            if tail.starts_with("//") {
-                spans.push((tail.into(), "muted"));
-                break;
-            }
-            if tail.starts_with("/*") {
-                self.block = true;
-                spans.push(("/*".into(), "muted"));
-                index += 2;
-                continue;
-            }
-            let ch = tail.chars().next().unwrap();
-            if matches!(ch, '\'' | '"' | '`') {
-                self.quote = Some(ch);
-                spans.push((ch.to_string(), "success"));
-                index += ch.len_utf8();
-                continue;
-            }
-            if ch.is_alphabetic() || matches!(ch, '_' | '$') {
-                let length = tail
-                    .char_indices()
-                    .find(|(_, ch)| !(ch.is_alphanumeric() || matches!(ch, '_' | '$')))
-                    .map_or(tail.len(), |(end, _)| end);
-                let word = &tail[..length];
-                let tone = if matches!(
-                    word,
-                    "const"
-                        | "let"
-                        | "var"
-                        | "await"
-                        | "async"
-                        | "return"
-                        | "if"
-                        | "else"
-                        | "for"
-                        | "while"
-                        | "of"
-                        | "in"
-                        | "new"
-                        | "function"
-                        | "try"
-                        | "catch"
-                        | "finally"
-                        | "throw"
-                        | "class"
-                        | "extends"
-                        | "import"
-                        | "export"
-                        | "from"
-                        | "switch"
-                        | "case"
-                        | "break"
-                        | "continue"
-                        | "typeof"
-                        | "instanceof"
-                        | "delete"
-                        | "yield"
-                ) {
-                    "accent"
-                } else if matches!(word, "true" | "false" | "null" | "undefined") {
-                    "warning"
-                } else {
-                    "foreground"
-                };
-                spans.push((word.into(), tone));
-                index += length;
-                continue;
-            }
-            if ch.is_ascii_digit() {
-                let length = tail
-                    .char_indices()
-                    .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_')))
-                    .map_or(tail.len(), |(end, _)| end);
-                spans.push((tail[..length].into(), "warning"));
-                index += length;
-                continue;
-            }
-            spans.push((ch.to_string(), "foreground"));
-            index += ch.len_utf8();
-        }
-        if self.quote != Some('`') {
-            self.quote = None;
-            self.escaped = false;
-        }
-        spans
-    }
-}
-
 fn source_rows(code: &str, width: usize) -> Vec<Spans> {
     if width == 0 {
         return vec![Vec::new()];
@@ -754,7 +629,7 @@ fn source_rows(code: &str, width: usize) -> Vec<Spans> {
     let digits = code.split('\n').count().to_string().len();
     let prefix = if width > digits + 3 { digits + 2 } else { 0 };
     let available = width - prefix;
-    let mut lexer = Lexer::default();
+    let mut lexer = Lexer::for_language("javascript");
     let mut rows = Vec::new();
     for (number, line) in code.split('\n').enumerate() {
         let mut row = if prefix > 0 {
@@ -763,8 +638,9 @@ fn source_rows(code: &str, width: usize) -> Vec<Spans> {
             Vec::new()
         };
         let mut used = 0;
-        for (text, tone) in lexer.line(line) {
-            for mut ch in display_chars(&text) {
+        for token in lexer.line(line) {
+            let (text, tone) = (token.text, token.tone);
+            for mut ch in display_chars(text) {
                 let mut cells = ch.width().unwrap_or(0);
                 if cells > available {
                     ch = '�';

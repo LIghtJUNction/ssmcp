@@ -66,6 +66,22 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Clear visible logs",
     },
     SlashCommand {
+        name: "/paste",
+        description: "Import clipboard text or image",
+    },
+    SlashCommand {
+        name: "/attach",
+        description: "Import a local image as a private file reference",
+    },
+    SlashCommand {
+        name: "/copy",
+        description: "Copy the latest agent reply",
+    },
+    SlashCommand {
+        name: "/handoff",
+        description: "Prepare a context file and editable handoff draft",
+    },
+    SlashCommand {
         name: "/resume",
         description: "Resume saved local conversation history",
     },
@@ -95,6 +111,7 @@ pub(super) struct ComposerRows {
 pub(super) struct Composer {
     text: String,
     cursor: usize,
+    revision: u64,
     preferred_column: Option<usize>,
     history: VecDeque<String>,
     history_bytes: usize,
@@ -116,6 +133,9 @@ impl Composer {
     /// A byte offset that always falls on a UTF-8 boundary.
     pub(super) fn cursor(&self) -> usize {
         self.cursor
+    }
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Reject oversized edits as a whole so a submitted request is never silently truncated.
@@ -614,6 +634,7 @@ impl Composer {
     }
 
     fn reset_suggestions(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
         self.suggestion_index = 0;
         self.suggestions_dismissed = false;
     }

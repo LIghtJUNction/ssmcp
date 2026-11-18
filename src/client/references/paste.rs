@@ -20,19 +20,52 @@ pub(crate) fn store_at(root: &Path, text: &str) -> Result<String, String> {
     if text.len() > MAX_PASTE_BYTES {
         return Err("The paste exceeds 4 MiB of UTF-8 text; save it as a workspace file and reference it with @path.".into());
     }
+    let reference = store_bytes_at(root, "paste", "txt", text.as_bytes())?;
+    debug_assert_eq!(reference.len(), REFERENCE_BYTES);
+    Ok(reference)
+}
+
+pub(crate) fn store_image_at(root: &Path, bytes: &[u8], mime: &str) -> Result<String, String> {
+    if bytes.is_empty() || bytes.len() > crate::output::MAX_IMAGE_BYTES {
+        return Err("Prepared images must fit within 400 KiB.".into());
+    }
+    if crate::output::image_mime_type(bytes) != Some(mime) {
+        return Err("Prepared image bytes do not match their MIME type.".into());
+    }
+    let extension = match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => return Err("Unsupported image format.".into()),
+    };
+    store_bytes_at(root, "image", extension, bytes)
+}
+
+pub(crate) fn store_markdown_at(root: &Path, text: &str) -> Result<String, String> {
+    if text.is_empty() || text.len() > MAX_PASTE_BYTES {
+        return Err("The handoff document must contain 1 byte to 4 MiB of UTF-8 text.".into());
+    }
+    store_bytes_at(root, "handoff", "md", text.as_bytes())
+}
+
+fn store_bytes_at(
+    root: &Path,
+    prefix: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
     let mut random = [0u8; 16];
     crate::platform::random_bytes(&mut random)
-        .map_err(|error| format!("Could not create a unique paste filename: {error}"))?;
+        .map_err(|error| format!("Could not create a unique input filename: {error}"))?;
     let id = random
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    let name = format!("paste-{id}.txt");
-    save(root, &name, text.as_bytes())
-        .map_err(|error| format!("Could not save the long paste in .ssmcp/inputs: {error}"))?;
-    let reference = format!("@\".ssmcp/inputs/{name}\"");
-    debug_assert_eq!(reference.len(), REFERENCE_BYTES);
-    Ok(reference)
+    let name = format!("{prefix}-{id}.{extension}");
+    save(root, &name, bytes)
+        .map_err(|error| format!("Could not save the private input in .ssmcp/inputs: {error}"))?;
+    Ok(format!("@\".ssmcp/inputs/{name}\""))
 }
 
 #[cfg(unix)]
