@@ -5,9 +5,9 @@
     "binary_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
     "client_sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
     "disk": {
-      "free": 17496821760,
+      "free": 17496457216,
       "total": 26526855168,
-      "used": 8834166784
+      "used": 8834564096
     },
     "package": "ssmcp-git 0.8.0.r266.g7867cb8-1",
     "pid": 337744,
@@ -22,7 +22,7 @@
   },
   "cleanup_retry": "never automatic; failed partial files and manifests remain together",
   "client_installation_performed_by_helper": false,
-  "coordinator_sha256": "23346f644101df667593a17561a77798c77301572b4c6c35f273bd0ef89c5e11",
+  "coordinator_sha256": "119ac4c41ef04ce9e6f28c6c0f36349275fa298bff6b4b3080a26d5fc6e32d58",
   "default_client": {
     "matches_package": true,
     "sha256": "ee32a8d7c180f978797f61748d9e40602fc875204c67221b563fceefeb289406",
@@ -38,7 +38,7 @@
     "step": "verified_private_predeployment_backup",
     "type": "RuntimeError"
   },
-  "finished_utc": "2026-11-18T10:19:37+00:00",
+  "finished_utc": "2026-11-18T10:28:17+00:00",
   "historical_coordinator_sha256": "48d465f8f8d407640fa3e4ac8b507d9c9251fb72326943fad61eafb0c5ee28a3",
   "mcp_authorization_survives_restart": false,
   "mode": "deploy",
@@ -62,7 +62,7 @@
   "production_queue_after_restart": "pending_normal_png_and_v7_acceptance",
   "schema": "ssmcp.image-rollout.v1",
   "source_commit": "808703c7e3ff22520185083122ab8844d24fa84d",
-  "started_utc": "2026-11-18T10:19:12+00:00",
+  "started_utc": "2026-11-18T10:27:47+00:00",
   "status": "failed",
   "verified_archive_dependency_sha256": "a6362ffb8153641ff87f6a298bd79a0c91e9055dc75dc2fa5f1335bc787a34fe"
 }
