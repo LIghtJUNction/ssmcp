@@ -1,13 +1,64 @@
 {
+  "acceptance_failure": {
+    "message": "production image or v7 text acceptance failed",
+    "step": "production_png_and_v7_acceptance",
+    "type": "Failure"
+  },
+  "after": {
+    "active": "active",
+    "binary_sha256": "8276c9a0bba4d2b5bfc10c534cdcaee91878efd17523fe7e059ca1c20e04e89d",
+    "client_sha256": "ee32a8d7c180f978797f61748d9e40602fc875204c67221b563fceefeb289406",
+    "disk": {
+      "free": 17458765824,
+      "total": 26526855168,
+      "used": 8872419328
+    },
+    "package": "ssmcp-git 0.9.0.r307.g808703c7e3ff-1",
+    "pid": 488935,
+    "registry_private": true,
+    "runner_sha256": "c8f923aec2efb1cfd7a67af736f8a770c836dc68c0c5d66bb032e532f05c7e09",
+    "running_sha256": "8276c9a0bba4d2b5bfc10c534cdcaee91878efd17523fe7e059ca1c20e04e89d",
+    "version": "ssmcpd 0.9.0"
+  },
+  "apply": {
+    "binary_sha256": "8276c9a0bba4d2b5bfc10c534cdcaee91878efd17523fe7e059ca1c20e04e89d",
+    "checks": {
+      "checkpoint_created": true,
+      "checkpoint_unused": true,
+      "configuration_unchanged": true,
+      "github_configured": true,
+      "installed_version": true,
+      "issuer_https": true,
+      "matching_stage_receipt": true,
+      "package_name": true,
+      "package_sha256": true,
+      "package_version": true,
+      "production_DCR_survives_restart": true,
+      "production_lease": true,
+      "production_registry_permissions": true,
+      "public_health_discovery_and_auth_rejection": true,
+      "public_homepage": true,
+      "rollback_available": true,
+      "running_binary_matches_install": true
+    },
+    "commit": "808703c7e3ff22520185083122ab8844d24fa84d",
+    "expected_version": "0.9.0",
+    "finished_unix": 1794998892,
+    "package": "ssmcp-git 0.9.0.r307.g808703c7e3ff-1",
+    "phase": "apply",
+    "server_version": "ssmcpd 0.9.0",
+    "started_unix": 1794998872,
+    "state": "deployed"
+  },
   "archive_strategy": "unique per-root zstd batches, checksummed and verified before sequential deletion",
   "before": {
     "active": "active",
     "binary_sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
     "client_sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
     "disk": {
-      "free": 17496457216,
+      "free": 17504313344,
       "total": 26526855168,
-      "used": 8834564096
+      "used": 8826675200
     },
     "package": "ssmcp-git 0.8.0.r266.g7867cb8-1",
     "pid": 337744,
@@ -18,11 +69,124 @@
   },
   "bootstrap_download": {
     "configuration_changed": false,
-    "configured": false
+    "configured": false,
+    "public_unconfigured_503_verified": true
+  },
+  "cleanup": {
+    "archives": [
+      {
+        "archive_bytes": 509,
+        "archive_sha256": "a6eeeb0472d3657784d759518276f913e756f2a88641eebba4026966dbcd74b6",
+        "batch": "batch-01",
+        "cleanup": {
+          "remaining": 0,
+          "removed_roots": 1,
+          "verified_entries": 8
+        },
+        "elapsed_seconds": 0.53,
+        "entries": 8,
+        "manifest_sha256": "5747263b8904a48c0c40256a416399c9cc956fd73b685f7a6018bf2024fd65bc",
+        "paths": [
+          "/var/lib/ssmcp-stage-808703c7"
+        ],
+        "source_bytes": 317,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 12202960,
+        "archive_sha256": "09d44a1139acc8d540065ab8179640e54a157a335c24d3754ee24de9612fb352",
+        "batch": "batch-02",
+        "cleanup": {
+          "remaining": 0,
+          "removed_roots": 1,
+          "verified_entries": 1
+        },
+        "elapsed_seconds": 20.62,
+        "entries": 1,
+        "manifest_sha256": "f9763de17026a2fa7a7d705e8baeacc25a85ac78ecf31746903d45588d6c30be",
+        "paths": [
+          "/var/lib/ssmcp-rollouts/808703c7e3ff22520185083122ab8844d24fa84d/ssmcp-git-0.8.0.r266.g7867cb8-1-x86_64.pkg.tar.zst"
+        ],
+        "source_bytes": 12201070,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 12610296,
+        "archive_sha256": "ea2f1be20fed21301af42b9924d6588cb252cabbfb008e0442725d97565a99ed",
+        "batch": "batch-03",
+        "cleanup": {
+          "remaining": 0,
+          "removed_roots": 1,
+          "verified_entries": 3
+        },
+        "elapsed_seconds": 28.95,
+        "entries": 3,
+        "manifest_sha256": "9c9723ba25067179c63af99a6a90b340c1bbe29e1573467a352d5347b2d56711",
+        "paths": [
+          "/var/tmp/ssmcp-release/808703c7e3ff22520185083122ab8844d24fa84d"
+        ],
+        "source_bytes": 12618036,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 6531548,
+        "archive_sha256": "1ba7851e53c33fc897064ff58e00bda0a9f11db726eef85282bf6e4f63582cf1",
+        "batch": "batch-04",
+        "cleanup": {
+          "remaining": 0,
+          "removed_roots": 1,
+          "verified_entries": 1
+        },
+        "elapsed_seconds": 23.91,
+        "entries": 1,
+        "manifest_sha256": "e420d04900fcfe124adb8d0275637578e1b0b176ef7cf9be06386c3cba69383b",
+        "paths": [
+          "/var/lib/ssmcp-rollouts/808703c7e3ff22520185083122ab8844d24fa84d/files-before.tar"
+        ],
+        "source_bytes": 13506560,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 6927812,
+        "archive_sha256": "49aa4bc6bb49456e17666f87dd251f739a25ab8444e186e96b157a7b7c2aab79",
+        "batch": "batch-05",
+        "cleanup": {
+          "remaining": 0,
+          "removed_roots": 1,
+          "verified_entries": 9
+        },
+        "elapsed_seconds": 17.47,
+        "entries": 9,
+        "manifest_sha256": "dd5c19c4c4b5820180615a7f56d5ee469daf8832c16334ca6ab7690d6cf6d143",
+        "paths": [
+          "/opt/ssmcp/releases/808703c7e3ff22520185083122ab8844d24fa84d"
+        ],
+        "source_bytes": 14351884,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      }
+    ],
+    "batches": 5,
+    "completed_batches": 5,
+    "disk_free_delta_bytes": 34119680,
+    "entries": 22,
+    "production_pid_unchanged_during_cleanup": true,
+    "remaining_eligible_roots": 0,
+    "remaining_in_use_roots": 0,
+    "reports_retained_on_server": true,
+    "roots": 5,
+    "runtime_and_account_directories_preserved": true,
+    "skipped_in_use_roots": 0,
+    "source_bytes": 52677867,
+    "status": "verified_and_removed"
   },
   "cleanup_retry": "never automatic; failed partial files and manifests remain together",
   "client_installation_performed_by_helper": false,
-  "coordinator_sha256": "119ac4c41ef04ce9e6f28c6c0f36349275fa298bff6b4b3080a26d5fc6e32d58",
+  "coordinator_sha256": "f3819c43d789476d963b7bad001407b60ef7cd2c5de853d9dfd34b3ce21953aa",
   "default_client": {
     "matches_package": true,
     "sha256": "ee32a8d7c180f978797f61748d9e40602fc875204c67221b563fceefeb289406",
@@ -35,16 +199,41 @@
   "expected_runner_sha256": "c8f923aec2efb1cfd7a67af736f8a770c836dc68c0c5d66bb032e532f05c7e09",
   "expected_version": "0.9.0",
   "failure": {
-    "step": "verified_private_predeployment_backup",
-    "type": "RuntimeError"
+    "message": "production image or v7 text acceptance failed",
+    "step": "production_png_and_v7_acceptance",
+    "type": "Failure"
   },
-  "finished_utc": "2026-11-18T10:28:17+00:00",
+  "final_disk": {
+    "free": 17492815872,
+    "total": 26526855168,
+    "used": 8838336512
+  },
+  "final_service_active": true,
+  "finished_utc": "2026-11-18T10:51:50+00:00",
   "historical_coordinator_sha256": "48d465f8f8d407640fa3e4ac8b507d9c9251fb72326943fad61eafb0c5ee28a3",
   "mcp_authorization_survives_restart": false,
   "mode": "deploy",
   "package_sha256": "be28a277ff8d6dee340050ebb08d49df5d3d9e9a2c88d0e390bfa3b704903786",
   "package_source_commit_abbrev": "808703c7e3ff",
   "package_version": "0.9.0.r307.g808703c7e3ff-1",
+  "parallel_archive_streams": 1,
+  "postcheck": {
+    "bootstrap_directory_configuration_preserved": true,
+    "dcr_persistence_checked_by_apply": true,
+    "expected_version": true,
+    "installed_client_matches_package": true,
+    "installed_daemon_matches_package": true,
+    "installed_runner_matches_package": true,
+    "issuer_preserved": true,
+    "oauth_registration_private": true,
+    "private_config_preserved": true,
+    "public_bootstrap_unconfigured": true,
+    "public_health": true,
+    "public_metadata": true,
+    "public_unauthenticated_rejected": true,
+    "running_daemon_matches_package": true,
+    "service_active": true
+  },
   "predeployment_evidence_files": [
     {
       "bytes": 4939,
@@ -58,11 +247,354 @@
     }
   ],
   "previous_package_sha256": "cc74de563471a2f98e2413ad06555cd343ff08231194f30e22d703f179f1f4df",
+  "private_predeployment_backup": {
+    "archives": [
+      {
+        "archive_bytes": 179,
+        "archive_sha256": "c4928ad911d8c2f25983ba26c8150127935129a5134d8629e01d14a8364d9917",
+        "batch": "batch-01",
+        "elapsed_seconds": 0.53,
+        "entries": 1,
+        "manifest_sha256": "f932bfa4086562637b6305cf4cc0f6d669673ff59d7a69ee9e64e54621594928",
+        "paths": [
+          "/etc/ssmcpd/ssmcpd.env"
+        ],
+        "source_bytes": 123,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 240,
+        "archive_sha256": "89b1cc963472ab053ad019097a6439e0a3c73bf020eb5e7f9a163d3e6eb94099",
+        "batch": "batch-02",
+        "elapsed_seconds": 0.83,
+        "entries": 1,
+        "manifest_sha256": "98a61dab8aa22d594216660b3078bddeed72dd3fcf2f5e275204c18c225d5b8a",
+        "paths": [
+          "/usr/lib/systemd/system/ssmcp-portal-ssh.timer"
+        ],
+        "source_bytes": 185,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 341,
+        "archive_sha256": "fc03a6e95224c82a76f6b0f9e1eb04c290ae0e01406b2e56f7e11d5d60ebe119",
+        "batch": "batch-03",
+        "elapsed_seconds": 0.53,
+        "entries": 1,
+        "manifest_sha256": "af9508ef947063839d15553251a7659282bc37d003349a134703067b88a0c3e9",
+        "paths": [
+          "/usr/lib/systemd/system/ssmcp-portal-ssh.service"
+        ],
+        "source_bytes": 336,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 457,
+        "archive_sha256": "e3fea2f98c93f66d414fb50ede85b68339d2ed595adae841c13ca3da2a7bfb08",
+        "batch": "batch-04",
+        "elapsed_seconds": 0.54,
+        "entries": 1,
+        "manifest_sha256": "410e1d7f3405c793bea631103350169cf441b670313b557ed6c54cd0f0d999b5",
+        "paths": [
+          "/etc/ssmcpd/ssmcpd.toml"
+        ],
+        "source_bytes": 606,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 547,
+        "archive_sha256": "14c958e1c6107765e3c62850807e61acfb31af984b4ec6b5d63220c3150337c3",
+        "batch": "batch-05",
+        "elapsed_seconds": 0.53,
+        "entries": 1,
+        "manifest_sha256": "fb705cc1a685e9ff481e430ec98e012e8e3a33aa096df753c3ef614a6687015e",
+        "paths": [
+          "/usr/lib/systemd/system/ssmcp-portal.service"
+        ],
+        "source_bytes": 785,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 676,
+        "archive_sha256": "b8c5d17ab8d01d963658d8bbed37a5f4bd7553ad67a8ae19dddd156bf8724faa",
+        "batch": "batch-06",
+        "elapsed_seconds": 0.83,
+        "entries": 1,
+        "manifest_sha256": "852aa20c831e84ca90a83fa1d4065629ee2933755d5bd1a890c9e26da93b26ac",
+        "paths": [
+          "/usr/lib/systemd/system/ssmcpd.service"
+        ],
+        "source_bytes": 1022,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 24773,
+        "archive_sha256": "16a8d7f9a652cddae4bafd00ecdb91aa156a36bb826ae2fb674993eff986fa6c",
+        "batch": "batch-07",
+        "elapsed_seconds": 1.18,
+        "entries": 6,
+        "manifest_sha256": "9d4053169e1f7ae4f4ce6835099940c4db9a58e6e2a794fce546ad6ff5b72a97",
+        "paths": [
+          "/usr/libexec/ssmcp"
+        ],
+        "source_bytes": 70065,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 2625187,
+        "archive_sha256": "f8ea4e2f094bef42780acbdff0c29a628a766eb76c41917f56a45370fcb7c871",
+        "batch": "batch-08",
+        "elapsed_seconds": 7.61,
+        "entries": 1,
+        "manifest_sha256": "1361a53044cfd3bf123a3941374bafa119650015faca53092bcdce6dd0b7eff1",
+        "paths": [
+          "/usr/bin/ssmcpd"
+        ],
+        "source_bytes": 5375864,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      },
+      {
+        "archive_bytes": 3869573,
+        "archive_sha256": "0ce672d870e57d4210cc388bb95f76d8821a5154762cbd5f2684ea2bd4e2f9e5",
+        "batch": "batch-09",
+        "elapsed_seconds": 8.57,
+        "entries": 1,
+        "manifest_sha256": "76350c077361a07f652eccfa8c19eabbe68d1e2b6221ce4dfa8e4571f905aa32",
+        "paths": [
+          "/usr/bin/ssmcp"
+        ],
+        "source_bytes": 8039288,
+        "verification": "zstd checksum; every tar path, type, bytes/SHA256, mode, owner, symlink and hardlink",
+        "verified": true
+      }
+    ],
+    "batches": 9,
+    "completed_batches": 9,
+    "entries": 14,
+    "roots": 9,
+    "source_bytes": 13488274,
+    "status": "verified"
+  },
   "production_probe_sha256": "9129c04597c5408b91884a2ee0c5f72c20763637c07e00e2824bdc26d6fe571b",
-  "production_queue_after_restart": "pending_normal_png_and_v7_acceptance",
+  "production_queue_after_restart": {
+    "authentication": "existing SSH key, fresh one-time login code, normal HTTPS OAuth PKCE",
+    "checks": {
+      "legacy_v7_client_version": true,
+      "new_client_version": true,
+      "production_png_queue": false
+    },
+    "credential_storage": "memory only",
+    "duration_seconds": 114.27,
+    "failure": {
+      "check": "image_suite",
+      "type": "ProbeFailure"
+    },
+    "fixtures": {
+      "cancelled": {
+        "bytes": 75,
+        "encoded_bytes": 100,
+        "id": "c501fe24f13044dd1e4f0658c17096ee017accee90db62608339fe04127336d9",
+        "mime_type": "image/png",
+        "name": "acceptance-cancelled.png"
+      },
+      "edit_one": {
+        "bytes": 75,
+        "encoded_bytes": 100,
+        "id": "375e1431aea9aa63659bfad1f9be82a145d6aea725c0484d9e09f83c8d236a8e",
+        "mime_type": "image/png",
+        "name": "acceptance-edit-one.png"
+      },
+      "error": {
+        "bytes": 75,
+        "encoded_bytes": 100,
+        "id": "70faf274a01b3f5c2b60f48fb33f507b68fa7c7688cf79071ee8527315f0fc08",
+        "mime_type": "image/png",
+        "name": "acceptance-error.png"
+      },
+      "final": {
+        "bytes": 75,
+        "encoded_bytes": 100,
+        "id": "ea6957e201d8d7785237362776a204c223f0b3bb1a6e6e4feddbc5eeeed0222d",
+        "mime_type": "image/png",
+        "name": "acceptance-final.png"
+      },
+      "image_only": {
+        "bytes": 75,
+        "encoded_bytes": 100,
+        "id": "523551356a08778bffc03b00490f8a4956f09fc5635dfadaf7e0110d9b89cf45",
+        "mime_type": "image/png",
+        "name": "acceptance-image-only.png"
+      },
+      "original": {
+        "bytes": 75,
+        "encoded_bytes": 100,
+        "id": "e82d8226d4ce90216d7f181086401b2775660168cd58699f70e4cab5db563930",
+        "mime_type": "image/png",
+        "name": "acceptance-original.png"
+      },
+      "targeted": {
+        "bytes": 75,
+        "encoded_bytes": 100,
+        "id": "a034d98e15696afb93e84bf927ca708ced9d82aa37882c7116e25d72e91e903b",
+        "mime_type": "image/png",
+        "name": "acceptance-targeted.png"
+      }
+    },
+    "image_queue": {
+      "authentication": "existing SSH key, fresh one-time login code, normal HTTPS OAuth PKCE",
+      "checks": {
+        "after_say_retry_history_does_not_claim_queue": true,
+        "after_say_retry_history_native_success": true,
+        "after_say_retry_history_schema": true,
+        "all_image_requirements_delivered_once": true,
+        "authenticated_native_tool_roundtrip": true,
+        "authorized_isolated_client_visible": true,
+        "baseline_error_is_error_true": true,
+        "baseline_success_has_no_user_messages": true,
+        "cancelled_text_and_image_absent": true,
+        "csrf_bound_login_form": true,
+        "edited_image_claim_increments_revision": true,
+        "edited_image_delivered_snapshot_matches": true,
+        "edited_image_delivery_receipt_valid": true,
+        "edited_image_exact_png_bytes": true,
+        "edited_image_identity_text": true,
+        "edited_image_is_error_preserved": true,
+        "edited_image_metadata_matches_image": true,
+        "edited_image_metadata_omits_data": true,
+        "edited_image_one_message": true,
+        "edited_image_original_content_preserved": true,
+        "edited_image_original_structured_output_preserved": true,
+        "edited_image_real_mcp_image_block": true,
+        "edited_image_separate_requirement_text": true,
+        "error_result_image_exact_png_bytes": true,
+        "error_result_image_identity_text": true,
+        "error_result_image_is_error_preserved": true,
+        "error_result_image_metadata_matches_image": true,
+        "error_result_image_metadata_omits_data": true,
+        "error_result_image_one_message": true,
+        "error_result_image_original_content_preserved": true,
+        "error_result_image_original_structured_output_preserved": true,
+        "error_result_image_real_mcp_image_block": true,
+        "error_result_image_separate_requirement_text": true,
+        "error_result_image_target_member_identity": true,
+        "https_oauth_discovery": true,
+        "image_delivery_does_not_repeat": true,
+        "image_only_exact_png_bytes": true,
+        "image_only_identity_text": true,
+        "image_only_is_error_preserved": true,
+        "image_only_metadata_matches_image": true,
+        "image_only_metadata_omits_data": true,
+        "image_only_one_message": true,
+        "image_only_real_mcp_image_block": true,
+        "image_only_separate_requirement_text": true,
+        "image_only_target_member_identity": true,
+        "initial_history_does_not_claim_queue": true,
+        "initial_history_native_success": true,
+        "initial_history_schema": true,
+        "isolated_client_stopped": true,
+        "normal_dynamic_client_registration": true,
+        "normal_login_form": true,
+        "normal_pkce_token_exchange": true,
+        "oauth_state_and_issuer_bound": true,
+        "observation_polls_preserve_pending_image": true,
+        "one_time_login_code": true,
+        "other_member_receives_no_targeted_image": true,
+        "pending_say_0_history_does_not_claim_queue": true,
+        "pending_say_0_history_native_success": true,
+        "pending_say_0_history_schema": true,
+        "pending_say_1_history_does_not_claim_queue": true,
+        "pending_say_1_history_native_success": true,
+        "pending_say_1_history_schema": true,
+        "queue_image_protocol_supported": true,
+        "queue_protocol_supported": true,
+        "say_accepted_ack": true,
+        "say_ack_original_result_text_present": true,
+        "say_ack_original_result_text_preserved": true,
+        "say_can_claim_pending_requirement": true,
+        "say_history_retains_exact_text_and_kind": true,
+        "say_outer_result_not_error": true,
+        "say_requirement_claim_increments_revision": true,
+        "say_requirement_delivered_snapshot_matches": true,
+        "say_requirement_delivery_receipt_valid": true,
+        "say_retry_ack_original_result_text_present": true,
+        "say_retry_ack_original_result_text_preserved": true,
+        "say_retry_does_not_repeat_user_requirement": true,
+        "say_retry_only_one_history_record": true,
+        "say_same_key_returns_same_id_once": true,
+        "second_edit_replaces_text_and_images_atomically": true,
+        "ssh_login_code_authorized": true,
+        "ssh_registration_expected_origin": true,
+        "superseded_text_and_images_absent": true,
+        "targeted_image_exact_png_bytes": true,
+        "targeted_image_identity_text": true,
+        "targeted_image_is_error_preserved": true,
+        "targeted_image_metadata_matches_image": true,
+        "targeted_image_metadata_omits_data": true,
+        "targeted_image_one_message": true,
+        "targeted_image_real_mcp_image_block": true,
+        "targeted_image_separate_requirement_text": true,
+        "targeted_image_target_member_identity": true,
+        "two_edits_increase_revision": true,
+        "two_edits_keep_same_message_id": true,
+        "two_logical_members_registered": true,
+        "ui_observation_does_not_claim_messages": true
+      },
+      "credential_storage": "memory only",
+      "duration_seconds": 114.266,
+      "failure": {
+        "check": "unexpected_public_tool_error",
+        "step": "production_say_and_ui_message",
+        "type": "ProbeFailure"
+      },
+      "models_started": false,
+      "schema": "ssmcp.production-queue-acceptance.v1",
+      "scope": "actual production queue and two logical members",
+      "status": "failed",
+      "tls_verified": true
+    },
+    "models_started": false,
+    "schema": "ssmcp.production-image-acceptance.v1",
+    "status": "failed",
+    "tls_verified": true
+  },
+  "public_health_after_cleanup": {
+    "body": "ok",
+    "http_status": 200
+  },
   "schema": "ssmcp.image-rollout.v1",
   "source_commit": "808703c7e3ff22520185083122ab8844d24fa84d",
-  "started_utc": "2026-11-18T10:27:47+00:00",
-  "status": "failed",
+  "ssh_transport": "run-owned private control socket",
+  "stage": {
+    "checks": {
+      "github_configured": true,
+      "issuer_https": true,
+      "package_name": true,
+      "package_sha256": true,
+      "package_version": true,
+      "production_not_changed": true,
+      "stage_unit_unused": true,
+      "staged_DCR_survives_restart": true,
+      "staged_authorization_before_restart": true,
+      "staged_binary_version": true,
+      "staged_health_and_discovery": true,
+      "staged_private_registry": true
+    },
+    "commit": "808703c7e3ff22520185083122ab8844d24fa84d",
+    "expected_version": "0.9.0",
+    "finished_unix": 1794998871,
+    "phase": "stage",
+    "started_unix": 1794998858,
+    "state": "prepared"
+  },
+  "started_utc": "2026-11-18T10:46:18+00:00",
+  "status": "deployed_followup_failed",
   "verified_archive_dependency_sha256": "a6362ffb8153641ff87f6a298bd79a0c91e9055dc75dc2fa5f1335bc787a34fe"
 }
