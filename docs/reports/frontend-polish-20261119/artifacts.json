@@ -1,0 +1,16 @@
+{
+  "source_commit": "3c51ad96e4ed6e0edffb932e42414bf009e22f98",
+  "build_seconds": 168.38,
+  "artifacts": {
+    "ssmcp": {
+      "sha256": "16d79b87d92939be94c6854fc9361ca25a68bd3193c8f08fe7b1f0aca726d08d",
+      "bytes": 9924328,
+      "version": "ssmcp 0.9.4"
+    },
+    "ssmcpd": {
+      "sha256": "18ed7fb2b9d7bf59744a06a8d02c43a148a89247ec070b71bef7b6c63559a11e",
+      "bytes": 5981040,
+      "version": "ssmcpd 0.9.4"
+    }
+  }
+}
