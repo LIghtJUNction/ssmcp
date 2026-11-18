@@ -2653,8 +2653,31 @@ mod tests {
             assert!(names.insert(name.to_owned()));
             assert_eq!(tool["inputSchema"]["additionalProperties"], false);
         }
-        assert_eq!(names.len(), 17);
-        assert!(names.contains("ssmcp.browser.discover"));
+        let expected = [
+            "discover",
+            "status",
+            "launch",
+            "connect",
+            "tabs",
+            "open",
+            "navigate",
+            "snapshot",
+            "click",
+            "fill",
+            "key",
+            "scroll",
+            "act",
+            "wait",
+            "wait_for",
+            "evaluate",
+            "screenshot",
+            "close",
+            "disconnect",
+        ]
+        .into_iter()
+        .map(|name| format!("ssmcp.browser.{name}"))
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(names, expected);
         // The default must never open a desktop window implicitly.
         assert!(parse::<Launch>(json!({})).unwrap().headless);
         assert!(!parse::<Launch>(json!({"headless":false})).unwrap().headless);
