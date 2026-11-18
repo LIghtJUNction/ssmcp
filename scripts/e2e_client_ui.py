@@ -294,15 +294,31 @@ def main():
             preview.until(lambda s: prompt_start(s) == 25, "restored full-height composer")
 
             slash(preview, "/agents")
+            removed = preview.until(lambda s: "Unknown command" in text(s), "removed agent slash command")
+            check("ssmcp  /  activity" in text(removed) and "/agents" in prompt_text(removed),
+                  "the removed command neither opens a view nor submits its text")
+            clear_draft(preview)
+            preview.send(b"\x1b[D")
             agents = preview.until(lambda s: "ssmcp  /  agents" in text(s)
-                                   and "example-reviewer" in text(s), "sample agent roster")
-            check("Next caller" in text(agents) and "Builder" in text(agents)
-                  and "Reviewer" in text(agents) and agents["hide_cursor"],
-                  "agents view separates the default recipient from sample participants")
+                                   and "Reviewer" in body_text(s), "Left opening the sample agent panel")
+            check("Next caller" in body_text(agents) and "Builder" in body_text(agents)
+                  and agents["hide_cursor"], "the agent panel shows selectable named recipients")
             save_shot(args.out, "agents", agents)
+            preview.send(b"\x1b")
+            returned = preview.until(lambda s: "ssmcp  /  activity" in text(s) and not s["hide_cursor"],
+                                     "Escape returning to the default conversation")
+            check("Message the agent" in prompt_text(returned), "closing agents restores the empty composer")
+            preview.send("切换保留 界".encode() + b"\x01\x1b[D")
+            preview.until(lambda s: "ssmcp  /  agents" in text(s)
+                          and "切换保留 界" in prompt_text(s), "opening agents with a Unicode draft")
             preview.send(b"\x1b[B\r")
-            chosen = preview.until(lambda s: "To · Builder" in text(s) and not s["hide_cursor"], "explicit agent selection")
-            check("example-builder" in text(chosen), "agent navigation selects the displayed participant")
+            chosen = preview.until(lambda s: "To · Builder" in text(s)
+                                   and "ssmcp  /  activity" in text(s) and not s["hide_cursor"],
+                                   "explicit agent selection returning to the conversation")
+            check("切换保留 界" in prompt_text(chosen)
+                  and chosen["cursor"][0] >= chosen["size"][0] - 4,
+                  "agent selection preserves the Unicode draft and returns cursor focus to the composer")
+            clear_draft(preview)
             slash(preview, "/queue")
             queued = preview.until(lambda s: "example-request" in text(s) and "Requests ·" in text(s), "sample request queue")
             save_shot(args.out, "queue", queued)

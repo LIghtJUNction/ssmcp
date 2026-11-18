@@ -27,10 +27,6 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Restart this client session (alias of /reload)",
     },
     SlashCommand {
-        name: "/agents",
-        description: "Show agents",
-    },
-    SlashCommand {
         name: "/queue",
         description: "Show queued requests",
     },
@@ -778,7 +774,7 @@ mod tests {
                 .any(|line| line.contains("› /clear"))
         );
         draft.insert("a");
-        assert_eq!(draft.selected_suggestion().unwrap().name, "/agents");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");
     }
 
     #[test]

@@ -318,6 +318,18 @@ impl State {
         self.dirty = true;
     }
 
+    fn chat_agents(&mut self) {
+        self.chat_change_view(View::Agents);
+        let data = self.chat_data();
+        let entries = recipients(&data, self.audit.observed_controllers());
+        let target = self.conversation.target.as_deref().unwrap_or("next");
+        self.conversation.selected = entries
+            .iter()
+            .position(|entry| field(entry, "agent_id") == target)
+            .unwrap_or(0);
+        self.conversation.selected_agent = entries.get(self.conversation.selected).map(agent_key);
+    }
+
     fn chat_command(&mut self, text: &str) -> Result<bool, String> {
         if !text.starts_with('/') {
             return Ok(false);
@@ -329,7 +341,6 @@ impl State {
                 self.help = true;
                 self.conversation.content_focus = true;
             }
-            "/agents" => self.chat_change_view(View::Agents),
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
             "/logs" => self.chat_change_view(View::Activity),
@@ -510,8 +521,11 @@ impl State {
                     }
                     self.conversation.target = (field(&agent, "agent_id") != "next")
                         .then(|| field(&agent, "agent_id").into());
-                    self.conversation.content_focus = false;
-                    self.notice = Some(format!("To {}", panel::safe_text(field(&agent, "name"))));
+                    self.chat_change_view(View::Activity);
+                    self.notice = Some(format!(
+                        "To {} · Enter sends · ← at draft start switches agent",
+                        panel::safe_text(field(&agent, "name"))
+                    ));
                 }
             }
             View::Queue => {
@@ -576,6 +590,12 @@ impl State {
                 self.chat_escape();
             }
             return;
+        }
+        if self.conversation.view == View::Agents
+            && self.conversation.content_focus
+            && matches!(key, Key::Delete | Key::Newline)
+        {
+            self.chat_change_view(View::Activity);
         }
         let content = self.conversation.content_focus;
         match key {
@@ -658,11 +678,18 @@ impl State {
                     }
                 }
             }
+            Key::Back if self.conversation.view == View::Agents && content => {
+                self.chat_escape();
+            }
+            Key::Back if self.conversation.view == View::Activity && content => {
+                self.chat_agents();
+            }
             Key::Back if content => {
                 self.audit.back();
                 self.conversation.detail = false;
                 self.conversation.detail_scroll = 0;
             }
+            Key::Back if self.conversation.composer.cursor() == 0 => self.chat_agents(),
             Key::Back => {
                 self.conversation.composer.left();
             }
@@ -707,6 +734,11 @@ impl State {
                     if matches!(self.conversation.view, View::Agents | View::Queue)
                         && !self.conversation.detail
                     {
+                        if self.conversation.view == View::Agents
+                            && x >= self.chat_agent_list_width()
+                        {
+                            return;
+                        }
                         let Some(index) = self.chat_list_hit(y) else {
                             self.dirty = true;
                             return;
@@ -741,6 +773,17 @@ impl State {
             self.help = false;
             self.conversation.content_focus = false;
             self.notice = None;
+            return;
+        }
+        if self.conversation.view == View::Agents {
+            if self.conversation.detail {
+                self.audit.back();
+                self.conversation.detail = false;
+                self.conversation.content_focus = true;
+                self.notice = None;
+            } else {
+                self.chat_change_view(View::Activity);
+            }
             return;
         }
         if !self.conversation.content_focus
@@ -780,6 +823,15 @@ impl State {
                 self.dirty = true;
             }
             return;
+        }
+        if self.conversation.view == View::Agents
+            && self.conversation.content_focus
+            && matches!(
+                character,
+                '\n' | '\u{1}' | '\u{5}' | '\u{15}' | '\u{b}' | '\u{17}' | '\u{7f}' | '\u{8}'
+            )
+        {
+            self.chat_change_view(View::Activity);
         }
         match character {
             'r' | 'R'
@@ -879,6 +931,9 @@ impl State {
                 self.help = !self.help;
             }
             ch if !ch.is_control() => {
+                if self.conversation.view == View::Agents {
+                    self.chat_change_view(View::Activity);
+                }
                 self.conversation.content_focus = false;
                 if !self.conversation.composer.insert(&ch.to_string()) {
                     self.notice = Some("Draft limit reached · 16 KiB".into());
@@ -897,9 +952,14 @@ impl State {
         }
         if output == b"\x1b[201~" {
             if let Some(paste) = self.conversation.paste.take() {
-                if !paste.is_empty() && self.help {
-                    self.help = false;
-                    self.conversation.content_focus = false;
+                if !paste.is_empty() {
+                    if self.conversation.view == View::Agents {
+                        self.chat_change_view(View::Activity);
+                    }
+                    if self.help {
+                        self.help = false;
+                        self.conversation.content_focus = false;
+                    }
                 }
                 if self.conversation.paste_overflow
                     || !self
@@ -972,54 +1032,206 @@ impl State {
         )
     }
 
-    fn chat_list_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
-        self.conversation.list_start = 0;
-        self.conversation.list_count = 0;
-        let width = self.geometry.left;
-        let queue = self.conversation.view == View::Queue;
-        let entries = if queue {
-            items(data, "queue")
+    fn chat_list_window(&mut self, count: usize, height: u16) -> std::ops::Range<usize> {
+        self.conversation.selected = self.conversation.selected.min(count.saturating_sub(1));
+        let capacity = usize::from(height.saturating_sub(1) / 2).max(1);
+        let start = self.conversation.selected.saturating_sub(capacity - 1);
+        let count = if height > 1 {
+            count.saturating_sub(start).min(capacity)
         } else {
-            recipients(data, self.audit.observed_controllers())
+            0
         };
-        if !queue
-            && let Some(selected) = &self.conversation.selected_agent
+        self.conversation.list_start = start;
+        self.conversation.list_count = count;
+        start..start + count
+    }
+
+    fn chat_agent_list_width(&self) -> u16 {
+        let width = self.geometry.left;
+        if width >= 76 {
+            (width / 2).min(36)
+        } else {
+            width
+        }
+    }
+
+    fn chat_agent_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
+        let entries = recipients(data, self.audit.observed_controllers());
+        if let Some(selected) = &self.conversation.selected_agent
             && let Some(index) = entries
                 .iter()
                 .position(|entry| agent_key(entry) == *selected)
         {
             self.conversation.selected = index;
         }
+        let window = self.chat_list_window(entries.len(), height);
+        let selected = &entries[self.conversation.selected];
+        self.conversation.selected_agent = Some(agent_key(selected));
+        let width = self.geometry.left;
+        let list_width = self.chat_agent_list_width();
+        let target = self.conversation.target.as_deref().unwrap_or("next");
+        let mut rows = vec![self.chat_line(
+            &format!("  Agents  ·  {} connected", items(data, "agents").len()),
+            PanelTone::Heading,
+            list_width,
+        )];
+        for index in window {
+            let entry = &entries[index];
+            let observed = field(entry, "kind") == "observed";
+            let marker = if index == self.conversation.selected {
+                "›"
+            } else {
+                " "
+            };
+            let current = !observed && field(entry, "agent_id") == target;
+            let name = if observed {
+                format!("Call · {}", field(entry, "name"))
+            } else {
+                field(entry, "name").to_owned()
+            };
+            let title = format!(" {marker} {}{name}", if current { "● " } else { "" });
+            let subtitle = if observed {
+                format!(
+                    "     {} · view only",
+                    if entry["active"] == true {
+                        "active"
+                    } else {
+                        "recent"
+                    }
+                )
+            } else if field(entry, "agent_id") == "next" {
+                "     Automatic · next response".into()
+            } else {
+                let duplicate_name = entries
+                    .iter()
+                    .filter(|other| {
+                        field(other, "kind") != "observed"
+                            && field(other, "name") == field(entry, "name")
+                    })
+                    .count()
+                    > 1;
+                format!(
+                    "     {}{}",
+                    field(entry, "status"),
+                    if duplicate_name {
+                        format!(" · {}", panel::fit(field(entry, "agent_id"), 12))
+                    } else {
+                        String::new()
+                    }
+                )
+            };
+            rows.push(self.chat_line(
+                &title,
+                if index == self.conversation.selected {
+                    PanelTone::Accent
+                } else {
+                    PanelTone::Normal
+                },
+                list_width,
+            ));
+            rows.push(self.chat_line(&subtitle, PanelTone::Muted, list_width));
+        }
+        if list_width < width {
+            let observed = field(selected, "kind") == "observed";
+            let next = field(selected, "agent_id") == "next";
+            let details = [
+                (
+                    if observed {
+                        "Call details"
+                    } else {
+                        "Message target"
+                    },
+                    PanelTone::Heading,
+                ),
+                ("", PanelTone::Normal),
+                (field(selected, "name"), PanelTone::Accent),
+                (
+                    if observed {
+                        field(selected, "model")
+                    } else {
+                        field(selected, "role")
+                    },
+                    PanelTone::Muted,
+                ),
+                (
+                    if observed {
+                        field(selected, "tool")
+                    } else {
+                        field(selected, "status")
+                    },
+                    PanelTone::Muted,
+                ),
+                ("", PanelTone::Normal),
+                (
+                    if observed {
+                        "Enter / →  inspect"
+                    } else {
+                        "Enter / →  start chatting"
+                    },
+                    PanelTone::Normal,
+                ),
+                ("Esc        back to conversation", PanelTone::Muted),
+                ("", PanelTone::Normal),
+                (
+                    if observed {
+                        "Activity record · view only"
+                    } else if next {
+                        "The next eligible tool response"
+                    } else {
+                        "Messages go only to this agent"
+                    },
+                    PanelTone::Muted,
+                ),
+                (
+                    if observed || next {
+                        ""
+                    } else {
+                        field(selected, "agent_id")
+                    },
+                    PanelTone::Muted,
+                ),
+            ];
+            rows.resize_with(usize::from(height), || {
+                self.chat_line("", PanelTone::Normal, list_width)
+            });
+            for (index, row) in rows.iter_mut().enumerate() {
+                let (detail, tone) = details
+                    .get(index)
+                    .copied()
+                    .unwrap_or(("", PanelTone::Normal));
+                row.push_str(&self.tone(PanelTone::Muted, " │ "));
+                row.push_str(&self.chat_line(detail, tone, width - list_width - 3));
+            }
+        }
+        rows
+    }
+
+    fn chat_list_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
+        self.conversation.list_start = 0;
+        self.conversation.list_count = 0;
+        if self.conversation.view == View::Agents {
+            return self.chat_agent_rows(data, height);
+        }
+        let width = self.geometry.left;
+        let entries = items(data, "queue");
         self.conversation.selected = self
             .conversation
             .selected
             .min(entries.len().saturating_sub(1));
-        if !queue {
-            self.conversation.selected_agent =
-                entries.get(self.conversation.selected).map(agent_key);
-        }
         let mut rows = vec![self.chat_line(
-            if queue {
-                "  Requests · Enter edit · → details · Delete cancel · R resend"
-            } else {
-                "  Agents · Enter inspects calls or chooses a registered recipient"
-            },
+            "  Requests · Enter edit · → details · Delete cancel · R resend",
             PanelTone::Muted,
             width,
         )];
         if entries.is_empty() {
             rows.push(self.chat_line(
-                if queue {
-                    "  No queued requests. Write a requirement below."
-                } else {
-                    "  No registered agents. Call collab.join to join this session."
-                },
+                "  No queued requests. Write a requirement below.",
                 PanelTone::Normal,
                 width,
             ));
             return rows;
         }
-        if queue && self.conversation.detail {
+        if self.conversation.detail {
             let entry = &entries[self.conversation.selected];
             rows.push(self.chat_line(
                 &format!(
@@ -1059,41 +1271,19 @@ impl State {
             );
             return rows;
         }
-        let capacity = usize::from(height.saturating_sub(1) / 2).max(1);
-        let start = self.conversation.selected.saturating_sub(capacity - 1);
-        self.conversation.list_start = start;
-        self.conversation.list_count = if height > 1 {
-            entries.len().saturating_sub(start).min(capacity)
-        } else {
-            0
-        };
-        for (index, entry) in entries.iter().enumerate().skip(start).take(capacity) {
+        for index in self.chat_list_window(entries.len(), height) {
+            let entry = &entries[index];
             let marker = if index == self.conversation.selected {
                 "›"
             } else {
                 " "
             };
-            let title = if queue {
-                format!(
+            rows.push(self.chat_line(
+                &format!(
                     "{marker} {}  ·  {}",
                     field(entry, "status"),
                     message_id(entry)
-                )
-            } else if field(entry, "kind") == "observed" {
-                format!(
-                    "{marker} {}  ·  {}",
-                    field(entry, "name"),
-                    field(entry, "model")
-                )
-            } else {
-                format!(
-                    "{marker} {}  ·  {}",
-                    field(entry, "name"),
-                    field(entry, "role")
-                )
-            };
-            rows.push(self.chat_line(
-                &title,
+                ),
                 if index == self.conversation.selected {
                     PanelTone::Accent
                 } else {
@@ -1101,28 +1291,11 @@ impl State {
                 },
                 width,
             ));
-            let subtitle = if queue {
-                format!("  {}", field(entry, "text").lines().next().unwrap_or(""))
-            } else if field(entry, "kind") == "observed" {
-                format!(
-                    "  {} · {} · #{} · {}",
-                    if entry["active"] == true {
-                        "active call"
-                    } else {
-                        "recent call"
-                    },
-                    field(entry, "status"),
-                    panel::fit(field(entry, "run_id"), 12),
-                    field(entry, "tool")
-                )
-            } else {
-                format!(
-                    "  {} · reported {}",
-                    field(entry, "agent_id"),
-                    field(entry, "status")
-                )
-            };
-            rows.push(self.chat_line(&subtitle, PanelTone::Muted, width));
+            rows.push(self.chat_line(
+                &format!("  {}", field(entry, "text").lines().next().unwrap_or("")),
+                PanelTone::Muted,
+                width,
+            ));
         }
         rows
     }
@@ -1167,14 +1340,14 @@ impl State {
                 "  Up/Down    Move within input · select commands or history",
                 "  Ctrl+J     New line · pasted text stays in the draft",
                 "  Tab        Complete command · switch input / content focus",
-                "  Esc        Restore a parked draft when input is focused",
+                "  Esc        Close agents · restore a parked draft from input",
                 "  Ctrl+O     Source audit · Enter/→ open · ← back",
                 "  F2         Activity / audit / agents / queue",
                 "  Wheel      Scroll directly · PgUp/PgDn also work",
                 "  F3         Collapse sidebar · F4 change theme",
                 "  F5         Reload appearance · F8 save appearance",
                 "  /filter    Text search · F9 all / commands / errors",
-                "  /agents    Inspect observed calls or select a registered recipient",
+                "  ←          Agents at draft start · ↑/↓ select · Enter/→ chat",
                 "  /queue     Inspect, take back, edit or cancel requests",
                 "  /reload    Restart client session and restore pending work",
                 "",
@@ -1221,8 +1394,15 @@ impl State {
                     "connected"
                 };
                 let hint = self.notice.clone().unwrap_or_else(|| {
+                    if self.conversation.view == View::Agents {
+                        return if self.conversation.detail {
+                            "← / Esc  back to agents".into()
+                        } else {
+                            "↑↓ select · Enter/→ choose · Esc back · ● current recipient".into()
+                        };
+                    }
                     format!(
-                        "{} · {status} · {} members / {} calls · {pending} queued · Tab focus · /help",
+                        "{} · {status} · {} members / {} calls · {pending} queued · ← agents · /help",
                         if self.conversation.content_focus {
                             "browse"
                         } else {
@@ -1287,6 +1467,7 @@ impl State {
                     crate::client::ui::Panel::Agents => {
                         let mut section =
                             vec![(format!(" Members · {}", agents.len()), PanelTone::Heading)];
+                        section.push((" ← choose agent".into(), PanelTone::Muted));
                         for agent in agents.iter().take(4) {
                             section.push((format!(" {}", field(agent, "name")), PanelTone::Accent));
                             section.push((
@@ -1396,6 +1577,150 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
+    }
+
+    #[test]
+    fn left_opens_agents_only_at_draft_start_and_escape_keeps_the_draft() {
+        let mut state = preview(28, 120);
+        input(&mut state, "中文 draft".as_bytes());
+        input(&mut state, b"\x1b[D");
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.conversation.composer.cursor(), "中文 draf".len());
+        input(&mut state, b"\x01\x1b[D");
+        assert_eq!(state.conversation.view, View::Agents);
+        assert!(state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "中文 draft");
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "中文 draft");
+        assert_eq!(state.conversation.composer.cursor(), 0);
+        input(&mut state, b"\x1b[D");
+        assert_eq!(
+            state.conversation.selected_agent.as_deref(),
+            Some("member:next")
+        );
+    }
+
+    #[test]
+    fn choosing_an_agent_returns_to_chat_and_preserves_the_current_edit() {
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("draft under review");
+        state.conversation.editing = Some("existing-request".into());
+        state.conversation.composer.home();
+        input(&mut state, b"\x1b[D\x1b[B\r");
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-builder")
+        );
+        assert_eq!(state.conversation.composer.text(), "draft under review");
+        assert_eq!(state.conversation.composer.cursor(), 0);
+        assert_eq!(
+            state.conversation.editing.as_deref(),
+            Some("existing-request")
+        );
+        assert!(state.conversation.submitting.is_none());
+        input(&mut state, b"\x1b[D");
+        assert_eq!(
+            state.conversation.selected_agent.as_deref(),
+            Some("member:example-builder")
+        );
+        input(&mut state, b"\x1b[B\x1b[C");
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-reviewer")
+        );
+        assert_eq!(state.conversation.composer.cursor(), 0);
+    }
+
+    #[test]
+    fn agent_panel_closes_before_typing_or_pasting_without_switching_recipient() {
+        let mut state = preview(28, 120);
+        state.conversation.target = Some("example-reviewer".into());
+        input(&mut state, b"\x1b[D");
+        input(&mut state, "继续".as_bytes());
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.conversation.composer.text(), "继续");
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-reviewer")
+        );
+        input(&mut state, b"\x01\x1b[D");
+        input(&mut state, b"\x1b[200~pasted \x1b[201~");
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.conversation.composer.text(), "pasted 继续");
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-reviewer")
+        );
+    }
+
+    #[test]
+    fn removed_agents_command_cannot_open_a_view_or_submit_a_request() {
+        let mut state = preview(28, 120);
+        assert!(state.chat_command("/agents").is_err());
+        input(&mut state, b"/agents\r");
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.conversation.composer.text(), "/agents");
+        assert!(state.conversation.submitting.is_none());
+        assert!(
+            crate::client::composer::SLASH_COMMANDS
+                .iter()
+                .all(|command| command.name != "/agents")
+        );
+    }
+
+    #[test]
+    fn agent_panel_adapts_to_small_screens_and_shows_how_to_return() {
+        for rows in [1, 3, 6, 10, 18, 36] {
+            for cols in [1, 4, 20, 60, 80, 120, 160] {
+                let mut state = preview(rows, cols);
+                state.chat_agents();
+                let frame = state.chat_frame(Instant::now());
+                assert_eq!(frame.rows.len(), usize::from(rows));
+                assert!(frame.cursor.0 < rows && frame.cursor.1 < cols);
+                let shot = display(&mut state);
+                assert_eq!(shot.screen().size(), (nonzero(rows), nonzero(cols)));
+                if rows >= 10 && cols >= 80 {
+                    let visible = shot.screen().contents();
+                    assert!(visible.contains("Agents"));
+                    assert!(visible.contains("Esc back"));
+                    assert!(!visible.contains("collab.join"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn agent_details_are_not_mouse_targets_and_editing_keys_reveal_the_draft() {
+        let mut state = preview(28, 160);
+        state.conversation.composer.set_text("draft");
+        state.conversation.composer.home();
+        state.chat_agents();
+        display(&mut state);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: state.chat_agent_list_width() + 5,
+            y: body_top(state.geometry.rows) + 5,
+            release: false,
+        });
+        assert_eq!(state.conversation.view, View::Agents);
+        assert_eq!(
+            state.conversation.selected_agent.as_deref(),
+            Some("member:next")
+        );
+        assert!(state.conversation.target.is_none());
+        state.chat_key(Key::Delete);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "raft");
+        state.chat_agents();
+        state.chat_character('\u{b}');
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(state.conversation.composer.is_empty());
     }
 
     #[test]
@@ -1683,10 +2008,10 @@ mod tests {
     }
 
     #[test]
-    fn slash_views_and_arrow_selection_preserve_unsubmitted_text() {
+    fn keyboard_views_and_arrow_selection_preserve_unsubmitted_text() {
         let mut state = preview(36, 120);
-        input(&mut state, b"/agents\r\x1b[B\r");
-        assert_eq!(state.conversation.view, View::Agents);
+        input(&mut state, b"\x1b[D\x1b[B\r");
+        assert_eq!(state.conversation.view, View::Activity);
         assert_eq!(
             state.conversation.target.as_deref(),
             Some("example-builder")
