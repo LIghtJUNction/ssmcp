@@ -1,0 +1,94 @@
+{
+  "source_commit": "9f1008e3966542a8f4d1134451573a605cf29e39",
+  "phase": "check",
+  "started_at": "2026-11-18T05:26:56.569690+00:00",
+  "results": [
+    {
+      "stage": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 2.47,
+      "summary": []
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "-j1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 59.1,
+      "summary": [
+        "    Checking ssmcp v0.8.0 (${SOURCE_ROOT})",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 58.67s"
+      ]
+    },
+    {
+      "stage": "client-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::",
+        "-j1",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 120.85,
+      "summary": [
+        "test client::zero::tests::command_output_is_bounded_before_allocation ... ok",
+        "test client::zero::tests::inventory_does_not_expand_with_paths_or_diagnostics ... ok",
+        "test client::zero::tests::recovery_has_no_generic_execution_or_identity_arguments ... ok",
+        "test client::zero::tests::retry_delay_is_bounded_and_grows ... ok",
+        "test resources::client::tests::malformed_or_unbounded_pages_do_not_escape_the_relay ... ok",
+        "test resources::client::tests::unknown_client_resource_types_and_descriptors_pass_through ... ok",
+        "test client::steering::tests::trimmed_server_history_marks_requests_uncertain_without_replaying ... ok",
+        "",
+        "test result: ok. 299 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 8.56s",
+        ""
+      ]
+    },
+    {
+      "stage": "fixture",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--message-format=json",
+        "-j1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.39,
+      "summary": [
+        "{\"reason\":\"compiler-artifact\",\"package_id\":\"registry+https://github.com/rust-lang/crates.io-index#matchit@0.8.4\",\"manifest_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.8.4/Cargo.toml\",\"target\":{\"kind\":[\"lib\"],\"crate_types\":[\"lib\"],\"name\":\"matchit\",\"src_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matchit-0.8.4/src/lib.rs\",\"edition\":\"2021\",\"doc\":true,\"doctest\":true,\"test\":true},\"profile\":{\"opt_level\":\"0\",\"debuginfo\":0,\"debug_assertions\":true,\"overflow_checks\":true,\"test\":false},\"features\":[\"default\"],\"filenames\":[\"${BUILD_ROOT}/debug/build/matchit/f0d2ebc8d5fbc262/out/libmatchit-f0d2ebc8d5fbc262.rlib\",\"${BUILD_ROOT}/debug/build/matchit/f0d2ebc8d5fbc262/out/libmatchit-f0d2ebc8d5fbc262.rmeta\"],\"executable\":null,\"fresh\":true}",
+        "{\"reason\":\"compiler-artifact\",\"package_id\":\"registry+https://github.com/rust-lang/crates.io-index#axum@0.8.9\",\"manifest_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/Cargo.toml\",\"target\":{\"kind\":[\"lib\"],\"crate_types\":[\"lib\"],\"name\":\"axum\",\"src_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/lib.rs\",\"edition\":\"2021\",\"doc\":true,\"doctest\":true,\"test\":true},\"profile\":{\"opt_level\":\"0\",\"debuginfo\":0,\"debug_assertions\":true,\"overflow_checks\":true,\"test\":false},\"features\":[\"form\",\"http1\",\"json\",\"query\",\"tokio\",\"ws\"],\"filenames\":[\"${BUILD_ROOT}/debug/build/axum/89f3dc15d309814d/out/libaxum-89f3dc15d309814d.rlib\",\"${BUILD_ROOT}/debug/build/axum/89f3dc15d309814d/out/libaxum-89f3dc15d309814d.rmeta\"],\"executable\":null,\"fresh\":true}",
+        "{\"reason\":\"compiler-artifact\",\"package_id\":\"registry+https://github.com/rust-lang/crates.io-index#vt100@0.18.1\",\"manifest_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/vt100-0.18.1/Cargo.toml\",\"target\":{\"kind\":[\"lib\"],\"crate_types\":[\"lib\"],\"name\":\"vt100\",\"src_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/vt100-0.18.1/src/lib.rs\",\"edition\":\"2024\",\"doc\":true,\"doctest\":true,\"test\":true},\"profile\":{\"opt_level\":\"0\",\"debuginfo\":0,\"debug_assertions\":true,\"overflow_checks\":true,\"test\":false},\"features\":[\"default\",\"std\"],\"filenames\":[\"${BUILD_ROOT}/debug/build/vt100/4f87919f2750fa83/out/libvt100-4f87919f2750fa83.rlib\",\"${BUILD_ROOT}/debug/build/vt100/4f87919f2750fa83/out/libvt100-4f87919f2750fa83.rmeta\"],\"executable\":null,\"fresh\":true}",
+        "{\"reason\":\"compiler-artifact\",\"package_id\":\"registry+https://github.com/rust-lang/crates.io-index#miniz_oxide@0.9.1\",\"manifest_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/miniz_oxide-0.9.1/Cargo.toml\",\"target\":{\"kind\":[\"lib\"],\"crate_types\":[\"lib\"],\"name\":\"miniz_oxide\",\"src_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/miniz_oxide-0.9.1/src/lib.rs\",\"edition\":\"2021\",\"doc\":true,\"doctest\":true,\"test\":true},\"profile\":{\"opt_level\":\"0\",\"debuginfo\":0,\"debug_assertions\":true,\"overflow_checks\":true,\"test\":false},\"features\":[\"default\",\"with-alloc\"],\"filenames\":[\"${BUILD_ROOT}/debug/build/miniz_oxide/605c71cb6ae6a31f/out/libminiz_oxide-605c71cb6ae6a31f.rlib\",\"${BUILD_ROOT}/debug/build/miniz_oxide/605c71cb6ae6a31f/out/libminiz_oxide-605c71cb6ae6a31f.rmeta\"],\"executable\":null,\"fresh\":true}",
+        "{\"reason\":\"compiler-artifact\",\"package_id\":\"registry+https://github.com/rust-lang/crates.io-index#reqwest@0.12.28\",\"manifest_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/Cargo.toml\",\"target\":{\"kind\":[\"lib\"],\"crate_types\":[\"lib\"],\"name\":\"reqwest\",\"src_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/lib.rs\",\"edition\":\"2021\",\"doc\":true,\"doctest\":true,\"test\":true},\"profile\":{\"opt_level\":\"0\",\"debuginfo\":0,\"debug_assertions\":true,\"overflow_checks\":true,\"test\":false},\"features\":[\"__rustls\",\"__rustls-ring\",\"__tls\",\"json\",\"rustls-tls\",\"rustls-tls-webpki-roots\",\"rustls-tls-webpki-roots-no-provider\"],\"filenames\":[\"${BUILD_ROOT}/debug/build/reqwest/0aa93d0fdf148597/out/libreqwest-0aa93d0fdf148597.rlib\",\"${BUILD_ROOT}/debug/build/reqwest/0aa93d0fdf148597/out/libreqwest-0aa93d0fdf148597.rmeta\"],\"executable\":null,\"fresh\":true}",
+        "{\"reason\":\"compiler-artifact\",\"package_id\":\"registry+https://github.com/rust-lang/crates.io-index#toml@0.8.23\",\"manifest_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml-0.8.23/Cargo.toml\",\"target\":{\"kind\":[\"lib\"],\"crate_types\":[\"lib\"],\"name\":\"toml\",\"src_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml-0.8.23/src/lib.rs\",\"edition\":\"2021\",\"doc\":true,\"doctest\":true,\"test\":true},\"profile\":{\"opt_level\":\"0\",\"debuginfo\":0,\"debug_assertions\":true,\"overflow_checks\":true,\"test\":false},\"features\":[\"default\",\"display\",\"parse\"],\"filenames\":[\"${BUILD_ROOT}/debug/build/toml/8a4aa835e9cd5b6c/out/libtoml-8a4aa835e9cd5b6c.rlib\",\"${BUILD_ROOT}/debug/build/toml/8a4aa835e9cd5b6c/out/libtoml-8a4aa835e9cd5b6c.rmeta\"],\"executable\":null,\"fresh\":true}",
+        "{\"reason\":\"compiler-artifact\",\"package_id\":\"registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9\",\"manifest_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.10.9/Cargo.toml\",\"target\":{\"kind\":[\"lib\"],\"crate_types\":[\"lib\"],\"name\":\"sha2\",\"src_path\":\"${USER_HOME}/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.10.9/src/lib.rs\",\"edition\":\"2018\",\"doc\":true,\"doctest\":true,\"test\":true},\"profile\":{\"opt_level\":\"0\",\"debuginfo\":0,\"debug_assertions\":true,\"overflow_checks\":true,\"test\":false},\"features\":[\"default\",\"std\"],\"filenames\":[\"${BUILD_ROOT}/debug/build/sha2/a51dbb38669e9063/out/libsha2-a51dbb38669e9063.rlib\",\"${BUILD_ROOT}/debug/build/sha2/a51dbb38669e9063/out/libsha2-a51dbb38669e9063.rmeta\"],\"executable\":null,\"fresh\":true}",
+        "{\"reason\":\"compiler-artifact\",\"package_id\":\"path+file://${SOURCE_ROOT}#ssmcp@0.8.0\",\"manifest_path\":\"${SOURCE_ROOT}/Cargo.toml\",\"target\":{\"kind\":[\"lib\"],\"crate_types\":[\"lib\"],\"name\":\"ssmcp\",\"src_path\":\"${SOURCE_ROOT}/src/lib.rs\",\"edition\":\"2024\",\"doc\":true,\"doctest\":true,\"test\":true},\"profile\":{\"opt_level\":\"0\",\"debuginfo\":1,\"debug_assertions\":true,\"overflow_checks\":true,\"test\":true},\"features\":[],\"filenames\":[\"${BUILD_ROOT}/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988\"],\"executable\":\"${BUILD_ROOT}/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988\",\"fresh\":true}",
+        "{\"reason\":\"build-finished\",\"success\":true}",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s"
+      ]
+    }
+  ],
+  "status": "passed",
+  "finished_at": "2026-11-18T05:29:59.406936+00:00"
+}
