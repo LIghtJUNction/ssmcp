@@ -475,7 +475,7 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed),
             ));
             fs::create_dir(&path).unwrap();
-            Self(path)
+            Self(path.canonicalize().unwrap())
         }
         fn write(&self, path: &str, bytes: impl AsRef<[u8]>) {
             let target = self.0.join(path);
@@ -580,7 +580,8 @@ mod tests {
                 "{draft}"
             );
         }
-        let absolute = format!("@\"{}\"", fixture.0.join("allowed.txt").display());
+        let path = fixture.0.join("allowed.txt");
+        let absolute = format!("@\"{}\"", path.to_string_lossy().replace('\\', "\\\\"));
         assert_eq!(
             payload(&expand(&absolute, &workspace, &context).await.unwrap())["references"][0]["path"],
             "allowed.txt"

@@ -623,8 +623,8 @@ def main():
         checksums()
     elif args.command == "check-registry":
         check_registry_dependencies()
-        for package, release_version in publication_packages():
-            check_registry(package=package, release_version=release_version)
+        for package_name, release_version in publication_packages():
+            check_registry(package=package_name, release_version=release_version)
     elif args.command in {"publish", "publish-crate"}:
         publish()
     else:
