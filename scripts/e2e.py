@@ -44,6 +44,8 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
     "ssmcp.fs.read_image", "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text", "ssmcp.fs.events",
     "ssmcp.context.roots", "ssmcp.skills.list", "ssmcp.skills.read", "ssmcp.skills.view",
+    "ssmcp.context.status", "ssmcp.context.list", "ssmcp.context.read",
+    "ssmcp.context.compact", "ssmcp.context.fork", "ssmcp.context.switch",
     "ssmcp.agents.list", "ssmcp.agents.read", "ssmcp.agents.resolve",
     "ssmcp.net.listen", "ssmcp.net.accept", "ssmcp.net.connect", "ssmcp.net.read",
     "ssmcp.net.write", "ssmcp.net.shutdown", "ssmcp.net.close", "ssmcp.net.list",
@@ -56,7 +58,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.harnesses.load", "ssmcp.audit.events",
     "ssmcp.plugins.list", "ssmcp.plugins.load", "ssmcp.plugins.unload",
-    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.history", "ssmcp.ui.harness",
+    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.history", "ssmcp.ui.harness",
     "ssmcp.browser.discover",
     "ssmcp.browser.status",
     "ssmcp.browser.launch",
@@ -727,8 +729,8 @@ class Harness:
         status, result, _ = self.rpc("notifications/initialized", notification=True)
         self.check(status == 202 and result is None, "initialized notification returns empty 202")
         status, result, headers = self.rpc("tools/list")
-        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab"],
-                   "legacy tools/list exposes list, code_mode and collab")
+        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
+                   "legacy tools/list exposes list, code_mode, collab and invite")
         inventory = self.public_call("list")
         self.check(len(inventory["clients"]) == 1
                    and inventory["clients"][0]["id"] == self.client_id
@@ -767,7 +769,7 @@ class Harness:
         self.check(status == 200 and result["result"]["resultType"] == "complete"
                    and MODERN in result["result"]["supportedVersions"], "modern server/discover completes")
         status, result, _ = self.rpc("tools/list", modern=True)
-        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab"],
+        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
                    "modern tools/list exposes the same public tools")
         self.check(self.rpc("tools/list", modern=True, headers={"Mcp-Method": "ping"})[0] == 400,
                    "modern method header must match body")

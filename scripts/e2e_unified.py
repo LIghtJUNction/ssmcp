@@ -313,8 +313,8 @@ class Unified(SessionFeatures):
     def catalog(self):
         for modern in (False, True):
             status, result, _ = self.rpc("tools/list", modern=modern)
-            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["list", "code_mode"],
-                       f"public MCP exposes exactly list/code_mode (modern={modern})")
+            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
+                       f"public MCP exposes exactly list/code_mode/collab/invite (modern={modern})")
         harness_names = {"codex", "claude", "pi", "opencode"}
         provider_names = harness_names | {"playwright"}
         discovery = self.call("ssmcp.harnesses.list")
