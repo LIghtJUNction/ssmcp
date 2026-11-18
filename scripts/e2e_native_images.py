@@ -315,6 +315,24 @@ def run(harness, binary, temporary, output):
         harness.check(harness.ui("/display/conversation/draft/text") == "",
                       "real graphics and cell-size replies do not enter the composer")
 
+        def observe(name, arguments=None):
+            # UI actions return a full state snapshot, which can legitimately
+            # spill as this scenario grows. guard_result preserves isError;
+            # keep only that checked acknowledgement in code_mode. Narrow UI
+            # projections and X11 pixel assertions below verify each effect.
+            response = harness.response(
+                "const result=await call(%s,%s,%s);"
+                "if(result.isError)throw new Error(JSON.stringify(result));"
+                "const data=result.structuredContent;"
+                "if(data?.spilled&&!data.artifact?.complete)throw new Error('incomplete UI action result');"
+                "return {ok:true};"
+                % (json.dumps(harness.client_id), json.dumps(name), json.dumps(arguments or {}))
+            )
+            if harness.messages(response):
+                raise AssertionError("an unbound UI action consumed a queued user requirement")
+            if response.get("structuredContent", {}).get("result") != {"ok": True}:
+                raise AssertionError("native UI action did not return its checked acknowledgement")
+
         def read_image(name="native-grid.png"):
             result = harness.response(
                 "const result=await call(%s,'ssmcp.fs.read_image',{path:%s});"
@@ -351,7 +369,7 @@ def run(harness, binary, temporary, output):
             time.sleep(0.15)
             harness.check(not has_fixture_pixels(), label)
 
-        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        observe("ssmcp.ui.action", {"action": "logs.clear"})
         read_image()
         point = visible("native ztty pixels preserve the complete single-pixel 128 x 64 grid")
         native.image().save(output / "native-image.png")
@@ -364,10 +382,10 @@ def run(harness, binary, temporary, output):
         native.tap("Escape")
         native.wait(lambda: not harness.ui("/display/help"), "Activity view")
         visible("returning to Activity restores the cached native image")
-        harness.observe("ssmcp.ui.message", {"text": "\n".join(f"- Scroll line {i}" for i in range(48))})
+        observe("ssmcp.ui.message", {"text": "\n".join(f"- Scroll line {i}" for i in range(48))})
         absent("new text scrolls the earlier image out without leaving an overlay")
         for _ in range(6):
-            harness.observe("ssmcp.ui.action", {"action": "logs.page-up"})
+            observe("ssmcp.ui.action", {"action": "logs.page-up"})
             time.sleep(0.06)
             if locate_grid(native.image(), raster):
                 break
@@ -376,7 +394,7 @@ def run(harness, binary, temporary, output):
         native.resize(24, 80)
         native.wait(lambda: harness.ui("/display/rows") == 24
                     and harness.ui("/display/cols") == 80, "actual ztty PTY resize")
-        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        observe("ssmcp.ui.action", {"action": "logs.clear"})
         read_image()
         x, y = visible("native image is redrawn after an actual terminal resize")
         panes = harness.ui("/display/panes")
@@ -385,7 +403,7 @@ def run(harness, binary, temporary, output):
                       and y + raster.height <= 12 + panes["input"]["row"] * native.ch,
                       "resized image pixels remain inside Activity, above the composer")
         native.image().save(output / "resized-image.png")
-        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        observe("ssmcp.ui.action", {"action": "logs.clear"})
         absent("clearing Activity removes native image pixels")
         native.image().save(output / "cleared-image.png")
         read_image()
@@ -400,7 +418,7 @@ def run(harness, binary, temporary, output):
         tall = detail_image(600, 2400)
         tall.save(harness.workspace / "native-tall.png")
         tall.save(output / "source-tall.png")
-        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        observe("ssmcp.ui.action", {"action": "logs.clear"})
         read_image("native-tall.png")
 
         def crop_visible(source, y, label):
@@ -414,14 +432,14 @@ def run(harness, binary, temporary, output):
         harness.check(not initial["following"] and initial["rows_below"] > 0,
                       "a new tall image pauses at its heading with more image rows below")
         native.image().save(output / "tall-image-top.png")
-        harness.observe("ssmcp.ui.message", {"text": "Later activity preserves the image reading position."})
+        observe("ssmcp.ui.message", {"text": "Later activity preserves the image reading position."})
         after_message = harness.ui("/display/events")
         harness.check(after_message["scroll"] == initial["scroll"]
                       and not after_message["following"],
                       "later activity does not move a reader inspecting the tall image")
         harness.check(crop_visible(tall, 0, "the top image crop survives later activity") == top,
                       "new activity keeps the native image at the same screen position")
-        harness.observe("ssmcp.ui.action", {"action": "logs.page-down"})
+        observe("ssmcp.ui.action", {"action": "logs.page-down"})
         native.wait(lambda: harness.ui("/display/events/scroll") > initial["scroll"],
                     "long-image scroll position")
         scrolled = harness.ui("/display/events")
@@ -454,7 +472,7 @@ def run(harness, binary, temporary, output):
                       "the width-fitting fixture stays within ztty's decoded-image budget")
         wide.save(harness.workspace / "native-width-fit.png")
         wide.save(output / "source-width-fit.png")
-        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        observe("ssmcp.ui.action", {"action": "logs.clear"})
         read_image("native-width-fit.png")
         fitted_top = crop_visible(fitted, 0, "wide source fits Activity width and retains visible text and 1px details")
         fitted_initial = harness.ui("/display/events")
@@ -463,7 +481,7 @@ def run(harness, binary, temporary, output):
         harness.check(fitted_top[0] + fitted.width == 12 + panes["logs"]["cols"] * native.cw,
                       "the width-fitted image reaches the Activity edge without overflow")
         native.image().save(output / "width-fit-image-top.png")
-        harness.observe("ssmcp.ui.action", {"action": "logs.page-down"})
+        observe("ssmcp.ui.action", {"action": "logs.page-down"})
         native.wait(lambda: harness.ui("/display/events/scroll") > fitted_initial["scroll"],
                     "width-fitted image scroll position")
         fitted_scroll = harness.ui("/display/events/scroll")
@@ -486,7 +504,7 @@ def run(harness, binary, temporary, output):
         oversized.save(output / "source-over-terminal-limit.png")
         harness.check(oversized.width * oversized.height * 4 > 16 * 1024 * 1024,
                       "the rejection fixture exceeds ztty's decoded-image budget")
-        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        observe("ssmcp.ui.action", {"action": "logs.clear"})
         read_image("native-over-terminal-limit.png")
 
         def rejected_image_settled():
@@ -500,7 +518,7 @@ def run(harness, binary, temporary, output):
         harness.check(locate_grid(native.image(), oversized_display.crop((0, 0, fitted_width, 128))) is None,
                       "the rejected image does not leave a native width-fitted placement")
         native.image().save(output / "rejected-image-fallback.png")
-        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        observe("ssmcp.ui.action", {"action": "logs.clear"})
         read_image()
         recovered = visible("a later small image remains pixel-exact native after a terminal rejection")
         native.image().save(output / "native-after-rejection.png")
