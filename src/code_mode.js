@@ -497,7 +497,7 @@ const bootstrap = `(() => {
   const say = (id, message) => workspaceResult(id, 'ssmcp.ui.message',
     typeof message === 'string' ? {text: message} : message);
   const ui = freeze(Object.fromEntries(
-    ['get', 'set', 'action', 'filter', 'message'].map(name =>
+    ['get', 'set', 'action', 'filter', 'message', 'present'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.ui.' + name, args)])
   ));
   const sessions = freeze(Object.fromEntries(
@@ -521,6 +521,12 @@ const bootstrap = `(() => {
   });
   const context = freeze({
     roots: id => workspaceResult(id, 'ssmcp.context.roots'),
+    status: id => workspaceResult(id, 'ssmcp.context.status'),
+    read: (id, args = {}) => workspaceResult(id, 'ssmcp.context.read', args),
+    list: id => workspaceResult(id, 'ssmcp.context.list'),
+    compact: (id, args = {}) => workspaceResult(id, 'ssmcp.context.compact', args),
+    fork: (id, args = {}) => workspaceResult(id, 'ssmcp.context.fork', args),
+    switch: (id, args) => workspaceResult(id, 'ssmcp.context.switch', args),
   });
   const skills = freeze({
     list: (id, args) => workspaceResult(id, 'ssmcp.skills.list', args),

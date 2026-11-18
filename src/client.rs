@@ -7,6 +7,7 @@ mod clipboard;
 pub(crate) mod completion;
 mod composer;
 mod config;
+pub(crate) mod context_memory;
 
 pub(crate) use config::BrowserSettings;
 
@@ -21,6 +22,7 @@ pub(crate) mod input;
 pub(crate) mod interface;
 mod onboarding;
 mod panel;
+pub(crate) mod presentation;
 #[cfg(test)]
 mod protocol_tests;
 pub(crate) mod references;
@@ -1388,6 +1390,15 @@ pub async fn run() -> crate::Result<()> {
     }
     interface::initialize_path(options.ui_config.as_deref());
     render::configure(ui.clone());
+    if let Err(error) = context_memory::initialize() {
+        render::status(
+            "context",
+            "Warning",
+            &format!(
+                "Local memory unavailable; conversation history and drafts remain usable: {error}"
+            ),
+        );
+    }
     steering::restore_handoff()?;
     let mut attachment = if let Some(runner) = &service {
         Some(crate::session::attach::serve(runner.directory().to_path_buf(), None).await?)

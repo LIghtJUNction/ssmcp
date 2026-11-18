@@ -304,3 +304,31 @@ test('GIF and WebP retain decoded size, image count and encoded aggregate budget
     else assert.equal(result(record).reason, null);
   }
 });
+
+test('ui.present preserves typed arguments and the native acceptance receipt', async () => {
+  const document = {
+    title: '中文结果', kind: 'answer', idempotency_key: 'presentation_1',
+    blocks: [{ type: 'metrics', items: [{ label: '检查', value: '42' }] }],
+  };
+  const receipt = {
+    shown: true, accepted: true, message_id: 'message_native',
+    history_saved: true, duplicate: false, format: 'intelligence_ui.v1', block_count: 1,
+  };
+  const record = await run('return await ui.present("one", ' + JSON.stringify(document) + ');',
+    request => {
+      assert.equal(request.name, 'ssmcp.ui.present');
+      assert.equal(request.client_id, 'one');
+      assert.deepEqual(request.arguments, document);
+      return { ok: true, value: { structuredContent: receipt, isError: false } };
+    });
+  assert.equal(record.exitCode, 0, record.stderr || error(record));
+  assert.deepEqual(result(record), receipt);
+  assert.equal(record.requests.length, 1);
+  const rejected = await run(
+    'try { await ui.present("one", {}); } catch (error) { return {reason:error.message}; }',
+    () => ({ ok: true, value: {
+      isError: true, content: [{ type: 'text', text: 'invalid presentation: title required' }],
+    } }));
+  assert.equal(rejected.exitCode, 0, rejected.stderr || error(rejected));
+  assert.deepEqual(result(rejected), { reason: 'invalid presentation: title required' });
+});

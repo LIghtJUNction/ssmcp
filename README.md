@@ -106,6 +106,8 @@ return await exec.run(clientId, {
 | 回答问题 | **Shift + ↑** 打开待答问题，保留普通草稿 |
 | 继续旧会话 | `/resume` 选择本工作区的 JSONL 历史 |
 | 交接给另一个 Agent | `/handoff [备注]` 生成上下文文件与可编辑引用草稿，选好收件人后发送 |
+| 查看上下文 | `/context`、`/memory` 查看当前分支与有界记忆 |
+| 压缩与分支 | `/compact [摘要]`、`/fork [名称]`、`/switch CONTEXT_ID` |
 | 查看原生工具 | `/pi`、`/cc`、`/codex` 列出真实目录；`TOOL {...}` 显式调用 |
 | 浏览长输出 | 选择事件后 Enter 折叠或展开；PgUp / PgDn、滚轮滚动 |
 | 复制与帮助 | `/copy` 复制最近回复；**F7** 原生选择；`/help` 打开完整帮助 |
@@ -113,6 +115,10 @@ return await exec.run(clientId, {
 回复支持 Markdown 和常见代码块语法高亮。读取图片后，客户端会生成终端缩略图。超过 8 KiB 的整段粘贴会保存为私有工作区文件并插入引用，便于继续补充文字。
 
 Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重试可带幂等键，回执提供消息 ID 与历史保存状态。使用 `ssmcp.ui.ask` 非阻塞提问，再通过 `ssmcp.ui.questions` 读取答案。这些工具提供本地沟通通道，外部聊天应用仍决定自己的消息显示方式。
+
+`ssmcp.ui.present` 支持文字、卡片、指标、表格、进度、步骤与条形图，复用同一条消息历史和复制通道。[结构化显示](docs/intelligence-ui.md)
+
+分支上下文保留消息来源 ID 与内容哈希，并限制保存和返回的大小。`/compact` 可使用本地抽取或你提供的摘要；`/fork` 和 `/switch` 管理分支。它们不启动模型，也不重放历史任务。[上下文与分支](docs/context-memory.md)
 
 未选择接收人时，用户要求由下一次符合条件的单个调用领取；选择成员后，仅绑定该成员身份的调用能领取。**已交付**表示要求进入了工具响应，执行进度仍需由接收者反馈。[输入与交付语义](docs/client-input.md) · [成员协作](docs/agent-collaboration.md)
 

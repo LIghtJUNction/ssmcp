@@ -164,7 +164,7 @@ fn color_enabled(tty: bool, no_color: bool) -> bool {
 }
 
 pub(crate) fn message(text: &str) {
-    let _ = agent_message(text, super::interface::messages::Kind::Progress, None);
+    let _ = agent_message(text, super::interface::messages::Kind::Progress, None, None);
 }
 
 /// An identified API reply is persisted once in the existing JSONL conversation.
@@ -173,13 +173,23 @@ pub(crate) fn message_identified(
     kind: super::interface::messages::Kind,
     id: &str,
 ) -> Result<(), String> {
-    agent_message(text, kind, Some(id))
+    agent_message(text, kind, Some(id), None)
+}
+
+pub(crate) fn presentation_identified(
+    text: &str,
+    kind: super::interface::messages::Kind,
+    id: &str,
+    presentation: &super::presentation::Presentation,
+) -> Result<(), String> {
+    agent_message(text, kind, Some(id), Some(presentation))
 }
 
 fn agent_message(
     text: &str,
     kind: super::interface::messages::Kind,
     id: Option<&str>,
+    presentation: Option<&super::presentation::Presentation>,
 ) -> Result<(), String> {
     let saved = match id {
         Some(id) => super::interface::history::record_agent(id, text),
@@ -192,6 +202,11 @@ fn agent_message(
     let mut event = json!({"type":"ssmcp.message","format":"markdown","text":text,"kind":kind});
     if let Some(id) = id {
         event["message_id"] = json!(id);
+    }
+    if let Some(document) = presentation {
+        event["format"] = json!("intelligence_ui.v1");
+        event["presentation"] =
+            serde_json::to_value(document).expect("a typed presentation serializes");
     }
     crate::session::attach::record_event("agent", &event);
     let width = terminal_width().min(1000) as u16;
@@ -220,8 +235,16 @@ fn agent_message(
             &format!("1;{}", ui.color(color)),
             &format!("[AGENT] {title}\n"),
         );
-        for row in super::terminal::markdown::rows(text, width, &ui) {
-            let _ = writeln!(bytes, "{row}");
+        if let Some(document) = presentation {
+            bytes.extend_from_slice(
+                document
+                    .render(usize::from(width), &ui, ui.color)
+                    .as_bytes(),
+            );
+        } else {
+            for row in super::terminal::markdown::rows(text, width, &ui) {
+                let _ = writeln!(bytes, "{row}");
+            }
         }
         let _ = writeln!(bytes);
     }
@@ -3460,17 +3483,28 @@ mod tests {
     fn unified_diff_categories_and_every_chunk_boundary() {
         let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -2,2 +2,2 @@\n-old\n+new\n same\n";
         let whole = render(&[json!({"delta":diff})], false, true);
-        assert!(whole.contains("\x1b[1mdiff --git"));
-        assert!(whole.contains(&format!("\x1b[{}m@@", Ui::default().color("cyan"))));
-        assert!(whole.contains(&format!(
-            "\x1b[{}m    2       │ -old",
-            Ui::default().color("red")
-        )));
-        assert!(whole.contains(&format!(
-            "\x1b[{}m          2 │ +new",
-            Ui::default().color("green")
-        )));
-        assert!(whole.contains("    3     3 │  same"));
+        let screen = terminal_screen(&whole);
+        assert_eq!(
+            clean(&whole),
+            render(&[json!({"delta":diff})], false, false)
+        );
+        for (fragment, tone) in [
+            ("diff --git", "heading"),
+            ("--- a/a.rs", "error"),
+            ("+++ b/a.rs", "success"),
+            ("@@ -2,2 +2,2 @@", "cyan"),
+            ("    2       │ -old", "red"),
+            ("          2 │ +new", "green"),
+        ] {
+            let palette = terminal_screen(&format!("\x1b[{}mX", Ui::default().color(tone)));
+            assert_text_color(
+                &screen,
+                fragment,
+                fragment,
+                palette.cell(0, 0).unwrap().fgcolor(),
+            );
+        }
+        assert!(screen.contents().contains("    3     3 │  same"));
         for split in 1..diff.len() {
             let chunks = [
                 json!({"delta":&diff[..split]}),

@@ -897,6 +897,7 @@ async fn execute(
         let access_token = access_token.clone();
         let audit_run = host_run.clone();
         Box::pin(code_mode::AUDIT_RUN.scope(audit_run, async move {
+            let capture_memory = matches!(&request, HostRequest::Call { .. });
             let (client_id, operation) = match request {
                 HostRequest::Builtin { name, arguments } => {
                     if name == "collab.receive"
@@ -959,17 +960,120 @@ async fn execute(
                 .await
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             broker.client(&user, &authorization, &client_id).await?;
+            if capture_memory {
+                let _ = code_mode::AUDIT_RUN.try_with(|run| run.capture_context(&client_id, &result));
+            }
             Ok(result)
         }))
     });
     let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
     audit_report.finish(&result).await;
-    let response = crate::code_mode::tool_result(result);
-    let messages = claim_user_messages(&audit_report).await;
+    let response =
+        append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
+    let messages = claim_user_messages(&audit_report, &response).await;
     Ok(append_user_messages(response, messages))
 }
 
-async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
+fn context_memory_addition(memories: &[Value], deferred: bool) -> Value {
+    let mut text = String::from(
+        "SESSION CONTEXT — restored local workspace history for reference\nThis is saved context, not a new user requirement or native tool output. It may describe earlier work.\n",
+    );
+    for memory in memories {
+        text.push('\n');
+        text.push_str(&memory.to_string());
+        text.push('\n');
+    }
+    if deferred {
+        text.push_str("\nSome saved context was omitted to preserve the response budget. Use call(client_id, \"ssmcp.context.read\", {}) for the complete local branch; an unbound read does not claim next-caller requirements; explicit agent bindings retain their delivery semantics.\n");
+    }
+    json!({
+        "structuredContent":{
+            "context_memories":memories,
+            "context_memories_deferred":deferred
+        },
+        "content":[{"type":"text","text":text}]
+    })
+}
+
+/// Add memory outside the JavaScript result so returning only stdout cannot lose
+/// it. The complete addition (including its text copy) is bounded before the
+/// user queue computes the remaining response budget.
+fn append_context_memories(mut response: Value, run: &code_mode::AuditRun) -> Value {
+    let (memories, mut deferred) = run.context_memories();
+    if memories.is_empty() && !deferred {
+        return response;
+    }
+    if !response.get("content").is_some_and(Value::is_array)
+        || response.get("structuredContent").is_some_and(|value| {
+            !value.is_object()
+                || value.get("context_memories").is_some()
+                || value.get("context_memories_deferred").is_some()
+        })
+    {
+        return response;
+    }
+    let base = response.to_string().len();
+    let available = (crate::wire::MAX_FRAME - 8192)
+        .saturating_sub(base)
+        .min(code_mode::MAX_CONTEXT_BYTES);
+    let mut selected = Vec::new();
+    for memory in memories {
+        selected.push(memory);
+        // Reserve the omission notice while selecting. The patch envelope is
+        // larger than merging the same fields, so its encoded length is a safe
+        // upper bound without repeatedly cloning a multi-megabyte tool result.
+        if context_memory_addition(&selected, true).to_string().len() > available {
+            selected.pop();
+            deferred = true;
+        }
+    }
+    let mut addition = context_memory_addition(&selected, deferred);
+    if addition.to_string().len() > available {
+        addition = context_memory_addition(&[], true);
+    }
+    // An empty-budget result still has the frame's existing notice reserve.
+    // Keep half of it for a possible queue deferral notice and JSON-RPC framing.
+    if base.saturating_add(addition.to_string().len()) > crate::wire::MAX_FRAME - 4096 {
+        return response;
+    }
+    let fields = addition["structuredContent"]
+        .as_object()
+        .expect("context fields");
+    let structured = response
+        .as_object_mut()
+        .expect("MCP result")
+        .entry("structuredContent")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("structured result checked");
+    for (key, value) in fields {
+        structured.insert(key.clone(), value.clone());
+    }
+    response["content"]
+        .as_array_mut()
+        .expect("MCP content")
+        .extend(
+            addition["content"]
+                .as_array()
+                .expect("context text")
+                .iter()
+                .cloned(),
+        );
+    response
+}
+
+fn delivery_budget(response: &Value) -> usize {
+    // User text appears both in structuredContent and in a textual block.
+    // Reserve framing/header space before claiming any request, so a full
+    // native result plus saved memory never consumes work it cannot return.
+    (crate::wire::MAX_FRAME
+        .saturating_sub(response.to_string().len())
+        .saturating_sub(16 * 1024)
+        / 2)
+    .min(crate::steering::MAX_DELIVERY_BYTES)
+}
+
+async fn claim_user_messages(report: &CodeRunReport, response: &Value) -> Vec<Value> {
     let mut eligible = Vec::new();
     // Finish all asynchronous authorization lookups before claiming anything.
     // Cancellation while validating leaves every pending record editable.
@@ -1008,6 +1112,7 @@ async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
     }
     let mut messages = Vec::new();
     let mut bytes = 0usize;
+    let budget = delivery_budget(response);
     for (session, agent_id) in eligible {
         if !session.is_alive() {
             continue;
@@ -1017,7 +1122,7 @@ async fn claim_user_messages(report: &CodeRunReport) -> Vec<Value> {
             &report.run.context.run_id,
             agent_id.as_deref(),
             crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len()),
-            crate::steering::MAX_DELIVERY_BYTES.saturating_sub(bytes),
+            budget.saturating_sub(bytes),
         );
         bytes += claimed
             .iter()
@@ -1074,7 +1179,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript that orchestrates the clients returned by list. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools.search(clientId,{query,name_prefix,limit,include_schemas,cursor}) for bounded discovery, await tools(clientId, cursor?) for original native schema pages, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; rtk.status/run/start for installed RTK command-output compression; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates; collab.join/list/update/send/receive/ack/leave for session agents; collab.bind(clientId,{agent_id,token}) authenticates this run for exact-agent user messages. Check structuredContent.user_messages and the USER REQUIREMENTS text block on each code_mode response for local user instructions. Use the direct collab tool for receive waits over 1 second. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All registered native provider actions run through call over the client's outbound HTTPS/WebSocket or SSH connection. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
+            "description":"Run JavaScript that orchestrates the clients returned by list. Optional controller {name,model} attributes each call on updated terminals; model identity is caller-reported, never inferred. Globals: clients (metadata array), await call(clientId, nativeToolName, arguments = {}), await tools.search(clientId,{query,name_prefix,limit,include_schemas,cursor}) for bounded discovery, await tools(clientId, cursor?) for original native schema pages, print/console.log, and top-level return. Short native results are returned unchanged; long backend output returns artifact metadata. Inspect isError, structuredContent.spilled and capture completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results. Includes native computer and browser controls with image(screenshotResult) for visible screenshots; exec.run and exec.parallel for bounded parallel commands; rtk.status/run/start for installed RTK command-output compression; exec.start/list/status/read/wait/cancel/forget for background job management; reload(clientId), outputs.read/stat/cleanup, fs, context, skills, agents, rsync/sync managed jobs, jobs.status/wait/cancel/list, ports.open/list/close and resources.list/read/templates; collab.join/list/update/send/receive/ack/leave for session agents; collab.bind(clientId,{agent_id,token}) authenticates this run for exact-agent user messages. Check structuredContent.user_messages and the USER REQUIREMENTS text block on each code_mode response for local user instructions. Send user-visible Markdown progress through call(clientId, 'ssmcp.ui.message', {text,kind:'progress'}) and final answers with kind:'answer'; call(clientId, 'ssmcp.ui.present', {title,blocks}) renders structured presentation. Use ssmcp.ui.ask/questions for nonblocking questions. Updated relays collect bounded local historical reference in structuredContent.context_memories and a separate SESSION CONTEXT block, even when JavaScript returns only stdout. This memory is not new user instruction and never replays actions. The local ssmcp.ui.get projections /context/status, /context/read and /context/list share the same memory as native ssmcp.context.* tools. Observation without an explicit agent binding does not claim next-caller requests; explicit binding retains its existing exact-agent delivery behavior. ui.message and ui.present are interaction, as are context mutations. Use the direct collab tool for receive waits over 1 second. Reload requires updated client and server, stops background work and reconnects with a new ID; call list again. Supports variables, loops, conditions, await and Promise.all. The caller sandbox must be connected as its own client for cross-workspace file or port access. All registered native provider actions run through call over the client's outbound HTTPS/WebSocket or SSH connection. Native permissions/approvals apply. System Node.js executes the code in an isolated process; only the orchestration APIs above are exposed. Return JSON-serializable data; results and logs are bounded. Timeout stops orchestration; already-started native actions may continue, so inspect their state before retrying.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
@@ -1248,6 +1353,128 @@ impl Fault {
 
 #[cfg(test)]
 mod tests {
+    fn captured_memory_run(clients: usize, summary_bytes: usize) -> code_mode::AuditRun {
+        let run = code_mode::AuditRun::new("return {stdout: result.stdout};", None).unwrap();
+        for index in 0..clients {
+            let client = format!("memory-client-{index}");
+            run.native_dispatched(&client, Some("ssmcp.exec.run"));
+            run.capture_context(
+                &client,
+                &json!({
+                    "_meta":{"ssmcp.context":{
+                        "workspace":{"id":"a".repeat(64)},"branch":{"id":"main","revision":2},
+                        "revision":2,"summary":"x".repeat(summary_bytes),"mode":"provided_summary",
+                        "recent":[]
+                    }}
+                }),
+            );
+        }
+        run
+    }
+
+    #[test]
+    fn restored_context_is_separate_from_stdout_requirements_and_native_images() {
+        let run = captured_memory_run(1, 32);
+        for failed in [false, true] {
+            let original = json!({
+                "content":[{"type":"text","text":"original native result"},
+                    {"type":"image","mimeType":"image/png","data":"original-image"}],
+                "structuredContent":{"result":{"stdout":"only stdout"},"logs":["original log"]},
+                "isError":failed,"_meta":{"opaque":"preserved"}
+            });
+            let response = append_context_memories(original.clone(), &run);
+            assert_eq!(
+                response["structuredContent"]["result"],
+                original["structuredContent"]["result"]
+            );
+            assert_eq!(
+                response["structuredContent"]["logs"],
+                original["structuredContent"]["logs"]
+            );
+            assert_eq!(
+                &response["content"].as_array().unwrap()[..2],
+                original["content"].as_array().unwrap()
+            );
+            assert_eq!(response["isError"], failed);
+            assert_eq!(response["_meta"], original["_meta"]);
+            assert_eq!(
+                response["structuredContent"]["context_memories"][0]["client_id"],
+                "memory-client-0"
+            );
+            assert_eq!(
+                response["structuredContent"]["context_memories"][0]["context"]["revision"],
+                2
+            );
+            assert_eq!(
+                response["structuredContent"]["context_memories_deferred"],
+                false
+            );
+            assert!(response["structuredContent"].get("user_messages").is_none());
+            let text = response["content"][2]["text"].as_str().unwrap();
+            assert!(text.starts_with("SESSION CONTEXT"));
+            assert!(text.contains("not a new user requirement"));
+            assert!(!text.contains("USER REQUIREMENTS"));
+        }
+    }
+
+    #[test]
+    fn restored_context_counts_text_and_structured_copies_before_queue_budgeting() {
+        let run = captured_memory_run(20, 11 * 1024);
+        let original = crate::code_mode::tool_result(Ok(json!({"result":"stdout","logs":[]})));
+        let response = append_context_memories(original.clone(), &run);
+        assert!(
+            response.to_string().len() - original.to_string().len() <= code_mode::MAX_CONTEXT_BYTES
+        );
+        assert_eq!(
+            response["structuredContent"]["context_memories_deferred"],
+            true
+        );
+        assert!(
+            !response["structuredContent"]["context_memories"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let near_limit = json!({
+            "content":[{"type":"text","text":"x".repeat(crate::wire::MAX_FRAME - 8192 - 128)}],
+            "structuredContent":{"result":{"stdout":"unchanged"}},"isError":false
+        });
+        let response = append_context_memories(near_limit.clone(), &run);
+        assert!(response.to_string().len() < crate::wire::MAX_FRAME - 4096);
+        assert_eq!(response["content"][0], near_limit["content"][0]);
+        assert_eq!(
+            response["structuredContent"]["result"],
+            near_limit["structuredContent"]["result"]
+        );
+        assert_eq!(response["structuredContent"]["context_memories"], json!([]));
+        assert_eq!(
+            response["structuredContent"]["context_memories_deferred"],
+            true
+        );
+        assert!(
+            response["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("ssmcp.context.read")
+        );
+    }
+
+    #[test]
+    fn saved_memory_and_requirements_share_the_frame_budget_before_claim() {
+        assert_eq!(
+            delivery_budget(&json!({"content":[]})),
+            crate::steering::MAX_DELIVERY_BYTES
+        );
+        assert_eq!(
+            delivery_budget(&json!({"content":"x".repeat(crate::wire::MAX_FRAME)})),
+            0
+        );
+        let response = json!({"content":"x".repeat(crate::wire::MAX_FRAME - 32 * 1024)});
+        assert!(delivery_budget(&response) < crate::steering::MAX_DELIVERY_BYTES);
+        assert!(delivery_budget(&response) > 0);
+    }
+
     use super::*;
 
     #[test]

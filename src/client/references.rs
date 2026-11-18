@@ -1,5 +1,6 @@
 //! Explicit local file and skill references carried by the existing text queue.
 //! Reads use the same rooted capabilities as agents; no implicit home-directory access.
+pub(crate) mod files;
 pub(crate) mod paste;
 
 use crate::{context::Context, wire::MAX_USER_MESSAGE_BYTES, workspace::Workspace};
