@@ -1,0 +1,167 @@
+{
+  "date": "2026-11-17",
+  "branch": "feat/background-cua-setup",
+  "tested_source_tree": "0f26e92f69e96434dcf98ebbd25c6d838ecf73f6",
+  "source_revision": "4835c6af82c5f29ab788ce2e1e64a61a9a9e322d",
+  "scope": "Source development and local validation; developer-machine deployment pending reconnection",
+  "build": {
+    "command": "cargo build --locked --bins",
+    "exit_code": 0
+  },
+  "unit_tests": {
+    "command": "cargo test --locked --lib",
+    "exit_code": 101,
+    "passed": 569,
+    "failed": 3,
+    "ignored": 8,
+    "elapsed_seconds": 26.49,
+    "failures": [
+      "management::tests::oversized_frames_and_disabled_management_fail_closed",
+      "management::tests::private_socket_enforces_scope_record_types_and_file_permissions",
+      "portal::tests::dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits"
+    ],
+    "failure_boundary": "ManagementServer::bind; AF_UNIX socket() returns EPERM in this environment",
+    "relevant_modules_passed": {
+      "browser": 29,
+      "computer": 14,
+      "backend_playwright": 7,
+      "browser_setup": 1
+    }
+  },
+  "facade_tests": {
+    "command": "node --test scripts/test_cua_facade.mjs",
+    "passed": 6,
+    "failed": 0
+  },
+  "python_compile": {
+    "scripts": [
+      "scripts/e2e.py",
+      "scripts/e2e_computer_use.py"
+    ],
+    "exit_code": 0
+  },
+  "format_check": {
+    "exit_code": 0
+  },
+  "clippy": {
+    "command": "cargo clippy --locked --all-targets -- -D warnings",
+    "exit_code": 0,
+    "status": "passed"
+  },
+  "setup_runs": [
+    {
+      "label": "setup-install-1",
+      "exit_code": 0,
+      "elapsed_seconds": 26.159,
+      "state": "needs_extension",
+      "installation_state": "installed",
+      "provider": {
+        "automatic_tab_group": false,
+        "background": true,
+        "browser_connection": "not_attempted",
+        "protocol_handshake": "passed",
+        "state": "configured",
+        "tools": 28,
+        "version": "Version 0.0.85"
+      },
+      "node_available": true,
+      "npm_available": true,
+      "playwright_extension_present": false
+    },
+    {
+      "label": "setup-install-2",
+      "exit_code": 0,
+      "elapsed_seconds": 1.883,
+      "state": "needs_extension",
+      "installation_state": "already_installed",
+      "provider": {
+        "automatic_tab_group": false,
+        "background": true,
+        "browser_connection": "not_attempted",
+        "protocol_handshake": "passed",
+        "state": "configured",
+        "tools": 28,
+        "version": "Version 0.0.85"
+      },
+      "node_available": true,
+      "npm_available": true,
+      "playwright_extension_present": false
+    },
+    {
+      "label": "setup-check",
+      "exit_code": 0,
+      "elapsed_seconds": 1.275,
+      "state": "needs_extension",
+      "installation_state": null,
+      "provider": {
+        "automatic_tab_group": false,
+        "background": true,
+        "browser_connection": "not_attempted",
+        "protocol_handshake": "passed",
+        "state": "configured",
+        "tools": 28,
+        "version": "Version 0.0.85"
+      },
+      "node_available": true,
+      "npm_available": true,
+      "playwright_extension_present": false
+    }
+  ],
+  "setup_assertions_passed": [
+    "all three setup commands exit successfully",
+    "setup install is idempotent and check does not install",
+    "all setup inspections complete the MCP handshake and enumerate 28 tools",
+    "background provider configuration is verified without browser connection",
+    "missing local extension is accurately diagnosed",
+    "Node/npm runtime and managed provider selection are available",
+    "all three setup stderr logs are empty",
+    "installer leaves no temporary staging directory"
+  ],
+  "environment_diagnostics": [
+    {
+      "kind": "unix",
+      "result": "blocked",
+      "stage": "socket",
+      "errno": 1,
+      "error": "[Errno 1] Operation not permitted"
+    },
+    {
+      "kind": "tcp_loopback",
+      "result": "passed"
+    }
+  ],
+  "real_isolated_desktop": {
+    "command": "cargo test --lib computer::isolated::tests::real_isolated_desktop_input_capture_and_cleanup -- --ignored --exact",
+    "status": "blocked",
+    "exit_code": 101,
+    "error": "Xvfb exited without announcing a valid private display",
+    "evidence": "Xvfb cannot open local/unix listeners; AF_UNIX socket creation returns EPERM",
+    "input_checks_reached": false
+  },
+  "headless_e2e": {
+    "command": "python3 scripts/e2e_computer_use.py --bin-dir target/debug --chromium /usr/lib/chromium/chromium",
+    "exit_code": 1,
+    "status": "blocked",
+    "passed_steps": [
+      "effective sshd config permits public keys only"
+    ],
+    "error": "ssmcpd: Operation not permitted (os error 1)",
+    "stage": "daemon Unix control socket startup before HTTP listener",
+    "chromium_started": false
+  },
+  "developer_machine": {
+    "online": false,
+    "installed_updated_client": false,
+    "live_extension_pairing_verified": false,
+    "final_client_inventory_count": 0
+  },
+  "post_suite_source_change": "Replace drain(..).collect() with mem::take in isolated desktop Drop cleanup, as required by clippy; no behavior change intended",
+  "post_cleanup_unit_tests": {
+    "command": "cargo test --locked --lib computer::",
+    "exit_code": 0,
+    "passed": 14,
+    "failed": 0,
+    "ignored": 3,
+    "elapsed_seconds": 1.88
+  }
+}
