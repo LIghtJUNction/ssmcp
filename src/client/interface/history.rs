@@ -721,6 +721,24 @@ pub(crate) struct SafeDirectory {
     directory: cap_std::fs::Dir,
 }
 
+pub(crate) struct HistoryLock {
+    _file: File,
+}
+
+impl Drop for HistoryLock {
+    fn drop(&mut self) {
+        // flock is owned by the open file description. A concurrent fork can
+        // retain a duplicate until exec, so closing only our fd can leave a
+        // completed transaction locked. Explicitly release our own lock first.
+        #[cfg(unix)]
+        while let Err(error) = self._file.unlock() {
+            if error.kind() != io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
+}
+
 fn private_tree(path: &Path) -> Result<(), String> {
     if !path.is_absolute()
         || path
@@ -878,11 +896,11 @@ impl SafeDirectory {
         Ok(file)
     }
 
-    pub(crate) fn lock(&self) -> Result<File, String> {
+    pub(crate) fn lock(&self) -> Result<HistoryLock, String> {
         let file = self.open(".history.lock", true, true, false)?;
         crate::platform::lock_file(&file, true)
             .map_err(|_| "conversation storage is busy; retry shortly")?;
-        Ok(file)
+        Ok(HistoryLock { _file: file })
     }
 
     pub(crate) fn names(&self) -> Result<Vec<String>, String> {
@@ -1365,6 +1383,25 @@ mod tests {
             .join("conversations")
             .join(session_name(&summary.id).unwrap());
         assert!(fs::metadata(path).unwrap().len() <= MAX_SESSION_BYTES as u64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transaction_lock_releases_while_an_inherited_descriptor_stays_open() {
+        let temp = Temporary::new();
+        let history = temp.history();
+        let lock = history.directory.lock().unwrap();
+        // dup shares the same open file description as an fd inherited by fork.
+        let inherited = lock._file.try_clone().unwrap();
+        let busy = Some("conversation storage is busy; retry shortly");
+        assert_eq!(history.directory.lock().err().as_deref(), busy);
+        drop(lock);
+
+        let next = history.directory.lock().unwrap();
+        drop(inherited);
+        assert_eq!(history.directory.lock().err().as_deref(), busy);
+        drop(next);
+        assert!(history.directory.lock().is_ok());
     }
 
     #[test]
