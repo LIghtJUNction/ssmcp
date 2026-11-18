@@ -38,6 +38,17 @@ The Rust image tests cover envelope and decode limits, true-color fallback, tiny
 
 The visual acceptance fixture uses an owned Xvfb and a real ztty window. It should be run with explicitly selected candidate binaries. Its screenshots and pixel checks are separate from the ordinary PTY tests: a VT cell decoder cannot prove that a terminal rendered a native image.
 
+Run it on Linux with Xvfb, Pillow, python-Xlib, and already-built candidate binaries:
+
+```sh
+python3 scripts/e2e_native_images.py \
+  --bin-dir /path/to/candidate-bins \
+  --ztty /path/to/ztty \
+  --out out/native-images
+```
+
+The fixture starts its own loopback gateway, temporary home and state directories, and private display. It records binary hashes, JSON checks, and PNG screenshots, including clear, scroll, resize, and reload states. Keyboard events go only to that private ztty window.
+
 ## Protocol references
 
 - [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) — direct transmission, capability queries, placement geometry, and deletion.
