@@ -197,9 +197,13 @@ class ComputerUse(Harness):
                    "browser attach rejects a non-loopback debugger endpoint")
         self.check(self.rejected("ssmcp.browser.click", {"target_id": self.target, "ref": "missing-ref"}),
                    "browser click rejects unobserved element references")
+        self.batch_browser_checks()
+        self.wait_browser_checks()
         if self.desktop:
             self.desktop_checks()
         self.parallel_browser_checks(url)
+        last_snapshot = self.browser("snapshot", target_id=self.target)
+        input_ref = next(item["ref"] for item in last_snapshot["elements"] if item.get("tag") == "input")
         self.browser("navigate", target_id=self.target, url="about:blank")
         self.check(self.rejected("ssmcp.browser.fill", {"target_id": self.target, "ref": input_ref, "text": "stale"}),
                    "navigation invalidates references from the prior document")
@@ -209,6 +213,108 @@ class ComputerUse(Harness):
         self.check(not self.browser("status")["connected"], "disconnect releases owned browser connection")
         wait_for(lambda: json_get(endpoint + "/json/version") is None, description="owned browser stopped")
         self.check(True, "disconnect stops the browser owned by this connection")
+
+    def batch_browser_checks(self):
+        snapshot = self.browser("snapshot", target_id=self.target)
+        input_ref = next(item["ref"] for item in snapshot["elements"] if item.get("tag") == "input")
+        button_ref = next(item["ref"] for item in snapshot["elements"] if item.get("name") == "Run check")
+        before = self.evaluate("probe.clicks")
+        message = "ssmcp 批量输入 ✓"
+        arguments = {"target_id": self.target, "actions": [
+            {"type": "fill", "ref": input_ref, "text": message},
+            {"type": "click", "ref": button_ref},
+            {"type": "wait", "selector": "#result", "text": f"Checks: {before + 1}", "timeout_ms": 5000},
+        ]}
+        batch = self.browser("act", **arguments)
+        self.check(batch["completed_count"] == 3
+                   and [step["type"] for step in batch["completed"]] == ["fill", "click", "wait"]
+                   and batch["uses_system_pointer"] is False,
+                   "one browser batch completes fill, click and condition wait in order")
+        fresh = batch["snapshot"]
+        self.check(fresh["snapshot_id"] != snapshot["snapshot_id"]
+                   and fresh["target_id"] == self.target
+                   and message in fresh["text"]
+                   and f"Checks: {before + 1}" in fresh["text"],
+                   "batch returns a fresh snapshot containing the observed input and click result")
+        self.check(self.evaluate("({text:document.querySelector('#message').value,clicks:probe.clicks})")
+                   == {"text": message, "clicks": before + 1},
+                   "batch changes the real document exactly once")
+        self.check(self.rejected("ssmcp.browser.click", {"target_id": self.target, "ref": button_ref}),
+                   "post-batch snapshot invalidates references from the prior snapshot")
+        current_button = next(item["ref"] for item in fresh["elements"] if item.get("name") == "Run check")
+        failure_args = {"target_id": self.target, "actions": [
+            {"type": "click", "ref": current_button},
+            {"type": "click", "ref": "missing-ref"},
+            {"type": "click", "ref": current_button},
+        ]}
+        failed = self.code(
+            "const r=await browser.act(%s,%s);return {isError:r.isError,report:r.structuredContent};" %
+            (json.dumps(self.client_id), json.dumps(failure_args))
+        )
+        report = failed["report"]
+        self.check(failed["isError"] is True and report["completed_count"] == 1
+                   and report["failed_index"] == 1 and report["phase"] == "actions"
+                   and report["replay_safe"] is False,
+                   "failed batch preserves its completed action and failed index")
+        self.check(self.evaluate("probe.clicks") == before + 2,
+                   "batch stops on the stale reference without running the later click or replaying the first")
+        invalid_args = {"target_id": self.target, "actions": [
+            {"type": "click", "ref": current_button},
+            {"type": "scroll", "delta_y": 100001},
+        ]}
+        self.check(self.rejected("ssmcp.browser.act", invalid_args)
+                   and self.evaluate("probe.clicks") == before + 2,
+                   "an invalid later action rejects the entire batch before its first click")
+        self.metrics["browser_batch"] = {"actions_completed": batch["completed_count"],
+                                          "elapsed_ms": batch["elapsed_ms"],
+                                          "partial_failure_completed": report["completed_count"],
+                                          "partial_failure_index": report["failed_index"]}
+
+    def wait_browser_checks(self):
+        # The temporary page owns this asynchronous DOM change. There is no
+        # fixed host sleep and no interaction with another browser profile.
+        self.evaluate("""(() => {
+            document.querySelector('#async-result')?.remove();
+            setTimeout(() => {
+                const node=document.createElement('output');
+                node.id='async-result';node.textContent='Async condition ready';
+                document.querySelector('main').append(node);
+            }, 250);
+            return true;
+        })()""")
+        waited = self.browser("wait", target_id=self.target, selector="#async-result",
+                              text="Async condition ready", timeout_ms=5000)
+        self.check(waited["matched"] is True and waited["state"] == "visible"
+                   and self.evaluate("document.querySelector('#async-result').textContent") == "Async condition ready",
+                   "condition wait observes asynchronous DOM content in the background tab")
+        self.evaluate("document.querySelector('#async-result').hidden=true;true")
+        hidden = self.browser("wait", target_id=self.target, selector="#async-result", state="hidden")
+        attached = self.browser("wait", target_id=self.target, selector="#async-result", state="attached")
+        self.check(hidden["matched"] is True and attached["matched"] is True,
+                   "wait distinguishes hidden content from a detached node")
+        self.evaluate("document.querySelector('#async-result').remove();true")
+        detached = self.browser("wait", target_id=self.target, selector="#async-result", state="detached")
+        self.check(detached["matched"] is True
+                   and self.rejected("ssmcp.browser.wait", {"target_id": self.target,
+                       "selector": "#async-result", "state": "visible", "timeout_ms": 100}),
+                   "wait detects removal and returns an error when an unmet condition expires")
+        self.evaluate("""(() => {
+            const node=document.createElement('div');
+            node.id='zero-area-result';node.textContent='Clipped content';
+            node.style.cssText='width:0;height:0;overflow:hidden;padding:0;border:0';
+            document.querySelector('main').append(node);
+            return true;
+        })()""")
+        zero_area = self.browser("wait", target_id=self.target, selector="#zero-area-result",
+                                state="hidden", timeout_ms=500)
+        self.check(zero_area["matched"] is True
+                   and self.rejected("ssmcp.browser.wait", {"target_id": self.target,
+                       "selector": "#zero-area-result", "state": "visible", "timeout_ms": 100}),
+                   "wait treats an attached zero-area element as hidden and visible times out")
+        self.evaluate("document.querySelector('#zero-area-result').remove();true")
+        self.metrics["browser_wait"] = {"async_visible_elapsed_ms": waited["elapsed_ms"],
+                                         "states_checked": ["visible", "hidden", "attached", "detached"],
+                                         "zero_area_checked": True}
 
     def parallel_browser_checks(self, url):
         # Both targets are our local fixture in the ssmcp-owned temporary profile.
@@ -361,7 +467,7 @@ class ComputerUse(Harness):
             if not cursor:
                 break
         names = {tool["name"] for tool in tools}
-        expected = {"ssmcp.browser." + name for name in ("status", "discover", "launch", "connect", "tabs", "open", "navigate", "snapshot", "click", "fill", "key", "scroll", "wait_for", "evaluate", "screenshot", "close", "disconnect")}
+        expected = {"ssmcp.browser." + name for name in ("status", "discover", "launch", "connect", "tabs", "open", "navigate", "snapshot", "click", "fill", "key", "scroll", "act", "wait", "wait_for", "evaluate", "screenshot", "close", "disconnect")}
         expected |= {"ssmcp.computer." + name for name in ("status", "monitors", "windows", "focus", "screenshot", "move", "click", "drag", "key", "type", "scroll")}
         expected |= {"ssmcp.omarchy." + name for name in ("status", "themes", "theme_set", "backgrounds", "background_set", "fonts", "font_set", "audio", "audio_set", "brightness", "brightness_set", "toggles", "toggle_set", "workspaces", "workspace_switch", "window_action", "apps", "app_launch", "menu", "battery", "network")}
         self.check(expected <= names, "all native computer, browser and Omarchy tools are discoverable through public list")

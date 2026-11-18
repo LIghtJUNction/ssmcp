@@ -1,7 +1,9 @@
 //! Browser primitives implemented directly with the Chrome DevTools Protocol.
 //! The browser is a system dependency; no model or external MCP process is involved.
+mod actions;
 mod discovery;
 use crate::backend::{process::Managed, result};
+use actions::{Act, WaitArgs};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
@@ -503,6 +505,20 @@ impl Browser {
                 false,
             ),
             tool(
+                "act",
+                "Run an ordered batch of fill, click, key, scroll and condition-wait actions on one observed tab, then return a fresh snapshot. Holds the tab lock for the whole batch; stops at the first error and reports completed actions. Never replays a failed batch or falls back to desktop input.",
+                merge(target.clone(), actions::act_schema()),
+                &["target_id", "actions"],
+                false,
+            ),
+            tool(
+                "wait",
+                "Wait for visible, hidden, attached or detached page content using observed CSS selectors and/or literal text. Polls from the host so background tab timer throttling does not delay the check. No input is sent.",
+                merge(target.clone(), actions::wait_schema()),
+                &["target_id"],
+                true,
+            ),
+            tool(
                 "wait_for",
                 "Wait on this client for visible page text to appear or disappear without moving the system pointer or repeatedly transferring snapshots. Bounded timeout; holds this target's action order.",
                 merge(
@@ -942,47 +958,15 @@ impl Browser {
             }
             "ssmcp.browser.snapshot" => {
                 let args: SnapshotArgs = parse(args)?;
-                if !(1..=200).contains(&args.max_elements) || !(1..=32768).contains(&args.max_chars)
-                {
-                    return Err("snapshot bounds: max_elements 1..200, max_chars 1..32768".into());
-                }
-                let token = format!("s{}", self.next_snapshot.fetch_add(1, Ordering::Relaxed));
+                snapshot_bounds(args.max_elements, args.max_chars)?;
                 let mut page = self.page(&session, &args.target_id).await?;
-                // Release the old remote object before publishing a new set of refs.
-                if let Some(old) = page.snapshot.take() {
-                    let _ = page
-                        .cdp
-                        .call("Runtime.releaseObject", json!({"objectId":old.object_id}))
-                        .await;
-                }
-                let script = SNAPSHOT_SCRIPT
-                    .replace("$MAX_ELEMENTS", &args.max_elements.to_string())
-                    .replace("$MAX_CHARS", &args.max_chars.to_string())
-                    .replace("$TOKEN", &json!(token).to_string());
-                let reply = page.cdp.call("Runtime.evaluate",json!({
-                    "expression":script,"returnByValue":false,"objectGroup":"ssmcp-snapshot","timeout":10000
-                })).await?;
-                if let Some(exception) = reply.get("exceptionDetails") {
-                    return Err(format!("snapshot JavaScript exception: {exception}"));
-                }
-                let object_id = reply["result"]["objectId"]
-                    .as_str()
-                    .ok_or("snapshot has no DOM object")?
-                    .to_owned();
-                let info = page.cdp.call("Runtime.callFunctionOn",json!({
-                    "objectId":object_id,"functionDeclaration":"function(){ return this.info; }",
-                    "returnByValue":true
-                })).await?;
-                let mut info = remote_value_bounded(info, RPC_LIMIT)?;
-                info["target_id"] = json!(args.target_id);
-                let info = bound_snapshot(info);
-                let count = info["elements"].as_array().map_or(0, Vec::len);
-                page.snapshot = Some(Snapshot {
-                    token,
-                    object_id,
-                    count,
-                });
-                info
+                self.snapshot_page(
+                    &mut page,
+                    &args.target_id,
+                    args.max_elements,
+                    args.max_chars,
+                )
+                .await?
             }
             "ssmcp.browser.click" => {
                 let args: Click = parse(args)?;
@@ -1081,6 +1065,62 @@ impl Browser {
                     .await?;
                 json!({"target_id":args.target_id,"scrolled":true})
             }
+            "ssmcp.browser.wait" => {
+                let args: WaitArgs = parse(args)?;
+                let target_id = args.target_id.clone();
+                valid_target(&target_id)?;
+                let condition = args.into_condition();
+                condition.validate()?;
+                let mut value = tokio::time::timeout(Duration::from_millis(condition.timeout_ms), async {
+                    let mut page = self.page(&session, &target_id).await?;
+                    actions::wait(&mut page, &condition).await
+                }).await.map_err(|_| format!("browser wait exceeded its {} ms deadline, including time queued for the target", condition.timeout_ms))??;
+                value["target_id"] = json!(target_id);
+                value
+            }
+            "ssmcp.browser.act" => {
+                let args: Act = parse(args)?;
+                args.validate()?;
+                let started = tokio::time::Instant::now();
+                let mut completed = Vec::with_capacity(args.actions.len());
+                let mut failed_index = 0;
+                let mut phase = "queue";
+                let outcome = tokio::time::timeout_at(started + actions::BATCH_TIMEOUT, async {
+                    let mut page = self.page(&session, &args.target_id).await?;
+                    phase = "actions";
+                    for (index, action) in args.actions.iter().enumerate() {
+                        failed_index = index;
+                        self.ensure_session(&session)?;
+                        let value = actions::run(&mut page, action).await?;
+                        completed.push(json!({"index":index,"type":action.kind(),"result":value}));
+                    }
+                    phase = "snapshot";
+                    if args.snapshot {
+                        self.snapshot_page(&mut page, &args.target_id, args.max_elements, args.max_chars).await.map(Some)
+                    } else { Ok(None) }
+                }).await.map_err(|_| "browser act exceeded its 25-second deadline; inspect completed actions before continuing".to_owned()).and_then(|value| value);
+                let mut report = json!({"target_id":args.target_id,"completed_count":completed.len(),
+                    "completed":completed,"elapsed_ms":started.elapsed().as_millis(),"uses_system_pointer":false});
+                match outcome {
+                    Ok(snapshot) => {
+                        if let Some(snapshot) = snapshot {
+                            report["snapshot"] = snapshot;
+                        }
+                        report
+                    }
+                    Err(error) => {
+                        report["error"] = json!(error);
+                        report["phase"] = json!(phase);
+                        if phase == "actions" {
+                            report["failed_index"] = json!(failed_index);
+                        }
+                        report["replay_safe"] = json!(false);
+                        let mut response = result(report);
+                        response["isError"] = json!(true);
+                        return Ok(response);
+                    }
+                }
+            }
             "ssmcp.browser.wait_for" => {
                 let args: WaitFor = parse(args)?;
                 args.validate()?;
@@ -1159,6 +1199,58 @@ impl Browser {
             _ => return Err(format!("unknown browser tool: {name}")),
         };
         Ok(result(value))
+    }
+
+    async fn snapshot_page(
+        &self,
+        page: &mut Page,
+        target_id: &str,
+        max_elements: usize,
+        max_chars: usize,
+    ) -> Result<Value, String> {
+        snapshot_bounds(max_elements, max_chars)?;
+        let token = format!("s{}", self.next_snapshot.fetch_add(1, Ordering::Relaxed));
+        // Release the old remote object before publishing a new set of refs.
+        if let Some(old) = page.snapshot.take() {
+            let _ = page
+                .cdp
+                .call("Runtime.releaseObject", json!({"objectId":old.object_id}))
+                .await;
+        }
+        let script = SNAPSHOT_SCRIPT
+            .replace("$MAX_ELEMENTS", &max_elements.to_string())
+            .replace("$MAX_CHARS", &max_chars.to_string())
+            .replace("$TOKEN", &json!(token).to_string());
+        let reply = page.cdp.call("Runtime.evaluate",json!({
+            "expression":script,"returnByValue":false,"objectGroup":"ssmcp-snapshot","timeout":10000
+        })).await?;
+        if let Some(exception) = reply.get("exceptionDetails") {
+            return Err(format!("snapshot JavaScript exception: {exception}"));
+        }
+        let object_id = reply["result"]["objectId"]
+            .as_str()
+            .ok_or("snapshot has no DOM object")?
+            .to_owned();
+        let info = page
+            .cdp
+            .call(
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId":object_id,"functionDeclaration":"function(){ return this.info; }",
+                    "returnByValue":true
+                }),
+            )
+            .await?;
+        let mut info = remote_value_bounded(info, RPC_LIMIT)?;
+        info["target_id"] = json!(target_id);
+        let info = bound_snapshot(info);
+        let count = info["elements"].as_array().map_or(0, Vec::len);
+        page.snapshot = Some(Snapshot {
+            token,
+            object_id,
+            count,
+        });
+        Ok(info)
     }
 
     async fn disconnect(&self) {
@@ -1704,6 +1796,17 @@ struct SnapshotArgs {
     #[serde(default = "default_chars")]
     max_chars: usize,
 }
+fn enabled() -> bool {
+    true
+}
+
+fn snapshot_bounds(max_elements: usize, max_chars: usize) -> Result<(), String> {
+    if !(1..=200).contains(&max_elements) || !(1..=32768).contains(&max_chars) {
+        return Err("snapshot bounds: max_elements 1..200, max_chars 1..32768".into());
+    }
+    Ok(())
+}
+
 fn default_elements() -> usize {
     100
 }
@@ -1968,6 +2071,175 @@ mod tests {
             ))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn wait_deadline_includes_time_queued_for_the_page() {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let session = browser.session.lock().await.clone().unwrap();
+            let held_page = browser.page(&session, "a").await.unwrap();
+            let error = browser
+                .perform(
+                    "ssmcp.browser.wait",
+                    json!({"target_id":"a","selector":"#ready","timeout_ms":25}),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("deadline") && error.contains("queued"),
+                "{error}"
+            );
+            drop(held_page);
+            // Expiry removes the queued request; releasing the page must not
+            // trigger a late Runtime.evaluate or any input on this connection.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), socket.next())
+                    .await
+                    .is_err()
+            );
+            browser.disconnect().await;
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Close(_)
+            ));
+        })
+        .await
+        .expect("browser.wait did not expire while the page lock was held");
+    }
+
+    #[tokio::test]
+    async fn act_deadline_includes_time_queued_without_starting_input() {
+        // Keep the production 25-second deadline: this checks cancellation of
+        // the actual queued operation, without a test-only timeout override.
+        tokio::time::timeout(actions::BATCH_TIMEOUT + Duration::from_secs(3), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let session = browser.session.lock().await.clone().unwrap();
+            let held_page = browser.page(&session, "a").await.unwrap();
+            let response = browser
+                .perform(
+                    "ssmcp.browser.act",
+                    json!({"target_id":"a","actions":[{"type":"key","key":"Enter"}],"snapshot":false}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response["isError"], true);
+            let report = &response["structuredContent"];
+            assert_eq!(report["phase"], "queue");
+            assert_eq!(report["completed_count"], 0);
+            assert_eq!(report["completed"], json!([]));
+            assert!(report.get("failed_index").is_none());
+            assert_eq!(report["replay_safe"], false);
+            assert!(report["error"].as_str().unwrap().contains("deadline"));
+            drop(held_page);
+            // A timed-out batch must not start its key press after the holder
+            // releases the lock, nor send any other delayed CDP request.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), socket.next())
+                    .await
+                    .is_err()
+            );
+            browser.disconnect().await;
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Close(_)
+            ));
+        })
+        .await
+        .expect("browser.act did not expire while the page lock was held");
+    }
+
+    #[tokio::test]
+    async fn wait_retries_missing_default_context_during_navigation() {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let server = tokio::spawn(async move {
+                let first = test_request(&mut socket).await;
+                assert_eq!(first["method"], "Runtime.evaluate");
+                socket
+                    .send(Message::Text(
+                        json!({"id":first["id"],"error":{"code":-32000,"message":"Cannot find default execution context"}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                let second = test_request(&mut socket).await;
+                assert_eq!(second["method"], "Runtime.evaluate");
+                assert_eq!(second["params"]["expression"], first["params"]["expression"]);
+                test_reply(&mut socket, &second, json!({"result":{"value":true}})).await;
+            });
+            let response = browser
+                .perform(
+                    "ssmcp.browser.wait",
+                    json!({"target_id":"a","selector":"#ready","timeout_ms":1000}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response["structuredContent"]["matched"], true);
+            assert_eq!(response["structuredContent"]["target_id"], "a");
+            server.await.unwrap();
+            browser.disconnect().await;
+        })
+        .await
+        .expect("browser.wait did not recover when the new navigation context appeared");
+    }
+
+    #[tokio::test]
+    async fn act_prepares_background_input_and_preserves_partial_completion() {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let server = tokio::spawn(async move {
+                let focus = test_request(&mut socket).await;
+                assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(focus["params"]["enabled"], true);
+                test_reply(&mut socket, &focus, json!({})).await;
+                for kind in ["keyDown", "keyUp"] {
+                    let request = test_request(&mut socket).await;
+                    assert_eq!(request["method"], "Input.dispatchKeyEvent");
+                    assert_eq!(request["params"]["type"], kind);
+                    test_reply(&mut socket, &request, json!({})).await;
+                }
+                let focus = test_request(&mut socket).await;
+                assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(focus["params"]["enabled"], true);
+                test_reply(&mut socket, &focus, json!({})).await;
+                // The stale ref stops the batch; disconnect restores focus
+                // without sending the third action or replaying the first.
+                let restore = test_request(&mut socket).await;
+                assert_eq!(restore["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(restore["params"]["enabled"], false);
+                test_reply(&mut socket, &restore, json!({})).await;
+            });
+            let response = browser
+                .perform(
+                    "ssmcp.browser.act",
+                    json!({
+                        "target_id":"a", "snapshot":false, "actions":[
+                            {"type":"key","key":"Enter"},
+                            {"type":"click","ref":"stale-ref"},
+                            {"type":"key","key":"Escape"}
+                        ]
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response["isError"], true);
+            let report = &response["structuredContent"];
+            assert_eq!(report["completed_count"], 1);
+            assert_eq!(report["completed"][0]["type"], "key");
+            assert_eq!(report["failed_index"], 1);
+            assert_eq!(report["phase"], "actions");
+            assert_eq!(report["replay_safe"], false);
+            browser.disconnect().await;
+            server.await.unwrap();
+        })
+        .await
+        .expect("batch input or cleanup stalled");
     }
 
     #[tokio::test]
@@ -2397,70 +2669,77 @@ mod tests {
     }
     #[tokio::test]
     async fn cancelled_input_still_sends_release() {
-        use tokio::sync::oneshot;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (pressed_tx, pressed_rx) = oneshot::channel();
-        let (continue_tx, continue_rx) = oneshot::channel();
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let focus = test_request(&mut ws).await;
-            assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
-            assert_eq!(focus["params"]["enabled"], true);
-            test_reply(&mut ws, &focus, json!({})).await;
-            let down: Value =
-                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
-                    .unwrap();
-            assert_eq!(down["params"]["type"], "keyDown");
-            pressed_tx.send(()).unwrap();
-            continue_rx.await.unwrap();
-            ws.send(Message::Text(
-                json!({"id":down["id"],"result":{}}).to_string().into(),
-            ))
+        for (name, args) in [
+            ("ssmcp.browser.key", json!({"target_id":"test","key":"A"})),
+            (
+                "ssmcp.browser.act",
+                json!({
+                    "target_id":"test", "snapshot":false,
+                    "actions":[{"type":"key","key":"A"}]
+                }),
+            ),
+        ] {
+            use tokio::sync::oneshot;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (pressed_tx, pressed_rx) = oneshot::channel();
+            let (continue_tx, continue_rx) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let focus = test_request(&mut ws).await;
+                assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(focus["params"]["enabled"], true);
+                test_reply(&mut ws, &focus, json!({})).await;
+                let down: Value =
+                    serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                        .unwrap();
+                assert_eq!(down["params"]["type"], "keyDown");
+                pressed_tx.send(()).unwrap();
+                continue_rx.await.unwrap();
+                ws.send(Message::Text(
+                    json!({"id":down["id"],"result":{}}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+                let up: Value =
+                    serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                        .unwrap();
+                assert_eq!(up["params"]["type"], "keyUp");
+                ws.send(Message::Text(
+                    json!({"id":up["id"],"result":{}}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+                let restore = test_request(&mut ws).await;
+                assert_eq!(restore["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(restore["params"]["enabled"], false);
+                test_reply(&mut ws, &restore, json!({})).await;
+            });
+            let cdp = Cdp::connect(&format!("ws://{address}/devtools/page/test"))
+                .await
+                .unwrap();
+            let browser = test_browser(vec![("test", cdp)]).await;
+            let request = tokio::spawn({
+                let browser = browser.clone();
+                async move { browser.perform(name, args).await }
+            });
+            pressed_rx.await.unwrap();
+            request.abort();
+            assert!(request.await.unwrap_err().is_cancelled());
+            let disconnect = browser.disconnect();
+            tokio::pin!(disconnect);
+            assert!(poll_once(disconnect.as_mut()).await.is_pending());
+            continue_tx.send(()).unwrap();
+            // Poll disconnect while the peer waits for focus restoration. Merely
+            // constructing the future does not drive its cleanup after input drains.
+            tokio::time::timeout(Duration::from_secs(3), async {
+                let (server, ()) = tokio::join!(server, disconnect);
+                server.unwrap();
+            })
             .await
             .unwrap();
-            let up: Value =
-                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
-                    .unwrap();
-            assert_eq!(up["params"]["type"], "keyUp");
-            ws.send(Message::Text(
-                json!({"id":up["id"],"result":{}}).to_string().into(),
-            ))
-            .await
-            .unwrap();
-            let restore = test_request(&mut ws).await;
-            assert_eq!(restore["method"], "Emulation.setFocusEmulationEnabled");
-            assert_eq!(restore["params"]["enabled"], false);
-            test_reply(&mut ws, &restore, json!({})).await;
-        });
-        let cdp = Cdp::connect(&format!("ws://{address}/devtools/page/test"))
-            .await
-            .unwrap();
-        let browser = test_browser(vec![("test", cdp)]).await;
-        let request = tokio::spawn({
-            let browser = browser.clone();
-            async move {
-                browser
-                    .perform("ssmcp.browser.key", json!({"target_id":"test","key":"A"}))
-                    .await
-            }
-        });
-        pressed_rx.await.unwrap();
-        request.abort();
-        assert!(request.await.unwrap_err().is_cancelled());
-        let disconnect = browser.disconnect();
-        tokio::pin!(disconnect);
-        assert!(poll_once(disconnect.as_mut()).await.is_pending());
-        continue_tx.send(()).unwrap();
-        // Poll disconnect while the peer waits for focus restoration. Merely
-        // constructing the future does not drive its cleanup after input drains.
-        tokio::time::timeout(Duration::from_secs(3), async {
-            let (server, ()) = tokio::join!(server, disconnect);
-            server.unwrap();
-        })
-        .await
-        .unwrap();
+        }
     }
 
     #[tokio::test]
