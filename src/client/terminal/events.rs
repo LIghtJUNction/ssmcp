@@ -372,6 +372,27 @@ impl EventView {
             .sum()
     }
 
+    /// A terminal can reject one image while still supporting other images.
+    /// Keep that event's cell preview and release only its native payload.
+    pub(crate) fn reject_image(&mut self, id: u32) {
+        for event in &mut self.events {
+            if let Some(image) = event.image.as_mut()
+                && image
+                    .native
+                    .as_ref()
+                    .is_some_and(|native| native.id() == id)
+            {
+                image.native = None;
+                if self.new_image == Some(event.id) {
+                    self.new_image = None;
+                }
+                if self.selected == Some(event.id) && !self.follow {
+                    self.reveal = true;
+                }
+            }
+        }
+    }
+
     pub(crate) fn image_cells(&mut self, cells: Option<images::CellSize>) {
         self.image_cells = cells;
     }

@@ -1400,6 +1400,12 @@ impl State {
             self.keyboard.paste_last_input = Some(now);
         }
         let filtered = self.graphics.input(bytes, now, flush);
+        for id in self.graphics.take_rejected_images() {
+            self.events.reject_image(id);
+            if let Some(guide) = &self.guide {
+                guide.reject_image(id);
+            }
+        }
         self.dirty |= self.graphics.take_changed();
         let bytes = filtered.as_slice();
         if self.ui.layout == Layout::Chat {
@@ -2345,6 +2351,86 @@ mod tests {
         parser.process(&frame.diff(None));
         parser
     }
+    #[test]
+    fn rejected_native_image_keeps_other_images_and_future_uploads_available() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let source = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            16,
+            16,
+            image::Rgba([30, 120, 210, 255]),
+        ));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let block = serde_json::json!({
+            "type":"image", "mimeType":"image/png",
+            "data":STANDARD.encode(bytes.into_inner()),
+        });
+        let ui = Ui {
+            layout: Layout::Chat,
+            color: true,
+            sidebar: false,
+            ..Ui::default()
+        };
+        let mut state = State::new(40, 100, &ui);
+        state.graphics = images::Graphics::probe_for_test();
+        let now = Instant::now();
+        assert!(
+            state
+                .keyboard(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false)
+                .is_empty()
+        );
+        let rejected = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        let rejected_id = rejected.native.as_ref().unwrap().id();
+        state.image(rejected, "image/png");
+        let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        state.image(retained, "image/png");
+        let before = state.frame(now);
+        assert_eq!(state.media.len(), 2);
+        let mut media = images::Renderer::default();
+        media.update(
+            std::mem::take(&mut state.media),
+            before.cursor,
+            before.hidden,
+        );
+        media.complete();
+
+        let rejection =
+            format!("\x1b_Gi={rejected_id};E2BIG:image exceeds decoded size limit\x1b\\");
+        assert!(state.keyboard(rejection.as_bytes(), now, false).is_empty());
+        assert!(state.graphics.prepare_native());
+        let after = state.frame(now);
+        assert_eq!(
+            state.media.len(),
+            1,
+            "only the rejected image loses its placement"
+        );
+        assert!(
+            physical(&after)
+                .screen()
+                .contents()
+                .contains("Low-resolution thumbnail")
+        );
+        let (delete, _) =
+            media.update(std::mem::take(&mut state.media), after.cursor, after.hidden);
+        assert!(delete.contains(&format!("a=d,d=I,i={rejected_id},")));
+
+        let next = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        assert!(next.native.is_some());
+        let next_id = next.native.as_ref().unwrap().id();
+        state.image(next, "image/png");
+        let final_frame = state.frame(now);
+        assert_eq!(state.media.len(), 2);
+        let (_, upload) = media.update(
+            std::mem::take(&mut state.media),
+            final_frame.cursor,
+            final_frame.hidden,
+        );
+        assert!(upload.contains(&format!("a=t,t=d,f=100,i={next_id},")));
+        assert!(!upload.contains(&format!("a=t,t=d,f=100,i={rejected_id},")));
+    }
+
     #[test]
     fn selection_freeze_releases_native_placements_when_cell_measurement_expires() {
         let ui = Ui {
