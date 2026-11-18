@@ -488,7 +488,7 @@ pub async fn manage(args: Vec<OsString>) -> Result<()> {
     let name = name.ok_or("attach needs a session name")?;
     super::validate_name(&name)?;
     let root = super::session_root(false)?;
-    let (directory, _) = super::load(&root, &name)?;
+    let (directory, manifest) = super::load(&root, &name)?;
     let open = ipc::request(
         &directory,
         ENDPOINT,
@@ -502,7 +502,7 @@ pub async fn manage(args: Vec<OsString>) -> Result<()> {
         .as_str()
         .ok_or("attach endpoint returned no lease")?
         .to_owned();
-    let result = attached(&name, directory.clone(), &lease, read_only, &open).await;
+    let result = attached(&manifest.spec, directory.clone(), &lease, read_only, &open).await;
     // Best-effort lease release is independent of service lifetime. No stop,
     // restart or termination operation is ever sent by this frontend.
     let _ = ipc::request_with_timeout(
@@ -516,17 +516,19 @@ pub async fn manage(args: Vec<OsString>) -> Result<()> {
 }
 
 async fn attached(
-    name: &str,
+    spec: &super::SessionSpec,
     directory: PathBuf,
     lease: &str,
     read_only: bool,
     open: &Value,
 ) -> Result<()> {
     use crate::client::{render, terminal, ui::Ui};
+    let name = &spec.name;
+    let title = crate::client::session_title(spec)?;
     let ui = Ui::load(None)?;
     crate::client::interface::initialize_path(None);
     render::configure(ui.clone());
-    let display = terminal::Session::start(&ui)?;
+    let display = terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref())?;
     let mut terminal_ids = Vec::new();
     sync_terminals(open, &mut terminal_ids);
     let mut selected = 0usize;
