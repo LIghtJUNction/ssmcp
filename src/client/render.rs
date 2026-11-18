@@ -9,6 +9,9 @@ use super::{
 mod activity;
 #[path = "command.rs"]
 mod command;
+mod diagnostics;
+pub(crate) use diagnostics::Update as DiagnosticUpdate;
+
 #[cfg(test)]
 #[path = "command_process_tests.rs"]
 mod command_process_tests;
@@ -80,19 +83,21 @@ pub(crate) fn configure(ui: Ui) {
                     let width = terminal_width();
                     let now = Instant::now();
                     let mut bytes = Vec::new();
-                    let snapshot = {
+                    let (snapshot, diagnostics) = {
                         let mut renderer = display.lock().unwrap_or_else(|e| e.into_inner());
                         renderer.width = width;
                         renderer.dashboard_active = dashboard && !renderer.raw;
                         let _ = renderer.flush_diagnostics_due(&mut bytes, now);
-                        if renderer.dashboard_active {
+                        let snapshot = if renderer.dashboard_active {
                             Some(renderer.panel_snapshot(now))
                         } else {
                             let _ = renderer.heartbeat(&mut bytes, now, io::stderr().is_terminal());
                             None
-                        }
+                        };
+                        (snapshot, renderer.auth_diagnostics.take_updates())
                     };
                     publish(&bytes, snapshot);
+                    super::terminal::diagnostics(&diagnostics);
                 }
             });
         if started.is_err() {
@@ -255,6 +260,18 @@ fn agent_message(
     saved
 }
 
+/// Sanitize a diagnostic without changing native consumers or event archives.
+/// Called again after line assembly so credentials split across chunks are masked.
+pub(super) fn diagnostic_text(value: &Value) -> Option<String> {
+    if !matches!(value["type"].as_str(), Some("stderr" | "ssmcp.stderr")) {
+        return None;
+    }
+    let safe = crate::audit::event(value.clone());
+    safe["text"]
+        .as_str()
+        .map(|text| clean(&diagnostics::redact_url_userinfo(text)))
+}
+
 pub(crate) fn event(label: &str, value: &Value) {
     if value["type"] == "ssmcp.code_mode" {
         super::terminal::audit(value);
@@ -264,14 +281,15 @@ pub(crate) fn event(label: &str, value: &Value) {
     let dashboard = super::terminal::active();
     let width = terminal_width();
     let mut bytes = Vec::new();
-    let snapshot = {
+    let (snapshot, diagnostics) = {
         let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
         renderer.width = width;
         renderer.dashboard_active = dashboard && !renderer.raw;
         let _ = renderer.event(&mut bytes, label, value);
-        renderer
+        let snapshot = renderer
             .dashboard_active
-            .then(|| renderer.panel_snapshot(Instant::now()))
+            .then(|| renderer.panel_snapshot(Instant::now()));
+        (snapshot, renderer.auth_diagnostics.take_updates())
     };
     if super::terminal::log_event(label, value, &bytes) {
         if let Some(snapshot) = snapshot {
@@ -280,6 +298,7 @@ pub(crate) fn event(label: &str, value: &Value) {
     } else {
         publish(&bytes, snapshot);
     }
+    super::terminal::diagnostics(&diagnostics);
 }
 
 /// Held by the individual native request, including while it awaits I/O.
@@ -316,11 +335,13 @@ pub(crate) fn finish(label: &str) {
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
     crate::session::attach::record_finish(label);
     let mut bytes = Vec::new();
-    {
+    let diagnostics = {
         let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
         let _ = renderer.finish_group(&mut bytes, label);
-    }
+        renderer.auth_diagnostics.take_updates()
+    };
     publish(&bytes, None);
+    super::terminal::diagnostics(&diagnostics);
 }
 
 /// Git polling has no dependency on renderer or terminal locks.
@@ -426,6 +447,7 @@ struct Renderer {
     controllers: HashMap<String, ControllerView>,
     last_controller: Option<ControllerView>,
     diagnostics: HashMap<String, Diagnostic>,
+    auth_diagnostics: diagnostics::AuthDiagnostics,
 }
 
 struct Diagnostic {
@@ -481,6 +503,7 @@ impl Renderer {
             controllers: HashMap::new(),
             last_controller: None,
             diagnostics: HashMap::new(),
+            auth_diagnostics: diagnostics::AuthDiagnostics::default(),
         }
     }
 
@@ -558,7 +581,7 @@ impl Renderer {
                 "source":source,"occurrences":item.occurrences,"folded":item.occurrences.saturating_sub(1),
                 "message":diagnostic_summary(&item.key),
                 "age_ms":now.saturating_duration_since(item.updated).as_millis().min(u128::from(u64::MAX)) as u64
-            })).collect::<Vec<_>>()
+            })).chain(self.auth_diagnostics.snapshot(now)).collect::<Vec<_>>()
         }))
     }
 
@@ -613,11 +636,22 @@ impl Renderer {
         text: &str,
         now: Instant,
     ) -> io::Result<()> {
-        let text = clean(text);
+        // Redact again after line assembly: credentials may span native chunks.
+        let text = diagnostic_text(&json!({"type":"stderr","text":text})).unwrap_or_default();
         if text.trim().is_empty() {
             return Ok(());
         }
         let normalized = diagnostic_key(&text);
+        if let Some(update) = self.auth_diagnostics.observe(label, &normalized, now) {
+            self.report_diagnostic_repeats(out, label, diagnostic, now)?;
+            diagnostic.key.clear();
+            diagnostic.occurrences = 0;
+            diagnostic.updated = now;
+            if update.occurrences == 1 && !self.dashboard_active {
+                self.block(out, label, "Warning", &update.message)?;
+            }
+            return Ok(());
+        }
         if normalized == diagnostic.key && diagnostic.occurrences > 0 {
             diagnostic.occurrences = diagnostic.occurrences.saturating_add(1);
             diagnostic.unreported = diagnostic.unreported.saturating_add(1);
@@ -629,11 +663,7 @@ impl Renderer {
         diagnostic.occurrences = 1;
         diagnostic.updated = now;
         diagnostic.reported = now;
-        if diagnostic.key.contains("AuthRequired") || diagnostic.key.contains("auth_required") {
-            self.block(out, label, "Warning", &diagnostic_summary(&diagnostic.key))
-        } else {
-            self.block(out, label, "stderr", &text)
-        }
+        self.block(out, label, "stderr", &text)
     }
 
     fn report_diagnostic_repeats(
@@ -687,6 +717,22 @@ impl Renderer {
                 }
                 self.report_diagnostic_repeats(out, &label, &mut diagnostic, now)?;
                 self.diagnostics.insert(label, diagnostic);
+            }
+        }
+        self.report_auth_diagnostics(out, None, now, false)?;
+        Ok(())
+    }
+
+    fn report_auth_diagnostics(
+        &mut self,
+        out: &mut impl Write,
+        source: Option<&str>,
+        now: Instant,
+        force: bool,
+    ) -> io::Result<()> {
+        for (source, text) in self.auth_diagnostics.reports(source, now, force) {
+            if !self.dashboard_active {
+                self.summary(out, &source, "Warning", &text)?;
             }
         }
         Ok(())
@@ -1607,6 +1653,8 @@ impl Renderer {
 
     fn finish_group(&mut self, out: &mut impl Write, label: &str) -> io::Result<()> {
         self.finish_diagnostic(out, label)?;
+        self.report_auth_diagnostics(out, Some(label), Instant::now(), true)?;
+        self.auth_diagnostics.close(label);
         let prefix = format!("{label}\0");
         let keys: Vec<_> = self
             .streams
@@ -3194,6 +3242,96 @@ mod tests {
             render(std::slice::from_ref(&event), true, true),
             format!("{event}\n")
         );
+    }
+
+    #[test]
+    fn dashboard_auth_warnings_update_across_interleaving_without_hiding_new_errors() {
+        let mut renderer = Renderer::new(false, false, 120);
+        renderer.dashboard_active = true;
+        let mut out = Vec::new();
+        let mut original = Vec::new();
+        for second in 0..28 {
+            let site = if second % 2 == 0 {
+                "api.x.com"
+            } else {
+                "api.lmm.best"
+            };
+            let line = format!(
+                "2026-11-17T17:26:{second:02}Z ERROR rmcp::transport::worker: Worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError {{ www_authenticate_header: resource_metadata=\\\"https://{site}/.well-known/oauth-protected-resource\\\" }})\n"
+            );
+            original.push(json!({"type":"stderr","text":line}));
+            let split = line.len() / 2;
+            for chunk in [&line[..split], &line[split..]] {
+                renderer
+                    .event(&mut out, "codex", &json!({"type":"stderr","text":chunk}))
+                    .unwrap();
+            }
+        }
+        assert!(
+            out.is_empty(),
+            "dashboard warnings are structured updates, not new log blocks"
+        );
+        let updates = renderer.auth_diagnostics.take_updates();
+        assert_eq!(updates.len(), 2);
+        assert!(updates.iter().all(|update| update.occurrences == 14));
+        assert_ne!(updates[0].id, updates[1].id);
+        assert_eq!(
+            renderer.snapshot(Instant::now())["diagnostics"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        renderer
+            .event(
+                &mut out,
+                "codex",
+                &json!({"type":"stderr","text":"ERROR new transport failure: disk full\n"}),
+            )
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("disk full"));
+        let before = out.len();
+        renderer.finish_group(&mut out, "codex").unwrap();
+        assert_eq!(
+            out.len(),
+            before,
+            "finish does not append a repeat-warning card"
+        );
+        renderer.event(&mut out, "codex", &original[0]).unwrap();
+        let restarted = renderer.auth_diagnostics.take_updates();
+        assert_eq!(restarted.len(), 1);
+        assert_eq!(restarted[0].occurrences, 15);
+        assert!(updates.iter().any(|old| old.id == restarted[0].id));
+
+        let mut raw = Renderer::new(true, false, 120);
+        let mut raw_bytes = Vec::new();
+        for event in &original {
+            raw.event(&mut raw_bytes, "codex", event).unwrap();
+        }
+        let decoded: Vec<Value> = String::from_utf8(raw_bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            decoded, original,
+            "all 28 native records remain in explicit raw mode"
+        );
+    }
+
+    #[test]
+    fn safe_raw_diagnostic_copy_keeps_repeats_and_newlines_without_control_or_secrets() {
+        let event = json!({"type":"stderr","text":"first\n\x1b[2JAuthRequired https://alice:fixture-secret@api.x.com/path?token=private\n"});
+        let original = event.clone();
+        let safe = diagnostic_text(&event).unwrap();
+        assert!(safe.starts_with("first\n"));
+        assert!(safe.ends_with('\n'));
+        assert!(!safe.contains('\x1b'));
+        assert!(!safe.contains("fixture-secret"));
+        assert!(!safe.contains("token=private"));
+        assert_eq!(diagnostic_text(&event).unwrap(), safe);
+        assert_eq!(event, original);
+        assert!(diagnostic_text(&json!({"type":"stdout","text":"ordinary"})).is_none());
     }
 
     #[test]

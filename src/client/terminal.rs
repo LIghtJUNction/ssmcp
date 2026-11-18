@@ -187,9 +187,30 @@ pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) ->
         return false;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.log_raw(bytes);
-    state.events.ingest_event(label, value, bytes);
+    state.log_event(label, value, bytes);
     true
+}
+
+/// Updates are emitted after the renderer lock has been released.
+pub(super) fn diagnostics(updates: &[super::render::DiagnosticUpdate]) {
+    if updates.is_empty() {
+        return;
+    }
+    let Some(shared) = shared() else {
+        return;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return;
+    }
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    for update in updates {
+        if state.events.ingest_diagnostic(update) {
+            // /raw keeps the existing bounded, safe display transcript. Complete
+            // original diagnostics remain in the backend event archive.
+            state.log_raw(update.text().as_bytes());
+        }
+    }
+    state.dirty = true;
 }
 
 /// Decode outside the State lock; preview failures do not alter native output.
@@ -1100,10 +1121,28 @@ impl State {
         self.events.attach_image(preview);
     }
 
+    fn expanded_logs(&self) -> bool {
+        self.ui.log_format != LogFormat::Pretty || self.ui.show_raw_json
+    }
+
     fn log(&mut self, bytes: &[u8]) {
-        self.events.ingest(bytes);
+        if self.expanded_logs() {
+            self.events.ingest_expanded(bytes);
+        } else {
+            self.events.ingest(bytes);
+        }
         self.log_raw(bytes);
     }
+
+    fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
+        self.log_raw(bytes);
+        if self.expanded_logs() {
+            self.events.ingest_expanded(bytes);
+        } else {
+            self.events.ingest_event(label, value, bytes);
+        }
+    }
+
     fn log_raw(&mut self, bytes: &[u8]) {
         let mut normalized = Vec::with_capacity(bytes.len());
         for &byte in bytes {
@@ -2170,6 +2209,30 @@ impl Drop for PhysicalOutput {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn explicit_verbose_and_raw_modes_keep_native_and_plain_events_expanded() {
+        for (format, raw_json, expanded) in [
+            (LogFormat::Pretty, false, false),
+            (LogFormat::PrettyVerbose, false, true),
+            (LogFormat::Pretty, true, true),
+            (LogFormat::Jsonl, false, true),
+        ] {
+            let ui = Ui {
+                log_format: format,
+                show_raw_json: raw_json,
+                ..split_ui()
+            };
+            let mut state = State::new(40, 120, &ui);
+            let body = format!("[WARN] codex\n{}", "diagnostic detail\n".repeat(20));
+            let event = serde_json::json!({"type":"stderr","text":"original stderr\n"});
+            state.log_event("codex", &event, body.as_bytes());
+            assert_eq!(state.events.snapshot()["events"][0]["expanded"], expanded);
+            state.log(body.as_bytes());
+            assert_eq!(state.events.snapshot()["events"][1]["expanded"], expanded);
+        }
+    }
+
     use super::*;
 
     fn split_ui() -> Ui {
@@ -2225,14 +2288,14 @@ mod tests {
     #[test]
     fn geometry_reserves_real_panes_and_survives_narrow_resize() {
         let mut state = State::new(58, 106, &split_ui());
-        assert_eq!(state.geometry.left, 75);
+        assert_eq!(state.geometry.left, 68);
         assert_eq!(state.geometry.pty_rows, 23);
         assert_eq!(state.geometry.log_rows, 33);
         state.resize(30, 80);
         assert_eq!(state.geometry.left, 80);
         state.resize(58, 160);
-        assert_eq!(state.geometry.left, 129);
-        assert_eq!(state.pty.screen().size(), (nonzero(23), nonzero(129)));
+        assert_eq!(state.geometry.left, 122);
+        assert_eq!(state.pty.screen().size(), (nonzero(23), nonzero(122)));
         state.resize(18, 96);
         assert_eq!(state.geometry.pty_rows, 7);
         state.resize(1, 1);
@@ -2393,7 +2456,7 @@ mod tests {
         assert!(replies.contains("\x1b[0n"), "{replies:?}");
         assert!(replies.contains("\x1b[?1;2c"), "{replies:?}");
         assert!(replies.contains("\x1b[>0;0;0c"), "{replies:?}");
-        assert!(replies.contains("\x1b[8;23;75t"), "{replies:?}");
+        assert!(replies.contains("\x1b[8;23;68t"), "{replies:?}");
         for _ in 0..2000 {
             state.pty.process(b"\x1b[6n");
         }
