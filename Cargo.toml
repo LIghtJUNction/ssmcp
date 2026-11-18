@@ -137,6 +137,7 @@ include = [
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
 getrandom = "0.3"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 libc = "0.2"
 miniz_oxide = "0.9.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

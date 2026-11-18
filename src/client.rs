@@ -1,7 +1,9 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod account;
+mod attachments;
 mod audit_view;
 mod browser_setup;
+mod clipboard;
 mod composer;
 mod config;
 

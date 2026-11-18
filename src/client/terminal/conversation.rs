@@ -1,6 +1,7 @@
 //! Conversation-style local controls. No input is ever forwarded to a hidden PTY.
 use super::*;
-use crate::client::{composer::Composer, steering};
+use crate::client::{attachments, composer::Composer, steering};
+use crate::wire::UserImage;
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -49,6 +50,10 @@ pub(super) struct Conversation {
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
     restored: bool,
+    images: Vec<UserImage>,
+    images_changed: bool,
+    image_task: Option<attachments::Task>,
+    persisted_context: Option<Value>,
 }
 
 impl Conversation {
@@ -56,7 +61,8 @@ impl Conversation {
         json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue" },
             "focus":if self.content_focus {"content"} else {"input"},
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
-            "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
+            "draft":{"text":self.composer.text(),"cursor":self.composer.cursor(),
+                "images":attachments::metadata(&self.images)}, "loading_image":self.image_task.is_some()})
     }
 }
 
@@ -124,6 +130,7 @@ impl State {
             text: self.conversation.composer.text().into(),
             cursor: self.conversation.composer.cursor(),
             target: self.conversation.target.clone(),
+            images: self.conversation.images.clone(),
         }
     }
 
@@ -133,6 +140,8 @@ impl State {
             && self.conversation.composer.left()
         {}
         self.conversation.target = draft.target;
+        self.conversation.images = draft.images;
+        self.conversation.images_changed = true;
     }
 
     fn chat_data(&self) -> Value {
@@ -149,7 +158,9 @@ impl State {
 
     fn chat_block_replacement(&mut self) {
         self.notice = Some(
-            (if self.conversation.submitting.is_some() {
+            (if self.conversation.image_task.is_some() {
+                "Clipboard operation in progress · continue typing, or press Esc to cancel"
+            } else if self.conversation.submitting.is_some() {
                 "Waiting for queue confirmation · your current draft is preserved"
             } else if self.conversation.editing.is_some() {
                 "Finish the current edit before opening another request"
@@ -167,6 +178,8 @@ impl State {
     fn chat_enqueued(&mut self, id: String, text: String) {
         self.conversation.submitting = Some((id, text));
         self.conversation.composer.take_text();
+        self.conversation.images.clear();
+        self.conversation.images_changed = true;
         self.conversation.editing = None;
         if let Some(parked) = self.conversation.parked.take() {
             self.chat_restore_draft(parked);
@@ -180,6 +193,14 @@ impl State {
         let mut record = format!("\n[USER] #{id}\n");
         for line in text.lines() {
             let _ = writeln!(record, "  {}", panel::safe_text(line));
+        }
+        for (index, image) in steering::message_images(&id).iter().enumerate() {
+            let _ = writeln!(
+                record,
+                "  [Image {}] {}",
+                index + 1,
+                panel::safe_text(&attachments::description(image))
+            );
         }
         record.push_str("  queued · waiting for the next eligible tool response\n\n");
         self.log(record.as_bytes());
@@ -196,9 +217,16 @@ impl State {
         self.dirty = true;
     }
 
-    fn chat_editable(&mut self, id: String, text: String, target: Option<String>) {
+    fn chat_editable(
+        &mut self,
+        id: String,
+        text: String,
+        target: Option<String>,
+        images: Vec<UserImage>,
+    ) {
         let same_edit = self.conversation.editing.as_ref() == Some(&id);
-        if self.conversation.submitting.is_some()
+        if self.conversation.image_task.is_some()
+            || self.conversation.submitting.is_some()
             || (!same_edit
                 && (self.conversation.editing.is_some() || self.conversation.parked.is_some()))
         {
@@ -206,10 +234,12 @@ impl State {
             return;
         }
         if !same_edit {
-            if !self.conversation.composer.is_empty() {
+            if !self.conversation.composer.is_empty() || !self.conversation.images.is_empty() {
                 self.conversation.parked = Some(self.chat_saved_draft());
             }
             self.conversation.composer.set_text(&text);
+            self.conversation.images = images;
+            self.conversation.images_changed = true;
         }
         self.conversation.target = target;
         self.conversation.editing = Some(id);
@@ -226,11 +256,13 @@ impl State {
                 text,
                 cursor,
                 target: context.target,
+                images: steering::draft_images(),
             });
             self.conversation.editing = context.editing;
             self.conversation.parked = context.parked;
             self.conversation.restored = true;
         }
+        self.chat_poll_image();
         if self.preview {
             return;
         }
@@ -239,7 +271,7 @@ impl State {
                 steering::UiEvent::Accepted { id, text } => {
                     self.chat_accepted(id, text);
                 }
-                steering::UiEvent::Editable { id, text } => {
+                steering::UiEvent::Editable { id, text, images } => {
                     let data = steering::snapshot();
                     let target = items(&data, "queue")
                         .iter()
@@ -247,7 +279,7 @@ impl State {
                         .and_then(|record| record.get("target").and_then(Value::as_str))
                         .filter(|target| *target != "next")
                         .map(str::to_owned);
-                    self.chat_editable(id, text, target);
+                    self.chat_editable(id, text, target, images);
                 }
                 steering::UiEvent::Failed { id, message } => {
                     if self
@@ -271,7 +303,10 @@ impl State {
             {
                 if field(record, "status") == "cancelled" {
                     self.conversation.editing = None;
+                    self.chat_cancel_image();
                     self.conversation.composer.take_text();
+                    self.conversation.images.clear();
+                    self.conversation.images_changed = true;
                     if let Some(parked) = self.conversation.parked.take() {
                         self.chat_restore_draft(parked);
                     }
@@ -290,18 +325,160 @@ impl State {
         self.chat_persist_draft();
     }
 
-    fn chat_persist_draft(&self) {
-        if !self.preview {
-            let _ = steering::set_draft(
+    fn chat_persist_draft(&mut self) {
+        if self.preview {
+            return;
+        }
+        let result = if self.conversation.images_changed {
+            steering::set_draft_with_images(
                 self.conversation.composer.text(),
                 self.conversation.composer.cursor(),
-            );
-            let _ = steering::set_draft_context(steering::DraftContext {
+                self.conversation.images.clone(),
+            )
+        } else {
+            steering::set_draft(
+                self.conversation.composer.text(),
+                self.conversation.composer.cursor(),
+            )
+        };
+        match result {
+            Ok(()) => self.conversation.images_changed = false,
+            Err(error) => self.notice = Some(error),
+        }
+        // Parked images can contain megabytes. Compare small metadata before
+        // cloning a retained draft, rather than copying payloads on each redraw.
+        let context_key = json!({
+            "editing": self.conversation.editing, "target": self.conversation.target,
+            "parked": self.conversation.parked.as_ref().map(|draft| json!({
+                "text":draft.text, "cursor":draft.cursor, "target":draft.target,
+                "images":attachments::metadata(&draft.images)
+            }))
+        });
+        if self.conversation.persisted_context.as_ref() != Some(&context_key) {
+            match steering::set_draft_context(steering::DraftContext {
                 editing: self.conversation.editing.clone(),
                 target: self.conversation.target.clone(),
                 parked: self.conversation.parked.clone(),
-            });
+            }) {
+                Ok(()) => self.conversation.persisted_context = Some(context_key),
+                Err(error) => self.notice = Some(error),
+            }
         }
+    }
+
+    fn chat_replace_images(&mut self, images: Vec<UserImage>) -> Result<(), String> {
+        crate::wire::validate_user_images(&images)?;
+        if !self.preview {
+            steering::set_draft_with_images(
+                self.conversation.composer.text(),
+                self.conversation.composer.cursor(),
+                images.clone(),
+            )?;
+        }
+        self.conversation.images = images;
+        self.conversation.images_changed = false;
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn chat_start_image(
+        &mut self,
+        source: attachments::Source,
+        fallback: Option<String>,
+    ) -> Result<(), String> {
+        if self.conversation.image_task.is_some() {
+            return Err("A clipboard or image load is already in progress · Esc cancels it".into());
+        }
+        let task = attachments::Task::start(source, &self.conversation.images, fallback)?;
+        self.conversation.composer.begin_external_paste();
+        self.conversation.image_task = Some(task);
+        self.conversation.content_focus = false;
+        self.notice = Some("Loading clipboard or image… · keep typing · Esc cancels".into());
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn chat_cancel_image(&mut self) {
+        self.conversation.image_task = None;
+        self.conversation.composer.cancel_external_paste();
+    }
+
+    fn chat_poll_image(&mut self) {
+        let Some(result) = self
+            .conversation
+            .image_task
+            .as_mut()
+            .and_then(attachments::Task::poll)
+        else {
+            return;
+        };
+        let fallback = self
+            .conversation
+            .image_task
+            .take()
+            .and_then(|mut task| task.fallback.take());
+        self.chat_loaded_image(result, fallback);
+    }
+
+    fn chat_loaded_image(
+        &mut self,
+        result: Result<attachments::Loaded, String>,
+        fallback: Option<String>,
+    ) {
+        match result {
+            Ok(attachments::Loaded::Copied) => {
+                self.conversation.composer.cancel_external_paste();
+                self.notice = Some("Latest agent message copied to the clipboard".into());
+            }
+            Ok(attachments::Loaded::Text(text)) => {
+                let pasted = self.conversation.composer.finish_external_paste(&text);
+                self.notice = Some(if !pasted {
+                    "Paste exceeds the 16 KiB draft limit; the draft was preserved".into()
+                } else if text.is_empty() {
+                    "The clipboard is empty · use /attach PATH for an image file".into()
+                } else if attachments::pasted_paths(&text).is_some() {
+                    "Path pasted as text · image was not attached; /attach PATH shows the error"
+                        .into()
+                } else {
+                    "Clipboard text pasted".into()
+                });
+            }
+            Ok(attachments::Loaded::Images(images)) => {
+                self.conversation.composer.cancel_external_paste();
+                let mut combined = self.conversation.images.clone();
+                let mut added = Vec::new();
+                for image in images {
+                    if !combined.iter().any(|old| old.id == image.id) {
+                        added.push(attachments::description(&image));
+                        combined.push(image);
+                    }
+                }
+                match self.chat_replace_images(combined) {
+                    Ok(()) if added.is_empty() => {
+                        self.notice = Some("This image is already attached".into())
+                    }
+                    Ok(()) => {
+                        self.notice = Some(format!(
+                            "Attached {} · /images details · /detach N removes",
+                            added.join(" · ")
+                        ))
+                    }
+                    Err(error) => self.notice = Some(error),
+                }
+            }
+            Err(error) => {
+                let restored = fallback
+                    .as_deref()
+                    .is_some_and(|text| self.conversation.composer.finish_external_paste(text));
+                self.conversation.composer.cancel_external_paste();
+                self.notice = Some(if restored {
+                    format!("{error} · pasted path preserved as text; no image attached")
+                } else {
+                    error
+                });
+            }
+        }
+        self.dirty = true;
     }
 
     fn chat_change_view(&mut self, view: View) {
@@ -328,6 +505,83 @@ impl State {
             "/help" => {
                 self.help = true;
                 self.conversation.content_focus = true;
+            }
+            "/copy" => {
+                if !rest.is_empty() {
+                    return Err(
+                        "Use /copy without arguments to copy the latest agent message".into(),
+                    );
+                }
+                let text = crate::client::messages::last_text()
+                    .ok_or("No agent message is available to copy yet")?;
+                if self.conversation.image_task.is_some() {
+                    return Err(
+                        "Another clipboard operation is in progress · Esc cancels it".into(),
+                    );
+                }
+                let task = attachments::Task::start(attachments::Source::Copy(text), &[], None)?;
+                self.conversation.image_task = Some(task);
+                self.notice = Some("Copying the latest agent message…".into());
+            }
+            "/paste" | "/attach" => {
+                let source = if command == "/paste" {
+                    if !rest.is_empty() {
+                        return Err("Use /paste without arguments, or /attach PATH".into());
+                    }
+                    attachments::Source::Clipboard
+                } else {
+                    attachments::Source::Paths(attachments::pasted_paths(rest).ok_or(
+                        "Use /attach PATH for PNG, JPEG, GIF or WebP; quote paths with spaces",
+                    )?)
+                };
+                let draft = self.chat_saved_draft();
+                self.conversation.composer.take_text();
+                if let Err(error) = self.chat_start_image(source, None) {
+                    self.chat_restore_draft(draft);
+                    return Err(error);
+                }
+            }
+            "/images" => {
+                if !rest.is_empty() {
+                    return Err("Use /images without arguments".into());
+                }
+                let mut text = String::from("\n[IMAGES] Draft attachments\n");
+                if self.conversation.images.is_empty() {
+                    text.push_str("  No images attached · Ctrl+V, /paste or /attach PATH\n");
+                }
+                for (index, image) in self.conversation.images.iter().enumerate() {
+                    let _ = writeln!(
+                        text,
+                        "  [Image {}] {}",
+                        index + 1,
+                        panel::safe_text(&attachments::description(image))
+                    );
+                }
+                text.push_str("  /detach N removes an image · /detach all clears attachments\n\n");
+                self.log(text.as_bytes());
+                self.chat_change_view(View::Activity);
+            }
+            "/detach" => {
+                let mut images = self.conversation.images.clone();
+                if images.is_empty() {
+                    return Err("The draft has no attached images".into());
+                }
+                if rest == "all" {
+                    images.clear();
+                } else {
+                    let index = if rest.is_empty() {
+                        images.len()
+                    } else {
+                        rest.parse::<usize>()
+                            .map_err(|_| "Use /detach N or /detach all")?
+                    };
+                    if index == 0 || index > images.len() {
+                        return Err(format!("Choose an image from 1 to {}", images.len()));
+                    }
+                    images.remove(index - 1);
+                }
+                self.chat_replace_images(images)?;
+                self.notice = Some("Image removed from the draft".into());
             }
             "/agents" => self.chat_change_view(View::Agents),
             "/queue" => self.chat_change_view(View::Queue),
@@ -407,6 +661,7 @@ impl State {
 
     fn chat_menu_visible(&self) -> bool {
         !self.conversation.content_focus
+            && self.conversation.image_task.is_none()
             && self.conversation.editing.is_none()
             && self
                 .conversation
@@ -415,6 +670,10 @@ impl State {
     }
 
     fn chat_submit(&mut self) {
+        if self.conversation.image_task.is_some() {
+            self.chat_block_replacement();
+            return;
+        }
         if self.conversation.submitting.is_some() {
             self.notice = Some("Waiting for queue confirmation · your draft is preserved".into());
             return;
@@ -429,13 +688,21 @@ impl State {
         } else {
             self.conversation.composer.text().to_owned()
         };
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && self.conversation.images.is_empty() {
             return;
         }
-        if self.conversation.editing.is_none() {
+        if self.conversation.editing.is_none()
+            || matches!(
+                text.split_whitespace().next(),
+                Some("/paste" | "/attach" | "/images" | "/detach" | "/copy")
+            )
+        {
             match self.chat_command(&text) {
                 Ok(true) => {
-                    if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart")) {
+                    if !matches!(
+                        text.split_whitespace().next(),
+                        Some("/reload" | "/restart" | "/paste" | "/attach")
+                    ) {
                         self.conversation.composer.take_text();
                     }
                     return;
@@ -455,9 +722,10 @@ impl State {
         // The composer always shows a deliberate choice, including Next caller.
         let target = Some(self.conversation.target.as_deref().unwrap_or("next"));
         let result = if let Some(id) = self.conversation.editing.clone() {
-            steering::publish_edit(&id, &text, target).map(|()| id)
+            steering::publish_edit_with_images(&id, &text, target, self.conversation.images.clone())
+                .map(|()| id)
         } else {
-            steering::submit(&text, target)
+            steering::submit_with_images(&text, target, self.conversation.images.clone())
         };
         match result {
             Ok(id) => self.chat_enqueued(id, text),
@@ -484,7 +752,8 @@ impl State {
     fn chat_open(&mut self, edit: bool) {
         if edit
             && self.conversation.view == View::Queue
-            && (self.conversation.editing.is_some()
+            && (self.conversation.image_task.is_some()
+                || self.conversation.editing.is_some()
                 || self.conversation.submitting.is_some()
                 || self.conversation.parked.is_some())
         {
@@ -621,6 +890,10 @@ impl State {
                     return;
                 }
                 if !self.conversation.composer.up(self.geometry.left) {
+                    if self.conversation.image_task.is_some() {
+                        self.chat_block_replacement();
+                        return;
+                    }
                     if self.conversation.editing.is_none() && self.conversation.parked.is_some() {
                         self.chat_block_replacement();
                         return;
@@ -637,7 +910,9 @@ impl State {
                         if let Err(error) = steering::take_back(message_id(&queued)) {
                             self.notice = Some(error);
                         }
-                    } else if self.conversation.editing.is_none() {
+                    } else if self.conversation.editing.is_none()
+                        && self.conversation.images.is_empty()
+                    {
                         self.conversation.composer.history_previous();
                     }
                 }
@@ -651,9 +926,10 @@ impl State {
                 if !self.conversation.composer.down(self.geometry.left)
                     && self.conversation.editing.is_none()
                 {
-                    if self.conversation.parked.is_some() {
+                    if self.conversation.parked.is_some() || self.conversation.image_task.is_some()
+                    {
                         self.chat_block_replacement();
-                    } else {
+                    } else if self.conversation.images.is_empty() {
                         self.conversation.composer.history_next();
                     }
                 }
@@ -732,6 +1008,11 @@ impl State {
 
     fn chat_escape(&mut self) {
         self.dirty = true;
+        if self.conversation.image_task.is_some() {
+            self.chat_cancel_image();
+            self.notice = Some("Clipboard operation cancelled · draft preserved".into());
+            return;
+        }
         if !self.help && self.chat_menu_visible() {
             self.conversation.composer.dismiss_suggestions();
             self.notice = None;
@@ -792,7 +1073,8 @@ impl State {
                     );
                     let same_retarget = recoverable
                         && self.conversation.editing.as_deref() == Some(message_id(&message));
-                    if self.conversation.submitting.is_some()
+                    if self.conversation.image_task.is_some()
+                        || self.conversation.submitting.is_some()
                         || (self.conversation.parked.is_some() && !same_retarget)
                         || self
                             .conversation
@@ -808,10 +1090,14 @@ impl State {
                             self.notice = Some(error);
                         }
                     } else {
-                        if !self.conversation.composer.is_empty() {
+                        if !self.conversation.composer.is_empty()
+                            || !self.conversation.images.is_empty()
+                        {
                             self.conversation.parked = Some(self.chat_saved_draft());
                         }
                         self.conversation.composer.set_text(field(&message, "text"));
+                        self.conversation.images = steering::message_images(message_id(&message));
+                        self.conversation.images_changed = true;
                         self.conversation.editing = None;
                         self.conversation.target = None;
                         self.conversation.content_focus = false;
@@ -827,6 +1113,11 @@ impl State {
                 }
             }
             '\u{1b}' => self.chat_escape(),
+            '\u{16}' => {
+                if let Err(error) = self.chat_start_image(attachments::Source::Clipboard, None) {
+                    self.notice = Some(error);
+                }
+            }
             '\t' => {
                 if self.chat_menu_visible() {
                     let selected = self.conversation.composer.selected_suggestion().unwrap();
@@ -901,15 +1192,27 @@ impl State {
                     self.help = false;
                     self.conversation.content_focus = false;
                 }
-                if self.conversation.paste_overflow
-                    || !self
-                        .conversation
-                        .composer
-                        .paste(&String::from_utf8_lossy(&paste))
-                {
+                if self.conversation.paste_overflow {
                     self.notice = Some(
                         "Paste exceeds the 16 KiB draft limit; the draft was preserved".into(),
                     );
+                } else {
+                    let text = String::from_utf8_lossy(&paste);
+                    if self.conversation.image_task.is_none()
+                        && let Some(paths) = attachments::pasted_paths(&text)
+                    {
+                        if let Err(error) = self.chat_start_image(
+                            attachments::Source::Paths(paths),
+                            Some(text.to_string()),
+                        ) {
+                            self.conversation.composer.paste(&text);
+                            self.notice = Some(format!("{error} · image path pasted as text"));
+                        }
+                    } else if !self.conversation.composer.paste(&text) {
+                        self.notice = Some(
+                            "Paste exceeds the 16 KiB draft limit; the draft was preserved".into(),
+                        );
+                    }
                 }
             }
             self.dirty = true;
@@ -1031,6 +1334,14 @@ impl State {
                 width,
             ));
             let mut wrapped = Vec::new();
+            for (index, image) in items(entry, "images").iter().enumerate() {
+                wrapped.push(format!(
+                    "  [Image {}] {} · {}",
+                    index + 1,
+                    field(image, "name"),
+                    field(image, "mime_type")
+                ));
+            }
             for line in field(entry, "text").split('\n') {
                 let mut part = String::from("  ");
                 let mut used = 2;
@@ -1074,9 +1385,15 @@ impl State {
                 " "
             };
             let title = if queue {
+                let count = items(entry, "images").len();
                 format!(
-                    "{marker} {}  ·  {}",
+                    "{marker} {}{}  ·  {}",
                     field(entry, "status"),
+                    if count == 0 {
+                        String::new()
+                    } else {
+                        format!(" · {count} image(s)")
+                    },
                     message_id(entry)
                 )
             } else if field(entry, "kind") == "observed" {
@@ -1223,6 +1540,9 @@ impl State {
                 "  Enter      Queue a new requirement",
                 "  Up/Down    Move within input · select commands or history",
                 "  Ctrl+J     New line · pasted text stays in the draft",
+                "  Ctrl+V     Paste image or text · /paste if the terminal intercepts it",
+                "  /attach    Add image file · /images details · /detach N removes",
+                "  /copy      Copy the latest agent message to the clipboard",
                 "  Tab        Complete command · switch input / content focus",
                 "  Esc        Restore a parked draft when input is focused",
                 "  Ctrl+O     Source audit · Enter/→ open · ← back",
@@ -1247,12 +1567,36 @@ impl State {
             self.chat_line("", PanelTone::Normal, g.left)
         });
         body.truncate(usize::from(height));
-        let prompt = self.conversation.composer.rows(
+        let mut prompt = self.conversation.composer.rows(
             g.left,
             prompt_rows(g.rows).max(1),
             &self.ui,
-            !self.conversation.content_focus && self.conversation.editing.is_none(),
+            !self.conversation.content_focus
+                && self.conversation.editing.is_none()
+                && self.conversation.image_task.is_none(),
         );
+        let available = usize::from(prompt_rows(g.rows)).saturating_sub(prompt.lines.len());
+        if available > 0 && !self.conversation.images.is_empty() {
+            // Attachment descriptions use only spare input rows; the cursor's
+            // viewport and the last activity line remain visible.
+            let count = self.conversation.images.len();
+            for (index, image) in self.conversation.images.iter().take(available).enumerate() {
+                let extra = if index + 1 == available && count > available {
+                    format!(" · +{} more · /images", count - available)
+                } else {
+                    String::new()
+                };
+                prompt.lines.push(self.chat_line(
+                    &format!(
+                        "  [Image {}] {}{extra}",
+                        index + 1,
+                        attachments::description(image)
+                    ),
+                    PanelTone::Accent,
+                    g.left,
+                ));
+            }
+        }
         let label = self
             .conversation
             .target
@@ -1310,11 +1654,22 @@ impl State {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g.rows) && prompt_rows(g.rows) > 0 {
                 let title = format!(
-                    "─ {} · {} ",
+                    "─ {}{} · {} ",
                     if self.conversation.editing.is_some() {
                         "Editing"
                     } else {
                         "To"
+                    },
+                    if let Some(task) = &self.conversation.image_task {
+                        if task.copying {
+                            " · copying…".into()
+                        } else {
+                            " · loading image…".into()
+                        }
+                    } else if self.conversation.images.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {} image(s) · /images", self.conversation.images.len())
                     },
                     label
                 );
@@ -1530,6 +1885,7 @@ mod tests {
             text: "界x\\".into(),
             cursor: "界".len(),
             target: None,
+            images: Vec::new(),
         });
         input(&mut state, b"\r");
         assert_eq!(state.conversation.composer.text(), "界x\\");
@@ -1538,6 +1894,7 @@ mod tests {
             text: "界\\tail".into(),
             cursor: "界\\".len(),
             target: None,
+            images: Vec::new(),
         });
         input(&mut state, b"\r");
         assert_eq!(state.conversation.composer.text(), "界\ntail");
@@ -1588,6 +1945,7 @@ mod tests {
             text: "继续review".into(),
             cursor: "继续re".len(),
             target: Some("example-reviewer".into()),
+            images: Vec::new(),
         };
         state.chat_restore_draft(original.clone());
         state.conversation.view = View::Queue;
@@ -1606,6 +1964,7 @@ mod tests {
             "another_request".into(),
             "external request".into(),
             Some("example-builder".into()),
+            Vec::new(),
         );
         assert_eq!(state.chat_saved_draft(), copied);
         assert_eq!(state.conversation.parked.as_ref(), Some(&original));
@@ -1631,11 +1990,12 @@ mod tests {
             "request_b".into(),
             "old B".into(),
             Some("example-builder".into()),
+            Vec::new(),
         );
         state.conversation.composer.set_text("revised B");
         state.conversation.composer.left();
         let cursor = state.conversation.composer.cursor();
-        state.chat_editable("request_b".into(), "old B".into(), None);
+        state.chat_editable("request_b".into(), "old B".into(), None, Vec::new());
         assert_eq!(state.conversation.composer.text(), "revised B");
         assert_eq!(state.conversation.composer.cursor(), cursor);
         assert!(state.conversation.target.is_none());
@@ -1669,6 +2029,7 @@ mod tests {
             text: "原稿 A".into(),
             cursor: "原".len(),
             target: Some("example-reviewer".into()),
+            images: Vec::new(),
         };
         state.conversation.parked = Some(parked.clone());
         state.conversation.editing = Some("request_b".into());
@@ -1791,13 +2152,18 @@ mod tests {
                 .selected_suggestion()
                 .unwrap()
                 .name,
-            "/audit"
+            "/attach"
         );
         assert!(state.conversation.editing.is_none());
         assert!(state.conversation.target.is_none());
-        assert!(display(&mut state).screen().contents().contains("› /audit"));
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("› /attach")
+        );
         input(&mut state, b"\t");
-        assert_eq!(state.conversation.composer.text(), "/audit ");
+        assert_eq!(state.conversation.composer.text(), "/attach ");
         assert!(!state.conversation.content_focus);
         assert!(!state.chat_menu_visible());
 
@@ -1815,6 +2181,7 @@ mod tests {
             text: "parked request".into(),
             cursor: 6,
             target: None,
+            images: Vec::new(),
         });
         state.chat_key(Key::Escape);
         assert_eq!(state.conversation.composer.text(), "/re");
@@ -1964,5 +2331,86 @@ mod tests {
         assert_eq!(field(&state.chat_selected().unwrap(), "run_id"), selected);
         state.chat_move(1);
         assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
+    }
+    fn test_image(name: &str, color: u8) -> UserImage {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            1,
+            1,
+            image::Rgba([color, 0, 0, 255]),
+        ))
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+        UserImage::from_bytes(name, "image/png", &bytes.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn image_drafts_park_restore_and_render_without_exposing_base64() {
+        let mut state = preview(36, 120);
+        let original = test_image("original.png [1×1]", 20);
+        state.chat_replace_images(vec![original.clone()]).unwrap();
+        let saved = state.chat_saved_draft();
+        state.chat_editable(
+            "image_b".into(),
+            "edit B".into(),
+            None,
+            vec![test_image("queue.png [1×1]", 40)],
+        );
+        assert_eq!(state.conversation.parked.as_ref(), Some(&saved));
+        assert!(state.conversation.images[0].name.starts_with("queue"));
+        state.chat_enqueued("image_b".into(), "edited B".into());
+        assert_eq!(state.chat_saved_draft(), saved);
+        assert_eq!(state.conversation.images, vec![original]);
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("[Image 1]")
+        );
+        let snapshot = state.conversation.snapshot();
+        assert!(snapshot["draft"]["images"][0].get("data").is_none());
+        assert_eq!(snapshot["draft"]["images"][0]["mime_type"], "image/png");
+    }
+
+    #[test]
+    fn attachment_only_submit_detach_and_failed_paste_preserve_the_draft() {
+        let mut state = preview(36, 120);
+        state
+            .chat_replace_images(vec![test_image("screen.png [1×1]", 90)])
+            .unwrap();
+        input(&mut state, b"\r");
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("connect a session")
+        );
+        assert_eq!(state.conversation.images.len(), 1);
+        state.conversation.composer.set_text("draft ");
+        state.conversation.composer.begin_external_paste();
+        state.conversation.composer.insert("later");
+        state.chat_loaded_image(
+            Err("Cannot decode image".into()),
+            Some("/tmp/image.png ".into()),
+        );
+        assert_eq!(
+            state.conversation.composer.text(),
+            "draft /tmp/image.png later"
+        );
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("no image attached")
+        );
+        let before = state.conversation.composer.text().to_owned();
+        state.chat_command("/detach all").unwrap();
+        assert!(state.conversation.images.is_empty());
+        assert_eq!(state.conversation.composer.text(), before);
+        state.chat_loaded_image(Ok(attachments::Loaded::Copied), None);
+        assert_eq!(state.conversation.composer.text(), before);
+        assert!(state.notice.as_deref().unwrap().contains("copied"));
     }
 }
