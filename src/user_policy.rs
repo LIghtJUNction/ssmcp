@@ -11,6 +11,7 @@ use std::{
 use tokio::{sync::Notify, time::Instant};
 
 pub const DEFAULT_RATE_LIMIT_BPS: u64 = 8 * 1024 * 1024;
+pub(crate) const RECHARGED_RATE_LIMIT_BPS: u64 = 64 * 1024 * 1024;
 pub const MAX_RATE_LIMIT_BPS: u64 = 1024 * 1024 * 1024;
 const MAX_BURST: u64 = 64 * 1024;
 
@@ -261,6 +262,21 @@ impl UserPolicies {
             .get(subject)
             .is_some_and(|entry| entry.banned())
     }
+    pub(crate) fn apply_account(
+        &self,
+        subject: &str,
+        banned: bool,
+        rate: Option<u64>,
+        has_recharged: bool,
+    ) {
+        let default = if has_recharged {
+            self.default_rate().max(RECHARGED_RATE_LIMIT_BPS)
+        } else {
+            self.default_rate()
+        };
+        self.get(subject).configure(banned, rate.unwrap_or(default));
+    }
+    #[cfg(test)]
     pub(crate) fn set(&self, subject: &str, banned: bool, rate: Option<u64>) {
         self.get(subject)
             .configure(banned, rate.unwrap_or_else(|| self.default_rate()));
@@ -325,6 +341,31 @@ mod tests {
         assert!(bandwidth.charge(true, 1).await.is_err());
         policies.set("123", false, None);
         assert!(!bandwidth.banned());
+    }
+
+    #[test]
+    fn recharge_updates_the_existing_bucket_and_preserves_explicit_rates() {
+        let policies = UserPolicies::default();
+        policies.set_default(16 * 1024 * 1024).unwrap();
+        let active = policies.get("123");
+        policies.apply_account("123", false, None, true);
+        assert_eq!(
+            active.settings.read().unwrap().rate,
+            RECHARGED_RATE_LIMIT_BPS
+        );
+        policies.apply_account("123", true, Some(1024), true);
+        assert_eq!(active.settings.read().unwrap().rate, 1024);
+        assert!(active.banned());
+        policies.apply_account("123", false, None, true);
+        assert_eq!(
+            active.settings.read().unwrap().rate,
+            RECHARGED_RATE_LIMIT_BPS
+        );
+        assert!(!active.banned());
+        assert_eq!(
+            policies.get("456").settings.read().unwrap().rate,
+            policies.default_rate()
+        );
     }
 
     #[test]
