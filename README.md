@@ -108,7 +108,16 @@ ssmcp trust list
 
 0.8.0 客户端默认使用 `dark` 主题和 `chat` 布局：连续事件流展示调用、输出和结果，底部输入框用于追加用户要求。运行期间可以继续输入，待交付要求保留在队列中，支持取回编辑；下一次符合目标的 `code_mode` 响应携带这些要求时，界面标记为已交付。已交付表示附加到了响应，不代表模型已经阅读或执行。
 
-`/help` 查看操作，`/audit` 浏览原始编排源码，输入框为空或光标在草稿开头时按 ← 打开 Agent 面板，`/queue` 管理待交付要求。Agent 面板中 ↑/↓ 选择、Enter/→ 开始定向对话、Esc 返回会话；草稿与光标保持原位。Tab 切换输入和浏览焦点，F2 切换事件流、审计、成员和队列，F3 收起侧栏。`/reload` 重新启动客户端，F5 只重载显示配置。终端输入继续通过 `terminal.*` 或 `ssmcp -i` 使用。
+`/help` 或 F1 打开可滚动的完整帮助；`/audit` 浏览原始编排源码，`/queue` 管理待交付要求。输入框为空或光标在整份草稿开头时按 ← 打开 Agent 面板：↑/↓ 选择、Enter/→ 选定后返回会话、Esc/← 保留原收件人和草稿返回。Tab 切换输入与内容焦点，F2 轮换事件流、审计、成员、队列、问题与历史，F3 收起侧栏。`/reload` 重新启动客户端，F5 只重载显示配置。终端输入继续通过 `terminal.*` 或 `ssmcp -i` 使用。
+
+| 操作 | 用法与边界 |
+| --- | --- |
+| 文件、技能与图片 | 输入 `@path`、`@"含空格的路径"` 或 `$skill-name`。文件须位于工作区内；文本附有界预览，图片通过 `ssmcp.fs.read_image` 实际读取后显示本地缩略图。支持 PNG/JPEG/GIF/WebP，单图最多 400 KiB；旧中转端仍仅兼容 PNG/JPEG |
+| 长粘贴 | Unix 终端的整段粘贴超过 8 KiB 时保存为私有文件并插入 `@file`，可继续追加要求；单次最多 4 MiB |
+| 事件与复制 | 缓冲工具输出默认摘要 8 行；活动页逐条折叠或展开，保留最多 128 条、合计 2 MiB 的展示正文。F7 冻结界面并释放鼠标选择，F7/Esc 返回；支持的终端也可 Shift+拖选 |
+| 历史与原生工具 | `/resume` 恢复本工作区的版本化 JSONL 文本历史，不重放工具或要求。`/pi`、`/cc`、`/codex` 先显示实际工具目录；只有显式 `TOOL {...}` 才调用工具，不虚构 Pi 内部 LSP 接口 |
+
+Agent 向本机用户发送 Markdown 进度与结果时使用 `ssmcp.ui.message`；需要回答时用 `ssmcp.ui.ask` 非阻塞提问，稍后通过 `ssmcp.ui.questions` 读取答案。用户按 Shift+↑ 打开问题，普通草稿单独保留。这条本地通道不会拦截外部聊天应用。前台输入与后台 `ssmcp.ui.queue` 要求都在服务器确认接收后写入本地历史；确认入队不等于已交付。[输入、引用与本地沟通](docs/client-input.md) · [会话历史格式与恢复边界](docs/conversation-history.md)
 
 ![ssmcp 客户端：执行记录、输入框和状态面板](docs/assets/client-ui.png)
 
@@ -292,6 +301,8 @@ cargo test --locked
 | 主题 | 文档 |
 | --- | --- |
 | 输入与队列、主题、源码审计和自定义界面 | [客户端 UI](docs/client-ui.md) |
+| 文件与技能引用、图片、长粘贴和本地沟通 | [客户端输入](docs/client-input.md) |
+| 版本化 JSONL 会话历史与不重放的恢复 | [会话历史](docs/conversation-history.md) |
 | 登录、设备列表和临时邀请 | [客户端账号](docs/client-accounts.md) |
 | 用户名绑定与服务器管理 | [具名账号](docs/named-accounts.md) |
 | 默认中转服务器与可信公钥 | [服务器与信任](docs/client-server.md) |

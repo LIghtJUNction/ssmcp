@@ -1,7 +1,9 @@
 //! Conversation-style local controls. No input is ever forwarded to a hidden PTY.
 use super::*;
-use crate::client::{composer::Composer, steering};
+use crate::client::{composer::Composer, references, steering};
 use serde_json::{Value, json};
+mod history;
+mod questions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum View {
@@ -10,6 +12,8 @@ pub(super) enum View {
     Audit,
     Agents,
     Queue,
+    Questions,
+    History,
 }
 impl View {
     fn name(self) -> &'static str {
@@ -18,6 +22,8 @@ impl View {
             Self::Audit => "code audit",
             Self::Agents => "agents",
             Self::Queue => "queue",
+            Self::Questions => "questions",
+            Self::History => "history",
         }
     }
     fn next(self) -> Self {
@@ -25,7 +31,9 @@ impl View {
             Self::Activity => Self::Audit,
             Self::Audit => Self::Agents,
             Self::Agents => Self::Queue,
-            Self::Queue => Self::Activity,
+            Self::Queue => Self::Questions,
+            Self::Questions => Self::History,
+            Self::History => Self::Activity,
         }
     }
 }
@@ -49,12 +57,20 @@ pub(super) struct Conversation {
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
     restored: bool,
+    question_id: Option<String>,
+    answers: BTreeMap<String, Composer>,
+    help_scroll: usize,
+    sessions: Vec<crate::client::interface::history::SessionSummary>,
+    history: Option<crate::client::interface::history::Conversation>,
+    history_rows: Vec<String>,
+    pub(super) history_width: u16,
 }
 
 impl Conversation {
     pub(super) fn snapshot(&self) -> Value {
-        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue" },
+        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history" },
             "focus":if self.content_focus {"content"} else {"input"},
+            "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
@@ -176,10 +192,14 @@ impl State {
     }
 
     fn chat_accepted(&mut self, id: String, text: String) {
+        let text = references::source(&text).to_owned();
         self.conversation.composer.remember(&text);
+        if self.conversation.view == View::History {
+            self.chat_change_view(View::Activity);
+        }
         let mut record = format!("\n[USER] #{id}\n");
-        for line in text.lines() {
-            let _ = writeln!(record, "  {}", panel::safe_text(line));
+        for line in markdown::rows(&text, self.geometry.left, &self.ui) {
+            let _ = writeln!(record, "{line}");
         }
         record.push_str("  queued · waiting for the next eligible tool response\n\n");
         self.log(record.as_bytes());
@@ -197,6 +217,7 @@ impl State {
     }
 
     fn chat_editable(&mut self, id: String, text: String, target: Option<String>) {
+        let text = references::source(&text).to_owned();
         let same_edit = self.conversation.editing.as_ref() == Some(&id);
         if self.conversation.submitting.is_some()
             || (!same_edit
@@ -234,6 +255,7 @@ impl State {
         if self.preview {
             return;
         }
+        let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
                 steering::UiEvent::Accepted { id, text } => {
@@ -250,6 +272,7 @@ impl State {
                     self.chat_editable(id, text, target);
                 }
                 steering::UiEvent::Failed { id, message } => {
+                    failed_notice = Some(message.clone());
                     if self
                         .conversation
                         .submitting
@@ -286,6 +309,9 @@ impl State {
                     );
                 }
             }
+        }
+        if let Some(message) = failed_notice {
+            self.notice = Some(message);
         }
         self.chat_persist_draft();
     }
@@ -338,8 +364,22 @@ impl State {
         let rest = rest.trim();
         match command {
             "/help" => {
+                self.conversation.help_scroll = 0;
                 self.help = true;
                 self.conversation.content_focus = true;
+            }
+            "/resume" => {
+                if !rest.is_empty() {
+                    return Err("Use /resume to choose a saved conversation".into());
+                }
+                self.chat_resume();
+            }
+            "/pi" | "/cc" | "/codex" => {
+                if self.preview {
+                    return Err("Preview does not invoke installed harnesses".into());
+                }
+                crate::client::interface::harness::submit(&command[1..], rest)?;
+                self.notice = Some("Harness request queued · results appear here".into());
             }
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
@@ -374,6 +414,7 @@ impl State {
                 self.chat_change_view(View::Activity);
             }
             "/clear" => {
+                self.events.clear();
                 self.logs = vt100::Parser::new(
                     nonzero(self.geometry.log_rows),
                     nonzero(self.geometry.left),
@@ -543,18 +584,40 @@ impl State {
                     }
                 }
             }
-            View::Activity => {}
+            View::History => self.chat_resume_selected(),
+            View::Activity => {
+                if !self.log_query.is_empty() || self.log_level != 0 {
+                    self.notice = Some("Clear the log filter to expand individual events".into());
+                    return;
+                }
+                if edit {
+                    self.events.toggle();
+                } else {
+                    self.events.open();
+                }
+            }
+            View::Questions => {}
         }
     }
 
     fn chat_move(&mut self, delta: isize) {
         match self.conversation.view {
-            View::Activity => self.scroll_logs(-delta),
+            View::Activity => {
+                self.scroll_logs(-delta);
+                self.events.scroll_by(delta);
+            }
             View::Audit => self.audit.scroll_by(delta),
             View::Agents if self.conversation.detail => self.audit.scroll_by(delta),
-            View::Queue if self.conversation.detail => {
+            View::Queue | View::History if self.conversation.detail => {
                 self.conversation.detail_scroll =
                     self.conversation.detail_scroll.saturating_add_signed(delta);
+            }
+            View::History => {
+                self.conversation.selected = self
+                    .conversation
+                    .selected
+                    .saturating_add_signed(delta)
+                    .min(self.conversation.sessions.len().saturating_sub(1));
             }
             view => {
                 let data = self.chat_data();
@@ -585,10 +648,59 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        if matches!(key, Key::Select) || (self.selection && matches!(key, Key::Escape)) {
+            self.selection = !self.selection;
+            self.notice = self.selection.then(|| {
+                "Copy mode · drag to select · use your terminal Copy · F7/Esc back".into()
+            });
+            self.dirty = true;
+            return;
+        }
+        if self.selection {
+            return;
+        }
+        if matches!(key, Key::Questions) {
+            self.chat_questions();
+            return;
+        }
         if self.help {
-            if matches!(key, Key::Help | Key::Escape) {
-                self.chat_escape();
+            let page = usize::from(body_rows(self.geometry.rows).saturating_sub(1).max(1));
+            match key {
+                Key::Help | Key::Escape => self.chat_escape(),
+                Key::AuditUp => {
+                    self.conversation.help_scroll = self.conversation.help_scroll.saturating_sub(1)
+                }
+                Key::AuditDown => {
+                    self.conversation.help_scroll = self.conversation.help_scroll.saturating_add(1)
+                }
+                Key::Up => {
+                    self.conversation.help_scroll =
+                        self.conversation.help_scroll.saturating_sub(page)
+                }
+                Key::Down => {
+                    self.conversation.help_scroll =
+                        self.conversation.help_scroll.saturating_add(page)
+                }
+                Key::Home | Key::HistoryStart => self.conversation.help_scroll = 0,
+                Key::End | Key::HistoryEnd => self.conversation.help_scroll = usize::MAX,
+                Key::Mouse {
+                    button,
+                    release: false,
+                    ..
+                } if button & 64 != 0 => {
+                    self.conversation.help_scroll = if button & 1 == 0 {
+                        self.conversation.help_scroll.saturating_sub(3)
+                    } else {
+                        self.conversation.help_scroll.saturating_add(3)
+                    };
+                }
+                _ => {}
             }
+            self.dirty = true;
+            return;
+        }
+        if self.conversation.view == View::Questions {
+            self.question_key(key);
             return;
         }
         if self.conversation.view == View::Agents
@@ -600,10 +712,15 @@ impl State {
         let content = self.conversation.content_focus;
         match key {
             Key::Help => {
+                self.conversation.help_scroll = 0;
                 self.help = !self.help;
                 self.conversation.content_focus = self.help;
             }
-            Key::Layout => self.chat_change_view(self.conversation.view.next()),
+            Key::Layout => match self.conversation.view.next() {
+                View::History => self.chat_resume(),
+                View::Questions => self.chat_questions(),
+                view => self.chat_change_view(view),
+            },
             Key::Sidebar => self.actions.push("sidebar.toggle"),
             Key::Theme => self.actions.push("theme.next"),
             Key::Reload => self.actions.push("reload"),
@@ -621,11 +738,29 @@ impl State {
             ),
             Key::HistoryStart => {
                 self.scroll_logs(isize::MAX);
+                self.events.scroll_by(isize::MIN.saturating_add(1));
                 self.chat_change_view(View::Activity);
             }
             Key::HistoryEnd => {
                 self.scroll_logs(isize::MIN);
+                self.events.latest();
                 self.chat_change_view(View::Activity);
+            }
+            Key::AuditUp
+                if content
+                    && self.conversation.view == View::Activity
+                    && self.log_query.is_empty()
+                    && self.log_level == 0 =>
+            {
+                self.events.select(-1)
+            }
+            Key::AuditDown
+                if content
+                    && self.conversation.view == View::Activity
+                    && self.log_query.is_empty()
+                    && self.log_level == 0 =>
+            {
+                self.events.select(1)
             }
             Key::AuditUp if content => self.chat_move(-1),
             Key::AuditDown if content => self.chat_move(1),
@@ -682,7 +817,11 @@ impl State {
                 self.chat_escape();
             }
             Key::Back if self.conversation.view == View::Activity && content => {
-                self.chat_agents();
+                if !self.log_query.is_empty() || self.log_level != 0 {
+                    self.notice = Some("Clear the log filter to fold individual events".into());
+                } else if !self.events.back() {
+                    self.chat_agents();
+                }
             }
             Key::Back if content => {
                 self.audit.back();
@@ -731,8 +870,26 @@ impl State {
                     self.conversation.content_focus = false;
                 } else {
                     self.conversation.content_focus = true;
-                    if matches!(self.conversation.view, View::Agents | View::Queue)
-                        && !self.conversation.detail
+                    if self.conversation.view == View::Activity
+                        && self.log_query.is_empty()
+                        && self.log_level == 0
+                    {
+                        if let Some(row) = y.checked_sub(body_top(self.geometry.rows)) {
+                            if self.events.mouse_select(row) {
+                                if button == 0 {
+                                    self.events.toggle();
+                                } else if button == 2 {
+                                    self.events.open();
+                                }
+                            }
+                        }
+                        self.dirty = true;
+                        return;
+                    }
+                    if matches!(
+                        self.conversation.view,
+                        View::Agents | View::Queue | View::History
+                    ) && !self.conversation.detail
                     {
                         if self.conversation.view == View::Agents
                             && x >= self.chat_agent_list_width()
@@ -764,6 +921,10 @@ impl State {
 
     fn chat_escape(&mut self) {
         self.dirty = true;
+        if self.conversation.view == View::Questions && !self.help {
+            self.question_key(Key::Escape);
+            return;
+        }
         if !self.help && self.chat_menu_visible() {
             self.conversation.composer.dismiss_suggestions();
             self.notice = None;
@@ -773,6 +934,16 @@ impl State {
             self.help = false;
             self.conversation.content_focus = false;
             self.notice = None;
+            return;
+        }
+        if self.conversation.view == View::History {
+            if self.conversation.detail {
+                self.conversation.detail = false;
+                self.conversation.content_focus = true;
+                self.notice = None;
+            } else {
+                self.chat_change_view(View::Activity);
+            }
             return;
         }
         if self.conversation.view == View::Agents {
@@ -810,6 +981,12 @@ impl State {
     }
 
     fn chat_character(&mut self, character: char) {
+        if self.selection {
+            if character == '\u{1b}' {
+                self.chat_key(Key::Select);
+            }
+            return;
+        }
         if self.help {
             if character == '\u{1b}' {
                 self.chat_escape();
@@ -822,6 +999,10 @@ impl State {
                 }
                 self.dirty = true;
             }
+            return;
+        }
+        if self.conversation.view == View::Questions {
+            self.question_character(character);
             return;
         }
         if self.conversation.view == View::Agents
@@ -863,7 +1044,9 @@ impl State {
                         if !self.conversation.composer.is_empty() {
                             self.conversation.parked = Some(self.chat_saved_draft());
                         }
-                        self.conversation.composer.set_text(field(&message, "text"));
+                        self.conversation
+                            .composer
+                            .set_text(references::source(field(&message, "text")));
                         self.conversation.editing = None;
                         self.conversation.target = None;
                         self.conversation.content_focus = false;
@@ -944,6 +1127,45 @@ impl State {
         self.dirty = true;
     }
 
+    fn chat_paste_text(&mut self, text: &str) -> Result<(), String> {
+        let large = text.len() > 8 * 1024;
+        let question = self.conversation.view == View::Questions;
+        let used = if question {
+            self.question_paste_len()?
+        } else {
+            self.conversation.composer.text().len()
+        };
+        let required = if large {
+            references::paste::REFERENCE_BYTES + 2
+        } else {
+            text.len()
+        };
+        if required > crate::client::composer::MAX_DRAFT_BYTES.saturating_sub(used) {
+            return Err("Not enough draft space for this paste; your draft was preserved".into());
+        }
+        let stored;
+        let inserted = if large {
+            stored = format!("\n{}\n", references::paste::store(text)?);
+            stored.as_str()
+        } else {
+            text
+        };
+        let accepted = if question {
+            self.question_paste(inserted)
+        } else {
+            self.conversation.composer.paste(inserted)
+        };
+        if !accepted {
+            return Err("Paste could not be inserted; your draft was preserved".into());
+        }
+        if large {
+            self.notice = Some(
+                "Long paste saved as @file · add your instructions after the reference".into(),
+            );
+        }
+        Ok(())
+    }
+
     fn chat_output(&mut self, output: &[u8]) {
         if output == b"\x1b[200~" {
             self.conversation.paste = Some(Vec::new());
@@ -961,23 +1183,27 @@ impl State {
                         self.conversation.content_focus = false;
                     }
                 }
-                if self.conversation.paste_overflow
-                    || !self
-                        .conversation
-                        .composer
-                        .paste(&String::from_utf8_lossy(&paste))
-                {
-                    self.notice = Some(
-                        "Paste exceeds the 16 KiB draft limit; the draft was preserved".into(),
-                    );
+                let result = if self.selection {
+                    Err("Leave copy mode before pasting".into())
+                } else if self.conversation.paste_overflow {
+                    Err("Paste exceeds 4 MiB; save it as a file and use @path".into())
+                } else {
+                    match std::str::from_utf8(&paste) {
+                        Ok(text) => self.chat_paste_text(text),
+                        Err(_) => {
+                            Err("Paste is not UTF-8 text; save it as a file and use @path".into())
+                        }
+                    }
+                };
+                if let Err(error) = result {
+                    self.notice = Some(error);
                 }
             }
             self.dirty = true;
             return;
         }
         if let Some(paste) = &mut self.conversation.paste {
-            if paste.len().saturating_add(output.len()) <= crate::client::composer::MAX_DRAFT_BYTES
-            {
+            if paste.len().saturating_add(output.len()) <= references::paste::MAX_PASTE_BYTES {
                 paste.extend_from_slice(output);
             } else {
                 self.conversation.paste_overflow = true;
@@ -1242,33 +1468,13 @@ impl State {
                 PanelTone::Accent,
                 width,
             ));
-            let mut wrapped = Vec::new();
-            for line in field(entry, "text").split('\n') {
-                let mut part = String::from("  ");
-                let mut used = 2;
-                for ch in panel::safe_text(line).chars() {
-                    let n = ch.width().unwrap_or(0);
-                    if used + n > usize::from(width) && used > 2 {
-                        wrapped.push(part);
-                        part = "  ".into();
-                        used = 2;
-                    }
-                    part.push(ch);
-                    used += n;
-                }
-                wrapped.push(part);
-            }
+            let wrapped = markdown::rows(references::source(field(entry, "text")), width, &self.ui);
             self.conversation.detail_scroll = self.conversation.detail_scroll.min(
                 wrapped
                     .len()
                     .saturating_sub(usize::from(height).saturating_sub(2)),
             );
-            rows.extend(
-                wrapped
-                    .into_iter()
-                    .skip(self.conversation.detail_scroll)
-                    .map(|line| self.chat_line(&line, PanelTone::Normal, width)),
-            );
+            rows.extend(wrapped.into_iter().skip(self.conversation.detail_scroll));
             return rows;
         }
         for index in self.chat_list_window(entries.len(), height) {
@@ -1324,52 +1530,51 @@ impl State {
         let height = body_rows(g.rows);
         let mut body = match self.conversation.view {
             View::Activity => self.filtered_logs().unwrap_or_else(|| {
-                (0..height)
-                    .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
-                    .collect()
+                if self.events.is_empty() {
+                    (0..height)
+                        .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
+                        .collect()
+                } else {
+                    self.events
+                        .render(g.left, height, &self.ui, self.conversation.content_focus)
+                }
             }),
+            View::History => self.chat_history_rows(height),
+            View::Questions => self.question_rows(height),
             View::Audit => self.audit.render(g.left, height, &self.ui),
             View::Agents if self.conversation.detail => self.audit.render(g.left, height, &self.ui),
             _ => self.chat_list_rows(&data, height),
         };
         if self.help {
-            let help = [
-                "  ssmcp · keyboard and commands",
-                "",
-                "  Enter      Queue a new requirement",
-                "  Up/Down    Move within input · select commands or history",
-                "  Ctrl+J     New line · pasted text stays in the draft",
-                "  Tab        Complete command · switch input / content focus",
-                "  Esc        Close agents · restore a parked draft from input",
-                "  Ctrl+O     Source audit · Enter/→ open · ← back",
-                "  F2         Activity / audit / agents / queue",
-                "  Wheel      Scroll directly · PgUp/PgDn also work",
-                "  F3         Collapse sidebar · F4 change theme",
-                "  F5         Reload appearance · F8 save appearance",
-                "  /filter    Text search · F9 all / commands / errors",
-                "  ←          Agents at draft start · ↑/↓ select · Enter/→ chat",
-                "  /queue     Inspect, take back, edit or cancel requests",
-                "  /reload    Restart client session and restore pending work",
-                "",
-                "  Queued means waiting. Delivered means included in a response.",
-                "  ssmcp does not infer that a model read or executed a request.",
-            ];
-            body = help
-                .iter()
-                .map(|line| self.chat_line(line, PanelTone::Normal, g.left))
-                .collect();
+            body = self.chat_help_rows(height);
         }
         body.resize_with(usize::from(height), || {
             self.chat_line("", PanelTone::Normal, g.left)
         });
         body.truncate(usize::from(height));
-        let prompt = self.conversation.composer.rows(
+        let empty = Composer::default();
+        let input = if self.conversation.view == View::Questions {
+            self.question_editor().unwrap_or(&empty)
+        } else {
+            &self.conversation.composer
+        };
+        let mut prompt = input.rows(
             g.left,
             prompt_rows(g.rows).max(1),
             &self.ui,
-            !self.conversation.content_focus && self.conversation.editing.is_none(),
+            self.conversation.view != View::Questions
+                && !self.conversation.content_focus
+                && self.conversation.editing.is_none(),
         );
-        let label = self
+        if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
+        {
+            prompt.lines[0] = self.chat_line(
+                "❯ Type an answer · number selects an option",
+                PanelTone::Muted,
+                g.left,
+            );
+        }
+        let mut label = self
             .conversation
             .target
             .as_ref()
@@ -1381,6 +1586,15 @@ impl State {
                     .unwrap_or_else(|| "offline recipient".into())
             })
             .unwrap_or_else(|| "next caller".into());
+        if self.conversation.view == View::Questions {
+            label = self
+                .conversation
+                .question_id
+                .as_ref()
+                .and_then(|id| crate::client::interface::questions::get(id))
+                .and_then(|q| q.title)
+                .unwrap_or_else(|| "pending question".into());
+        }
         let mut rows = Vec::new();
         for index in 0..g.rows {
             let line = if g.rows >= 3 && index == g.rows - 1 {
@@ -1394,6 +1608,18 @@ impl State {
                     "connected"
                 };
                 let hint = self.notice.clone().unwrap_or_else(|| {
+                    if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
+                    if self.conversation.view == View::History {
+                        return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
+                            else { "↑↓ select · Enter resume · Esc back".into() };
+                    }
+                    if self.conversation.view == View::Questions {
+                        return if self.conversation.detail {
+                            "Enter answer · Shift+↑ next · Esc list · Tab browse".into()
+                        } else {
+                            "↑↓ select · Enter answer · Delete skip · Esc back".into()
+                        };
+                    }
                     if self.conversation.view == View::Agents {
                         return if self.conversation.detail {
                             "← / Esc  back to agents".into()
@@ -1434,7 +1660,9 @@ impl State {
             } else if index == prompt_top(g.rows) && prompt_rows(g.rows) > 0 {
                 let title = format!(
                     "─ {} · {} ",
-                    if self.conversation.editing.is_some() {
+                    if self.conversation.view == View::Questions {
+                        "Answer"
+                    } else if self.conversation.editing.is_some() {
                         "Editing"
                     } else {
                         "To"
@@ -1554,6 +1782,7 @@ impl State {
             application_cursor: false,
             application_keypad: false,
             bracketed_paste: true,
+            mouse_capture: !self.selection,
         }
     }
 }

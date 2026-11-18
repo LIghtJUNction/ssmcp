@@ -1,5 +1,6 @@
 //! Root-scoped files and bounded loopback TCP handles shared by every backend.
 mod audit;
+mod image;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -175,6 +176,13 @@ impl Workspace {
                 "ssmcp.fs.read",
                 "Read a bounded binary file chunk as base64; reuse next_offset until eof.",
                 json!({"path":path,"offset":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1,"maximum":MAX_FILE_BYTES,"default":65536}}),
+                &["path"],
+                true,
+            ),
+            tool(
+                "ssmcp.fs.read_image",
+                "Read a complete workspace image as MCP image content (PNG/JPEG/GIF/WebP, at most 400 KiB). Validates headers, not full decoding. Use image(await call(clientId, 'ssmcp.fs.read_image', {path})) to view it.",
+                json!({"path":path}),
                 &["path"],
                 true,
             ),
@@ -522,6 +530,7 @@ impl Root {
             "ssmcp.fs.list" => self.list(parse(args)?),
             "ssmcp.fs.stat" => self.stat(parse(args)?),
             "ssmcp.fs.read" => self.read(parse(args)?),
+            "ssmcp.fs.read_image" => self.read_image(parse(args)?),
             "ssmcp.fs.write" => self.write(parse(args)?),
             "ssmcp.fs.read_text" => self.read_text(parse(args)?),
             "ssmcp.fs.write_text" => self.write_text(parse(args)?),

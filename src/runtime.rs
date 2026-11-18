@@ -329,7 +329,7 @@ impl Runtime {
             "annotations":{"readOnlyHint":true,"destructiveHint":false}
         })])?;
         let audit = EventLog::with_output("audit", output.clone());
-        Ok(Arc::new(Self {
+        let runtime = Arc::new(Self {
             backend,
             registry,
             workspace,
@@ -344,7 +344,12 @@ impl Runtime {
             next_call: AtomicU64::new(1),
             catalog: Catalog::default(),
             sessions,
-        }))
+        });
+        crate::client::interface::harness::bind(&runtime);
+        Ok(runtime)
+    }
+    pub(crate) fn local_registry(&self) -> Arc<Registry> {
+        self.registry.clone()
     }
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
@@ -384,6 +389,10 @@ impl Runtime {
     ) -> Result<(), String> {
         self.code_audit.finish(completion)
     }
+    pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
+        crate::client::references::expand(text, &self.workspace, &self.context).await
+    }
+
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         self.registry.ensure_open()?;
@@ -461,7 +470,13 @@ impl Runtime {
                 .workspace
                 .perform(&tool.native_name, arguments)
                 .await
-                .map(backend::result),
+                .map(|value| {
+                    if tool.native_name == "ssmcp.fs.read_image" {
+                        value
+                    } else {
+                        backend::result(value)
+                    }
+                }),
             Provider::Context => self
                 .context
                 .perform(&tool.native_name, arguments)
@@ -553,6 +568,24 @@ impl Runtime {
                 }
             }
         };
+        if crate::client::terminal::active()
+            && let Some(content) = value.get("content").and_then(Value::as_array)
+        {
+            let images: Vec<Value> = content
+                .iter()
+                .filter(|block| block["type"] == "image")
+                .take(4)
+                .cloned()
+                .collect();
+            if !images.is_empty() {
+                let _ = tokio::task::spawn_blocking(move || {
+                    for image in images {
+                        crate::client::terminal::image(&image);
+                    }
+                })
+                .await;
+            }
+        }
         // Retrieval pages already point to the original complete capture. Guarding
         // them again would recursively archive the artifact-read response itself.
         // Context already enforces a 1 MiB response and 256 KiB full-document limit.

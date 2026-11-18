@@ -165,7 +165,7 @@ fn native_limits() -> Value {
             "desktop_coordinates":"read coordinate_space: Linux/macOS logical, Windows physical virtual-desktop pixels; use image_to_desktop mapping",
             "browser_transport":"native Chromium CDP at explicit loopback endpoints; optional installed Playwright MCP in --extension mode",
             "image_max_decoded_bytes":400*1024,
-            "image_formats":["image/png","image/jpeg"],
+            "image_formats":["image/png","image/jpeg","image/gif","image/webp"],
             "lifetime":"client connection; owned browser processes stop on disconnect; attached browsers remain running"
         },
         "command_jobs":{
@@ -200,7 +200,7 @@ fn native_limits() -> Value {
             "audit_max_runs":128,
             "audit_max_bytes":2097152,
             "audit_source_max_bytes":65536,
-            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue"],
+            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue","ssmcp.ui.message","ssmcp.ui.ask","ssmcp.ui.questions","ssmcp.ui.history","ssmcp.ui.harness"],
             "get_projection_max_bytes":8192,
             "queue_message_max_bytes":crate::wire::MAX_USER_MESSAGE_BYTES,
             "queue_pending_max":crate::wire::MAX_USER_MESSAGES,
@@ -500,6 +500,12 @@ UI calls, tool directory queries, ssmcp.client.capabilities and ssmcp.resources.
 do not claim Next caller requirements by themselves. Explicit collab.bind remains eligible; \
 terminal, file and output calls retain their normal delivery behavior. Source audit still records \
 native queries. Queue support requires protocol v7; source lifecycle support requires v6.\n\n\
+To communicate in the user's ssmcp terminal, call(clientId,'ssmcp.ui.message',{text}) with your Markdown reply; \
+the client renders it locally and records the assistant message. Use ssmcp.ui.ask for a nonblocking question, \
+then ssmcp.ui.questions to retrieve its answer; the user opens the queue with Shift+Up. Do not wait inside \
+code_mode or fabricate an answer. ssmcp.ui.history lists or reads versioned JSONL conversations; /resume \
+continues one locally without replaying tools or restoring a remote model thread. The composer accepts \
+@file and $skill references. Read images with ssmcp.fs.read_image, then image(result); do not print base64.\n\n\
 A custom frontend can read ssmcp.audit.events for source lifecycle events and ssmcp.exec.events \
 for command output/results. Full code_mode source goes only to actual authorized target clients; \
 the client applies audit redaction before display and storage. The local composer retains pending \
