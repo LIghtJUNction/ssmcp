@@ -866,15 +866,35 @@ impl OutputStore {
     }
 }
 
-/// Validate bounded standard-base64 PNG/JPEG blocks before forwarding binary content.
+/// Identify supported raster headers; this does not decode the image.
+pub(crate) fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// Validate bounded canonical base64 and matching raster headers before forwarding.
 pub(crate) fn validate_image_content(value: &Value) -> Result<usize, String> {
     if value["type"] != "image" {
         return Err("image content must have type=image".into());
     }
     let mime = value["mimeType"]
         .as_str()
-        .filter(|mime| matches!(*mime, "image/png" | "image/jpeg"))
-        .ok_or("image MIME type must be image/png or image/jpeg")?;
+        .filter(|mime| {
+            matches!(
+                *mime,
+                "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+            )
+        })
+        .ok_or("image MIME type must be image/png, image/jpeg, image/gif or image/webp")?;
     let data = value["data"].as_str().ok_or("image data must be base64")?;
     if data.is_empty() || data.len() > MAX_IMAGE_BYTES.div_ceil(3) * 4 {
         return Err("image data exceeds 400 KiB or is empty".into());
@@ -885,13 +905,8 @@ pub(crate) fn validate_image_content(value: &Value) -> Result<usize, String> {
     if decoded.len() > MAX_IMAGE_BYTES || STANDARD.encode(&decoded) != data {
         return Err("image data must be canonical base64 within 400 KiB".into());
     }
-    let matches = match mime {
-        "image/png" => decoded.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "image/jpeg" => decoded.starts_with(&[0xff, 0xd8, 0xff]),
-        _ => false,
-    };
-    if !matches {
-        return Err("image bytes do not match the declared PNG or JPEG MIME type".into());
+    if image_mime_type(&decoded) != Some(mime) {
+        return Err("image bytes do not match the declared raster MIME type".into());
     }
     Ok(decoded.len())
 }
@@ -1977,9 +1992,36 @@ mod tests {
     }
 
     #[test]
+    fn gif_and_webp_images_remain_inline_above_the_text_budget() {
+        let fixture = Fixture::new(Policy::default());
+        // Header fixtures exercise the envelope, not complete codec decoding.
+        for (mime, header) in [
+            ("image/gif", b"GIF87a".as_slice()),
+            ("image/webp", b"RIFF\0\0\0\0WEBP".as_slice()),
+        ] {
+            let mut bytes = vec![0; INLINE_BYTES + 1];
+            bytes[..header.len()].copy_from_slice(header);
+            let native = json!({
+                "isError":false,
+                "content":[{"type":"image","mimeType":mime,"data":STANDARD.encode(&bytes)}],
+                "structuredContent":{"size":bytes.len(),"mime_type":mime}
+            });
+            assert_eq!(
+                validate_image_content(&native["content"][0]).unwrap(),
+                bytes.len()
+            );
+            assert_eq!(fixture.store.guard_result(native.clone()), native);
+        }
+    }
+
+    #[test]
     fn image_payload_validation_bounds_decode_and_rejects_mismatched_types() {
         for image in [
             json!({"type":"image","mimeType":"image/png","data":"not base64"}),
+            json!({"type":"image","mimeType":"image/gif","data":STANDARD.encode(b"GIF88a")}),
+            json!({"type":"image","mimeType":"image/webp","data":STANDARD.encode(b"RIFF\0\0\0\0WAVE")}),
+            json!({"type":"image","mimeType":"image/webp","data":STANDARD.encode(b"RIFF\0\0\0\0WEB")}),
+            json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(b"GIF89a")}),
             json!({"type":"image","mimeType":"image/jpeg","data":"YWJj"}),
             json!({"type":"image","mimeType":"image/svg+xml","data":"PHN2Zy8+"}),
             json!({"type":"image","mimeType":"image/png","data":""}),

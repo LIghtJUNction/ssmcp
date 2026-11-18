@@ -506,3 +506,29 @@ async fn version_seven_gateway_accepts_text_queue_after_explicit_v8_rejection() 
     assert_eq!(hellos[1]["version"], QUEUE_VERSION);
     close(registration).await;
 }
+
+#[tokio::test]
+async fn cancelled_registration_does_not_start_a_transport() {
+    let fixture = Fixture::new();
+    let metadata = metadata(false);
+    let mut protocol = VERSION;
+    let mut registered = false;
+    let attempts = Cell::new(0usize);
+    let result = register_ssh(
+        &metadata,
+        &mut protocol,
+        &mut registered,
+        || {
+            attempts.set(attempts.get() + 1);
+            fixture.command("current")
+        },
+        std::future::ready(()),
+        READY_LIMIT,
+    )
+    .await
+    .unwrap();
+    assert!(result.is_none());
+    assert_eq!(attempts.get(), 0);
+    assert_eq!(protocol, VERSION);
+    assert!(!registered);
+}

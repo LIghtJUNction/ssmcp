@@ -279,7 +279,7 @@ impl Default for Ui {
             timestamps: false,
             show_request_id: true,
             show_raw_json: false,
-            max_inline_output: 12,
+            max_inline_output: 8,
             activity_interval_secs: 5,
         }
     }

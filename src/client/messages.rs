@@ -1,5 +1,5 @@
 //! User-facing agent messages delivered through native tools into this session.
-use super::{panel, render, terminal, ui::Ui};
+use super::{panel, presentation::Presentation, render, terminal, ui::Ui};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -74,6 +74,8 @@ struct Message {
     kind: Kind,
     author: String,
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presentation: Option<Presentation>,
     created_at_unix_ms: u64,
     #[serde(skip)]
     idempotency_key: Option<String>,
@@ -84,6 +86,9 @@ impl Message {
         self.text.len()
             + self.author.len()
             + self.idempotency_key.as_ref().map_or(0, String::len)
+            + self.presentation.as_ref().map_or(0, |value| {
+                serde_json::to_vec(value).map_or(MAX_HISTORY_BYTES + 1, |bytes| bytes.len())
+            })
             + 256
     }
 }
@@ -96,6 +101,14 @@ struct History {
 }
 impl History {
     fn record(&mut self, request: Request) -> Result<(Message, bool), String> {
+        self.record_presentation(request, None)
+    }
+
+    fn record_presentation(
+        &mut self,
+        request: Request,
+        presentation: Option<Presentation>,
+    ) -> Result<(Message, bool), String> {
         request.validate()?;
         let author = request.author.unwrap_or_else(|| "Agent".into());
         if let Some(key) = &request.idempotency_key
@@ -104,7 +117,11 @@ impl History {
                 .iter()
                 .find(|m| m.idempotency_key.as_ref() == Some(key))
         {
-            if prior.kind == request.kind && prior.text == request.text && prior.author == author {
+            if prior.kind == request.kind
+                && prior.text == request.text
+                && prior.author == author
+                && prior.presentation == presentation
+            {
                 return Ok((prior.clone(), true));
             }
             return Err("idempotency_key already identifies a different message".into());
@@ -120,10 +137,14 @@ impl History {
             kind: request.kind,
             author,
             text: request.text,
+            presentation,
             created_at_unix_ms,
             idempotency_key: request.idempotency_key,
         };
         let bytes = message.retained_bytes();
+        if bytes > MAX_HISTORY_BYTES {
+            return Err("message and presentation exceed the 256 KiB history budget".into());
+        }
         while self.messages.len() >= MAX_MESSAGES
             || self.bytes.saturating_add(bytes) > MAX_HISTORY_BYTES
         {
@@ -149,21 +170,53 @@ fn rendered(message: &Message, ui: &Ui, color: bool) -> String {
     } else {
         format!("\n{heading}\n")
     };
-    output.push_str(&render::message_body(&message.text, ui, color));
+    if let Some(presentation) = &message.presentation {
+        output.push_str(&presentation.render(render::terminal_width(), ui, color));
+    } else {
+        output.push_str(&render::message_body(&message.text, ui, color));
+    }
     output.push('\n');
     output
 }
 
 pub(crate) fn send(arguments: Value) -> Result<Value, String> {
+    send_with_presentation(arguments, None)
+}
+
+pub(crate) fn send_presentation(
+    text_arguments: Value,
+    presentation: Presentation,
+) -> Result<Value, String> {
+    send_with_presentation(text_arguments, Some(presentation))
+}
+
+fn send_with_presentation(
+    arguments: Value,
+    presentation: Option<Presentation>,
+) -> Result<Value, String> {
     let request: Request = serde_json::from_value(arguments)
         .map_err(|_| "message requires text and accepts kind, author and idempotency_key")?;
-    let (message, duplicate) = HISTORY
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .record(request)?;
+    let (message, duplicate) = {
+        let mut history = HISTORY
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match presentation {
+            Some(presentation) => history.record_presentation(request, Some(presentation))?,
+            None => history.record(request)?,
+        }
+    };
     let active = terminal::active();
     if !duplicate {
+        if let Err(error) = super::interface::history::record("assistant", &message.text) {
+            terminal::notice(&format!(
+                "Message recorded; history could not be saved: {error}"
+            ));
+        }
+        crate::session::attach::record_event(
+            "agent",
+            &json!({"type":"ssmcp.message","format":"markdown","text":message.text}),
+        );
         let ui = render::current_ui();
         let color = ui.color
             && std::env::var_os("NO_COLOR").is_none()
@@ -234,7 +287,7 @@ pub(crate) fn tools() -> Vec<Value> {
     vec![
         json!({
             "name":"ssmcp.ui.message",
-            "description":"Deliver text addressed to the human into this client's conversation. Use for every user-facing progress update, explanation, question and final answer; code_mode say(clientId,{text,kind}) is the shortcut. kind is progress or answer. This is separate from the user's input queue and does not launch a model. Preserve Markdown/plain text and links in text. Optional author is caller-reported display attribution. Optional idempotency_key prevents duplicate retries within retained history. Acceptance records a message; it does not prove the user read it. Messages remain in bounded local history; ssmcp.ui.messages reads them.",
+            "description":"Deliver text addressed to the human into this client's conversation. Use for every user-facing progress update, explanation, question and final answer; code_mode say(clientId,{text,kind}) is the shortcut. kind is progress or answer. This is separate from the user's input queue and does not launch a model. Markdown and fenced source/diff are rendered locally; preserve complete plain text and links in text. Use ssmcp.ui.ask for a nonblocking question with a separately readable answer. Optional author is caller-reported display attribution. Optional idempotency_key prevents duplicate retries within retained history. Acceptance records a message; it does not prove the user read it. Exact message bodies remain in bounded process history read by ssmcp.ui.messages and /copy. A redacted plain-text copy is also saved to the durable conversation history read by ssmcp.ui.history.",
             "inputSchema":{"type":"object","required":["text"],"additionalProperties":false,"properties":{
                 "text":{"type":"string","minLength":1,"maxLength":MAX_TEXT,"description":"Complete user-facing text, at most 16384 UTF-8 bytes; use separate messages for longer answers."},
                 "kind":{"type":"string","enum":["progress","answer"],"default":"progress"},
@@ -276,7 +329,11 @@ mod tests {
         let colored = rendered(&message, &ui, true);
         assert!(!plain.contains('\x1b'));
         assert!(plain.contains("const 界 = 42; // note"));
-        assert!(colored.contains("mconst\x1b[0m"));
+        assert!(colored.contains(&format!(
+            "\x1b[0;{};{};1mconst",
+            ui.background(),
+            ui.color("accent")
+        )));
         for expected in [
             "--- a/demo",
             "+++ b/demo",
@@ -290,6 +347,99 @@ mod tests {
         }
         assert_eq!(message.text, text);
         assert_eq!(history.messages.back().unwrap().text, text);
+    }
+
+    #[test]
+    fn structured_messages_keep_plain_copy_and_include_layout_in_retry_identity() {
+        let presentation: Presentation = serde_json::from_value(json!({
+            "title":"Build", "blocks":[
+                {"type":"card","title":"Checks","body":"Ready","tone":"success"}
+            ]
+        }))
+        .unwrap();
+        let changed: Presentation = serde_json::from_value(json!({
+            "title":"Build", "blocks":[
+                {"type":"card","title":"Checks","body":"Ready","tone":"warning"}
+            ]
+        }))
+        .unwrap();
+        let text = presentation.plain_text();
+        let mut history = History::default();
+        let (first, duplicate) = history
+            .record_presentation(
+                request(&text, Some("structured")),
+                Some(presentation.clone()),
+            )
+            .unwrap();
+        assert!(!duplicate);
+        let (same, duplicate) = history
+            .record_presentation(
+                request(&text, Some("structured")),
+                Some(presentation.clone()),
+            )
+            .unwrap();
+        assert!(duplicate);
+        assert_eq!(first.id, same.id);
+        assert_eq!(first.text, text);
+        assert_eq!(history.messages.back().unwrap().text, text);
+        assert_eq!(history.bytes, first.retained_bytes());
+        assert!(history.bytes >= text.len() + serde_json::to_vec(&presentation).unwrap().len());
+        assert_eq!(
+            serde_json::to_value(&first).unwrap()["presentation"],
+            json!(presentation)
+        );
+        assert!(!rendered(&first, &Ui::default(), false).contains('\x1b'));
+        assert!(
+            history
+                .record_presentation(request(&text, Some("structured")), Some(changed))
+                .is_err()
+        );
+        assert!(history.record(request(&text, Some("structured"))).is_err());
+        assert_eq!(history.messages.len(), 1);
+        let (plain, _) = history.record(request("plain", None)).unwrap();
+        assert!(
+            serde_json::to_value(plain)
+                .unwrap()
+                .get("presentation")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn oversized_presentation_cannot_evict_retained_messages() {
+        let mut history = History::default();
+        let (retained, _) = history.record(request("Keep this", None)).unwrap();
+        let bytes = history.bytes;
+        let oversized: Presentation = serde_json::from_value(json!({
+            "title":"Oversized", "blocks":[
+                {"type":"text","text":"x".repeat(MAX_HISTORY_BYTES)}
+            ]
+        }))
+        .unwrap();
+        assert!(
+            history
+                .record_presentation(request("fallback", None), Some(oversized))
+                .is_err()
+        );
+        assert_eq!(history.bytes, bytes);
+        assert_eq!(history.messages.len(), 1);
+        assert_eq!(history.messages.front().unwrap().id, retained.id);
+    }
+
+    #[test]
+    fn message_schema_preserves_markdown_and_rejects_impersonation_fields() {
+        let markdown: Request = serde_json::from_value(json!({
+            "text":"# Heading\r\n\r\n**Hello**\n\tcode","kind":"answer"
+        }))
+        .unwrap();
+        assert!(markdown.validate().is_ok());
+        assert!(
+            serde_json::from_value::<Request>(json!({
+                "text":"Cannot impersonate","role":"user"
+            }))
+            .is_err()
+        );
+        assert!(request("hi\u{0007}", None).validate().is_err());
     }
 
     #[test]

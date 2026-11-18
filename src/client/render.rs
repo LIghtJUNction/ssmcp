@@ -137,7 +137,7 @@ fn display() -> &'static Mutex<Renderer> {
     })
 }
 
-fn terminal_width() -> usize {
+pub(super) fn terminal_width() -> usize {
     if let Some(columns) = super::terminal::log_width() {
         return columns;
     }
@@ -161,6 +161,43 @@ fn terminal_width() -> usize {
 
 fn color_enabled(tty: bool, no_color: bool) -> bool {
     tty && !no_color
+}
+
+pub(crate) fn message(text: &str) {
+    if let Err(error) = super::interface::history::record("assistant", text) {
+        super::terminal::notice(&format!("Message history could not be saved: {error}"));
+    }
+    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    let event = json!({"type":"ssmcp.message","format":"markdown","text":text});
+    crate::session::attach::record_event("agent", &event);
+    let width = terminal_width().min(1000) as u16;
+    let (raw, mut ui) = {
+        let renderer = display().lock().unwrap_or_else(|e| e.into_inner());
+        let mut ui = renderer.ui.clone();
+        ui.color = renderer.color;
+        (renderer.raw, ui)
+    };
+    let mut bytes = Vec::new();
+    if raw {
+        let safe = crate::audit::event(event);
+        let _ = writeln!(bytes, "{safe}");
+    } else {
+        if !super::terminal::active() {
+            ui.color &= io::stderr().is_terminal();
+        }
+        let _ = writeln!(bytes);
+        let _ = painted(
+            &mut bytes,
+            ui.color,
+            &format!("1;{}", ui.color("accent")),
+            "[AGENT]\n",
+        );
+        for row in super::terminal::markdown::rows(text, width, &ui) {
+            let _ = writeln!(bytes, "{row}");
+        }
+        let _ = writeln!(bytes);
+    }
+    publish(&bytes, None);
 }
 
 pub(crate) fn event(label: &str, value: &Value) {
@@ -387,7 +424,8 @@ impl Renderer {
     }
 
     fn event(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<()> {
-        let safe = crate::audit::event(value.clone());
+        let mut safe = crate::audit::event(value.clone());
+        omit_image_bytes(&mut safe);
         let value = &safe;
         let controller_event = self.controller(out, value)?;
         if self.raw {
@@ -1355,26 +1393,34 @@ impl Renderer {
             }
             let mut context = Vec::new();
             for field in ["cwd", "name", "tool", "processId"] {
+                if !self.verbose && field == "processId" {
+                    continue;
+                }
                 if let Some(v) = params.get(field).filter(|v| !v.is_null()) {
                     let text = match (field, v.as_str()) {
                         ("cwd", Some(path)) => self.path_label(path),
                         ("processId", Some(id)) => short_id(id),
                         _ => compact(v, 0),
                     };
-                    context.push(format!("{field}={text}"));
+                    if self.verbose || field != "cwd" || text != "." {
+                        context.push(format!("{field}={text}"));
+                    }
                 }
             }
-            if let Some(ms) = params
-                .get("timeoutMs")
-                .or_else(|| params.get("timeout_ms"))
-                .and_then(Value::as_u64)
+            if self.verbose
+                && let Some(ms) = params
+                    .get("timeoutMs")
+                    .or_else(|| params.get("timeout_ms"))
+                    .and_then(Value::as_u64)
             {
                 context.push(format!("timeout={:.3}s", ms as f64 / 1000.0));
             }
             if !context.is_empty() {
                 self.text(out, label, &format!("{}\n", context.join("  ·  ")))?;
             }
-            if let Some(command) = command {
+            if let Some(command) = command
+                && (self.verbose || command_description.is_none())
+            {
                 self.command_details(out, label, command)?;
             }
             self.finish(out, label)?;
@@ -1453,14 +1499,17 @@ impl Renderer {
                     meta += &format!("  {field}={}", compact(v, 0));
                 }
             }
-            if let Some(pid) = result.pointer("/process/id").or_else(|| result.get("pid")) {
+            if self.verbose
+                && let Some(pid) = result.pointer("/process/id").or_else(|| result.get("pid"))
+            {
                 meta += &format!("  process.id={}", compact(pid, 0));
             }
-            if let Some(rss) = result
-                .pointer("/process/rssBytes")
-                .or_else(|| result.pointer("/memory/rss"))
-                .or_else(|| result.get("rssBytes"))
-                .and_then(Value::as_u64)
+            if self.verbose
+                && let Some(rss) = result
+                    .pointer("/process/rssBytes")
+                    .or_else(|| result.pointer("/memory/rss"))
+                    .or_else(|| result.get("rssBytes"))
+                    .and_then(Value::as_u64)
             {
                 meta += &format!("  rss={:.1}MB", rss as f64 / 1_000_000.0);
             }
@@ -1533,6 +1582,7 @@ impl Renderer {
             "Request" | "User" => ("REQ ", "blue"),
             "Running" => ("RUN ", "blue"),
             "Read" => ("READ", "cyan"),
+            "Image" => ("IMG ", "cyan"),
             "Edit" => ("EDIT", "purple"),
             "Diff" => ("DIFF", "purple"),
             "Skill" => ("SKIL", "purple"),
@@ -1541,14 +1591,19 @@ impl Renderer {
             "Error" | "Timeout" => ("ERR ", "red"),
             "Warning" => ("WARN", "yellow"),
             "Progress" => ("PROG", "yellow"),
-            "stdout" => ("STDOUT", "purple"),
+            "stdout" => ("STDOUT", "gray"),
             "stderr" => ("STDERR", "yellow"),
             "stderr-error" => ("STDERR", "red"),
             "Tool" | "Command" | "Files" => ("OUT ", "purple"),
             "Usage" => ("META", "gray"),
             _ => ("RES ", "cyan"),
         };
-        painted(out, self.color, &self.ui.color(color), &format!("[{tag}] "))
+        painted(
+            out,
+            self.color,
+            &format!("1;{}", self.ui.color(color)),
+            &format!("[{tag}] "),
+        )
     }
 
     fn summary(
@@ -1562,18 +1617,41 @@ impl Renderer {
         self.prefix(out, title)?;
         // Summaries are one line. Full identifiers, paths and command arguments
         // remain in the event/output record; the interactive transcript is bounded.
-        let text = clean(&format!("{label}  {text}"));
         let available = self
             .width
             .saturating_sub(if self.ui.timestamps { 24 } else { 7 })
             .max(8);
-        writeln!(out, "{}", activity::single_line(&text, available))
+        let label = activity::single_line(&clean(label), (available / 3).clamp(4, 24));
+        let label_width = unicode_width::UnicodeWidthStr::width(label.as_str());
+        let separator = usize::from(!label.is_empty());
+        let text = activity::single_line(
+            &clean(text),
+            available.saturating_sub(label_width + separator),
+        );
+        if !label.is_empty() {
+            painted(out, self.color, &self.ui.color("muted"), &label)?;
+            if !text.is_empty() {
+                write!(out, " ")?;
+            }
+        }
+        let tone = match title {
+            "Error" | "Timeout" => "error",
+            "Warning" => "warning",
+            _ => "foreground",
+        };
+        painted(out, self.color, &self.ui.color(tone), &text)?;
+        writeln!(out)
     }
 
     fn heading(&mut self, out: &mut impl Write, label: &str, title: &str) -> io::Result<()> {
         self.finish_visible(out)?;
         self.prefix(out, title)?;
-        writeln!(out, "{}", clean(label))
+        painted(
+            out,
+            self.color,
+            &self.ui.color("muted"),
+            &format!("{}\n", clean(label)),
+        )
     }
 
     fn block(
@@ -1584,11 +1662,13 @@ impl Renderer {
         text: &str,
     ) -> io::Result<()> {
         self.heading(out, label, title)?;
-        let stream = matches!(title, "stdout" | "stderr" | "stderr-error");
-        let limit = if self.verbose || !stream {
+        // Human conversation remains complete. Tool data, file reads and
+        // generic result values all share the same bounded default preview.
+        let conversation = matches!(title, "Assistant" | "User" | "Answer");
+        let limit = if self.verbose || conversation {
             usize::MAX
         } else {
-            self.ui.max_inline_output
+            self.ui.max_inline_output.max(1)
         };
         let cleaned = clean(text);
         let lines: Vec<_> = cleaned.lines().collect();
@@ -1605,9 +1685,10 @@ impl Renderer {
         } else if title == "stderr" {
             self.ui.color("yellow")
         } else {
-            "0".into()
+            self.ui.color("foreground")
         };
         self.streams.entry(label.into()).or_default().tone = tone;
+        let mut shortened = false;
         for (i, line) in lines.iter().enumerate() {
             if i >= head && i < lines.len().saturating_sub(tail) && lines.len() > limit {
                 if i == head {
@@ -1615,14 +1696,27 @@ impl Renderer {
                         out,
                         label,
                         &format!(
-                            "... {} lines folded; use --verbose or --raw-events\n",
+                            "... {} lines folded; original output: archive or --verbose\n",
                             lines.len() - shown
                         ),
                     )?;
                 }
                 continue;
             }
-            self.text(out, label, &format!("{line}\n"))?;
+            let visible = if self.verbose || conversation {
+                (*line).to_owned()
+            } else {
+                super::panel::fit(line, self.width.saturating_sub(2).max(12) * 2)
+            };
+            shortened |= visible != *line;
+            self.text(out, label, &format!("{visible}\n"))?;
+        }
+        if shortened {
+            self.text(
+                out,
+                label,
+                "... long lines shortened; original output: archive or --verbose\n",
+            )?;
         }
         self.finish(out, label)
     }
@@ -1730,16 +1824,55 @@ impl Renderer {
             if let Ok(inner) = serde_json::from_str::<Value>(text) {
                 return self.value(out, label, &inner, title, depth + 1);
             }
+            if title == "Event" {
+                // Unwrapped text events are transcript bodies. Retain every
+                // character for EventView to fold/open; only buffered tool
+                // results use the bounded block preview below.
+                self.heading(out, label, title)?;
+                self.streams.entry(label.into()).or_default().tone = self.ui.color("foreground");
+                self.text(out, label, text)?;
+                return self.finish(out, label);
+            }
             return self.block(out, label, title, text);
         }
         if let Some(array) = v.as_array() {
-            for item in array
-                .iter()
-                .take(if self.verbose { usize::MAX } else { 12 })
-            {
+            let limit = if self.verbose {
+                usize::MAX
+            } else {
+                self.ui.max_inline_output.max(1)
+            };
+            for item in array.iter().take(limit) {
                 self.value(out, label, item, title, depth + 1)?;
             }
+            if array.len() > limit {
+                self.summary(
+                    out,
+                    label,
+                    "Usage",
+                    &format!(
+                        "{} additional items folded; original output: archive or --verbose",
+                        array.len() - limit
+                    ),
+                )?;
+            }
             return Ok(());
+        }
+        if v["type"] == "image" {
+            let mime = v["mimeType"]
+                .as_str()
+                .or_else(|| v["mime_type"].as_str())
+                .unwrap_or("unknown image type");
+            let dimensions = v["width"]
+                .as_u64()
+                .zip(v["height"].as_u64())
+                .map(|(width, height)| format!(" · {width} × {height}"))
+                .unwrap_or_default();
+            return self.summary(
+                out,
+                label,
+                "Image",
+                &format!("{mime}{dimensions} · image available in the tool result"),
+            );
         }
         if v["method"] == "notifications/progress" {
             self.activity(out, label, v)?;
@@ -1853,7 +1986,9 @@ impl Renderer {
             } else {
                 "0".into()
             };
-            lines.summarize_json = !self.verbose;
+            // The interactive EventView owns folding and needs the full stream
+            // body to reopen it. Plain terminal logs retain their compact outline.
+            lines.summarize_json = !self.verbose && !self.dashboard_active;
             return self.command_text(out, &key, &String::from_utf8_lossy(&bytes));
         }
         // Native transports wrap useful payloads in these fields.
@@ -1931,10 +2066,8 @@ impl Renderer {
             self.block(out, label, title, &compact(v, 0))?;
         } else if !shown && kind.is_empty() {
             if let Some(object) = v.as_object() {
-                for (key, value) in object
-                    .iter()
-                    .take(if self.verbose { usize::MAX } else { 12 })
-                {
+                let mut fields = Vec::new();
+                for (key, value) in object.iter() {
                     if title == "Result"
                         && matches!(
                             key.as_str(),
@@ -1958,8 +2091,11 @@ impl Renderer {
                             | "stderr"
                             | "status"
                     ) {
-                        self.block(out, label, title, &format!("{key}: {}", compact(value, 0)))?;
+                        fields.push(format!("{key}: {}", compact(value, 0)));
                     }
+                }
+                if !fields.is_empty() {
+                    self.block(out, label, title, &fields.join("\n"))?;
                 }
             } else if !v.is_null() {
                 self.block(out, label, title, &compact(v, 0))?;
@@ -2176,6 +2312,31 @@ fn diagnostic_summary(text: &str) -> String {
         )
     } else {
         activity::single_line(text, 240)
+    }
+}
+
+// Images remain unchanged in native MCP responses. Their local transcript copy
+// contains metadata only, including in verbose/JSONL logs.
+fn omit_image_bytes(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            if fields.get("type").and_then(Value::as_str) == Some("image") {
+                let removed = fields.remove("data").is_some();
+                let removed = fields.remove("data_base64").is_some() || removed;
+                if removed {
+                    fields.insert("data_omitted".into(), json!(true));
+                }
+            }
+            for inner in fields.values_mut() {
+                omit_image_bytes(inner);
+            }
+        }
+        Value::Array(items) => {
+            for inner in items {
+                omit_image_bytes(inner);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2518,23 +2679,17 @@ fn render_source(
     writeln!(out)
 }
 
-/// Render code fences in agent replies with the same safe syntax colors as tool output.
-/// Ordinary prose and links retain their text; only presentation receives ANSI styling.
+/// Share terminal-safe Markdown and fenced source/diff rendering with all agent replies.
+/// Only this display copy normalizes line endings; retained and copied text stays exact.
 pub(super) fn message_body(text: &str, ui: &Ui, color: bool) -> String {
-    let mut output = Vec::new();
-    let mut lines = Lines::default();
-    let width = terminal_width();
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    for line in normalized.split('\n') {
-        let safe = super::panel::safe_text(line);
-        if lines.fence.is_some() || CodeFence::opening(&safe).is_some() {
-            render_line(&mut output, color, width, &mut lines, &safe, ui)
-                .expect("rendering to a byte vector cannot fail");
-        } else {
-            writeln!(&mut output, "  {safe}").expect("writing to a byte vector cannot fail");
-        }
-    }
-    String::from_utf8(output).expect("message rendering only writes UTF-8")
+    let mut display = ui.clone();
+    display.color = color;
+    let mut output =
+        super::terminal::markdown::rows(&normalized, terminal_width().min(1000) as u16, &display)
+            .join("\n");
+    output.push('\n');
+    output
 }
 
 fn render_line(
@@ -2709,6 +2864,128 @@ fn clean(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn images_show_metadata_without_base64_in_any_local_log_mode() {
+        let data = STANDARD.encode([19u8; 4096]);
+        let image =
+            json!({"type":"image","mimeType":"image/png","width":20,"height":30,"data":data});
+        for (raw, verbose) in [(false, false), (false, true), (true, false)] {
+            let mut renderer = Renderer::new(raw, false, 120);
+            renderer.verbose = verbose;
+            let mut output = Vec::new();
+            renderer.event(&mut output, "tool", &image).unwrap();
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains("image/png"));
+            assert!(!text.contains(&data));
+            assert!(text.len() < 1000);
+            if !raw {
+                assert!(text.contains("20 × 30"));
+            }
+        }
+        assert_eq!(image["data"], data, "native image content is never mutated");
+    }
+
+    #[test]
+    fn tool_text_and_metadata_share_bounded_previews_without_truncating_conversation() {
+        let body = (0..40)
+            .map(|line| format!("content-{line}\n"))
+            .collect::<String>();
+        let mut renderer = Renderer::new(false, false, 60);
+        renderer.ui.max_inline_output = 4;
+        let mut output = Vec::new();
+        renderer
+            .value(&mut output, "tool", &json!(body), "Result", 0)
+            .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("content-0"));
+        assert!(text.contains("content-39"));
+        assert!(!text.contains("content-20"));
+        assert!(text.contains("lines folded"));
+
+        let mut output = Vec::new();
+        renderer
+            .value(
+                &mut output,
+                "tool",
+                &json!("界".repeat(10_000)),
+                "Result",
+                0,
+            )
+            .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.len() < 1200);
+        assert!(text.contains("long lines shortened"));
+
+        let mut output = Vec::new();
+        renderer
+            .value(
+                &mut output,
+                "agent",
+                &json!({"role":"assistant","text":body}),
+                "Event",
+                0,
+            )
+            .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("content-20"),
+            "conversation messages stay complete"
+        );
+        assert!(!text.contains("folded"));
+    }
+
+    #[test]
+    fn default_metadata_has_one_heading_and_verbose_and_raw_keep_the_source() {
+        let fields = (0..40)
+            .map(|i| (format!("field_{i:02}"), json!(format!("value-{i}"))))
+            .collect::<serde_json::Map<_, _>>();
+        let value = Value::Object(fields);
+        let mut renderer = Renderer::new(false, false, 80);
+        renderer.ui.max_inline_output = 4;
+        let mut output = Vec::new();
+        renderer
+            .value(&mut output, "tool", &value, "Result", 0)
+            .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert_eq!(text.matches("[RES ").count(), 1);
+        assert!(text.contains("field_00"));
+        assert!(text.contains("field_39"));
+        assert!(!text.contains("field_20"));
+
+        renderer.verbose = true;
+        let mut verbose = Vec::new();
+        renderer
+            .value(&mut verbose, "tool", &value, "Result", 0)
+            .unwrap();
+        assert!(String::from_utf8(verbose).unwrap().contains("field_20"));
+        let mut raw = Renderer::new(true, false, 80);
+        let mut output = Vec::new();
+        raw.event(&mut output, "tool", &value).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&output).unwrap(), value);
+    }
+
+    #[test]
+    fn ordinary_command_metadata_does_not_repeat_its_invocation() {
+        let mut renderer = Renderer::new(false, false, 100);
+        renderer.workspace_root = Some("/fixture".into());
+        let request = json!({"id":"once","method":"command/exec","params":{
+            "command":["cargo","test"],"cwd":"/fixture","timeoutMs":2000,"processId":"process"}});
+        let mut output = Vec::new();
+        renderer.event(&mut output, "tool", &request).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert_eq!(text.matches("cargo test").count(), 1);
+        assert!(!text.contains("cwd=."));
+        assert!(!text.contains("processId="));
+        assert!(!text.contains("timeout="));
+        renderer.verbose = true;
+        let mut verbose = Vec::new();
+        renderer.event(&mut verbose, "tool", &request).unwrap();
+        let text = String::from_utf8(verbose).unwrap();
+        assert!(text.contains("timeout=2.000s"));
+        assert!(text.contains("cmd=cargo test"));
+    }
+
     use super::*;
 
     #[test]
@@ -2818,6 +3095,43 @@ mod tests {
         }
         renderer.finish_group(&mut out, "codex").unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    fn terminal_screen(text: &str) -> vt100::Screen {
+        use std::num::NonZeroU16;
+        let mut parser = vt100::Parser::new(
+            NonZeroU16::new(64).unwrap(),
+            NonZeroU16::new(160).unwrap(),
+            0,
+        );
+        // A real PTY applies ONLCR to renderer line feeds.
+        parser.process(text.replace('\n', "\r\n").as_bytes());
+        parser.screen().clone()
+    }
+
+    fn assert_text_color(
+        screen: &vt100::Screen,
+        context: &str,
+        fragment: &str,
+        expected: vt100::Color,
+    ) {
+        let (row, line) = screen
+            .rows(0, screen.size().1.get())
+            .enumerate()
+            .find(|(_, line)| line.contains(context))
+            .unwrap_or_else(|| panic!("missing {context}: {}", screen.contents()));
+        let start = line
+            .find(fragment)
+            .expect("colored fragment in matched row");
+        let column = unicode_width::UnicodeWidthStr::width(&line[..start]);
+        let cells = unicode_width::UnicodeWidthStr::width(fragment);
+        for column in column..column + cells {
+            assert_eq!(
+                screen.cell(row as u16, column as u16).unwrap().fgcolor(),
+                expected,
+                "{context}: {fragment}"
+            );
+        }
     }
 
     #[test]
@@ -3190,30 +3504,34 @@ mod tests {
     }
     #[test]
     fn rpc_reply_keeps_status_and_request_context_without_replaying_streams() {
-        let text = render(
-            &[
-                json!({"type":"ssmcp.request","request":{"id":"r1","method":"command/exec","params":{"command":["sh","-c","printf hello"],"cwd":"/project","timeoutMs":1000}}}),
-                json!({"id":"r1","result":{"exitCode":0,"stdout":"hello\nsecond\n","stderr":"warning\n"}}),
-            ],
-            false,
-            true,
-        );
+        let events = [
+            json!({"type":"ssmcp.request","request":{"id":"r1","method":"command/exec","params":{"command":["sh","-c","printf hello"],"cwd":"/project","timeoutMs":1000}}}),
+            json!({"id":"r1","result":{"exitCode":0,"stdout":"hello\\nsecond\\n","stderr":"warning\\n"}}),
+        ];
+        let output = render(&events, false, true);
+        let text = terminal_screen(&output).contents();
         for expected in [
-            "[RUN ] codex id=r1",
-            "cmd=sh -c",
+            "[RUN ] codex id=r1 sh -c 'printf hello'",
+            "[OK  ] codex id=r1 exitCode=0",
             "cwd=/project",
-            "timeout=1.000s",
-            &format!("\x1b[{}m", Ui::default().color("blue")),
-            &format!("\x1b[{}m", Ui::default().color("green")),
         ] {
-            assert!(
-                text.contains(expected) || clean(&text).contains(expected),
-                "missing {expected}: {text}"
-            );
+            assert!(text.contains(expected), "missing {expected}: {text}");
         }
-        assert!(!text.contains("hello\n  second"));
+        assert!(!text.contains("hello\\n  second"));
         assert!(!text.contains("warning"));
         assert!(!text.contains("[STDOUT]"));
+
+        // The concise view keeps the command and outcome; routing options and
+        // the separately formatted command remain available in verbose output.
+        let mut renderer = Renderer::new(false, true, 100);
+        renderer.verbose = true;
+        let mut output = Vec::new();
+        for event in &events {
+            renderer.event(&mut output, "codex", event).unwrap();
+        }
+        let text = terminal_screen(&String::from_utf8(output).unwrap()).contents();
+        assert!(text.contains("cmd=sh -c"), "{text}");
+        assert!(text.contains("timeout=1.000s"), "{text}");
     }
 
     #[test]
@@ -3506,6 +3824,7 @@ mod tests {
         let mut renderer = Renderer::new(false, true, 120);
         renderer.ui.colors.error = "#123456".into();
         renderer.ui.colors.warning = "#987654".into();
+        renderer.ui.colors.muted = "#536475".into();
         let mut out = Vec::new();
         renderer
             .event(
@@ -3521,10 +3840,37 @@ mod tests {
                 &json!({"type":"ssmcp.status","level":"Error","message":"failed"}),
             )
             .unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("\x1b[38;2;18;52;86m  [ERR ] fatal"), "{text}");
-        assert!(text.contains("\x1b[38;2;18;52;86m[ERR ]"), "{text}");
-        assert!(text.contains("\x1b[38;2;152;118;84m[STDERR]"), "{text}");
+        let screen = terminal_screen(&String::from_utf8(out).unwrap());
+        assert_text_color(
+            &screen,
+            "fatal: unavailable",
+            "[ERR ] fatal: unavailable",
+            vt100::Color::Rgb(18, 52, 86),
+        );
+        assert_text_color(
+            &screen,
+            "client failed",
+            "[ERR ]",
+            vt100::Color::Rgb(18, 52, 86),
+        );
+        assert_text_color(
+            &screen,
+            "client failed",
+            "failed",
+            vt100::Color::Rgb(18, 52, 86),
+        );
+        assert_text_color(
+            &screen,
+            "[STDERR]",
+            "[STDERR]",
+            vt100::Color::Rgb(152, 118, 84),
+        );
+        assert_text_color(
+            &screen,
+            "client failed",
+            "client",
+            vt100::Color::Rgb(83, 100, 117),
+        );
     }
 
     #[test]
@@ -4059,6 +4405,40 @@ mod tests {
         assert!(!text.contains("[OK  ]"));
         assert_eq!(text.matches("[ERR ]").count(), 1, "{text}");
         assert!(text.contains("exit=9"), "{text}");
+    }
+
+    #[test]
+    fn dashboard_keeps_large_chunked_json_streams_available_for_expansion() {
+        let body = json!({"data":"x".repeat(20_000),"tail":"STREAM_END"}).to_string();
+        let mut renderer = Renderer::new(false, false, 80);
+        renderer.dashboard_active = true;
+        renderer.ui.max_inline_output = 2;
+        let mut output = Vec::new();
+        for chunk in body.as_bytes().chunks(1024) {
+            renderer
+                .event(
+                    &mut output,
+                    "codex",
+                    &json!({
+                        "method":"command/exec/outputDelta",
+                        "params":{"processId":"json-fixture","stream":"stdout",
+                            "deltaBase64":STANDARD.encode(chunk)}
+                    }),
+                )
+                .unwrap();
+        }
+        renderer.finish_group(&mut output, "codex").unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.starts_with("[STDOUT] codex · json-fixture\n"),
+            "{text}"
+        );
+        let restored = text
+            .lines()
+            .skip(1)
+            .map(|line| line.strip_prefix("  ").unwrap_or(line))
+            .collect::<String>();
+        assert_eq!(restored, body, "folding must not discard the stream body");
     }
 
     #[test]
