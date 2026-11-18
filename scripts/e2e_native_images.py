@@ -446,8 +446,12 @@ def run(harness, binary, temporary, output):
         # without assuming a particular terminal interpolation algorithm.
         panes = harness.ui("/display/panes")
         fitted_width = 12 + panes["logs"]["cols"] * native.cw - top[0]
-        fitted = detail_image(fitted_width, 1200)
+        # This positive geometry test stays within ztty's default 16 MiB
+        # decoded-image budget. Test a terminal rejection separately below.
+        fitted = detail_image(fitted_width, 864)
         wide = fitted.resize((fitted.width * 2, fitted.height * 2), native.Image.Resampling.NEAREST)
+        harness.check(wide.width * wide.height * 4 <= 16 * 1024 * 1024,
+                      "the width-fitting fixture stays within ztty's decoded-image budget")
         wide.save(harness.workspace / "native-width-fit.png")
         wide.save(output / "source-width-fit.png")
         harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
@@ -471,6 +475,42 @@ def run(harness, binary, temporary, output):
             "source_pixels": list(wide.size), "display_pixels": list(fitted.size),
             "top_origin": fitted_top, "interior_origin": fitted_middle,
             "interior_display_y": fitted_y,
+        }
+
+        # A compressed PNG can fit ssmcp's transfer/cache budgets yet exceed a
+        # terminal's decoded-image budget. That rejection must affect one image,
+        # and must not disable later native uploads in the same client session.
+        oversized_display = detail_image(fitted_width, 1200)
+        oversized = oversized_display.resize((fitted_width * 2, 2400), native.Image.Resampling.NEAREST)
+        oversized.save(harness.workspace / "native-over-terminal-limit.png")
+        oversized.save(output / "source-over-terminal-limit.png")
+        harness.check(oversized.width * oversized.height * 4 > 16 * 1024 * 1024,
+                      "the rejection fixture exceeds ztty's decoded-image budget")
+        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        read_image("native-over-terminal-limit.png")
+
+        def rejected_image_settled():
+            events = harness.ui("/display/events")
+            image_present = any(event["summary"].startswith(f"[IMAGE] {oversized.width} × {oversized.height}")
+                                for event in events["events"])
+            return image_present and events["image_cache_bytes"] == 0
+
+        native.wait(rejected_image_settled, "terminal rejection releases only the rejected native payload")
+        harness.check(True, "terminal rejection releases the rejected payload while retaining its image event")
+        harness.check(locate_grid(native.image(), oversized_display.crop((0, 0, fitted_width, 128))) is None,
+                      "the rejected image does not leave a native width-fitted placement")
+        native.image().save(output / "rejected-image-fallback.png")
+        harness.observe("ssmcp.ui.action", {"action": "logs.clear"})
+        read_image()
+        recovered = visible("a later small image remains pixel-exact native after a terminal rejection")
+        native.image().save(output / "native-after-rejection.png")
+        harness.metrics["terminal_rejection"] = {
+            "source_pixels": list(oversized.size),
+            "source_rgba_bytes": oversized.width * oversized.height * 4,
+            "ztty_default_decoded_limit_bytes": 16 * 1024 * 1024,
+            "rejected_native_cache_bytes": 0,
+            "subsequent_small_native_origin": recovered,
+            "same_client_session": True,
         }
         previous = harness.client_id
         harness.call("ssmcp.client.reload", {})
