@@ -1,4 +1,5 @@
-//! Bounded image loading for the local composer; no I/O or decoding under the display lock.
+//! Bounded image/file loading for the local composer, outside the display lock.
+use super::references::files;
 use crate::wire::{MAX_USER_IMAGE_BYTES, MAX_USER_IMAGES, MAX_USER_IMAGES_BYTES, UserImage};
 use image::{DynamicImage, ImageFormat, ImageReader};
 use serde_json::{Value, json};
@@ -15,12 +16,18 @@ const MAX_DIMENSION: u32 = 16_384;
 pub(super) enum Source {
     Clipboard,
     Paths(Vec<PathBuf>),
+    Files(Vec<PathBuf>),
     Copy(String),
 }
 #[derive(Debug)]
 pub(super) enum Loaded {
     Text(String),
     Images(Vec<UserImage>),
+    Files {
+        text: String,
+        images: Vec<UserImage>,
+        files: files::ImportedFiles,
+    },
     Copied,
 }
 
@@ -73,9 +80,19 @@ impl Task {
                             })
                             .await
                             .unwrap_or_else(|error| Err(format!("Image loading failed: {error}")))
+                        } else if let Some(paths) = pasted_file_paths(&text) {
+                            tokio::task::spawn_blocking(move || load_files(&paths, slots, budget))
+                                .await
+                                .unwrap_or_else(|error| Err(format!("File import failed: {error}")))
                         } else {
                             Ok(Loaded::Text(text))
                         }
+                    }
+                    #[cfg(all(not(target_os = "macos"), not(windows)))]
+                    Ok(super::clipboard::Content::Files(paths)) => {
+                        tokio::task::spawn_blocking(move || load_files(&paths, slots, budget))
+                            .await
+                            .unwrap_or_else(|error| Err(format!("File import failed: {error}")))
                     }
                     Err(error) => Err(error),
                 },
@@ -84,6 +101,11 @@ impl Task {
                 })
                 .await
                 .unwrap_or_else(|error| Err(format!("Image loading failed: {error}"))),
+                Source::Files(paths) => {
+                    tokio::task::spawn_blocking(move || load_files(&paths, slots, budget))
+                        .await
+                        .unwrap_or_else(|error| Err(format!("File import failed: {error}")))
+                }
             };
             let _ = sender.send(result);
         });
@@ -185,6 +207,62 @@ pub(super) fn pasted_paths(text: &str) -> Option<Vec<PathBuf>> {
         })
         .collect()
 }
+
+pub(super) fn pasted_file_paths(text: &str) -> Option<Vec<PathBuf>> {
+    files::pasted_paths(text)
+}
+
+fn load_files(paths: &[PathBuf], slots: usize, budget: usize) -> Result<Loaded, String> {
+    let root = std::env::current_dir()
+        .map_err(|error| format!("Cannot locate the workspace for pasted files: {error}"))?;
+    load_files_at(&root, paths, slots, budget)
+}
+
+fn load_files_at(
+    root: &Path,
+    paths: &[PathBuf],
+    slots: usize,
+    budget: usize,
+) -> Result<Loaded, String> {
+    fn image_type(file: &files::SelectedFile) -> Option<&'static str> {
+        crate::output::image_mime_type(&file.bytes).filter(|mime| {
+            matches!(
+                *mime,
+                "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+            )
+        })
+    }
+    let selected = files::read(paths)?;
+    let image_count = selected
+        .iter()
+        .filter(|file| image_type(file).is_some())
+        .count();
+    if image_count > slots {
+        return Err("At most four images per request; use /detach first".into());
+    }
+    let per_image = (budget / image_count.max(1)).min(MAX_USER_IMAGE_BYTES);
+    let mut images = Vec::with_capacity(image_count);
+    let mut ordinary = Vec::new();
+    for file in selected {
+        if let Some(mime) = image_type(&file) {
+            images.push(prepare(&file.name, mime, file.bytes, per_image)?);
+        } else {
+            ordinary.push(file);
+        }
+    }
+    if ordinary.is_empty() {
+        return Ok(Loaded::Images(images));
+    }
+    // Decode every selected image and validate every source before publishing any copy.
+    let files = files::import(root, ordinary)?;
+    let text = files.references();
+    Ok(Loaded::Files {
+        text,
+        images,
+        files,
+    })
+}
+
 fn load_paths(paths: &[PathBuf], slots: usize, budget: usize) -> Result<Vec<UserImage>, String> {
     if paths.is_empty() || paths.len() > slots {
         return Err("At most four images per request; use /detach first".into());

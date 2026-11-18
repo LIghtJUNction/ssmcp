@@ -135,6 +135,28 @@ fn validate_content(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn request_identity(request_id: &str, text: &str) -> Result<String, String> {
+    if request_id.is_empty()
+        || request_id.len() > 128
+        || !request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+    {
+        return Err("invalid request identity for conversation history".into());
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"ssmcp.history.request.v1\0");
+    digest.update(request_id.as_bytes());
+    digest.update(b"\0");
+    digest.update(text.as_bytes());
+    let digest = digest.finalize();
+    let suffix: String = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(format!("message_{suffix}"))
+}
+
 fn role_and_kind(role: &str) -> Result<(&'static str, &'static str), String> {
     match role {
         "user" => Ok(("user", "requirement")),
@@ -146,7 +168,7 @@ fn role_and_kind(role: &str) -> Result<(&'static str, &'static str), String> {
     }
 }
 
-fn default_directory() -> Result<PathBuf, String> {
+pub(crate) fn default_directory() -> Result<PathBuf, String> {
     #[cfg(windows)]
     let root = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
@@ -169,7 +191,7 @@ fn default_directory() -> Result<PathBuf, String> {
     Ok(root.join("ssmcp/conversations"))
 }
 
-fn workspace() -> Result<String, String> {
+pub(crate) fn workspace() -> Result<String, String> {
     let path = std::env::current_dir()
         .and_then(fs::canonicalize)
         .map_err(|_| "cannot determine conversation workspace")?;
@@ -407,30 +429,55 @@ impl History {
         Ok(())
     }
 
+    fn delivered_source(&self, request_id: &str, text: &str) -> Result<(String, Message), String> {
+        let identity = request_identity(request_id, text)?;
+        let mut expected_text = safe_text(text);
+        if expected_text.len() > MAX_CONTENT {
+            let mut end = MAX_CONTENT;
+            while !expected_text.is_char_boundary(end) {
+                end -= 1;
+            }
+            expected_text.truncate(end);
+        }
+        let _lock = self.directory.lock()?;
+        let mut ids = Vec::new();
+        if let Some(active) = &self.active {
+            ids.push(active.metadata.id.clone());
+        }
+        for name in self.directory.names()? {
+            if let Some(id) = name.strip_suffix(".jsonl")
+                && valid_id(id, "conversation")
+                && !ids.iter().any(|known| known == id)
+            {
+                ids.push(id.into());
+            }
+        }
+        if ids.len() > MAX_SESSIONS {
+            return Err("too many retained histories to resolve a delivered request safely".into());
+        }
+        for id in ids {
+            let conversation = self.load(&id)?;
+            if conversation.metadata.workspace != self.workspace {
+                continue;
+            }
+            if let Some(message) = conversation.messages.iter().find(|m| m.id == identity) {
+                if message.role != "user" || message.content != expected_text {
+                    return Err(
+                        "delivered request conflicts with its original history source".into(),
+                    );
+                }
+                return Ok((id, message.clone()));
+            }
+        }
+        Err("delivered request source is absent from retained JSONL; memory was not changed".into())
+    }
+
     fn record(&mut self, role: &str, text: &str) -> Result<(), String> {
         self.record_identified(role, text, None)
     }
 
     fn record_request(&mut self, request_id: &str, text: &str) -> Result<(), String> {
-        if request_id.is_empty()
-            || request_id.len() > 128
-            || !request_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
-        {
-            return Err("invalid request identity for conversation history".into());
-        }
-        let mut digest = Sha256::new();
-        digest.update(b"ssmcp.history.request.v1\0");
-        digest.update(request_id.as_bytes());
-        digest.update(b"\0");
-        digest.update(text.as_bytes());
-        let digest = digest.finalize();
-        let suffix: String = digest[..16]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        self.record_identified("user", text, Some(format!("message_{suffix}")))
+        self.record_identified("user", text, Some(request_identity(request_id, text)?))
     }
 
     fn record_identified(
@@ -510,6 +557,8 @@ impl History {
             bytes = Self::encode(&conversation)?;
         }
         self.retain(&conversation.metadata.id, bytes.len())?;
+        let remembered = conversation.messages.last().cloned();
+        let remembered_conversation = conversation.metadata.id.clone();
         self.directory
             .write_atomic(&session_name(&conversation.metadata.id)?, &bytes)?;
         if let Some(active) = new_active {
@@ -517,6 +566,17 @@ impl History {
         }
         if let Some(active) = &mut self.active {
             active.metadata = conversation.metadata;
+        }
+        if let Some(message) = remembered
+            && let Err(error) = crate::client::context_memory::record_history(
+                &self.workspace,
+                &remembered_conversation,
+                &message,
+            )
+        {
+            crate::client::terminal::notice(&format!(
+                "Conversation saved; local memory could not be updated: {error}"
+            ));
         }
         Ok(())
     }
@@ -567,6 +627,31 @@ pub(crate) fn record(role: &str, text: &str) -> Result<(), String> {
 pub(crate) fn record_request(request_id: &str, text: &str) -> Result<(), String> {
     with(|history| history.record_request(request_id, text))
 }
+/// Resolve the saved original text only after a new delivery receipt arrives.
+/// Targeted requests remain outside shared automatic memory even after delivery.
+pub(crate) fn remember_delivered_request(
+    request_id: &str,
+    text: &str,
+    revision: u64,
+    target: &str,
+) -> Result<(), String> {
+    if target != "next" {
+        return Ok(());
+    }
+    let (workspace, conversation_id, message) = with(|history| {
+        let (conversation_id, message) = history.delivered_source(request_id, text)?;
+        Ok((history.workspace.clone(), conversation_id, message))
+    })?;
+    crate::client::context_memory::record_delivered_history(
+        &workspace,
+        &conversation_id,
+        &message,
+        request_id,
+        revision,
+        target,
+    )
+}
+
 pub(crate) fn sessions() -> Result<Vec<SessionSummary>, String> {
     with(|history| history.sessions())
 }
@@ -577,7 +662,7 @@ pub(crate) fn resume(id: &str) -> Result<Conversation, String> {
     with(|history| history.resume(id))
 }
 
-struct SafeDirectory {
+pub(crate) struct SafeDirectory {
     path: PathBuf,
     #[cfg(unix)]
     directory: File,
@@ -644,7 +729,7 @@ fn private_file(file: &File) -> Result<(), String> {
 }
 
 impl SafeDirectory {
-    fn at(path: PathBuf) -> Result<Self, String> {
+    pub(crate) fn at(path: PathBuf) -> Result<Self, String> {
         private_tree(&path)?;
         #[cfg(unix)]
         let directory = {
@@ -694,7 +779,13 @@ impl SafeDirectory {
         Ok(())
     }
 
-    fn open(&self, name: &str, write: bool, create: bool, exclusive: bool) -> Result<File, String> {
+    pub(crate) fn open(
+        &self,
+        name: &str,
+        write: bool,
+        create: bool,
+        exclusive: bool,
+    ) -> Result<File, String> {
         self.verify()?;
         if name.is_empty() || name.contains(['/', '\\']) || name.contains('\0') {
             return Err("invalid conversation storage filename".into());
@@ -736,14 +827,14 @@ impl SafeDirectory {
         Ok(file)
     }
 
-    fn lock(&self) -> Result<File, String> {
+    pub(crate) fn lock(&self) -> Result<File, String> {
         let file = self.open(".history.lock", true, true, false)?;
         crate::platform::lock_file(&file, true)
             .map_err(|_| "conversation storage is busy; retry shortly")?;
         Ok(file)
     }
 
-    fn names(&self) -> Result<Vec<String>, String> {
+    pub(crate) fn names(&self) -> Result<Vec<String>, String> {
         self.verify()?;
         #[cfg(unix)]
         let entries = fs::read_dir(&self.path).map_err(|_| "cannot list conversation history")?;
@@ -783,7 +874,7 @@ impl SafeDirectory {
         Ok(())
     }
 
-    fn write_atomic(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+    pub(crate) fn write_atomic(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
         if bytes.len() > MAX_SESSION_BYTES {
             return Err("conversation exceeds its storage budget".into());
         }
@@ -974,6 +1065,49 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn delivered_request_source_uses_original_identity_without_rewriting_history() {
+        let temp = Temporary::new();
+        let mut history = temp.history();
+        history
+            .record_request("request_fixture", "Original source @file.rs")
+            .unwrap();
+        let session = history.sessions().unwrap().remove(0).id;
+        let path = temp
+            .0
+            .join("conversations")
+            .join(session_name(&session).unwrap());
+        let before = fs::read(&path).unwrap();
+        let (id, message) = history
+            .delivered_source("request_fixture", "Original source @file.rs")
+            .unwrap();
+        assert_eq!(id, session);
+        assert_eq!(message.role, "user");
+        assert_eq!(message.content, "Original source @file.rs");
+        assert!(
+            history
+                .delivered_source("request_fixture", "Different edited source")
+                .is_err()
+        );
+        let reopened = temp.history();
+        assert_eq!(
+            reopened
+                .delivered_source("request_fixture", "Original source @file.rs")
+                .unwrap()
+                .0,
+            session
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let other =
+            History::with_workspace(temp.0.join("conversations"), "/fixture/different".into())
+                .unwrap();
+        assert!(
+            other
+                .delivered_source("request_fixture", "Original source @file.rs")
+                .is_err()
+        );
     }
 
     #[test]

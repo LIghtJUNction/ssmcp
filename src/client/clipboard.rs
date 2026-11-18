@@ -7,6 +7,8 @@ pub(super) enum Content {
         bytes: Vec<u8>,
     },
     Text(String),
+    #[cfg(all(not(target_os = "macos"), not(windows)))]
+    Files(Vec<std::path::PathBuf>),
 }
 async fn helper(program: &str, arguments: &[&str], limit: usize) -> Result<Vec<u8>, String> {
     crate::computer::run_helper(
@@ -43,7 +45,7 @@ pub(super) async fn read() -> Result<Content, String> {
         }
     }
     Err(if failures.is_empty() {
-        "No desktop clipboard is available. Paste text normally or use /attach PATH for an image."
+        "No desktop clipboard is available. Paste text or an absolute file path normally; /attach PATH accepts images."
             .into()
     } else {
         format!(
@@ -81,11 +83,27 @@ async fn read_unix(program: &str, wayland: bool) -> Result<Content, String> {
             });
         }
     }
+    for target in ["x-special/gnome-copied-files", "text/uri-list"] {
+        if types.lines().any(|line| line.trim() == target) {
+            let args = if wayland {
+                vec!["--no-newline", "--type", target]
+            } else {
+                vec!["-selection", "clipboard", "-o", "-t", target]
+            };
+            let bytes = helper(
+                program,
+                &args,
+                super::references::files::MAX_PATH_LIST_BYTES,
+            )
+            .await?;
+            let text = String::from_utf8(bytes).map_err(|_| "Clipboard file list is not UTF-8")?;
+            return super::references::files::clipboard_paths(target, &text).map(Content::Files);
+        }
+    }
     if types.lines().any(|line| line.trim().starts_with("image/")) {
         return Err("Clipboard image format is unsupported; use a PNG/JPEG/GIF/WebP file".into());
     }
     let target = [
-        "text/uri-list",
         "text/plain;charset=utf-8",
         "UTF8_STRING",
         "text/plain",
@@ -93,7 +111,7 @@ async fn read_unix(program: &str, wayland: bool) -> Result<Content, String> {
     ]
     .into_iter()
     .find(|kind| types.lines().any(|line| line.trim() == *kind))
-    .ok_or("Clipboard does not contain an image or plain text")?;
+    .ok_or("Clipboard does not contain an image, local files or plain text")?;
     let args = if wayland {
         vec!["--no-newline", "--type", target]
     } else {

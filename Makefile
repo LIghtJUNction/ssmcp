@@ -38,6 +38,9 @@ test-client-ui:
 	python3 scripts/e2e_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/composer.json
 	python3 scripts/e2e_questions.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/questions.json --out $(CARGO_TARGET_DIR)/acceptance/questions
 	python3 scripts/e2e_input_history.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/input-history
+	python3 scripts/e2e_attachments.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/attachments.json --out $(CARGO_TARGET_DIR)/acceptance/attachments
+	python3 scripts/e2e_presentations.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/presentations.json --out $(CARGO_TARGET_DIR)/acceptance/presentations
+	python3 scripts/e2e_context_memory.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/context-memory.json
 	@set -eu; ssmcp_fixture="$$($(CARGO) test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"; \
 	python3 scripts/e2e_relay_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --fixture-binary "$$ssmcp_fixture" --report $(CARGO_TARGET_DIR)/acceptance/relay-composer.json
 

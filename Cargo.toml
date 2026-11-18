@@ -62,6 +62,8 @@ include = [
     "/docs/client-server.md",
     "/docs/client-ui.md",
     "/docs/intelligence-ui.md",
+    "/docs/context-memory.md",
+    "/scripts/e2e_context_memory.py",
     "/scripts/e2e_presentations.py",
     "/docs/client-input.md",
     "/docs/conversation-history.md",
