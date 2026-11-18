@@ -1,0 +1,70 @@
+{
+  "schema": "ssmcp.public-assets.v1",
+  "checked_at_utc": "2026-11-18T20:16:45.565990+00:00",
+  "public_origin": "https://ssmcp.lmm.best",
+  "checks": [
+    {
+      "path": "/healthz",
+      "status": 200,
+      "bytes": 3,
+      "sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "no-store",
+      "last_modified": null,
+      "etag": null
+    },
+    {
+      "path": "/portal-refresh.css",
+      "status": 200,
+      "bytes": 2540,
+      "sha256": "073c2cbc73d50b8a244572f127e5767bb1044947c83ee07d891baf73637896be",
+      "content_type": "text/css",
+      "cache_control": null,
+      "last_modified": "Wed, 18 Nov 2026 17:40:52 GMT",
+      "etag": "\"6afde324-9ec\"",
+      "expected_candidate_sha256": "b48923a87680342cdd8bf7f69219d731132682b0640d7c83272a1da77b0ef810",
+      "matches_candidate": false
+    },
+    {
+      "path": "/portal.css",
+      "status": 200,
+      "bytes": 24796,
+      "sha256": "780644d0590e28411b80e76ea7e1c215f9a38f64e5005e5b69d556bdf722667f",
+      "content_type": "text/css; charset=utf-8",
+      "cache_control": "no-store",
+      "last_modified": null,
+      "etag": null
+    },
+    {
+      "path": "/traffic-meter.js",
+      "status": 200,
+      "bytes": 2088,
+      "sha256": "ea5c2a14f8b677084bf1cde50c657031b1943ace29e1f0e3d4b9f9d68f08a68a",
+      "content_type": "text/javascript",
+      "cache_control": null,
+      "last_modified": "Wed, 18 Nov 2026 18:03:29 GMT",
+      "etag": "\"6afde871-828\"",
+      "expected_candidate_sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c",
+      "matches_candidate": false
+    },
+    {
+      "path": "/client-install-copy.js",
+      "status": 200,
+      "bytes": 681,
+      "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96",
+      "content_type": "text/javascript",
+      "cache_control": null,
+      "last_modified": "Wed, 18 Nov 2026 17:38:28 GMT",
+      "etag": "\"6afde294-2a9\"",
+      "expected_candidate_sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96",
+      "matches_candidate": true
+    }
+  ],
+  "legacy_css": {
+    "source_commit": "f3a502a482b31ed49f16faf4a38d4ddd1b08c091",
+    "source_path": "src/portal/portal-refresh.css",
+    "bytes": 2540,
+    "sha256": "073c2cbc73d50b8a244572f127e5767bb1044947c83ee07d891baf73637896be"
+  },
+  "interpretation": "Public CSS matches the legacy source and differs from the candidate. CSS and two JavaScript responses have static-file headers instead of the application's no-store headers. Production proxy configuration must be inspected before changing routes."
+}

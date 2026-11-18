@@ -1,0 +1,44 @@
+{
+  "cleanup": {
+    "free_bytes_after_cleanup": 17470128128,
+    "local_private_backup_retained": true,
+    "other_task_files_touched": false,
+    "owned_remote_files_removed": true,
+    "removed_bytes": 11982058
+  },
+  "commit": "3c51ad96e4ed6e0edffb932e42414bf009e22f98",
+  "css_sha256": "b48923a87680342cdd8bf7f69219d731132682b0640d7c83272a1da77b0ef810",
+  "expected_live_sha256": "4e66fc7f1d221a21e56162efe5c4d832d1e621cbce9d9d644841ee4f26291fb1",
+  "failure": {
+    "reason": "css_sha256",
+    "step": "switch_and_verify",
+    "type": "RuntimeError"
+  },
+  "favicon_sha256": "f470a6aeb0c412b9ee990b6009c2fbe4127eac9a1ae5688df7cd1483cb7182a1",
+  "finished_utc": "2026-11-18T19:25:27Z",
+  "free_bytes_after": 17466114048,
+  "free_bytes_before": 17470087168,
+  "local_backup_verified": true,
+  "rollback_runtime_restored": false,
+  "rollback_verified": true,
+  "schema": "ssmcp.frontend-rollout.v1",
+  "stage_checks": {
+    "admin_rejects_unauthenticated": true,
+    "commerce_disabled": true,
+    "css_marker": true,
+    "css_sha256": true,
+    "dcr_survives_restart": true,
+    "favicon_sha256": true,
+    "fresh_state": true,
+    "health": true,
+    "homepage": true,
+    "mcp_rejects_unauthenticated": true,
+    "oauth_issuer": true,
+    "production_state_inaccessible": true
+  },
+  "started_utc": "2026-11-18T19:25:25Z",
+  "status": "rolled_back",
+  "step": "switch_and_verify",
+  "target_sha256": "18ed7fb2b9d7bf59744a06a8d02c43a148a89247ec070b71bef7b6c63559a11e",
+  "version": "0.9.4"
+}
