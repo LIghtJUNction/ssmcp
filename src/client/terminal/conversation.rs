@@ -185,7 +185,10 @@ fn activity_segments(
             PanelTone::Warning,
             panel::fit(
                 &if width >= 64 {
-                    format!("{title} · Offline · activity unknown")
+                    format!(
+                        "{} · Offline · activity unknown",
+                        panel::fit(title, (width / 2).min(64))
+                    )
                 } else {
                     "Offline · activity unknown".into()
                 },
@@ -223,7 +226,7 @@ fn activity_segments(
     let mut result = Vec::new();
     let mut available = width;
     if width >= 64 {
-        let title = panel::fit(title, (width / 3).min(32));
+        let title = panel::fit(title, (width / 2).min(64));
         available = available.saturating_sub(title.width() + separator.width());
         result.push((PanelTone::Heading, title));
         result.push((PanelTone::Muted, separator.into()));
@@ -398,6 +401,23 @@ impl State {
             .observe(event, &steering::snapshot());
     }
 
+    /// Main's context label contains the startup project and optional session
+    /// title. Keep the project in the persistent footer, leaving header space
+    /// for the distinct session title and observed caller activity.
+    fn chat_context_labels(&self) -> (String, Option<String>) {
+        let label = self.context_label.strip_prefix("  /  ").unwrap_or("");
+        let (project, title) = label.split_once("  /  ").unwrap_or((label, ""));
+        let project = if !project.is_empty() {
+            project.to_owned()
+        } else if self.preview {
+            "ssmcp".into()
+        } else {
+            panel::safe_text(&self.project_name)
+        };
+        let title = (!title.is_empty() && title != project).then(|| title.to_owned());
+        (project, title)
+    }
+
     fn chat_activity_header(&mut self, data: &Value, observed: &[Value], width: u16) -> String {
         let summary = self.conversation.activity_header.summarize(observed, data);
         let suffix = if !self.log_query.is_empty() || self.log_level != 0 {
@@ -409,7 +429,14 @@ impl State {
         } else {
             String::new()
         };
-        let title = format!("  ssmcp  /  {}{suffix}", self.conversation.view.name());
+        let (_, session_title) = self.chat_context_labels();
+        let context = session_title
+            .map(|title| format!("  /  {title}"))
+            .unwrap_or_default();
+        let title = format!(
+            "  ssmcp  /  {}{context}{suffix}",
+            self.conversation.view.name()
+        );
         let segments = activity_segments(&summary, &title, usize::from(width));
         let occupied = segments.iter().map(|(_, text)| text.width()).sum::<usize>();
         let mut line = segments
@@ -1852,11 +1879,7 @@ impl State {
         if width < 28 {
             return self.chat_line(&format!(" {hint}"), PanelTone::Muted, width);
         }
-        let project = if self.preview {
-            "ssmcp".into()
-        } else {
-            panel::safe_text(&self.project_name)
-        };
+        let (project, _) = self.chat_context_labels();
         let budget = width.saturating_sub(24).min((width / 2).max(16));
         let mut context = project;
         if budget >= 24
@@ -2302,6 +2325,108 @@ mod tests {
             assert_eq!((actual_rows.get(), actual_cols.get()), (rows, cols));
             assert_eq!((state.geometry.pty_rows, prompt_top(rows)), before);
             assert!(!parser.screen().hide_cursor());
+        }
+    }
+
+    #[test]
+    fn header_shows_startup_project_and_optional_custom_title() {
+        let ui = Ui {
+            sidebar: false,
+            ..Ui::default()
+        };
+        let mut state = super::super::preview_state(24, 100, &ui);
+        for (cwd, title, project, heading_title) in [
+            ("/workspace/alpha-project/", None, "alpha-project", None),
+            (
+                "/workspace/终端",
+                Some("修复输入框"),
+                "终端",
+                Some("修复输入框"),
+            ),
+            (
+                "/workspace/alpha-project",
+                Some("alpha-project"),
+                "alpha-project",
+                None,
+            ),
+            ("", None, "ssmcp", None),
+        ] {
+            state.set_context(cwd, title);
+            let screen = display(&mut state).screen().contents();
+            let header = screen.lines().next().unwrap();
+            let footer = screen.lines().last().unwrap().trim_end();
+            assert!(header.starts_with("  ssmcp  /  activity"));
+            assert!(header.contains("● Active 0") && header.contains("○ Idle 1"));
+            assert!(
+                footer.ends_with(project),
+                "startup project stays at the lower right"
+            );
+            if let Some(title) = heading_title {
+                assert!(
+                    header.contains(title),
+                    "custom session title remains visible"
+                );
+            }
+            if project != "ssmcp" {
+                assert!(
+                    !header.contains(project),
+                    "do not repeat the footer project in the header"
+                );
+            }
+        }
+        state.set_context("/workspace/alpha-project", Some("Review uploads"));
+        state.conversation.view = View::Queue;
+        let screen = display(&mut state).screen().contents();
+        assert!(
+            screen
+                .lines()
+                .next()
+                .unwrap()
+                .starts_with("  ssmcp  /  queue  /  Review uploads")
+        );
+        assert!(
+            screen
+                .lines()
+                .last()
+                .unwrap()
+                .trim_end()
+                .ends_with("alpha-project")
+        );
+    }
+
+    #[test]
+    fn header_is_one_safe_row_with_narrow_and_unicode_content() {
+        let ui = Ui {
+            sidebar: false,
+            ..Ui::default()
+        };
+        for cols in [20, 40, 80, 100] {
+            let mut state = super::super::preview_state(24, cols, &ui);
+            let before = display(&mut state).screen().contents();
+            state.set_context(
+                "/workspace/项目\nname",
+                Some("修改标题\r\u{1b}[2J\u{202e}extra-long-title"),
+            );
+            let after = display(&mut state).screen().contents();
+            assert_eq!(
+                after.lines().skip(1).take(22).collect::<Vec<_>>(),
+                before.lines().skip(1).take(22).collect::<Vec<_>>(),
+                "header and footer must not wrap or inject controls at {cols} columns",
+            );
+            let header = after.lines().next().unwrap();
+            let footer = after.lines().last().unwrap();
+            assert!(header.width() <= usize::from(cols));
+            assert!(footer.width() <= usize::from(cols));
+            if cols == 100 {
+                assert!(footer.contains(r"项目\nname"));
+                assert!(header.contains(r"修改标题\r\x1b"));
+                assert!(
+                    state
+                        .context_label
+                        .contains(r"修改标题\r\x1b[2J\u{202e}extra-long-title")
+                );
+                assert!(header.contains("● Active") && header.contains("○ Idle"));
+            }
         }
     }
 

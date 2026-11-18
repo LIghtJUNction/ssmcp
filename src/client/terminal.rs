@@ -51,7 +51,7 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn start(ui: &Ui) -> io::Result<Option<Self>> {
+    pub(crate) fn start(ui: &Ui, cwd: &str, title: Option<&str>) -> io::Result<Option<Self>> {
         if !ui.dashboard
             || ui.log_format == LogFormat::Jsonl
             || !io::stdin().is_terminal()
@@ -67,8 +67,10 @@ impl Session {
         let output = PhysicalOutput::open()?;
         let mut options = ui.clone();
         options.color &= std::env::var_os("NO_COLOR").is_none();
+        let mut state = State::new(rows, cols, &options);
+        state.set_context(cwd, title);
         let shared = Arc::new(Shared {
-            state: Mutex::new(State::new(rows, cols, &options)),
+            state: Mutex::new(state),
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
         });
@@ -364,15 +366,19 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
 }
 
 pub(crate) fn preview_bytes(ui: &Ui, rows: u16, cols: u16) -> Vec<u8> {
-    preview_state(rows, cols, ui)
-        .frame(Instant::now())
-        .diff(None)
+    let mut state = preview_state(rows, cols, ui);
+    if let Ok(cwd) = std::env::current_dir() {
+        state.set_context(&cwd.to_string_lossy(), None);
+    }
+    state.frame(Instant::now()).diff(None)
 }
 
 pub(crate) fn seed_preview() {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let context_label = std::mem::take(&mut state.context_label);
         *state = preview_state(state.geometry.rows, state.geometry.cols, &state.ui);
+        state.context_label = context_label;
     }
 }
 
@@ -783,6 +789,7 @@ impl vt100::Callbacks for Replies {
 }
 
 struct State {
+    context_label: String,
     geometry: Geometry,
     logs: vt100::Parser,
     pty: vt100::Parser<Replies>,
@@ -811,6 +818,7 @@ impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let geometry = Geometry::new(rows, cols, ui);
         Self {
+            context_label: String::new(),
             logs: vt100::Parser::new(
                 nonzero(geometry.log_rows),
                 nonzero(geometry.left),
@@ -855,6 +863,23 @@ impl State {
             conversation: conversation::Conversation::default(),
         }
     }
+    fn set_context(&mut self, cwd: &str, title: Option<&str>) {
+        let project = std::path::Path::new(cwd)
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new(cwd))
+            .to_string_lossy();
+        self.context_label.clear();
+        for label in [Some(project.as_ref()), title].into_iter().flatten() {
+            let label = panel::safe_text(label);
+            let label = label.trim();
+            if !label.is_empty() {
+                self.context_label.push_str("  /  ");
+                self.context_label.push_str(label);
+            }
+        }
+        self.dirty = true;
+    }
+
     fn register_session(&mut self, id: &str, title: &str) {
         if id.is_empty() {
             return;
@@ -2360,10 +2385,18 @@ mod tests {
             log_format: LogFormat::Jsonl,
             ..split_ui()
         };
-        assert!(Session::start(&ui).unwrap().is_none());
+        assert!(
+            Session::start(&ui, "/workspace/project", None)
+                .unwrap()
+                .is_none()
+        );
         ui.log_format = LogFormat::Pretty;
         ui.dashboard = false;
-        assert!(Session::start(&ui).unwrap().is_none());
+        assert!(
+            Session::start(&ui, "/workspace/project", None)
+                .unwrap()
+                .is_none()
+        );
     }
     #[cfg(unix)]
     #[test]
