@@ -104,11 +104,27 @@ ssmcp trust list
 
 ## 定制客户端
 
-本节描述 0.8.0 候选功能；通用安装命令获取已发布版本。候选源码、验证结果与安装状态见[最终集成报告](docs/reports/client-experience-0.8.0-20261118/final/README.md)。从当前源码预览可运行 `cargo run --locked --bin ssmcp -- ui preview`。
+本节介绍当前源码中的客户端交互。安装脚本获取已发布版本；从源码预览可运行 `cargo run --locked --bin ssmcp -- ui preview`。
 
-0.8.0 客户端默认使用 `dark` 主题和 `chat` 布局：连续事件流展示调用、输出和结果，底部输入框用于追加用户要求。运行期间可以继续输入，待交付要求保留在队列中，支持取回编辑；下一次符合目标的 `code_mode` 响应携带这些要求时，界面标记为已交付。已交付表示附加到了响应，不代表模型已经阅读或执行。
+客户端默认使用 `dark` 主题和 `chat` 布局：连续事件流展示调用、输出和结果，底部输入框用于追加用户要求。运行期间可以继续输入，待交付要求保留在队列中，支持取回编辑；下一次符合目标的 `code_mode` 响应携带这些要求时，界面标记为已交付。已交付表示附加到了响应，不代表模型已经阅读或执行。
 
-`/help` 查看操作，`/audit` 浏览原始编排源码，`/agents` 选择真实登记成员，`/queue` 管理待交付要求。Tab 切换输入和浏览焦点，F2 切换事件流、审计、成员和队列，F3 收起侧栏。`/reload` 重新启动客户端，F5 只重载显示配置。终端输入继续通过 `terminal.*` 或 `ssmcp -i` 使用。
+`/help` 查看操作，`/audit` 浏览原始编排源码，`/agents` 查看普通调用并选择已登记的接收者，`/queue` 管理待交付要求。↑/↓ 在输入框中按显示行移动，位于首行时可取回最近待交付项；Tab 切换输入和浏览焦点，F2 切换事件流、审计、成员和队列。
+
+复制截图后按 Ctrl+V，看到 `[Image N]` 附件标识后，继续写要求并按 Enter 提交。普通文本也可直接粘贴。图片与正文一起排队、取回编辑和重载恢复；较大的图片按容量限制缩小，附件信息会显示实际尺寸。
+
+| 操作 | 用途 |
+| --- | --- |
+| Ctrl+V / `/paste` | 粘贴剪贴板图片或文字；终端拦截 Ctrl+V 时使用 `/paste` |
+| `/attach "/path/screenshot.png"` | 附加本机图片文件；也可粘贴完整图片路径 |
+| `/images` | 查看附件名称、实际尺寸、格式和大小 |
+| `/detach 1` / `/detach all` | 移除指定附件 / 全部附件 |
+| `/copy` | 复制最近一条 Agent 消息的正文 |
+| `/reload` / `/restart` | 重启客户端并交接草稿、附件与尚未交付的要求；F5 只重载显示配置 |
+| `/sidebar` / F3 | 展开或收起右侧状态面板 |
+
+右下角显示项目名及可用的 Git 分支，收起侧栏后仍保留。窄窗口会优先显示操作状态。Agent 的进度、解释、问题和最终答复通过工具送入同一会话，分别显示为 `[UPDATE]` 或 `[ANSWER]`；`/copy` 复制最近一条消息。Agent 使用 `await say(clientId, {text, kind:"progress"})` 发送进度，最终答复使用 `kind:"answer"`。[图片与剪贴板](docs/client-ui.md#图片与剪贴板) · [会话中的 Agent 答复](docs/client-ui.md#会话中的-agent-答复)
+
+需要交互 Shell 时使用 `terminal.*` 或 `ssmcp -i`。
 
 ![ssmcp 客户端：执行记录、输入框和状态面板](docs/assets/client-ui.png)
 
@@ -146,7 +162,7 @@ heading = "#e8eaed"
 
 内置 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题。默认 `dark` 绘制完整深色背景；`minimal` 跟随终端颜色。颜色可逐项覆盖，源码审计与日志可以单独浏览，状态面板可以排序或隐藏。[完整配置、快捷键与队列接口](docs/client-ui.md)
 
-要求队列和成员目标需要客户端与服务器支持协议 v7，源码审计需要 v6 或更新版本。兼容旧连接时界面会说明可用范围。源码来自调用方提交的 `code_mode.code`，脱敏后只发送给本次调用实际操作的客户端。重载使用私有、单次读取的草稿与队列交接；交付不确定的记录保留待复核，不会自动重发。[队列与恢复](docs/client-ui.md#输入要求与队列) · [源码范围](docs/client-ui.md#源码审计与运行状态)
+图片交付需要客户端与服务器支持协议 v8；纯文字要求队列和成员目标需要 v7，源码审计需要 v6 或更新版本。兼容旧连接时界面会说明可用范围。源码来自调用方提交的 `code_mode.code`，脱敏后只发送给本次调用实际操作的客户端。重载使用私有、单次读取的草稿与队列交接；交付不确定的记录保留待复核，不会自动重发。[队列与恢复](docs/client-ui.md#输入要求与队列) · [源码范围](docs/client-ui.md#源码审计与运行状态)
 
 ### 独立命令观察窗口
 
@@ -174,6 +190,7 @@ UI 状态、工具目录、能力清单和客户端资源查询默认不领取 `
 | 当前客户端能力与资源 | `capabilities`、`resources.forClient`、动态 `native(clientId)` |
 | 界面配置、状态与筛选 | `ssmcp.ui.get`、`ssmcp.ui.set`、`ssmcp.ui.action`、`ssmcp.ui.filter` |
 | 用户要求队列 | `ssmcp.ui.queue`：读取、提交、取回、编辑、取消与重新选择目标 |
+| Agent 面向用户的消息 | `say` / `ssmcp.ui.message` 发送进度与答复，`ssmcp.ui.messages` 读取历史 |
 | 源码与调用审计 | `ssmcp.audit.events`，按游标读取 |
 | 多个交互终端 | `terminal.open/list/select/close/read/write/status/resize` |
 | 独立命令任务 | `exec.start/run/list/status/read/write/wait/cancel/forget` |
