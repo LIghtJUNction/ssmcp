@@ -528,6 +528,9 @@ async fn attached(
     let ui = Ui::load(None)?;
     crate::client::interface::initialize_path(None);
     render::configure(ui.clone());
+    // Use the attached session's workspace, which may differ from the directory
+    // where this frontend was launched. This grants input import only.
+    let _local_input = crate::client::attachments::LocalInput::bind(spec.cwd.clone())?;
     let display =
         terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref(), None)?;
     let mut terminal_ids = Vec::new();

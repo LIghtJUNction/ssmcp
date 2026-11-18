@@ -52,6 +52,7 @@ fn shared() -> Option<Arc<Shared>> {
 pub(crate) struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    guide_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -78,7 +79,9 @@ impl Session {
         options.color &= std::env::var_os("NO_COLOR").is_none();
         let mut state = State::new(rows, cols, &options);
         state.set_context(cwd, title);
-        state.guide = endpoint.and_then(guide::Guide::from_endpoint);
+        let guide = endpoint.and_then(guide::Guide::from_endpoint);
+        let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
+        state.guide = guide.map(guide::Guide::portal);
         state.graphics = images::Graphics::environment(&options);
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
@@ -103,10 +106,39 @@ impl Session {
             .spawn(move || {
                 draw_loop(&worker, output);
             }) {
-            Ok(thread) => Ok(Some(Self {
-                shared,
-                thread: Some(thread),
-            })),
+            Ok(thread) => {
+                let guide_probe = guide_url.and_then(|url| {
+                    let handle = tokio::runtime::Handle::try_current().ok()?;
+                    let display = Arc::downgrade(&shared);
+                    Some(handle.spawn(async move {
+                        // Keep networking and QR encoding outside the compositor lock.
+                        let Some(guide) = guide::Guide::resolve(&url).await else {
+                            return;
+                        };
+                        let Some(shared) = display.upgrade() else {
+                            return;
+                        };
+                        if shared.stop.load(Ordering::Acquire)
+                            || !shared.alive.load(Ordering::Acquire)
+                        {
+                            return;
+                        }
+                        let mut state = shared
+                            .state
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        if !state.preview {
+                            state.guide = Some(guide);
+                            state.dirty = true;
+                        }
+                    }))
+                });
+                Ok(Some(Self {
+                    shared,
+                    thread: Some(thread),
+                    guide_probe,
+                }))
+            }
             Err(error) => {
                 *DISPLAY
                     .get()
@@ -122,6 +154,9 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
+        if let Some(probe) = self.guide_probe.take() {
+            probe.abort();
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }

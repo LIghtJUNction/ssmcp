@@ -56,6 +56,7 @@ impl Slot {
             .seen
             .is_some_and(|seen| seen.elapsed() < HEARTBEAT)
     }
+    #[cfg(unix)]
     fn dimensions(&self) -> (u16, u16) {
         let view = self.view.lock().unwrap();
         (view.rows, view.cols)
@@ -92,6 +93,7 @@ impl Lease {
     pub(crate) fn append(&self, bytes: &[u8]) {
         self.slot.append(bytes);
     }
+    #[cfg(unix)]
     pub(crate) fn dimensions(&self) -> (u16, u16) {
         self.slot.dimensions()
     }

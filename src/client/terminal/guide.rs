@@ -2,11 +2,13 @@
 use super::super::{account, ui::Ui};
 use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
 use reqwest::Url;
+use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
 const QUIET: i32 = 4;
 const STATUS_ROWS: usize = 8;
 const MAX_URL_BYTES: usize = 512;
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) struct Guide {
     url: String,
@@ -38,6 +40,10 @@ impl Guide {
         if url.len() > MAX_URL_BYTES {
             return None;
         }
+        Some(Self::new(url))
+    }
+
+    fn new(url: String) -> Self {
         let segments = QrSegment::make_segments(&url);
         let codes = [QrCodeEcc::Medium, QrCodeEcc::Low]
             .into_iter()
@@ -53,7 +59,38 @@ impl Guide {
                 .ok()
             })
             .collect();
-        Some(Self { url, codes })
+        Self { url, codes }
+    }
+
+    /// The established portal is usable while a live session checks the newer route.
+    pub(super) fn portal(self) -> Self {
+        let origin = self
+            .url
+            .strip_suffix("/guide/")
+            .expect("guide URLs are constructed from a validated origin");
+        Self::new(format!("{origin}/"))
+    }
+
+    /// One anonymous, same-origin request. No response body or redirect is needed.
+    /// The caller owns this task and cancels it when its display session ends.
+    pub(super) async fn resolve(endpoint: &str) -> Option<Self> {
+        let guide = Self::from_endpoint(endpoint)?;
+        let available = tokio::time::timeout(PROBE_TIMEOUT, async {
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .referer(false)
+                .connect_timeout(PROBE_TIMEOUT)
+                .timeout(PROBE_TIMEOUT)
+                .build()
+                .ok()?;
+            client.get(guide.url()).send().await.ok()
+        })
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|response| response.status().is_success());
+        Some(if available { guide } else { guide.portal() })
     }
 
     pub(super) fn url(&self) -> &str {
@@ -171,6 +208,122 @@ mod tests {
         ] {
             assert!(Guide::from_endpoint(raw).is_none(), "accepted {raw:?}");
         }
+    }
+
+    async fn reply_once(response: String) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let request = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0 && request.len() + read <= 8192);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        (origin, request)
+    }
+
+    #[tokio::test]
+    async fn probe_selects_the_available_route_without_sending_endpoint_or_auth_data() {
+        for (status, available) in [
+            ("200 OK", true),
+            ("404 Not Found", false),
+            ("401 Unauthorized", false),
+            ("503 Service Unavailable", false),
+        ] {
+            let (origin, request) = reply_once(format!(
+                "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ))
+            .await;
+            let guide = Guide::resolve(&format!("{origin}/private-user/opaque-login-code"))
+                .await
+                .unwrap();
+            assert_eq!(
+                guide.url(),
+                format!("{origin}/{}", if available { "guide/" } else { "" })
+            );
+            let request = request.await.unwrap();
+            assert!(request.starts_with("GET /guide/ HTTP/1.1\r\n"), "{request}");
+            let headers = request.to_ascii_lowercase();
+            for forbidden in [
+                "private-user",
+                "opaque-login-code",
+                "authorization:",
+                "cookie:",
+                "referer:",
+            ] {
+                assert!(!headers.contains(forbidden), "request leaked {forbidden}");
+            }
+            let shown = guide.rows(
+                80,
+                5,
+                &Ui {
+                    color: false,
+                    ..Ui::default()
+                },
+            );
+            assert!(shown.iter().any(|row| row.trim_end() == guide.url()));
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_rejects_credentials_and_never_follows_redirects() {
+        let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination_origin = format!("http://{}", destination.local_addr().unwrap());
+        for endpoint in [
+            destination_origin.replacen("://", "://user:secret@", 1),
+            format!("{destination_origin}/mcp?token=secret"),
+            format!("{destination_origin}/mcp#secret"),
+        ] {
+            assert!(Guide::resolve(&endpoint).await.is_none());
+        }
+        let (origin, request) = reply_once(format!(
+            "HTTP/1.1 302 Found\r\nLocation: {destination_origin}/login?token=secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ))
+        .await;
+        let guide = Guide::resolve(&format!("{origin}/mcp")).await.unwrap();
+        assert_eq!(guide.url(), format!("{origin}/"));
+        assert!(
+            request
+                .await
+                .unwrap()
+                .starts_with("GET /guide/ HTTP/1.1\r\n")
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), destination.accept())
+                .await
+                .is_err(),
+            "credentials and redirect destinations must never produce a request"
+        );
+    }
+
+    #[tokio::test]
+    async fn unanswered_probe_returns_the_portal_within_its_network_budget() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (accepted, connected) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            accepted.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        let endpoint = format!("{origin}/private-user");
+        let probe = tokio::spawn(async move { Guide::resolve(&endpoint).await });
+        connected.await.unwrap();
+        let guide = tokio::time::timeout(PROBE_TIMEOUT + Duration::from_secs(1), probe)
+            .await
+            .expect("a connected server that sends no headers cannot keep discovery pending")
+            .unwrap()
+            .unwrap();
+        server.abort();
+        let _ = server.await;
+        assert_eq!(guide.url(), format!("{origin}/"));
     }
 
     #[test]
