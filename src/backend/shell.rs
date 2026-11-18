@@ -710,6 +710,9 @@ impl Shell {
             );
             {
                 let mut state = worker.state();
+                // Status reads can observe completion without a notification.
+                // Release capacity before publishing it under the same lock.
+                drop(permit);
                 state.running = false;
                 state.exit_code = outcome.0;
                 state.cancelled = outcome.1;
@@ -733,8 +736,6 @@ impl Shell {
                 };
                 lease.finish(&status);
             }
-            // Release the running slot before publishing completion to waiters.
-            drop(permit);
             worker.changed.notify_waiters();
             let mut snapshot = worker.snapshot();
             snapshot["type"] = json!("exec.exited");
@@ -1696,6 +1697,127 @@ mod tests {
             .unwrap();
         shell.shutdown().await;
     }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn completed_job_releases_capacity_before_reporting_finished() {
+        let (_directory, store) = isolated_output();
+        let shell = Shell::with_workspace(std::env::current_dir().unwrap(), store).unwrap();
+        let occupied = shell
+            .slots
+            .clone()
+            .acquire_many_owned((MAX_JOBS - 1) as u32)
+            .await
+            .unwrap();
+        let id = start_fixture_with_input(&shell, "stdin", 15000, "pipe").await;
+        // Consume the fixture's initial output before taking the observation
+        // lock. Closing its stdin then exits without emitting any further bytes.
+        timeout(Duration::from_secs(5), async {
+            let mut stdout = String::new();
+            let mut cursor = 0;
+            loop {
+                let page = shell
+                    .call(
+                        "ssmcp.exec.read",
+                        json!({"job_id":id,"stdout_cursor":cursor,"wait_ms":100}),
+                    )
+                    .await
+                    .unwrap();
+                stdout.push_str(page["stdout"].as_str().unwrap());
+                cursor = page["stdout_cursor"].as_u64().unwrap();
+                if stdout.contains(OUTPUT_START) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("stdin fixture must be ready before holding its observation lock");
+
+        let job = shell.job(&id).unwrap();
+        let slots = shell.slots.clone();
+        let (cancel, cancelled) = std::sync::mpsc::channel::<()>();
+        let (locked, acquired) = tokio::sync::oneshot::channel();
+        let (finished, completion) = tokio::sync::oneshot::channel();
+        // This OS thread observes and releases the gate itself. It never needs
+        // a blocked Tokio worker or timer to advance before dropping the mutex.
+        let observer = std::thread::spawn(move || {
+            let result = {
+                let _observation = job.observation.lock().unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                let _ = locked.send(());
+                loop {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break Err("observation gate reached its independent cleanup deadline");
+                    }
+                    // snapshot() is also used by the public exec.status path.
+                    let state = job.snapshot();
+                    if state["running"] == false {
+                        break Ok((state, slots.available_permits()));
+                    }
+                    // Dropping the test future closes this channel and releases
+                    // the guard even when the async path panics or is cancelled.
+                    match cancelled.recv_timeout(remaining.min(Duration::from_millis(1))) {
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            break Err("observation gate was cancelled");
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+            };
+            // Publish only after the observation mutex guard has been dropped.
+            let _ = finished.send(());
+            result
+        });
+        timeout(Duration::from_secs(5), acquired)
+            .await
+            .expect("observation gate must acquire the existing mutex")
+            .unwrap();
+        shell
+            .call("ssmcp.exec.write", json!({"job_id":id,"close_stdin":true}))
+            .await
+            .unwrap();
+        completion.await.expect("observation gate thread stopped");
+        let observed = observer.join().expect("observation gate thread failed");
+        drop(cancel);
+
+        // The gate is now open. Public status and a replacement native process
+        // run without deliberately blocking any runtime worker.
+        let public_state = shell.call("ssmcp.exec.status", json!({"job_id":id})).await;
+        let replacement = if observed.is_ok() {
+            Some(
+                shell
+                    .call(
+                        "ssmcp.exec.start",
+                        json!({
+                            "command":[std::env::current_exe().unwrap(),"--exact",
+                                "backend::shell::tests::fixture_process","--nocapture"],
+                            "env":{"SSMCP_SHELL_TEST_FIXTURE":"next"},
+                            "timeout_ms":5000
+                        }),
+                    )
+                    .await,
+            )
+        } else {
+            None
+        };
+        // Clean up every owned process and permit before checking the results.
+        drop(occupied);
+        shell.shutdown().await;
+
+        let (completed, available_permits) = observed.expect("observation gate failed");
+        assert_eq!(completed["exit_code"], 0);
+        assert!(completed["error"].is_null(), "{completed}");
+        assert_eq!(public_state.unwrap()["running"], false);
+        assert_eq!(
+            available_permits, 1,
+            "a job reported complete while its execution permit was still held"
+        );
+        let replacement = replacement.unwrap();
+        assert!(
+            replacement.is_ok(),
+            "the released execution slot must accept a new command: {replacement:?}"
+        );
+    }
+
     #[tokio::test]
     async fn rejected_capacity_never_executes_the_command() {
         let shell = Shell::new();
