@@ -2,6 +2,7 @@
 use super::*;
 use crate::client::{attachments, composer::Composer, references, steering};
 use serde_json::{Value, json};
+mod canvas;
 mod history;
 mod questions;
 
@@ -18,7 +19,7 @@ pub(super) enum View {
 impl View {
     fn name(self) -> &'static str {
         match self {
-            Self::Activity => "activity",
+            Self::Activity => "conversation",
             Self::Audit => "code audit",
             Self::Agents => "agents",
             Self::Queue => "queue",
@@ -54,6 +55,8 @@ pub(super) struct Conversation {
     pub(super) composer: Composer,
     pub(super) view: View,
     pub(super) content_focus: bool,
+    canvas: canvas::Canvas,
+    pub(super) logs_open: bool,
     selected: usize,
     selected_agent: Option<String>,
     drawn_agents: Vec<String>,
@@ -76,7 +79,7 @@ pub(super) struct Conversation {
     answers: BTreeMap<String, Composer>,
     help_scroll: usize,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
-    history: Option<crate::client::interface::history::Conversation>,
+    history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_rows: Vec<String>,
     pub(super) history_width: u16,
 }
@@ -87,6 +90,7 @@ impl Conversation {
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
+            "canvas":self.canvas.snapshot(),"logs_open":self.logs_open,
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
 }
@@ -230,7 +234,7 @@ impl State {
             let _ = writeln!(record, "{line}");
         }
         record.push_str("  queued · waiting for the next eligible tool response\n\n");
-        self.log(record.as_bytes());
+        self.log_message("user", &text, record.as_bytes());
         if self
             .conversation
             .submitting
@@ -360,20 +364,15 @@ impl State {
     }
 
     fn chat_change_view(&mut self, view: View) {
-        self.conversation.view = view;
-        self.conversation.content_focus = view != View::Activity;
-        self.conversation.selected = 0;
-        self.conversation.selected_agent = None;
-        self.conversation.drawn_agents.clear();
-        self.conversation.list_start = 0;
-        self.conversation.list_count = 0;
-        self.conversation.detail = false;
-        self.conversation.detail_scroll = 0;
+        self.canvas_focus(view);
+        self.conversation.logs_open = false;
+        self.raw_logs = false;
         self.help = false;
         self.notice = None;
         self.dirty = true;
     }
 
+    #[cfg(test)]
     fn chat_agents(&mut self) {
         self.chat_change_view(View::Agents);
         let data = self.chat_data();
@@ -466,8 +465,9 @@ impl State {
             "/queue" => self.chat_change_view(View::Queue),
             "/audit" => self.chat_change_view(View::Audit),
             "/logs" => {
-                self.raw_logs = false;
-                self.chat_change_view(View::Activity);
+                self.conversation.logs_open = true;
+                self.raw_logs = true;
+                self.notice = None;
             }
             "/raw" => {
                 if !rest.is_empty() {
@@ -475,8 +475,25 @@ impl State {
                         "Use /raw without arguments to toggle the original transcript".into(),
                     );
                 }
-                self.raw_logs = !self.raw_logs;
-                self.chat_change_view(View::Activity);
+                self.logs_toggle();
+            }
+            "/new" => {
+                let view = match rest {
+                    "" | "chat" | "conversation" => View::Activity,
+                    "agents" => View::Agents,
+                    "audit" => View::Audit,
+                    "queue" => View::Queue,
+                    "questions" => View::Questions,
+                    "history" => View::History,
+                    _ => return Err("Use /new [chat|agents|audit|queue|questions|history]".into()),
+                };
+                self.canvas_new(view);
+            }
+            "/close" => {
+                if !rest.is_empty() {
+                    return Err("Use /close without arguments to close this view".into());
+                }
+                self.canvas_close();
             }
             "/questions" => self.chat_questions(),
             "/sidebar" => self.actions.push("sidebar.toggle"),
@@ -506,7 +523,10 @@ impl State {
                     self.log_query = rest.into();
                 }
                 self.filter_offset = 0;
-                self.chat_change_view(View::Activity);
+                self.conversation.logs_open = true;
+                self.raw_logs = true;
+                self.help = false;
+                self.notice = None;
             }
             "/clear" => {
                 self.events.clear();
@@ -787,6 +807,7 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        self.events.set_scope(events::EventScope::Conversation);
         if matches!(key, Key::Interrupt) {
             request_interrupt();
             return;
@@ -802,6 +823,47 @@ impl State {
         }
         if self.selection {
             return;
+        }
+        if let Key::Mouse {
+            button,
+            release: false,
+            ..
+        } = key
+            && button & 3 == 2
+            && button & (32 | 64) == 0
+        {
+            self.logs_toggle();
+            return;
+        }
+        if matches!(key, Key::CanvasLeft | Key::CanvasRight) {
+            self.canvas_move(if matches!(key, Key::CanvasLeft) {
+                -1
+            } else {
+                1
+            });
+            return;
+        }
+        if self.conversation.logs_open {
+            self.logs_key(key);
+            return;
+        }
+        if !self.help && matches!(key, Key::Back | Key::Open) {
+            let editor = if self.conversation.view == View::Questions {
+                self.question_editor()
+            } else {
+                Some(&self.conversation.composer)
+            };
+            let at_edge = editor.is_none_or(|editor| {
+                if matches!(key, Key::Back) {
+                    editor.cursor() == 0
+                } else {
+                    editor.cursor() == editor.text().len()
+                }
+            });
+            if self.conversation.content_focus || at_edge {
+                self.canvas_move(if matches!(key, Key::Back) { -1 } else { 1 });
+                return;
+            }
         }
         if matches!(key, Key::Questions) {
             self.chat_questions();
@@ -872,6 +934,8 @@ impl State {
             Key::Filter => {
                 self.log_level = (self.log_level + 1) % 3;
                 self.filter_offset = 0;
+                self.conversation.logs_open = true;
+                self.raw_logs = true;
             }
             Key::FocusBack => self.conversation.content_focus = !content,
             Key::Up => self.chat_move(
@@ -951,26 +1015,34 @@ impl State {
                     }
                 }
             }
-            Key::Back if self.conversation.view == View::Agents && content => {
-                self.chat_escape();
-            }
+            Key::Back if self.conversation.view == View::Agents && content => self.canvas_move(-1),
             Key::Back if self.conversation.view == View::Activity && content => {
                 if self.raw_logs {
                     self.notice = Some("Raw transcript · /logs returns to tool details".into());
                 } else if !self.events.back() {
-                    self.chat_agents();
+                    self.canvas_move(-1);
                 }
             }
             Key::Back if content => {
-                self.audit.back();
-                self.conversation.detail = false;
-                self.conversation.detail_scroll = 0;
+                if self.conversation.detail {
+                    self.audit.back();
+                    self.conversation.detail = false;
+                    self.conversation.detail_scroll = 0;
+                } else {
+                    self.canvas_move(-1);
+                }
             }
-            Key::Back if self.conversation.composer.cursor() == 0 => self.chat_agents(),
+            Key::Back if self.conversation.composer.cursor() == 0 => self.canvas_move(-1),
             Key::Back => {
                 self.conversation.composer.left();
             }
             Key::Open if content => self.chat_open(false),
+            Key::Open
+                if self.conversation.composer.cursor()
+                    == self.conversation.composer.text().len() =>
+            {
+                self.canvas_move(1)
+            }
             Key::Open => {
                 self.conversation.composer.right();
             }
@@ -1067,6 +1139,10 @@ impl State {
 
     fn chat_escape(&mut self) {
         self.dirty = true;
+        if self.conversation.logs_open {
+            self.logs_toggle();
+            return;
+        }
         if self.conversation.view == View::Questions && !self.help {
             self.question_key(Key::Escape);
             return;
@@ -1135,6 +1211,16 @@ impl State {
             }
             return;
         }
+        if self.conversation.logs_open {
+            if character == '\u{1b}' {
+                self.logs_toggle();
+                return;
+            }
+            if character.is_control() {
+                return;
+            }
+            self.logs_toggle();
+        }
         if self.help {
             if character == '\u{1b}' {
                 self.chat_escape();
@@ -1170,6 +1256,11 @@ impl State {
             self.chat_change_view(View::Activity);
         }
         match character {
+            'i' | 'I'
+                if self.conversation.content_focus && self.conversation.view == View::Queue =>
+            {
+                self.chat_open(false);
+            }
             'r' | 'R'
                 if self.conversation.content_focus && self.conversation.view == View::Queue =>
             {
@@ -1397,7 +1488,11 @@ impl State {
                     let _ = writeln!(record, "{line}");
                 }
                 record.push('\n');
-                self.log(record.as_bytes());
+                self.log_event(
+                    "context",
+                    &json!({"type":"ssmcp.message", "author":"Context", "text":text}),
+                    record.as_bytes(),
+                );
                 self.notice = Some(
                     "Local context updated · source history and queue were not replayed".into(),
                 );
@@ -1923,7 +2018,7 @@ impl State {
             .selected
             .min(entries.len().saturating_sub(1));
         let mut rows = vec![self.chat_line(
-            "  Requests · Enter edit · → details · Delete cancel · R resend",
+            "  Requests · Enter edit · i/I inspect · Delete cancel · R resend · Alt+←/→ panels",
             PanelTone::Muted,
             width,
         )];
@@ -1939,7 +2034,7 @@ impl State {
             let entry = &entries[self.conversation.selected];
             rows.push(self.chat_line(
                 &format!(
-                    "  {} · {} · ← back",
+                    "  {} · {} · Esc back",
                     field(entry, "status"),
                     message_id(entry)
                 ),
@@ -1994,10 +2089,10 @@ impl State {
     }
 
     fn chat_scroll_hint(&self) -> Option<String> {
-        if self.help || self.conversation.view != View::Activity {
+        if !self.conversation.logs_open && (self.help || self.conversation.view != View::Activity) {
             return None;
         }
-        if self.raw_logs || self.events.is_empty() {
+        if self.conversation.logs_open {
             let below = if self.log_query.is_empty() && self.log_level == 0 {
                 self.logs.screen().scrollback()
             } else {
@@ -2019,6 +2114,7 @@ impl State {
     }
 
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
+        self.events.set_scope(events::EventScope::Conversation);
         self.chat_updates();
         self.chat_refresh_completions();
         let g = self.geometry;
@@ -2035,17 +2131,9 @@ impl State {
         let height = body_rows(g.rows);
         let mut body = match self.conversation.view {
             View::Activity => {
-                if self.raw_logs || self.events.is_empty() {
-                    self.filtered_logs().unwrap_or_else(|| {
-                        (0..height)
-                            .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
-                            .collect()
-                    })
-                } else {
-                    self.events.filter(&self.log_query, self.log_level);
-                    self.events
-                        .render(g.left, height, &self.ui, self.conversation.content_focus)
-                }
+                self.events.filter("", 0);
+                self.events
+                    .render(g.left, height, &self.ui, self.conversation.content_focus)
             }
             View::History => self.chat_history_rows(height),
             View::Questions => self.question_rows(height),
@@ -2053,7 +2141,13 @@ impl State {
             View::Agents if self.conversation.detail => self.audit.render(g.left, height, &self.ui),
             _ => self.chat_list_rows(&data, height),
         };
-        if self.help {
+        if self.conversation.logs_open {
+            body = self.filtered_logs().unwrap_or_else(|| {
+                (0..height)
+                    .map(|row| screen_row(self.logs.screen(), row, g.left, &self.ui))
+                    .collect()
+            });
+        } else if self.help {
             body = self.chat_help_rows(height);
         }
         body.resize_with(usize::from(height), || {
@@ -2128,6 +2222,7 @@ impl State {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
+                    if self.conversation.logs_open { return "Logs · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc close".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::History {
                         return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
@@ -2145,9 +2240,9 @@ impl State {
                             "← / Esc  back to agents".into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
-                                "↑↓ select · Enter latest call · Esc back · view only".into()
+                                "↑↓ select · Enter latest call · ←/→ panels · Esc back".into()
                             } else {
-                                "↑↓ select · Enter/→ message · Esc back · ● current recipient".into()
+                                "↑↓ select · Enter message · ←/→ panels · Esc back".into()
                             }
                         };
                     }
@@ -2157,14 +2252,12 @@ impl State {
                             else { "F1 · full online guide link".into() };
                     }
                     format!(
-                        "{} · {status} · {} members / {} callers · {pending} queued · ← agents · /help",
+                        "{} · {status} · Alt+←/→ panels · right-click logs · /help",
                         if self.conversation.content_focus {
                             "browse"
                         } else {
                             "input"
-                        },
-                        agents.len(),
-                        grouped_callers.len()
+                        }
                     )
                 });
                 rows.push(self.chat_line(&format!(" {hint}"), hint_tone, g.cols));
@@ -2182,10 +2275,10 @@ impl State {
                 self.chat_line(
                     &format!(
                         "  ssmcp  /  {}{}{suffix}",
-                        if self.conversation.view == View::Activity && self.raw_logs {
-                            "raw transcript"
+                        if self.conversation.logs_open {
+                            "Logs".into()
                         } else {
-                            self.conversation.view.name()
+                            self.conversation.canvas.label(g.left)
                         },
                         self.context_label,
                     ),
@@ -2332,7 +2425,10 @@ impl State {
             geometry: g,
             rows,
             cursor,
-            hidden: self.help || self.conversation.content_focus || prompt_rows(g.rows) == 0,
+            hidden: self.conversation.logs_open
+                || self.help
+                || self.conversation.content_focus
+                || prompt_rows(g.rows) == 0,
             application_cursor: false,
             application_keypad: false,
             bracketed_paste: true,
@@ -2462,25 +2558,29 @@ mod tests {
             (
                 "/workspace/alpha-project/",
                 None,
-                "  ssmcp  /  activity  /  alpha-project",
+                "  ssmcp  /  ‹ agents     conversation  2/6     code audit ›  /  alpha-project",
             ),
             (
                 "/workspace/终端",
                 Some("修复输入框"),
-                "  ssmcp  /  activity  /  终端  /  修复输入框",
+                "  ssmcp  /  ‹ agents     conversation  2/6     code audit ›  /  终端  /  修复输入框",
             ),
-            ("", None, "  ssmcp  /  activity"),
+            (
+                "",
+                None,
+                "  ssmcp  /  ‹ agents     conversation  2/6     code audit ›",
+            ),
         ] {
             state.set_context(cwd, title);
             let screen = display(&mut state).screen().contents();
             assert_eq!(screen.lines().next().unwrap().trim_end(), expected);
         }
         state.set_context("/workspace/alpha-project", Some("Review uploads"));
-        state.conversation.view = View::Queue;
+        state.chat_change_view(View::Queue);
         let screen = display(&mut state).screen().contents();
         assert_eq!(
             screen.lines().next().unwrap().trim_end(),
-            "  ssmcp  /  queue  /  alpha-project  /  Review uploads",
+            "  ssmcp  /  ‹ code audit     queue  4/6     questions ›  /  alpha-project  /  Review uploads",
         );
     }
 
@@ -2700,11 +2800,12 @@ mod tests {
             "controller":{"name":"Another caller","model":"B","source":"caller-reported"}
         }));
         state.chat_key(Key::Mouse {
-            button: 2,
+            button: 0,
             x: 2,
             y: body_top(state.geometry.rows) + 1 + index as u16 * 2,
             release: false,
         });
+        state.chat_key(Key::Open);
         assert_eq!(state.audit.snapshot()["selected"]["run_id"], "drawn");
         assert!(state.conversation.target.is_none());
     }
@@ -2825,7 +2926,7 @@ mod tests {
         state.chat_agents();
         display(&mut state);
         state.chat_key(Key::Mouse {
-            button: 2,
+            button: 0,
             x: state.chat_agent_list_width() + 5,
             y: body_top(state.geometry.rows) + 5,
             release: false,
@@ -2893,6 +2994,7 @@ mod tests {
                 "list header is not an entry"
             );
             assert!(!state.conversation.detail);
+            assert!(state.conversation.logs_open);
             state.chat_key(Key::Mouse {
                 button: 2,
                 x: 1,
@@ -2904,6 +3006,7 @@ mod tests {
                 start + 1,
                 "prompt border is not an entry"
             );
+            assert!(!state.conversation.logs_open);
         }
     }
 
@@ -2932,6 +3035,39 @@ mod tests {
     }
 
     #[test]
+    fn queue_inspect_keys_preserve_the_draft_recipient_and_editing_request() {
+        let mut state = preview(36, 120);
+        state.chat_change_view(View::Queue);
+        state.conversation.composer.set_text("Keep this draft 界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("example-builder".into());
+        state.conversation.editing = Some("another-request".into());
+        let saved = state.chat_saved_draft();
+
+        for key in ['i', 'I'] {
+            state.conversation.detail = false;
+            state.conversation.detail_scroll = 17;
+            state.chat_character(key);
+            assert!(state.conversation.detail);
+            assert_eq!(state.conversation.detail_scroll, 0);
+            assert_eq!(state.conversation.view, View::Queue);
+            assert!(state.conversation.content_focus);
+            assert_eq!(state.chat_saved_draft(), saved);
+            assert_eq!(
+                state.conversation.editing.as_deref(),
+                Some("another-request")
+            );
+        }
+
+        state.conversation.detail = false;
+        state.conversation.content_focus = false;
+        state.conversation.composer.set_text("typing ");
+        state.chat_character('i');
+        assert_eq!(state.conversation.composer.text(), "typing i");
+        assert!(!state.conversation.detail);
+    }
+
+    #[test]
     fn help_blocks_hidden_queue_actions_and_printable_input_returns_to_the_editor() {
         let mut state = preview(36, 120);
         state.conversation.view = View::Queue;
@@ -2942,7 +3078,7 @@ mod tests {
         state.chat_character('\r');
         state.chat_key(Key::Open);
         state.chat_key(Key::Mouse {
-            button: 2,
+            button: 0,
             x: 1,
             y: 2,
             release: false,
@@ -3385,16 +3521,19 @@ mod tests {
     }
 
     #[test]
-    fn mouse_wheel_scrolls_without_focus_switch_or_draft_loss() {
+    fn diagnostic_mouse_wheel_scrolls_without_changing_the_draft() {
         let mut state = preview(24, 100);
         for index in 0..80 {
             state.log(format!("event {index}\n").as_bytes());
         }
         input(&mut state, b"unfinished");
+        state.chat_command("/logs").unwrap();
+        assert!(state.conversation.logs_open);
         assert_eq!(state.logs.screen().scrollback(), 0);
         input(&mut state, b"\x1b[<64;10;5M");
         assert!(state.logs.screen().scrollback() > 0);
-        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(display(&mut state).screen().hide_cursor());
         assert_eq!(state.conversation.composer.text(), "unfinished");
         input(&mut state, b"\x1b[1;5F");
         assert_eq!(state.logs.screen().scrollback(), 0);
@@ -3467,27 +3606,30 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_sections_obey_configuration_and_log_filters_keep_results() {
+    fn sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results() {
         let mut state = preview(36, 120);
         state.ui.panels = vec![crate::client::ui::Panel::Queue];
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("Queue · 1 pending"));
         assert!(!screen.contains("Members · 2"));
-        // The READY fixture also mentions `/filter cargo`; use the full command
-        // so this assertion tests block association rather than that second match.
         input(&mut state, b"/filter cargo test --lib\r");
+        assert!(state.conversation.logs_open);
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("cargo test --lib"));
-        assert!(!screen.contains("A quieter workspace"));
-        state.events.open();
-        let screen = display(&mut state).screen().contents();
         assert!(screen.contains("exit=0"));
         assert!(screen.contains("custom_colors ... ok"));
         assert!(!screen.contains("A quieter workspace"));
         assert!(
             screen.contains("[RUN]"),
-            "filtered activity keeps the same semantic command heading"
+            "filtered diagnostics retain the original command heading"
         );
+        state.chat_key(Key::Escape);
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.log_query, "cargo test --lib");
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("Improve the client experience"));
+        assert!(screen.contains("cargo test --lib"));
+        assert!(!screen.contains("A quieter workspace"));
     }
     #[test]
     fn observed_agent_calls_open_audit_without_changing_the_message_recipient() {
@@ -3761,7 +3903,7 @@ mod tests {
             let mut state = preview(30, 120);
             state.conversation.composer.set_text("keep this draft");
             for index in 0..80 {
-                state.log(format!("\n[INFO] retained event {index}\n").as_bytes());
+                state.log(format!("\n[USER] retained event {index}\n").as_bytes());
             }
             display(&mut state);
             input(&mut state, b"\x1b[1;5H");
@@ -3778,7 +3920,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_diagnostics_open_original_output_and_allow_compact_navigation() {
+    fn explicit_diagnostics_start_in_logs_and_escape_restores_conversation() {
         for ui in [
             Ui {
                 log_format: super::super::LogFormat::PrettyVerbose,
@@ -3790,36 +3932,53 @@ mod tests {
             },
         ] {
             let mut state = super::super::preview_state(40, 120, &ui);
+            assert!(state.conversation.logs_open);
             let original = display(&mut state).screen().contents();
-            assert!(original.contains("raw transcript"));
+            assert!(original.contains("Logs"));
             assert!(original.contains("Command completed successfully."));
             state.chat_command("/logs").unwrap();
             assert!(
-                !display(&mut state)
-                    .screen()
-                    .contents()
-                    .contains("raw transcript")
+                state.conversation.logs_open,
+                "/logs opens the same panel idempotently"
             );
+            state.chat_key(Key::Escape);
+            assert!(!state.conversation.logs_open);
+            let conversation = display(&mut state).screen().contents();
+            assert!(
+                conversation
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("conversation  2/6")
+            );
+            assert!(conversation.contains("cargo test --lib"));
+            assert!(!conversation.contains("A quieter workspace"));
         }
     }
 
     #[test]
-    fn raw_transcript_toggle_keeps_draft_and_returns_to_compact_activity() {
+    fn raw_and_logs_commands_share_diagnostics_without_changing_the_draft() {
         let mut state = preview(30, 120);
         state.conversation.composer.set_text("unsent request");
         assert!(state.chat_command("/raw").unwrap());
-        assert!(state.raw_logs);
-        assert!(
-            display(&mut state)
-                .screen()
-                .contents()
-                .contains("raw transcript")
-        );
+        assert!(state.conversation.logs_open);
+        assert!(display(&mut state).screen().contents().contains("Logs"));
         assert_eq!(state.conversation.composer.text(), "unsent request");
         assert!(state.chat_command("/raw unexpected").is_err());
-        assert!(state.raw_logs);
+        assert!(state.conversation.logs_open);
         assert!(state.chat_command("/logs").unwrap());
-        assert!(!state.raw_logs);
+        assert!(state.conversation.logs_open);
+        assert!(state.chat_command("/raw").unwrap());
+        assert!(!state.conversation.logs_open);
         assert_eq!(state.conversation.composer.text(), "unsent request");
+        let conversation = display(&mut state).screen().contents();
+        assert!(
+            conversation
+                .lines()
+                .next()
+                .unwrap()
+                .contains("conversation  2/6")
+        );
+        assert!(!conversation.contains("A quieter workspace"));
     }
 }

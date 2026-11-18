@@ -94,7 +94,32 @@ pub(super) struct AuditView {
     scroll_limit: Cell<usize>,
 }
 
+#[derive(Default)]
+pub(super) struct AuditPosition {
+    selected: Option<String>,
+    detail: bool,
+    scroll: usize,
+}
+
 impl AuditView {
+    pub(super) fn position(&self) -> AuditPosition {
+        AuditPosition {
+            selected: self.selected_entry().map(|entry| entry.run_id.clone()),
+            detail: self.detail,
+            scroll: self.scroll,
+        }
+    }
+
+    pub(super) fn restore_position(&mut self, position: &AuditPosition) {
+        self.selected = position
+            .selected
+            .as_ref()
+            .and_then(|id| self.entries.iter().position(|entry| &entry.run_id == id))
+            .unwrap_or(0);
+        self.detail = position.detail && !self.entries.is_empty();
+        self.scroll = position.scroll;
+    }
+
     /// Source and metadata are retained only after the existing audit redactor.
     /// Lifecycle repeats update the same record instead of duplicating source.
     pub(super) fn ingest(&mut self, value: &Value) -> bool {

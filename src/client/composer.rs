@@ -47,11 +47,19 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/logs",
-        description: "Show compact tool activity",
+        description: "Open the diagnostic log panel; Esc returns",
     },
     SlashCommand {
         name: "/raw",
-        description: "Toggle the original tool transcript",
+        description: "Toggle the diagnostic log panel",
+    },
+    SlashCommand {
+        name: "/new",
+        description: "Add a canvas panel: chat, agents, audit, queue, questions or history",
+    },
+    SlashCommand {
+        name: "/close",
+        description: "Close this canvas panel; keep the session and running work",
     },
     SlashCommand {
         name: "/questions",
