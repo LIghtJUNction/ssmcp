@@ -36,7 +36,7 @@ return await tools.search(clientId, {
 
 ## 验证结果
 
-所有下列命令退出码均为 0。
+所有下列命令退出码均为 0。 原始断言记录见 [session-service.json](attach-input-discovery-20261118/session-service.json)。
 
 | 验证 | 结果 | 主要覆盖 |
 | --- | --- | --- |
@@ -70,7 +70,7 @@ python3 scripts/e2e_session_service.py --bin-dir target/debug --report target/at
 | --- | --- |
 | 改动价值 | 独立 Esc 可完成界面动作，原生命名空间可直接筛选；都有回归与真实链路检查。 |
 | 表述清晰 | 文档区分注册工具名与 JavaScript 便捷函数，示例使用可调用的真实目录。 |
-| 实验强度 | 定时取消测试覆盖输入未来被反复丢弃；真实 PTY 覆盖无后续按键的 Esc。 |
+| 实验强度 | 回归测试覆盖异步读取被反复取消；真实 PTY 覆盖无后续按键的 Esc。 |
 | 覆盖范围 | 本轮为 Linux 定向验证；没有将本地验收写成生产部署或跨平台运行结果。 |
 | 设计一致性 | 收到字节与读取取消采用不同计时规则；搜索保留原有授权、描述及分页约束。 |
 
