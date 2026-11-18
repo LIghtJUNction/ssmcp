@@ -1602,6 +1602,18 @@ impl State {
         Vec::new()
     }
 
+    fn should_redraw(
+        &self,
+        previous: Option<&Frame>,
+        previous_cell: Option<images::CellSize>,
+    ) -> bool {
+        let pixels_changed = self.graphics.cell() != previous_cell;
+        let frozen = self.selection
+            && !pixels_changed
+            && previous.is_some_and(|old| !old.mouse_capture && old.geometry == self.geometry);
+        (self.dirty || pixels_changed) && !frozen
+    }
+
     fn frame(&mut self, now: Instant) -> Frame {
         self.media.clear();
         self.events
@@ -2090,6 +2102,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
     let mut pending = ENTER.to_vec();
     let mut offset = 0;
     let mut previous = None;
+    let mut previous_cell = None;
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
         if offset >= pending.len() {
@@ -2100,16 +2113,14 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
                     state.dirty = true;
                     last_panel = Instant::now();
                 }
-                // Selection freezes normal updates. A resize still redraws so
-                // image rectangles cannot retain their old viewport bounds.
-                let frozen = state.selection
-                    && previous.as_ref().is_some_and(|old: &Frame| {
-                        !old.mouse_capture && old.geometry == state.geometry
-                    });
-                let refresh = if state.dirty && !frozen {
+                // Selection freezes normal updates. Grid or font-cell changes
+                // still redraw so images cannot retain their old pixel bounds.
+                let cell = state.graphics.cell();
+                let refresh = if state.should_redraw(previous.as_ref(), previous_cell) {
                     let frame = state.frame(Instant::now());
                     let media = std::mem::take(&mut state.media);
                     state.dirty = false;
+                    previous_cell = cell;
                     Some((frame, media))
                 } else {
                     None
@@ -2334,6 +2345,72 @@ mod tests {
         parser.process(&frame.diff(None));
         parser
     }
+    #[test]
+    fn selection_freeze_releases_native_placements_when_cell_measurement_expires() {
+        let ui = Ui {
+            layout: Layout::Chat,
+            color: true,
+            sidebar: true,
+            sidebar_width: 37,
+            panels: vec![crate::client::ui::Panel::Agents],
+            ..Ui::default()
+        };
+        let mut state = State::new(30, 120, &ui);
+        state.guide = guide::Guide::from_endpoint("https://ssmcp.lmm.best/mcp");
+        state.guide.as_ref().unwrap().prepare_for_test();
+        state.graphics = images::Graphics::probe_for_test();
+        let now = Instant::now();
+        assert!(
+            state
+                .graphics
+                .input(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false,)
+                .is_empty()
+        );
+        state.selection = true;
+        let before = state.frame(now);
+        let previous_cell = state.graphics.cell();
+        let mut screen = physical(&before);
+        let mut media = images::Renderer::default();
+        let (_, upload) = media.update(
+            std::mem::take(&mut state.media),
+            before.cursor,
+            before.hidden,
+        );
+        assert!(
+            upload.contains("a=p"),
+            "the frame has an actual native QR placement"
+        );
+        media.complete();
+        assert!(screen.screen().contents().contains("Scan for the guide"));
+        state.dirty = true;
+        assert!(
+            !state.should_redraw(Some(&before), previous_cell),
+            "ordinary updates remain frozen"
+        );
+
+        state.dirty = false;
+        state.graphics.resized();
+        assert!(state.geometry == before.geometry, "the grid stays the same");
+        assert!(state.should_redraw(Some(&before), previous_cell));
+        let after = state.frame(now);
+        let (delete, output) =
+            media.update(std::mem::take(&mut state.media), after.cursor, after.hidden);
+        assert!(
+            delete.contains("a=d,d=I"),
+            "the next frame removes stale native pixels"
+        );
+        assert!(!output.contains("a=p"));
+        screen.process(&after.diff(Some(&before)));
+        assert!(screen.screen().contents().contains("Online guide"));
+        assert!(
+            screen
+                .screen()
+                .contents()
+                .contains("https://ssmcp.lmm.best/guide/")
+        );
+        assert!(!screen.screen().contents().contains("Scan for the guide"));
+    }
+
     #[test]
     fn frame_diff_erases_old_text_when_a_row_shrinks_or_becomes_empty() {
         let mut state = State::new(12, 40, &split_ui());
