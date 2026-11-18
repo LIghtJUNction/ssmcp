@@ -63,6 +63,7 @@ pub(crate) struct Store {
     _lock: File,
     database: Database,
     failed: bool,
+    traffic: super::traffic::TrafficLedger,
 }
 
 impl Drop for Store {
@@ -78,7 +79,7 @@ impl Drop for Store {
     }
 }
 
-fn private_file(file: &File) -> crate::Result<()> {
+pub(super) fn private_file(file: &File) -> crate::Result<()> {
     let m = file.metadata()?;
     // SAFETY: geteuid has no preconditions.
     if !m.is_file()
@@ -163,11 +164,13 @@ impl Store {
             Err(e) => return Err(e.into()),
         };
         validate(&database)?;
+        let traffic = super::traffic::TrafficLedger::open(&directory)?;
         Ok(Self {
             directory,
             _lock: lock,
             database,
             failed: false,
+            traffic,
         })
     }
 
@@ -355,6 +358,57 @@ impl Store {
             .ok_or(Problem::NotFound)?;
         account.keys.remove(index);
         self.save(next)
+    }
+
+    pub(crate) fn traffic_quota(
+        &self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        unlimited: bool,
+    ) -> Result<crate::user_policy::TrafficQuota, Problem> {
+        self.account(subject)?;
+        self.traffic
+            .snapshot(subject, period, utc_offset_minutes, unlimited)
+    }
+
+    pub(crate) fn reserve_traffic(
+        &mut self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        bytes: u64,
+        unlimited: bool,
+    ) -> Result<(), Problem> {
+        self.account(subject)?;
+        self.traffic.reserve(
+            &self.directory,
+            subject,
+            period,
+            utc_offset_minutes,
+            bytes,
+            unlimited,
+        )
+    }
+
+    pub(crate) fn grant_paid_traffic(
+        &mut self,
+        subject: &str,
+        period: &str,
+        current_period: &str,
+        order_id: &str,
+        bytes: u64,
+    ) -> Result<bool, Problem> {
+        // An already paid order must remain reconcilable after a later account ban.
+        self.account_record(subject)?;
+        self.traffic.grant(
+            &self.directory,
+            subject,
+            period,
+            current_period,
+            order_id,
+            bytes,
+        )
     }
 
     fn save(&mut self, next: Database) -> Result<(), Problem> {
