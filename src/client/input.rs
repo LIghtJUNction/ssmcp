@@ -11,6 +11,8 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
+pub(crate) mod paste;
+
 pub(crate) struct Input {
     task: Option<JoinHandle<()>>,
     mode: Arc<platform::Mode>,

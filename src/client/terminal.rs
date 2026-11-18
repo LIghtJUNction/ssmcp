@@ -226,6 +226,28 @@ pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) ->
     true
 }
 
+/// The renderer releases its lock before publishing these display-only updates.
+pub(super) fn diagnostics(updates: &[super::render::DiagnosticUpdate]) {
+    if updates.is_empty() {
+        return;
+    }
+    let Some(shared) = shared() else {
+        return;
+    };
+    if !shared.alive.load(Ordering::Acquire) {
+        return;
+    }
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    for update in updates {
+        if state.events.ingest_diagnostic(update) {
+            // Keep the retained raw pane's safe first warning. Unfolded original
+            // records remain available in explicit verbose/JSONL and the archive.
+            state.log_raw(update.text().as_bytes());
+        }
+    }
+    state.dirty = true;
+}
+
 /// Decode outside the State lock; preview failures do not alter native output.
 pub(crate) fn image(block: &serde_json::Value) {
     let Some(shared) = shared() else {
@@ -325,6 +347,15 @@ pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
     state.notice = None;
     state.dirty = true;
     Some((state.geometry.pty_rows, state.geometry.left))
+}
+
+/// Called after the steering lock is released; recipients and audit runs stay intact.
+pub(super) fn callers_disconnected() {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.caller_tracker.disconnect();
+        state.dirty = true;
+    }
 }
 
 pub(crate) fn audit(value: &serde_json::Value) {
@@ -456,6 +487,7 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
     state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"17","exit_code":0}), "[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
+    state.log("[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
     state.log("[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
@@ -532,6 +564,26 @@ pub(crate) fn keyboard_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     Some(state.keyboard(bytes, Instant::now(), false))
+}
+
+/// Preserve an outer reader's actual image-input time when it retains a split
+/// framing marker instead of returning bytes to the compositor immediately.
+pub(crate) fn paste_input_progress(now: Instant) {
+    let Some(shared) = shared() else {
+        return;
+    };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.paste_input_progress(now);
+}
+
+/// The attach decoder emits an explicit recovery boundary. Reset every
+/// compositor layer before bytes following that boundary are accepted.
+pub(crate) fn discard_image_paste() {
+    let Some(shared) = shared() else {
+        return;
+    };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.discard_image_paste();
 }
 
 /// Called by the input pump so a lone Escape never waits indefinitely for a
@@ -705,11 +757,34 @@ struct Keyboard {
     since: Option<Instant>,
     logs: bool,
     pasting: bool,
+    paste_png: crate::client::input::paste::PngFraming,
+    paste_last_input: Option<Instant>,
 }
 impl Keyboard {
+    fn image_paste_expired(&self, now: Instant) -> bool {
+        self.pasting
+            && self.paste_png.is_image_prefix()
+            && self.paste_last_input.is_some_and(|last| {
+                now.saturating_duration_since(last)
+                    >= crate::client::input::paste::IMAGE_IDLE_TIMEOUT
+            })
+    }
+
+    fn discard_image_paste(&mut self) -> bool {
+        if !self.pasting || !self.paste_png.is_image_prefix() {
+            return false;
+        }
+        self.pasting = false;
+        self.paste_png = Default::default();
+        self.paste_last_input = None;
+        self.pending.clear();
+        self.since = None;
+        true
+    }
+
     fn accepts(&self, key: Key, allow_logs: bool) -> bool {
         if self.pasting {
-            return matches!(key, Key::PasteEnd);
+            return matches!(key, Key::PasteEnd) && self.paste_png.allows_end();
         }
         match key {
             Key::Interrupt
@@ -746,10 +821,16 @@ impl Keyboard {
         allow_logs: bool,
         force_logs: bool,
     ) -> (Vec<u8>, Vec<Key>) {
+        if self.image_paste_expired(now) {
+            self.discard_image_paste();
+        }
         self.logs |= force_logs;
         let mut output = Vec::new();
         let mut actions = Vec::new();
         for &byte in bytes {
+            if self.pasting {
+                self.paste_last_input = Some(now);
+            }
             if byte == 0x03 && !self.pasting {
                 self.pending.clear();
                 self.since = None;
@@ -771,6 +852,9 @@ impl Keyboard {
             if self.pending.is_empty() && byte != 0x1b {
                 if !self.pasting {
                     self.logs = force_logs;
+                }
+                if self.pasting {
+                    self.paste_png.feed(&[byte]);
                 }
                 output.push(byte);
                 continue;
@@ -815,10 +899,14 @@ impl Keyboard {
                     Key::PasteStart => {
                         self.logs = force_logs;
                         self.pasting = true;
+                        self.paste_png = Default::default();
+                        self.paste_last_input = Some(now);
                         output.extend_from_slice(sequence);
                     }
                     Key::PasteEnd => {
                         self.pasting = false;
+                        self.paste_png = Default::default();
+                        self.paste_last_input = None;
                         output.extend_from_slice(sequence);
                     }
                     key => actions.push(*key),
@@ -833,11 +921,15 @@ impl Keyboard {
                 if !self.pasting {
                     self.logs = force_logs;
                 }
+                if self.pasting {
+                    self.paste_png.feed(&self.pending);
+                }
                 output.append(&mut self.pending);
                 self.since = None;
             }
         }
         if flush
+            && !(self.pasting && self.paste_png.is_image_prefix())
             && self.since.is_some_and(|since| {
                 now.saturating_duration_since(since) >= Duration::from_millis(80)
             })
@@ -849,6 +941,9 @@ impl Keyboard {
             } else {
                 if !self.pasting {
                     self.logs = force_logs;
+                }
+                if self.pasting {
+                    self.paste_png.feed(&self.pending);
                 }
                 output.append(&mut self.pending);
             }
@@ -1276,7 +1371,34 @@ impl State {
         Some(result)
     }
 
+    fn paste_input_progress(&mut self, now: Instant) {
+        if self.keyboard.pasting && self.keyboard.paste_png.is_image_prefix() {
+            self.keyboard.paste_last_input = Some(
+                self.keyboard
+                    .paste_last_input
+                    .map_or(now, |last| last.max(now)),
+            );
+        }
+        self.graphics.paste_input_progress(now);
+    }
+
+    fn discard_image_paste(&mut self) {
+        let discarded = self.keyboard.discard_image_paste() | self.graphics.discard_image_paste();
+        if discarded {
+            self.chat_discard_image_paste();
+            self.dirty = true;
+        }
+    }
+
     fn keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        if self.keyboard.image_paste_expired(now) {
+            self.discard_image_paste();
+        }
+        // Graphics may retain a split framing marker. Every layer uses the same
+        // raw input progress, so it cannot expire while another still buffers it.
+        if !bytes.is_empty() && self.keyboard.pasting {
+            self.keyboard.paste_last_input = Some(now);
+        }
         let filtered = self.graphics.input(bytes, now, flush);
         self.dirty |= self.graphics.take_changed();
         let bytes = filtered.as_slice();
@@ -1490,9 +1612,10 @@ impl State {
                 && self.conversation.view == conversation::View::Activity
                 && !self.raw_logs
             {
-                self.media = self
-                    .events
-                    .image_placements(conversation::body_top(self.geometry.rows));
+                self.media.extend(
+                    self.events
+                        .image_placements(conversation::body_top(self.geometry.rows)),
+                );
             }
             return frame;
         }
@@ -1507,7 +1630,7 @@ impl State {
         );
         let sidebar = layout.sidebar.map(|rect| {
             let height = rect.height.saturating_sub(u16::from(g.rows >= 3));
-            let footer = self.guide_rows(rect.width, height);
+            let footer = self.guide_rows(rect.width, height, rect.row, rect.col);
             let mut panel: Vec<String> = panel::render_configured(
                 &self.panel,
                 rect.width,
@@ -1596,6 +1719,7 @@ impl State {
             rows.push(line);
         }
         if self.help {
+            self.media.clear();
             let mut lines = vec![
                 "SSMCP  /  Help & appearance".to_string(),
                 String::new(),
@@ -1674,10 +1798,16 @@ impl State {
             mouse_capture: !self.selection,
         }
     }
-    fn guide_rows(&self, width: u16, height: u16) -> Vec<String> {
-        self.guide
-            .as_ref()
-            .map_or_else(Vec::new, |guide| guide.rows(width, height, &self.ui))
+    fn guide_rows(&mut self, width: u16, height: u16, row: u16, col: u16) -> Vec<String> {
+        let Some(guide) = self.guide.as_ref() else {
+            return Vec::new();
+        };
+        let (rows, placement) =
+            guide.rows(width, height, &self.ui, self.graphics.cell(), (row, col));
+        if let Some(placement) = placement {
+            self.media.push(placement);
+        }
+        rows
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
         if !self.ui.color {
@@ -2898,7 +3028,8 @@ mod tests {
     }
     #[test]
     fn interrupt_is_decoded_only_outside_paste_at_every_input_boundary() {
-        let pasted = b"\x1b[200~PNG\x00\x03\x91\x1b[201~";
+        let png = crate::client::input::paste::fixture_png();
+        let pasted = [b"\x1b[200~".as_slice(), &png, b"\x1b[201~"].concat();
         let bytes = [pasted.as_slice(), b"\x03"].concat();
         for split in 0..=bytes.len() {
             let mut keyboard = Keyboard::default();
@@ -2917,6 +3048,35 @@ mod tests {
             );
             assert!(!keyboard.pasting);
             assert!(keyboard.pending.is_empty());
+        }
+    }
+    #[test]
+    fn image_idle_recovery_releases_real_keys_even_without_an_outer_end() {
+        use crate::client::input::paste::{IMAGE_IDLE_TIMEOUT, fixture_png};
+        let png = fixture_png();
+        let malformed = b"\x89PNG\r\n\x1a\n\xff\xff\xff\xffIHDR".to_vec();
+        for payload in [&png[..1], &png[..png.len() - 1], png.as_slice(), &malformed] {
+            let now = Instant::now();
+            let mut keyboard = Keyboard::default();
+            let source = [b"\x1b[200~".as_slice(), payload].concat();
+            let (output, actions) = keyboard.feed(&source, now, false, true, false);
+            assert_eq!(output, source);
+            assert!(actions.is_empty());
+            assert!(keyboard.pasting);
+            let (_, actions) = keyboard.feed(
+                &[],
+                now + IMAGE_IDLE_TIMEOUT - Duration::from_millis(1),
+                true,
+                true,
+                false,
+            );
+            assert!(actions.is_empty());
+            assert!(keyboard.pasting);
+            let (output, actions) =
+                keyboard.feed(b"\x03", now + IMAGE_IDLE_TIMEOUT, false, true, false);
+            assert!(output.is_empty());
+            assert!(matches!(actions.as_slice(), [Key::Interrupt]));
+            assert!(!keyboard.pasting);
         }
     }
 }

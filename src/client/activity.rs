@@ -171,6 +171,13 @@ pub(crate) struct CallerGroup {
 }
 
 impl CallerTracker {
+    /// Retire every observed start even if no frame is drawn before reconnect.
+    /// This affects display confidence only; audit entries and recipients are untouched.
+    pub(crate) fn disconnect(&mut self) {
+        self.stale
+            .extend(self.runs.iter().map(|(id, _)| id.clone()));
+    }
+
     pub(crate) fn observe(&mut self, event: &Value, data: &Value) {
         let run = field(event, "run_id");
         if field(event, "phase") != "started"
@@ -197,8 +204,7 @@ impl CallerTracker {
         let preview = data["preview"].as_bool().unwrap_or(false);
         let connected = preview || data["connected"].as_bool().unwrap_or(false);
         if !connected {
-            self.stale
-                .extend(self.runs.iter().map(|(id, _)| id.clone()));
+            self.disconnect();
         }
         let mut groups: Vec<CallerGroup> = Vec::new();
         let mut indexes = BTreeMap::<(String, String, String), usize>::new();
@@ -249,7 +255,12 @@ impl CallerTracker {
         }
         for group in &mut groups {
             if group.running > 0 {
-                group.status = "running".into();
+                group.status = if group.unknown {
+                    "running + unknown"
+                } else {
+                    "running"
+                }
+                .into();
             } else if group.unknown {
                 group.status = "activity unknown".into();
             }
@@ -312,6 +323,58 @@ mod caller_tests {
             &json!({"connected":true,"room_id":"two"}),
         );
         assert_eq!(groups[0].running, 1);
+        assert!(groups[0].unknown);
+    }
+
+    #[test]
+    fn explicit_disconnect_between_frames_keeps_replayed_starts_stale() {
+        let live = json!({"connected":true,"room_id":"same-room"});
+        let mut tracker = CallerTracker::default();
+        let start = json!({"phase":"started","run_id":"old"});
+        tracker.observe(&start, &live);
+        tracker.disconnect();
+        tracker.observe(&start, &live);
+        let group = tracker.groups(&[call("old", true)], &live).remove(0);
+        assert_eq!(group.running, 0);
+        assert_eq!(group.status, "activity unknown");
+        tracker.observe(&json!({"phase":"started","run_id":"new"}), &live);
+        let group = tracker
+            .groups(&[call("old", true), call("new", true)], &live)
+            .remove(0);
+        assert_eq!(group.calls, 2);
+        assert_eq!(group.running, 1);
+        assert!(group.unknown);
+        assert_eq!(group.status, "running + unknown");
+        let group = tracker
+            .groups(&[call("old", false), call("new", true)], &live)
+            .remove(0);
+        assert_eq!(group.running, 1);
+        assert!(!group.unknown);
+    }
+
+    #[test]
+    fn remembered_runs_are_bounded_and_missing_starts_never_claim_live_activity() {
+        let live = json!({"connected":true,"room_id":"room"});
+        let mut tracker = CallerTracker::default();
+        for index in 0..300 {
+            tracker.observe(
+                &json!({"phase":"started","run_id":format!("run-{index}")}),
+                &live,
+            );
+        }
+        assert_eq!(tracker.runs.len(), 256);
+        tracker.disconnect();
+        assert_eq!(tracker.stale.len(), 256);
+        let groups = tracker.groups(
+            &[
+                call("run-0", true),
+                call("run-299", true),
+                call("unseen", true),
+            ],
+            &live,
+        );
+        assert_eq!(groups[0].calls, 3);
+        assert_eq!(groups[0].running, 0);
         assert!(groups[0].unknown);
     }
 

@@ -18,6 +18,7 @@ include = [
     "/skills/**",
     "/docs/workspaces.md",
     "/docs/context.md",
+    "/docs/code-mode.md",
     "/docs/rtk.md",
     "/docs/validation-live-context-rtk.md",
     "/docs/session-control.md",

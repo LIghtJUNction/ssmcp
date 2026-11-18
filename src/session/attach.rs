@@ -607,6 +607,12 @@ async fn attached(
                 _ = terminate.recv() => break,
                 event = keyboard.next() => match event? {
                     input::Event::Detach => break,
+                    input::Event::InputProgress(now) => terminal::paste_input_progress(now),
+                    input::Event::PasteExpired => {
+                        terminal::discard_image_paste();
+                        utf8 = input::Utf8Input::default();
+                        keys = crate::client::input::SessionKeys::default();
+                    }
                     input::Event::Interrupt => {
                         // Session attach keeps Ctrl-C on the inner PTY even with
                         // the dashboard active. Flush fallback key prefixes in order.
@@ -623,7 +629,12 @@ async fn attached(
                         geometry=Some((rows,cols));
                         if !read_only && let Some(generation)=backend_generation { ipc::request(&directory, ENDPOINT,json!({"op":"resize","lease":lease,"backend_generation":generation,"rows":rows,"cols":cols})).await?; }
                     }
-                    input::Event::Bytes(bytes) => {
+                    event @ (input::Event::Bytes(_) | input::Event::PasteBytes(_)) => {
+                        let (bytes, pasted) = match event {
+                            input::Event::Bytes(bytes) => (bytes, false),
+                            input::Event::PasteBytes(bytes) => (bytes, true),
+                            _ => unreachable!(),
+                        };
                         if !read_only && backend_generation.is_none() && !waiting_input_warned {
                             render::status("attach","Warning","Session is connecting. Terminal input is unavailable and is not queued for later execution.");waiting_input_warned=true;
                         }
@@ -632,6 +643,11 @@ async fn attached(
                         // text uses SessionKeys to select the existing remote PTY.
                         let events = if let Some(output) = terminal::keyboard_bytes(&bytes) {
                             vec![crate::client::input::InputEvent::Text(utf8.push(&output, false))]
+                        } else if pasted {
+                            // The outer decoder has already separated the paste.
+                            // Keep the text-based fallback, without interpreting
+                            // embedded End/F7 bytes as local session shortcuts.
+                            vec![crate::client::input::InputEvent::Text(utf8.push(&bytes, false))]
                         } else {
                             keys.feed(&utf8.push(&bytes, false), Instant::now(), false)
                         };

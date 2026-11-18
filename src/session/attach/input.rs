@@ -1,11 +1,20 @@
 //! Cancellation-safe local keyboard input. It owns an independent terminal
 //! descriptor, restores its mode on every exit, and never leaves stdin blocked.
 use crate::Result;
-use std::{collections::VecDeque, time::Duration};
+use crate::client::input::paste::{IMAGE_IDLE_TIMEOUT, PngFraming};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 pub(crate) enum Event {
     Bytes(Vec<u8>),
+    /// Content between the outer paste markers, never a fallback shortcut.
+    PasteBytes(Vec<u8>),
+    /// A raw image byte arrived even if its marker prefix is still buffered.
+    InputProgress(Instant),
     Interrupt,
+    PasteExpired,
     Resize(u16, u16),
     Detach,
     End,
@@ -56,18 +65,27 @@ impl Keyboard {
             if let Some(event) = self.events.pop_front() {
                 return Ok(event);
             }
-            let raw = if self.decoder.pending_escape() {
-                // The caller cancels this future when output or a tick wins select!.
-                // Retain the deadline so continuous output cannot postpone Escape.
-                let deadline = *self
-                    .escape_deadline
-                    .get_or_insert_with(|| tokio::time::Instant::now() + Duration::from_millis(35));
+            let escape_deadline =
+                if self.decoder.pending_escape() {
+                    // Keep absolute deadlines when select! cancels this future.
+                    Some(*self.escape_deadline.get_or_insert_with(|| {
+                        tokio::time::Instant::now() + Duration::from_millis(35)
+                    }))
+                } else {
+                    self.escape_deadline = None;
+                    None
+                };
+            let image_deadline = self
+                .decoder
+                .image_deadline()
+                .map(tokio::time::Instant::from_std);
+            let deadline = escape_deadline.into_iter().chain(image_deadline).min();
+            let raw = if let Some(deadline) = deadline {
                 match tokio::time::timeout_at(deadline, self.platform.next()).await {
                     Ok(result) => Some(result?),
                     Err(_) => None,
                 }
             } else {
-                self.escape_deadline = None;
                 Some(self.platform.next().await?)
             };
             match raw {
@@ -77,7 +95,15 @@ impl Keyboard {
                     self.events.extend(self.decoder.feed(&[], true));
                     self.events.push_back(Event::End);
                 }
-                None => self.events.extend(self.decoder.flush_escape()),
+                None => {
+                    if self.decoder.expire_image(Instant::now()) {
+                        self.events.push_back(Event::PasteExpired);
+                    } else if escape_deadline
+                        .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+                    {
+                        self.events.extend(self.decoder.flush_escape());
+                    }
+                }
             }
             if !self.decoder.pending_escape() {
                 self.escape_deadline = None;
@@ -87,22 +113,69 @@ impl Keyboard {
 }
 
 #[derive(Default)]
-struct Decoder {
+pub(crate) struct Decoder {
     pasted: bool,
     escape: Vec<u8>,
     detached: bool,
     detach_on_interrupt: bool,
+    paste_png: PngFraming,
+    paste_last_input: Option<Instant>,
 }
 impl Decoder {
     fn pending_escape(&self) -> bool {
-        !self.escape.is_empty()
+        // A possible image end marker may arrive in slow fragments. It shares
+        // the image's idle deadline, not the ordinary standalone-Escape timer.
+        !self.escape.is_empty() && !(self.pasted && self.paste_png.is_image_prefix())
     }
+
+    fn image_deadline(&self) -> Option<Instant> {
+        (self.pasted && self.paste_png.is_image_prefix())
+            .then_some(self.paste_last_input?)
+            .map(|last| last + IMAGE_IDLE_TIMEOUT)
+    }
+
+    fn expire_image(&mut self, now: Instant) -> bool {
+        if !self
+            .image_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            return false;
+        }
+        self.pasted = false;
+        self.escape.clear();
+        self.paste_png = Default::default();
+        self.paste_last_input = None;
+        true
+    }
+
     fn feed(&mut self, bytes: &[u8], eof: bool) -> Vec<Event> {
+        self.feed_at(bytes, eof, Instant::now())
+    }
+
+    pub(crate) fn feed_at(&mut self, bytes: &[u8], eof: bool, now: Instant) -> Vec<Event> {
         let mut events = Vec::new();
+        if self.expire_image(now) {
+            // This explicit boundary also resets the compositor before any new
+            // text or real Ctrl-C is processed, even at the exact idle deadline.
+            events.push(Event::PasteExpired);
+        }
+        if !bytes.is_empty() && self.pasted && self.paste_png.is_image_prefix() {
+            // Forward the read's time even when all its bytes form a pending
+            // End prefix. Inner filters must not expire behind this decoder.
+            events.push(Event::InputProgress(now));
+        }
         let mut literal = Vec::new();
         for byte in bytes {
             if self.detached {
                 break;
+            }
+            if self.pasted {
+                self.paste_last_input = Some(now);
+                if !self.paste_png.allows_end() {
+                    self.paste_png.feed(&[*byte]);
+                    literal.push(*byte);
+                    continue;
+                }
             }
             self.escape.push(*byte);
             loop {
@@ -111,16 +184,21 @@ impl Decoder {
                 } else {
                     b"\x1b[200~"
                 };
-                if marker.starts_with(&self.escape) {
+                if (!self.pasted || self.paste_png.allows_end()) && marker.starts_with(&self.escape)
+                {
                     if self.escape.len() == marker.len() {
-                        literal.append(&mut self.escape);
+                        Self::emit(&mut literal, &mut events, self.pasted);
+                        // Only real outer markers enter the fallback key parser.
+                        events.push(Event::Bytes(std::mem::take(&mut self.escape)));
                         self.pasted = !self.pasted;
+                        self.paste_png = Default::default();
+                        self.paste_last_input = self.pasted.then_some(now);
                     }
                     break;
                 }
                 let value = self.escape.remove(0);
                 if !self.pasted && (value == 0x1d || value == 0x03) {
-                    Self::emit(&mut literal, &mut events);
+                    Self::emit(&mut literal, &mut events, false);
                     if value == 0x1d || self.detach_on_interrupt {
                         events.push(Event::Detach);
                         self.detached = true;
@@ -131,6 +209,9 @@ impl Decoder {
                     // dashboard's process-level interrupt action.
                     events.push(Event::Interrupt);
                 } else {
+                    if self.pasted {
+                        self.paste_png.feed(&[value]);
+                    }
                     literal.push(value);
                 }
                 if self.escape.is_empty() {
@@ -139,19 +220,32 @@ impl Decoder {
             }
         }
         if eof {
+            if self.pasted {
+                self.paste_png.feed(&self.escape);
+            }
             literal.append(&mut self.escape);
         }
-        Self::emit(&mut literal, &mut events);
+        Self::emit(&mut literal, &mut events, self.pasted);
         events
     }
+
     fn flush_escape(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
-        Self::emit(&mut self.escape, &mut events);
+        if self.pasted {
+            self.paste_png.feed(&self.escape);
+        }
+        Self::emit(&mut self.escape, &mut events, self.pasted);
         events
     }
-    fn emit(bytes: &mut Vec<u8>, events: &mut Vec<Event>) {
+
+    fn emit(bytes: &mut Vec<u8>, events: &mut Vec<Event>, pasted: bool) {
         if !bytes.is_empty() {
-            events.push(Event::Bytes(std::mem::take(bytes)));
+            let bytes = std::mem::take(bytes);
+            events.push(if pasted {
+                Event::PasteBytes(bytes)
+            } else {
+                Event::Bytes(bytes)
+            });
         }
     }
 }
@@ -551,7 +645,7 @@ mod tests {
         events
             .into_iter()
             .filter_map(|e| {
-                if let Event::Bytes(s) = e {
+                if let Event::Bytes(s) | Event::PasteBytes(s) = e {
                     Some(s)
                 } else {
                     None
@@ -690,7 +784,8 @@ mod tests {
     }
     #[test]
     fn binary_paste_is_preserved_before_utf8_decoding_at_every_boundary() {
-        let source = b"\x1b[200~\x89PNG\r\n\x1a\n\x00\xff\x03\x1d\x11\x13\x1b[18~\x1b[201~";
+        let png = crate::client::input::paste::fixture_png();
+        let source = [b"\x1b[200~".as_slice(), &png, b"\x1b[201~"].concat();
         for read_only in [false, true] {
             for split in 0..=source.len() {
                 let mut decoder = Decoder {
@@ -709,7 +804,163 @@ mod tests {
                     source,
                     "read-only {read_only}, split {split}"
                 );
+                assert!(!decoder.pasted);
+                let events = decoder.feed(b"\x03", false);
+                assert!(matches!(events.as_slice(), [Event::Detach]) == read_only);
+                assert!(matches!(events.as_slice(), [Event::Interrupt]) != read_only);
             }
+        }
+    }
+
+    #[test]
+    fn image_idle_recovery_precedes_new_text_and_writer_or_observer_interrupt() {
+        let png = crate::client::input::paste::fixture_png();
+        let malformed = b"\x89PNG\r\n\x1a\n\xff\xff\xff\xffIHDR".to_vec();
+        for payload in [&png[..1], &png[..png.len() - 1], png.as_slice(), &malformed] {
+            for read_only in [false, true] {
+                let now = Instant::now();
+                let mut decoder = Decoder {
+                    detach_on_interrupt: read_only,
+                    ..Decoder::default()
+                };
+                let source = [b"\x1b[200~".as_slice(), payload].concat();
+                assert_eq!(bytes(decoder.feed_at(&source, false, now)), source);
+                assert!(!decoder.expire_image(now + IMAGE_IDLE_TIMEOUT - Duration::from_millis(1)));
+                let events = decoder.feed_at(b"next\x03after", false, now + IMAGE_IDLE_TIMEOUT);
+                if read_only {
+                    assert!(matches!(events.as_slice(),
+                        [Event::PasteExpired, Event::Bytes(text), Event::Detach] if text == b"next"
+                    ));
+                } else {
+                    assert!(matches!(events.as_slice(),
+                        [Event::PasteExpired, Event::Bytes(text), Event::Interrupt, Event::Bytes(tail)]
+                        if text == b"next" && tail == b"after"
+                    ));
+                }
+                assert!(!decoder.pasted);
+                assert!(decoder.escape.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn split_png_end_retains_framing_until_completion_or_its_idle_deadline() {
+        let now = Instant::now();
+        let mut decoder = Decoder::default();
+        let source = [
+            b"\x1b[200~".as_slice(),
+            &crate::client::input::paste::fixture_png(),
+        ]
+        .concat();
+        let mut output = bytes(decoder.feed_at(&source, false, now));
+        assert!(matches!(
+            decoder.feed_at(b"\x1b[20", false, now + Duration::from_secs(1)).as_slice(),
+            [Event::InputProgress(at)] if *at == now + Duration::from_secs(1)
+        ));
+        assert!(!decoder.pending_escape());
+        assert!(!decoder.expire_image(now + Duration::from_millis(2200)));
+        output.extend(bytes(decoder.feed_at(
+            b"1~",
+            false,
+            now + Duration::from_millis(2500),
+        )));
+        assert_eq!(output, [source.as_slice(), b"\x1b[201~"].concat());
+        assert!(!decoder.pasted);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn image_deadline_survives_cancelled_keyboard_reads() {
+        use std::{future::Future, task::Poll};
+        let mut keyboard = Keyboard {
+            platform: platform::Keyboard::idle().unwrap(),
+            decoder: Decoder::default(),
+            events: VecDeque::new(),
+            escape_deadline: None,
+        };
+        keyboard.feed(b"\x1b[200~\x89PNG\r\n\x1a\n");
+        keyboard.events.clear();
+        keyboard.decoder.paste_last_input =
+            Some(Instant::now() - IMAGE_IDLE_TIMEOUT + Duration::from_millis(30));
+        let deadline = keyboard.decoder.image_deadline();
+        let mut received = None;
+        for _ in 0..20 {
+            let result = {
+                let mut next = std::pin::pin!(keyboard.next());
+                std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx))).await
+            };
+            if let Poll::Ready(event) = result {
+                received = Some(event.unwrap());
+                break;
+            }
+            assert_eq!(keyboard.decoder.image_deadline(), deadline);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(matches!(received, Some(Event::PasteExpired)));
+        keyboard.feed(b"\x03");
+        assert!(matches!(keyboard.next().await.unwrap(), Event::Interrupt));
+    }
+
+    #[test]
+    fn raw_fallback_keeps_paste_opaque_but_decodes_shortcuts_after_the_outer_end() {
+        use crate::client::input::{InputEvent, SessionKeys};
+        let png = crate::client::input::paste::fixture_png();
+        let pasted = [b"\x1b[200~".as_slice(), &png, b"\x1b[201~"].concat();
+        // A pending ordinary escape prefix must also stay before the paste.
+        let prefix = b"\x1b[1";
+        let source = [prefix.as_slice(), &pasted, b"\x1b[18~after\x03tail"].concat();
+        for size in 1..=source.len() {
+            let now = Instant::now();
+            let mut decoder = Decoder::default();
+            let mut utf8 = Utf8Input::default();
+            let mut keys = SessionKeys::default();
+            let mut delivered = Vec::new();
+            for part in source.chunks(size) {
+                for event in decoder.feed_at(part, false, now) {
+                    match event {
+                        Event::Bytes(bytes) => {
+                            delivered.extend(keys.feed(&utf8.push(&bytes, false), now, false));
+                        }
+                        Event::PasteBytes(bytes) => {
+                            delivered.push(InputEvent::Text(utf8.push(&bytes, false)));
+                        }
+                        Event::Interrupt => {
+                            delivered.extend(keys.feed(&utf8.push(b"\x03", false), now, false));
+                        }
+                        Event::InputProgress(_) => {}
+                        _ => panic!("valid complete paste must not detach or expire"),
+                    }
+                }
+            }
+            let mut selected = false;
+            let mut before = String::new();
+            let mut after = String::new();
+            for event in delivered {
+                match event {
+                    InputEvent::NextTerminal => {
+                        assert!(
+                            !selected,
+                            "pasted F7 selected a terminal; chunk size {size}"
+                        );
+                        selected = true;
+                    }
+                    InputEvent::Text(text) => {
+                        if selected {
+                            after.push_str(&text);
+                        } else {
+                            before.push_str(&text);
+                        }
+                    }
+                }
+            }
+            assert!(selected, "real F7 after End must select; chunk size {size}");
+            // Raw attach retains its text protocol; only the dashboard imports
+            // original PNG bytes. Assert the existing UTF-8 fallback explicitly.
+            assert_eq!(
+                before,
+                String::from_utf8_lossy(&[prefix.as_slice(), &pasted].concat())
+            );
+            assert_eq!(after, "after\x03tail");
         }
     }
 

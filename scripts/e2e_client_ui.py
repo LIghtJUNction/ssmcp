@@ -209,6 +209,36 @@ def main():
                   "preview sidebar labels its two sample agents")
             save_shot(args.out, "chat", initial)
 
+            check("exit=0" in body_text(initial)
+                  and "test client::ui::custom_colors" not in body_text(initial),
+                  "commands default to a compact row with the real exit status")
+            check("- let expanded = true" in body_text(initial)
+                  and "+ let expanded = false" in body_text(initial),
+                  "editing diff remains expanded in compact activity")
+            command_row = next(index for index, row in enumerate(initial["rows"])
+                               if "▸" in row and "cargo test --lib" in row)
+            preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
+            expanded = preview.until(lambda s: "test client::ui::custom_colors" in body_text(s),
+                                     "click-expanded command output")
+            check("exit=0" in body_text(expanded), "expanded commands retain their status")
+            save_shot(args.out, "command-expanded", expanded)
+            preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
+            preview.until(lambda s: "test client::ui::custom_colors" not in body_text(s),
+                          "click-collapsed command output")
+            preview.send(b"\x1b")
+            preview.until(lambda s: not s["hide_cursor"], "input focus after compact navigation")
+            slash(preview, "/raw")
+            raw = preview.until(lambda s: "raw transcript" in s["rows"][0]
+                                and "test client::ui::custom_colors" in body_text(s),
+                                "original unfolded transcript")
+            save_shot(args.out, "raw-activity", raw)
+            slash(preview, "/raw")
+            preview.until(lambda s: "raw transcript" not in s["rows"][0]
+                          and "exit=0" in body_text(s),
+                          "raw toggle returning to compact activity")
+            check(True, "/raw toggles the original transcript and compact display")
+
+
             preview.send(b"q")
             typed = preview.until(lambda s: "❯ q" in prompt_text(s), "q as draft text")
             check(preview.process.poll() is None and not typed["hide_cursor"], "q types text instead of exiting")
@@ -241,7 +271,12 @@ def main():
 
             preview.send(b"\x0f")
             audit = preview.until(lambda s: "code audit" in s["rows"][0]
-                                  and "#example-01" in text(s), "Ctrl+O source details")
+                                  and "#example-01" in text(s), "Ctrl+O audit view")
+            if "Enter inspect" in text(audit):
+                preview.send(b"\r")
+            audit = preview.until(lambda s: "#example-01" in text(s)
+                                  and "command:" in body_text(s)
+                                  and "print(" in body_text(s), "selected source details")
             code_rows = [index for index, row in enumerate(left_rows(audit))
                          if any(token in row for token in ["const ", "command:", "print("])]
             left_width = audit["rows"][0].find("│")
@@ -275,6 +310,8 @@ def main():
             slash(preview, "/filter --all")
             preview.until(lambda s: "errors /" not in s["rows"][0], "category clear")
 
+            slash(preview, "/raw")
+            preview.until(lambda s: "raw transcript" in s["rows"][0], "raw scrolling fixture")
             preview.resize(18, 120)
             live = preview.until(lambda s: "Write a requirement below" in body_text(s)
                                  and prompt_start(s) == 13, "compact live activity")
@@ -282,14 +319,25 @@ def main():
             preview.until(lambda s: "wheel draft" in prompt_text(s), "draft before direct scrolling")
             before_scroll = body_text(live)
             preview.send(b"\x1b[<64;3;2M")
-            scrolled = preview.until(lambda s: body_text(s) != before_scroll, "wheel scroll without F6")
+            scrolled = preview.until(lambda s: body_text(s) != before_scroll
+                                     and "rows below" in text(s)
+                                     and "Ctrl+End to return to latest" in text(s),
+                                     "wheel scroll and return-to-latest hint without F6")
             check("wheel draft" in prompt_text(scrolled) and not scrolled["hide_cursor"],
                   "wheel scrolls activity directly while preserving composer text and focus")
+            check("rows below" in text(scrolled) and "Ctrl+End to return to latest" in text(scrolled),
+                  "scrolled output shows remaining rows and its return-to-latest shortcut")
+            save_shot(args.out, "scroll-hint", scrolled)
             preview.send(b"\x1b[<64;3;2M" * 8)
             preview.until(lambda s: "Improve the client experience" in body_text(s), "retained activity history")
             preview.send(b"\x1b[1;5F")
-            preview.until(lambda s: "Write a requirement below" in body_text(s), "Ctrl+End following live output")
+            following = preview.until(lambda s: "Write a requirement below" in body_text(s)
+                                      and "rows below" not in text(s),
+                                      "Ctrl+End following live output")
+            check("wheel draft" in prompt_text(following) and not following["hide_cursor"],
+                  "Ctrl+End resumes following without changing the draft or composer focus")
             clear_draft(preview)
+            slash(preview, "/logs")
             preview.resize(30, 120)
             preview.until(lambda s: prompt_start(s) == 25, "restored full-height composer")
 

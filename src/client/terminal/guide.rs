@@ -1,9 +1,12 @@
 //! A public guide link and cached QR matrices. No I/O or encoding during redraw.
 use super::super::{account, ui::Ui};
+use super::images::{CellSize, Placement};
 use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
 use reqwest::Url;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use unicode_width::UnicodeWidthStr;
+
+mod native;
 
 const QUIET: i32 = 4;
 const STATUS_ROWS: usize = 8;
@@ -13,7 +16,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(super) struct Guide {
     url: String,
     // Prefer Medium; Low is a compact fallback for a narrower sidebar.
-    codes: Vec<QrCode>,
+    codes: native::Cache,
 }
 
 impl Guide {
@@ -59,7 +62,10 @@ impl Guide {
                 .ok()
             })
             .collect();
-        Self { url, codes }
+        Self {
+            url,
+            codes: native::Cache::new(codes),
+        }
     }
 
     /// The established portal is usable while a live session checks the newer route.
@@ -105,28 +111,34 @@ impl Guide {
             .collect()
     }
 
-    /// Complete, padded footer rows. A QR is never cropped or scaled.
-    pub(super) fn rows(&self, width: u16, height: u16, ui: &Ui) -> Vec<String> {
+    /// Complete footer rows and an optional, wholly visible native QR. The
+    /// terminal must report graphics support and actual cell dimensions first.
+    pub(super) fn rows(
+        &self,
+        width: u16,
+        height: u16,
+        ui: &Ui,
+        cell: Option<CellSize>,
+        origin: (u16, u16),
+    ) -> (Vec<String>, Option<Placement>) {
         if width == 0 || height == 0 {
-            return Vec::new();
+            return (Vec::new(), None);
         }
-        let cols = usize::from(width);
-        let available = usize::from(height);
-        // Origin serialization is ASCII (including IDNA hosts), so chunks never
-        // split UTF-8, and a narrow footer retains every byte of the public URL.
         let links = self.url_lines(width);
-        let code = if ui.color {
-            self.codes.iter().find(|code| {
-                let modules = (code.size() + 2 * QUIET) as usize;
-                modules <= cols && 1 + modules.div_ceil(2) + links.len() + STATUS_ROWS <= available
+        let available = usize::from(height);
+        let image_rows = available.saturating_sub(STATUS_ROWS + 1 + links.len()) as u16;
+        let code = cell.filter(|_| ui.color).and_then(|cell| {
+            // A fitting, confirmed terminal is the only path that requests
+            // PNG preparation. The first frame keeps the URL while the bounded
+            // cache worker encodes outside the input/display lock.
+            self.codes.image(width, image_rows, cell).and_then(|image| {
+                image
+                    .layout(width, image_rows, cell)
+                    .map(|bounds| (image, bounds))
             })
-        } else {
-            None
-        };
+        });
         if code.is_none() && 1 + links.len() > available {
-            // Do not present a cut-off URL as a usable destination. Scrollable F1
-            // help always retains the complete link, even on a very small screen.
-            return vec![line("Guide · F1 for URL", width, ui, "muted")];
+            return (vec![line("Guide · F1 for URL", width, ui, "muted")], None);
         }
         let mut rows = vec![line(
             if code.is_some() {
@@ -138,29 +150,21 @@ impl Guide {
             ui,
             "heading",
         )];
-        if let Some(code) = code {
-            let modules = code.size() + 2 * QUIET;
-            let padding = (cols - modules as usize) / 2;
-            for y in (0..modules).step_by(2) {
-                let mut text = " ".repeat(padding);
-                for x in 0..modules {
-                    let top = code.get_module(x - QUIET, y - QUIET);
-                    let bottom = code.get_module(x - QUIET, y + 1 - QUIET);
-                    text.push(match (top, bottom) {
-                        (true, true) => '█',
-                        (true, false) => '▀',
-                        (false, true) => '▄',
-                        (false, false) => ' ',
-                    });
-                }
-                text.push_str(&" ".repeat(cols - padding - modules as usize));
-                // Machine-readable contrast must not inherit a low-contrast theme.
-                // The only payload here is our own fixed half-block alphabet.
-                rows.push(format!("\x1b[38;2;0;0;0;48;2;255;255;255m{text}\x1b[0m"));
-            }
+        if let Some((_, bounds)) = code {
+            rows.extend((0..bounds.rows).map(|_| line("", width, ui, "foreground")));
         }
         rows.extend(links.into_iter().map(|text| line(text, width, ui, "muted")));
-        rows
+        let placement = code.and_then(|(image, bounds)| {
+            let row = origin
+                .0
+                .checked_add(height.saturating_sub(rows.len() as u16))?
+                .checked_add(1)?;
+            let col = origin
+                .1
+                .checked_add(width.saturating_sub(bounds.columns) / 2)?;
+            bounds.placement(Arc::clone(image), row, col, 0, bounds.rows)
+        });
+        (rows, placement)
     }
 }
 
@@ -260,14 +264,18 @@ mod tests {
             ] {
                 assert!(!headers.contains(forbidden), "request leaked {forbidden}");
             }
-            let shown = guide.rows(
-                80,
-                5,
-                &Ui {
-                    color: false,
-                    ..Ui::default()
-                },
-            );
+            let shown = guide
+                .rows(
+                    80,
+                    5,
+                    &Ui {
+                        color: false,
+                        ..Ui::default()
+                    },
+                    None,
+                    (0, 0),
+                )
+                .0;
             assert!(shown.iter().any(|row| row.trim_end() == guide.url()));
         }
     }
@@ -326,53 +334,61 @@ mod tests {
         assert_eq!(guide.url(), format!("{origin}/"));
     }
 
-    #[test]
-    fn default_footer_preserves_every_module_and_four_module_quiet_zone() {
-        let guide = Guide::from_endpoint("https://ssmcp.lmm.best/mcp").unwrap();
-        let rows = guide.rows(37, 29, &Ui::default());
-        let code = &guide.codes[0];
-        assert_eq!(code.size(), 29);
-        assert_eq!(rows.len(), 21);
-        let mut parser = vt100::Parser::new(
-            super::super::nonzero(rows.len() as u16),
-            super::super::nonzero(37),
-            0,
-        );
-        parser.process(rows.join("\r\n").as_bytes());
-        let screen = parser.screen();
-        for y in 0..38 {
-            for x in 0..37 {
-                let cell = screen.cell(1 + y / 2, x).unwrap();
-                assert_eq!(cell.fgcolor(), vt100::Color::Rgb(0, 0, 0));
-                assert_eq!(cell.bgcolor(), vt100::Color::Rgb(255, 255, 255));
-                let value = cell.contents();
-                let dark = if y % 2 == 0 {
-                    matches!(value, "█" | "▀")
-                } else {
-                    matches!(value, "█" | "▄")
-                };
-                assert_eq!(
-                    dark,
-                    code.get_module(i32::from(x) - QUIET, i32::from(y) - QUIET)
-                );
-            }
-        }
-        assert!(screen.contents().contains(guide.url()));
+    fn ready_guide(endpoint: &str) -> Option<Guide> {
+        let guide = Guide::from_endpoint(endpoint)?;
+        guide.codes.prepare_for_test();
+        Some(guide)
     }
 
     #[test]
-    fn small_or_uncolored_sidebars_keep_complete_links_without_partial_qr() {
-        let guide = Guide::from_endpoint("https://ssmcp.lmm.best/alice").unwrap();
+    fn supported_default_footer_places_whole_square_pixels_inside_its_rows() {
+        let guide = ready_guide("https://ssmcp.lmm.best/mcp").unwrap();
+        let (rows, placement) = guide.rows(
+            37,
+            29,
+            &Ui::default(),
+            Some(CellSize {
+                width: 8,
+                height: 16,
+            }),
+            (0, 0),
+        );
+        assert_eq!(rows.len(), 21);
+        assert!(rows.join("\n").contains(guide.url()));
+        assert!(!rows.iter().any(|row| row.contains(['█', '▀', '▄'])));
+        let (_, wire) = super::super::images::Renderer::default().update(
+            vec![placement.expect("a supported 120x30 terminal has room for the QR")],
+            (0, 0),
+            true,
+        );
+        assert!(wire.contains("a=t,t=d,f=100"));
+        assert!(wire.contains("w=296,h=296"));
+        assert!(wire.contains("\x1b[10;1H"));
+        assert!(
+            !wire.contains(",c=") && !wire.contains(",r="),
+            "QR pixels are never scaled"
+        );
+    }
+
+    #[test]
+    fn unsupported_small_or_uncolored_sidebars_keep_complete_links_without_a_partial_qr() {
+        let guide = ready_guide("https://ssmcp.lmm.best/alice").unwrap();
+        let cell = Some(CellSize {
+            width: 8,
+            height: 16,
+        });
         let mono = Ui {
             color: false,
             ..Ui::default()
         };
-        for (width, height, ui) in [
-            (30, 29, Ui::default()),
-            (37, 20, Ui::default()),
-            (37, 29, mono),
+        for (width, height, ui, graphics) in [
+            (30, 29, Ui::default(), cell),
+            (37, 20, Ui::default(), cell),
+            (37, 29, mono, cell),
+            (37, 29, Ui::default(), None),
         ] {
-            let rows = guide.rows(width, height, &ui);
+            let (rows, placement) = guide.rows(width, height, &ui, graphics, (0, 0));
+            assert!(placement.is_none());
             let mut parser = vt100::Parser::new(
                 super::super::nonzero(rows.len() as u16),
                 super::super::nonzero(width),
@@ -385,18 +401,20 @@ mod tests {
                 assert!(!rows.iter().any(|row| row.contains('\x1b')));
             }
         }
-        let low = guide.rows(33, 29, &Ui::default());
-        assert!(low.iter().any(|row| row.contains(['█', '▀', '▄'])));
+        assert!(guide.rows(33, 29, &Ui::default(), cell, (0, 0)).1.is_some());
         let long =
             Guide::from_endpoint(&format!("https://{}.example/alice", "a".repeat(60))).unwrap();
-        let rows = long.rows(
+        let (rows, placement) = long.rows(
             20,
             25,
             &Ui {
                 color: false,
                 ..Ui::default()
             },
+            None,
+            (0, 0),
         );
+        assert!(placement.is_none());
         assert_eq!(
             rows.iter()
                 .skip(1)
@@ -404,6 +422,6 @@ mod tests {
                 .collect::<String>(),
             long.url()
         );
-        assert!(guide.rows(0, 20, &Ui::default()).is_empty());
+        assert!(guide.rows(0, 20, &Ui::default(), cell, (0, 0)).0.is_empty());
     }
 }

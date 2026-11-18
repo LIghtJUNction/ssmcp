@@ -1354,6 +1354,8 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
                 _=terminate.recv()=>break,
                 event=keyboard.next()=>match event?{
                     input::Event::Detach=>break,
+                    input::Event::InputProgress(_)=>{}
+                    input::Event::PasteExpired=>{utf8=input::Utf8Input::default();}
                     input::Event::End=>{
                         let text=utf8.push(&[],true);
                         if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
@@ -1365,7 +1367,7 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
                         let text=utf8.push(b"\x03",false);
                         api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;
                     }
-                    input::Event::Bytes(bytes)=>{
+                    input::Event::Bytes(bytes)|input::Event::PasteBytes(bytes)=>{
                         let text=utf8.push(&bytes,false);
                         if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
                     }

@@ -11,7 +11,7 @@ use std::{
 };
 use tokio::{sync::oneshot, task::JoinHandle};
 
-pub(super) const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_SOURCE_BYTES: usize = super::input::paste::MAX_IMAGE_PASTE_BYTES;
 const MAX_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 16_384;
 pub(super) const REFERENCE_RESERVE: usize = 64;
@@ -156,24 +156,52 @@ pub(super) fn source_argument(text: &str) -> Result<Source, String> {
 
 /// Apply the image budget only after its signature is available. Text keeps
 /// the existing 4 MiB limit; both paths stay bounded while reads are fragmented.
-pub(super) fn paste_limit(bytes: &[u8]) -> usize {
-    if crate::output::image_mime_type(bytes).is_some() {
+pub(super) fn paste_source(bytes: Vec<u8>) -> Result<Source, String> {
+    if crate::output::image_mime_type(&bytes).is_some() {
+        if bytes.len() > MAX_SOURCE_BYTES {
+            return Err("Image paste exceeds 16 MiB; use a smaller image or /attach PATH".into());
+        }
+        return Ok(Source::Image(bytes));
+    }
+    let head = &bytes[..bytes.len().min(96)];
+    let damaged_png = head.starts_with(b"\xef\xbf\xbdPNG")
+        || head.starts_with(b"\xc2\x89PNG")
+        || (head.starts_with(b"PNG") && head.windows(4).any(|part| part == b"IHDR"));
+    let damaged_jpeg = head.starts_with(b"\xef\xbf\xbd\xef\xbf\xbd")
+        && head
+            .windows(4)
+            .any(|part| part == b"JFIF" || part == b"Exif");
+    let damaged_webp = head.starts_with(b"RIFF") && head.windows(4).any(|part| part == b"WEBP");
+    if damaged_png || damaged_jpeg || damaged_webp {
+        return Err("The terminal altered image bytes; paste was not saved as text. Copy the original image and use Ctrl+V or /paste, or use /attach PATH.".into());
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| "Paste contains binary data that is not a supported image. Use Ctrl+V or /paste for an image, or /attach PATH for a file.")?;
+    if text.contains('\0') {
+        return Err(
+            "Paste contains binary data, not plain text. Use Ctrl+V or /paste, or /attach PATH."
+                .into(),
+        );
+    }
+    if text.len() > super::references::paste::MAX_PASTE_BYTES {
+        return Err("Paste exceeds 4 MiB of UTF-8 text; save it as a file and use @path".into());
+    }
+    Ok(Source::Text(text))
+}
+
+/// Inspect only a fixed header while collecting; images and text keep separate caps.
+pub(super) fn paste_limit(current: &[u8], incoming: &[u8]) -> usize {
+    let mut head = [0u8; 16];
+    let mut count = 0;
+    for byte in current.iter().chain(incoming).take(head.len()) {
+        head[count] = *byte;
+        count += 1;
+    }
+    if crate::output::image_mime_type(&head[..count]).is_some() {
         MAX_SOURCE_BYTES
     } else {
         super::references::paste::MAX_PASTE_BYTES
     }
-}
-
-pub(super) fn paste_source(bytes: Vec<u8>) -> Result<Source, String> {
-    if bytes.len() > paste_limit(&bytes) {
-        return Err("Paste exceeds its input limit; save it as a file and use @path".into());
-    }
-    if crate::output::image_mime_type(&bytes).is_some() {
-        return Ok(Source::Image(bytes));
-    }
-    String::from_utf8(bytes)
-        .map(Source::Text)
-        .map_err(|_| "Paste is not UTF-8 text or a supported image; use /attach PATH".into())
 }
 
 /// Parse one explicit path, with quotes/escaped spaces, without shell expansion.
@@ -876,6 +904,29 @@ mod tests {
         let mut image = vec![0; MAX_SOURCE_BYTES + 1];
         image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
         assert!(paste_source(image).is_err());
+    }
+
+    #[test]
+    fn damaged_image_or_nul_paste_is_never_imported_as_text() {
+        for bytes in [
+            b"plain\0binary".as_slice(),
+            b"\xef\xbf\xbdPNG\r\n\x1a\n",
+            b"\xc2\x89PNG\r\n\x1a\n",
+            b"PNG damaged IHDR",
+            b"\xef\xbf\xbd\xef\xbf\xbd broken JFIF",
+            b"\xef\xbf\xbd\xef\xbf\xbd broken Exif",
+            b"RIFF damaged WEBP",
+        ] {
+            assert!(paste_source(bytes.to_vec()).is_err(), "{bytes:?}");
+        }
+        assert!(matches!(
+            paste_source("ordinary replacement � is valid text".as_bytes().to_vec()).unwrap(),
+            Source::Text(_)
+        ));
+        let png = png(1, 1);
+        for split in 0..=16 {
+            assert_eq!(paste_limit(&png[..split], &png[split..]), MAX_SOURCE_BYTES);
+        }
     }
 
     #[cfg(unix)]

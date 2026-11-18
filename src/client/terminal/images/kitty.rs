@@ -2,6 +2,7 @@
 //! creates; text layout and terminal transport remain with the compositor.
 //! Protocol: https://sw.kovidgoyal.net/kitty/graphics-protocol/
 use super::super::super::ui::Ui;
+use crate::client::input::paste::{IMAGE_IDLE_TIMEOUT, PngFraming};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageEncoder};
 use std::{
@@ -83,11 +84,11 @@ impl Native {
         let max_width = u32::from(columns) * u32::from(cell.width);
         let max_height = u32::from(rows) * u32::from(cell.height);
         let scaled = self.width > max_width || self.height > max_height;
+        let width_limited = u64::from(max_width) * u64::from(self.height)
+            <= u64::from(max_height) * u64::from(self.width);
         let (width, height) = if !scaled {
             (self.width, self.height)
-        } else if u64::from(max_width) * u64::from(self.height)
-            <= u64::from(max_height) * u64::from(self.width)
-        {
+        } else if width_limited {
             (
                 max_width,
                 (u64::from(max_width) * u64::from(self.height) / u64::from(self.width)).max(1)
@@ -106,6 +107,7 @@ impl Native {
                 .min(u32::from(columns)) as u16,
             rows: height.div_ceil(u32::from(cell.height)).min(u32::from(rows)) as u16,
             scaled,
+            width_limited,
             cell,
         })
     }
@@ -141,6 +143,7 @@ pub(crate) struct ImageBox {
     pub(crate) columns: u16,
     pub(crate) rows: u16,
     scaled: bool,
+    width_limited: bool,
     cell: CellSize,
 }
 
@@ -159,16 +162,33 @@ impl ImageBox {
         if visible == 0 {
             return None;
         }
-        let source_row = |value: u16| {
-            if self.scaled {
-                u32::from(value) * image.height / u32::from(self.rows)
+        let source_row = |value: u16, round_up: bool| {
+            let (numerator, denominator) = if self.scaled && self.width_limited {
+                // The terminal scales by columns; the final occupied text row
+                // may contain only a fraction of a cell's image pixels.
+                (
+                    u64::from(value) * u64::from(self.cell.height) * u64::from(image.width),
+                    u64::from(self.columns) * u64::from(self.cell.width),
+                )
+            } else if self.scaled {
+                (
+                    u64::from(value) * u64::from(image.height),
+                    u64::from(self.rows),
+                )
             } else {
-                u32::from(value) * u32::from(self.cell.height)
-            }
-            .min(image.height)
+                (u64::from(value) * u64::from(self.cell.height), 1)
+            };
+            let source = if round_up {
+                numerator.div_ceil(denominator)
+            } else {
+                numerator / denominator
+            };
+            source.min(u64::from(image.height)) as u32
         };
-        let y = source_row(skip);
-        let end = source_row(skip + visible);
+        let y = source_row(skip, false);
+        // Rounding a height-limited crop inward would enlarge its width when
+        // the terminal fits the requested rows. Round its far edge outward.
+        let end = source_row(skip + visible, self.scaled && !self.width_limited);
         (end > y).then(|| Placement {
             image,
             rect: Rect {
@@ -179,6 +199,8 @@ impl ImageBox {
                 y,
                 height: end - y,
                 scaled: self.scaled,
+                width_limited: self.width_limited,
+                cell: self.cell,
             },
         })
     }
@@ -193,6 +215,8 @@ struct Rect {
     y: u32,
     height: u32,
     scaled: bool,
+    width_limited: bool,
+    cell: CellSize,
 }
 
 #[derive(Clone)]
@@ -223,7 +247,13 @@ impl Placement {
             r.height
         );
         if r.scaled {
-            let _ = write!(output, ",c={},r={}", r.columns, r.rows);
+            // One limiting axis avoids per-placement letterboxing/recentering
+            // when only part of a scaled image is visible.
+            if r.width_limited {
+                let _ = write!(output, ",c={}", r.columns);
+            } else {
+                let _ = write!(output, ",r={}", r.rows);
+            }
         }
         output.push_str("\x1b\\");
     }
@@ -316,6 +346,8 @@ pub(crate) struct Graphics {
     pending: Vec<u8>,
     pending_at: Option<Instant>,
     pasting: bool,
+    paste_png: PngFraming,
+    paste_last: Option<Instant>,
     discard_apc: bool,
     requests: Vec<u8>,
     changed: bool,
@@ -357,6 +389,14 @@ impl Graphics {
     }
 
     pub(crate) fn resized(&mut self) {
+        // Once initial discovery succeeded, later resize measurements must not
+        // reuse its expired startup deadline. Until the new report arrives,
+        // hide native placements instead of using stale pixel dimensions.
+        if self.cell().is_some() {
+            self.started_at = None;
+        }
+        self.cell = None;
+        self.changed = true;
         if self.enabled && self.started && !self.failed && self.requests.len() < 256 {
             self.requests.extend_from_slice(b"\x1b[16t");
         }
@@ -382,6 +422,26 @@ impl Graphics {
         }
     }
 
+    /// Forward real outer input progress without extending deadlines on redraw.
+    pub(crate) fn paste_input_progress(&mut self, now: Instant) {
+        if self.pasting && self.paste_png.is_image_prefix() {
+            self.paste_last = Some(self.paste_last.map_or(now, |last| last.max(now)));
+        }
+    }
+
+    /// Clear only a timed-out image paste; keep unrelated terminal reports intact.
+    pub(crate) fn discard_image_paste(&mut self) -> bool {
+        if !self.pasting || !self.paste_png.is_image_prefix() {
+            return false;
+        }
+        self.pasting = false;
+        self.pending.clear();
+        self.pending_at = None;
+        self.paste_png = PngFraming::default();
+        self.paste_last = None;
+        true
+    }
+
     /// Consume only terminal reports, leaving ordinary keys and bracketed paste
     /// unchanged. This runs after raw input attachment, across arbitrary reads.
     pub(crate) fn input(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
@@ -389,25 +449,50 @@ impl Graphics {
             return bytes.to_vec();
         }
         self.ready(now);
+        if self.pasting
+            && self.paste_png.is_image_prefix()
+            && self
+                .paste_last
+                .is_some_and(|last| now.saturating_duration_since(last) >= IMAGE_IDLE_TIMEOUT)
+        {
+            // Match the shared input/PNG collector's recovery boundary before
+            // interpreting the next batch of actual user input.
+            self.discard_image_paste();
+        }
         let mut output = Vec::with_capacity(bytes.len());
         for &byte in bytes {
             if self.pasting {
                 const END: &[u8] = b"\x1b[201~";
+                self.paste_last = Some(now);
                 if self.pending.is_empty() && byte != 0x1b {
+                    self.paste_png.feed(&[byte]);
                     output.push(byte);
                     continue;
                 }
                 self.pending.push(byte);
                 if self.pending == END {
+                    if self.paste_png.allows_end() {
+                        self.pasting = false;
+                        self.paste_png = PngFraming::default();
+                        self.paste_last = None;
+                    } else {
+                        self.paste_png.feed(&self.pending);
+                    }
                     output.append(&mut self.pending);
-                    self.pasting = false;
                     self.pending_at = None;
                 } else if !END.starts_with(&self.pending) {
                     let restart = self.pending.last() == Some(&0x1b);
                     let end = self.pending.len() - usize::from(restart);
+                    self.paste_png.feed(&self.pending[..end]);
                     output.extend_from_slice(&self.pending[..end]);
                     self.pending.drain(..end);
                 }
+                continue;
+            }
+            // Dashboard raw mode routes real Ctrl-C through Keyboard. Keep any
+            // pending APC intact so a delayed report tail cannot become draft text.
+            if byte == 0x03 {
+                output.push(byte);
                 continue;
             }
             if self.discard_apc {
@@ -444,6 +529,8 @@ impl Graphics {
                 self.pending_at = None;
                 if sequence == b"\x1b[200~" {
                     self.pasting = true;
+                    self.paste_png = PngFraming::default();
+                    self.paste_last = Some(now);
                     output.extend_from_slice(&sequence);
                 } else if sequence == b"\x1b[201~" {
                     self.pasting = false;
@@ -462,19 +549,18 @@ impl Graphics {
             }
         }
         if !self.pasting
+            && !self.pending.starts_with(b"\x1b_")
             && flush
             && (self.pending == b"\x1b"
                 || self.pending_at.is_some_and(|at| {
                     now.saturating_duration_since(at) >= Duration::from_millis(80)
                 }))
         {
-            // Only an identified APC report may be dropped after an interrupted
-            // response. A lone Escape still reaches the existing key parser.
-            if !self.pending.starts_with(b"\x1b_G") || self.pasting {
-                output.append(&mut self.pending);
-            } else {
-                self.pending.clear();
-            }
+            // An APC report may arrive in delayed fragments (for example over
+            // SSH). Retain it until ST so its tail can never become draft text.
+            // Storage is bounded above; ordinary Escape still reaches the
+            // existing key parser without an extra key timeout.
+            output.append(&mut self.pending);
             self.pending_at = None;
         }
         output
@@ -562,6 +648,52 @@ mod tests {
     }
 
     #[test]
+    fn resize_hides_native_pixels_until_fresh_cell_dimensions_arrive() {
+        let now = Instant::now();
+        let mut graphics = probe();
+        let reply = format!("\x1b_Gi={QUERY_ID};OK\x1b\\\x1b[6;25;10t");
+        assert!(graphics.input(reply.as_bytes(), now, false).is_empty());
+        assert_eq!(
+            graphics.cell(),
+            Some(CellSize {
+                width: 10,
+                height: 25
+            })
+        );
+        graphics.take_requests();
+        graphics.take_changed();
+
+        graphics.resized();
+        assert!(graphics.take_changed());
+        assert_eq!(graphics.take_requests(), b"\x1b[16t");
+        assert_eq!(
+            graphics.cell(),
+            None,
+            "old font geometry must not place an image"
+        );
+        assert!(!graphics.prepare_native());
+        let later = now + PROBE_TIMEOUT + Duration::from_secs(1);
+        assert_eq!(graphics.input(b"draft", later, true), b"draft");
+        assert_eq!(
+            graphics.cell(),
+            None,
+            "a missing measurement keeps the fallback"
+        );
+        assert!(graphics.input(b"\x1b[6;0;0t", later, false).is_empty());
+        assert_eq!(graphics.cell(), None);
+        assert!(graphics.input(b"\x1b[6;12;6t", later, false).is_empty());
+        assert_eq!(
+            graphics.cell(),
+            Some(CellSize {
+                width: 6,
+                height: 12
+            })
+        );
+        assert!(graphics.take_changed());
+        assert!(graphics.prepare_native());
+    }
+
+    #[test]
     fn probe_reports_never_enter_the_draft_at_any_read_boundary() {
         let now = Instant::now();
         let response = format!("\x1b_Gi={QUERY_ID};OK\x1b\\\x1b[6;18;9t\x1b[?62;4c");
@@ -602,6 +734,178 @@ mod tests {
         );
         assert!(graphics.input(b"\x1b", now, false).is_empty());
         assert_eq!(graphics.input(b"", now, true), b"\x1b");
+    }
+
+    #[test]
+    fn delayed_report_fragments_do_not_turn_into_user_input() {
+        let now = Instant::now();
+        let mut graphics = probe();
+        assert!(
+            graphics
+                .input(b"\x1b_Gi=4294967295;", now, false)
+                .is_empty()
+        );
+        assert!(
+            graphics
+                .input(b"", now + Duration::from_millis(150), true)
+                .is_empty()
+        );
+        assert!(
+            graphics
+                .input(b"OK\x1b\\", now + Duration::from_millis(151), false)
+                .is_empty()
+        );
+        assert!(graphics.input(b"\x1b[6;16;8t", now, false).is_empty());
+        assert_eq!(
+            graphics.cell(),
+            Some(CellSize {
+                width: 8,
+                height: 16
+            })
+        );
+        assert_eq!(graphics.input(b"draft", now, false), b"draft");
+
+        let oversized = format!("\x1b_Gi={QUERY_ID};{}", "x".repeat(300));
+        assert!(graphics.input(oversized.as_bytes(), now, false).is_empty());
+        assert!(graphics.discard_apc && graphics.pending.len() <= 1);
+        assert!(
+            !graphics.discard_image_paste(),
+            "image paste recovery cannot erase an unrelated pending APC"
+        );
+        assert!(
+            graphics
+                .input(b"", now + Duration::from_millis(150), true)
+                .is_empty()
+        );
+        assert_eq!(
+            graphics.input(b"\x1b\\next draft", now + Duration::from_millis(151), false),
+            b"next draft"
+        );
+        assert!(!graphics.discard_apc);
+    }
+
+    #[test]
+    fn real_interrupt_passes_through_buffered_and_discarded_apc_without_leaking_tails() {
+        let now = Instant::now();
+        for discard in [false, true] {
+            let mut graphics = probe();
+            let prefix = format!(
+                "\x1b_Gi={QUERY_ID};{}",
+                if discard {
+                    "x".repeat(300)
+                } else {
+                    String::new()
+                }
+            );
+            assert!(graphics.input(prefix.as_bytes(), now, false).is_empty());
+            assert_eq!(graphics.discard_apc, discard);
+            let pending = graphics.pending.clone();
+            assert_eq!(
+                graphics.input(b"\x03", now + Duration::from_millis(150), false),
+                b"\x03",
+                "real Ctrl-C must reach Keyboard even before a terminal report ends"
+            );
+            assert_eq!(graphics.discard_apc, discard);
+            assert_eq!(graphics.pending, pending);
+            assert_eq!(
+                graphics.input(
+                    b"OK\x1b\\next draft",
+                    now + Duration::from_millis(151),
+                    false
+                ),
+                b"next draft",
+                "the APC tail stays out of the draft after passing through Ctrl-C"
+            );
+            assert!(!graphics.discard_apc && graphics.pending.is_empty());
+        }
+    }
+
+    #[test]
+    fn only_raw_image_paste_progress_extends_the_idle_deadline() {
+        let now = Instant::now();
+        let mut graphics = probe();
+        assert_eq!(
+            graphics.input(b"\x1b[200~\x89P", now, false),
+            b"\x1b[200~\x89P"
+        );
+        let progress = now + Duration::from_secs(1);
+        graphics.paste_input_progress(progress);
+        graphics.paste_input_progress(now + Duration::from_millis(500));
+        assert_eq!(graphics.paste_last, Some(progress), "progress is monotonic");
+        assert!(
+            graphics
+                .input(b"", now + Duration::from_millis(2500), true)
+                .is_empty()
+        );
+        assert!(graphics.pasting);
+        assert_eq!(graphics.paste_last, Some(progress), "ticks are not input");
+        assert!(
+            graphics
+                .input(b"", progress + IMAGE_IDLE_TIMEOUT, true)
+                .is_empty()
+        );
+        assert!(!graphics.pasting);
+    }
+
+    #[test]
+    fn binary_bracketed_paste_is_opaque_to_graphics_reports() {
+        let now = Instant::now();
+        let payload = crate::client::input::paste::fixture_png();
+        assert!(payload.contains(&0x03), "PNG control bytes stay literal");
+        image::load_from_memory_with_format(&payload, image::ImageFormat::Png).unwrap();
+        let embedded_end = payload
+            .windows(6)
+            .position(|part| part == b"\x1b[201~")
+            .unwrap()
+            + 6;
+        let mut input = b"\x1b[200~".to_vec();
+        input.extend_from_slice(&payload);
+        input.extend_from_slice(b"\x1b[201~suffix");
+        for size in 1..=input.len() {
+            let mut graphics = probe();
+            let mut output = Vec::new();
+            for part in input.chunks(size) {
+                output.extend(graphics.input(part, now, false));
+            }
+            assert_eq!(output, input, "binary paste chunk size {size}");
+            assert!(!graphics.pasting);
+            assert_eq!(graphics.cell(), None);
+        }
+        let mut graphics = probe();
+        let _ = graphics.input(b"\x1b[200~", now, false);
+        assert_eq!(
+            graphics.input(&payload[..embedded_end], now, false),
+            payload[..embedded_end]
+        );
+        assert!(graphics.pasting, "a delimiter inside a PNG chunk is data");
+        assert!(!graphics.paste_png.allows_end());
+        assert_eq!(
+            graphics.input(b"next draft", now + IMAGE_IDLE_TIMEOUT, false),
+            b"next draft"
+        );
+        assert!(
+            !graphics.pasting,
+            "incomplete PNG timeout recovers before new input"
+        );
+        for bytes in [b"\x89P".as_slice(), payload.as_slice()] {
+            let mut graphics = probe();
+            assert_eq!(graphics.input(b"\x1b[200~", now, false), b"\x1b[200~");
+            assert_eq!(graphics.input(bytes, now, false), bytes);
+            assert!(graphics.pasting && graphics.paste_png.is_image_prefix());
+            assert!(
+                graphics
+                    .input(b"", now + IMAGE_IDLE_TIMEOUT, true)
+                    .is_empty()
+            );
+            assert!(
+                !graphics.pasting,
+                "partial signature and complete PNG without outer End share the same idle recovery"
+            );
+            assert_eq!(
+                graphics.input(b"next draft", now + IMAGE_IDLE_TIMEOUT, false),
+                b"next draft"
+            );
+        }
     }
 
     #[test]
@@ -675,7 +979,7 @@ mod tests {
         let (before, after) = renderer.update(vec![full.clone()], (20, 2), false);
         assert!(before.is_empty());
         assert!(after.contains("a=t,t=d,f=100"));
-        assert!(after.contains("C=1,z=1,q=1,c=20,r=5"));
+        assert!(after.contains("C=1,z=1,q=1,c=20\x1b\\"));
         assert!(after.ends_with("\x1b[21;3H\x1b[?25h"));
         assert_eq!(
             renderer.update(vec![full], (20, 2), false),
@@ -689,6 +993,47 @@ mod tests {
         assert!(clear.contains(&format!("d=I,i={}", image.id)));
         assert!(!clear.contains("d=A"));
         assert!(renderer.clear().is_empty());
+    }
+
+    #[test]
+    fn scaled_partial_rows_use_pixel_geometry_without_recentering_or_overflow() {
+        let image =
+            Native::prepare(&DynamicImage::ImageRgba8(image::RgbaImage::new(128, 64))).unwrap();
+        let cell = CellSize {
+            width: 8,
+            height: 16,
+        };
+        let bounds = image.layout(10, 8, cell).unwrap();
+        assert_eq!((bounds.columns, bounds.rows), (10, 3)); // 80 x 40 pixels
+        let crop = bounds.placement(image.clone(), 4, 2, 1, 2).unwrap();
+        assert_eq!((crop.rect.y, crop.rect.height), (25, 39));
+        let tail = bounds.placement(image, 4, 2, 2, 1).unwrap();
+        assert_eq!((tail.rect.y, tail.rect.height), (51, 13));
+        let mut wire = String::new();
+        tail.display(&mut wire);
+        assert!(wire.contains(",c=10"));
+        assert!(
+            !wire.contains(",r="),
+            "cell rounding must not vertically center a crop"
+        );
+        assert!(tail.rect.height * 80 / 128 <= u32::from(cell.height));
+
+        // An inward-rounded source crop would expand 1024 source pixels beyond
+        // the 1020-pixel viewport when only one height-limited row is visible.
+        let image =
+            Native::prepare(&DynamicImage::ImageRgba8(image::RgbaImage::new(1024, 200))).unwrap();
+        let cell = CellSize {
+            width: 1,
+            height: 1,
+        };
+        let bounds = image.layout(1020, 199, cell).unwrap();
+        let crop = bounds.placement(image, 2, 0, 1, 1).unwrap();
+        assert_eq!((crop.rect.y, crop.rect.height), (1, 2));
+        assert!(crop.image.width * u32::from(crop.rect.rows) / crop.rect.height <= 1020);
+        let mut wire = String::new();
+        crop.display(&mut wire);
+        assert!(wire.contains(",r=1"));
+        assert!(!wire.contains(",c="));
     }
 
     #[test]

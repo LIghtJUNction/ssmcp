@@ -732,9 +732,13 @@ fn validate_request(request: &HostRequest) -> Result<(), String> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
                 || !arguments.is_object()
-                || arguments.to_string().len() > crate::wire::MAX_FRAME / 2
             {
                 return Err("invalid native tool name or arguments".into());
+            }
+            if arguments.to_string().len() > crate::wire::MAX_FRAME / 2 {
+                return Err(
+                    "native tool arguments exceed 2 MiB; send a smaller argument payload".into(),
+                );
             }
             client_id
         }
@@ -896,6 +900,31 @@ mod tests {
             "workspace":{"id":workspace.to_string().repeat(64)},
             "revision":revision,"summary":text,"mode":"provided_summary"
         }}})
+    }
+
+    #[test]
+    fn native_argument_size_has_an_explicit_error_at_the_unchanged_boundary() {
+        let limit = crate::wire::MAX_FRAME / 2;
+        let overhead = json!({"data":""}).to_string().len();
+        let request = |size| HostRequest::Call {
+            client_id: "client".into(),
+            name: "ssmcp.fs.write".into(),
+            arguments: json!({"data":"x".repeat(size - overhead)}),
+        };
+        assert!(validate_request(&request(limit)).is_ok());
+        assert_eq!(
+            validate_request(&request(limit + 1)).unwrap_err(),
+            "native tool arguments exceed 2 MiB; send a smaller argument payload",
+        );
+        assert_eq!(
+            validate_request(&HostRequest::Call {
+                client_id: "client".into(),
+                name: "invalid name".into(),
+                arguments: json!({}),
+            })
+            .unwrap_err(),
+            "invalid native tool name or arguments",
+        );
     }
 
     #[test]
