@@ -105,7 +105,9 @@ return await exec.parallel(clientId, [
 
 一次最多提交 32 项，`concurrency` 为 1–8，默认 4，限制这次调用实际运行中的命令数。单次等待到期时，任务继续占用名额，直到明确结束才启动下一项。客户端另有 32 个同时运行任务的硬上限，容量不足时在创建进程前报错。
 
-如果任务已启动但状态读取失败，该 worker 会保留名额并返回已知的 `job_id`，避免在完成状态未知时继续启动任务。未被其他 worker 执行的项目返回 `not_started:true`；先用 `exec.status/read/list` 检查任务状态，再决定是否重试。
+命令选项类型、`wait_ms` 或 `max_bytes` 在本地校验失败时，该项返回 `rejected` 和 `not_started:true`，同一 worker 继续执行后续合法项；这类错误不会发送原生命令。
+
+进入原生启动阶段后，如果启动回包丢失或后续状态读取失败，该 worker 会保留名额，并返回已经取得的 `job_id`（若有），避免在完成状态未知时继续启动任务。未被其他 worker 执行的项目返回 `not_started:true`；先用 `exec.status/read/list` 检查任务状态，再决定是否重试。
 
 `parallel` 默认每个流只读取 2048 字节，控制汇总大小；单项可用 `max_bytes` 覆盖。长输出按需分页，避免把多份完整构建日志放进一次响应。
 
