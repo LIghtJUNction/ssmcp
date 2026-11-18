@@ -312,6 +312,7 @@ mod tests {
             handle: Some("developer".into()),
             banned: false,
             rate_limit_bps: None,
+            has_recharged: false,
         }
     }
 

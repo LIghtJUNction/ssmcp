@@ -313,7 +313,7 @@ pub struct Broker {
     pub client_downloads: Option<crate::client_downloads::Publisher>,
     management: Option<crate::management::State>,
     traffic_utc_offset_minutes: std::sync::atomic::AtomicI32,
-    pub(crate) user_policies: crate::user_policy::UserPolicies,
+    pub(crate) user_policies: Arc<crate::user_policy::UserPolicies>,
     pub(crate) user_policy_updates: tokio::sync::Mutex<()>,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
 }
@@ -344,7 +344,7 @@ impl Broker {
             portal: crate::portal::Portal::default(),
             client_downloads: None,
             management: None,
-            user_policies: crate::user_policy::UserPolicies::default(),
+            user_policies: Arc::default(),
             traffic_utc_offset_minutes: std::sync::atomic::AtomicI32::new(
                 crate::user_policy::DEFAULT_TRAFFIC_UTC_OFFSET_MINUTES,
             ),
@@ -383,10 +383,29 @@ impl Broker {
             Err(_) => return Err("could not load account restrictions; refusing to start".into()),
         };
         for account in accounts {
-            self.user_policies
-                .set(&account.subject, account.banned, account.rate_limit_bps);
+            self.user_policies.apply_account(
+                &account.subject,
+                account.banned,
+                account.rate_limit_bps,
+                account.has_recharged,
+            );
         }
         Ok(())
+    }
+
+    pub(crate) async fn record_recharge(
+        &self,
+        subject: &str,
+    ) -> Result<(), crate::portal::Problem> {
+        let subject = subject.to_owned();
+        let policies = self.user_policies.clone();
+        self.portal
+            .storage(move |store| {
+                let account = store.record_recharge(&subject)?;
+                policies.apply_account(&subject, account.banned, account.rate_limit_bps, true);
+                Ok(())
+            })
+            .await
     }
 
     pub async fn online_session(&self, user: &str) -> Option<Arc<Session>> {

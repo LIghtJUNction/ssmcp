@@ -38,6 +38,8 @@ pub(crate) struct Account {
     pub banned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit_bps: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_recharged: bool,
 }
 
 /// Account directory data deliberately excludes public keys and their fingerprints.
@@ -50,6 +52,7 @@ pub(crate) struct AccountSummary {
     pub handle: Option<String>,
     pub banned: bool,
     pub rate_limit_bps: Option<u64>,
+    pub has_recharged: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -211,6 +214,7 @@ impl Store {
                 handle: account.handle.clone(),
                 banned: account.banned,
                 rate_limit_bps: account.rate_limit_bps,
+                has_recharged: account.has_recharged,
             })
             .collect())
     }
@@ -249,6 +253,7 @@ impl Store {
                 handle: None,
                 banned: false,
                 rate_limit_bps: None,
+                has_recharged: false,
             });
         account.github_login.clone_from(&identity.login);
         let account = account.clone();
@@ -409,6 +414,22 @@ impl Store {
             order_id,
             bytes,
         )
+    }
+
+    pub(crate) fn record_recharge(&mut self, subject: &str) -> Result<Account, Problem> {
+        let account = self.account_record(subject)?;
+        if account.has_recharged {
+            return Ok(account);
+        }
+        let mut next = self.database.clone();
+        let account = next
+            .accounts
+            .get_mut(subject)
+            .ok_or(Problem::Unauthorized)?;
+        account.has_recharged = true;
+        let account = account.clone();
+        self.save(next)?;
+        Ok(account)
     }
 
     fn save(&mut self, next: Database) -> Result<(), Problem> {
@@ -646,6 +667,7 @@ mod tests {
                     handle: Some("shared-name".into()),
                     banned: false,
                     rate_limit_bps: None,
+                    has_recharged: false,
                 },
             );
         }
