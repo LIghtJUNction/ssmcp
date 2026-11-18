@@ -294,7 +294,7 @@ def main():
             preview.until(lambda s: prompt_start(s) == 25, "restored full-height composer")
 
             slash(preview, "/agents")
-            agents = preview.until(lambda s: "Connected agents" in text(s)
+            agents = preview.until(lambda s: "ssmcp  /  agents" in text(s)
                                    and "example-reviewer" in text(s), "sample agent roster")
             check("Next caller" in text(agents) and "Builder" in text(agents)
                   and "Reviewer" in text(agents) and agents["hide_cursor"],
