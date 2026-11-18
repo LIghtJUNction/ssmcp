@@ -63,6 +63,7 @@ include = [
     "/docs/client-accounts.md",
     "/docs/client-server.md",
     "/docs/client-ui.md",
+    "/docs/terminal-images.md",
     "/docs/client-input.md",
     "/docs/conversation-history.md",
     "/docs/client-extension.md",
