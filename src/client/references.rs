@@ -580,7 +580,8 @@ mod tests {
                 "{draft}"
             );
         }
-        let absolute = format!("@\"{}\"", fixture.0.join("allowed.txt").display());
+        let path = fixture.0.join("allowed.txt");
+        let absolute = format!("@\"{}\"", path.to_string_lossy().replace('\\', "\\\\"));
         assert_eq!(
             payload(&expand(&absolute, &workspace, &context).await.unwrap())["references"][0]["path"],
             "allowed.txt"
