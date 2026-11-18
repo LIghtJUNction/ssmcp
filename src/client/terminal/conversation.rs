@@ -1492,7 +1492,7 @@ impl State {
                 }
             }
         }
-        let right = panel::fit(&context, budget);
+        let right = panel::fit(&context, usize::from(budget));
         let left_width = usize::from(width).saturating_sub(right.width() + 2);
         let left = fit(&format!(" {hint}"), left_width as u16);
         let padding =
