@@ -1607,6 +1607,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execution_job_helpers_preserve_both_signatures_through_the_runner() {
+        let _guard = TESTS.lock().await;
+        let requests = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let host: Host = {
+            let requests = requests.clone();
+            Arc::new(move |request| {
+                let requests = requests.clone();
+                Box::pin(async move {
+                    let HostRequest::Call {
+                        client_id,
+                        name,
+                        arguments,
+                    } = request
+                    else {
+                        return Err("unexpected fixture request".into());
+                    };
+                    assert_eq!(client_id, "one");
+                    let receipt = json!({"name":name,"arguments":arguments});
+                    requests.lock().unwrap().push(receipt.clone());
+                    Ok(crate::backend::result(receipt))
+                })
+            })
+        };
+        let output = trusted_execute(
+            r#"
+                const replies = [];
+                const cases = [
+                    ['status', {}],
+                    ['wait', {wait_ms:13}],
+                    ['read', {stdout_cursor:7,stderr_cursor:3,max_bytes:64,wait_ms:0}],
+                    ['write', {data:'中文\n',close_stdin:true}],
+                    ['cancel', {}],
+                    ['forget', {}],
+                ];
+                for (const [name, options] of cases) {
+                    replies.push(await exec[name]('one',
+                        Object.freeze({job_id:'job',...options})));
+                    if (['wait','read','write'].includes(name)) {
+                        replies.push(await exec[name]('one', 'job',
+                            Object.freeze({...options,job_id:'cannot-override'})));
+                    } else {
+                        replies.push(await exec[name]('one', 'job'));
+                    }
+                }
+                return replies;
+            "#
+            .into(),
+            2_000,
+            json!([{"id":"one"}]),
+            host,
+        )
+        .await
+        .unwrap();
+        let mut expected = Vec::new();
+        for (name, mut arguments) in [
+            ("status", json!({})),
+            ("wait", json!({"wait_ms":13})),
+            (
+                "read",
+                json!({"stdout_cursor":7,"stderr_cursor":3,"max_bytes":64,"wait_ms":0}),
+            ),
+            ("write", json!({"data":"中文\n","close_stdin":true})),
+            ("cancel", json!({})),
+            ("forget", json!({})),
+        ] {
+            arguments["job_id"] = json!("job");
+            let receipt = json!({"name":format!("ssmcp.exec.{name}"),"arguments":arguments});
+            expected.push(receipt.clone());
+            expected.push(receipt);
+        }
+        assert_eq!(*requests.lock().unwrap(), expected);
+        assert_eq!(output["result"], json!(expected));
+    }
+
+    #[tokio::test]
+    async fn execution_job_helper_failures_cross_the_rust_host_once() {
+        let _guard = TESTS.lock().await;
+        let requests = Arc::new(AtomicUsize::new(0));
+        let host: Host = {
+            let requests = requests.clone();
+            Arc::new(move |request| {
+                let requests = requests.clone();
+                Box::pin(async move {
+                    let HostRequest::Call {
+                        client_id,
+                        name,
+                        arguments,
+                    } = request
+                    else {
+                        return Err("unexpected fixture request".into());
+                    };
+                    assert_eq!(client_id, "one");
+                    assert_eq!(arguments, json!({"job_id":"job"}));
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    match name.as_str() {
+                        "ssmcp.exec.read" => Err("fixture read transport interrupted".into()),
+                        "ssmcp.exec.cancel" => Ok(json!({
+                            "isError":true,
+                            "content":[{"type":"text","text":"fixture cancellation denied"}]
+                        })),
+                        _ => Err(format!("unexpected fixture tool {name}")),
+                    }
+                })
+            })
+        };
+        let output = trusted_execute(
+            r#"
+                let invalid;
+                try {
+                    await exec.cancel('one', {job_id:'job'}, {});
+                } catch (error) {
+                    invalid = error.message;
+                }
+                const native = [];
+                for (const name of ['read','cancel']) {
+                    try {
+                        await exec[name]('one', {job_id:'job'});
+                        native.push(null);
+                    } catch (error) {
+                        native.push(error.message);
+                    }
+                }
+                return {invalid,native};
+            "#
+            .into(),
+            2_000,
+            json!([{"id":"one"}]),
+            host,
+        )
+        .await
+        .unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert!(
+            output["result"]["invalid"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
+        assert_eq!(
+            output["result"]["native"],
+            json!([
+                "fixture read transport interrupted",
+                "fixture cancellation denied"
+            ])
+        );
+    }
+
+    #[tokio::test]
     async fn sandbox_has_no_os_capabilities_or_mutable_client_metadata() {
         let _guard = TESTS.lock().await;
         let output = run_code(r#"

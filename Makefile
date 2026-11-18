@@ -5,7 +5,7 @@ SYSTEMD_DIR ?= /usr/lib/systemd/system
 CARGO ?= cargo
 CARGO_TARGET_DIR ?= target
 
-.PHONY: all build check test install install-server
+.PHONY: all build check test test-code-mode install install-server
 all: build
 
 build:
@@ -15,8 +15,10 @@ check:
 	$(CARGO) fmt --all -- --check
 	$(CARGO) clippy --locked --all-targets -- -D warnings
 
-test:
-	node --test scripts/test_cua_facade.mjs scripts/test_execution_helpers.mjs scripts/test_rtk_helpers.mjs
+test-code-mode:
+	node --test scripts/test_cua_facade.mjs scripts/test_execution_helpers.mjs scripts/test_rtk_helpers.mjs scripts/test_tools_search.mjs scripts/test_client_capabilities.mjs
+
+test: test-code-mode
 	$(CARGO) test --locked
 	$(CARGO) test --locked --lib code_mode::tests -- --include-ignored
 	$(CARGO) test --locked --test two_tools -- --include-ignored

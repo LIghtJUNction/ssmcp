@@ -545,17 +545,20 @@ const bootstrap = `(() => {
     resolve: (id, args) => workspaceResult(id, 'ssmcp.agents.resolve', args),
   });
   const execution = (name, id, args) => workspaceResult(id, 'ssmcp.exec.' + name, args);
-  const executeCommand = async (id, args) => {
+  const commandOptions = (args, defaultMaxBytes = 16384) => {
     if (!args || typeof args !== 'object' || isArray(args)) {
       throw new Failure('exec.run requires a command options object');
     }
-    const {wait_ms = 5000, max_bytes = 16384, ...startArgs} = args;
+    const {wait_ms = 5000, max_bytes = defaultMaxBytes, ...startArgs} = args;
     if (!Number.isSafeInteger(wait_ms) || wait_ms < 0 || wait_ms > 60000) {
       throw new Failure('exec.run wait_ms must be 0..=60000; it never cancels the command');
     }
     if (!Number.isSafeInteger(max_bytes) || max_bytes < 1 || max_bytes > 32768) {
       throw new Failure('exec.run max_bytes must be 1..=32768 per stream');
     }
+    return {wait_ms, max_bytes, startArgs};
+  };
+  const executePreparedCommand = async (id, {wait_ms, max_bytes, startArgs}) => {
     const started = await execution('start', id, startArgs);
     const job = started.job_id;
     if (typeof job !== 'string' || !job) {
@@ -573,6 +576,7 @@ const bootstrap = `(() => {
       throw failure;
     }
   };
+  const executeCommand = async (id, args) => executePreparedCommand(id, commandOptions(args));
   const parallelCommands = async (id, commands, options = {}) => {
     if (!isArray(commands) || commands.length > 32) {
       throw new Failure('exec.parallel accepts an array of at most 32 command options objects');
@@ -590,13 +594,19 @@ const bootstrap = `(() => {
     const worker = async () => {
       while (next < commands.length) {
         const index = next++;
+        let prepared;
+        try {
+          prepared = commandOptions(commands[index], 2048);
+        } catch (error) {
+          results[index] = {
+            status:'rejected', not_started:true,
+            reason:(error?.message ?? text(error)).slice(0, 4096),
+          };
+          continue;
+        }
         let job;
         try {
-          const command = commands[index];
-          if (!command || typeof command !== 'object' || isArray(command)) {
-            throw new Failure('each parallel command must be an options object');
-          }
-          let value = await executeCommand(id, {max_bytes:2048, ...command});
+          let value = await executePreparedCommand(id, prepared);
           job = value.job_id;
           // A polling deadline never frees a running process's concurrency slot.
           while (value.running === true) {
@@ -607,7 +617,7 @@ const bootstrap = `(() => {
             value = {...value, ...status, snapshot:status};
             if (!status.running) {
               const output = await execution('read', id, {
-                job_id:job, max_bytes:command.max_bytes ?? 2048,
+                job_id:job, max_bytes:prepared.max_bytes,
               });
               value = {...value, ...output.snapshot, ...output, snapshot:output.snapshot ?? status};
             }
@@ -637,15 +647,34 @@ const bootstrap = `(() => {
     }
     return results;
   };
+  const executionJob = async (name, id, job, args) => {
+    if (typeof job === 'string') {
+      if (args === undefined) args = {};
+      if (!args || typeof args !== 'object' || isArray(args)) {
+        throw new Failure('exec.' + name + ' options must be a JSON object');
+      }
+      args = {...args, job_id:job};
+    } else {
+      if (args !== undefined) {
+        throw new Failure('exec.' + name + ' takes either a job options object or a job ID and options');
+      }
+      args = job;
+    }
+    if (!args || typeof args !== 'object' || isArray(args)
+        || typeof args.job_id !== 'string' || !args.job_id) {
+      throw new Failure('exec.' + name + ' requires a nonempty job ID or an options object with job_id');
+    }
+    return execution(name, id, args);
+  };
   const exec = freeze({
     start: (id, args) => execution('start', id, args),
     list: id => execution('list', id),
-    status: (id, job) => execution('status', id, {job_id:job}),
-    wait: (id, job, args = {}) => execution('wait', id, {...args, job_id:job}),
-    read: (id, job, args = {}) => execution('read', id, {...args, job_id:job}),
-    write: (id, job, args = {}) => execution('write', id, {...args, job_id:job}),
-    cancel: (id, job) => execution('cancel', id, {job_id:job}),
-    forget: (id, job) => execution('forget', id, {job_id:job}),
+    status: (id, job, args) => executionJob('status', id, job, args),
+    wait: (id, job, args) => executionJob('wait', id, job, args),
+    read: (id, job, args) => executionJob('read', id, job, args),
+    write: (id, job, args) => executionJob('write', id, job, args),
+    cancel: (id, job, args) => executionJob('cancel', id, job, args),
+    forget: (id, job, args) => executionJob('forget', id, job, args),
     events: (id, args) => execution('events', id, args),
     run: executeCommand,
     parallel: parallelCommands,

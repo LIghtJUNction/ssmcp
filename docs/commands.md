@@ -85,9 +85,23 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 | `exec.status(clientId, jobId)` | 读取一个任务的最新状态 |
 | `exec.wait(clientId, jobId, {wait_ms})` | 等待结束或等待期限到达 |
 | `exec.read(clientId, jobId, options)` | 按字节游标读取两个输出流，可同时短等待 |
+| `exec.write(clientId, jobId, options)` | 向以 `stdin:"pipe"` 启动的任务写入数据或发送 EOF |
 | `exec.cancel(clientId, jobId)` | 请求停止任务及其受管理子进程；重复取消已结束任务可安全返回 |
 | `exec.forget(clientId, jobId)` | 删除已完成的任务记录；运行中任务必须先取消 |
 | `exec.events(clientId, options)` | 读取任务事件；参数以发现的 schema 为准 |
+
+以上六个按任务 ID 操作的接口（`status/wait/read/write/cancel/forget`）也接受与原生 schema 相同的对象参数：
+
+```javascript
+return await exec.read(clientId, {
+  job_id: jobId,
+  stdout_cursor: savedStdoutCursor,
+  stderr_cursor: savedStderrCursor,
+  max_bytes: 16384
+});
+```
+
+对象形式需要含非空字符串 `job_id`，所有选项写在同一个对象中；同时提供第三参数会在调用前报错。原有 `exec.read(clientId, jobId, options)` 继续可用，第三参数中的 `job_id` 仍由第二参数确定的任务 ID 覆盖。参数对象不会被修改，其余字段继续由客户端原生 schema 验证；原生失败保留原错误且不自动重试。对象形式需要更新服务端的 JavaScript 助手，已有原生命令接口的客户端可以直接使用。
 
 任务在当前 `code_mode` 完成后继续存在，但属于这条客户端连接。退出、断开清理或 `reload` 会停止其后台工作；任务 ID 不能迁移到重连后的新客户端。
 
@@ -105,7 +119,9 @@ return await exec.parallel(clientId, [
 
 一次最多提交 32 项，`concurrency` 为 1–8，默认 4，限制这次调用实际运行中的命令数。单次等待到期时，任务继续占用名额，直到明确结束才启动下一项。客户端另有 32 个同时运行任务的硬上限，容量不足时在创建进程前报错。
 
-如果任务已启动但状态读取失败，该 worker 会保留名额并返回已知的 `job_id`，避免在完成状态未知时继续启动任务。未被其他 worker 执行的项目返回 `not_started:true`；先用 `exec.status/read/list` 检查任务状态，再决定是否重试。
+命令选项类型、`wait_ms` 或 `max_bytes` 在本地校验失败时，该项返回 `rejected` 和 `not_started:true`，同一 worker 继续执行后续合法项；这类错误不会发送原生命令。
+
+进入原生启动阶段后，如果启动回包丢失或后续状态读取失败，该 worker 会保留名额，并返回已经取得的 `job_id`（若有），避免在完成状态未知时继续启动任务。未被其他 worker 执行的项目返回 `not_started:true`；先用 `exec.status/read/list` 检查任务状态，再决定是否重试。
 
 `parallel` 默认每个流只读取 2048 字节，控制汇总大小；单项可用 `max_bytes` 覆盖。长输出按需分页，避免把多份完整构建日志放进一次响应。
 
