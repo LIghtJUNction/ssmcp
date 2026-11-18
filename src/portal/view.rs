@@ -1,4 +1,4 @@
-//! Static, script-free account pages. All stored display data is escaped.
+//! Server-rendered account pages. All stored display data is escaped.
 use super::store::Account;
 use crate::user_policy::TrafficQuota;
 
@@ -135,19 +135,26 @@ fn account_panel(
     );
     if let Some(a) = account {
         let traffic_html = traffic.map(traffic_panel).unwrap_or_default();
+        let username_form = if a.handle.is_none() {
+            format!(
+                r#"<form class="key-form" method="post" action="/account/username"><input type="hidden" name="csrf" value="{csrf}"><label for="account-username">服务器用户名<input id="account-username" name="username" required minlength="3" maxlength="32" autocapitalize="none" spellcheck="false" aria-describedby="username-help"></label><small id="username-help">3–32 个英文字母、数字、下划线或连字符。以字母开头，以字母或数字结尾。登记后绑定当前 GitHub 账号。</small><button type="submit">注册用户名</button></form>"#
+            )
+        } else {
+            String::new()
+        };
         html.push_str(&format!(
             r##"<h2 id="account-title">{}</h2><p class="account-description">在项目目录运行连接命令，即可使用已授权的工具。</p>
 <dl class="account-facts"><div><dt>服务器用户名</dt><dd class="mono">{}</dd></div><div><dt>GitHub 账户</dt><dd>{}</dd></div></dl>
-{traffic_html}<div class="account-actions"><a class="button" href="#connect">连接这台电脑 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出门户</button></form></div>
+{username_form}{traffic_html}<div class="account-actions"><a class="button secondary" href="/account/traffic">流量与订单</a><a class="button" href="#connect">连接这台电脑 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出门户</button></form></div>
 <small class="account-note">用户名绑定 GitHub 账号编号，GitHub 改名后保持不变。</small>"##,
             escape(a.handle.as_deref().unwrap_or(&a.github_login)),
-            escape(a.handle.as_deref().unwrap_or("尚未选择 · 在终端命令中填写")),
+            escape(a.handle.as_deref().unwrap_or("尚未注册")),
             escape(&a.github_login),
         ));
     } else if enabled {
         html.push_str(&format!(
-            r#"<h2 id="account-title">一条命令，连接电脑。</h2><p class="account-description">在终端选择用户名，客户端会自动打开 GitHub 登录并完成绑定。已有凭据时直接连接。</p>
-<form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 管理账户<span class="arrow" aria-hidden="true">↗</span></button></form>
+            r#"<h2 id="account-title">一条命令，连接电脑。</h2><p class="account-description">使用 GitHub 登录后，可以在这里注册服务器用户名、查看流量和订单。</p>
+<form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 登录<span class="arrow" aria-hidden="true">↗</span></button></form>
 <small class="account-note">门户用于查看账户和连接；从终端开始即可完成首次接入。</small>"#
         ));
     } else {
@@ -231,8 +238,9 @@ fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
     };
     format!(
         r#"<section class="workspace-section" id="connect" aria-labelledby="connect-title"><div class="section-heading"><p class="eyebrow">02 / CONNECT</p><h2 id="connect-title">连接你的工作目录</h2><p class="section-description">安装客户端后，在需要操作的项目目录运行。</p></div>
-<div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code>{}</code></pre></div></div>
-<div class="connect-actions"><p class="command-hint">{hint}</p></div>
+<div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code id="client-command">{}</code></pre></div></div>
+<div class="connect-actions"><p class="command-hint">{hint}</p><button id="copy-client-command" class="secondary" type="button" hidden>复制命令</button><span id="copy-command-status" role="status"></span></div>
+<script src="/copy-command.js" defer></script>
 <p class="section-description">首次连接时，浏览器会引导 GitHub 登录。核对用户名和设备后允许连接；后续自动复用本机凭据。</p>
 <a class="text-link" href="https://github.com/LIghtJUNction/ssmcp#安装与升级">安装与升级 <span class="arrow" aria-hidden="true">↗</span></a>
 <details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>Shell 始终可用。客户端自动发现本机已安装的工具；工具需要的本机登录和授权仍由你管理。</p></details></section>"#,
