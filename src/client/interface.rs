@@ -477,6 +477,8 @@ pub(crate) async fn call(
         let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
         match name {
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
+            "ssmcp.ui.message" => return super::messages::send(arguments),
+            "ssmcp.ui.messages" => return super::messages::read(arguments),
             "ssmcp.ui.get" => {
                 let projection = parse_get(&arguments)?;
                 return project_snapshot(get(), projection);
@@ -529,13 +531,15 @@ pub(crate) fn tools() -> Vec<Value> {
             "success":color,"warning":color,"error":color,"heading":color
         }}
     });
-    vec![
+    let mut result = vec![
         queue_tool(),
         json!({"name":"ssmcp.ui.filter","description":"Filter the retained visible log history by case-insensitive text and all/commands/errors. Matching blocks keep their output. Does not alter audit events or running commands.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string","maxLength":256,"description":"Plain text, at most 256 UTF-8 bytes; empty clears the text filter."},"level":{"type":"string","enum":["all","commands","errors"]}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         get_tool(),
         json!({"name":"ssmcp.ui.set","description":"Validate and apply a partial display configuration immediately. Colors merge by key; panels replace the ordered list. Set persist:true to save to this client's UI config. Running jobs and terminal contents are retained.","inputSchema":{"type":"object","required":["patch"],"additionalProperties":false,"properties":{"patch":{"type":"object","properties":properties,"additionalProperties":false},"persist":{"type":"boolean","default":false}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
-    ]
+    ];
+    result.extend(super::messages::tools());
+    result
 }
 
 fn get_tool() -> Value {

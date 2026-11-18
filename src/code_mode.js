@@ -476,8 +476,9 @@ const bootstrap = `(() => {
   };
   const file = (name, id, args) => workspaceResult(id, 'ssmcp.fs.' + name, args);
   const reload = id => workspaceResult(id, 'ssmcp.client.reload');
+  const say = (id, message) => workspaceResult(id, 'ssmcp.ui.message', typeof message === 'string' ? {text: message} : message);
   const ui = freeze(Object.fromEntries(
-    ['get', 'set', 'action', 'filter'].map(name =>
+    ['get', 'set', 'action', 'filter', 'queue', 'message', 'messages'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.ui.' + name, args)])
   ));
   const sessions = freeze(Object.fromEntries(
@@ -716,6 +717,7 @@ const bootstrap = `(() => {
     cua: { value: cua, enumerable: true },
     omarchy: { value: omarchy, enumerable: true },
     reload: { value: reload, enumerable: true },
+    say: { value: say, enumerable: true },
     ui: { value: ui, enumerable: true },
     sessions: { value: sessions, enumerable: true },
     collab: { value: collab, enumerable: true },

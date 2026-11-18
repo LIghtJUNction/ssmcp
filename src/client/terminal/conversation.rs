@@ -1096,6 +1096,15 @@ impl State {
                 &title,
                 if index == self.conversation.selected {
                     PanelTone::Accent
+                } else if queue {
+                    match field(entry, "status") {
+                        "queued" | "sending" | "editing" => PanelTone::Warning,
+                        "delivered" => PanelTone::Success,
+                        "uncertain" | "retarget-required" => PanelTone::Error,
+                        _ => PanelTone::Muted,
+                    }
+                } else if entry["active"] == true {
+                    PanelTone::Success
                 } else {
                     PanelTone::Normal
                 },
@@ -1134,6 +1143,54 @@ impl State {
         }
         let index = usize::from(relative / 2);
         (index < self.conversation.list_count).then_some(self.conversation.list_start + index)
+    }
+
+    /// Keep project context at the lower right, independently of the sidebar.
+    /// Widths are terminal cells; untrusted directory/branch controls are escaped.
+    fn chat_footer(&self, hint: &str, width: u16) -> String {
+        if width < 28 {
+            return self.chat_line(&format!(" {hint}"), PanelTone::Muted, width);
+        }
+        let project = if self.preview {
+            "ssmcp".into()
+        } else {
+            panel::safe_text(&self.project_name)
+        };
+        let budget = width.saturating_sub(24).min((width / 2).max(16));
+        let mut context = project;
+        if budget >= 24
+            && let Some(git) = self.panel.git.as_ref()
+        {
+            let branch =
+                git.branch
+                    .as_deref()
+                    .unwrap_or(if git.detached { "detached" } else { "" });
+            if !branch.is_empty() {
+                context.push_str(" · ");
+                context.push_str(&panel::safe_text(branch));
+                if git.stale {
+                    context.push_str(" ?");
+                } else if git.staged + git.unstaged + git.untracked + git.conflicts > 0 {
+                    context.push_str(" *");
+                }
+            }
+        }
+        let right = panel::fit(&context, budget);
+        let left_width = usize::from(width).saturating_sub(right.width() + 2);
+        let left = fit(&format!(" {hint}"), left_width as u16);
+        let padding =
+            " ".repeat(usize::from(width).saturating_sub(left.width() + right.width() + 1));
+        let left = self.tone(PanelTone::Muted, &format!("{left}{padding}"));
+        let right = if self.ui.color {
+            format!(
+                "\x1b[{};{}m{right}\x1b[0m",
+                self.ui.background(),
+                self.ui.color("blue")
+            )
+        } else {
+            right
+        };
+        format!("{left}{right}{}", self.tone(PanelTone::Normal, " "))
     }
 
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
@@ -1232,7 +1289,7 @@ impl State {
                         observed.len()
                     )
                 });
-                rows.push(self.chat_line(&format!(" {hint}"), PanelTone::Muted, g.cols));
+                rows.push(self.chat_footer(&hint, g.cols));
                 continue;
             } else if top > 0 && index == 0 {
                 let suffix = if !self.log_query.is_empty() || self.log_level != 0 {
@@ -1261,9 +1318,16 @@ impl State {
                     },
                     label
                 );
-                let mut border = fit(&title, g.left);
-                border.push_str(&"─".repeat(usize::from(g.left).saturating_sub(border.width())));
-                self.chat_line(&border, PanelTone::Muted, g.left)
+                let title_width = fit(&title, g.left).width();
+                let title = fit(&title, g.left);
+                format!(
+                    "{}{}",
+                    self.tone(PanelTone::Accent, &title),
+                    self.tone(
+                        PanelTone::Muted,
+                        &"─".repeat(usize::from(g.left).saturating_sub(title_width))
+                    )
+                )
             } else {
                 prompt
                     .lines

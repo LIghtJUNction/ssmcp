@@ -773,6 +773,7 @@ struct State {
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
     session_titles: BTreeMap<String, String>,
     panel: PanelSnapshot,
+    project_name: String,
     ui: Ui,
     help: bool,
     audit: AuditView,
@@ -809,6 +810,14 @@ impl State {
             session_titles: BTreeMap::from([("main".into(), "main".into())]),
             geometry,
             panel: PanelSnapshot::default(),
+            project_name: std::env::current_dir()
+                .ok()
+                .and_then(|path| {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "workspace".into()),
             ui: ui.clone(),
             help: false,
             audit: AuditView::default(),
