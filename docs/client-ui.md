@@ -123,6 +123,8 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 | `/resume` | 列出本工作区的已保存会话，选中后按 Enter 继续该文本历史 |
 | `/pi` / `/cc` / `/codex` | 查看对应后端的实际工具目录；`TOOL` 查看 schema，`TOOL {...}` 显式调用 |
 
+`/exit` 与 `/quit` 只接受无参数形式。输入 `/exit extra` 等带参数形式时，界面显示 `Use /exit or /quit without arguments`，保留当前输入并继续运行。合法退出沿正常清理路径关闭前端，恢复终端输入模式、光标、鼠标与括号粘贴状态；预览也使用同一退出入口。本地 attach 的退出只结束观察会话。[本地命令处理](../src/client/terminal/conversation.rs) · [预览清理路径](../src/client/ui_command.rs)
+
 `/reload` 重新启动客户端，F5 和原子 UI 动作 `reload` 只重载显示配置。重启前，客户端尝试取回仍在服务器排队的要求，并通过私有、单次读取的交接文件保留草稿与队列。新连接只继续发布确定尚未交付且目标仍适用的要求；目标成员失效或交付不确定时等待显式复核，不自动重发。
 
 若重启在取回要求之后中止，已获服务器确认、仍属于当前连接的要求恢复排队，沿用原消息 ID 和最新版本。迟到的取回确认也会恢复要求；确认尚未到达时继续等待，用户主动进入的编辑状态保持原样。
@@ -209,6 +211,10 @@ show_raw_json = false
 max_inline_output = 8
 activity_interval_secs = 5
 
+[ui.pet]
+preset = "cat"
+text = ""
+
 [ui.colors]
 background = ""
 foreground = ""
@@ -223,6 +229,24 @@ heading = ""
 空字符串表示继承所选主题的颜色。可以只写需要修改的字段，其余使用默认值。F8 和 `save` 动作保存当前显示设置；`set` 调用使用 `persist:true` 时也会写入本机配置文件。
 
 `dashboard` 与 `log_format` 是启动设置，不能通过 `ssmcp.ui.set` 修改；内置界面运行时，配置重载也不能切换这两项。修改文件后重启客户端即可应用。主题、颜色、布局和面板设置可在运行时调整。
+
+### 侧栏 ASCII 宠物
+
+`[ui.pet]` 控制侧栏底部的小图案。`preset` 接受 `cat`（默认）、`robot`、`custom` 和 `off`；选择 `off` 即关闭。图案随主题颜色显示，只有侧栏有足够空间容纳整幅图案并保留状态区时才出现，窄小窗口会将其隐藏。
+
+自定义图案使用 TOML 多行字面量字符串，空格与反斜杠按原样保存：
+
+```toml
+[ui.pet]
+preset = "custom"
+text = '''
+ /\_/\
+( o.o )
+ > ^ <
+'''
+```
+
+`custom` 必须提供非空图案；`text` 只接受可打印 ASCII 字符与换行，最多 1024 字节、8 行，每行最多 80 列。制表符、回车、ANSI 控制序列和其他控制字符会被拒绝。它是静态文字配置，不执行命令或加载外部图片。修改后按 F5 重载；通过原子 UI 接口修改 `pet` 后也可用 F8 或 `persist:true` 保存。[配置校验](../src/client/ui/pet.rs) · [侧栏排版](../src/client/terminal/guide/pet.rs)
 
 ## 布局与状态面板
 
@@ -365,6 +389,8 @@ foreground = "default"
 ## 键盘与鼠标操作
 
 下面的操作用于默认 `chat` 布局。F1 显示当前帮助；Tab 或 Shift-Tab 在输入框与内容区之间切换焦点。输入框出现斜杠命令补全时，Tab 优先接受补全，Shift-Tab 仍可切换焦点。
+
+底栏根据当前焦点显示快捷键：空输入提示粘贴、`@` 文件和 `$` 技能，已有草稿提示发送与换行，补全菜单提示选择、插入和关闭；进入对话、审计或队列内容区后，提示随该区域的操作变化。窗口变窄时自动选择较短的提示，状态或错误通知优先显示，完整按键仍可用 F1 或 `/help` 查看。[上下文提示实现](../src/client/terminal/conversation/hints.rs)
 
 | 操作 | 作用 |
 | --- | --- |
