@@ -101,7 +101,8 @@ mod tests {
     async fn guide_routes_are_public_without_displacing_the_guide_account_endpoint() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let broker = Arc::new(Broker::new(base.clone()));
+        let public_origin = "https://relay.example";
+        let broker = Arc::new(Broker::new(public_origin.into()));
         let router = crate::http::router(broker);
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let client = reqwest::Client::new();
@@ -133,7 +134,7 @@ mod tests {
             );
             let html = response.text().await.unwrap();
             assert!(html.contains(&format!("<html lang=\"{language}\">")));
-            assert!(html.contains(&format!("{base}/mcp")));
+            assert!(html.contains(&format!("{public_origin}/mcp")));
         }
         let css = client
             .get(format!("{base}/guide/style.css"))

@@ -24,6 +24,7 @@ struct Event {
     cache: Option<(usize, bool, Vec<String>)>,
     image: Option<images::Preview>,
     activity: Option<activity::Activity>,
+    diagnostic: Option<(u64, u64)>,
 }
 
 #[derive(Default)]
@@ -96,6 +97,7 @@ impl EventView {
             cache: None,
             image: None,
             activity: None,
+            diagnostic: None,
         });
         self.prune();
         if at_end {
@@ -109,6 +111,53 @@ impl EventView {
             self.selected = self.events.front().map(|event| event.id);
             self.reveal = true;
         }
+    }
+
+    /// An explicit verbose/raw request expands the retained event body.
+    pub(crate) fn ingest_expanded(&mut self, bytes: &[u8]) {
+        let previous = self.next_id;
+        self.ingest(bytes);
+        if self.next_id != previous
+            && let Some(event) = self.events.back_mut()
+        {
+            event.expanded = true;
+        }
+    }
+
+    /// One card per renderer-issued diagnostic ID, including across interleaved
+    /// backends. Clear/eviction drops only the preview: the next update recreates it.
+    pub(crate) fn ingest_diagnostic(
+        &mut self,
+        update: &super::super::render::DiagnosticUpdate,
+    ) -> bool {
+        let (text, truncated) = retained_text_limit(update.text().as_bytes(), MAX_TOOL_BYTES);
+        let inserted = if let Some(event) = self
+            .events
+            .iter_mut()
+            .find(|event| event.diagnostic.is_some_and(|(id, _)| id == update.id))
+        {
+            self.bytes -= event.text.len();
+            event.text = text;
+            event.summary = super::super::panel::fit(&update.heading(), 200);
+            event.lines = unstyled(&event.text).lines().count().max(1);
+            event.truncated = truncated;
+            event.cache = None;
+            event.diagnostic = Some((update.id, update.occurrences));
+            self.bytes += event.text.len();
+            false
+        } else {
+            self.ingest(text.as_bytes());
+            if let Some(event) = self.events.back_mut() {
+                event.summary = super::super::panel::fit(&update.heading(), 200);
+                event.expanded = false;
+                event.truncated |= truncated;
+                event.tone = "warning";
+                event.diagnostic = Some((update.id, update.occurrences));
+            }
+            true
+        };
+        self.prune();
+        inserted
     }
 
     /// Fold tool activity in this same bounded store; notices/images still append.
@@ -340,7 +389,8 @@ impl EventView {
                 "id":event.id,"summary":event.summary,"lines":event.lines,
                 "bytes":event.text.len(),"expanded":event.expanded,"truncated":event.truncated,
                 "selected":Some(event.id)==self.selected,
-                "tool_status":event.activity.as_ref().map(|value| value.status.label())
+                "tool_status":event.activity.as_ref().map(|value| value.status.label()),
+                "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count)
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
@@ -760,6 +810,88 @@ fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn auth_update(
+        id: u64,
+        count: u64,
+        origin: &str,
+    ) -> super::super::super::render::DiagnosticUpdate {
+        super::super::super::render::DiagnosticUpdate {
+            id,
+            source: "codex".into(),
+            summary: format!("MCP sign-in required ({origin})"),
+            message: "Sign in to the backend connector.\nOriginal diagnostics: --raw-events."
+                .into(),
+            preview: format!("AuthRequired {origin}"),
+            occurrences: count,
+        }
+    }
+
+    #[test]
+    fn interleaved_auth_cards_update_in_place_and_preserve_expansion_and_selection() {
+        let mut view = EventView::new();
+        for update in [
+            auth_update(10, 1, "https://api.x.com"),
+            auth_update(11, 1, "https://api.lmm.best"),
+            auth_update(10, 2, "https://api.x.com"),
+            auth_update(11, 2, "https://api.lmm.best"),
+        ] {
+            view.ingest_diagnostic(&update);
+        }
+        assert_eq!(view.events.len(), 2);
+        assert!(view.events.iter().all(|event| !event.expanded));
+        assert_eq!(view.events[0].diagnostic, Some((10, 2)));
+        assert_eq!(view.events[1].diagnostic, Some((11, 2)));
+        let rendered = view.render(120, 8, &plain_ui(), true).join("\n");
+        assert_eq!(rendered.matches("[WARN]").count(), 2);
+        assert_eq!(rendered.matches("×2").count(), 2);
+        view.select(-1);
+        let selected = view.selected;
+        view.open();
+        assert!(view.events[0].expanded);
+        view.ingest_diagnostic(&auth_update(10, 3, "https://api.x.com"));
+        assert_eq!(view.selected, selected);
+        assert!(view.events[0].expanded);
+        assert_eq!(view.events[0].diagnostic, Some((10, 3)));
+        assert_eq!(
+            view.bytes,
+            view.events
+                .iter()
+                .map(|event| event.text.len())
+                .sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn auth_card_reappears_after_clear_or_eviction_without_resetting_backend_count() {
+        let mut view = EventView::new();
+        view.ingest_diagnostic(&auth_update(10, 1, "https://api.x.com"));
+        view.clear();
+        view.ingest_diagnostic(&auth_update(10, 2, "https://api.x.com"));
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].diagnostic, Some((10, 2)));
+        for index in 0..MAX_EVENTS {
+            view.ingest(format!("[READ] unrelated {index}\n").as_bytes());
+        }
+        assert!(view.events.iter().all(|event| event.diagnostic.is_none()));
+        view.ingest_diagnostic(&auth_update(10, 3, "https://api.x.com"));
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert_eq!(view.events.back().unwrap().diagnostic, Some((10, 3)));
+        view.ingest_diagnostic(&auth_update(12, 1, "https://api.x.com"));
+        assert_eq!(
+            view.events.back().unwrap().diagnostic,
+            Some((12, 1)),
+            "a different diagnostic ID remains a separate card"
+        );
+        assert!(view.bytes <= MAX_BYTES);
+        assert_eq!(
+            view.bytes,
+            view.events
+                .iter()
+                .map(|event| event.text.len())
+                .sum::<usize>()
+        );
+    }
+
     fn plain_ui() -> Ui {
         Ui {
             color: false,
@@ -934,21 +1066,25 @@ mod image_tests {
             .split("\x1b\\")
             .next()
             .unwrap();
-        let number = |key: &str| -> u32 {
-            placement
-                .split(',')
-                .find_map(|field| {
-                    let (name, value) = field.split_once('=')?;
-                    (name == key).then(|| value.parse().unwrap())
-                })
-                .unwrap()
+        let number = |key: &str| -> Option<u32> {
+            placement.split(',').find_map(|field| {
+                let (name, value) = field.split_once('=')?;
+                (name == key).then(|| value.parse().unwrap())
+            })
         };
+        let y = number("y").unwrap();
+        let height = number("h").unwrap();
         assert!(
-            number("y") > 0,
+            y > 0,
             "the image is cropped after scrolling its header off screen"
         );
-        assert!(number("y") + number("h") <= 300);
-        assert!(number("c") <= 22 && number("r") <= 7);
+        assert!(y + height <= 300);
+        let (pixel_width, pixel_height) = match (number("c"), number("r")) {
+            (Some(columns), None) => (columns * 8, height * columns * 8 / 600),
+            (None, Some(rows)) => (600 * rows * 16 / height, rows * 16),
+            axes => panic!("scaled placement must specify exactly one limiting axis: {axes:?}"),
+        };
+        assert!(pixel_width <= 22 * 8 && pixel_height <= 7 * 16);
         assert!(
             wire.contains("\x1b[4;7H"),
             "physical anchor includes the Activity top and image inset"
