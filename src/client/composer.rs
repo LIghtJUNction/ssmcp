@@ -71,7 +71,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/paste",
-        description: "Paste a clipboard image or text (Ctrl+V)",
+        description: "Paste clipboard files, images or text (Ctrl+V)",
     },
     SlashCommand {
         name: "/attach",
@@ -88,6 +88,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/copy",
         description: "Copy the latest agent message",
+    },
+    SlashCommand {
+        name: "/handoff",
+        description: "Prepare a context file and editable handoff draft",
     },
     SlashCommand {
         name: "/clear",

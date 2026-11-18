@@ -1,7 +1,7 @@
 //! Human transcript only; never changes events retained for MCP consumers.
 use super::{
     git_status::GitSnapshot,
-    highlight::{Lexer, Spans},
+    highlight::{Lexer, Token},
     panel::{ControllerView, PanelSnapshot, ProgressView, TaskView},
     ui::Ui,
 };
@@ -164,11 +164,35 @@ fn color_enabled(tty: bool, no_color: bool) -> bool {
 }
 
 pub(crate) fn message(text: &str) {
-    if let Err(error) = super::interface::history::record("assistant", text) {
+    let _ = agent_message(text, super::interface::messages::Kind::Progress, None);
+}
+
+/// An identified API reply is persisted once in the existing JSONL conversation.
+pub(crate) fn message_identified(
+    text: &str,
+    kind: super::interface::messages::Kind,
+    id: &str,
+) -> Result<(), String> {
+    agent_message(text, kind, Some(id))
+}
+
+fn agent_message(
+    text: &str,
+    kind: super::interface::messages::Kind,
+    id: Option<&str>,
+) -> Result<(), String> {
+    let saved = match id {
+        Some(id) => super::interface::history::record_agent(id, text),
+        None => super::interface::history::record("assistant", text),
+    };
+    if let Err(error) = &saved {
         super::terminal::notice(&format!("Message history could not be saved: {error}"));
     }
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
-    let event = json!({"type":"ssmcp.message","format":"markdown","text":text});
+    let mut event = json!({"type":"ssmcp.message","format":"markdown","text":text,"kind":kind});
+    if let Some(id) = id {
+        event["message_id"] = json!(id);
+    }
     crate::session::attach::record_event("agent", &event);
     let width = terminal_width().min(1000) as u16;
     let (raw, mut ui) = {
@@ -185,12 +209,16 @@ pub(crate) fn message(text: &str) {
         if !super::terminal::active() {
             ui.color &= io::stderr().is_terminal();
         }
+        let (title, color) = match kind {
+            super::interface::messages::Kind::Progress => ("Progress", "accent"),
+            super::interface::messages::Kind::Answer => ("Answer", "success"),
+        };
         let _ = writeln!(bytes);
         let _ = painted(
             &mut bytes,
             ui.color,
-            &format!("1;{}", ui.color("accent")),
-            "[AGENT]\n",
+            &format!("1;{}", ui.color(color)),
+            &format!("[AGENT] {title}\n"),
         );
         for row in super::terminal::markdown::rows(text, width, &ui) {
             let _ = writeln!(bytes, "{row}");
@@ -198,6 +226,9 @@ pub(crate) fn message(text: &str) {
         let _ = writeln!(bytes);
     }
     publish(&bytes, None);
+    // No terminal or history lock is held while the /copy cache is updated.
+    super::interface::messages::remember_last(text);
+    saved
 }
 
 pub(crate) fn event(label: &str, value: &Value) {
@@ -304,7 +335,7 @@ struct Lines {
 struct CodeFence {
     marker: char,
     count: usize,
-    lexer: Option<Lexer>,
+    lexer: Lexer,
     diff: bool,
 }
 
@@ -1760,7 +1791,8 @@ impl Renderer {
             .unwrap_or("sh");
         let mut lexer = Lexer::for_program(program);
         for (index, line) in script.lines().enumerate() {
-            let spans = lexer.line(&clean(&self.source_excerpt(line)));
+            let displayed = clean(&self.source_excerpt(line));
+            let tokens = lexer.line(&displayed);
             if index >= head && index < total - tail && total > limit {
                 if index == head {
                     self.text(out, label, &format!(
@@ -1771,7 +1803,7 @@ impl Renderer {
                 }
                 continue;
             }
-            self.source_line(out, index + 1, digits, &spans)?;
+            self.source_line(out, index + 1, digits, &tokens)?;
         }
         Ok(())
     }
@@ -1793,7 +1825,7 @@ impl Renderer {
         out: &mut impl Write,
         number: usize,
         digits: usize,
-        spans: &Spans,
+        tokens: &[Token<'_>],
     ) -> io::Result<()> {
         let prefix = format!("  {number:>digits$} │ ");
         let continuation = format!("  {:>digits$} │ ", "");
@@ -1801,7 +1833,7 @@ impl Renderer {
             out,
             self.color,
             self.width,
-            spans,
+            tokens,
             &prefix,
             &continuation,
             &self.ui,
@@ -2634,7 +2666,7 @@ fn render_source(
     out: &mut impl Write,
     color: bool,
     width: usize,
-    spans: &Spans,
+    tokens: &[Token<'_>],
     prefix: &str,
     continuation: &str,
     ui: &Ui,
@@ -2644,13 +2676,23 @@ fn render_source(
         .max(2);
     painted(out, color, &ui.color("muted"), prefix)?;
     let mut column = 0;
-    for (text, tone) in spans {
+    for token in tokens {
+        let text = token.text;
+        let code = if token.bold {
+            format!("{};1", ui.color(token.tone))
+        } else {
+            ui.color(token.tone)
+        };
         let mut fragment = String::new();
         for ch in text.chars() {
             let expanded = match ch {
                 '\t' => " ".repeat(4 - column % 4),
                 '\u{1b}' => "␛".into(),
-                '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => "�".into(),
+                '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}' => "�".into(),
                 ch if ch.is_control() && ch != '\n' => " ".into(),
                 ch => ch.to_string(),
             };
@@ -2658,7 +2700,7 @@ fn render_source(
                 let cells = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
                 if ch == '\n' || column + cells > available {
                     if !fragment.is_empty() {
-                        painted(out, color, &ui.color(tone), &fragment)?;
+                        painted(out, color, &code, &fragment)?;
                         fragment.clear();
                     }
                     writeln!(out)?;
@@ -2673,7 +2715,7 @@ fn render_source(
             }
         }
         if !fragment.is_empty() {
-            painted(out, color, &ui.color(tone), &fragment)?;
+            painted(out, color, &code, &fragment)?;
         }
     }
     writeln!(out)
@@ -2707,12 +2749,8 @@ fn render_line(
             return painted(out, color, &ui.color("muted"), &format!("  {line}\n"));
         }
         if !fence.diff {
-            let spans = fence
-                .lexer
-                .as_mut()
-                .map(|lexer| lexer.line(line))
-                .unwrap_or_else(|| vec![(line.into(), "foreground")]);
-            return render_source(out, color, width, &spans, "  ", "  ", ui);
+            let tokens = fence.lexer.line(line);
+            return render_source(out, color, width, &tokens, "  ", "  ", ui);
         }
     } else if let Some(fence) = CodeFence::opening(line) {
         lines.fence = Some(fence);
@@ -2853,7 +2891,8 @@ fn clean(text: &str) -> String {
             if chars.peek() != Some(&'\n') {
                 output.push('\n');
             }
-        } else if matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
+        } else if matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        {
             output.push('�');
         } else if !c.is_control() || matches!(c, '\n' | '\t') {
             output.push(c);
@@ -3337,21 +3376,24 @@ mod tests {
     }
 
     #[test]
-    fn fenced_code_highlights_unicode_and_multiline_comments_at_each_chunk_boundary() {
-        let source = "\u{60}\u{60}\u{60}js\n/* first\ncomment */ const 名 = \"值\";\nconst n = 1e-3;\n\u{60}\u{60}\u{60}\nordinary text\n";
+    fn fenced_streams_keep_shared_tokens_at_every_chunk_boundary() {
+        let source = "\u{60}\u{60}\u{60}js\n/* first\ncomment */ const 名 = \"value\";\nconst n = 1e-3;\n\u{60}\u{60}\u{60}\nordinary text\n";
         let whole = render(&[json!({"delta":source})], false, true);
         let plain = render(&[json!({"delta":source})], false, false);
         assert_eq!(clean(&whole), plain);
-        assert!(!plain.contains('\u{1b}'));
-        for (text, semantic) in [
-            ("const", "accent"),
-            ("\"值\"", "success"),
-            ("comment */", "muted"),
-            ("1e-3", "warning"),
+        let screen = terminal_screen(&whole);
+        for (context, fragment, tone) in [
+            ("const 名", "const", "accent"),
+            ("const 名", "\"value\"", "success"),
+            ("comment */", "comment */", "muted"),
+            ("const n", "1e-3", "warning"),
         ] {
-            assert!(
-                whole.contains(&format!("\x1b[{}m{text}", Ui::default().color(semantic))),
-                "{whole}"
+            let palette = terminal_screen(&format!("\x1b[{}mX", Ui::default().color(tone)));
+            assert_text_color(
+                &screen,
+                context,
+                fragment,
+                palette.cell(0, 0).unwrap().fgcolor(),
             );
         }
         for (split, _) in source.char_indices().skip(1) {
@@ -3365,18 +3407,16 @@ mod tests {
                     true
                 ),
                 whole,
-                "split {split}",
+                "text split {split}"
             );
         }
-        // Real command output can flush incomplete lines early. Fence prefixes
-        // and their code must still wait for a logical line, not change on chunks.
+        let command_source = source.strip_suffix("ordinary text\n").unwrap();
         let delta = |text: &str| {
             json!({
                 "method":"command/exec/outputDelta",
                 "params":{"deltaBase64":STANDARD.encode(text)}
             })
         };
-        let command_source = source.strip_suffix("ordinary text\n").unwrap();
         let command = render(&[delta(command_source)], false, true);
         for (split, _) in command_source.char_indices().skip(1) {
             assert_eq!(
@@ -3389,7 +3429,7 @@ mod tests {
                     true
                 ),
                 command,
-                "command split {split}",
+                "command split {split}"
             );
         }
     }
@@ -3397,16 +3437,26 @@ mod tests {
     #[test]
     fn source_color_keeps_unicode_wrapping_and_cannot_emit_tool_controls() {
         let source = "const 名 = \"e\u{301}界\";\t// \x1b[2J\u{9b}31m\u{202e}tail";
-        let spans = Lexer::default().line(source);
+        let mut lexer = Lexer::default();
+        let tokens = lexer.line(source);
         for width in [12, 21, 80] {
             let mut plain = Vec::new();
             let mut colored = Vec::new();
-            render_source(&mut plain, false, width, &spans, "  ", "  ", &Ui::default()).unwrap();
+            render_source(
+                &mut plain,
+                false,
+                width,
+                &tokens,
+                "  ",
+                "  ",
+                &Ui::default(),
+            )
+            .unwrap();
             render_source(
                 &mut colored,
                 true,
                 width,
-                &spans,
+                &tokens,
                 "  ",
                 "  ",
                 &Ui::default(),
@@ -3437,28 +3487,41 @@ mod tests {
     }
 
     #[test]
-    fn diff_headers_markers_and_prose_boundary_keep_plain_text() {
-        let diff = "diff --git a/名.rs b/名.rs\nindex 000..111 100644\n--- a/名.rs\n+++ b/名.rs\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n\\ No newline at end of file\nfinished\n";
+    fn diff_headers_exit_hunks_before_indented_prose() {
+        let diff = "diff --git a/名.rs b/名.rs\nindex 000..111 100644\n--- a/名.rs\n+++ b/名.rs\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n\\ No newline at end of file\nfinished\n  ordinary indented text\n+ordinary plus\n";
         let plain = render(&[json!({"delta":diff})], false, false);
         let colored = render(&[json!({"delta":diff})], false, true);
         assert_eq!(clean(&colored), plain);
-        assert!(!plain.contains('\x1b'));
-        for (marker, semantic) in [
+        assert!(plain.contains("    1       │ -old"));
+        assert!(plain.contains("          1 │ +new"));
+        assert!(plain.contains("    2     2 │  same"));
+        assert!(
+            plain.ends_with("  finished\n    ordinary indented text\n  +ordinary plus\n"),
+            "{plain}"
+        );
+        let screen = terminal_screen(&colored);
+        for (marker, tone) in [
             ("diff --git", "heading"),
             ("--- a/", "error"),
             ("+++ b/", "success"),
             ("@@ ", "cyan"),
         ] {
-            assert!(colored.contains(&format!("\x1b[{}m{marker}", Ui::default().color(semantic))));
+            let palette = terminal_screen(&format!("\x1b[{}mX", Ui::default().color(tone)));
+            assert_text_color(
+                &screen,
+                marker,
+                marker,
+                palette.cell(0, 0).unwrap().fgcolor(),
+            );
         }
-        assert!(plain.contains("    1       │ -old"));
-        assert!(plain.contains("          1 │ +new"));
-        assert!(plain.contains("    2     2 │  same"));
-        assert!(plain.ends_with("  finished\n"), "{plain}");
         let fenced = format!("\u{60}\u{60}\u{60}diff\n{diff}\u{60}\u{60}\u{60}\n");
         let text = render(&[json!({"delta":fenced})], false, false);
         assert!(text.contains("    1       │ -old"));
         assert!(text.contains("          1 │ +new"));
+        assert!(
+            text.contains("    ordinary indented text\n  +ordinary plus\n"),
+            "{text}"
+        );
     }
 
     #[test]

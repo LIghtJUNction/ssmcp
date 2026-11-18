@@ -7,8 +7,6 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MAX_EVENTS: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
-const LONG_LINES: usize = 6;
-const LONG_BYTES: usize = 640;
 
 struct Event {
     id: u64,
@@ -49,6 +47,14 @@ impl EventView {
     }
 
     pub(crate) fn ingest(&mut self, bytes: &[u8]) {
+        self.ingest_with_expansion(bytes, false);
+    }
+
+    pub(crate) fn ingest_expanded(&mut self, bytes: &[u8]) {
+        self.ingest_with_expansion(bytes, true);
+    }
+
+    fn ingest_with_expansion(&mut self, bytes: &[u8], expand_all: bool) {
         if bytes.is_empty() {
             return;
         }
@@ -57,22 +63,49 @@ impl EventView {
         let Some(first) = plain.lines().find(|line| !line.trim().is_empty()) else {
             return;
         };
-        let first = first.trim();
-        let conversation = ["[USER]", "[AGENT]", "[ANSWER]", "[IMAGE]"]
-            .iter()
-            .any(|prefix| first.starts_with(prefix));
-        let tone = if first.starts_with("[ERR") {
+        let first = heading(first);
+        let conversation = [
+            "[USER]",
+            "[AGENT]",
+            "[UPDATE]",
+            "[ANSWER]",
+            "[IMAGE]",
+            "[CONTEXT]",
+        ]
+        .iter()
+        .any(|prefix| first.starts_with(prefix));
+        // A batch can begin with stdout and contain the failure later. Keep
+        // that failure visible rather than judging only its first heading.
+        let error = plain
+            .lines()
+            .map(heading)
+            .find(|line| line.starts_with("[ERR"));
+        let warning = plain
+            .lines()
+            .map(heading)
+            .find(|line| line.starts_with("[WARN") || line.starts_with("[STDERR"));
+        let attention = error.or(warning);
+        let tone = if conversation {
+            "accent"
+        } else if error.is_some() {
             "error"
-        } else if first.starts_with("[WARN") || first.starts_with("[STDERR") {
+        } else if warning.is_some() {
             "warning"
         } else if first.starts_with("[OK") {
             "success"
-        } else if conversation || first.starts_with("[RUN") || first.starts_with("[REQ") {
+        } else if first.starts_with("[RUN") || first.starts_with("[REQ") {
             "accent"
         } else {
             "foreground"
         };
-        let summary = super::super::panel::fit(first, 200);
+        let summary = event_summary(
+            &plain,
+            if conversation {
+                first
+            } else {
+                attention.unwrap_or(first)
+            },
+        );
         let lines = plain.lines().count().max(1);
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
@@ -83,7 +116,7 @@ impl EventView {
             text,
             summary,
             lines,
-            expanded: conversation || (lines <= LONG_LINES && plain.len() <= LONG_BYTES),
+            expanded: expand_all || conversation || attention.is_some(),
             truncated,
             tone,
             cache: None,
@@ -288,12 +321,13 @@ impl EventView {
                     ));
                 }
             } else {
-                let label = format!(
-                    "{} · {} lines{}",
-                    event.summary,
-                    event.lines,
-                    if event.truncated { " · partial" } else { "" }
-                );
+                let mut label = event.summary.clone();
+                if event.lines > 1 {
+                    label.push_str(&format!(" · {} lines", event.lines));
+                }
+                if event.truncated {
+                    label.push_str(" · partial");
+                }
                 let label = clip_plain(&label, body_width);
                 rows.push((
                     event.id,
@@ -353,6 +387,40 @@ impl EventView {
         }
         result
     }
+}
+
+fn heading(line: &str) -> &str {
+    let line = line.trim();
+    if let Some((timestamp, rest)) = line.split_once(' ')
+        && timestamp.len() == 13
+        && timestamp.ends_with('Z')
+        && timestamp
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || b":.Z".contains(&byte))
+    {
+        return rest.trim_start();
+    }
+    line
+}
+
+fn event_summary(plain: &str, first: &str) -> String {
+    // Generic audit response headings put the actual native name on the next
+    // line. Include that name without copying JSON or source into the summary.
+    let mut summary = first.to_owned();
+    if (first.starts_with("[RES") || first.starts_with("[REQ"))
+        && first.ends_with("audit")
+        && let Some(detail) = plain.lines().map(heading).find(|line| {
+            line.contains('.')
+                && line.len() <= 128
+                && line
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+        })
+    {
+        summary.push_str(" · ");
+        summary.push_str(detail);
+    }
+    super::super::panel::fit(&summary, 200)
 }
 
 fn paint(text: &str, tone: &str, ui: &Ui, bold: bool) -> String {
@@ -550,11 +618,59 @@ mod tests {
         let mut view = EventView::new();
         view.ingest(format!("[STDOUT] task\n{}", "output\n".repeat(30)).as_bytes());
         assert!(!view.snapshot()["events"][0]["expanded"].as_bool().unwrap());
-        for tag in ["USER", "AGENT", "ANSWER", "IMAGE"] {
+        for tag in ["USER", "AGENT", "UPDATE", "ANSWER", "IMAGE", "CONTEXT"] {
             view.ingest(format!("[{tag}]\n{}", "visible content\n".repeat(20)).as_bytes());
             assert!(view.events.back().unwrap().expanded, "{tag}");
         }
-        assert_eq!(view.snapshot()["retained_events"], 5);
+        assert_eq!(view.snapshot()["retained_events"], 7);
+    }
+
+    #[test]
+    fn short_success_is_compact_but_keeps_unicode_detail_for_existing_expand() {
+        let mut view = EventView::new();
+        let source = "[RES ] audit\n  ssmcp.fs.read_text\n  中文界面 e\u{301}\n";
+        view.ingest(source.as_bytes());
+        let closed = view.render(80, 8, &plain_ui(), true).join("\n");
+        assert!(closed.contains("ssmcp.fs.read_text"));
+        assert!(!closed.contains("中文界面"));
+        assert!(!view.events[0].expanded);
+        assert_eq!(view.events[0].text, source);
+        assert!(view.open());
+        assert!(
+            view.render(80, 8, &plain_ui(), true)
+                .join("\n")
+                .contains("中文界面 e\u{301}")
+        );
+    }
+
+    #[test]
+    fn errors_warnings_and_timestamped_progress_stay_visible() {
+        let mut view = EventView::new();
+        for header in [
+            "[ERR ] failed",
+            "[WARN] diagnostic",
+            "[STDERR] failure",
+            "12:34:56.789Z [UPDATE] progress",
+            "[ANSWER] result",
+        ] {
+            view.ingest(format!("{header}\n{}", "details 界\n".repeat(20)).as_bytes());
+            assert!(view.events.back().unwrap().expanded, "{header}");
+        }
+        view.ingest(b"[STDOUT] command\npartial\n[ERR ] exit=7\n");
+        let failed = view.events.back().unwrap();
+        assert!(failed.expanded);
+        assert_eq!(failed.tone, "error");
+        assert_eq!(failed.summary, "[ERR ] exit=7");
+    }
+
+    #[test]
+    fn explicit_verbose_display_keeps_long_tool_output_open() {
+        let mut view = EventView::new();
+        view.ingest_expanded(format!("[READ] source\n{}", "retained body\n".repeat(30)).as_bytes());
+        assert!(view.events[0].expanded);
+        assert_eq!(view.events[0].lines, 31);
+        assert!(view.back());
+        assert!(view.open());
     }
 
     #[test]

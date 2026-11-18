@@ -491,13 +491,33 @@ class Attachments(Composer):
         self.attach(front)
         removed = self.submit(front, "ATTACHMENT_REMOVE_ORIGINAL")
         self.take_back(front, removed)
-        front.send(CLEAR_LINE + b"/detach all\r")
-        self.wait_ui(front, lambda state: not state["draft"].get("images")
-                     and not state["draft"]["text"], "removing the image from the held edit")
+        before_delete = self.ui("/display/conversation")
+        before_target = self.queue()["draft_context"]["target"]
+        original_text = before_delete["draft"]["text"]
+        front.send(b"x")
+        self.wait_ui(front, lambda state: state["draft"]["text"] == original_text + "x",
+                     "typing beside the held image before normal Backspace")
+        front.send(b"\x7f")
+        self.wait_ui(front, lambda state: state["draft"]["text"] == original_text
+                     and len(state["draft"].get("images", [])) == 1,
+                     "ordinary Backspace deleting text before images")
+        front.send(b"\x01\x7f")
+        no_image = self.wait_ui(front, lambda state: not state["draft"].get("images")
+                               and state["draft"]["text"] == original_text
+                               and state["draft"]["cursor"] == 0,
+                               "Backspace at draft start removing the last image")
+        self.check(no_image["editing"] == removed["id"]
+                   and self.queue()["draft_context"]["target"] == before_target,
+                   "Backspace image removal preserves the held edit, full text and chosen target")
+        front.until(lambda shot: "[Image 1]" not in input_text(shot),
+                    "the removed image chip disappearing from the actual input")
         without_image = "ATTACHMENT_REMOVE_REVISED"
-        self.submit(front, without_image)
+        front.send(CLEAR_LINE + without_image.encode() + ENTER)
+        front.until(lambda shot: visible_record(shot, without_image, "queued", removed["id"]),
+                    "submitting an edited request after Backspace removes its image")
         removed_now = self.record(self.queue(), message_id=removed["id"])
-        self.check(not removed_now["images"], "an explicit detach is persisted with the edited request")
+        self.check(not removed_now["images"] and removed_now["target"] == removed["target"],
+                   "Backspace removal is persisted atomically with the edited request and target")
         self.delivery(self.work(), removed, without_image, image=False)
         self.wait_delivered(front, removed, without_image)
 

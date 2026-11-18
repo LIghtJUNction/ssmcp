@@ -18,10 +18,15 @@ pub(super) enum Source {
     Paths(Vec<PathBuf>),
     Files(Vec<PathBuf>),
     Copy(String),
+    Handoff(String),
 }
 #[derive(Debug)]
 pub(super) enum Loaded {
     Text(String),
+    Reference {
+        reference: String,
+        description: String,
+    },
     Images(Vec<UserImage>),
     Files {
         text: String,
@@ -69,6 +74,21 @@ impl Task {
                     })
                     .await
                     .unwrap_or_else(|error| Err(format!("Image processing failed: {error}"))),
+                    Ok(super::clipboard::Content::Text(text)) if text.len() > 8 * 1024 => {
+                        tokio::task::spawn_blocking(move || {
+                            super::references::paste::store(&text).map(|reference| {
+                                Loaded::Reference {
+                                    reference,
+                                    description: format!(
+                                        "Saved clipboard text · {} bytes",
+                                        text.len()
+                                    ),
+                                }
+                            })
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(format!("Clipboard storage failed: {error}")))
+                    }
                     Ok(super::clipboard::Content::Text(text)) => {
                         if let Some(paths) = pasted_paths(&text) {
                             tokio::task::spawn_blocking(move || {
@@ -101,6 +121,17 @@ impl Task {
                 })
                 .await
                 .unwrap_or_else(|error| Err(format!("Image loading failed: {error}"))),
+                Source::Handoff(note) => tokio::task::spawn_blocking(move || {
+                    let root = std::env::current_dir().map_err(|error| {
+                        format!("Cannot locate the workspace for handoff: {error}")
+                    })?;
+                    super::handoff::prepare(&root, &note).map(|reference| Loaded::Reference {
+                        reference,
+                        description: "Handoff prepared · review before sending".into(),
+                    })
+                })
+                .await
+                .unwrap_or_else(|error| Err(format!("Handoff preparation failed: {error}"))),
                 Source::Files(paths) => {
                     tokio::task::spawn_blocking(move || load_files(&paths, slots, budget))
                         .await
@@ -120,7 +151,9 @@ impl Task {
         match self.receiver.try_recv() {
             Ok(result) => Some(result),
             Err(oneshot::error::TryRecvError::Empty) => None,
-            Err(oneshot::error::TryRecvError::Closed) => Some(Err("Image loading stopped".into())),
+            Err(oneshot::error::TryRecvError::Closed) => Some(Err(
+                "Local input loading stopped; the draft is preserved".into(),
+            )),
         }
     }
 }
@@ -159,6 +192,9 @@ fn decoded_bytes(data: &str) -> usize {
 
 /// Parse complete image paths with quotes/escaped spaces, never shell expansion.
 pub(super) fn pasted_paths(text: &str) -> Option<Vec<PathBuf>> {
+    if text.len() > files::MAX_PATH_LIST_BYTES {
+        return None;
+    }
     let mut parts = Vec::new();
     let mut part = String::new();
     let mut quote = None;

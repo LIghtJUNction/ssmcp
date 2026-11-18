@@ -476,6 +476,13 @@ impl History {
         self.record_identified(role, text, None)
     }
 
+    fn record_agent(&mut self, id: &str, text: &str) -> Result<(), String> {
+        if !valid_id(id, "message") {
+            return Err("invalid agent message identity for conversation history".into());
+        }
+        self.record_identified("assistant", text, Some(id.to_owned()))
+    }
+
     fn record_request(&mut self, request_id: &str, text: &str) -> Result<(), String> {
         self.record_identified("user", text, Some(request_identity(request_id, text)?))
     }
@@ -591,6 +598,13 @@ impl History {
             .collect())
     }
 
+    fn current(&self) -> Result<Option<Conversation>, String> {
+        let Some(active) = &self.active else {
+            return Ok(None);
+        };
+        self.read(&active.metadata.id).map(Some)
+    }
+
     fn read(&self, id: &str) -> Result<Conversation, String> {
         let _lock = self.directory.lock()?;
         let conversation = self.load(id)?;
@@ -623,6 +637,9 @@ impl History {
 
 pub(crate) fn record(role: &str, text: &str) -> Result<(), String> {
     with(|history| history.record(role, text))
+}
+pub(crate) fn record_agent(id: &str, text: &str) -> Result<(), String> {
+    with(|history| history.record_agent(id, text))
 }
 pub(crate) fn record_request(request_id: &str, text: &str) -> Result<(), String> {
     with(|history| history.record_request(request_id, text))
@@ -658,8 +675,15 @@ pub(crate) fn sessions() -> Result<Vec<SessionSummary>, String> {
 pub(crate) fn read(id: &str) -> Result<Conversation, String> {
     with(|history| history.read(id))
 }
+/// Read only the active local JSONL conversation; never select or resume another.
+pub(crate) fn current() -> Result<Option<Conversation>, String> {
+    with(|history| history.current())
+}
 pub(crate) fn resume(id: &str) -> Result<Conversation, String> {
-    with(|history| history.resume(id))
+    let conversation = with(|history| history.resume(id))?;
+    // Restore copy state after releasing the history lock, without display or record hooks.
+    super::messages::restore_copy(&conversation.messages);
+    Ok(conversation)
 }
 
 pub(crate) struct SafeDirectory {
@@ -1378,5 +1402,41 @@ mod tests {
         text = text.replace(SCHEMA, "ssmcp.conversation.v99");
         fs::write(&path, text).unwrap();
         assert!(history.read(&id).is_err());
+    }
+    #[test]
+    fn identified_agent_replies_share_jsonl_without_duplicate_records() {
+        let temp = Temporary::new();
+        let mut history = temp.history();
+        let id = "message_00000000000000000000000000000001";
+        let text = "## 结果\n保留中文正文";
+        history.record_agent(id, text).unwrap();
+        history.record_agent(id, text).unwrap();
+        assert!(history.record_agent(id, "changed reply").is_err());
+        assert!(history.record_agent("../unsafe", text).is_err());
+        let sessions = history.sessions().unwrap();
+        let conversation = history.read(&sessions[0].id).unwrap();
+        assert_eq!(conversation.messages.len(), 1);
+        let message = &conversation.messages[0];
+        assert_eq!(message.id, id);
+        assert_eq!(message.role, "assistant");
+        assert_eq!(message.kind, "agent_message");
+        assert_eq!(message.content, text);
+    }
+
+    #[test]
+    fn current_export_reads_only_the_active_conversation_without_selecting_old_history() {
+        let temp = Temporary::new();
+        {
+            let mut previous = temp.history();
+            previous.record("user", "Other conversation").unwrap();
+        }
+        let mut history = temp.history();
+        assert!(history.current().unwrap().is_none());
+        history.record("assistant", "Current context").unwrap();
+        let current = history.current().unwrap().unwrap();
+        assert_eq!(current.messages.len(), 1);
+        assert_eq!(current.messages[0].content, "Current context");
+        assert_eq!(history.sessions().unwrap().len(), 2);
+        assert_eq!(history.current().unwrap().unwrap(), current);
     }
 }

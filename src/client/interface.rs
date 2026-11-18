@@ -14,6 +14,7 @@ use std::{
 
 pub(crate) mod harness;
 pub(crate) mod history;
+pub(crate) mod messages;
 pub(crate) mod questions;
 
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();

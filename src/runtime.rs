@@ -537,7 +537,21 @@ impl Runtime {
                 .client_resource_call(&tool.native_name, arguments)
                 .await
                 .map(backend::result),
-            Provider::Browser => self.browser.perform(&tool.native_name, arguments).await,
+            Provider::Browser => self
+                .browser
+                .perform(&tool.native_name, arguments)
+                .await
+                .and_then(|mut value| {
+                    if tool.native_name != "ssmcp.browser.discover" {
+                        return Ok(value);
+                    }
+                    let mut metadata = value
+                        .get_mut("structuredContent")
+                        .ok_or("browser discovery returned no metadata")?
+                        .take();
+                    metadata["routing"] = crate::browser::control_routes(&self.registry)?;
+                    Ok(backend::result(metadata))
+                }),
             Provider::Computer => self.computer.perform(&tool.native_name, arguments).await,
             Provider::Omarchy => self.omarchy.perform(&tool.native_name, arguments).await,
             Provider::Workspace => self

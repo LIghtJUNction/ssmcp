@@ -287,7 +287,20 @@ class ComputerUse(Harness):
         self.check(waited["matched"] is True and waited["state"] == "visible"
                    and self.evaluate("document.querySelector('#async-result').textContent") == "Async condition ready",
                    "condition wait observes asynchronous DOM content in the background tab")
-        self.evaluate("document.querySelector('#async-result').hidden=true;true")
+        css = self.evaluate("""(() => {
+            const e=document.querySelector('#async-result');
+            e.hidden=true;
+            return {hidden:e.hidden,display:getComputedStyle(e).display,
+                    area:[...e.getClientRects()].some(r=>r.width>0&&r.height>0)};
+        })()""")
+        # This fixture's author rule output{display:block} overrides the UA
+        # [hidden] style. Wait must follow actual rendering, not the attribute.
+        shown = self.browser("wait", target_id=self.target, selector="#async-result",
+                             state="visible", timeout_ms=500)
+        self.check(css["hidden"] is True and css["display"] == "block"
+                   and css["area"] is True and shown["matched"] is True,
+                   "wait follows computed CSS when display:block overrides the hidden attribute")
+        self.evaluate("document.querySelector('#async-result').style.display='none';true")
         hidden = self.browser("wait", target_id=self.target, selector="#async-result", state="hidden")
         attached = self.browser("wait", target_id=self.target, selector="#async-result", state="attached")
         self.check(hidden["matched"] is True and attached["matched"] is True,
@@ -314,7 +327,7 @@ class ComputerUse(Harness):
         self.evaluate("document.querySelector('#zero-area-result').remove();true")
         self.metrics["browser_wait"] = {"async_visible_elapsed_ms": waited["elapsed_ms"],
                                          "states_checked": ["visible", "hidden", "attached", "detached"],
-                                         "zero_area_checked": True}
+                                         "zero_area_checked": True, "css_hidden_override_checked": True}
 
     def parallel_browser_checks(self, url):
         # Both targets are our local fixture in the ssmcp-owned temporary profile.

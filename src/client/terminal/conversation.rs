@@ -187,6 +187,72 @@ impl ActivityHeader {
     }
 }
 
+#[derive(Debug)]
+struct CallerGroup {
+    name: String,
+    model: String,
+    calls: usize,
+    running: usize,
+    unknown: bool,
+    status: String,
+}
+
+/// Display grouping only: recipient identities and individual audit runs are
+/// unchanged. Counts describe the bounded recent observed-call window.
+fn caller_groups(observed: &[Value], header: &ActivityHeader, data: &Value) -> Vec<CallerGroup> {
+    let preview = data["preview"].as_bool().unwrap_or(false);
+    let connected = preview || data["connected"].as_bool().unwrap_or(false);
+    let mut groups: Vec<CallerGroup> = Vec::new();
+    let mut indexes = BTreeMap::<(String, String, String), usize>::new();
+    for entry in observed {
+        let run = field(entry, "run_id");
+        let name = field(entry, "name");
+        let model = field(entry, "model");
+        let source = field(entry, "source");
+        let known =
+            !name.is_empty() && name != "Unknown controller" && source != "metadata missing";
+        let key = if known {
+            (source.to_owned(), name.to_owned(), model.to_owned())
+        } else {
+            (String::new(), run.to_owned(), String::new())
+        };
+        let index = *indexes.entry(key).or_insert_with(|| {
+            groups.push(CallerGroup {
+                name: if known {
+                    panel::safe_text(name)
+                } else {
+                    format!("Unknown #{}", run.chars().take(6).collect::<String>())
+                },
+                model: panel::safe_text(model),
+                calls: 0,
+                running: 0,
+                unknown: false,
+                status: if connected {
+                    panel::safe_text(field(entry, "status"))
+                } else {
+                    "offline".into()
+                },
+            });
+            groups.len() - 1
+        });
+        let current = connected
+            && (preview
+                || (!header.stale.contains(run)
+                    && header
+                        .runs
+                        .iter()
+                        .any(|(id, room)| id == run && room == field(data, "room_id"))));
+        let group = &mut groups[index];
+        group.calls += 1;
+        if entry["active"].as_bool().unwrap_or(false) {
+            group.running += usize::from(current);
+            group.unknown |= connected && !current;
+        }
+    }
+    groups.sort_by_key(|group| group.running == 0);
+    groups
+}
+
 fn activity_segments(
     summary: &ActivitySummary,
     title: &str,
@@ -770,13 +836,13 @@ impl State {
         fallback: Option<String>,
     ) -> Result<(), String> {
         if self.conversation.image_task.is_some() {
-            return Err("A clipboard or image load is already in progress · Esc cancels it".into());
+            return Err("A local input operation is already in progress · Esc cancels it".into());
         }
         let task = attachments::Task::start(source, &self.conversation.images, fallback)?;
         self.conversation.composer.begin_external_paste();
         self.conversation.image_task = Some(task);
         self.conversation.content_focus = false;
-        self.notice = Some("Loading clipboard or image… · keep typing · Esc cancels".into());
+        self.notice = Some("Loading local input… · keep typing · Esc cancels".into());
         self.dirty = true;
         Ok(())
     }
@@ -813,6 +879,16 @@ impl State {
                 self.conversation.composer.cancel_external_paste();
                 self.notice = Some("Latest agent message copied to the clipboard".into());
             }
+            Ok(attachments::Loaded::Reference {
+                reference,
+                description,
+            }) => match self.chat_accept_file_paste(&format!("\n{reference}\n"), Vec::new()) {
+                Ok(_) => self.notice = Some(format!("{description} · Enter sends")),
+                Err(error) => {
+                    self.conversation.composer.cancel_external_paste();
+                    self.notice = Some(format!("{error} · saved reference: {reference}"));
+                }
+            },
             Ok(attachments::Loaded::Text(text)) => {
                 let stored;
                 let inserted = if text.len() > 8 * 1024 {
@@ -904,7 +980,7 @@ impl State {
                     }
                     Ok(()) => {
                         self.notice = Some(format!(
-                            "Attached {} · /images details · /detach N removes",
+                            "Attached {} · Backspace at draft start removes · /images details",
                             added.join(" · ")
                         ))
                     }
@@ -917,7 +993,7 @@ impl State {
                     .is_some_and(|text| self.conversation.composer.finish_external_paste(text));
                 self.conversation.composer.cancel_external_paste();
                 self.notice = Some(if restored {
-                    format!("{error} · pasted path preserved as text; no image attached")
+                    format!("{error} · pasted path preserved as text; no attachment added")
                 } else {
                     error
                 });
@@ -992,7 +1068,7 @@ impl State {
             "/paste" | "/attach" => {
                 let source = if command == "/paste" {
                     if !rest.is_empty() {
-                        return Err("Use /paste without arguments, or /attach PATH".into());
+                        return Err("Use /paste without arguments for clipboard files, images or text; /attach PATH accepts images".into());
                     }
                     attachments::Source::Clipboard
                 } else {
@@ -1003,6 +1079,20 @@ impl State {
                 let draft = self.chat_saved_draft();
                 self.conversation.composer.take_text();
                 if let Err(error) = self.chat_start_image(source, None) {
+                    self.chat_restore_draft(draft);
+                    return Err(error);
+                }
+            }
+            "/handoff" => {
+                if self.preview {
+                    return Err("Preview does not export conversation context".into());
+                }
+                let draft = self.chat_saved_draft();
+                self.conversation.composer.take_text();
+                if let Err(error) = self.chat_start_image(
+                    attachments::Source::Handoff(rest.to_owned()),
+                    Some(text.to_owned()),
+                ) {
                     self.chat_restore_draft(draft);
                     return Err(error);
                 }
@@ -1023,7 +1113,7 @@ impl State {
                         panel::safe_text(&attachments::description(image))
                     );
                 }
-                text.push_str("  /detach N removes an image · /detach all clears attachments\n\n");
+                text.push_str("  Backspace at draft start removes the last image · /detach N or all also works\n\n");
                 self.log(text.as_bytes());
                 self.chat_change_view(View::Activity);
             }
@@ -1238,6 +1328,7 @@ impl State {
                 Some(
                     "/paste"
                         | "/attach"
+                        | "/handoff"
                         | "/images"
                         | "/detach"
                         | "/copy"
@@ -1253,7 +1344,7 @@ impl State {
                 Ok(true) => {
                     if !matches!(
                         text.split_whitespace().next(),
-                        Some("/reload" | "/restart" | "/paste" | "/attach")
+                        Some("/reload" | "/restart" | "/paste" | "/attach" | "/handoff")
                     ) {
                         self.conversation.composer.take_text();
                     }
@@ -1294,9 +1385,12 @@ impl State {
         };
         if self.conversation.view == View::Agents
             && let Some(selected) = &self.conversation.selected_agent
-            && let Some(entry) = entries.iter().find(|entry| agent_key(entry) == *selected)
         {
-            return Some(entry.clone());
+            // An expired member must never silently resolve to the next row.
+            return entries
+                .iter()
+                .find(|entry| agent_key(entry) == *selected)
+                .cloned();
         }
         entries.get(self.conversation.selected).cloned()
     }
@@ -1989,7 +2083,14 @@ impl State {
                 self.conversation.composer.delete_word();
             }
             '\u{7f}' | '\u{8}' => {
-                self.conversation.composer.backspace();
+                if !self.conversation.composer.backspace() && !self.conversation.images.is_empty() {
+                    let mut images = self.conversation.images.clone();
+                    images.pop();
+                    match self.chat_replace_images(images) {
+                        Ok(()) => self.notice = Some("Last image removed from the draft".into()),
+                        Err(error) => self.notice = Some(error),
+                    }
+                }
             }
             '?' if self.conversation.composer.is_empty() && !self.conversation.content_focus => {
                 self.help = !self.help;
@@ -2175,60 +2276,87 @@ impl State {
     fn chat_agent_list_width(&self) -> u16 {
         let width = self.geometry.left;
         if width >= 76 {
-            (width / 2).min(36)
+            (width.saturating_mul(2) / 5).min(40)
         } else {
             width
         }
     }
 
     fn chat_agent_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
-        let entries = recipients(data, self.audit.observed_controllers());
-        if let Some(selected) = &self.conversation.selected_agent
-            && let Some(index) = entries
+        let observed_calls = self.audit.observed_controllers();
+        let running = observed_calls
+            .iter()
+            .filter(|entry| entry["active"] == true)
+            .count();
+        let entries = recipients(data, observed_calls);
+        if let Some(selected) = &self.conversation.selected_agent {
+            if let Some(index) = entries
                 .iter()
                 .position(|entry| agent_key(entry) == *selected)
-        {
-            self.conversation.selected = index;
+            {
+                self.conversation.selected = index;
+            } else {
+                self.conversation.selected = 0;
+                self.notice = Some("Selected member or call left · choose a recipient".into());
+            }
         }
+        let missing = self
+            .conversation
+            .selected_agent
+            .as_ref()
+            .is_some_and(|key| !entries.iter().any(|entry| agent_key(entry) == *key));
         let window = self.chat_list_window(entries.len(), height);
         let selected = &entries[self.conversation.selected];
-        self.conversation.selected_agent = Some(agent_key(selected));
+        if !missing {
+            self.conversation.selected_agent = Some(agent_key(selected));
+        }
         let width = self.geometry.left;
         let list_width = self.chat_agent_list_width();
         let target = self.conversation.target.as_deref().unwrap_or("next");
         let mut rows = vec![self.chat_line(
-            &format!("  Agents  ·  {} connected", items(data, "agents").len()),
+            &format!(
+                "  Agents · {} members · {running} active calls",
+                items(data, "agents").len()
+            ),
             PanelTone::Heading,
             list_width,
         )];
         for index in window {
             let entry = &entries[index];
             let observed = field(entry, "kind") == "observed";
-            let marker = if index == self.conversation.selected {
+            let marker = if !missing && index == self.conversation.selected {
                 "›"
             } else {
                 " "
             };
             let current = !observed && field(entry, "agent_id") == target;
-            let name = if observed {
-                format!("Call · {}", field(entry, "name"))
+            let symbol = if current {
+                "● "
+            } else if observed {
+                "↳ "
             } else {
-                field(entry, "name").to_owned()
+                ""
             };
-            let title = format!(" {marker} {}{name}", if current { "● " } else { "" });
+            let title = format!(" {marker} {symbol}{}", field(entry, "name"));
             let subtitle = if observed {
+                let model = field(entry, "model");
                 format!(
-                    "     {} · view only",
+                    "     {} · {}",
                     if entry["active"] == true {
-                        "active"
+                        "Running"
                     } else {
-                        "recent"
+                        "Recent call"
+                    },
+                    if model.is_empty() {
+                        "Model unknown"
+                    } else {
+                        model
                     }
                 )
             } else if field(entry, "agent_id") == "next" {
-                "     Automatic · next response".into()
+                "     Next eligible response".into()
             } else {
-                let duplicate_name = entries
+                let duplicate = entries
                     .iter()
                     .filter(|other| {
                         field(other, "kind") != "observed"
@@ -2236,11 +2364,21 @@ impl State {
                     })
                     .count()
                     > 1;
+                let id = field(entry, "agent_id");
+                let suffix: String = id
+                    .chars()
+                    .rev()
+                    .take(8)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                let status = field(entry, "status");
                 format!(
                     "     {}{}",
-                    field(entry, "status"),
-                    if duplicate_name {
-                        format!(" · {}", panel::fit(field(entry, "agent_id"), 12))
+                    if status.is_empty() { "Member" } else { status },
+                    if duplicate {
+                        format!(" · …{suffix}")
                     } else {
                         String::new()
                     }
@@ -2248,7 +2386,7 @@ impl State {
             };
             rows.push(self.chat_line(
                 &title,
-                if index == self.conversation.selected {
+                if !missing && index == self.conversation.selected {
                     PanelTone::Accent
                 } else {
                     PanelTone::Normal
@@ -2260,70 +2398,121 @@ impl State {
         if list_width < width {
             let observed = field(selected, "kind") == "observed";
             let next = field(selected, "agent_id") == "next";
-            let details = [
+            let selected_target = !observed && field(selected, "agent_id") == target;
+            let mut details: Vec<(String, PanelTone)> = vec![
                 (
-                    if observed {
-                        "Call details"
+                    (if observed {
+                        "Observed call"
                     } else {
-                        "Message target"
-                    },
+                        "Message recipient"
+                    })
+                    .into(),
                     PanelTone::Heading,
                 ),
-                ("", PanelTone::Normal),
-                (field(selected, "name"), PanelTone::Accent),
-                (
-                    if observed {
-                        field(selected, "model")
-                    } else {
-                        field(selected, "role")
-                    },
-                    PanelTone::Muted,
-                ),
-                (
-                    if observed {
-                        field(selected, "tool")
-                    } else {
-                        field(selected, "status")
-                    },
-                    PanelTone::Muted,
-                ),
-                ("", PanelTone::Normal),
-                (
-                    if observed {
-                        "Enter / →  inspect"
-                    } else {
-                        "Enter / →  start chatting"
-                    },
-                    PanelTone::Normal,
-                ),
-                ("Esc        back to conversation", PanelTone::Muted),
-                ("", PanelTone::Normal),
-                (
-                    if observed {
-                        "Activity record · view only"
-                    } else if next {
-                        "The next eligible tool response"
-                    } else {
-                        "Messages go only to this agent"
-                    },
-                    PanelTone::Muted,
-                ),
-                (
-                    if observed || next {
-                        ""
-                    } else {
-                        field(selected, "agent_id")
-                    },
-                    PanelTone::Muted,
-                ),
+                ("".into(), PanelTone::Normal),
+                (field(selected, "name").into(), PanelTone::Accent),
             ];
+            if missing {
+                details.clear();
+                details.extend([
+                    ("Selection unavailable".into(), PanelTone::Heading),
+                    ("".into(), PanelTone::Normal),
+                    ("The selected member or call left".into(), PanelTone::Normal),
+                    ("Your recipient has not changed".into(), PanelTone::Muted),
+                    ("".into(), PanelTone::Normal),
+                    ("↑ / ↓      choose another entry".into(), PanelTone::Normal),
+                    ("Esc / ←    return to your draft".into(), PanelTone::Muted),
+                ]);
+            } else if observed {
+                details.extend([
+                    (
+                        format!("Model · {}", field(selected, "model")),
+                        PanelTone::Muted,
+                    ),
+                    (
+                        format!("Tool  · {}", field(selected, "tool")),
+                        PanelTone::Muted,
+                    ),
+                    (
+                        (if selected["active"] == true {
+                            "Running now"
+                        } else {
+                            "Retained activity"
+                        })
+                        .into(),
+                        PanelTone::Normal,
+                    ),
+                    ("".into(), PanelTone::Normal),
+                    ("Enter / →  inspect this call".into(), PanelTone::Normal),
+                    ("Esc / ←    back to conversation".into(), PanelTone::Muted),
+                    ("".into(), PanelTone::Normal),
+                    (
+                        "View only · does not change recipient".into(),
+                        PanelTone::Muted,
+                    ),
+                    (
+                        "Name and model are caller reported".into(),
+                        PanelTone::Muted,
+                    ),
+                ]);
+            } else {
+                details.extend([
+                    (
+                        (if next {
+                            "Automatic delivery"
+                        } else {
+                            field(selected, "role")
+                        })
+                        .into(),
+                        PanelTone::Muted,
+                    ),
+                    (
+                        (if selected_target {
+                            "● Current recipient".into()
+                        } else {
+                            format!("Presence · {}", field(selected, "status"))
+                        }),
+                        PanelTone::Normal,
+                    ),
+                    ("".into(), PanelTone::Normal),
+                    ("Enter / →  choose and return".into(), PanelTone::Normal),
+                    ("Esc / ←    back to conversation".into(), PanelTone::Muted),
+                    ("".into(), PanelTone::Normal),
+                    (
+                        (if next {
+                            "Delivered to the next eligible caller"
+                        } else {
+                            "Delivered only to this member ID"
+                        })
+                        .into(),
+                        PanelTone::Muted,
+                    ),
+                    (
+                        (if next {
+                            ""
+                        } else {
+                            field(selected, "agent_id")
+                        })
+                        .into(),
+                        PanelTone::Muted,
+                    ),
+                    ("".into(), PanelTone::Normal),
+                    (
+                        "Your draft and cursor stay in place".into(),
+                        PanelTone::Muted,
+                    ),
+                ]);
+                if next && items(data, "agents").is_empty() {
+                    details.push(("No connected members yet".into(), PanelTone::Muted));
+                }
+            }
             rows.resize_with(usize::from(height), || {
                 self.chat_line("", PanelTone::Normal, list_width)
             });
             for (index, row) in rows.iter_mut().enumerate() {
                 let (detail, tone) = details
                     .get(index)
-                    .copied()
+                    .map(|(text, tone)| (text.as_str(), *tone))
                     .unwrap_or(("", PanelTone::Normal));
                 row.push_str(&self.tone(PanelTone::Muted, " │ "));
                 row.push_str(&self.chat_line(detail, tone, width - list_width - 3));
@@ -2719,23 +2908,40 @@ impl State {
                             ));
                         }
                         if !observed.is_empty() {
+                            let groups =
+                                caller_groups(&observed, &self.conversation.activity_header, &data);
                             section.push((
-                                format!(" Observed calls · {}", observed.len()),
+                                format!(" Callers · {} · recent", groups.len()),
                                 PanelTone::Heading,
                             ));
-                            for controller in observed.iter().take(3) {
-                                section.push((
-                                    format!(" ↳ {}", field(controller, "name")),
-                                    PanelTone::Agent,
-                                ));
-                                section.push((
-                                    format!(
-                                        "   {} · {}",
-                                        field(controller, "model"),
-                                        field(controller, "status")
-                                    ),
-                                    PanelTone::Muted,
-                                ));
+                            for group in groups.iter().take(3) {
+                                let name = if groups
+                                    .iter()
+                                    .filter(|other| other.name == group.name)
+                                    .count()
+                                    > 1
+                                {
+                                    format!("{} ({})", group.name, group.model)
+                                } else {
+                                    group.name.clone()
+                                };
+                                section.push((format!(" ↳ {name}"), PanelTone::Agent));
+                                let (status, tone) = if group.running > 0 {
+                                    (format!("{} running", group.running), PanelTone::Success)
+                                } else if group.unknown {
+                                    ("unknown".into(), PanelTone::Warning)
+                                } else {
+                                    (
+                                        group.status.clone(),
+                                        if matches!(group.status.as_str(), "failed" | "timeout") {
+                                            PanelTone::Error
+                                        } else {
+                                            PanelTone::Muted
+                                        },
+                                    )
+                                };
+                                section
+                                    .push((format!("   {} calls · {status}", group.calls), tone));
                             }
                         }
                         if agents.is_empty() && observed.is_empty() {
@@ -2861,6 +3067,68 @@ mod tests {
         let summary = header.summarize(&audit.observed_controllers(), &data);
         assert!(summary.active.is_empty());
         assert_eq!(summary.idle, ["Builder"]);
+    }
+
+    #[test]
+    fn sidebar_groups_repeated_callers_without_changing_audit_run_identities() {
+        let mut audit = AuditView::default();
+        let mut header = ActivityHeader::default();
+        let data = json!({"connected":true,"room_id":"room"});
+        for run in ["one", "two", "three"] {
+            let event = activity_event(run, "started", "Builder 界");
+            audit.ingest(&event);
+            header.observe(&event, &data);
+        }
+        audit.ingest(&activity_event("one", "finished", "Builder 界"));
+        let observed = audit.observed_controllers();
+        let grouped = caller_groups(&observed, &header, &data);
+        assert_eq!(observed.len(), 3);
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0].name, "Builder 界");
+        assert_eq!(grouped[0].calls, 3);
+        assert_eq!(grouped[0].running, 2);
+        for run in ["two", "three"] {
+            audit.ingest(&activity_event(run, "finished", "Builder 界"));
+        }
+        let grouped = caller_groups(&audit.observed_controllers(), &header, &data);
+        assert_eq!(grouped[0].running, 0);
+        assert_eq!(grouped[0].status, "done");
+        for run in ["one", "two", "three"] {
+            assert!(audit.open_run(run));
+        }
+    }
+
+    #[test]
+    fn sidebar_keeps_distinct_labels_and_does_not_revive_stale_runs() {
+        let mut audit = AuditView::default();
+        let mut header = ActivityHeader::default();
+        let data = json!({"connected":true,"room_id":"old"});
+        for (run, model) in [("one", "model-a"), ("two", "model-b")] {
+            let mut event = activity_event(run, "started", "Same name");
+            event["controller"]["model"] = json!(model);
+            audit.ingest(&event);
+            header.observe(&event, &data);
+        }
+        let observed = audit.observed_controllers();
+        assert_eq!(caller_groups(&observed, &header, &data).len(), 2);
+        let offline = json!({"connected":false});
+        header.summarize(&observed, &offline);
+        assert!(
+            caller_groups(&observed, &header, &offline)
+                .iter()
+                .all(|group| group.running == 0 && group.status == "offline")
+        );
+        assert!(
+            caller_groups(&observed, &header, &data)
+                .iter()
+                .all(|group| group.running == 0 && group.unknown)
+        );
+        let mut unknown = observed;
+        for entry in &mut unknown {
+            entry["name"] = json!("Unknown controller");
+            entry["source"] = json!("metadata missing");
+        }
+        assert_eq!(caller_groups(&unknown, &header, &data).len(), 2);
     }
 
     #[test]
@@ -4037,6 +4305,112 @@ mod tests {
     }
 
     #[test]
+    fn backspace_deletes_text_before_images_and_keeps_the_target_and_parked_draft() {
+        let mut state = preview(28, 120);
+        let parked = steering::SavedDraft {
+            text: "parked draft".into(),
+            cursor: 3,
+            target: Some("parked-member".into()),
+            images: vec![test_image("parked.png", 10)],
+        };
+        state.conversation.parked = Some(parked.clone());
+        state.conversation.editing = Some("held-request".into());
+        state.conversation.target = Some("selected-member".into());
+        state.conversation.composer.set_text("正文界");
+        let first = test_image("first.png", 20);
+        state
+            .chat_replace_images(vec![first.clone(), test_image("last.png", 30)])
+            .unwrap();
+        input(&mut state, b"\x7f");
+        assert_eq!(state.conversation.composer.text(), "正文");
+        assert_eq!(state.conversation.images.len(), 2);
+        input(&mut state, b"\x01\x7f");
+        assert_eq!(state.conversation.composer.text(), "正文");
+        assert_eq!(state.conversation.composer.cursor(), 0);
+        assert_eq!(state.conversation.images, vec![first]);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("selected-member")
+        );
+        assert_eq!(state.conversation.editing.as_deref(), Some("held-request"));
+        assert_eq!(state.conversation.parked.as_ref(), Some(&parked));
+        input(&mut state, b"\x08");
+        assert!(state.conversation.images.is_empty());
+        assert_eq!(state.conversation.composer.text(), "正文");
+        input(&mut state, b"\x7f");
+        assert_eq!(state.conversation.composer.text(), "正文");
+        assert_eq!(state.conversation.parked.as_ref(), Some(&parked));
+    }
+
+    #[test]
+    fn prepared_handoff_references_keep_later_typing_images_and_the_recipient() {
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("before");
+        state.conversation.composer.begin_external_paste();
+        state.conversation.composer.insert(" after");
+        let image = test_image("retained.png", 60);
+        state.conversation.images = vec![image.clone()];
+        state.conversation.target = Some("selected-member".into());
+        state.chat_loaded_image(
+            Ok(attachments::Loaded::Reference {
+                reference: "@\".ssmcp/inputs/handoff-example.md\"".into(),
+                description: "Handoff prepared".into(),
+            }),
+            None,
+        );
+        assert_eq!(
+            state.conversation.composer.text(),
+            "before\n@\".ssmcp/inputs/handoff-example.md\"\n after"
+        );
+        assert_eq!(state.conversation.images, vec![image]);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("selected-member")
+        );
+    }
+
+    #[test]
+    fn expired_agent_identity_cannot_select_an_unrelated_row() {
+        let mut state = preview(28, 120);
+        state.chat_agents();
+        state.conversation.selected = 1;
+        state.conversation.selected_agent = Some("member:expired".into());
+        assert!(state.chat_selected().is_none());
+        state.chat_open(true);
+        assert!(state.conversation.target.is_none());
+        assert_eq!(state.conversation.view, View::Agents);
+        let data = state.chat_data();
+        state.chat_agent_rows(&data, 18);
+        assert_eq!(
+            state.conversation.selected_agent.as_deref(),
+            Some("member:expired")
+        );
+        assert!(state.notice.as_ref().unwrap().contains("left"));
+        state.chat_open(true);
+        assert!(state.conversation.target.is_none());
+        assert_eq!(state.conversation.view, View::Agents);
+        state.chat_move(1);
+        state.chat_open(true);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-builder")
+        );
+    }
+
+    #[test]
+    fn duplicate_member_names_show_distinct_identity_suffixes() {
+        let mut state = preview(28, 120);
+        state.chat_agents();
+        let data = json!({"agents":[
+            {"agent_id":"agent_prefix_11111111","name":"Builder","status":"working"},
+            {"agent_id":"agent_prefix_22222222","name":"Builder","status":"available"}
+        ]});
+        let rows = state.chat_agent_rows(&data, 18).join("\n");
+        assert!(rows.contains("…11111111"));
+        assert!(rows.contains("…22222222"));
+    }
+
+    #[test]
     fn attachment_only_submit_detach_and_failed_paste_preserve_the_draft() {
         let mut state = preview(36, 120);
         state
@@ -4067,7 +4441,7 @@ mod tests {
                 .notice
                 .as_deref()
                 .unwrap()
-                .contains("no image attached")
+                .contains("no attachment added")
         );
         let before = state.conversation.composer.text().to_owned();
         state.chat_command("/detach all").unwrap();

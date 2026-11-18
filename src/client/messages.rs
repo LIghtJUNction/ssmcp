@@ -16,7 +16,7 @@ static HISTORY: OnceLock<Mutex<History>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-enum Kind {
+pub(crate) enum Kind {
     #[default]
     Progress,
     Answer,
@@ -79,6 +79,8 @@ struct Message {
     created_at_unix_ms: u64,
     #[serde(skip)]
     idempotency_key: Option<String>,
+    #[serde(skip)]
+    history_saved: bool,
 }
 
 impl Message {
@@ -97,7 +99,7 @@ impl Message {
 struct History {
     messages: VecDeque<Message>,
     bytes: usize,
-    sequence: u64,
+    last_copy: Option<String>,
 }
 impl History {
     fn record(&mut self, request: Request) -> Result<(Message, bool), String> {
@@ -126,20 +128,20 @@ impl History {
             }
             return Err("idempotency_key already identifies a different message".into());
         }
-        self.sequence = self.sequence.wrapping_add(1);
         let created_at_unix_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis()
             .min(u128::from(u64::MAX)) as u64;
         let message = Message {
-            id: format!("message-{created_at_unix_ms:x}-{:x}", self.sequence),
+            id: message_id()?,
             kind: request.kind,
             author,
             text: request.text,
             presentation,
             created_at_unix_ms,
             idempotency_key: request.idempotency_key,
+            history_saved: false,
         };
         let bytes = message.retained_bytes();
         if bytes > MAX_HISTORY_BYTES {
@@ -157,6 +159,26 @@ impl History {
         self.messages.push_back(message.clone());
         Ok((message, false))
     }
+
+    fn remember_last(&mut self, text: &str) {
+        self.last_copy = (text.len() <= MAX_TEXT).then(|| text.to_owned());
+    }
+
+    fn restore_copy(&mut self, messages: &[super::interface::history::Message]) {
+        self.last_copy = messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "assistant")
+            .filter(|message| message.content.len() <= MAX_TEXT)
+            .map(|message| message.content.clone());
+    }
+}
+
+fn message_id() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    crate::platform::random_bytes(&mut bytes).map_err(|_| "cannot create message identity")?;
+    let suffix: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(format!("message_{suffix}"))
 }
 
 fn rendered(message: &Message, ui: &Ui, color: bool) -> String {
@@ -196,7 +218,7 @@ fn send_with_presentation(
 ) -> Result<Value, String> {
     let request: Request = serde_json::from_value(arguments)
         .map_err(|_| "message requires text and accepts kind, author and idempotency_key")?;
-    let (message, duplicate) = {
+    let (mut message, duplicate) = {
         let mut history = HISTORY
             .get_or_init(Default::default)
             .lock()
@@ -208,30 +230,50 @@ fn send_with_presentation(
     };
     let active = terminal::active();
     if !duplicate {
-        if let Err(error) = super::interface::history::record("assistant", &message.text) {
-            terminal::notice(&format!(
-                "Message recorded; history could not be saved: {error}"
-            ));
-        }
-        crate::session::attach::record_event(
-            "agent",
-            &json!({"type":"ssmcp.message","format":"markdown","text":message.text}),
-        );
-        let ui = render::current_ui();
-        let color = ui.color
-            && std::env::var_os("NO_COLOR").is_none()
-            && (active || io::stderr().is_terminal());
-        let output = rendered(&message, &ui, color);
-        if !terminal::log(output.as_bytes()) {
-            io::stderr()
-                .lock()
-                .write_all(output.as_bytes())
-                .map_err(|_| "message was recorded, but writing the client display failed")?;
+        message.history_saved = if message.presentation.is_none() && message.author == "Agent" {
+            render::message_identified(&message.text, message.kind, &message.id).is_ok()
+        } else {
+            let saved = super::interface::history::record_agent(&message.id, &message.text);
+            if let Err(error) = &saved {
+                terminal::notice(&format!(
+                    "Message recorded; history could not be saved: {error}"
+                ));
+            }
+            crate::session::attach::record_event(
+                "agent",
+                &json!({"type":"ssmcp.message","format":"markdown","text":message.text,
+                    "kind":message.kind,"message_id":message.id}),
+            );
+            let ui = render::current_ui();
+            let color = ui.color
+                && std::env::var_os("NO_COLOR").is_none()
+                && (active || io::stderr().is_terminal());
+            let output = rendered(&message, &ui, color);
+            if !terminal::log(output.as_bytes()) {
+                io::stderr()
+                    .lock()
+                    .write_all(output.as_bytes())
+                    .map_err(|_| "message was recorded, but writing the client display failed")?;
+            }
+            remember_last(&message.text);
+            saved.is_ok()
+        };
+        let mut history = HISTORY
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(retained) = history
+            .messages
+            .iter_mut()
+            .find(|item| item.id == message.id)
+        {
+            retained.history_saved = message.history_saved;
         }
     }
     Ok(json!({
-        "accepted":true, "message_id":message.id, "kind":message.kind,
+        "shown":true, "accepted":true, "message_id":message.id, "kind":message.kind,
         "duplicate":duplicate, "terminal_active":active,
+        "history_saved":message.history_saved,
         "text_bytes":message.text.len(),
         "note":"Recorded in the client conversation; does not assert that the user read it."
     }))
@@ -242,9 +284,26 @@ pub(super) fn last_text() -> Option<String> {
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .messages
-        .back()
-        .map(|message| message.text.clone())
+        .last_copy
+        .clone()
+}
+
+/// Called after publication, including local harness replies; acquires no display lock.
+pub(crate) fn remember_last(text: &str) {
+    HISTORY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remember_last(text);
+}
+
+/// Restore only copy state after /resume, without replaying or rewriting conversation history.
+pub(crate) fn restore_copy(messages: &[super::interface::history::Message]) {
+    HISTORY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .restore_copy(messages);
 }
 
 pub(crate) fn read(arguments: Value) -> Result<Value, String> {
@@ -318,6 +377,60 @@ mod tests {
             author: None,
             idempotency_key: key.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn message_receipts_use_jsonl_identities_and_copy_updates_only_after_publication() {
+        let mut history = History::default();
+        history.remember_last("previously published reply");
+        let (first, duplicate) = history.record(request("new reply", Some("once"))).unwrap();
+        assert!(!duplicate);
+        let suffix = first.id.strip_prefix("message_").unwrap();
+        assert_eq!(suffix.len(), 32);
+        assert!(suffix.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!first.history_saved);
+        assert_eq!(
+            history.last_copy.as_deref(),
+            Some("previously published reply")
+        );
+        history.messages.back_mut().unwrap().history_saved = true;
+        history.remember_last("later harness reply");
+        let (duplicate, repeated) = history.record(request("new reply", Some("once"))).unwrap();
+        assert!(repeated && duplicate.history_saved);
+        assert_eq!(duplicate.id, first.id);
+        assert_eq!(history.last_copy.as_deref(), Some("later harness reply"));
+        assert_eq!(history.messages.len(), 1);
+    }
+
+    #[test]
+    fn resume_restores_latest_assistant_copy_without_replaying_or_importing_messages() {
+        let message = |role: &str, text: &str| super::super::interface::history::Message {
+            id: "message_00000000000000000000000000000001".into(),
+            role: role.into(),
+            content: text.into(),
+            kind: "agent_message".into(),
+            created_at_ms: 1,
+            truncated: false,
+        };
+        let mut history = History::default();
+        history.restore_copy(&[
+            message("assistant", "old reply"),
+            message("assistant", "完整最后答复：界"),
+            message("user", "pending requirement stays in its own queue"),
+        ]);
+        assert_eq!(history.last_copy.as_deref(), Some("完整最后答复：界"));
+        assert!(history.messages.is_empty());
+        assert_eq!(history.bytes, 0);
+        history.restore_copy(&[message("user", "not an agent reply")]);
+        assert!(history.last_copy.is_none());
+        history.restore_copy(&[
+            message("assistant", "earlier reply"),
+            message("assistant", &"界".repeat(MAX_TEXT / 3 + 1)),
+        ]);
+        assert!(
+            history.last_copy.is_none(),
+            "never restore an older stale reply"
+        );
     }
     #[test]
     fn agent_reply_code_and_diff_share_highlighting_without_changing_copy_text() {
