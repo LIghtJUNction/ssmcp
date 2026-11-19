@@ -872,11 +872,11 @@ fn with_button<T>(
         armed: true,
     };
     let down = release.desktop.button(button, "down");
-    if let Err(error) = &down {
-        if input_error_precedes_effect(release.desktop.backend(), error, false) {
-            release.armed = false;
-            return Err(error.clone());
-        }
+    if let Err(error) = &down
+        && input_error_precedes_effect(release.desktop.backend(), error, false)
+    {
+        release.armed = false;
+        return Err(error.clone());
     }
     let outcome = down.and_then(|_| operation(release.desktop));
     let released = release.desktop.button(button, "up");
