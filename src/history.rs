@@ -97,6 +97,10 @@ pub struct AuditEvent {
     pub hostname: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<crate::wire::ControlAttribution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 impl AuditEvent {
     pub fn new(action: AuditAction, outcome: AuditOutcome) -> Self {
@@ -111,10 +115,29 @@ impl AuditEvent {
             client_name: None,
             hostname: None,
             tool_name: None,
+            attribution: None,
+            run_id: None,
         }
     }
 
     fn validate_metadata(&self) -> crate::Result<()> {
+        if let Some(attribution) = &self.attribution {
+            attribution.validate()?;
+            if self.actor_subject.as_deref() != Some(attribution.account.subject.as_str())
+                || attribution.owner.as_ref().is_some_and(|owner| {
+                    self.owner_subject.as_deref() != Some(owner.subject.as_str())
+                })
+            {
+                return Err("audit attribution does not match authenticated subjects".into());
+            }
+        }
+        if self
+            .run_id
+            .as_ref()
+            .is_some_and(|id| id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err("invalid audit run identifier".into());
+        }
         for subject in [&self.actor_subject, &self.owner_subject]
             .into_iter()
             .flatten()
@@ -604,3 +627,40 @@ impl AuditLog {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    #[test]
+    fn control_attribution_journal_checks_actor_owner_and_legacy_records() {
+        let mut event = AuditEvent::new(AuditAction::ToolCall, AuditOutcome::Pending);
+        let legacy = serde_json::to_string(&event).unwrap();
+        assert!(!legacy.contains("attribution") && !legacy.contains("run_id"));
+        assert!(
+            serde_json::from_str::<AuditEvent>(&legacy)
+                .unwrap()
+                .attribution
+                .is_none()
+        );
+        event.actor_subject = Some("456".into());
+        event.owner_subject = Some("123".into());
+        event.run_id = Some("a".repeat(32));
+        event.attribution = Some(crate::wire::ControlAttribution {
+            account: crate::wire::ControlAccount {
+                provider: "github".into(),
+                subject: "456".into(),
+                login: "bob".into(),
+            },
+            owner: Some(crate::wire::ControlAccount {
+                provider: "github".into(),
+                subject: "123".into(),
+                login: "alice".into(),
+            }),
+            agent: None,
+        });
+        assert!(event.validate_metadata().is_ok());
+        event.actor_subject = Some("123".into());
+        assert!(event.validate_metadata().is_err());
+    }
+}

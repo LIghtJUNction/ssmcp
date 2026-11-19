@@ -11,6 +11,7 @@ enum Hint {
     Conversation,
     Audit,
     Queue,
+    QueueInspect,
 }
 
 impl State {
@@ -36,7 +37,17 @@ impl State {
             match self.conversation.view {
                 View::Activity => Hint::Conversation,
                 View::Audit => Hint::Audit,
-                View::Queue => Hint::Queue,
+                View::Queue => {
+                    if self.chat_data()["queue"]
+                        .as_array()
+                        .and_then(|entries| entries.get(self.conversation.selected))
+                        .is_some_and(|entry| Receipt::from_entry(entry).editable())
+                    {
+                        Hint::Queue
+                    } else {
+                        Hint::QueueInspect
+                    }
+                }
                 _ => return None,
             }
         };
@@ -57,29 +68,34 @@ fn shortcuts(hint: Hint, width: u16, status: &str) -> String {
             "Loading… · Esc close",
         ],
         Hint::EmptyInput => [
-            "@ files · $ skills · / commands · F1 help",
-            "@ files · $ skills · / commands",
-            "@ files · $ skills · F1 help",
+            "F7 copy · ↑ edit queued · Alt+↑/↓ input height · @ files · $ skills · / commands",
+            "F7 copy · ↑ edit queued · @ files · / commands",
+            "F7 copy · ↑ edit queued · F1 help",
         ],
         Hint::Draft => [
-            "Enter send · Ctrl+J newline · Tab browse",
-            "Enter send · Ctrl+J newline · Tab browse",
-            "Enter send · Tab browse",
+            "Enter send · Ctrl+J newline · Ctrl+C clear · F7 copy · Alt+↑/↓ input height",
+            "Enter send · Ctrl+J newline · Ctrl+C clear · F7 copy",
+            "Enter send · F7 copy · F1 help",
         ],
         Hint::Conversation => [
-            "↑↓ select · Enter expand · PgUp/PgDn scroll · ←/→ panels · Tab input",
-            "↑↓ select · Enter expand · Tab input",
-            "Enter expand · Tab input",
+            "F7 copy · ↑↓ select · Enter expand · PgUp/PgDn scroll · ←/→ panels · Tab input",
+            "F7 copy · ↑↓ select · Enter expand · Tab input",
+            "F7 copy · Enter expand · Tab input",
         ],
         Hint::Audit => [
-            "↑↓ browse · Enter details · PgUp/PgDn scroll · ←/→ panels · Tab input",
-            "Enter details · PgUp/PgDn scroll · Tab input",
-            "Enter details · Tab input",
+            "F7 copy · ↑↓ browse · Enter details · PgUp/PgDn scroll · ←/→ panels · Tab input",
+            "F7 copy · Enter details · PgUp/PgDn scroll · Tab input",
+            "F7 copy · Enter details · Tab input",
         ],
         Hint::Queue => [
-            "↑↓ select · Enter take back · i inspect · Delete cancel · Tab input",
-            "Enter take back · i inspect · Tab input",
-            "Enter take back · Tab input",
+            "F7 copy · ↑↓ select · Enter edit · i inspect · Delete cancel · Tab input",
+            "F7 copy · Enter edit · i inspect · Tab input",
+            "F7 copy · Enter edit · Tab input",
+        ],
+        Hint::QueueInspect => [
+            "F7 copy · ↑↓ select · Enter inspect · i inspect · Tab input",
+            "F7 copy · Enter inspect · Tab input",
+            "Enter inspect · Tab input",
         ],
     };
     let available = usize::from(width.saturating_sub(1));
@@ -107,10 +123,15 @@ mod tests {
         assert!(!menu.contains("Enter send"));
         let draft = shortcuts(Hint::Draft, 100, "connected");
         assert!(draft.contains("Enter send") && draft.contains("Ctrl+J"));
+        assert!(draft.contains("Alt+↑/↓ input height") && draft.contains("F7 copy"));
         let empty = shortcuts(Hint::EmptyInput, 100, "connected");
         assert!(empty.contains("@ files") && empty.contains("$ skills"));
+        assert!(empty.contains("Alt+↑/↓ input height") && empty.contains("F7 copy"));
         let queue = shortcuts(Hint::Queue, 100, "connected");
         assert!(queue.contains("i inspect") && queue.contains("Delete cancel"));
+        let delivered = shortcuts(Hint::QueueInspect, 100, "connected");
+        assert!(delivered.contains("Enter inspect"));
+        assert!(!delivered.contains("edit") && !delivered.contains("cancel"));
     }
 
     #[test]
@@ -124,6 +145,7 @@ mod tests {
                 Hint::Conversation,
                 Hint::Audit,
                 Hint::Queue,
+                Hint::QueueInspect,
             ] {
                 let text = shortcuts(hint, width, "server update required for queue");
                 assert!(

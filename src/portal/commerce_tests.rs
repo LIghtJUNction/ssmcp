@@ -31,6 +31,10 @@ impl Drop for App {
 }
 impl App {
     async fn new() -> Self {
+        Self::with_environment("test").await
+    }
+
+    async fn with_environment(environment: &str) -> Self {
         let path = std::env::temp_dir().join(format!(
             "ssmcp-commerce-http-{}",
             super::super::random().unwrap()
@@ -75,6 +79,7 @@ impl App {
             .unwrap();
         let config = CommerceConfig {
             enabled: true,
+            environment: environment.into(),
             monthly_sellable_gb: 10,
             merchant_id: "MER_test".into(),
             store_id: "STO_test".into(),
@@ -142,7 +147,7 @@ impl App {
     }
     fn notification(&self, order: &Order, amount: &str, subject: &str) -> (Vec<u8>, String) {
         let body=serde_json::to_vec(&serde_json::json!({
-            "id":"EVT_local","eventId":"PAY_local","eventType":"order.completed","storeId":"STO_test","mode":"test",
+            "id":"EVT_local","eventId":"PAY_local","eventType":"order.completed","storeId":"STO_test","mode":self.broker.portal.commerce.as_ref().unwrap().config.environment.as_str(),
             "data":{"orderId":"ORD_local","orderStatus":"completed","orderMerchantExternalId":order.id,
             "merchantProvidedBuyerIdentity":format!("github:{subject}"),"currency":"CNY",
             "chargedAmount":amount,"listPrice":{"subtotal":"1.00","taxAmount":"0.00","total":"1.00","listTotal":"1.00","discountAmount":"0.00"},"paymentId":"PAY_local","paymentStatus":"succeeded"}
@@ -455,4 +460,52 @@ async fn checkout_page_never_caches_bearer_link_and_discloses_month_end() {
     assert!(body.contains("noreferrer noopener"));
     assert!(body.contains("协议封装与重试"));
     assert!(body.contains("含税应付金额"));
+}
+
+#[tokio::test]
+async fn monthly_paid_tier_requires_verified_production_settlement() {
+    for environment in ["test", "prod"] {
+        let app = App::with_environment(environment).await;
+        app.broker
+            .portal
+            .configure_monthly_allowances(crate::user_policy::MonthlyTrafficAllowances {
+                free_user_bytes: 100,
+                paid_user_bytes: 1_000,
+            })
+            .unwrap();
+        let order = app.reserved().await;
+        assert_eq!(
+            app.broker.traffic_quota("123").await.unwrap().free_bytes,
+            100
+        );
+        let (body, signature) = app.notification(&order, "0.99", "123");
+        assert_eq!(app.notify(body, signature).await, StatusCode::BAD_REQUEST);
+        assert!(
+            !app.broker
+                .portal
+                .storage(|store| Ok(store.account("123")?.has_recharged))
+                .await
+                .unwrap()
+        );
+        let (body, signature) = app.notification(&order, "1.00", "123");
+        assert_eq!(app.notify(body, signature).await, StatusCode::NO_CONTENT);
+        app.broker.reconcile_commerce().await.unwrap();
+        let quota = app.broker.traffic_quota("123").await.unwrap();
+        let paid = environment == "prod";
+        assert_eq!(
+            app.broker
+                .portal
+                .storage(|store| Ok(store.account("123")?.has_recharged))
+                .await
+                .unwrap(),
+            paid
+        );
+        assert_eq!(quota.free_bytes, if paid { 1_000 } else { 100 });
+        assert_eq!(quota.paid_bytes, commerce::GB);
+        assert_eq!(quota.limit_bytes, Some(quota.free_bytes + commerce::GB));
+        assert_eq!(
+            app.broker.traffic_quota("456").await.unwrap().free_bytes,
+            100
+        );
+    }
 }

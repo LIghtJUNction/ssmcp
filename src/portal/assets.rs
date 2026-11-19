@@ -1,13 +1,15 @@
 //! Bundled portal assets use content-derived URLs under the portal proxy prefix.
 //! Legacy top-level URLs remain available for previously rendered pages.
+use crate::broker::Broker;
 use axum::{
     Router,
-    http::{HeaderName, HeaderValue, header},
+    extract::{Path, State},
+    http::{HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use sha2::{Digest, Sha256};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 struct Asset {
     name: &'static str,
@@ -99,23 +101,75 @@ pub(super) fn url(name: &str) -> &'static str {
         .path
 }
 
-pub(super) fn routes<S>() -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let mut router = Router::new();
-    for asset in ASSETS.iter() {
-        // Register exact content/name pairs. Unknown names and stale fingerprints
-        // never reach a file lookup or a permissive fallback handler.
-        router = router
-            .route(
-                url(asset.name),
-                get(move || async move { asset.response() }),
+pub(super) fn public_bytes(name: &str) -> Option<(&'static str, &'static [u8])> {
+    ASSETS
+        .iter()
+        .find(|asset| asset.name == name)
+        .map(|asset| (asset.content_type, asset.body))
+}
+
+async fn respond(asset: &'static Asset, broker: &Broker, expected: Option<&str>) -> Response {
+    if let Some(endpoint) = &broker.portal.frontend
+        && let Some(rendered) = endpoint
+            .render(
+                super::frontend::Request::Asset {
+                    name: asset.name.into(),
+                },
+                asset.content_type,
+                expected,
             )
-            .route(
-                &asset.legacy_path,
-                get(move || async move { asset.response() }),
-            );
+            .await
+    {
+        let mut response = (
+            [
+                (header::CONTENT_TYPE, asset.content_type),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            rendered.body,
+        )
+            .into_response();
+        response.headers_mut().insert(
+            HeaderName::from_static("x-ssmcp-asset-sha256"),
+            HeaderValue::from_str(&rendered.fingerprint).expect("computed SHA-256 is ASCII hex"),
+        );
+        return response;
+    }
+    // Old core templates may retain an old fingerprint after a worker upgrade.
+    // Serve only the exact bundled bytes for that URL; never lie about a hash.
+    if expected.is_none_or(|hash| hash == asset.fingerprint) {
+        asset.response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+async fn fingerprinted(
+    State(broker): State<Arc<Broker>>,
+    Path((fingerprint, name)): Path<(String, String)>,
+) -> Response {
+    if fingerprint.len() != 64
+        || !fingerprint
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(asset) = ASSETS.iter().find(|asset| asset.name == name) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    respond(asset, &broker, Some(&fingerprint)).await
+}
+
+pub(super) fn routes() -> Router<Arc<Broker>> {
+    let mut router =
+        Router::new().route("/account/assets/{fingerprint}/{name}", get(fingerprinted));
+    for asset in ASSETS.iter() {
+        router = router.route(
+            &asset.legacy_path,
+            get(move |State(broker): State<Arc<Broker>>| async move {
+                respond(asset, &broker, None).await
+            }),
+        );
     }
     router
 }
@@ -140,7 +194,12 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
-            axum::serve(listener, routes::<()>()).await.unwrap();
+            axum::serve(
+                listener,
+                routes().with_state(Arc::new(Broker::new("https://ssmcp.test".into()))),
+            )
+            .await
+            .unwrap();
         });
         let client = reqwest::Client::new();
         for asset in ASSETS.iter() {
@@ -172,7 +231,12 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
-            axum::serve(listener, routes::<()>()).await.unwrap();
+            axum::serve(
+                listener,
+                routes().with_state(Arc::new(Broker::new("https://ssmcp.test".into()))),
+            )
+            .await
+            .unwrap();
         });
         let client = reqwest::Client::new();
         let hash = &ASSETS[0].fingerprint;

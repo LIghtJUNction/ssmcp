@@ -1,4 +1,5 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
+pub(crate) mod call_scope;
 mod capabilities;
 pub mod hooks;
 pub(crate) mod native_host;
@@ -50,6 +51,7 @@ impl CodeAudit {
         operation: &Operation,
         request_id: u64,
         controller: Option<&crate::wire::Controller>,
+        attribution: Option<&crate::wire::ControlAttribution>,
         context: Option<crate::wire::CodeContext>,
     ) -> Result<Option<CodeCall>, String> {
         let Some(context) = context else {
@@ -63,28 +65,21 @@ impl CodeAudit {
             }
             runs.push_back((context.run_id.clone(), false));
             self.log
-                .push(json!({"type":"ssmcp.code_mode","phase":"started",
+                .push_control(json!({"type":"ssmcp.code_mode","phase":"started",
                 "run_id":context.run_id,"code":context.code,
                 "timestamp_ms":context.timestamp_ms,"controller":controller}));
         }
         drop(runs);
-        let tool = match operation {
-            Operation::CallTool { name, .. } => name.as_str(),
-            Operation::ListTools { .. } => "tools/list",
-            Operation::Read { .. } => "terminal.read",
-            Operation::Write { .. } => "terminal.write",
-            Operation::Resize { .. } => "terminal.resize",
-            Operation::Status {} => "terminal.status",
-        }
-        .to_owned();
+        let tool = operation.name().to_owned();
         self.log
-            .push(json!({"type":"ssmcp.code_mode","phase":"call-started",
-            "scope":"native-call","run_id":context.run_id,"request_id":request_id,"tool":tool}));
+            .push_control(json!({"type":"ssmcp.code_mode","phase":"call-started",
+            "scope":"native-call","run_id":context.run_id,"request_id":request_id,"tool":tool,"attribution":attribution}));
         Ok(Some(CodeCall {
             log: self.log.clone(),
             run_id: context.run_id,
             request_id,
             tool,
+            attribution: attribution.cloned(),
             started: Instant::now(),
             finished: false,
         }))
@@ -101,7 +96,7 @@ impl CodeAudit {
         }
         *finished = true;
         self.log
-            .push(json!({"type":"ssmcp.code_mode","phase":"finished",
+            .push_control(json!({"type":"ssmcp.code_mode","phase":"finished",
             "run_id":completion.run_id,"success":completion.success,"status":completion.status,
             "duration_ms":completion.duration_ms,"error":completion.error}));
         Ok(())
@@ -113,6 +108,7 @@ pub(crate) struct CodeCall {
     run_id: String,
     request_id: u64,
     tool: String,
+    attribution: Option<crate::wire::ControlAttribution>,
     started: Instant,
     finished: bool,
 }
@@ -126,6 +122,7 @@ impl CodeCall {
         let success = result.as_ref().is_ok_and(|value| value["isError"] != true);
         let mut event = json!({"type":"ssmcp.code_mode","phase":"call-finished",
             "scope":"native-call","run_id":self.run_id,"request_id":self.request_id,"tool":self.tool,
+            "attribution":self.attribution,
             "success":success,"duration_ms":self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64});
         let error = match result {
             Err(error) => Some(error.as_str()),
@@ -159,7 +156,7 @@ impl CodeCall {
                 }
             }
         }
-        self.log.push(event);
+        self.log.push_control(event);
     }
 }
 
@@ -276,6 +273,7 @@ pub struct Runtime {
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
     code_audit: CodeAudit,
+    call_connection: u64,
     next_call: AtomicU64,
     tool_call_hook: Mutex<Option<Arc<dyn hooks::ToolCallHook>>>,
     catalog: Catalog,
@@ -345,6 +343,7 @@ impl Runtime {
             desktop,
             plugins,
             code_audit: CodeAudit::new(audit.clone()),
+            call_connection: call_scope::connection(),
             audit,
             output,
             next_call: AtomicU64::new(1),
@@ -407,15 +406,32 @@ impl Runtime {
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         self.registry.catalog()
     }
+    /// Opaque runtime generation used to reject work retained across reconnects.
+    pub(crate) fn connection_generation(&self) -> u64 {
+        self.call_connection
+    }
+
+    /// Accept only metadata supplied by the authenticated relay frame, before
+    /// entering a provider. Tool arguments cannot create this scope.
+    pub(crate) fn call_scope(
+        &self,
+        request_id: u64,
+        attribution: Option<&crate::wire::ControlAttribution>,
+        context: Option<&crate::wire::CodeContext>,
+    ) -> Result<Arc<call_scope::CallScope>, String> {
+        call_scope::CallScope::from_relay(self.call_connection, request_id, attribution, context)
+    }
+
     pub(crate) fn begin_code_call(
         &self,
         operation: &Operation,
         request_id: u64,
         controller: Option<&crate::wire::Controller>,
+        attribution: Option<&crate::wire::ControlAttribution>,
         context: Option<crate::wire::CodeContext>,
     ) -> Result<Option<CodeCall>, String> {
         self.code_audit
-            .begin(operation, request_id, controller, context)
+            .begin(operation, request_id, controller, attribution, context)
     }
     pub(crate) fn code_mode_finished(
         &self,
@@ -829,6 +845,8 @@ mod tests {
 
     fn code_context(code: &str) -> crate::wire::CodeContext {
         crate::wire::CodeContext {
+            session_id: None,
+            thread_id: None,
             run_id: "a".repeat(32),
             code: code.into(),
             timestamp_ms: 1234,
@@ -849,14 +867,14 @@ mod tests {
             arguments: json!({"command":["true"]}),
         };
         let mut first = audit
-            .begin(&operation, 1, None, Some(context.clone()))
+            .begin(&operation, 1, None, None, Some(context.clone()))
             .unwrap()
             .unwrap();
         first.finish(&Ok(backend::result(
             json!({"job_id":"job-a","state":"running","running":true}),
         )));
         let mut second = audit
-            .begin(&operation, 2, None, Some(context))
+            .begin(&operation, 2, None, None, Some(context))
             .unwrap()
             .unwrap();
         second.finish(&Ok(backend::result(
@@ -902,7 +920,7 @@ mod tests {
         };
         drop(
             audit
-                .begin(&operation, 5, None, Some(code_context(source)))
+                .begin(&operation, 5, None, None, Some(code_context(source)))
                 .unwrap(),
         );
         let page = log.read(json!({})).await.unwrap();
@@ -919,7 +937,12 @@ mod tests {
                 .unwrap()
                 .contains("cancelled")
         );
-        assert!(audit.begin(&operation, 6, None, None).unwrap().is_none());
+        assert!(
+            audit
+                .begin(&operation, 6, None, None, None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn tools(generation: usize) -> Vec<ToolDescriptor> {

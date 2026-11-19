@@ -1,5 +1,9 @@
 //! Explicit receipt-based delivery to one program on the current connection.
 //! Ordinary code_mode replies and collaboration presence never acquire a lease.
+#[cfg(test)]
+mod scope_tests;
+#[cfg(target_os = "linux")]
+mod transport;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -12,6 +16,7 @@ use tokio::sync::{Notify, watch};
 const LEASE: Duration = Duration::from_secs(30);
 const ACK_WAIT: Duration = Duration::from_secs(5);
 const MAX_RECEIPTS: usize = 32;
+const MAX_OPEN_KEYS: usize = 128;
 const NO_LISTENER: &str = "发送失败：没有程序在监听";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -26,6 +31,7 @@ pub(crate) enum Status {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Receipt {
     pub delivery_id: String,
+    pub cursor: u64,
     pub connection_id: String,
     pub listener_id: String,
     pub status: Status,
@@ -43,6 +49,99 @@ pub(crate) struct Target {
 struct Connection {
     id: String,
     epoch: u64,
+    generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Owner {
+    Remote {
+        provider: String,
+        subject: String,
+        thread: Option<String>,
+    },
+    Local {
+        uid: u32,
+        pid: u32,
+        started: u64,
+    },
+}
+
+impl Owner {
+    fn thread(&self) -> Option<&str> {
+        match self {
+            Self::Remote { thread, .. } => thread.as_deref(),
+            Self::Local { .. } => None,
+        }
+    }
+}
+
+// Constructed only by the accepted relay CallScope or kernel Unix peer credentials.
+#[derive(Clone)]
+struct Caller {
+    generation: u64,
+    session: Option<String>,
+    owner: Owner,
+}
+
+impl Caller {
+    fn remote(scope: &crate::runtime::call_scope::CallScope) -> Result<Self, String> {
+        let attribution = scope.attribution().ok_or(
+            "listener_auth_required: this operation needs authenticated controller metadata",
+        )?;
+        if attribution.agent.is_some() && scope.thread().is_none() {
+            return Err(
+                "listener_thread_required: relay did not negotiate the bound thread".into(),
+            );
+        }
+        Ok(Self {
+            generation: scope.connection(),
+            session: scope.thread().map(|thread| thread.session_id().into()),
+            owner: Owner::Remote {
+                provider: attribution.account.provider.clone(),
+                subject: attribution.account.subject.clone(),
+                thread: scope.thread().map(|thread| thread.thread_id().into()),
+            },
+        })
+    }
+
+    fn validate(&self, connection: Option<&Connection>) -> Result<(), String> {
+        let connection = connection.ok_or("client connection is not active")?;
+        if self.generation != connection.generation
+            || self
+                .session
+                .as_deref()
+                .is_some_and(|id| id != connection.id)
+        {
+            return Err("listener_scope_expired: caller belongs to another connection".into());
+        }
+        Ok(())
+    }
+
+    fn owns(&self, owner: &Owner) -> bool {
+        // A same-UID local process may be explicitly handed a listener token.
+        // Remote callers always retain their authenticated account/thread scope.
+        matches!(self.owner, Owner::Local { .. }) || &self.owner == owner
+    }
+
+    #[cfg(test)]
+    fn fixture() -> Self {
+        Self {
+            generation: 0,
+            session: None,
+            owner: Owner::Local {
+                uid: 1,
+                pid: 1,
+                started: 1,
+            },
+        }
+    }
+}
+
+struct OpenKey {
+    owner: Owner,
+    key: String,
+    label: String,
+    listener_id: String,
 }
 
 // No Debug/Serialize: the credential is returned only by the explicit open call.
@@ -52,10 +151,12 @@ struct Lease {
     token: String,
     expires: Instant,
     reading: bool,
+    owner: Owner,
 }
 
 struct Pending {
     id: String,
+    cursor: u64,
     target: Target,
     source: String,
     text: String,
@@ -91,6 +192,9 @@ struct State {
     lease: Option<Lease>,
     pending: Option<Pending>,
     receipts: VecDeque<Remembered>,
+    cursor: u64,
+    open_keys: VecDeque<OpenKey>,
+    local_endpoint: Option<String>,
 }
 
 impl State {
@@ -100,6 +204,7 @@ impl State {
         };
         let receipt = Receipt {
             delivery_id: pending.id,
+            cursor: pending.cursor,
             connection_id: pending.target.connection_id,
             listener_id: pending.target.listener_id,
             status,
@@ -157,9 +262,10 @@ impl State {
         changed
     }
 
-    fn authenticate(&self, id: &str, token: &str) -> Result<(), String> {
+    fn authenticate(&self, id: &str, token: &str, caller: &Caller) -> Result<(), String> {
+        caller.validate(self.connection.as_ref())?;
         let lease = self.lease.as_ref().ok_or("listener lease has expired")?;
-        if lease.id != id || !same_token(&lease.token, token) {
+        if lease.id != id || !same_token(&lease.token, token) || !caller.owns(&lease.owner) {
             return Err("listener credential is invalid for this connection".into());
         }
         Ok(())
@@ -207,35 +313,71 @@ impl Hub {
         crate::client::terminal::invalidate();
     }
 
-    fn reset(&self, connection_id: Option<&str>) {
+    fn reset_for(&self, connection_id: Option<&str>, generation: u64) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.lost("connection_ended", "发送失败：连接已结束，消息未投递");
         state.lease = None;
+        state.open_keys.clear();
+        state.cursor = 0;
+        state.local_endpoint = None;
         state.epoch = state.epoch.saturating_add(1);
         state.connection = connection_id.map(|id| Connection {
             id: id.into(),
             epoch: state.epoch,
+            generation,
         });
         drop(state);
         self.changed();
     }
 
-    fn open(&self, label: String) -> Result<Value, String> {
+    fn open_for(
+        &self,
+        label: String,
+        caller: &Caller,
+        key: Option<String>,
+    ) -> Result<Value, String> {
         let label = label.trim();
         if label.is_empty() || label.len() > 96 || label.chars().any(char::is_control) {
             return Err(
                 "listener label must contain 1–96 UTF-8 bytes without control characters".into(),
             );
         }
+        if key.as_ref().is_some_and(|key| {
+            key.is_empty()
+                || key.len() > 128
+                || !key
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_-.:".contains(&c))
+        }) {
+            return Err(
+                "idempotency_key must contain 1..128 ASCII letters, digits, _, -, . or :".into(),
+            );
+        }
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let now = Instant::now();
         state.expire(now);
+        caller.validate(state.connection.as_ref())?;
         let connection_id = state
             .connection
             .as_ref()
             .ok_or("client connection is not active")?
             .id
             .clone();
+        if let Some(key) = key.as_ref()
+            && let Some(previous) = state
+                .open_keys
+                .iter()
+                .find(|entry| entry.owner == caller.owner && entry.key == *key)
+        {
+            if previous.label != label {
+                return Err(
+                    "idempotency_conflict: listener label differs from the original request".into(),
+                );
+            }
+            let lease = state.lease.as_ref().filter(|lease| lease.id == previous.listener_id)
+                .ok_or("idempotency_expired: the original listener is closed or expired; use a new key to explicitly register again")?;
+            return Ok(Self::opened(&connection_id, lease));
+        }
         if state.lease.is_some() {
             return Err("listener_busy: this connection already has a listener".into());
         }
@@ -247,27 +389,59 @@ impl Hub {
             token: token.clone(),
             expires: now + LEASE,
             reading: false,
+            owner: caller.owner.clone(),
         });
+        if let Some(key) = key {
+            state.open_keys.push_back(OpenKey {
+                owner: caller.owner.clone(),
+                key,
+                label: label.into(),
+                listener_id: id,
+            });
+            while state.open_keys.len() > MAX_OPEN_KEYS {
+                state.open_keys.pop_front();
+            }
+        }
+        let value = Self::opened(&connection_id, state.lease.as_ref().expect("new lease"));
         drop(state);
         self.changed();
         // The field is deliberately named token so automatic source/result
         // audit redaction handles it. It never enters snapshots or UI messages.
-        Ok(json!({"schema_version":1,"connection_id":connection_id,
-            "listener_id":id,"token":token,"expires_in_ms":LEASE.as_millis(),
-            "heartbeat_ms":5000,"ack_timeout_ms":ACK_WAIT.as_millis()}))
+        Ok(value)
+    }
+
+    fn opened(connection_id: &str, lease: &Lease) -> Value {
+        json!({"schema_version":1,"connection_id":connection_id,
+            "listener_id":lease.id,"token":lease.token,"thread_id":lease.owner.thread(),
+            "expires_in_ms":lease.expires.saturating_duration_since(Instant::now()).as_millis(),
+            "lease_ms":LEASE.as_millis(),"heartbeat_ms":5000,"ack_timeout_ms":ACK_WAIT.as_millis(),
+            "idempotency_retained_keys":MAX_OPEN_KEYS})
     }
 
     fn snapshot(&self) -> Value {
+        self.snapshot_for(None)
+            .expect("local status has no remote scope to validate")
+    }
+
+    fn snapshot_for(&self, caller: Option<&Caller>) -> Result<Value, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(caller) = caller {
+            // Validation and serialization must use this same guard: a reconnect
+            // between separate locks must not expose a new connection's status.
+            caller.validate(state.connection.as_ref())?;
+        }
         let now = Instant::now();
         let expired = state.expire(now);
         let value = json!({"schema_version":1,"connected":state.connection.is_some(),
             "connection_id":state.connection.as_ref().map(|value| &value.id),
+            "local_endpoint":state.local_endpoint,
             "listener":state.lease.as_ref().map(|lease| json!({
                 "listener_id":lease.id,"label":lease.label,"reading":lease.reading,
+                "thread_id":lease.owner.thread(),
                 "expires_in_ms":lease.expires.saturating_duration_since(now).as_millis()})),
             "pending":state.pending.as_ref().map(|value| json!({
                 "delivery_id":value.id,"listener_id":value.target.listener_id,
+                "cursor":value.cursor,
                 "status":if value.offered {"offered"} else {"waiting"},
                 "expires_in_ms":value.deadline.saturating_duration_since(now).as_millis()})),
             "receipts":state.receipts.iter().map(|value| &value.receipt).collect::<Vec<_>>()});
@@ -275,14 +449,19 @@ impl Hub {
         if expired {
             self.changed();
         }
-        value
+        Ok(value)
     }
 
-    fn target(&self) -> Result<Target, String> {
+    fn target_for(&self, selected_thread: Option<&str>) -> Result<Target, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.expire(Instant::now());
         let connection = state.connection.as_ref().ok_or(NO_LISTENER)?;
         let lease = state.lease.as_ref().ok_or(NO_LISTENER)?;
+        if lease.owner.thread() != selected_thread.filter(|id| *id != "next") {
+            return Err(
+                "发送失败：监听程序与当前选择的线程不同；请选择对应线程，草稿已保留".into(),
+            );
+        }
         if state.pending.is_some() {
             return Err("发送失败：上一条消息仍在等待监听程序确认，草稿已保留".into());
         }
@@ -317,10 +496,16 @@ impl Hub {
             return Err("发送失败：上一条消息仍在等待监听程序确认，草稿已保留".into());
         }
         let id = random(16)?;
+        state.cursor = state
+            .cursor
+            .checked_add(1)
+            .ok_or("listener cursor exhausted")?;
+        let cursor = state.cursor;
         let (reply, receiver) = watch::channel(None);
         let deadline = now + ACK_WAIT;
         state.pending = Some(Pending {
             id: id.clone(),
+            cursor,
             target,
             source,
             text,
@@ -340,11 +525,12 @@ impl Hub {
         })
     }
 
-    async fn read(
+    async fn read_for(
         self: &Arc<Self>,
         id: String,
         token: String,
         wait_ms: u64,
+        caller: Caller,
     ) -> Result<Value, String> {
         if wait_ms > 5000 {
             return Err("listener wait_ms must be at most 5000".into());
@@ -353,7 +539,7 @@ impl Hub {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             let now = Instant::now();
             state.expire(now);
-            state.authenticate(&id, &token)?;
+            state.authenticate(&id, &token, &caller)?;
             let lease = state.lease.as_mut().expect("authenticated lease");
             if lease.reading {
                 return Err("read_busy: this listener already has a pending read".into());
@@ -373,10 +559,11 @@ impl Hub {
             let delivery = {
                 let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
                 state.expire(Instant::now());
-                state.authenticate(&id, &token)?;
+                state.authenticate(&id, &token, &caller)?;
                 state.pending.as_mut().map(|pending| {
                     pending.offered = true;
                     json!({"delivery_id":pending.id,"connection_id":pending.target.connection_id,
+                        "cursor":pending.cursor,
                         "listener_id":pending.target.listener_id,"source":"client_user",
                         "source_text":pending.source,"text":pending.text,"created_at_ms":pending.created_at_ms})
                 })
@@ -394,7 +581,14 @@ impl Hub {
         }
     }
 
-    fn ack(&self, id: &str, token: &str, delivery_id: &str, ack: Ack) -> Result<Value, String> {
+    fn ack_for(
+        &self,
+        id: &str,
+        token: &str,
+        delivery_id: &str,
+        ack: Ack,
+        caller: &Caller,
+    ) -> Result<Value, String> {
         if ack.reason.as_ref().is_some_and(|reason| {
             reason.trim().is_empty() || reason.len() > 512 || reason.chars().any(char::is_control)
         }) {
@@ -410,7 +604,7 @@ impl Hub {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let now = Instant::now();
         state.expire(now);
-        state.authenticate(id, token)?;
+        state.authenticate(id, token, caller)?;
         let epoch = state
             .connection
             .as_ref()
@@ -464,10 +658,10 @@ impl Hub {
         Ok(json!({"schema_version":1,"receipt":receipt}))
     }
 
-    fn close(&self, id: &str, token: &str) -> Result<Value, String> {
+    fn close_for(&self, id: &str, token: &str, caller: &Caller) -> Result<Value, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.expire(Instant::now());
-        state.authenticate(id, token)?;
+        state.authenticate(id, token, caller)?;
         state.lease = None;
         state.lost("listener_closed", "发送失败：监听程序已退出，消息未投递");
         drop(state);
@@ -553,6 +747,8 @@ impl Drop for Ticket {
 enum Request {
     Open {
         label: String,
+        #[serde(default)]
+        idempotency_key: Option<String>,
     },
     Read {
         listener_id: String,
@@ -578,49 +774,108 @@ fn wait_default() -> u64 {
 }
 
 pub(crate) fn connect(connection_id: &str) {
-    global().reset(Some(connection_id));
+    let runtime = super::harness::local_runtime().ok();
+    let generation = runtime
+        .as_ref()
+        .map_or(0, |(runtime, _)| runtime.connection_generation());
+    global().reset_for(Some(connection_id), generation);
+    #[cfg(target_os = "linux")]
+    transport::replace(
+        global().clone(),
+        connection_id,
+        generation,
+        runtime.map(|(_, handle)| handle),
+    );
 }
 pub(crate) fn disconnect() {
-    global().reset(None);
+    global().reset_for(None, 0);
+    #[cfg(target_os = "linux")]
+    transport::stop();
 }
 pub(crate) fn snapshot() -> Value {
     global().snapshot()
 }
-pub(crate) fn target() -> Result<Target, String> {
-    global().target()
+pub(crate) fn target(selected_thread: Option<&str>) -> Result<Target, String> {
+    global().target_for(selected_thread)
 }
 pub(crate) fn submit(target: Target, source: String, text: String) -> Result<Ticket, String> {
     global().submit(target, source, text)
 }
 
 pub(crate) async fn call(arguments: Value) -> Result<Value, String> {
-    let request: Request = serde_json::from_value(arguments)
-        .map_err(|_| "listener requires a valid open/read/ack/close/status request")?;
-    match request {
-        Request::Open { label } => global().open(label),
-        Request::Read {
-            listener_id,
-            token,
-            wait_ms,
-        } => global().read(listener_id, token, wait_ms).await,
-        Request::Ack {
-            listener_id,
-            token,
-            delivery_id,
-            status,
-            reason,
-        } => global().ack(&listener_id, &token, &delivery_id, Ack { status, reason }),
-        Request::Close { listener_id, token } => global().close(&listener_id, &token),
-        Request::Status {} => Ok(snapshot()),
+    let scope = crate::runtime::call_scope::current()
+        .ok_or("listener_auth_required: no accepted relay call scope")?;
+    let caller = Caller::remote(&scope)?;
+    global().call_for(caller, arguments).await
+}
+
+impl Hub {
+    async fn call_for(self: &Arc<Self>, caller: Caller, arguments: Value) -> Result<Value, String> {
+        let request: Request = serde_json::from_value(arguments)
+            .map_err(|_| "listener requires a valid open/read/ack/close/status request")?;
+        match request {
+            Request::Open {
+                label,
+                idempotency_key,
+            } => self.open_for(label, &caller, idempotency_key),
+            Request::Read {
+                listener_id,
+                token,
+                wait_ms,
+            } => self.read_for(listener_id, token, wait_ms, caller).await,
+            Request::Ack {
+                listener_id,
+                token,
+                delivery_id,
+                status,
+                reason,
+            } => self.ack_for(
+                &listener_id,
+                &token,
+                &delivery_id,
+                Ack { status, reason },
+                &caller,
+            ),
+            Request::Close { listener_id, token } => self.close_for(&listener_id, &token, &caller),
+            Request::Status {} => self.snapshot_for(Some(&caller)),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Hub {
+    fn reset(&self, id: Option<&str>) {
+        self.reset_for(id, 0);
+    }
+    fn open(&self, label: String) -> Result<Value, String> {
+        self.open_for(label, &Caller::fixture(), None)
+    }
+    fn target(&self) -> Result<Target, String> {
+        self.target_for(None)
+    }
+    async fn read(
+        self: &Arc<Self>,
+        id: String,
+        token: String,
+        wait_ms: u64,
+    ) -> Result<Value, String> {
+        self.read_for(id, token, wait_ms, Caller::fixture()).await
+    }
+    fn ack(&self, id: &str, token: &str, delivery_id: &str, ack: Ack) -> Result<Value, String> {
+        self.ack_for(id, token, delivery_id, ack, &Caller::fixture())
+    }
+    fn close(&self, id: &str, token: &str) -> Result<Value, String> {
+        self.close_for(id, token, &Caller::fixture())
     }
 }
 
 pub(crate) fn tool() -> Value {
     json!({"name":"ssmcp.ui.listener",
-        "description":"Explicit single-program listener for forced user messages on this connection. open acquires a 30-second exclusive lease. read renews it and returns the same delivery until ack; only accepted ACK means the program received it, never that a model ran. Poll read within 5 seconds, acknowledge within 5 seconds, and close when done. The token is secret. Expired/disconnected leases cannot be resumed; offered but unacknowledged messages are unknown and never automatically replayed. Ordinary code_mode requests do not register listeners or consume these messages.",
+        "description":"Explicit single-program listener for forced user messages on this connection and authenticated thread. open acquires a 30-second exclusive lease for the actual controller account and bound participant (main when unbound). Optional idempotency_key is scoped to that caller; the last 128 keys are retained until disconnect. read renews the lease and returns the same delivery_id/cursor until ack. Only accepted ACK means the program received it, never that a model ran. Poll within 5 seconds and acknowledge within 5 seconds. status exposes a Linux private Unix endpoint using the same state; a same-UID local program needs the secret token to consume a remote lease. Expired/disconnected leases cannot be resumed, and unknown delivery is never automatically replayed. Ordinary code_mode requests do not register listeners or consume these messages.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["op"],
             "properties":{"op":{"enum":["open","read","ack","close","status"]},
                 "label":{"type":"string","minLength":1,"maxLength":96},
+                 "idempotency_key":{"type":"string","minLength":1,"maxLength":128},
                 "listener_id":{"type":"string","minLength":32,"maxLength":32},
                 "token":{"type":"string","minLength":64,"maxLength":64},
                 "delivery_id":{"type":"string","minLength":32,"maxLength":32},

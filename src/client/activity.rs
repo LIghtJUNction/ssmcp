@@ -212,18 +212,36 @@ impl CallerTracker {
             self.disconnect();
         }
         let mut groups: Vec<CallerGroup> = Vec::new();
-        let mut indexes = BTreeMap::<(String, String, String), usize>::new();
+        let mut indexes = BTreeMap::<(String, String, String, String), usize>::new();
         for entry in observed.iter().take(128) {
             let run = field(entry, "run_id");
             let name = field(entry, "name");
             let model = field(entry, "model");
             let source = field(entry, "source");
-            let known =
-                !name.is_empty() && name != "Unknown controller" && source != "metadata missing";
+            let attribution = serde_json::from_value::<crate::wire::ControlAttribution>(
+                entry["attribution"].clone(),
+            )
+            .ok()
+            .filter(|attribution| attribution.validate().is_ok());
+            let account_key = attribution
+                .as_ref()
+                .map(|attribution| {
+                    serde_json::json!([
+                        attribution.account.provider,
+                        attribution.account.subject,
+                        attribution.agent.as_ref().map(|agent| agent.id.as_str())
+                    ])
+                    .to_string()
+                })
+                .unwrap_or_default();
+            let known = attribution.is_some()
+                || (!name.is_empty()
+                    && name != "Unknown controller"
+                    && source != "metadata missing");
             let key = if known {
-                (source.into(), name.into(), model.into())
+                (account_key, source.into(), name.into(), model.into())
             } else {
-                (String::new(), run.into(), String::new())
+                (String::new(), String::new(), run.into(), String::new())
             };
             // This is a stable display key, not an authenticated recipient ID.
             // Encoding the tuple avoids collisions between untrusted labels.
@@ -231,13 +249,27 @@ impl CallerTracker {
             let index = *indexes.entry(key).or_insert_with(|| {
                 groups.push(CallerGroup {
                     key: display_key,
-                    name: if known {
+                    name: if let Some(attribution) = &attribution {
+                        let agent = attribution
+                            .agent
+                            .as_ref()
+                            .map(|agent| format!("{} · {}", agent.name, &agent.id[..14]))
+                            .unwrap_or_else(|| "not bound".into());
+                        super::super::panel::safe_text(&format!(
+                            "{} · Agent {agent} · {name}",
+                            attribution.account.label()
+                        ))
+                    } else if known {
                         super::super::panel::safe_text(name)
                     } else {
                         format!("Unknown #{}", run.chars().take(6).collect::<String>())
                     },
                     model: super::super::panel::safe_text(model),
-                    source: source.into(),
+                    source: if attribution.is_some() {
+                        format!("verified account · app/model {source}")
+                    } else {
+                        source.into()
+                    },
                     run_id: run.into(),
                     tool: super::super::panel::safe_text(field(entry, "tool")),
                     calls: 0,
@@ -306,6 +338,28 @@ mod caller_tests {
 
     fn call(id: &str, active: bool) -> Value {
         json!({"run_id":id,"name":"ChatGPT","model":"model","source":"reported","active":active,"status":"done"})
+    }
+
+    #[test]
+    fn control_attribution_keeps_equal_claims_from_different_accounts_and_agents_apart() {
+        let mut tracker = CallerTracker::default();
+        let mut rows = Vec::new();
+        for (run, subject, agent) in [("a", "123", "a"), ("b", "456", "a"), ("c", "123", "b")] {
+            let mut row = call(run, false);
+            row["attribution"] = json!({"account":{"provider":"github","subject":subject,"login":"same-label"},
+                "agent":{"id":format!("agent_{}", agent.repeat(32)),"name":"same worker"}});
+            rows.push(row);
+        }
+        let groups = tracker.groups(&rows, &json!({"preview":true}));
+        assert_eq!(groups.len(), 3);
+        assert_ne!(groups[0].key, groups[1].key);
+        assert_ne!(groups[0].key, groups[2].key);
+        assert!(groups[0].name.contains("#123") && groups[1].name.contains("#456"));
+        assert!(
+            groups
+                .iter()
+                .all(|group| group.source.contains("verified account"))
+        );
     }
 
     #[test]

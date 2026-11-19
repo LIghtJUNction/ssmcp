@@ -1,4 +1,4 @@
-//! Local, declarative ASCII footer settings; never interpreted as commands.
+//! Legacy declarative ASCII settings retained for configuration compatibility.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -47,6 +47,8 @@ impl Pet {
         Ok(())
     }
 
+    // Legacy configuration round-trip fixtures still use this accessor.
+    #[cfg(test)]
     pub(crate) fn lines(&self) -> Vec<&str> {
         match self.preset {
             Preset::Cat => " /\\_/\\ \n( o.o )\n > ^ < ".lines().collect(),
@@ -60,7 +62,7 @@ impl Pet {
         json!({
             "type":"object",
             "additionalProperties":false,
-            "description":"Local ASCII pet in the sidebar footer. Hidden when the complete drawing does not fit.",
+            "description":"Legacy ASCII settings retained for config compatibility; the sidebar now displays connection data rates.",
             "properties":{
                 "preset":{"type":"string","enum":["cat","robot","custom","off"],"default":"cat"},
                 "text":{
