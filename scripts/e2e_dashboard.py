@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the real dashboard through an owned POSIX PTY and isolated SSH/OAuth.
+"""Exercise the real dashboard through an owned POSIX PTY and account relay.
 
 Requires the same installed tools as e2e.py, Git, and the already-built
 examples/vt_snapshot decoder. No packages, coding harnesses, or models are
@@ -118,26 +118,17 @@ class Frontend:
             os.tcsetpgrp(0, os.getpgrp())
 
         self.process = subprocess.Popen(
-            [str(harness.binary_dir / "ssmcp"), "--ssh", "-F", str(harness.directory / "ssh_config"),
-             "--name", label, "--shell", "/bin/sh", f"{harness.user}@ssmcp-e2e"],
+            harness.client_command(name=label),
             stdin=self.slave, stdout=subprocess.PIPE, stderr=self.slave,
             cwd=harness.workspace, env=environment, preexec_fn=own_controlling_terminal,
         )
         harness.processes.append(self.process)
         os.set_blocking(self.process.stdout.fileno(), False)
-        deadline = time.monotonic() + 15
-        while b"\n" not in self.stdout and time.monotonic() < deadline:
-            self.pump(0.05)
-            if self.process.poll() is not None:
-                break
-        if b"\n" not in self.stdout:
-            detail = self.failure_detail()
+        try:
+            self.credentials = harness.connection_record(self, "initial account relay connection")
+        except BaseException:
             self.close()
-            raise AssertionError("PTY client did not return its private connection record\n" + detail)
-        line, _, rest = self.stdout.partition(b"\n")
-        self.stdout = bytearray(rest)
-        self.credentials = json.loads(line)
-        harness.sensitive.append(self.credentials["login_code"])
+            raise
         self.client_id = self.credentials["client_id"]
 
     def failure_detail(self):
@@ -639,10 +630,9 @@ class Dashboard(Harness):
 
         self.client, credentials = self.start_client("dashboard-nontty", cwd=self.workspace,
             extra_env={"SSMCP_UI_CONFIG": str(self.config("nontty")), "NO_COLOR": "1"})
-        self.sensitive.append(credentials["login_code"])
         self.client_id = credentials["client_id"]
-        # The previous foreground connection was explicitly disconnected; its
-        # grant is revoked. Authenticate this new connection before native calls.
+        # Authenticate an independent consumer grant against the same account;
+        # device disconnection does not revoke identity-scoped MCP grants.
         self.oauth_login(credentials)
         job = self.run_job([sys.executable, "-c", "print('DASH_NONTTY_READY', flush=True)"])
         self.call("ssmcp.exec.wait", {"job_id": job["job_id"], "wait_ms": 5000})
