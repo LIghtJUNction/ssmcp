@@ -111,11 +111,30 @@ pub struct CodeContext {
     pub run_id: String,
     pub code: String,
     pub timestamp_ms: u64,
+    /// Authenticated logical scope, emitted only after thread_scope:1 capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 impl CodeContext {
     pub fn validate(&self) -> Result<(), String> {
         validate_run_id(&self.run_id)?;
+        if self.session_id.is_some() != self.thread_id.is_some()
+            || [&self.session_id, &self.thread_id]
+                .iter()
+                .filter_map(|value| value.as_ref())
+                .any(|value| {
+                    value.is_empty()
+                        || value.len() > 128
+                        || !value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+                })
+        {
+            return Err("invalid authenticated session/thread scope".into());
+        }
         if self.code.trim().is_empty() || self.code.len() > MAX_CODE_BYTES {
             return Err("code audit source must contain 1..=65536 UTF-8 bytes".into());
         }
@@ -752,6 +771,8 @@ mod tests {
     fn code_source_metadata_is_bounded_exact_and_separate_from_tool_arguments() {
         let code = format!("//{}\n", "x".repeat(MAX_CODE_BYTES - 3));
         let context = CodeContext {
+            session_id: None,
+            thread_id: None,
             run_id: "a".repeat(32),
             code: code.clone(),
             timestamp_ms: 42,
@@ -783,6 +804,8 @@ mod tests {
         assert_eq!(decoded, context);
         assert!(
             CodeContext {
+                session_id: None,
+                thread_id: None,
                 code: "x".repeat(MAX_CODE_BYTES + 1),
                 ..context.clone()
             }
@@ -791,6 +814,8 @@ mod tests {
         );
         assert!(
             CodeContext {
+                session_id: None,
+                thread_id: None,
                 run_id: "bad".into(),
                 ..context
             }
