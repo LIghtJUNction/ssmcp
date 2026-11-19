@@ -2461,7 +2461,14 @@ mod tests {
             ui.sidebar = false;
             let mut hidden = vt100::Parser::new(nonzero(30), nonzero(120), 0);
             hidden.process(&preview_bytes(&ui, 30, 120));
-            assert!(!hidden.screen().contents().contains("账号"));
+            let contents = hidden.screen().contents();
+            if layout == Layout::Chat {
+                assert!(contents.contains("账号  example"), "{contents}");
+                assert!(contents.contains("本月剩余  0.75 GB"), "{contents}");
+            } else {
+                assert!(!contents.contains("账号"));
+            }
+            assert!(!contents.contains("( o.o )"));
         }
     }
 
