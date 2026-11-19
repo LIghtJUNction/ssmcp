@@ -152,10 +152,15 @@ fn account_panel(
         } else {
             r##"<a class="button secondary" href="#connect">连接电脑 <span class="arrow" aria-hidden="true">↗</span></a>"##
         };
+        let traffic_action = if traffic.is_none() {
+            r#"<a class="text-link" href="/account/traffic">流量与订单 <span aria-hidden="true">↗</span></a>"#
+        } else {
+            ""
+        };
         html.push_str(&format!(
             r#"<h2 id="account-title">账户信息</h2>
 <dl class="account-facts identity-facts"><div><dt>服务器用户名</dt><dd class="mono">{}</dd></div><div><dt>GitHub 账户</dt><dd>{}</dd></div></dl>
-{username_form}<div class="account-actions">{primary_action}</div>"#,
+{username_form}<div class="account-actions">{primary_action}{traffic_action}</div>"#,
             escape(a.handle.as_deref().unwrap_or("尚未注册")),
             escape(&a.github_login),
         ));
@@ -384,6 +389,27 @@ mod tests {
         assert!(!html.contains("不自动重置"));
         assert!(!html.contains("checkout"));
         assert!(!html.contains(r#"href="/account/admin#registered-users""#));
+    }
+
+    #[test]
+    fn account_keeps_orders_navigation_without_a_quota_snapshot() {
+        let account = sample_account();
+        let quota = monthly_quota(0);
+        let orders_link = r#"href="/account/traffic""#;
+        for management_enabled in [false, true] {
+            let without_quota =
+                account_panel(Some(&account), "csrf", true, management_enabled, None);
+            assert_eq!(without_quota.matches(orders_link).count(), 1);
+            let with_quota = account_panel(
+                Some(&account),
+                "csrf",
+                true,
+                management_enabled,
+                Some(&quota),
+            );
+            assert!(!with_quota.contains(orders_link));
+        }
+        assert!(!account_panel(None, "csrf", true, true, None).contains(orders_link));
     }
 
     #[test]
