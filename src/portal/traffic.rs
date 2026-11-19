@@ -6,7 +6,7 @@
 //! A reservation may remain charged if forwarding fails after it is committed.
 use super::{Problem, store::private_file};
 use crate::user_policy::{
-    FREE_MONTHLY_TRAFFIC_BYTES, TrafficFrame, TrafficQuota, valid_traffic_period,
+    FREE_MONTHLY_TRAFFIC_BYTES, TrafficBudget, TrafficFrame, TrafficQuota, valid_traffic_period,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -374,8 +374,9 @@ impl TrafficLedger {
         subject: &str,
         period: &str,
         utc_offset_minutes: i32,
-        unlimited: bool,
+        budget: impl Into<TrafficBudget>,
     ) -> Result<TrafficQuota, Problem> {
+        let budget = budget.into();
         if self.failed {
             return Err(Problem::Storage);
         }
@@ -388,14 +389,14 @@ impl TrafficLedger {
             utc_offset_minutes,
             usage.used_bytes,
             usage.paid_bytes,
-            unlimited,
+            budget,
         );
         if let Some(directional) = &usage.directional {
             quota.uploaded_bytes = directional.uploaded_bytes;
             quota.downloaded_bytes = directional.downloaded_bytes;
             quota.legacy_used_bytes = directional.legacy_used_bytes;
         }
-        if let Some(limit) = usage.adjusted_limit_bytes.filter(|_| !unlimited) {
+        if let Some(limit) = usage.adjusted_limit_bytes.filter(|_| !budget.unlimited) {
             quota.limit_bytes = Some(limit);
             quota.remaining_bytes = Some(limit.saturating_sub(usage.used_bytes));
         }
@@ -410,9 +411,9 @@ impl TrafficLedger {
         period: &str,
         utc_offset_minutes: i32,
         bytes: u64,
-        unlimited: bool,
+        budget: impl Into<TrafficBudget>,
     ) -> Result<(), Problem> {
-        let quota = self.snapshot(subject, period, utc_offset_minutes, unlimited)?;
+        let quota = self.snapshot(subject, period, utc_offset_minutes, budget)?;
         if quota
             .remaining_bytes
             .is_some_and(|remaining| bytes > remaining)
@@ -441,9 +442,9 @@ impl TrafficLedger {
         period: &str,
         utc_offset_minutes: i32,
         frame: TrafficFrame,
-        unlimited: bool,
+        budget: impl Into<TrafficBudget>,
     ) -> Result<(), Problem> {
-        let quota = self.snapshot(subject, period, utc_offset_minutes, unlimited)?;
+        let quota = self.snapshot(subject, period, utc_offset_minutes, budget)?;
         if frame.bytes == 0 {
             return Ok(());
         }
@@ -481,13 +482,24 @@ impl TrafficLedger {
         period: &str,
         utc_offset_minutes: i32,
         remaining_bytes: u64,
+        free_bytes: u64,
     ) -> Result<(), Problem> {
-        let quota = self.snapshot(subject, period, utc_offset_minutes, false)?;
+        let quota = self.snapshot(
+            subject,
+            period,
+            utc_offset_minutes,
+            TrafficBudget {
+                free_bytes,
+                unlimited: false,
+            },
+        )?;
         let limit_bytes = quota
             .used_bytes
             .checked_add(remaining_bytes)
             .ok_or(Problem::Invalid)?;
-        if quota.limit_bytes == Some(limit_bytes) {
+        // A same-value administrator edit still establishes an override. It
+        // must survive a later tier/configuration change in this same month.
+        if self.state.usage(subject, period).adjusted_limit_bytes == Some(limit_bytes) {
             return Ok(());
         }
         self.require_period_capacity(subject, period)?;
