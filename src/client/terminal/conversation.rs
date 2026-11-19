@@ -464,6 +464,14 @@ impl State {
             "/attach" => {
                 self.chat_start_input(attachments::source_argument(rest)?, true)?;
             }
+            "/select" => {
+                if !rest.is_empty() {
+                    return Err(
+                        "Use /select without arguments; F7 or Esc returns to the interface".into(),
+                    );
+                }
+                self.set_selection_mode(true);
+            }
             "/copy" => {
                 if !rest.is_empty() {
                     return Err(
@@ -1050,11 +1058,7 @@ impl State {
         self.chat_disarm_exit();
         self.chat_refresh_completions();
         if matches!(key, Key::Select) || (self.selection && matches!(key, Key::Escape)) {
-            self.selection = !self.selection;
-            self.notice = self.selection.then(|| {
-                "Copy mode · drag to select · use your terminal Copy · F7/Esc back".into()
-            });
-            self.dirty = true;
+            self.set_selection_mode(!self.selection);
             return;
         }
         if self.selection {
@@ -4238,6 +4242,26 @@ mod tests {
             );
             assert_eq!(screen.cell(top + 3, 4).unwrap().bgcolor(), background);
         }
+    }
+
+    #[test]
+    fn copy_mode_command_uses_terminal_selection_without_clipboard_side_effects() {
+        let mut state = preview(24, 100);
+        let queue = state.chat_data()["queue"].clone();
+        input(&mut state, b"/select\r");
+        assert!(state.selection);
+        assert!(state.conversation.composer.is_empty());
+        assert!(state.conversation.input_task.is_none());
+        assert_eq!(state.notice.as_deref(), Some(COPY_HINT));
+        assert!(!state.frame(Instant::now()).mouse_capture);
+        input(&mut state, b"ignored while selecting\r");
+        assert!(state.conversation.composer.is_empty());
+        assert_eq!(state.chat_data()["queue"], queue);
+        input(&mut state, b"\x1b[18~");
+        assert!(!state.selection);
+        assert!(state.frame(Instant::now()).mouse_capture);
+        assert!(state.chat_command("/select extra").is_err());
+        assert!(!state.selection);
     }
 
     #[test]
