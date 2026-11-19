@@ -246,6 +246,8 @@ impl State {
         if let Some(parked) = self.conversation.parked.take() {
             self.chat_restore_draft(parked);
         }
+        self.chat_follow_latest();
+        self.conversation.content_focus = false;
         self.notice = Some("Sending to queue… · the next draft stays editable".into());
         self.dirty = true;
     }
@@ -400,6 +402,14 @@ impl State {
                 parked: self.conversation.parked.clone(),
             });
         }
+    }
+
+    fn chat_follow_latest(&mut self) {
+        // Returning to a canvas column can restore its old scroll position.
+        // Select the conversation first, then explicitly follow its newest row.
+        self.chat_change_view(View::Activity);
+        self.scroll_logs(isize::MIN);
+        self.events.latest();
     }
 
     fn chat_change_view(&mut self, view: View) {
@@ -1216,11 +1226,7 @@ impl State {
                 self.events.scroll_by(isize::MIN.saturating_add(1));
                 self.chat_change_view(View::Activity);
             }
-            Key::HistoryEnd => {
-                self.scroll_logs(isize::MIN);
-                self.events.latest();
-                self.chat_change_view(View::Activity);
-            }
+            Key::HistoryEnd => self.chat_follow_latest(),
             Key::AuditUp
                 if content && self.conversation.view == View::Activity && !self.raw_logs =>
             {
@@ -3816,6 +3822,114 @@ mod tests {
         assert!(state.conversation.target.is_none());
         assert_eq!(state.conversation.parked.as_ref(), Some(&original));
         assert_eq!(state.conversation.editing.as_deref(), Some("request_b"));
+    }
+
+    fn chat_follow_fixture(rows: u16, cols: u16) -> State {
+        let mut state = preview(rows, cols);
+        state.events.clear();
+        for index in 0..8 {
+            state.log_message(
+                "assistant",
+                &format!(
+                    "Earlier reply {index}\n{}",
+                    "Long line with 中文 wrapping and preserved input. ".repeat(8)
+                ),
+                b"",
+            );
+        }
+        display(&mut state);
+        state
+    }
+
+    #[test]
+    fn chat_follow_send_returns_from_saved_panes_and_tracks_new_output() {
+        for (rows, cols) in [(12, 32), (28, 96)] {
+            for view in [View::Activity, View::Queue, View::History, View::Tasks] {
+                let mut state = chat_follow_fixture(rows, cols);
+                state.events.scroll_by(isize::MIN.saturating_add(1));
+                display(&mut state);
+                assert!(!state.events.is_following());
+                state.chat_change_view(view);
+                state.conversation.composer.set_text("newly sent request");
+                state.chat_enqueued("follow-request".into(), "newly sent request".into());
+                assert_eq!(state.conversation.view, View::Activity);
+                assert!(!state.conversation.content_focus);
+                assert!(state.conversation.composer.is_empty());
+                assert!(state.events.is_following());
+
+                state.conversation.composer.set_text("下一条 draft");
+                state.conversation.composer.left();
+                let draft = state.chat_saved_draft();
+                state.chat_accepted("follow-request".into(), "newly sent request".into());
+                display(&mut state);
+                assert_eq!(state.events.snapshot()["rows_below"], 0);
+                state.log_message("assistant", &"New assistant reply 中文 ".repeat(30), b"");
+                state.log_event(
+                    "fixture",
+                    &json!({"type":"exec.started","job_id":"follow-stream"}),
+                    b"[RUN] follow-stream started\n",
+                );
+                for chunk in 0..4 {
+                    state.log_event(
+                        "fixture",
+                        &json!({"type":"exec.stdout","job_id":"follow-stream"}),
+                        format!(
+                            "[STDOUT] follow-stream\nchunk {chunk}\n{}",
+                            "line\n".repeat(12)
+                        )
+                        .as_bytes(),
+                    );
+                    display(&mut state);
+                    assert!(state.events.is_following());
+                    assert_eq!(state.events.snapshot()["rows_below"], 0);
+                    assert_eq!(state.chat_saved_draft(), draft);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chat_follow_ack_and_stream_do_not_pull_a_reader_back_down() {
+        for (rows, cols) in [(12, 32), (28, 96)] {
+            let mut state = chat_follow_fixture(rows, cols);
+            state.chat_enqueued("follow-request".into(), "send then read".into());
+            display(&mut state);
+            state.events.scroll_by(-4);
+            display(&mut state);
+            let position = state.events.snapshot()["scroll"].clone();
+            assert!(!state.events.is_following());
+            state.conversation.composer.set_text("保留 this draft");
+            state.conversation.composer.left();
+            let draft = state.chat_saved_draft();
+            state.chat_accepted("follow-request".into(), "send then read".into());
+            state.log_message("assistant", &"A later reply 中文 ".repeat(40), b"");
+            state.log_event(
+                "fixture",
+                &json!({"type":"exec.stdout","job_id":"later-stream"}),
+                b"[STDOUT] later-stream\nnew output\n",
+            );
+            display(&mut state);
+            assert!(!state.events.is_following());
+            assert_eq!(state.events.snapshot()["scroll"], position);
+            assert_eq!(state.chat_saved_draft(), draft);
+        }
+    }
+
+    #[test]
+    fn chat_follow_ctrl_end_overrides_a_saved_conversation_position() {
+        let mut state = chat_follow_fixture(16, 40);
+        state.events.scroll_by(isize::MIN.saturating_add(1));
+        display(&mut state);
+        assert!(!state.events.is_following());
+        state.chat_change_view(View::Queue);
+        state.conversation.composer.set_text("keep this draft");
+        let draft = state.chat_saved_draft();
+        state.chat_key(Key::HistoryEnd);
+        display(&mut state);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(state.events.is_following());
+        assert_eq!(state.events.snapshot()["rows_below"], 0);
+        assert_eq!(state.chat_saved_draft(), draft);
     }
 
     #[test]
