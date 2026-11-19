@@ -537,7 +537,7 @@ Use await reload(clientId) after installing an updated client binary. The client
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
 must finish first. Call list again for the new ID. Account sessions reconnect using saved login \
-credentials; GitHub --allow access persists. Login-code connections need new OAuth login. \
+credentials; server-qualified --allow accounts are checked again after reconnect. \
 Temporary joined sessions cannot reload; create a new invitation. Both client and server must support reload.\n\n\
 Long command output is streamed to the client's private ssmcp storage \
 (normally /tmp/ssmcp-<uid> on Unix or LOCALAPPDATA/ssmcp/output on Windows). Read the \

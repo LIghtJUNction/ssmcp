@@ -57,26 +57,42 @@ pub(super) fn failure(message: String) -> crate::Error {
 
 /// Secrets are passed in this one child's environment, never argv, session
 /// manifests, connection output or inherited native-tool environments.
-pub(super) fn command(executable: &Path, credential: &Credential) -> Command {
+pub(super) fn command(executable: &Path, server: &str, credential: Option<&Credential>) -> Command {
     let mut command = Command::new(executable);
     command
         .arg("__relay")
-        .env("SSMCP_RELAY_SERVER", &credential.server)
-        .env("SSMCP_RELAY_TOKEN", &credential.token)
+        .env("SSMCP_RELAY_SERVER", server)
+        .env_remove("SSMCP_RELAY_TOKEN")
         .env(
             "SSMCP_RELAY_CAPABILITIES",
-            crate::wire::SESSION_ACCESS_CAPABILITY,
+            format!(
+                "{},{}",
+                crate::wire::SESSION_ACCESS_CAPABILITY,
+                crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+            ),
         )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(credential) = credential {
+        command.env("SSMCP_RELAY_TOKEN", &credential.token);
+    }
     command
 }
 
 fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
-    (parent_offer == Some(crate::wire::SESSION_ACCESS_CAPABILITY))
-        .then(|| HeaderValue::from_static(crate::wire::SESSION_ACCESS_CAPABILITY))
+    let offer = parent_offer.filter(|offer| offer.len() <= 256)?;
+    let capabilities: Vec<_> = offer.split(',').map(str::trim).collect();
+    if capabilities.iter().enumerate().any(|(index, value)| {
+        !matches!(
+            *value,
+            crate::wire::SESSION_ACCESS_CAPABILITY | crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+        ) || capabilities[..index].contains(value)
+    }) {
+        return None;
+    }
+    HeaderValue::from_str(&capabilities.join(",")).ok()
 }
 
 fn websocket_url(server: &str) -> crate::Result<String> {
@@ -102,13 +118,14 @@ fn decode_frame(bytes: &[u8]) -> io::Result<Frame> {
 pub(super) async fn run() -> crate::Result<()> {
     let server = std::env::var("SSMCP_RELAY_SERVER")
         .map_err(|_| "private relay must be started by ssmcp")?;
-    let token = std::env::var("SSMCP_RELAY_TOKEN")
-        .map_err(|_| "private relay requires a client credential")?;
+    let token = std::env::var("SSMCP_RELAY_TOKEN").ok();
     let mut request = websocket_url(&server)?.into_client_request()?;
-    let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-        .map_err(|_| "invalid client credential")?;
-    authorization.set_sensitive(true);
-    request.headers_mut().insert("authorization", authorization);
+    if let Some(token) = &token {
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| "invalid client credential")?;
+        authorization.set_sensitive(true);
+        request.headers_mut().insert("authorization", authorization);
+    }
     // The parent, not just this helper, must understand the optional Ready fields.
     // This also supports an old running client that starts a newer relay after update.
     // Older servers ignore the HTTP offer and keep the strict v7 Ready shape.
@@ -156,7 +173,11 @@ pub(super) async fn run() -> crate::Result<()> {
             write_frame(
                 &mut tokio::io::stdout(),
                 &Frame::Reject {
-                    message: AUTH_EXPIRED.into(),
+                    message: if token.is_some() {
+                        AUTH_EXPIRED.into()
+                    } else {
+                        UNSUPPORTED.into()
+                    },
                 },
             )
             .await?;
@@ -265,6 +286,19 @@ mod tests {
             access_capability_header(Some(crate::wire::SESSION_ACCESS_CAPABILITY)).unwrap(),
             crate::wire::SESSION_ACCESS_CAPABILITY
         );
+        let both = format!(
+            "{},{}",
+            crate::wire::SESSION_ACCESS_CAPABILITY,
+            crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+        );
+        assert_eq!(access_capability_header(Some(&both)).unwrap(), both);
+        for invalid in [
+            "control_attribution_v10",
+            "control_attribution_v1,admin",
+            "control_attribution_v1,control_attribution_v1",
+        ] {
+            assert!(access_capability_header(Some(invalid)).is_none());
+        }
     }
 
     #[test]

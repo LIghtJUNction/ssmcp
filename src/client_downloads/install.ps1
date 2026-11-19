@@ -1,8 +1,8 @@
-# Same-origin compatible release; verified user installation, then temporary join.
+# Same-origin compatible release; verified user installation, then an explicit relay connection.
 [CmdletBinding()]
 param(
     [string]$Server,
-    [Parameter(Mandatory = $true)][string]$Token,
+    [Parameter(Mandatory = $true)][string[]]$Allow,
     [string]$Name,
     [string]$InstallDir,
     [switch]$SkipBrowserDependencies,
@@ -14,7 +14,7 @@ Set-StrictMode -Version Latest
 $downloadOrigin = @@ORIGIN@@
 $requiredWire = @@WIRE@@
 if (-not $Server) { $Server = $downloadOrigin }
-if ($Server.TrimEnd('/') -cne $downloadOrigin) { throw 'The join server must match this gateway.' }
+if ($Server.TrimEnd('/') -cne $downloadOrigin) { throw 'The connection server must match this gateway.' }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'Use the shell installation command on Linux and macOS.'
 }
@@ -385,13 +385,14 @@ try {
     $stagePath = $null
     if ($backupPath -and [IO.File]::Exists($backupPath)) { [IO.File]::Delete($backupPath); $backupPath = $null }
     Write-Host "Installed ssmcp $version at $installedPath"
-    Write-Host 'Starting the authorized temporary session. Keep this terminal open; Ctrl-C stops it.'
-    $joinArguments = @('join', '--server', $Server, '--token', $Token)
-    if ($Name) { $joinArguments += @('--name', $Name) }
-    if ($NoWatchdog) { $joinArguments += '--no-watchdog' }
-    else { $joinArguments += @('--reconnect-delay', $ReconnectDelay.ToString()) }
-    & $installedPath @joinArguments
-    if ($LASTEXITCODE -ne 0) { throw "The temporary session exited with code $LASTEXITCODE." }
+    Write-Host 'Starting the controlled connection. Keep this terminal open; Ctrl-C stops it.'
+    $connectionArguments = @('--server', $Server)
+    foreach ($targetAccount in $Allow) { $connectionArguments += @('--allow', $targetAccount) }
+    if ($Name) { $connectionArguments += @('--name', $Name) }
+    if ($NoWatchdog) { $connectionArguments += '--no-watchdog' }
+    else { $connectionArguments += @('--reconnect-delay', $ReconnectDelay.ToString()) }
+    & $installedPath @connectionArguments
+    if ($LASTEXITCODE -ne 0) { throw "The controlled connection exited with code $LASTEXITCODE." }
 } finally {
     $cancellation.Cancel()
     if ($client) { $client.Dispose() }

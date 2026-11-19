@@ -69,16 +69,15 @@ ssmcp whoami    # 查看当前账号
 
 将终端显示的 `https://你的服务器/mcp` 加入 ChatGPT 或其他支持 OAuth 的 MCP 客户端，再完成该应用的授权。CLI 登录与 MCP 应用授权分别管理。
 
-对外入口有四个：
+对外入口有三个：
 
 | 入口 | 作用 |
 | --- | --- |
 | `list` | 发现当前身份可访问的设备与客户端工具目录 |
 | `code_mode` | 用 JavaScript 组合原生调用，安排顺序、并发和结果读取 |
 | `collab` | 同一会话中的成员身份、定向消息、广播与确认 |
-| `invite` | 由当前 GitHub OAuth 身份签发一次性安装接入命令，目标设备无需再次登录 GitHub |
 
-控制端可调用 `invite` 获取 Shell 或 PowerShell 命令，发给自己的目标设备执行。命令验证网关发布的兼容客户端并安装到用户目录，再启动接入；邀请使用一次，设备授权受原始 OAuth 授权的期限和撤销约束。网关须先配置匹配的下载清单。[安装与邀请](docs/client-accounts.md)
+被控设备可以不登录，直接运行 `ssmcp --allow 用户名@中继服务器`；控制者必须登录该服务器的既有账号。显式名单仅授权列出的人，已登录客户端省略名单时仅允许自己。CLI `invite` / `join` 和 MCP `invite` 已移除，会话内 agent 的 `collab.join` 保留。[账号与授权](docs/client-accounts.md)
 
 先从 `list` 选择确切的客户端 ID，再查询工具的原始 schema：
 
