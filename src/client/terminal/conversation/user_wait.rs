@@ -317,7 +317,9 @@ mod tests {
     fn user_wait_real_frame_keeps_wait_visible_with_a_draft_and_preserves_specific_controls() {
         fn screen(state: &mut State) -> String {
             let frame = state.chat_frame(Instant::now());
-            let mut parser = vt100::Parser::new(frame.geometry.rows, frame.geometry.cols, 0);
+            let rows = std::num::NonZeroU16::new(frame.geometry.rows).expect("nonzero frame rows");
+            let cols = std::num::NonZeroU16::new(frame.geometry.cols).expect("nonzero frame cols");
+            let mut parser = vt100::Parser::new(rows, cols, 0);
             parser.process(&frame.diff(None));
             parser.screen().contents()
         }
