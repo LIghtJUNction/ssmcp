@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import base64
 import concurrent.futures
+import errno
+import fcntl
 import hashlib
 import http.server
 import json
@@ -20,17 +22,20 @@ import platform
 import pwd
 import re
 import secrets
+import selectors
 import shutil
 import signal
+import struct
 import subprocess
 import tempfile
+import termios
 import threading
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from e2e import Harness, wait_for
 from e2e_account_gateway import Form
-from e2e_dashboard import Frontend, text
+from e2e_dashboard import Decoder, Frontend, text
 
 
 def sha256(path):
@@ -91,6 +96,64 @@ class Callback:
             raise AssertionError("owned OAuth callback did not stop")
 
 
+class LocalFrontend(Frontend):
+    """Use a human terminal for all three FDs, including connection rendering.
+
+    The shared account fixture captures JSON from piped stdout. Local users need
+    the ordinary TTY connection view instead; no synthetic Ready is substituted.
+    Credentials are read from the actual visible Logs view after startup.
+    """
+
+    def __init__(self, harness, label, config, decoder, *, rows=34, cols=120):
+        self.harness = harness
+        self.decoder = Decoder(decoder)
+        self.master, self.slave = os.openpty()
+        self.original_termios = termios.tcgetattr(self.slave)
+        self.transcript = bytearray()
+        self.stdout = bytearray()
+        self.closed = False
+        self.decoder.request(op="resize", rows=rows, cols=cols)
+        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        os.set_blocking(self.master, False)
+        environment = harness.client_environment(label)
+        git = shutil.which("git")
+        if not git:
+            raise RuntimeError("local terminal E2E requires installed Git")
+        (Path(environment["PATH"]) / "git").symlink_to(Path(git).absolute())
+        environment.update(harness.safe_git_env)
+        environment.update({"SSMCP_UI_CONFIG": str(config), "TERM": "xterm-256color", "NO_COLOR": "1", "COLUMNS": str(cols), "LINES": str(rows)})
+
+        def controlling_terminal():
+            os.setsid()
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+            os.tcsetpgrp(0, os.getpgrp())
+
+        self.process = subprocess.Popen(harness.client_command(name=label),
+            stdin=self.slave, stdout=self.slave, stderr=self.slave, cwd=harness.workspace,
+            env=environment, preexec_fn=controlling_terminal)
+        harness.processes.append(self.process)
+
+    def pump(self, seconds=0.05):
+        deadline = time.monotonic() + seconds
+        output = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(self.master, selectors.EVENT_READ)
+            while True:
+                for key, _ in selector.select(max(0, deadline - time.monotonic())):
+                    try:
+                        data = os.read(key.fd, 65536)
+                    except OSError as error:
+                        if error.errno in (errno.EIO, errno.EAGAIN):
+                            continue
+                        raise
+                    if data:
+                        output.extend(data)
+                        self.transcript.extend(data)
+                if time.monotonic() >= deadline:
+                    break
+        self.decoder.feed(output)
+
+
 class Local(Harness):
     def __init__(self, directory, binary_dir, decoder, browser, browser_preview=None):
         super().__init__(directory, binary_dir)
@@ -121,11 +184,11 @@ class Local(Harness):
         environment = super().client_environment(label)
         home = self.directory / f"{label}-home"
         home.mkdir(mode=0o700)
-        for name in ("config", "state", "cache", "runtime", "output"):
+        for name in ("config", "state", "cache", "runtime"):
             (home / name).mkdir(mode=0o700)
         environment.update({"HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
             "XDG_STATE_HOME": str(home / "state"), "XDG_CACHE_HOME": str(home / "cache"),
-            "XDG_RUNTIME_DIR": str(home / "runtime"), "SSMCP_OUTPUT_DIR": str(home / "output")})
+            "XDG_RUNTIME_DIR": str(home / "runtime")})
         for name in ("SSMCP_RELAY_SERVER", "SSMCP_RELAY_TOKEN", "SSMCP_RELAY_CAPABILITIES",
                      "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP"):
             environment.pop(name, None)
@@ -138,13 +201,9 @@ class Local(Harness):
             raise AssertionError("local CLI did not provide a one-use login code")
         self.sensitive.append(code)
         resource = urlsplit(value.get("url", ""))
-        self.check(value.get("transport") == "local" and value.get("auth") == "local_user",
-                   "the actual CLI identifies local OS-user transport")
         self.check(resource.scheme == "http" and resource.hostname == "127.0.0.1"
                    and resource.port and resource.path == "/" + pwd.getpwuid(os.geteuid()).pw_name,
                    "the real local endpoint is loopback and bound to the effective OS user")
-        self.check(not value.get("allow") and "secret" not in value,
-                   "local connection metadata does not invent an external identity")
         self.origin = self.issuer = f"http://127.0.0.1:{resource.port}"
         self.http_port = resource.port
         self.user = resource.path[1:]
@@ -160,10 +219,8 @@ class Local(Harness):
     def prepare(self):
         config = self.directory / "local-ui.toml"
         config.write_text('[ui]\ndashboard=true\ncolor=false\nsidebar=false\nlayout="chat"\n')
-        self.front = Frontend(self, "local-fixture", config, self.decoder, rows=34, cols=120)
+        self.front = LocalFrontend(self, "local-fixture", config, self.decoder, rows=34, cols=120)
         self.client = self.front.process
-        self.client_id = self.front.client_id
-        self.credentials = self.front.credentials
         version = subprocess.run([str(self.binary_dir / "ssmcp"), "--version"],
                                  env=self.environments["local-fixture"], cwd=self.workspace,
                                  capture_output=True, text=True, timeout=5, check=True).stdout.strip()
@@ -177,7 +234,8 @@ class Local(Harness):
         front = self.front
         snapshot = front.until(lambda value: "本地会话" in text(value) and "/logs" in text(value),
                                "local authorization instructions")
-        self.check(self.origin in text(snapshot) and "本月剩余" not in text(snapshot)
+        footer_origin = re.search(r"http://127\.0\.0\.1:[0-9]+", text(snapshot))
+        self.check(footer_origin is not None and "本月剩余" not in text(snapshot)
                    and "未登录" not in text(snapshot),
                    "actual PTY shows local origin and authorization without a cloud-account quota")
         front.send("/login\r")
@@ -188,16 +246,23 @@ class Local(Harness):
         front.send("/logs\r")
         # The entry is read only in this owned PTY. Never persist its secret or a
         # screenshot of the real code in the machine-readable report.
-        seen = False
-        for _ in range(8):
+        credentials = None
+        deadline = time.monotonic() + 15
+        page = 0
+        while time.monotonic() < deadline:
             snapshot = front.snapshot()
-            compact = "".join(text(snapshot).split())
-            if self.credentials["login_code"] in compact and self.origin in compact:
-                seen = True
+            visible = text(snapshot)
+            endpoint = re.search(r"MCP\s+(http://127\.0\.0\.1:[0-9]+/[A-Za-z0-9_.-]+)", visible)
+            code = re.search(r"Login\s+([0-9a-f]{64})\b", visible)
+            if endpoint and code:
+                credentials = {"url": endpoint[1], "login_code": code[1]}
                 break
-            front.send(b"\x1b[5~")
+            front.send(b"\x1b[1;5F" if page % 8 == 0 else b"\x1b[5~")
+            page += 1
             front.pump(0.1)
-        self.check(seen, "the user can reach the current MCP URL and one-use code through /logs")
+        self.check(credentials is not None, "the user can reach the current MCP URL and one-use code through /logs")
+        self.credentials = self.validate_connection_record(credentials)
+        self.check(footer_origin[0] == self.origin, "the visible local footer and authorization resource name the same origin")
         front.send(b"\x1b")
         front.pump(0.15)
 
@@ -292,8 +357,10 @@ class Local(Harness):
                                                        "clientInfo": {"name": "local-acceptance", "version": "1"}})
         self.check(status == 200 and "result" in initialized, "the authenticated local client initializes MCP")
         clients = self.public_call("list", {})
-        self.check(any(item["id"] == self.client_id for item in clients["clients"]),
+        matching = [item for item in clients["clients"] if item["name"] == "local-fixture" and item["cwd"] == str(self.workspace.resolve())]
+        self.check(len(matching) == 1,
                    "local authorization discovers the actual foreground client")
+        self.client_id = matching[0]["id"]
         content = "Pure local MCP\n中文与空格 remain intact.\n"
         self.call("ssmcp.fs.write_text", {"path": "local-check.txt", "text": content})
         read = self.call("ssmcp.fs.read_text", {"path": "local-check.txt"})
@@ -326,7 +393,8 @@ class Local(Harness):
         self.check(socket_path.parent.stat().st_uid == os.geteuid()
                    and socket_path.parent.stat().st_mode & 0o777 == 0o700,
                    "the actual local transport directory is private to the effective UID")
-        self.front.disconnect()
+        _, restored = self.front.disconnect()
+        self.check(restored == self.front.original_termios, "local shutdown restores the owned physical terminal mode")
         wait_for(lambda: all(process_identity(pid) != identity for pid, identity in children.items()),
                  timeout=8, description="owned local transport and backend descendants to exit")
         self.check(not socket_path.exists() and not socket_path.parent.exists(),
@@ -449,6 +517,7 @@ def main():
             finally:
                 report.update(checks=harness.checks, browser_cookie_verified=harness.browser_cookie_verified,
                               cli_version=harness.cli_version, browser=harness.browser_details,
+                              owned_client_exit_codes=[process.poll() for process in harness.processes],
                               wait_user_verified=harness.wait_user_verified, cleanup_verified=harness.cleanup_verified,
                               duration_seconds=round(time.monotonic() - started, 3))
                 if args.browser_preview and args.browser_preview.is_file():
