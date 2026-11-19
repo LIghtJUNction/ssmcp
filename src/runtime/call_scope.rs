@@ -23,6 +23,24 @@ pub(crate) struct CallScope {
     request_id: u64,
     run_id: Option<String>,
     attribution: Option<ControlAttribution>,
+    thread: Option<ThreadScope>,
+}
+
+/// Accepted only from the relay's verified participant binding, never tool JSON.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ThreadScope {
+    session_id: String,
+    thread_id: String,
+}
+
+impl ThreadScope {
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub(crate) fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
 }
 
 pub(super) fn connection() -> u64 {
@@ -44,11 +62,28 @@ impl CallScope {
         if let Some(context) = context {
             context.validate()?;
         }
+        let thread = context
+            .filter(|context| context.thread_id.is_some())
+            .map(|context| {
+                let thread_id = context.thread_id.as_deref().expect("validated pair");
+                if attribution
+                    .and_then(|value| value.agent.as_ref())
+                    .is_none_or(|agent| agent.id != thread_id)
+                {
+                    return Err("thread scope lacks a matching authenticated participant".into());
+                }
+                Ok::<_, String>(ThreadScope {
+                    session_id: context.session_id.clone().expect("validated pair"),
+                    thread_id: thread_id.into(),
+                })
+            })
+            .transpose()?;
         Ok(Arc::new(Self {
             connection,
             request_id,
             run_id: context.map(|context| context.run_id.clone()),
             attribution: attribution.cloned(),
+            thread,
         }))
     }
 
@@ -68,11 +103,16 @@ impl CallScope {
         self.attribution.as_ref()
     }
 
+    pub(crate) fn thread(&self) -> Option<&ThreadScope> {
+        self.thread.as_ref()
+    }
+
     pub(crate) fn same_call(&self, other: &Self) -> bool {
         self.connection() == other.connection()
             && self.request_id() == other.request_id()
             && self.run_id() == other.run_id()
             && self.attribution() == other.attribution()
+            && self.thread() == other.thread()
     }
 
     /// Tokio does not inherit this scope across spawn/spawn_blocking. A native
@@ -189,5 +229,29 @@ mod tests {
         invalid.account.subject = "0".into();
         assert!(CallScope::from_relay(1, 1, Some(&invalid), None).is_err());
         assert_ne!(connection(), connection());
+    }
+
+    #[test]
+    fn call_scope_thread_requires_the_same_verified_agent_and_preserves_session() {
+        let agent_id = format!("agent_{}", "a".repeat(32));
+        let mut attribution = source("123", 1).attribution().unwrap().clone();
+        let context = CodeContext {
+            run_id: "a".repeat(32),
+            code: "return 1".into(),
+            timestamp_ms: 1,
+            session_id: Some("session_fixture".into()),
+            thread_id: Some(agent_id.clone()),
+        };
+        assert!(CallScope::from_relay(7, 1, None, Some(&context)).is_err());
+        assert!(CallScope::from_relay(7, 1, Some(&attribution), Some(&context)).is_err());
+        attribution.agent = Some(crate::wire::ControlAgent {
+            id: agent_id.clone(),
+            name: "display only".into(),
+        });
+        let scope = CallScope::from_relay(7, 1, Some(&attribution), Some(&context)).unwrap();
+        assert_eq!(scope.thread().unwrap().session_id(), "session_fixture");
+        assert_eq!(scope.thread().unwrap().thread_id(), agent_id);
+        attribution.agent.as_mut().unwrap().id = format!("agent_{}", "b".repeat(32));
+        assert!(CallScope::from_relay(7, 1, Some(&attribution), Some(&context)).is_err());
     }
 }

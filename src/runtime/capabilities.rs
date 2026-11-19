@@ -319,6 +319,12 @@ impl Runtime {
         manifest["schema"] = json!("ssmcp.client.capabilities.v1");
         manifest["client_version"] = json!(env!("CARGO_PKG_VERSION"));
         manifest["wire_version"] = json!(crate::wire::VERSION);
+        manifest["thread_scope"] = json!(1);
+        manifest["listener"] = json!({
+            "tool":"ssmcp.ui.listener", "scope":"authenticated account and bound thread",
+            "transports":["authenticated_mcp_longpoll", "private_unix_socket_on_linux"],
+            "delivery":"one shared lease, cursor and ACK state; no automatic replay"
+        });
         manifest["resources"] = json!({
             "list":"ssmcp.resources.list","templates":"ssmcp.resources.templates","read":"ssmcp.resources.read",
             "max_response_bytes":MAX_BYTES,"page_size":PAGE_SIZE,"guide":"ssmcp-client://guide","skill":"ssmcp-client://skill",

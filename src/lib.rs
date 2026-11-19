@@ -18,6 +18,8 @@ pub mod http;
 #[cfg(target_os = "linux")]
 pub mod identity;
 #[cfg(target_os = "linux")]
+pub(crate) mod local_socket;
+#[cfg(target_os = "linux")]
 pub mod management;
 pub(crate) mod memory;
 #[cfg(target_os = "linux")]

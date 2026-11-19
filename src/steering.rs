@@ -6,7 +6,7 @@ use crate::wire::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::VecDeque,
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -29,28 +29,6 @@ struct State {
     messages: VecDeque<SteeringMessage>,
     commands: VecDeque<(String, [u8; 32])>,
     reminders: crate::code_mode::reminders::State,
-    sources: BTreeMap<String, MessageSource>,
-    external_attempts: VecDeque<ExternalAttempt>,
-}
-
-/// Origin is trusted server metadata and never taken from message text.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MessageSource {
-    User,
-    Webhook,
-}
-impl MessageSource {
-    fn label(self) -> &'static str {
-        match self {
-            Self::User => "client_user",
-            Self::Webhook => "webhook",
-        }
-    }
-}
-struct ExternalAttempt {
-    key: String,
-    fingerprint: [u8; 32],
-    receipt: Value,
 }
 
 fn pending(message: &SteeringMessage) -> bool {
@@ -118,12 +96,7 @@ impl State {
             let Ok(revision) = next(message.revision) else {
                 break;
             };
-            let source = self
-                .sources
-                .get(&message.id)
-                .copied()
-                .unwrap_or(MessageSource::User);
-            let value = json!({"source":source.label(),"client_id":client_id,"session_id":client_id,"thread_id":agent_id,"message_id":message.id,
+            let value = json!({"source":"client_user","client_id":client_id,"session_id":client_id,"thread_id":agent_id,"message_id":message.id,
                 "revision":revision,"text":message.text,"target":message.target,"agent_id":agent_id});
             let bytes = value.to_string().len();
             if used.saturating_add(bytes) > max_bytes {
@@ -159,9 +132,7 @@ impl State {
             let Some(index) = self.messages.iter().position(|message| !pending(message)) else {
                 break;
             };
-            if let Some(message) = self.messages.remove(index) {
-                self.sources.remove(&message.id);
-            }
+            self.messages.remove(index);
         }
     }
 
@@ -177,136 +148,6 @@ impl State {
 }
 
 impl Queue {
-    /// Admit all selected recipients under one lock. A broadcast snapshots the
-    /// current roster; later arrivals do not receive old messages.
-    pub(crate) fn enqueue(
-        &self,
-        client_id: &str,
-        agents: Vec<SteeringAgent>,
-        target: Option<&str>,
-        text: &str,
-        broadcast: bool,
-        idempotency_key: Option<&str>,
-        source: MessageSource,
-    ) -> Result<Value, String> {
-        if text.trim().is_empty()
-            || text.len() > MAX_USER_MESSAGE_BYTES
-            || text
-                .chars()
-                .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
-        {
-            return Err("message must contain 1..=16384 UTF-8 bytes; only newline and tab controls are allowed".into());
-        }
-        if broadcast && target.is_some() {
-            return Err("choose a thread target or session broadcast, not both".into());
-        }
-        if let Some(key) = idempotency_key {
-            identifier(key, "idempotency_key")?;
-        }
-        let fingerprint: [u8; 32] = Sha256::digest(
-            serde_json::to_vec(&(target, text, broadcast, source.label()))
-                .map_err(|error| error.to_string())?,
-        )
-        .into();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some(key) = idempotency_key
-            && let Some(attempt) = state
-                .external_attempts
-                .iter()
-                .find(|attempt| attempt.key == key)
-        {
-            if attempt.fingerprint != fingerprint {
-                return Err(
-                    "idempotency_key was already used for different message content".into(),
-                );
-            }
-            let mut receipt = attempt.receipt.clone();
-            receipt["duplicate"] = json!(true);
-            return Ok(receipt);
-        }
-        let targets: Vec<String> = if broadcast {
-            if agents.is_empty() {
-                return Err("session has no active threads to broadcast to".into());
-            }
-            agents.iter().map(|agent| agent.agent_id.clone()).collect()
-        } else if let Some(target) = target {
-            if !agents.iter().any(|agent| agent.agent_id == target) {
-                return Err(
-                    "target thread is unavailable; list active threads before retrying".into(),
-                );
-            }
-            vec![target.into()]
-        } else {
-            vec!["next".into()]
-        };
-        let retained_pending: usize = state
-            .messages
-            .iter()
-            .filter(|message| pending(message))
-            .map(cost)
-            .sum();
-        let pending_count = state
-            .messages
-            .iter()
-            .filter(|message| pending(message))
-            .count();
-        let now = now_ms();
-        let mut messages = Vec::with_capacity(targets.len());
-        for target in &targets {
-            let mut bytes = [0u8; 16];
-            crate::platform::random_bytes(&mut bytes).map_err(|error| error.to_string())?;
-            let prefix = if source == MessageSource::Webhook {
-                "webhook"
-            } else {
-                "message"
-            };
-            let id = format!(
-                "{prefix}_{}",
-                bytes
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            );
-            messages.push(SteeringMessage {
-                id,
-                revision: 1,
-                text: text.into(),
-                target: target.clone(),
-                state: SteeringState::Queued,
-                created_at_ms: now,
-                updated_at_ms: now,
-                delivery: None,
-            });
-        }
-        if pending_count + messages.len() > MAX_USER_MESSAGES
-            || retained_pending.saturating_add(messages.iter().map(cost).sum::<usize>())
-                > MAX_RETAINED_BYTES
-        {
-            return Err("user message queue is full; no broadcast recipients were queued".into());
-        }
-        let revision = next(state.revision)?;
-        let ids: Vec<_> = messages.iter().map(|message| message.id.clone()).collect();
-        for message in messages {
-            state.sources.insert(message.id.clone(), source);
-            state.messages.push_back(message);
-        }
-        state.revision = revision;
-        state.trim();
-        let receipt = json!({"session_id":client_id,"message_ids":ids,"thread_ids":targets,
-            "queued":ids.len(),"delivery":"queued","source":source.label(),"duplicate":false});
-        if let Some(key) = idempotency_key {
-            state.external_attempts.push_back(ExternalAttempt {
-                key: key.into(),
-                fingerprint,
-                receipt: receipt.clone(),
-            });
-            if state.external_attempts.len() > MAX_COMMANDS {
-                state.external_attempts.pop_front();
-            }
-        }
-        Ok(receipt)
-    }
-
     pub(crate) fn command(
         &self,
         client_id: &str,
@@ -743,20 +584,19 @@ mod tests {
     }
 
     #[test]
-    fn session_broadcast_waits_for_each_exact_thread_and_retries_once() {
+    fn global_publish_waits_for_each_exact_thread_and_retries_once() {
         let queue = Queue::default();
+        let command = publish(
+            "global_retry",
+            "global_message",
+            0,
+            "check AGENTS.md",
+            "global",
+        );
         let receipt = queue
-            .enqueue(
-                "session",
-                threads(),
-                None,
-                "check AGENTS.md",
-                true,
-                Some("broadcast_once"),
-                MessageSource::User,
-            )
+            .command("session", threads(), command.clone())
             .unwrap();
-        assert_eq!(receipt["queued"], 2);
+        assert_eq!(receipt.messages.len(), 2);
         assert!(
             queue
                 .claim("session", "unbound", None, 8, MAX_DELIVERY_BYTES)
@@ -767,28 +607,22 @@ mod tests {
         assert_eq!(first[0]["thread_id"], "thread_a");
         assert!(
             queue
-                .claim(
-                    "session",
-                    "one_retry",
-                    Some("thread_a"),
-                    8,
-                    MAX_DELIVERY_BYTES
-                )
+                .claim("session", "retry", Some("thread_a"), 8, MAX_DELIVERY_BYTES)
                 .is_empty()
         );
-        let duplicate = queue
-            .enqueue(
-                "session",
-                threads(),
-                None,
-                "check AGENTS.md",
-                true,
-                Some("broadcast_once"),
-                MessageSource::User,
-            )
-            .unwrap();
-        assert_eq!(duplicate["duplicate"], true);
-        assert_eq!(duplicate["message_ids"], receipt["message_ids"]);
+        let duplicate = queue.command("session", threads(), command).unwrap();
+        assert_eq!(
+            duplicate
+                .messages
+                .iter()
+                .map(|message| &message.id)
+                .collect::<Vec<_>>(),
+            receipt
+                .messages
+                .iter()
+                .map(|message| &message.id)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(
             queue
                 .claim("session", "two", Some("thread_b"), 8, MAX_DELIVERY_BYTES)
@@ -797,60 +631,56 @@ mod tests {
         );
         assert!(
             queue
-                .enqueue(
+                .command(
                     "session",
                     threads(),
-                    None,
-                    "changed content",
-                    true,
-                    Some("broadcast_once"),
-                    MessageSource::User
+                    publish("global_retry", "global_message", 0, "changed", "global")
                 )
                 .is_err()
         );
     }
 
     #[test]
-    fn broadcast_admission_is_atomic_and_webhooks_retain_external_origin() {
+    fn global_publish_admission_is_atomic_and_private_delivery_keeps_user_origin() {
         let queue = Queue::default();
         for index in 0..MAX_USER_MESSAGES - 1 {
             queue
-                .enqueue(
+                .command(
                     "session",
                     threads(),
-                    None,
-                    "queued",
-                    false,
-                    Some(&format!("key_{index}")),
-                    MessageSource::User,
+                    publish(
+                        &format!("command_{index}"),
+                        &format!("message_{index}"),
+                        0,
+                        "queued",
+                        "next",
+                    ),
                 )
                 .unwrap();
         }
         let before = snapshot(&queue);
         assert!(
             queue
-                .enqueue(
+                .command(
                     "session",
                     threads(),
-                    None,
-                    "broadcast",
-                    true,
-                    None,
-                    MessageSource::User
+                    publish("overflow", "overflow_message", 0, "broadcast", "global")
                 )
                 .is_err()
         );
         assert_eq!(snapshot(&queue), before);
         let other = Queue::default();
         other
-            .enqueue(
+            .command(
                 "session",
                 threads(),
-                Some("thread_a"),
-                "build completed",
-                false,
-                None,
-                MessageSource::Webhook,
+                publish(
+                    "private",
+                    "private_message",
+                    0,
+                    "private user request",
+                    "thread_a",
+                ),
             )
             .unwrap();
         assert!(
@@ -859,8 +689,9 @@ mod tests {
                 .is_empty()
         );
         let claimed = other.claim("session", "right", Some("thread_a"), 8, MAX_DELIVERY_BYTES);
-        assert_eq!(claimed[0]["source"], "webhook");
+        assert_eq!(claimed[0]["source"], "client_user");
         assert_eq!(claimed[0]["session_id"], "session");
+        assert_eq!(claimed[0]["thread_id"], "thread_a");
     }
 
     #[test]

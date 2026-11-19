@@ -1,6 +1,6 @@
 //! Replaceable renderer for public guide pages and known static assets only.
 //! The core never forwards cookies, bearer tokens, account state, or headers.
-mod socket;
+use crate::local_socket as socket;
 #[cfg(test)]
 mod tests;
 
