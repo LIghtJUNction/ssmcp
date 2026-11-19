@@ -135,7 +135,7 @@ def main():
                 if title:
                     h.check("text/html" in content_type and "<title>" + title + "</title>" in body
                             and '<html lang="' + language + '">' in body, path + " returns the correct localized guide")
-                    h.check("{{" not in body and e2e.PUBLIC_URL + "/mcp" in body
+                    h.check("{{" not in body and h.issuer + "/mcp" in body
                             and "ssmcp.fs.read_image" in body, path + " renders real gateway examples")
                     file = "guide-zh.html" if language == "zh-CN" else "guide-en.html"
                 else:
@@ -166,7 +166,7 @@ def main():
             window = Window(h, ztty, temp)
             credentials = window.connection()
             h.client_id = credentials["client_id"]
-            h.sensitive.append(credentials["login_code"])
+            h.validate_connection_record(credentials)
             h.oauth_login(credentials)
             window.wait(lambda: h.ui("/display/rows") == 32, "candidate UI")
             ready = True
@@ -175,7 +175,7 @@ def main():
             endpoint = urlsplit(credentials["url"])
             assert endpoint.username is None and endpoint.password is None
             expected = endpoint.scheme + "://" + endpoint.netloc + "/"
-            h.check(expected == e2e.PUBLIC_URL + "/", "the owned HTTPS fixture has the expected public origin")
+            h.check(expected == h.issuer + "/", "the owned HTTPS fixture has the expected public origin")
             # Wait beyond the two-second anonymous discovery budget so an
             # initial portal placeholder cannot count as settled fallback.
             discovery_settled = time.monotonic() + 2.1
@@ -232,3 +232,4 @@ if __name__ == "__main__":
     def interrupted(*_): raise TimeoutError("guide validation interrupted")
     signal.signal(signal.SIGTERM, interrupted)
     raise SystemExit(main())
+

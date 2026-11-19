@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Verify titles, long-output artifacts and reload through real local SSH/OAuth.
+"""Verify titles, long-output artifacts and reload through real local WSS/OAuth.
 
-Uses the isolated sshd and OAuth helpers from e2e.py. No existing SSH identity,
+Uses the isolated account gateway and OAuth helpers from e2e.py. No real identity,
 external service or model is used. Client PATH contains only test shell tools,
 so automatic harness discovery cannot start an installed coding agent.
 """
@@ -69,17 +69,12 @@ class SessionFeatures(Harness):
         self.metrics = {}
 
     def titled_client(self, label, title, cwd):
-        command = [
-            str(self.binary_dir / "ssmcp"), "--ssh",
-            "-F", str(self.directory / "ssh_config"),
-            "--name", label, "--title", title, "--shell", "/bin/sh",
-            "ssmcp-e2e",
-        ]
+        command = self.client_command(name=label, extra_args=("--title", title))
         process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd,
                              env=self.client_environment(label))
         reader = ConnectionReader(process)
         credentials = reader.read()
-        self.sensitive.append(credentials.get("login_code", ""))
+        self.validate_connection_record(credentials)
         return process, reader, credentials
 
     def quiet_terminal(self, client_id):
@@ -165,7 +160,7 @@ class SessionFeatures(Harness):
                 cursor = result["next_offset"]
                 pages += 1
         self.check(cursor == metadata["bytes"] and digest.hexdigest() == metadata["sha256"],
-                   "outputs.read reconstructs the exact artifact across bounded SSH pages")
+                   "outputs.read reconstructs the exact artifact across bounded WSS pages")
         return pages
 
     def run(self):
@@ -222,23 +217,24 @@ class SessionFeatures(Harness):
         accepted = self.public_call("code_mode", {"code": code})["result"]
         self.check(accepted.get("accepted") is True
                    and accepted["client_id"] == old_id
-                   and accepted["oauth_login_required"] is True,
-                   "code_mode reload returns its acknowledged lifecycle result over real SSH")
+                   and accepted["oauth_login_required"] is False,
+                   "code_mode reload returns its acknowledged lifecycle result over real WSS")
         replacement = reader.read()
-        self.sensitive.append(replacement.get("login_code", ""))
+        self.validate_connection_record(replacement)
         self.check(self.client.poll() is None and self.client.pid == pid
                    and replacement["client_id"] != old_id
                    and replacement["title"] == original["title"]
                    and replacement["cwd"] == original["cwd"]
                    and replacement["name"] == original["name"],
                    "same client process execs and reconnects with new ID while preserving title, name and cwd")
-        wait_for(lambda: self.request(body={}, secret=old_token)[0] == 401,
-                 description="old OAuth grant revoked after reload")
-        self.check(True, "reload revokes the old connection-bound OAuth access token")
-        self.oauth_login(replacement)
+        self.check(self.rpc("ping", modern=True, secret=old_token)[0] == 200,
+                   "device reload preserves the independent account OAuth grant")
         self.client_id = replacement["client_id"]
         self.check(self.call("terminal.status")["running"],
-                   "fresh OAuth authorization controls the reloaded terminal")
+                   "the same account OAuth authorization controls the reloaded terminal")
+        listed = self.public_call("list")["clients"]
+        self.check(all(item["id"] != old_id for item in listed),
+                   "the disconnected client ID is absent after reload")
         code = "return await outputs.stat(%s, {id:%s});" % (
             json.dumps(self.client_id), json.dumps(artifact["id"]),
         )
@@ -252,7 +248,7 @@ class SessionFeatures(Harness):
             "large_output_sha256": artifact["sha256"], "artifact_read_pages": pages,
             "line_threshold_bytes": line_artifact["bytes"], "line_threshold_lines": line_artifact["lines"],
             "client_id_changed": True, "same_process_reconnected": True,
-            "previous_oauth_status": 401, "artifact_survived_reload": True,
+            "previous_oauth_status": 200, "artifact_survived_reload": True,
         }
 
     def remove_test_artifacts(self):
@@ -283,7 +279,7 @@ def main():
         report = {
             "status": "passed", "checks": harness.checks, "metrics": harness.metrics,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "transport": "real OpenSSH public-key + OAuth PKCE + HTTP MCP + Linux PTY",
+            "transport": "real account WebSocket + OAuth PKCE + HTTP MCP + Linux PTY",
         }
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -293,3 +289,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
