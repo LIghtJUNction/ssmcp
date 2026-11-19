@@ -9,6 +9,7 @@ mod history;
 mod login;
 pub(super) mod logout;
 mod questions;
+mod queue;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
 mod tasks;
@@ -82,6 +83,7 @@ pub(super) struct Conversation {
     drawn_agents: Vec<String>,
     list_start: usize,
     list_count: usize,
+    queue_hit_rows: Vec<Option<String>>,
     detail: bool,
     detail_scroll: usize,
     target: Option<String>,
@@ -2338,78 +2340,17 @@ impl State {
     fn chat_list_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
         self.conversation.list_start = 0;
         self.conversation.list_count = 0;
+        self.conversation.queue_hit_rows.clear();
         if self.conversation.view == View::Agents {
             return self.chat_agent_rows(data, height);
         }
-        let width = self.geometry.left;
-        let entries = items(data, "queue");
-        self.conversation.selected = self
-            .conversation
-            .selected
-            .min(entries.len().saturating_sub(1));
-        let mut rows = vec![self.chat_line(
-            "  Requests · Enter edit · i/I inspect · Delete cancel · R resend · Alt+←/→ panels",
-            PanelTone::Muted,
-            width,
-        )];
-        if entries.is_empty() {
-            rows.push(self.chat_line(
-                "  No queued requests. Write a requirement below.",
-                PanelTone::Normal,
-                width,
-            ));
-            return rows;
-        }
-        if self.conversation.detail {
-            let entry = &entries[self.conversation.selected];
-            rows.push(self.chat_line(
-                &format!(
-                    "  {} · {} · Esc back",
-                    field(entry, "status"),
-                    message_id(entry)
-                ),
-                PanelTone::Accent,
-                width,
-            ));
-            let wrapped = markdown::rows(references::source(field(entry, "text")), width, &self.ui);
-            self.conversation.detail_scroll = self.conversation.detail_scroll.min(
-                wrapped
-                    .len()
-                    .saturating_sub(usize::from(height).saturating_sub(2)),
-            );
-            rows.extend(wrapped.into_iter().skip(self.conversation.detail_scroll));
-            return rows;
-        }
-        for index in self.chat_list_window(entries.len(), height) {
-            let entry = &entries[index];
-            let marker = if index == self.conversation.selected {
-                "›"
-            } else {
-                " "
-            };
-            rows.push(self.chat_line(
-                &format!(
-                    "{marker} {}  ·  {}",
-                    field(entry, "status"),
-                    message_id(entry)
-                ),
-                if index == self.conversation.selected {
-                    PanelTone::Accent
-                } else {
-                    PanelTone::Normal
-                },
-                width,
-            ));
-            rows.push(self.chat_line(
-                &format!("  {}", field(entry, "text").lines().next().unwrap_or("")),
-                PanelTone::Muted,
-                width,
-            ));
-        }
-        rows
+        self.chat_queue_rows(data, height)
     }
 
     fn chat_list_hit(&self, row: u16) -> Option<usize> {
+        if self.conversation.view == View::Queue {
+            return self.chat_queue_hit(&self.chat_data(), row);
+        }
         let relative = row.checked_sub(body_top(self.geometry.rows) + 1)?;
         if relative >= self.geometry.log_rows.saturating_sub(1) {
             return None;
@@ -3750,75 +3691,178 @@ mod tests {
     }
 
     #[test]
-    fn mouse_selects_visible_items_after_a_list_has_scrolled() {
+    fn mouse_selects_visible_agents_after_a_list_has_scrolled() {
         let data = json!({
             "agents":(0..24).map(|index| json!({"agent_id":format!("agent_{index}"),"name":format!("Agent {index}"),"role":"worker","status":"working"})).collect::<Vec<_>>(),
             "queue":(0..24).map(|index| json!({"id":format!("request_{index}"),"text":format!("Request {index}"),"status":"queued"})).collect::<Vec<_>>()
         });
-        for view in [View::Agents, View::Queue] {
-            let mut state = preview(18, 120);
-            state.canvas_focus(view);
-            state.conversation.content_focus = true;
-            state.conversation.selected = 15;
-            state.conversation.selected_agent = None;
-            let rows = state.chat_list_rows(&data, state.geometry.log_rows);
-            let start = state.conversation.list_start;
-            assert!(start > 0);
-            assert_eq!(state.conversation.list_count, 5);
-            assert!(!rows[1].contains("Agent 0  ·"));
-            let first = body_top(state.geometry.rows) + 1;
-            state.chat_key(Key::Mouse {
-                button: 0,
-                x: 1,
-                y: first,
-                release: false,
-            });
-            assert_eq!(state.conversation.selected, start);
-            state.chat_key(Key::Mouse {
-                button: 0,
-                x: 1,
-                y: first + 3,
-                release: false,
-            });
-            assert_eq!(
-                state.conversation.selected,
-                start + 1,
-                "subtitle selects its visible item"
-            );
-            state.chat_key(Key::Mouse {
-                button: 0,
-                x: 1,
-                y: body_top(state.geometry.rows),
-                release: false,
-            });
-            assert_eq!(
-                state.conversation.selected,
-                start + 1,
-                "list header is not an entry"
-            );
-            assert!(!state.conversation.detail);
-            state.chat_key(Key::Mouse {
-                button: 2,
-                x: 1,
-                y: body_top(state.geometry.rows),
-                release: false,
-            });
-            assert_eq!(state.conversation.view, View::Logs);
-            assert!(state.conversation.logs_open);
-            state.chat_key(Key::Mouse {
-                button: 2,
-                x: 1,
-                y: prompt_top(state.geometry),
-                release: false,
-            });
-            assert_eq!(
-                state.conversation.selected,
-                start + 1,
-                "prompt border is not an entry"
-            );
-            assert!(!state.conversation.logs_open);
-            assert_eq!(state.conversation.view, view);
+        let view = View::Agents;
+        let mut state = preview(18, 120);
+        state.canvas_focus(view);
+        state.conversation.content_focus = true;
+        state.conversation.selected = 15;
+        state.conversation.selected_agent = None;
+        let rows = state.chat_list_rows(&data, state.geometry.log_rows);
+        let start = state.conversation.list_start;
+        assert!(start > 0);
+        assert_eq!(state.conversation.list_count, 5);
+        assert!(!rows[1].contains("Agent 0  ·"));
+        let first = body_top(state.geometry.rows) + 1;
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: first,
+            release: false,
+        });
+        assert_eq!(state.conversation.selected, start);
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: first + 3,
+            release: false,
+        });
+        assert_eq!(
+            state.conversation.selected,
+            start + 1,
+            "subtitle selects its visible item"
+        );
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: body_top(state.geometry.rows),
+            release: false,
+        });
+        assert_eq!(
+            state.conversation.selected,
+            start + 1,
+            "list header is not an entry"
+        );
+        assert!(!state.conversation.detail);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: body_top(state.geometry.rows),
+            release: false,
+        });
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(state.conversation.logs_open);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: prompt_top(state.geometry),
+            release: false,
+        });
+        assert_eq!(
+            state.conversation.selected,
+            start + 1,
+            "prompt border is not an entry"
+        );
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.view, view);
+    }
+
+    #[test]
+    fn mouse_targets_scrolled_request_cards_by_full_id_and_ignores_spacing() {
+        let data = json!({
+            "queue":(0..24).map(|index| json!({"id":format!("request_{index}"),"text":format!("Request {index}"),"status":"queued"})).collect::<Vec<_>>()
+        });
+        let mut state = preview(18, 120);
+        state.canvas_focus(View::Queue);
+        state.conversation.content_focus = true;
+        state.conversation.selected = 15;
+        let rows = state.chat_list_rows(&data, state.geometry.log_rows);
+        let start = state.conversation.list_start;
+        assert!(start > 0);
+        assert_eq!(state.conversation.list_count, 4);
+        assert!(rows[1].contains(&format!("Request {start}")));
+        let top = body_top(state.geometry.rows);
+        for offset in 0..state.conversation.list_count {
+            let first = 1 + offset * 3;
+            let expected = start + offset;
+            for row in [first, first + 1] {
+                let hit = state.chat_queue_hit(&data, top + row as u16);
+                assert_eq!(
+                    hit,
+                    Some(expected),
+                    "body and metadata select the same card"
+                );
+                assert_eq!(
+                    message_id(&data["queue"][hit.unwrap()]),
+                    format!("request_{expected}"),
+                    "the visible row resolves to its complete request ID"
+                );
+            }
+            if offset + 1 < state.conversation.list_count {
+                assert_eq!(state.chat_queue_hit(&data, top + (first + 2) as u16), None);
+            }
         }
+        for row in [top, prompt_top(state.geometry)] {
+            assert_eq!(
+                state.chat_queue_hit(&data, row),
+                None,
+                "chrome is not an entry"
+            );
+        }
+        // The live preview has a different queue. A stale rendered ID must not
+        // select a same-position request from that replacement snapshot.
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: top + 1,
+            release: false,
+        });
+        assert_eq!(
+            state.conversation.selected, 15,
+            "removed IDs are not mouse targets"
+        );
+
+        // Exercise the real mouse entry point with the same queue it renders.
+        let live = state.chat_data();
+        state.chat_list_rows(&live, state.geometry.log_rows);
+        for row in [top + 1, top + 2] {
+            state.conversation.selected = 15;
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 1,
+                y: row,
+                release: false,
+            });
+            assert_eq!(state.conversation.selected, 0);
+            assert_eq!(
+                message_id(&state.chat_selected().unwrap()),
+                "example-request"
+            );
+        }
+        for row in [top, prompt_top(state.geometry)] {
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 1,
+                y: row,
+                release: false,
+            });
+            assert_eq!(
+                state.conversation.selected, 0,
+                "chrome does not move selection"
+            );
+        }
+        assert!(!state.conversation.detail);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: top,
+            release: false,
+        });
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(state.conversation.logs_open);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: prompt_top(state.geometry),
+            release: false,
+        });
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.view, View::Queue);
+        assert_eq!(state.conversation.selected, 0);
     }
 
     #[test]
