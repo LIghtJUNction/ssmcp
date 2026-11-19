@@ -1,0 +1,328 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "recovery_commit": "93b728ea73b31d5803aee043efcbcd095e05b6ab",
+  "candidate_commit": "53794fe4f914aa6c75737d9c0a1836e9c47d1ca3",
+  "validation_date_utc": "2026-11-19",
+  "platform": "Linux x86_64",
+  "commands": "local targeted tests; no CI, installation or live-client mutations",
+  "unique_test_count": 26,
+  "unique_tests": [
+    "backend::events::tests::recovery_event_index_freezes_cursors_without_copying_or_consuming_events",
+    "client::context_memory::tests::bounded_unicode_excerpts_and_extractive_checkpoints_keep_provenance",
+    "client::context_memory::tests::branch_count_and_full_workspace_storage_are_bounded",
+    "client::context_memory::tests::compare_and_swap_rejects_lost_updates_and_bad_ids_without_replacing_disk",
+    "client::context_memory::tests::fork_switch_and_restart_restore_isolated_memory_without_source_replay",
+    "client::context_memory::tests::native_schemas_separate_observation_from_memory_mutations",
+    "client::context_memory::tests::pending_and_targeted_user_text_cannot_enter_snapshots_or_extractive_checkpoints",
+    "client::context_memory::tests::private_atomic_storage_rejects_symlinks_and_hardlinks",
+    "client::context_memory::tests::recovery_rejects_conflicting_or_duplicate_checkpoint_source_identities",
+    "client::context_memory::tests::recovery_workspace_admission_is_bounded_and_existing_memory_is_preserved",
+    "client::context_memory::tests::recovery_workspace_admission_serializes_two_creators_at_the_last_slot",
+    "client::context_memory::tests::snapshot_budget_counts_json_escaping_and_reserves_the_server_envelope",
+    "client::context_memory::tests::workspace_and_schema_mismatch_fail_closed_without_deleting_memory",
+    "client::interface::history::tests::recovery_has_no_invented_current_conversation_and_preserves_retention_count",
+    "client::interface::history::tests::recovery_source_index_keeps_recent_ids_hashes_and_json_budget_without_rewriting",
+    "code_mode::tests::context_reads_are_observation_and_context_mutations_are_interaction",
+    "code_mode::tests::history_helpers_route_metadata_search_and_reject_action_overrides",
+    "runtime::capabilities::tests::capability_summary_tracks_live_providers_without_copying_schemas",
+    "runtime::capabilities::tests::client_catalog_paginates_and_rejects_stale_or_changed_page_sizes",
+    "runtime::capabilities::tests::client_resource_uris_preserve_only_supported_parameters",
+    "runtime::recovery::tests::recovery_errors_keep_utf8_boundaries_and_a_small_response",
+    "runtime::recovery::tests::recovery_native_tool_reads_current_sources_without_replaying_or_copying_them",
+    "session::storage::tests::saved_quota_counts_interrupted_images_and_preserves_existing_over_budget",
+    "session::storage::tests::saved_quota_management_lock_serializes_two_creators_at_the_last_slot",
+    "session::storage::tests::saved_quota_rejects_full_directory_count_without_creating_or_removing_state",
+    "session::storage::tests::saved_quota_snapshot_accepts_exact_remaining_bytes_and_rejects_oversize_before_write"
+  ],
+  "steps": [
+    {
+      "name": "native-recovery",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "runtime::recovery::tests",
+        "--",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 70.468,
+      "passed_tests": [
+        "runtime::recovery::tests::recovery_errors_keep_utf8_boundaries_and_a_small_response",
+        "runtime::recovery::tests::recovery_native_tool_reads_current_sources_without_replaying_or_copying_them"
+      ],
+      "log_sha256": "35f05400f036a7f0d99aedf4048ef87d1beb82de4b77595723d3189b70726d6e"
+    },
+    {
+      "name": "history-source-index",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "client::interface::history::tests::recovery_",
+        "--",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.367,
+      "passed_tests": [
+        "client::interface::history::tests::recovery_has_no_invented_current_conversation_and_preserves_retention_count",
+        "client::interface::history::tests::recovery_source_index_keeps_recent_ids_hashes_and_json_budget_without_rewriting"
+      ],
+      "log_sha256": "738fb2e6c82bc26c15c7fff031d05080405df238fa4e52d445167e5ea53ecf31"
+    },
+    {
+      "name": "context-memory",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "client::context_memory::tests",
+        "--",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.265,
+      "passed_tests": [
+        "client::context_memory::tests::bounded_unicode_excerpts_and_extractive_checkpoints_keep_provenance",
+        "client::context_memory::tests::compare_and_swap_rejects_lost_updates_and_bad_ids_without_replacing_disk",
+        "client::context_memory::tests::fork_switch_and_restart_restore_isolated_memory_without_source_replay",
+        "client::context_memory::tests::native_schemas_separate_observation_from_memory_mutations",
+        "client::context_memory::tests::pending_and_targeted_user_text_cannot_enter_snapshots_or_extractive_checkpoints",
+        "client::context_memory::tests::private_atomic_storage_rejects_symlinks_and_hardlinks",
+        "client::context_memory::tests::recovery_rejects_conflicting_or_duplicate_checkpoint_source_identities",
+        "client::context_memory::tests::recovery_workspace_admission_is_bounded_and_existing_memory_is_preserved",
+        "client::context_memory::tests::recovery_workspace_admission_serializes_two_creators_at_the_last_slot",
+        "client::context_memory::tests::snapshot_budget_counts_json_escaping_and_reserves_the_server_envelope",
+        "client::context_memory::tests::workspace_and_schema_mismatch_fail_closed_without_deleting_memory",
+        "client::context_memory::tests::branch_count_and_full_workspace_storage_are_bounded"
+      ],
+      "log_sha256": "50099238d0867d005aa4d959af5b5cb8ecf9f091e496cbe6e7ab3c11238d91d7"
+    },
+    {
+      "name": "event-source-index",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "backend::events::tests::recovery_event_index",
+        "--",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.166,
+      "passed_tests": [
+        "backend::events::tests::recovery_event_index_freezes_cursors_without_copying_or_consuming_events"
+      ],
+      "log_sha256": "a65df40fd89f435313456a9e2272c1efcd3eae8e3dd07b5535f36a4d0d6a4463"
+    },
+    {
+      "name": "node-history-helper",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "code_mode::tests::history_helpers_route_metadata_search_and_reject_action_overrides",
+        "--",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.215,
+      "passed_tests": [
+        "code_mode::tests::history_helpers_route_metadata_search_and_reject_action_overrides"
+      ],
+      "log_sha256": "79572dd490d574ff9ec09b25c53df2de02d3277da5baa73a98d1271c688d69d8"
+    },
+    {
+      "name": "observation-classification",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "code_mode::tests::context_reads_are_observation_and_context_mutations_are_interaction",
+        "--",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.115,
+      "passed_tests": [
+        "code_mode::tests::context_reads_are_observation_and_context_mutations_are_interaction"
+      ],
+      "log_sha256": "50ad3d184f336cb4a930d90e9bbfd9f11423eec2ab9f27108bd3e9511a11fbaa"
+    },
+    {
+      "name": "native-capabilities",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "runtime::capabilities::tests",
+        "--",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.114,
+      "passed_tests": [
+        "runtime::capabilities::tests::capability_summary_tracks_live_providers_without_copying_schemas",
+        "runtime::capabilities::tests::client_catalog_paginates_and_rejects_stale_or_changed_page_sizes",
+        "runtime::capabilities::tests::client_resource_uris_preserve_only_supported_parameters"
+      ],
+      "log_sha256": "ce429c4599005ed325c9a7fc44e8e85de85207140b564f6ad2ac320678e96bcd"
+    },
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 1.668,
+      "passed_tests": [],
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "saved-admission",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "session::storage::tests",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 27.828,
+      "passed_tests": [
+        "session::storage::tests::saved_quota_counts_interrupted_images_and_preserves_existing_over_budget",
+        "session::storage::tests::saved_quota_management_lock_serializes_two_creators_at_the_last_slot",
+        "session::storage::tests::saved_quota_rejects_full_directory_count_without_creating_or_removing_state",
+        "session::storage::tests::saved_quota_snapshot_accepts_exact_remaining_bytes_and_rejects_oversize_before_write"
+      ],
+      "log_sha256": "ad7c25401112bfc822ef6dba864f157e0dee7bc2755d5bf4368bde090d3f871c"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 62.966,
+      "passed_tests": [],
+      "log_sha256": "e579afee6d4d5958afe3707b02d6836ca360f1b8680d15f5568d9fc054632b7f"
+    }
+  ],
+  "attempts": [
+    {
+      "directory": "gate-20261119T181043Z",
+      "complete": false,
+      "ok": false,
+      "source_before": {
+        "sha256": "e50a9c5934fe6596a62225bc335efead9f8025d0cac46cc716ceffb3fb126b5f",
+        "files": 238
+      },
+      "source_after": {
+        "sha256": "e50a9c5934fe6596a62225bc335efead9f8025d0cac46cc716ceffb3fb126b5f",
+        "files": 238
+      }
+    },
+    {
+      "directory": "gate-20261119T181340Z",
+      "complete": true,
+      "ok": true,
+      "source_before": {
+        "sha256": "1e40dbef1adbdb3c60f8a7f55bd13bc7d9f6d7c85dd2fabdb50f090fece6e1ec",
+        "files": 238
+      },
+      "source_after": {
+        "sha256": "1e40dbef1adbdb3c60f8a7f55bd13bc7d9f6d7c85dd2fabdb50f090fece6e1ec",
+        "files": 238
+      }
+    }
+  ],
+  "initial_failure": {
+    "tests": 3,
+    "cause": "Saved-session test fixture omitted its required --name option, so existing validation rejected before admission. Corrected test arguments and diagnostics; production logic unchanged between attempts.",
+    "logs_preserved": true
+  },
+  "cargo_manifest_warning": "Existing Cargo manifest warning: unused dependency qrcodegen; strict Rust Clippy completed with exit 0.",
+  "final_test_executable": {
+    "sha256": "8bf4f3f181c55ecdf5736682711a6c91cb5c0620ebd55d1d271aa1e369beb07b",
+    "bytes": 256277872,
+    "retained_copy": false
+  },
+  "source_files_sha256": {
+    "src/backend.rs": "72c62f434e279e7335911b38bf8ebd9cb1cbdc0f1837538aba8cbd80cf79a5a6",
+    "src/backend/events.rs": "fd359c3896622230c5d3496199809d5d9b5cbf368c27ef6a9686f2a767f88c49",
+    "src/backend/shell.rs": "1da4d265c400af1225c64f8fc5162b9fb582c2e4fb2609bfa4f1616c1000be41",
+    "src/client/context_memory.rs": "7f08eeea7d336fba2322b2910f9cc7703e0f73bfc9049e310da84c63ad21e593",
+    "src/client/interface/history.rs": "2c15f571f37e39879cc5cd9dc744d2ba0aa1529d3a2b834c1d082ed09170b00a",
+    "src/code_mode.js": "5cdf55bdeeda9ded1abadc0b563296da339eabbd70c5b6a8a6cae9ab14497ebd",
+    "src/code_mode.rs": "61ee4e01d243aac4862bdd90eb43e5472dd4705345ec115a95021e10f41d388e",
+    "src/registry.rs": "d575d831c1c337bbb452903870aefeb7b1a899968e5004f1566efd7909025b00",
+    "src/runtime.rs": "a934f12d5f6853ebe264e61fa2647f7da28845cb4a5a18790053eaec79c735ca",
+    "src/runtime/capabilities.rs": "7899a22d79c1601d0df6347739a590782923fc3124e986bf6e94c7e41a6bc514",
+    "src/runtime/recovery.rs": "13893bcce9b2e52cf22a43c4220e4aa5716e93b7fb7841288c7fe62e86cfaffa",
+    "src/runtime/recovery/tests.rs": "cce485470ce30b08dc630094c9d053fe794acea845e57bac3a37d2c78c970aa5",
+    "src/session.rs": "a03141357c4f0747a88cbd13ac9f8b30c323f23423e923bbc40140e8464cfcf7",
+    "src/session/storage.rs": "2a226cb46c691bde78b6e3d16855dfd12a8ff1a9b60b658514c0b494a9f72f34"
+  },
+  "saved_storage_observation": {
+    "time": "2026-11-19T18:17:01.461873+00:00",
+    "saved_directories": 2,
+    "executables": 2,
+    "executable_logical_bytes": 19781728,
+    "executable_allocated_bytes": 19783680,
+    "unsafe_entries": 0,
+    "content_read": false
+  },
+  "boundaries": {
+    "recovery_structured_bytes": 32768,
+    "recent_limit_max": 16,
+    "preview_bytes": 512,
+    "context_new_workspace_limit": 256,
+    "saved_directories_including_interrupted": 1024,
+    "saved_executable_logical_bytes": 4294967296
+  },
+  "limitations": [
+    "Recovery source sections are independent snapshots, not a global transaction.",
+    "No new persistent copies of conversation, attachments, task bodies or audit bodies.",
+    "Read-only recovery does not lazily create history directories.",
+    "Quota applies to creation only; old unpaged listing guard for more than 1024 committed definitions remains.",
+    "Four GiB covers executable logical bytes, not total physical disk usage.",
+    "Native recovery exercised in an owned isolated Runtime; Node helper uses an in-memory protocol peer, not the installed production relay.",
+    "Windows and macOS not run for this change.",
+    "No daemon or user session was restarted; no candidate installed."
+  ],
+  "public_runner": {
+    "portability_only_changes": true,
+    "executed_again": false,
+    "sha256": "033ddeb426e9e86d1da1643186b2fc6fb4d4c486343fb2eb9240a58600aac2b0"
+  }
+}

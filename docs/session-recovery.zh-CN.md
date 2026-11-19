@@ -80,3 +80,5 @@ if (state.history.available && state.history.value.active) {
 已有保存会话服务另外保留会话配置、执行映像和生命周期日志。新建保存会话在管理锁内检查 1024 个目录及 4 GiB 执行映像准入；旧记录不会被自动删除或终止。生命周期日志按 256 KiB 阈值轮转并保留当前及上一份，单条状态文档另受 128 KiB 限制。完整范围和旧数据边界见[保存会话的磁盘准入限制](session-storage.zh-CN.md)。Recovery 本身不更改服务配置或创建映像。
 
 相关文档：[JSONL 历史](conversation-history.md)、[本地检查点](context-memory.md)、[会话候选消息](session-messages.md)。
+
+本阶段运行证据见[本机验证记录](reports/session-recovery-20261119/report.zh-CN.md)。
