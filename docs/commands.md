@@ -17,7 +17,8 @@ ssmcp invite
 | 命令 | 用途 |
 | --- | --- |
 | `ssmcp username@server` | 自动登录或注册并连接自己的设备 |
-| `ssmcp whoami` / `logout` | 确认身份、撤销这次客户端授权 |
+| `ssmcp whoami` | 确认当前服务器上的登录身份 |
+| `ssmcp logout [--server URL] [--json]` | 清理所选服务器的本机凭据，并报告远端撤销结果；离线也能退出 |
 | `ssmcp list` / `ls` / `sessions list --remote` | 当前账号在所选服务器可控的在线会话 |
 | `ssmcp -i` / `list -i` | 选择会话并进入远端终端，Ctrl-] 离开 |
 | `ssmcp invite` | 生成 B 可直接执行的临时接入命令；默认验证并持久安装同源兼容客户端 |
