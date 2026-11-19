@@ -1,0 +1,190 @@
+{
+  "schema": "ssmcp.user-wait-sleep.validation.v1",
+  "created_at_utc": "2026-11-19T22:47:46.675924+00:00",
+  "product_version": "0.10.14",
+  "product_source": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "ui_source": "a965fe3828838013d47bc7ffc6254f0cb402c572",
+  "e2e_source": "6ccf782093d90a58cc01f8e2f22d49654b2f909a",
+  "later_test_only_source": "9bfd4de8ee55bc66e2414f20f2e4bb6f4b5fbe9e",
+  "frozen_product": {
+    "candidate": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+    "command": [
+      "python3",
+      "scripts/e2e_user_wait.py",
+      "--bin-dir",
+      "<frozen-bin>",
+      "--decoder",
+      "<frozen-decoder>",
+      "--out",
+      "<private-evidence>"
+    ],
+    "binary_sha256": {
+      "ssmcp": "c80da3aa112d25d9228dfe7a860ed02ceb3aa04cd545eb904d1ebad448bf85f7",
+      "ssmcpd": "c657bd9216b2ca4e3a89548f5565c44da14a48b14f5b5d6684616e8489f96518",
+      "ssmcp-frontend": "9bc2c9b2b98d9a8f6a997c3aeda11f735a964b141b70870f75825e75e8a63c5b"
+    },
+    "libtest_sha256": "b74d457c9934557a6588107c4478e68804f238a71e7e677c998d57b143a54793",
+    "exit_code": 0
+  },
+  "terminal_tests": [
+    {
+      "name": "client::terminal::sleep::tests",
+      "exit_code": 0,
+      "passed": 6,
+      "expected": 6
+    },
+    {
+      "name": "client::terminal::tests::frame_diff_erases_old_text_when_a_row_shrinks_or_becomes_empty",
+      "exit_code": 0,
+      "passed": 1,
+      "expected": 1
+    },
+    {
+      "name": "client::terminal::tests::visible_log_diff_keeps_hidden_terminal_modes_out_of_the_client",
+      "exit_code": 0,
+      "passed": 1,
+      "expected": 1
+    },
+    {
+      "name": "client::terminal::tests::synchronized_frame_includes_initial_clear_rows_and_native_images",
+      "exit_code": 0,
+      "passed": 1,
+      "expected": 1
+    },
+    {
+      "name": "client::terminal::tests::synchronized_frame_remains_open_until_a_split_scroll_write_completes",
+      "exit_code": 0,
+      "passed": 1,
+      "expected": 1
+    },
+    {
+      "name": "client::terminal::tests::nonblocking_output_keeps_partial_bytes_for_the_next_frame",
+      "exit_code": 0,
+      "passed": 1,
+      "expected": 1
+    },
+    {
+      "name": "client::terminal::tests::geometry_reserves_real_panes_and_survives_narrow_resize",
+      "exit_code": 0,
+      "passed": 1,
+      "expected": 1
+    },
+    {
+      "name": "client::terminal::tests::split_unicode_is_preserved_in_logs_and_hidden_native_terminal",
+      "exit_code": 0,
+      "passed": 1,
+      "expected": 1
+    }
+  ],
+  "terminal_passed": 13,
+  "sleep_passed": 6,
+  "e2e_passed": 127,
+  "e2e_seconds": 20.972,
+  "images": [
+    {
+      "file": "frame-sleep-120.png",
+      "sha256": "3a5052bd39202974aa40c3ff632173a7cad74aad3c45e888493555f96210c61c",
+      "bytes": 45356,
+      "ansi_sha256": "84164de3a6fafa523d374250838a2f105af32d526f7416f3b9829fabd46a741b",
+      "size": [
+        28,
+        120
+      ],
+      "source": "frame"
+    },
+    {
+      "file": "frame-awake-120.png",
+      "sha256": "feeda8a47d5c6243c6562743c9e013b4edc09bc46c1fe061b655b07baf608a67",
+      "bytes": 48181,
+      "ansi_sha256": "cc326b0802df205c86c8ea75330e8d87196aa27b34749ebd5ba00469f3f459bb",
+      "size": [
+        28,
+        120
+      ],
+      "source": "frame"
+    },
+    {
+      "file": "frame-sleep-48.png",
+      "sha256": "cd34fd38dcdacd6c47de4fb5d8d52b2f6644394cfb888a472524d6ed71971810",
+      "bytes": 35119,
+      "ansi_sha256": "af075b8e9ef88ad87b6c7219bc0461d3552bb793c5f988a5e8c3dd2b5d3a3f75",
+      "size": [
+        24,
+        48
+      ],
+      "source": "frame"
+    },
+    {
+      "file": "frame-awake-48.png",
+      "sha256": "a12e09f81a22433c8327733a75652b0286f39d69ac94ef7029246c63ce5232a2",
+      "bytes": 39804,
+      "ansi_sha256": "3bfb7fecda19d7d1d0f555ab423e3ce09f334e3bb17abe77d5982afc5e2d8bd5",
+      "size": [
+        24,
+        48
+      ],
+      "source": "frame"
+    },
+    {
+      "file": "pty-sleep-120.png",
+      "size": [
+        28,
+        120
+      ],
+      "sha256": "69c7f871ff5c4f7afcb8125ff676957a491aef3bebbf668c988575b137c188fa",
+      "bytes": 30723,
+      "snapshot_sha256": "b330ebc29898b1289245ef1f61c5706bb47d0861df5522480754f123a27d3ce8",
+      "source": "pty"
+    },
+    {
+      "file": "pty-sleep-48.png",
+      "size": [
+        24,
+        48
+      ],
+      "sha256": "f0e6c764059e96340ed878d214dc29d96eeb3d295e8bf3d92ecd373ab4fd3bb6",
+      "bytes": 24815,
+      "snapshot_sha256": "b4a9a3fcffe8885ba317a33bfa62ca267460ab57645d3a9f1f6dcb16a24afe94",
+      "source": "pty"
+    },
+    {
+      "file": "pty-mouse-awake-120.png",
+      "size": [
+        28,
+        120
+      ],
+      "sha256": "9dcb0d25cba44d7ef69be2990e07b5a3e5f8cb8b9afb7f7ed69e5098fe13ac59",
+      "bytes": 31546,
+      "snapshot_sha256": "b6dfe8abda7c277e108e60ec104c0bc686448bdefffd9a7377a10ae39f38431f",
+      "source": "pty"
+    }
+  ],
+  "visual_review": {
+    "reviewer": "root assistant",
+    "frame": "four initial same-ANSI images inspected; final artifacts add a CJK fallback font without changing layout or ANSI",
+    "real_pty": "three final CJK-aware images inspected; dim and wake layout, Chinese draft, indentation and queue/footer preserved"
+  },
+  "initial_fixture_failures": [
+    {
+      "kind": "ui_projection",
+      "reason": "whole /display exceeded existing 8KiB projection bound",
+      "fixed": "read /display/sleeping; same frozen ELF rerun passed"
+    },
+    {
+      "kind": "local_status_assertion",
+      "reason": "old full-sidebar wording applied to compact chat layout",
+      "fixed": "test-only 6ccf782; source status renderer unchanged between70aebd0 andb49"
+    },
+    {
+      "kind": "image_expansion_assertions",
+      "reason": "3e84726 already made Conversation previews compact",
+      "fixed": "test-only 9bfd4de explicitly opens image then retains placement/rejection/expiry checks"
+    }
+  ],
+  "full_library_gate": "owned by combined validation; not counted as passed by this component report",
+  "limits": [
+    "Linux local validation",
+    "synthetic account, owned loopback services and PTYs",
+    "notify:false; no real OS notification or user session touched"
+  ]
+}
