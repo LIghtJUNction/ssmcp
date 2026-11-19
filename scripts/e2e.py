@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise the actual Rust binaries through an isolated, public-key-only sshd.
+"""Exercise actual clients through an isolated production account WebSocket router.
 
-Uses only the Python standard library. It does not read existing SSH identities,
-change system configuration, or contact any remote host.
+Uses only the Python standard library and an already-built Rust router fixture.
+Set SSMCP_E2E_FIXTURE_BINARY to that library test executable. Only its upstream
+GitHub provider is synthetic; no installed account or remote host is used.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
-import pwd
+
 import re
 import selectors
 import shlex
@@ -28,6 +29,8 @@ import sys
 import tempfile
 import time
 from urllib.parse import urlencode, urlsplit, parse_qs
+
+from e2e_account_gateway import AccountGateway, direct_loopback
 
 
 MODERN = "2026-07-28"
@@ -142,12 +145,11 @@ class Harness:
     def __init__(self, directory: Path, binary_dir: Path):
         self.directory = directory
         self.binary_dir = binary_dir.resolve()
-        self.user = pwd.getpwuid(os.getuid()).pw_name
-        self.http_port = free_port()
-        self.ssh_port = free_port()
-        while self.ssh_port == self.http_port:
-            self.ssh_port = free_port()
-        self.socket = directory / "control.sock"
+        self.user = "mcp"
+        self.http_port = 0
+        self.origin = ""
+        self.issuer = ""
+        self.account_gateway = AccountGateway(self)
         self.processes = []
         self.logs = []
         self.checks = []
@@ -193,7 +195,10 @@ class Harness:
 
     def cleanup(self):
         for process in reversed(self.processes):
-            self.stop(process)
+            if process is not self.account_gateway.process:
+                self.stop(process)
+        self.account_gateway.stop()
+        for process in self.processes:
             if process.stdout:
                 process.stdout.close()
         for _, log in self.logs:
@@ -435,92 +440,25 @@ class Harness:
         raise AssertionError(f"Expected PTY output did not arrive: {pattern!r}; received {output[-2000:]!r}")
 
     def prepare(self):
-        for executable in ("ssmcp", "ssmcpd"):
-            if not (self.binary_dir / executable).is_file():
-                raise RuntimeError(f"Missing {self.binary_dir / executable}; run cargo build --locked first")
-        sshd = shutil.which("sshd") or "/usr/sbin/sshd"
-        if not Path(sshd).is_file():
-            raise RuntimeError("OpenSSH server is required (install openssh-server)")
-        for key in ("host", "client", "wrong"):
-            subprocess.run(
-                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(self.directory / key)],
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
-        (self.directory / "authorized_keys").write_text((self.directory / "client.pub").read_text())
-        (self.directory / "known_hosts").write_text(
-            "ssmcp-e2e " + (self.directory / "host.pub").read_text()
-        )
-        for name, key in (("ssh_config", "client"), ("wrong_config", "wrong")):
-            (self.directory / name).write_text(
-                f"Host ssmcp-e2e\n"
-                f"    HostName 127.0.0.1\n"
-                f"    User {self.user}\n"
-                f"    HostKeyAlias ssmcp-e2e\n"
-                f"    Port {self.ssh_port}\n"
-                f"    IdentityFile {self.directory / key}\n"
-                f"    IdentitiesOnly yes\n"
-                f"    UserKnownHostsFile {self.directory / 'known_hosts'}\n"
-                f"    GlobalKnownHostsFile /dev/null\n"
-                f"    StrictHostKeyChecking yes\n"
-                f"    BatchMode yes\n"
-                f"    LogLevel ERROR\n"
-            )
-        config = self.directory / "sshd_config"
-        config.write_text(
-            f"Port {self.ssh_port}\n"
-            f"ListenAddress 127.0.0.1\n"
-            f"HostKey {self.directory / 'host'}\n"
-            f"PidFile {self.directory / 'sshd.pid'}\n"
-            f"AuthorizedKeysFile {self.directory / 'authorized_keys'}\n"
-            f"StrictModes no\n"
-            f"UsePAM no\n"
-            f"AllowUsers {self.user}\n"
-            f"PermitRootLogin prohibit-password\n"
-            f"AuthenticationMethods publickey\n"
-            f"PubkeyAuthentication yes\n"
-            f"PasswordAuthentication no\n"
-            f"KbdInteractiveAuthentication no\n"
-            f"DisableForwarding yes\n"
-            f"PermitTTY no\n"
-            f"PermitUserRC no\n"
-            f"ClientAliveInterval 1\n"
-            f"ClientAliveCountMax 2\n"
-            f"ForceCommand {self.binary_dir / 'ssmcpd'} attach --socket {self.socket}\n"
-        )
-        effective = subprocess.check_output(
-            [sshd, "-T", "-f", str(config), "-C", f"user={self.user},host=localhost,addr=127.0.0.1"],
-            text=True,
-        )
-        required = (
-            "authenticationmethods publickey", "passwordauthentication no",
-            "kbdinteractiveauthentication no", "disableforwarding yes", "permittty no",
-        )
-        self.check(all(item in effective.lower().splitlines() for item in required), "effective sshd config permits public keys only")
-        daemon = self.spawn("daemon", [
-            str(self.binary_dir / "ssmcpd"), "serve", "--listen", f"127.0.0.1:{self.http_port}",
-            "--public-url", PUBLIC_URL, "--socket", str(self.socket),
-        ])
+        self.account_gateway.prepare()
 
-        def healthy():
-            if daemon.poll() is not None:
-                raise AssertionError("ssmcpd exited before opening its listeners; see daemon.log")
-            try:
-                return self.request("GET", path="/healthz", secret="")[0] == 200
-            except OSError:
-                return False
+    def client_command(self, *, name="workstation", shell="/bin/sh", extra_args=()):
+        return self.account_gateway.client_command(name=name, shell=shell, extra_args=extra_args)
 
-        wait_for(healthy, description="daemon health")
-        self.spawn("sshd", [sshd, "-D", "-e", "-f", str(config)])
+    def validate_connection_record(self, value):
+        return self.account_gateway.validate_connection_record(value)
 
-        def ssh_ready():
-            try:
-                with socket.create_connection(("127.0.0.1", self.ssh_port), timeout=0.2):
-                    return True
-            except OSError:
-                return False
-
-        wait_for(ssh_ready, description="isolated sshd")
+    def connection_record(self, front, description):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            front.pump(0.05)
+            if front.process.poll() is not None:
+                raise AssertionError(f"client exited during {description}\n{front.failure_detail()}")
+            if b"\n" in front.stdout:
+                line, _, rest = front.stdout.partition(b"\n")
+                front.stdout = bytearray(rest)
+                return self.validate_connection_record(json.loads(line))
+        raise AssertionError(f"timed out during {description}\n{front.failure_detail()}")
 
     def external_invocations(self, label):
         """Read only this fixture client's bounded external-program invocation log."""
@@ -547,7 +485,7 @@ class Harness:
         directory = self.directory / f"{label}-bin"
         directory.mkdir(mode=0o700)
         (directory / "client.toml").touch(exist_ok=True)
-        for name in ("ssh", "stty", "tty", "sleep", "head", "tr"):
+        for name in ("stty", "tty", "sleep", "head", "tr"):
             executable = shutil.which(name)
             if not executable:
                 raise RuntimeError(f"test requires system {name}")
@@ -587,9 +525,8 @@ class Harness:
                 f"os.execv({sys.executable!r}, {executable!r} + sys.argv[1:] + {extra!r})\n"
             )
             wrapper.chmod(0o700)
-        # Cached account credentials can automatically select GitHub SSH ACLs.
-        # These login-code fixtures must neither consult that account nor reuse
-        # the invoking developer session's lifecycle or reload handoff state.
+        # Each child gets only the owned fixture account and isolated lifecycle
+        # state. Never consult the developer's saved login or reload handoff.
         state = self.directory / f"{label}-state"
         state.mkdir(mode=0o700)
         (state / "auth").mkdir(mode=0o700)
@@ -599,7 +536,7 @@ class Harness:
         inherited = {key: value for key, value in os.environ.items()
                      if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "SSMCP_PLAYWRIGHT_MCP",
                                     "SSMCP_UI_CONFIG", "SSMCP_SESSION_GENERATION", "SSMCP_CLIENT_OUTBOX", "SSMCP_OUTPUT_RELOAD")}
-        return {
+        environment = direct_loopback({
             **inherited,
             "PATH": str(directory.resolve()),
             "ENV": "/dev/null",
@@ -608,15 +545,14 @@ class Harness:
             "SSMCP_SESSION_HOME": str(state / "sessions"),
             "SSMCP_CLIENT_CONFIG": str(config),
             "SSMCP_UI_CONFIG": str(config),
-        }
+        })
+        return self.account_gateway.seed_login(environment)
 
     def start_client(self, label="client", *, name="workstation", cwd=None, harness=None,
                      fixture=None, fixture_args=(), destination=None, harnesses=(), extra_env=None):
-        command = [
-            str(self.binary_dir / "ssmcp"), "--ssh", "-F", str(self.directory / "ssh_config"),
-            "--name", name, "--shell", "/bin/sh",
-            destination or f"{self.user}@ssmcp-e2e",
-        ]
+        if destination is not None:
+            raise ValueError("SSH destinations are retired; this fixture uses its owned account server")
+        command = self.client_command(name=name)
         environment = self.client_environment(
             label, harness=harness, fixture=fixture, fixture_args=fixture_args, harnesses=harnesses
         )
@@ -630,7 +566,7 @@ class Harness:
         line = process.stdout.readline()
         if not line:
             raise AssertionError("ssmcp exited before returning connection credentials")
-        return process, json.loads(line)
+        return process, self.validate_connection_record(json.loads(line))
 
     def oauth_request(self, path, method="GET", data=None, *, cookie=None, headers=None, form=False):
         extra = {"Accept": "application/json"}
@@ -644,97 +580,7 @@ class Harness:
         return self.request(method, data, path=path, secret="", headers=extra)
 
     def oauth_login(self, credentials, *, attacks=False):
-        resource = credentials["url"]
-        login_code = credentials["login_code"]
-        self.sensitive.append(login_code)
-        self.check("secret" not in credentials, "SSH returns an OAuth login code, not a reusable bearer secret")
-        self.check(bool(re.fullmatch(r"[0-9a-f]{64}", login_code)), "login code contains 256 random bits")
-        self.check(0 < credentials["login_expires_in"] <= 1800, "login code reports its remaining thirty-minute lifetime")
-        self.check(self.request(body={}, secret=login_code)[0] == 401, "one-time login code cannot authenticate an MCP request")
-        status, _, challenge = self.request(body={}, secret="")
-        metadata_url = f"{PUBLIC_URL}/.well-known/oauth-protected-resource/{self.user}"
-        self.check(status == 401 and metadata_url in challenge.get("www-authenticate", ""), "MCP 401 advertises protected-resource metadata")
-        status, metadata, _ = self.oauth_request(urlsplit(metadata_url).path)
-        self.check(status == 200 and metadata["resource"] == resource and metadata["authorization_servers"] == [PUBLIC_URL], "resource metadata binds the exact user endpoint and OAuth issuer")
-        status, server, _ = self.oauth_request("/.well-known/oauth-authorization-server")
-        self.check(status == 200 and server["issuer"] == PUBLIC_URL and "S256" in server["code_challenge_methods_supported"], "OAuth discovery advertises authorization-code PKCE S256")
-        if self.oauth_client is None:
-            status, registration, _ = self.oauth_request(urlsplit(server["registration_endpoint"]).path, "POST", {
-                "client_name": "ssmcp end-to-end", "redirect_uris": ["http://127.0.0.1:37401/callback"],
-                "token_endpoint_auth_method": "none", "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"], "application_type": "native",
-            })
-            self.check(status == 201 and registration.get("client_id"), "public MCP client registers through OAuth DCR")
-            self.oauth_client = registration
-        client_id = self.oauth_client["client_id"]
-        redirect_uri = self.oauth_client["redirect_uris"][0]
-        verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
-        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-        state = base64.urlsafe_b64encode(os.urandom(18)).decode()
-        authorize = urlsplit(server["authorization_endpoint"]).path
-        token_path = urlsplit(server["token_endpoint"]).path
-        params = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code", "scope": "mcp", "resource": resource,
-                  "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
-        if attacks:
-            bad = dict(params, redirect_uri="https://attacker.example/callback")
-            status, _, headers = self.oauth_request(authorize + "?" + urlencode(bad))
-            self.check(status == 400 and "location" not in headers, "OAuth never redirects to an unregistered callback")
-            bad = dict(params, code_challenge_method="plain")
-            status, result, headers = self.oauth_request(authorize + "?" + urlencode(bad))
-            returned = parse_qs(urlsplit(headers.get("location", "")).query)
-            self.check(status >= 400 or bool(returned.get("error")), "OAuth rejects a PKCE downgrade to plain")
-        status, html, headers = self.oauth_request(authorize + "?" + urlencode(params), headers={"Accept": "text/html"})
-        self.check(status == 200 and isinstance(html, str), "OAuth presents the login page")
-        class Form(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.fields = {}
-                self.visible = []
-            def handle_starttag(self, tag, attrs):
-                attrs = dict(attrs)
-                if tag == "input" and attrs.get("name"):
-                    if attrs.get("type") == "hidden":
-                        self.fields[attrs["name"]] = attrs.get("value", "")
-                    else:
-                        self.visible.append(attrs["name"])
-        form = Form()
-        form.feed(html)
-        self.check(form.visible == ["login_code"] and "transaction_id" in form.fields, "login page has one visible code field and a CSRF-bound transaction")
-        cookie_header = headers.get("set-cookie", "")
-        self.check(all(flag in cookie_header.lower() for flag in ("secure", "httponly", "samesite=lax")), "login cookie is Secure, HttpOnly and SameSite Lax")
-        self.check("no-store" in headers.get("cache-control", "") and headers.get("referrer-policy") == "same-origin", "login page permits same-origin forms without cross-origin referrer leakage")
-        cookie = cookie_header.split(";", 1)[0]
-        payload = {**form.fields, "login_code": login_code}
-        origin = {"Origin": PUBLIC_URL, "Accept": "text/html"}
-        if attacks:
-            status, _, headers = self.oauth_request(authorize, "POST", payload, headers=origin, form=True)
-            self.check(status in (400, 403) and "location" not in headers, "login rejects a missing browser binding cookie")
-            status, _, headers = self.oauth_request(authorize, "POST", payload, cookie=cookie, headers={**origin, "Origin": "https://attacker.example"}, form=True)
-            self.check(status in (400, 403) and "location" not in headers, "login rejects a cross-origin form submission")
-            status, _, headers = self.oauth_request(authorize, "POST", {**payload, "login_code": "0" * 64}, cookie=cookie, headers=origin, form=True)
-            self.check(status != 303 and "location" not in headers, "an invalid login code cannot authorize the MCP client")
-        status, _, headers = self.oauth_request(authorize, "POST", payload, cookie=cookie, headers=origin, form=True)
-        self.check(status == 303, "one-time login code authorizes the OAuth client")
-        callback = urlsplit(headers["location"])
-        query = parse_qs(callback.query)
-        self.check(callback._replace(query="").geturl() == redirect_uri and query.get("state") == [state] and query.get("iss") == [PUBLIC_URL], "OAuth callback preserves state and identifies its issuer")
-        code = query["code"][0]
-        self.sensitive.append(code)
-        exchange = {"grant_type": "authorization_code", "client_id": client_id, "code": code,
-                    "code_verifier": verifier, "redirect_uri": redirect_uri, "resource": resource}
-        if attacks:
-            status, result, _ = self.oauth_request(token_path, "POST", {**exchange, "code_verifier": "x" * 43}, form=True)
-            self.check(status == 400 and result.get("error") == "invalid_grant", "authorization code rejects an incorrect PKCE verifier")
-            status, result, _ = self.oauth_request(token_path, "POST", {**exchange, "resource": PUBLIC_URL + "/different-user"}, form=True)
-            self.check(status == 400 and result.get("error"), "authorization code cannot be exchanged for another resource")
-        status, tokens, token_headers = self.oauth_request(token_path, "POST", exchange, form=True)
-        self.check(status == 200 and tokens.get("token_type", "").lower() == "bearer", "OAuth code exchange returns an access token")
-        self.check(tokens.get("expires_in") == 28800 and tokens.get("refresh_token"), "OAuth access expires in eight hours and supplies a refresh token")
-        self.check("no-store" in token_headers.get("cache-control", ""), "OAuth token responses cannot be cached")
-        self.secret = tokens["access_token"]
-        self.sensitive += [tokens["access_token"], tokens["refresh_token"]]
-        self.oauth_grant = {"tokens": tokens, "exchange": exchange, "token_path": token_path, "authorize": authorize, "authorize_params": params}
-        return self.oauth_grant
+        return self.account_gateway.authenticate_mcp(credentials, attacks=attacks)
 
     def oauth_refresh(self, refresh_token=None, resource=None):
         grant = self.oauth_grant
@@ -746,25 +592,23 @@ class Harness:
 
     def run(self):
         self.prepare()
-        bad_key = subprocess.run([
-            "ssh", "-F", str(self.directory / "wrong_config"), "-T", f"{self.user}@ssmcp-e2e"
-        ], capture_output=True, timeout=5)
-        self.check(bad_key.returncode == 255, "unauthorized public key is rejected by real sshd")
-        password = subprocess.run([
-            "ssh", "-F", str(self.directory / "ssh_config"), "-T",
-            "-oPreferredAuthentications=password,keyboard-interactive", "-oPubkeyAuthentication=no",
-            f"{self.user}@ssmcp-e2e",
-        ], capture_output=True, timeout=5)
-        self.check(password.returncode == 255, "password and keyboard-interactive cannot authenticate")
-        self.client, credentials = self.start_client(destination="ssmcp-e2e")
-        self.check(credentials["url"] == f"{PUBLIC_URL}/{self.user}",
-                   "bare SSH alias reuses configured User, HostName, Port, IdentityFile and host trust")
-        self.oauth_login(credentials, attacks=True)
+        for credential in ("", "invalid-account-credential"):
+            status, _, _ = self.request("GET", path="/api/client/whoami", secret=credential)
+            self.check(status == 401, "the account API rejects missing or incorrect device credentials")
+        status, account, _ = self.request("GET", path="/api/client/whoami", secret=self.account_token)
+        self.check(status == 200 and account["identity"] == self.identity,
+                   "the owned account credential resolves its stable provider identity")
+        self.client, credentials = self.start_client()
         self.client_id = credentials["client_id"]
-        self.check(credentials["url"] == f"{PUBLIC_URL}/{self.user}", "endpoint username comes from SSH account")
+        status, sessions, _ = self.request("GET", path="/api/client/sessions", secret=self.account_token)
+        self.check(status == 200 and any(item["id"] == self.client_id for item in sessions["clients"]),
+                   "the real WebSocket Ready connection belongs to the authenticated account")
+        self.oauth_login(credentials, attacks=True)
+        self.check(credentials["url"] == self.issuer + "/mcp", "the account connection advertises its shared MCP endpoint")
         self.check(self.request(body={}, secret="")[0] == 401, "missing Bearer is rejected")
         self.check(self.request(body={}, secret="0" * 64)[0] == 401, "incorrect Bearer is rejected")
-        self.check(self.request(body={}, path="/different-user")[0] == 401, "secret cannot select another user")
+        self.check(self.request(body={}, path="/different-user")[0] in (401, 404),
+                   "an identity token cannot select an unrelated protected resource")
         self.check(self.request(body={}, headers={"Origin": "https://attacker.example"})[0] == 403, "foreign Origin is rejected")
 
         for version in ("2025-03-26", "2025-06-18", LEGACY):
@@ -810,7 +654,7 @@ class Harness:
                    f"duplicates={len(catalog) - len(actual_tools)}, invalid_schemas={invalid_schemas}")
         self.check(any(key.lower() == "cache-control" and "no-store" in value for key, value in headers.items()),
                    "MCP responses cannot be stored by caches")
-        self.check(self.rpc("ping", headers={"Origin": PUBLIC_URL})[0] == 200, "configured Origin is accepted")
+        self.check(self.rpc("ping", headers={"Origin": self.issuer})[0] == 200, "configured Origin is accepted")
         self.check(self.request("GET")[0] == 405 and self.request("DELETE")[0] == 405,
                    "unsupported GET and DELETE return 405")
         self.check(self.request(body=b"{")[0] == 400, "malformed JSON is rejected")
@@ -962,8 +806,10 @@ class Harness:
         self.call("terminal.write", {"data": "sleep 300\n"})
         time.sleep(0.1)
         self.stop(self.client)
-        wait_for(lambda: self.rpc("ping")[0] == 401, description="revocation after client disconnect")
-        self.check(True, "issuer disconnect immediately revokes its Bearer while sibling clients remain online")
+        wait_for(lambda: all(client["id"] != self.client_id for client in self.public_call("list")["clients"]),
+                 description="removal of the disconnected WebSocket client")
+        self.check(self.rpc("ping")[0] == 200,
+                   "device disconnect preserves the identity-scoped MCP grant for sibling clients")
         remaining = self.public_call("list", secret=sibling_token)
         self.check([client["id"] for client in remaining["clients"]] == [sibling_id]
                    and self.call("terminal.status", client_id=sibling_id,
@@ -974,13 +820,11 @@ class Harness:
         self.check(True, "disconnect cleans up shell and terminal jobs")
         old_secret = self.secret
         old_client_id = self.client_id
-        status, result, _ = self.oauth_refresh()
-        self.check(status == 400 and result.get("error") == "invalid_grant", "SSH disconnect revokes OAuth refresh authority")
         self.client, credentials = self.start_client("reconnect")
-        self.oauth_login(credentials)
         self.client_id = credentials["client_id"]
-        self.check(self.secret != old_secret and self.request(body={}, secret=old_secret)[0] == 401,
-                   "reconnect requires a new OAuth login and rejects the previous access token")
+        self.check(self.secret == old_secret and self.rpc("ping", secret=old_secret)[0] == 200
+                   and any(client["id"] == self.client_id for client in self.public_call("list")["clients"]),
+                   "the existing account grant sees its replacement device without a fabricated login code")
         status, result, _ = self.rpc("tools/call", {"name": "code_mode", "arguments": {
             "code": "return await call(%s, 'terminal.status', {});" % json.dumps(old_client_id),
         }}, modern=True)
@@ -988,10 +832,11 @@ class Harness:
                    "reconnect creates a fresh ID and stale IDs cannot target the replacement")
         self.check(self.call("terminal.status")["running"], "reconnect creates a usable new terminal")
         previous_refresh = self.oauth_grant["tokens"]["refresh_token"]
-        status, tokens, _ = self.oauth_refresh(resource=PUBLIC_URL + "/different-user")
+        status, tokens, _ = self.oauth_refresh(resource=self.issuer + "/different-user")
         self.check(status == 400 and tokens.get("error"), "refresh tokens cannot switch the protected resource")
         status, tokens, _ = self.oauth_refresh()
-        self.check(status == 200 and tokens["refresh_token"] != previous_refresh, "refresh rotates the OAuth refresh token")
+        self.check(status == 200 and tokens["refresh_token"] != previous_refresh,
+                   "account refresh authority survives device replacement and rotates its refresh token")
         self.sensitive += [tokens["access_token"], tokens["refresh_token"]]
         self.secret = tokens["access_token"]
         self.oauth_grant["tokens"] = tokens
