@@ -2347,23 +2347,16 @@ impl State {
         let mut rows = Vec::new();
         for index in 0..g.rows {
             let line = if g.rows >= 3 && index == g.rows - 1 {
-                let status = if self.preview {
-                    "preview · sample data"
-                } else if !data["connected"].as_bool().unwrap_or(false) {
-                    "disconnected"
-                } else if !data["supported"].as_bool().unwrap_or(false) {
-                    "server update required for queue"
-                } else {
-                    "connected"
-                };
+                let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
+                let priority_hint = self.notice.is_some() || scroll_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
-                    if let Some(hint) = self.chat_contextual_hint(status) { return hint; }
+                    if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::Tasks {
@@ -2395,13 +2388,8 @@ impl State {
                             }
                         };
                     }
-                    if let Some(guide) = self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18) {
-                        let link = format!("{status} · {}", guide.url());
-                        return if link.width() < usize::from(g.cols) { link }
-                            else { "F1 · full online guide link".into() };
-                    }
                     format!(
-                        "{} · {status} · Alt+←/→ panels · right-click logs · /help",
+                        "{} · Alt+←/→ panels · right-click logs · /help",
                         if self.conversation.content_focus {
                             "browse"
                         } else {
@@ -2409,7 +2397,14 @@ impl State {
                         }
                     )
                 });
-                rows.push(self.chat_line(&format!(" {hint}"), hint_tone, g.cols));
+                let text = super::footer::render(
+                    &hint,
+                    self.server_origin.as_ref(),
+                    connection,
+                    g.cols,
+                    priority_hint,
+                );
+                rows.push(self.tone(hint_tone, &text));
                 continue;
             } else if top > 0 && index == 0 {
                 let suffix = if self.conversation.view == View::Logs
@@ -4391,6 +4386,62 @@ mod tests {
                 assert_eq!(state.conversation.editing, editing);
                 assert_eq!(state.conversation.submitting, submitting);
             }
+        }
+    }
+
+    #[test]
+    fn server_footer_keeps_canvas_drafts_and_recipients_intact() {
+        let mut state = preview(24, 100);
+        state.server_origin = super::super::footer::Origin::parse(
+            "https://user:password@ssmcp.lmm.best/mcp?token=hidden#private",
+        );
+        state.conversation.composer.set_text("保留草稿界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("example-builder".into());
+        let draft = state.conversation.snapshot()["draft"].clone();
+        let queue = state.chat_data()["queue"].clone();
+        for view in [View::Activity, View::Logs, View::Tasks, View::Audit] {
+            state.canvas_focus(view);
+            state.notice = Some("/exit must be used without arguments".into());
+            let frame = state.chat_frame(Instant::now());
+            let bottom = frame.rows.last().unwrap();
+            assert!(bottom.contains("https://ssmcp.lmm.best"), "{bottom}");
+            assert!(bottom.contains("without arguments"), "{bottom}");
+            for secret in ["user:password", "token", "hidden", "private"] {
+                assert!(!bottom.contains(secret), "{bottom}");
+            }
+            assert_eq!(state.conversation.snapshot()["draft"], draft);
+            assert_eq!(
+                state.conversation.target.as_deref(),
+                Some("example-builder")
+            );
+            assert_eq!(state.chat_data()["queue"], queue);
+            assert_eq!(frame.rows.len(), 24);
+        }
+    }
+
+    #[test]
+    fn joined_emoji_notices_keep_the_full_chat_footer() {
+        for (columns, notice) in [
+            (100, "\u{1f469}\u{200d}\u{1f4bb}".to_owned()),
+            (20, "\u{1f469}\u{200d}\u{1f4bb}".repeat(8)),
+        ] {
+            let mut state = preview(24, columns);
+            state.ui.color = false;
+            state.server_origin = super::super::footer::Origin::parse("https://ssmcp.lmm.best/mcp");
+            state.notice = Some(notice.clone());
+            let frame = state.chat_frame(Instant::now());
+            let bottom = frame.rows.last().unwrap();
+            assert!(bottom.contains(notice.as_str()), "{columns}: {bottom:?}");
+            assert_eq!(bottom.width(), usize::from(columns), "{bottom:?}");
+            if columns == 100 {
+                assert!(
+                    bottom.trim_end().ends_with("https://ssmcp.lmm.best"),
+                    "{bottom:?}"
+                );
+            }
+            // Exercise the measured row encoder as well as the footer string.
+            assert!(!frame.diff(None).is_empty());
         }
     }
 }

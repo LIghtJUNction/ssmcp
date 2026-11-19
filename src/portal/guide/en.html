@@ -28,7 +28,7 @@
   <section id="start" aria-labelledby="start-title">
     <div class="section-heading"><p class="eyebrow">01 / START</p><h2 id="start-title">Connect once, then choose your tools.</h2></div>
     <ol class="steps">
-      <li><h3>Install the client.</h3><p>Get the client for your system from <a href="https://github.com/LIghtJUNction/ssmcp/releases">GitHub releases</a>. Open a terminal in the project folder you want to work with.</p></li>
+      <li><h3>Install the client.</h3><p>Get the client for your system from <a href="https://github.com/LIghtJUNction/ssmcp/releases">GitHub releases</a>. The Windows installer prepares Node.js, Playwright and Chromium for native browser tools. Open a terminal in the project folder you want to work with.</p></li>
       <li><h3>Connect this computer.</h3><p>Choose your account name on the <a href="/">gateway account page</a>, then run the command below. Follow GitHub authorization when prompted.</p><pre><code>ssmcp yourname@{{gateway_authority}}</code></pre><p class="note">Replace <code>yourname</code> with your account name. On later visits, <code>ssmcp</code> can reuse your last authorized account.</p></li>
       <li><h3>Add the gateway to your AI app.</h3><p>Use this MCP address and authorize the same GitHub account. Ask the app to list online clients, then select the intended computer before calling a tool.</p><pre><code>{{gateway_origin}}/mcp</code></pre><p class="note">The AI runs in your app or an installed harness. Connecting ssmcp does not start a model.</p></li>
     </ol>
@@ -66,9 +66,9 @@ Inspect the document and capture the result.</code></pre><p class="note">Private
 Run the relevant tests and show the diff.</code></pre></article>
       <article><h3>Follow a long task</h3><p>Ask the agent to start a build, test or report job and follow its output. Managed jobs continue after a code_mode call returns while the client stays connected.</p><pre><code>Run the test suite once.
 Track its job ID and report the exit code.</code></pre></article>
-      <article><h3>Review an image or report</h3><p>Combine the visual evidence with the question you want answered. The agent reads the actual image through the native image tool.</p><pre><code>@assets/chart.png
+      <article><h3>Review an image or report</h3><p>Combine the visual evidence with the question you want answered. The agent reads the actual image through the native image tool. Terminals with image support show its pixels; other terminals show a compact attachment card with dimensions.</p><pre><code>@assets/chart.png
 Explain the trend and flag unclear labels.</code></pre></article>
-      <article><h3>Check a browser flow</h3><p>Use your app's authorized ChatGPT Browser plugin when available. Otherwise discover registered Playwright tools or select an observed CDP connection. The chosen provider controls the browser session.</p><pre><code>Inspect the open checkout page.
+      <article><h3>Check a browser flow</h3><p>Use the native browser tools for browser work. If you need a specific existing browser session, select its authorized connection explicitly; load the optional Playwright harness only when that route requires it.</p><pre><code>Inspect the open checkout page.
 Test the form and capture the resulting state.</code></pre></article>
       <article><h3>Work across devices and members</h3><p><code>ssmcp list</code> lists authorized online devices. The terminal's Agents panel selects a member on the current connection. Choose the device first, then the recipient for your request.</p><pre><code>On the selected build machine,
 inspect the latest build result.</code></pre></article>
@@ -78,7 +78,7 @@ inspect the latest build result.</code></pre></article>
 
   <section id="tools" aria-labelledby="tools-title">
     <div class="section-heading"><p class="eyebrow">05 / FOR TOOL CALLERS</p><h2 id="tools-title">Discover the live contract.</h2></div>
-    <p>Use <code>list</code> to get the selected client's ID. Inside code_mode, search its registered tools and read the returned schemas before calling them. Installed harnesses keep their native arguments and approval rules.</p>
+    <p>Use <code>list</code> to get the selected client's ID. Inside code_mode, search its registered tools and read the returned schemas before calling them. Native tools work without another harness. Optional harnesses start unloaded: <code>ssmcp.harnesses.list</code> reads cached status; <code>ssmcp.harnesses.load</code> explicitly loads one provider. Loaded tools keep their native arguments and approval rules.</p>
     <pre><code>const clientId = "ID_FROM_LIST";
 return await tools.search(clientId, {
   name_prefix: "ssmcp.fs.",
@@ -94,7 +94,7 @@ image(await call(clientId, "ssmcp.fs.read_image", {
 
   <section class="help" aria-labelledby="help-title">
     <h2 id="help-title">Need a quick check?</h2>
-    <dl><div><dt>No online client?</dt><dd>Keep the local client running and check that your app and client use the same authorized account and gateway.</dd></div><div><dt>A tool is missing?</dt><dd>Refresh the client list and search the selected client's live tools. Available capabilities depend on the tools and harnesses installed on that computer.</dd></div><div><dt>The QR does not fit?</dt><dd>The sidebar shows a readable link instead. F1 retains the full guide address on smaller terminals.</dd></div></dl>
+    <dl><div><dt>No online client?</dt><dd>Keep the local client running and check that your app and client use the same authorized account and gateway.</dd></div><div><dt>A tool is missing?</dt><dd>Refresh the client list and search the selected client's live tools. Native tools are available by default. Load an optional harness explicitly when its capabilities are needed, then search the refreshed catalog.</dd></div><div><dt>The QR does not fit?</dt><dd>The sidebar shows a readable link instead. F1 retains the full guide address on smaller terminals.</dd></div></dl>
   </section>
 </main>
 <footer class="container footer"><span>ssmcp {{version}}</span><a href="/">Gateway account</a><a href="https://github.com/LIghtJUNction/ssmcp">Source &amp; documentation</a></footer>

@@ -987,7 +987,6 @@ impl EventView {
                     ));
                     let inset = 2.min(body_width.saturating_sub(1));
                     let image_width = body_width.saturating_sub(inset).max(1) as u16;
-                    let image_height = page.saturating_sub(2).max(1) as u16;
                     let native = self.image_cells.filter(|_| ui.color).and_then(|cell| {
                         let native = image.native.as_ref()?;
                         Some((native.clone(), native.layout_width(image_width, cell)?))
@@ -1009,7 +1008,7 @@ impl EventView {
                                 dimensions
                             }
                         }
-                        None => "Low-resolution thumbnail · text may be unreadable".into(),
+                        None => format!("{} × {} · Image attachment", image.width, image.height),
                     };
                     rows.push((
                         event.id,
@@ -1045,11 +1044,22 @@ impl EventView {
                             // real height is known, without pausing text output.
                             self.new_image.get_or_insert(event.id);
                         }
-                        for row in
-                            image.render(usize::from(image_width), usize::from(image_height), ui)
-                        {
-                            rows.push((event.id, format!("{}{row}", " ".repeat(indent + inset))));
-                        }
+                        rows.push((
+                            event.id,
+                            format!(
+                                "{}{}",
+                                " ".repeat(indent + inset),
+                                paint(
+                                    &clip_plain(
+                                        "Inline preview unavailable. Use a terminal with image support.",
+                                        usize::from(image_width),
+                                    ),
+                                    "muted",
+                                    ui,
+                                    false,
+                                )
+                            ),
+                        ));
                     }
                     continue;
                 }
@@ -2263,7 +2273,7 @@ mod tests {
                 view.latest();
                 view.attach_image(image_preview(400, 2400, true));
                 let fallback = view.render(66, 20, &ui, true).join("\n");
-                assert!(unstyled(&fallback).contains("Low-resolution thumbnail"));
+                assert!(unstyled(&fallback).contains("Image attachment"));
                 let pending = view.position();
                 assert!(pending.new_image.is_some());
                 view.latest();
@@ -2363,7 +2373,7 @@ mod tests {
             view.ingest(b"[IMAGE] during-resize.png\n");
             view.attach_image(image_preview(400, 2400, true));
             let fallback = view.render(66, 20, &ui, true).join("\n");
-            assert!(unstyled(&fallback).contains("Low-resolution thumbnail"));
+            assert!(unstyled(&fallback).contains("Image attachment"));
             assert!(view.new_image.is_some());
             assert!(view.is_following());
             assert!(view.image_placements(0).is_empty());
@@ -2444,20 +2454,33 @@ mod tests {
     }
 
     #[test]
-    fn fallback_images_disclose_low_resolution_and_use_the_available_height() {
-        let mut view = EventView::new();
-        view.ingest(b"[IMAGE] screenshot.png\n");
-        view.attach_image(image_preview(128, 128, false));
-        let rows = view.render(134, 80, &plain_ui(), true);
-        assert!(rows.join("\n").contains("Low-resolution thumbnail"));
-        assert_eq!(
-            view.total_rows, 66,
-            "the old 18-row cap must not shrink a larger viewport"
-        );
-        assert!(view.image_placements(0).is_empty());
-        for width in [1, 10, 40] {
-            for row in view.render(width, 8, &plain_ui(), true) {
-                assert!(row.width() <= usize::from(width));
+    fn unsupported_images_are_compact_cards_without_pixel_art() {
+        for color in [false, true] {
+            let mut view = EventView::new();
+            view.ingest(b"[IMAGE] screenshot.png\n");
+            view.attach_image(image_preview(128, 128, false));
+            let ui = Ui {
+                color,
+                ..Ui::default()
+            };
+            let rows = view.render(134, 80, &ui, true);
+            let text = unstyled(&rows.join("\n"));
+            assert!(text.contains("128 × 128 · Image attachment"));
+            assert!(text.contains("Inline preview unavailable"));
+            assert!(!text.contains('▀') && !text.contains("Low-resolution thumbnail"));
+            assert_eq!(
+                view.total_rows, 3,
+                "fallback occupies a compact attachment card"
+            );
+            assert!(view.image_placements(0).is_empty());
+            assert!(
+                view.is_following(),
+                "a metadata card must not pause following"
+            );
+            for width in [1, 10, 40] {
+                for row in view.render(width, 8, &ui, true) {
+                    assert!(unstyled(&row).width() <= usize::from(width));
+                }
             }
         }
     }

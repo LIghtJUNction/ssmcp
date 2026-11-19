@@ -23,6 +23,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
 mod events;
+mod footer;
 mod guide;
 mod images;
 pub(crate) mod markdown;
@@ -83,6 +84,7 @@ impl Session {
         options.color &= std::env::var_os("NO_COLOR").is_none();
         let mut state = State::new(rows, cols, &options);
         state.set_context(cwd, title);
+        state.server_origin = endpoint.and_then(footer::Origin::parse);
         let guide = endpoint.and_then(guide::Guide::from_endpoint);
         let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
         state.guide = guide.map(guide::Guide::portal);
@@ -539,6 +541,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
 fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
+    state.server_origin = footer::Origin::parse(super::account::DEFAULT_SERVER);
     state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
     state.account = AccountStatus::Ready {
         login: "example".into(),
@@ -1092,6 +1095,7 @@ impl vt100::Callbacks for Replies {
 
 struct State {
     context_label: String,
+    server_origin: Option<footer::Origin>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
     graphics: images::Graphics,
@@ -1130,6 +1134,7 @@ impl State {
         let mut state = Self {
             events: events::EventView::new(),
             context_label: String::new(),
+            server_origin: None,
             guide: None,
             account: AccountStatus::Unavailable,
             graphics: images::Graphics::default(),
@@ -1266,16 +1271,10 @@ impl State {
         replies
     }
     fn image(&mut self, preview: images::Preview, mime: &str) {
-        let width = usize::from(self.geometry.left.saturating_sub(4).max(1));
-        let height = usize::from(self.geometry.log_rows.saturating_sub(3).max(1));
-        let mut text = format!(
-            "\n[IMAGE] {} × {} · {}\n  Low-resolution thumbnail\n",
+        let text = format!(
+            "\n[IMAGE] {} × {} · {}\n  Image attachment\n\n",
             preview.width, preview.height, mime
         );
-        for row in preview.render(width, height, &self.ui) {
-            let _ = writeln!(text, "  {row}");
-        }
-        text.push('\n');
         self.log(text.as_bytes());
         self.events.attach_image(preview);
     }
@@ -1765,24 +1764,18 @@ impl State {
                         " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
                         self.log_query
                     )
-                } else if let Some(guide) =
-                    self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18)
-                {
-                    let link = format!(" {} · F1 Help ", guide.url());
-                    if link.width() <= usize::from(g.cols) {
-                        link
-                    } else {
-                        " F1 · full online guide link ".into()
-                    }
                 } else if g.cols < 100 {
                     " Wheel Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F1 Help ".into()
                 } else {
                     " Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help · F4 Theme ".into()
                 };
-                let text = fit(&hint, g.cols);
-                let padded = format!(
-                    "{text}{}",
-                    " ".repeat(usize::from(g.cols).saturating_sub(text.width()))
+                let connection = footer::Connection::from_snapshot(self.preview, &self.chat_data());
+                let text = footer::render(
+                    &hint,
+                    self.server_origin.as_ref(),
+                    connection,
+                    g.cols,
+                    self.notice.is_some() || self.filter_editing,
                 );
                 rows.push(self.tone(
                     if self.keyboard.logs {
@@ -1790,7 +1783,7 @@ impl State {
                     } else {
                         PanelTone::Muted
                     },
-                    &padded,
+                    &text,
                 ));
                 continue;
             }
@@ -2555,7 +2548,7 @@ mod tests {
             physical(&after)
                 .screen()
                 .contents()
-                .contains("Low-resolution thumbnail")
+                .contains("Image attachment")
         );
         let (delete, _) =
             media.update(std::mem::take(&mut state.media), after.cursor, after.hidden);
@@ -2651,12 +2644,7 @@ mod tests {
         );
         assert!(!output.contains("a=p"));
         screen.process(&after.diff(Some(&before)));
-        assert!(
-            screen
-                .screen()
-                .contents()
-                .contains("Low-resolution thumbnail")
-        );
+        assert!(screen.screen().contents().contains("Image attachment"));
     }
 
     #[test]
@@ -3492,6 +3480,32 @@ mod tests {
             assert!(output.is_empty());
             assert!(matches!(actions.as_slice(), [Key::Interrupt]));
             assert!(!keyboard.pasting);
+        }
+    }
+
+    #[test]
+    fn connection_footer_uses_the_same_last_row_in_every_layout() {
+        for layout in [Layout::Chat, Layout::Logs, Layout::Audit, Layout::Split] {
+            let ui = Ui {
+                layout,
+                color: false,
+                sidebar: false,
+                ..Ui::default()
+            };
+            let mut state = preview_state(12, 100, &ui);
+            let before = state.geometry;
+            state.notice = Some("/exit must be used without arguments".into());
+            let frame = state.frame(Instant::now());
+            assert_eq!(state.geometry, before);
+            assert_eq!(frame.rows.len(), 12);
+            let bottom = frame.rows.last().unwrap();
+            assert!(bottom.contains("without arguments"), "{layout:?}: {bottom}");
+            assert!(
+                bottom.contains("https://ssmcp.lmm.best"),
+                "{layout:?}: {bottom}"
+            );
+            assert!(bottom.contains("preview"), "{layout:?}: {bottom}");
+            assert_eq!(bottom.width(), 100, "{layout:?}: {bottom:?}");
         }
     }
 }
