@@ -823,7 +823,7 @@ fn execute(
 }
 
 fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool {
-    // zuse 0.1.0 has String errors. These branches are verified against the
+    // zuse 0.2.0 has String errors. These branches are verified against the
     // pinned library: they return before key injection or keyboard-map writes.
     // Unknown native/runtime errors remain unconfirmed and keep input locked.
     if backend == "x11" {
