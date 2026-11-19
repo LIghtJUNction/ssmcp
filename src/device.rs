@@ -1157,6 +1157,39 @@ mod tests {
                         )
                         .await
                 }));
+                if bound {
+                    // A verified binding first asks this connection whether it
+                    // accepts thread scope. This is not the requested Status.
+                    let probe = receive(&mut socket).await.expect("thread scope probe");
+                    let probe_id = match probe {
+                        wire::Frame::Call {
+                            id,
+                            operation: Operation::CallTool { name, arguments },
+                            controller,
+                            attribution,
+                            code_context,
+                        } => {
+                            assert_eq!(name, "ssmcp.client.capabilities");
+                            assert_eq!(arguments, json!({}));
+                            assert!(controller.is_none());
+                            assert!(attribution.is_none());
+                            assert!(code_context.is_none());
+                            id
+                        }
+                        _ => panic!("thread scope capability call"),
+                    };
+                    socket
+                        .send(Message::Binary(
+                            serde_json::to_vec(&wire::Frame::Reply {
+                                id: probe_id,
+                                result: Ok(json!({"thread_scope":1})),
+                            })
+                            .unwrap()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
                 let bytes = loop {
                     match tokio::time::timeout(Duration::from_secs(4), socket.next())
                         .await
@@ -1175,16 +1208,27 @@ mod tests {
                 let frame: wire::Frame = serde_json::from_slice(&bytes).unwrap();
                 let (call_id, attribution) = match frame {
                     wire::Frame::Call {
-                        id,
+                        id: call_id,
+                        operation,
                         attribution,
                         controller,
-                        ..
+                        code_context,
                     } => {
+                        assert!(matches!(operation, Operation::Status {}));
                         assert_eq!(
                             controller.unwrap().name.as_deref(),
                             Some("bob (unverified claim)")
                         );
-                        (id, attribution)
+                        let context = code_context.expect("code-mode audit context");
+                        assert_eq!(
+                            context.session_id.as_deref(),
+                            agent.as_ref().map(|_| id.as_str())
+                        );
+                        assert_eq!(
+                            context.thread_id.as_deref(),
+                            agent.as_ref().and_then(|agent| agent["agent_id"].as_str())
+                        );
+                        (call_id, attribution)
                     }
                     _ => panic!("call frame"),
                 };
