@@ -415,6 +415,7 @@ mod tests {
                 session
                     .sender
                     .try_send(super::super::Call {
+                        attribution: None,
                         operation: Operation::ListTools { cursor: None },
                         controller: None,
                         code_context: None,

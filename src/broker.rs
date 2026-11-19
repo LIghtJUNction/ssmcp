@@ -1,5 +1,8 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
 mod access;
+mod attribution;
+#[cfg(test)]
+mod attribution_tests;
 mod management;
 mod traffic;
 use crate::{
@@ -39,6 +42,7 @@ type CallResult = std::result::Result<Value, String>;
 struct Call {
     operation: Operation,
     controller: Option<Controller>,
+    attribution: Option<wire::ControlAttribution>,
     code_context: Option<wire::CodeContext>,
     authorization: Option<Authorization>,
     reply: oneshot::Sender<CallResult>,
@@ -97,6 +101,7 @@ pub struct Session {
     alive: AtomicBool,
     ssh_user: String,
     owner_subject: Option<String>,
+    owner_identity: Option<Identity>,
     connected_at: u64,
     audit: Option<Arc<crate::history::AuditLog>>,
     disconnect: Notify,
@@ -214,10 +219,11 @@ impl Session {
         operation.validate()?;
         let audit_run = crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok();
         // A later collab.bind in the same run must not reattribute this reply.
-        let reply_agent = audit_run
+        let binding = audit_run
             .as_ref()
-            .and_then(|run| run.binding(self.client_id()))
-            .map(|binding| binding.agent_id);
+            .and_then(|run| run.binding(self.client_id()));
+        let reply_agent = binding.as_ref().map(|binding| binding.agent_id.clone());
+        let attribution = self.control_attribution(authorization, binding.as_ref())?;
         let controller =
             controller.or_else(|| audit_run.as_ref().and_then(|run| run.controller.clone()));
         if let Some(controller) = &controller {
@@ -242,6 +248,8 @@ impl Session {
                 .audit_call(
                     audit_tool.as_deref(),
                     actor_subject,
+                    attribution.as_ref(),
+                    code_context.as_ref().map(|context| context.run_id.as_str()),
                     crate::history::AuditOutcome::Pending,
                 )
                 .await
@@ -256,6 +264,7 @@ impl Session {
             .try_send(Call {
                 operation,
                 controller,
+                attribution: attribution.clone(),
                 code_context,
                 authorization: authorization.cloned(),
                 reply,
@@ -267,6 +276,8 @@ impl Session {
                     .audit_call(
                         audit_tool.as_deref(),
                         actor_subject,
+                        attribution.as_ref(),
+                        audit_run.as_ref().map(|run| run.context.run_id.as_str()),
                         crate::history::AuditOutcome::Error,
                     )
                     .await;
@@ -303,7 +314,13 @@ impl Session {
                 crate::history::AuditOutcome::Error
             };
             if self
-                .audit_call(audit_tool.as_deref(), actor_subject, outcome)
+                .audit_call(
+                    audit_tool.as_deref(),
+                    actor_subject,
+                    attribution.as_ref(),
+                    audit_run.as_ref().map(|run| run.context.run_id.as_str()),
+                    outcome,
+                )
                 .await
                 .is_err()
                 && audit_required
@@ -532,6 +549,7 @@ impl Broker {
                 .management
                 .as_ref()
                 .and_then(|state| state.policy.owner_subject(user)),
+            owner_identity: None,
             connected_at: crate::management::now(),
             audit: self.management.as_ref().map(|state| state.audit.clone()),
             disconnect: Notify::new(),
@@ -780,6 +798,16 @@ impl Broker {
             .as_ref()
             .filter(|registration| registration.session_access)
             .map(|registration| registration.identity.clone());
+        let control_attribution = registration
+            .as_ref()
+            .is_some_and(|registration| registration.control_attribution);
+        let mut capabilities = Vec::new();
+        if access_owner.is_some() {
+            capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
+        }
+        if control_attribution {
+            capabilities.push(wire::CONTROL_ATTRIBUTION_CAPABILITY.into());
+        }
         let login_code = if restricted {
             String::new()
         } else {
@@ -812,6 +840,9 @@ impl Broker {
             alive: AtomicBool::new(true),
             ssh_user: user.clone(),
             owner_subject: owner,
+            owner_identity: registration
+                .as_ref()
+                .map(|registration| registration.identity.clone()),
             connected_at: crate::management::now(),
             audit: self.management.as_ref().map(|state| state.audit.clone()),
             disconnect: Notify::new(),
@@ -899,7 +930,7 @@ impl Broker {
             },
             result = async {
             session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
-            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities: access_owner.as_ref().map(|_| vec![wire::SESSION_ACCESS_CAPABILITY.into()]).unwrap_or_default() }).await?;
+            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities }).await?;
             let mut next_id = 0u64;
             let mut delivered_runs = std::collections::VecDeque::<String>::new();
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
@@ -926,7 +957,7 @@ impl Broker {
                             let reload = crate::client::reload::is_reload(&call.operation);
                             pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation), reload));
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
-                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, code_context:call.code_context };
+                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context };
                             if let Some(subject) = legacy_subject {
                                 self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1)
                                     .await.map_err(|error| TrafficFailure::rejected_call(error, next_id))?;
@@ -1551,7 +1582,7 @@ mod tests {
         allowed_session(id, secret, Vec::new())
     }
 
-    fn allowed_session(id: &str, secret: &str, allow: Vec<Identity>) -> Arc<Session> {
+    pub(super) fn allowed_session(id: &str, secret: &str, allow: Vec<Identity>) -> Arc<Session> {
         let (sender, _rx) = mpsc::channel(1);
         let (reports, _reports_rx) = mpsc::channel(1);
         Arc::new(Session {
@@ -1576,6 +1607,7 @@ mod tests {
             alive: AtomicBool::new(true),
             ssh_user: "test".into(),
             owner_subject: None,
+            owner_identity: None,
             connected_at: crate::management::now(),
             audit: None,
             disconnect: Notify::new(),

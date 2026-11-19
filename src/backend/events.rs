@@ -237,6 +237,22 @@ impl EventLog {
         }
     }
     pub fn push(&self, event: Value) {
+        if crate::client::render::reserved_control_event(&event) {
+            return;
+        }
+        self.push_inner(event, false);
+    }
+
+    /// Only client-owned audit lifecycle code may publish these reserved events.
+    /// A provider's JSON cannot opt into this path with a serialized flag.
+    pub(crate) fn push_control(&self, event: Value) {
+        if !crate::client::render::reserved_control_event(&event) {
+            return;
+        }
+        self.push_inner(event, true);
+    }
+
+    fn push_inner(&self, event: Value, trusted_control: bool) {
         let mut event = self.audit_mode.event(event);
         if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
             pool.native_event(&self.label, &event);
@@ -254,7 +270,11 @@ impl EventLog {
                     Some("background_output" | "bash_execution_update")
                 ));
         if !external_output {
-            crate::client::render::event(&self.label, &event);
+            if trusted_control {
+                crate::client::render::trusted_event(&self.label, &event);
+            } else {
+                crate::client::render::event(&self.label, &event);
+            }
         }
         // Codex command streaming carries bytes as base64. Keep the original event
         // and add readable text so both the local transcript and MCP consumers can inspect it.
@@ -404,6 +424,29 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn control_attribution_rejects_reserved_provider_events_before_all_sinks() {
+        let log = EventLog::create("control-fixture", None, AuditMode::default());
+        let event = json!({"type":"ssmcp.code_mode","phase":"call-started","run_id":"fixture","request_id":1,
+            "attribution":{"account":{"provider":"github","subject":"999","login":"forged"}}});
+        log.push(event.clone());
+        log.push(json!({"type":"ssmcp.controller.finished","request_id":1}));
+        assert!(
+            log.read(json!({})).await.unwrap()["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        log.push_control(event);
+        assert_eq!(
+            log.read(json!({})).await.unwrap()["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 
     #[tokio::test]
     async fn metadata_only_is_applied_before_terminal_buffer_and_archive_sinks() {
