@@ -365,6 +365,8 @@ fn user_row(
             r#"<form class="user-rate-form" method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="traffic"><input type="hidden" name="period" value="{period}"><label class="visually-hidden" for="traffic-{subject}">{username} 当月剩余流量，字节</label><div class="rate-input"><input id="traffic-{subject}" type="text" inputmode="numeric" pattern="[0-9]+" maxlength="20" name="remaining_bytes" value="{remaining}" required><button class="secondary" type="submit">保存</button></div><small>{period} · {} · 输入单位为字节</small></form>"#,
             super::view::traffic_bytes(remaining),
         ));
+    } else if period.is_empty() {
+        html.push_str(r#"<span class="muted">不可用</span>"#);
     } else {
         html.push_str(r#"<span class="muted">不限量</span>"#);
     }
