@@ -63,6 +63,8 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .arg("__relay")
         .env("SSMCP_RELAY_SERVER", server)
         .env_remove("SSMCP_RELAY_TOKEN")
+        .env_remove(super::link_metrics::ENV)
+        .env_remove(super::link_metrics::ID_ENV)
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
@@ -116,6 +118,7 @@ fn decode_frame(bytes: &[u8]) -> io::Result<Frame> {
 }
 
 pub(super) async fn run() -> crate::Result<()> {
+    let mut metrics = super::link_metrics::Recorder::from_environment();
     let server = std::env::var("SSMCP_RELAY_SERVER")
         .map_err(|_| "private relay must be started by ssmcp")?;
     let token = std::env::var("SSMCP_RELAY_TOKEN").ok();
@@ -215,6 +218,8 @@ pub(super) async fn run() -> crate::Result<()> {
         }
     });
     let mut stdout = tokio::io::stdout();
+    let mut metrics_tick = tokio::time::interval(Duration::from_secs(1));
+    metrics_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut heartbeat = tokio::time::interval(Duration::from_secs(25));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result = async {
@@ -223,13 +228,7 @@ pub(super) async fn run() -> crate::Result<()> {
                 frame = frames.recv() => {
                     match frame {
                         Some(Ok(Some(frame))) => {
-                            let mut encoded = serde_json::to_vec(&frame)?;
-                            encoded.push(b'\n');
-                            if encoded.len() > MAX_FRAME {
-                                return Err("outgoing relay frame exceeds size limit".into());
-                            }
-                            timeout(Duration::from_secs(15), outgoing.send(Message::Binary(encoded.into())))
-                                .await.map_err(|_| "relay send timed out")??;
+                            send_application(&mut outgoing, &frame, &mut metrics).await?;
                         }
                         Some(Err(error)) => return Err(error.into()),
                         Some(Ok(None)) | None => {
@@ -240,8 +239,9 @@ pub(super) async fn run() -> crate::Result<()> {
                 }
                 message = incoming.next() => {
                     let frame = match message {
-                        Some(Ok(Message::Text(text))) => Some(decode_frame(text.as_bytes())?),
-                        Some(Ok(Message::Binary(bytes))) => Some(decode_frame(&bytes)?),
+                        Some(Ok(message @ (Message::Text(_) | Message::Binary(_)))) => {
+                            application_frame(message, &mut metrics)?
+                        }
                         Some(Ok(Message::Ping(bytes))) => {
                             timeout(Duration::from_secs(15), outgoing.send(Message::Pong(bytes)))
                                 .await.map_err(|_| "relay pong timed out")??;
@@ -262,6 +262,7 @@ pub(super) async fn run() -> crate::Result<()> {
                             .await.map_err(|_| "local relay output timed out")??;
                     }
                 }
+                _ = metrics_tick.tick(), if metrics.enabled() => metrics.publish(),
                 _ = heartbeat.tick() => {
                     timeout(Duration::from_secs(15), outgoing.send(Message::Ping(Vec::new().into())))
                         .await.map_err(|_| "relay heartbeat timed out")??;
@@ -272,6 +273,51 @@ pub(super) async fn run() -> crate::Result<()> {
     stdin_task.abort();
     result
 }
+
+async fn send_application<S>(
+    outgoing: &mut S,
+    frame: &Frame,
+    metrics: &mut super::link_metrics::Recorder,
+) -> crate::Result<()>
+where
+    S: futures_util::Sink<Message, Error = tungstenite::Error> + Unpin,
+{
+    let mut encoded = serde_json::to_vec(frame)?;
+    encoded.push(b'\n');
+    if encoded.len() > MAX_FRAME {
+        return Err("outgoing relay frame exceeds size limit".into());
+    }
+    let bytes = encoded.len();
+    timeout(
+        Duration::from_secs(15),
+        outgoing.send(Message::Binary(encoded.into())),
+    )
+    .await
+    .map_err(|_| "relay send timed out")??;
+    metrics.sent(bytes);
+    Ok(())
+}
+
+fn application_frame(
+    message: Message,
+    metrics: &mut super::link_metrics::Recorder,
+) -> io::Result<Option<Frame>> {
+    match message {
+        Message::Text(text) => {
+            metrics.received(text.len());
+            decode_frame(text.as_bytes()).map(Some)
+        }
+        Message::Binary(bytes) => {
+            metrics.received(bytes.len());
+            decode_frame(&bytes).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+#[path = "relay/metrics_tests.rs"]
+mod metrics_tests;
 
 #[cfg(test)]
 mod tests {

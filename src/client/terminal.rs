@@ -234,6 +234,32 @@ pub(crate) fn exit_requested() -> bool {
 }
 
 /// Keep the account actually used by this connection private to its local UI.
+pub(super) fn begin_link_metrics(
+    generation: u64,
+    client_id: &str,
+    status: super::link_metrics::Status,
+) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.link_metrics.begin(generation, client_id, status);
+        state.dirty = true;
+    }
+}
+
+pub(super) fn update_link_metrics(generation: u64, status: super::link_metrics::Status) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let changed = state.link_metrics.update(generation, status);
+        state.dirty |= changed;
+    }
+}
+
 pub(super) fn set_logout_target(target: Option<(&str, &str)>) {
     if let Some(shared) = shared() {
         shared
@@ -1178,6 +1204,7 @@ struct State {
     logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
+    link_metrics: super::link_metrics::View,
     graphics: images::Graphics,
     media: Vec<images::Placement>,
     geometry: Geometry,
@@ -1218,6 +1245,7 @@ impl State {
             logout_target: None,
             guide: None,
             account: AccountStatus::Unavailable,
+            link_metrics: super::link_metrics::View::default(),
             graphics: images::Graphics::default(),
             media: Vec::new(),
             logs: vt100::Parser::new(
@@ -2023,11 +2051,19 @@ impl State {
                 rows.push(self.tone(PanelTone::Muted, &padded));
             }
         }
-        rows.extend(guide::pet_rows(
-            width,
-            height.saturating_sub(rows.len() as u16),
-            &self.ui,
-        ));
+        for text in self
+            .link_metrics
+            .rows()
+            .into_iter()
+            .take(usize::from(height).saturating_sub(rows.len()))
+        {
+            let text = fit(&text, width);
+            let padded = format!(
+                "{text}{}",
+                " ".repeat(usize::from(width).saturating_sub(text.width()))
+            );
+            rows.push(self.tone(PanelTone::Muted, &padded));
+        }
         rows
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
@@ -2694,7 +2730,7 @@ mod tests {
     }
 
     #[test]
-    fn account_quota_preview_uses_the_shared_sidebar_and_preserves_the_ascii_pet() {
+    fn account_quota_preview_shares_sidebar_with_connection_metrics() {
         for layout in [Layout::Chat, Layout::Split, Layout::Logs] {
             let mut ui = Ui {
                 color: false,
@@ -2712,7 +2748,12 @@ mod tests {
                 "{layout:?}: {contents}"
             );
             assert!(contents.contains('█'), "{layout:?}: {contents}");
-            assert!(contents.contains("( o.o )"), "{layout:?}: {contents}");
+            assert!(contents.contains("App data #"), "{layout:?}: {contents}");
+            assert!(
+                contents.contains("Speed unavailable"),
+                "{layout:?}: {contents}"
+            );
+            assert!(!contents.contains("( o.o )"), "{layout:?}: {contents}");
             ui.sidebar = false;
             let mut hidden = vt100::Parser::new(nonzero(30), nonzero(120), 0);
             hidden.process(&preview_bytes(&ui, 30, 120));
@@ -2724,7 +2765,7 @@ mod tests {
             } else {
                 assert!(!contents.contains("Local example"));
             }
-            assert!(!contents.contains("( o.o )"));
+            assert!(!contents.contains("App data #"));
         }
     }
 
@@ -2746,6 +2787,58 @@ mod tests {
             assert!(contents.contains("Reset 2026-12-01"), "{width}: {contents}");
             assert!(contents.contains('█'), "{width}: {contents}");
             assert!(!contents.contains("本月剩余") && !contents.contains("无限"));
+        }
+    }
+
+    #[test]
+    fn link_metrics_sidebar_shows_sample_identity_and_disconnect_at_narrow_widths() {
+        for width in [20, 24, 30] {
+            let ui = Ui {
+                color: false,
+                layout: Layout::Chat,
+                sidebar: true,
+                sidebar_width: width,
+                ..Ui::default()
+            };
+            let mut state = State::new(30, 100, &ui);
+            state.link_metrics.begin(
+                7,
+                "abc01234ffff",
+                super::super::link_metrics::Status::Ready {
+                    uploaded: 1500,
+                    downloaded: 2_500_000,
+                },
+            );
+            let frame = state.frame(Instant::now());
+            let screen = physical(&frame);
+            let contents = screen.screen().contents();
+            assert!(
+                contents.contains("App data #abc01234"),
+                "{width}: {contents}"
+            );
+            assert!(
+                contents.contains("↑ 1.5 KB/s") && contents.contains("↓ 2.5 MB/s"),
+                "{width}: {contents}"
+            );
+            assert!(!contents.contains("( o.o )"), "{contents}");
+            assert!(
+                !state
+                    .link_metrics
+                    .update(6, super::super::link_metrics::Status::Disconnected)
+            );
+            assert!(
+                state
+                    .link_metrics
+                    .update(7, super::super::link_metrics::Status::Disconnected)
+            );
+            let frame = state.frame(Instant::now());
+            let screen = physical(&frame);
+            let contents = screen.screen().contents();
+            assert!(contents.contains("Disconnected"), "{width}: {contents}");
+            assert!(
+                !contents.contains("1.5 KB/s") && !contents.contains("0 B/s"),
+                "{contents}"
+            );
         }
     }
 
