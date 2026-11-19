@@ -496,6 +496,13 @@ pub(crate) async fn call(
         .await
         .map_err(|_| "message storage worker stopped".to_owned())?;
     }
+    if name == "ssmcp.ui.history" {
+        // Search may inspect retained files; it must not hold the display lock
+        // or block the async runtime while doing disk I/O.
+        return tokio::task::spawn_blocking(move || history::call(arguments))
+            .await
+            .map_err(|_| "history storage worker stopped".to_owned())?;
+    }
     // Memory reads are a projection of the same document, not a second cache.
     // Finish every disk read before taking the UI configuration/update mutex.
     if name == "ssmcp.ui.get" {
@@ -520,7 +527,6 @@ pub(crate) async fn call(
         let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
         match name {
             "ssmcp.ui.harness" => return harness::call(arguments),
-            "ssmcp.ui.history" => return history::call(arguments),
             "ssmcp.ui.ask" => return questions::ask(arguments),
             "ssmcp.ui.questions" => return questions::read(arguments),
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),

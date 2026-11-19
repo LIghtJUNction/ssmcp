@@ -504,6 +504,15 @@ const bootstrap = `(() => {
     ['list', 'status', 'create', 'restart', 'close'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.session.' + name, args)])
   ));
+  const history = freeze(Object.fromEntries(
+    ['list', 'metadata', 'read', 'search'].map(action =>
+      [action, (id, args = {}) => {
+        if (!args || typeof args !== 'object' || isArray(args) || Object.hasOwn(args, 'action')) {
+          throw new Failure('history arguments must be an object without an action field');
+        }
+        return workspaceResult(id, 'ssmcp.ui.history', {...args, action});
+      }])
+  ));
   const outputs = freeze({
     read: (id, args) => workspaceResult(id, 'ssmcp.output.read', args),
     stat: (id, args) => workspaceResult(id, 'ssmcp.output.stat', args),
@@ -774,6 +783,7 @@ const bootstrap = `(() => {
     say: { value: say, enumerable: true },
     ui: { value: ui, enumerable: true },
     sessions: { value: sessions, enumerable: true },
+    history: { value: history, enumerable: true },
     collab: { value: collab, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
