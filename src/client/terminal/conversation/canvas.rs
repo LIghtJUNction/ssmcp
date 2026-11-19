@@ -97,6 +97,16 @@ impl Canvas {
         })
     }
 
+    pub(super) fn is_default_conversation(&self) -> bool {
+        self.active == 1
+            && self.columns.len() == 8
+            && self
+                .columns
+                .iter()
+                .enumerate()
+                .all(|(index, column)| column.id == index as u64 + 1)
+    }
+
     pub(super) fn label(&self, _width: u16) -> String {
         let current = self.columns[self.active].view.name();
         format!("{current}  {}/{}", self.active + 1, self.columns.len())
