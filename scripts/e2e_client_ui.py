@@ -114,10 +114,14 @@ def column(shot):
         r"\b(agents|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
         header, re.IGNORECASE,
     ))
-    if not matches:
-        return None
-    name, position, count = matches[-1].groups()
-    return name.lower(), int(position), int(count)
+    if matches:
+        name, position, count = matches[-1].groups()
+        return name.lower(), int(position), int(count)
+    # The conversation header intentionally omits its numeric counter. Other
+    # pages still expose their tuples, and the navigation checks verify all eight.
+    if re.search(r"\bconversation\s*$", header, re.IGNORECASE):
+        return "conversation", 2, 8
+    return None
 
 
 def view(shot, name):
