@@ -1,0 +1,78 @@
+{
+  "source_commit": "8d8172765644bfecdf881a5a62262bde93415e53",
+  "binaries": {
+    "ssmcp": "e0510216d7125eb0ea511e66596e11227ec91aaa52acfa6a6742956d2c402b7f",
+    "ssmcpd": "a6ffed46b6261ec37e87abc3a34b507277422a2fe93c8a684dd12c585bbf86ed",
+    "vt_snapshot": "4569bc6bb436b103a2c9ea8e9d5f2a72a63dea5badad9ed292c674c0c4159fb7"
+  },
+  "results": [
+    {
+      "stage": "preview",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/e2e_client_ui.py",
+        "--bin-dir",
+        "${BUILD_ROOT}/debug",
+        "--out",
+        "${EVIDENCE_TMP}/ssmcp-ui-080"
+      ],
+      "exit_code": 0,
+      "seconds": 5.74,
+      "report": "${EVIDENCE_TMP}/ssmcp-ui-080/ui-smoke.json",
+      "count": 38,
+      "tail": []
+    },
+    {
+      "stage": "composer",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/e2e_composer.py",
+        "--bin-dir",
+        "${BUILD_ROOT}/debug",
+        "--report",
+        "${EVIDENCE_TMP}/ssmcp-composer-080.json"
+      ],
+      "exit_code": 0,
+      "seconds": 16.24,
+      "report": "${EVIDENCE_TMP}/ssmcp-composer-080.json",
+      "count": 88,
+      "tail": []
+    },
+    {
+      "stage": "dashboard",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/e2e_dashboard.py",
+        "--bin-dir",
+        "${BUILD_ROOT}/debug",
+        "--report",
+        "${EVIDENCE_TMP}/ssmcp-dashboard-080.json"
+      ],
+      "exit_code": 0,
+      "seconds": 35.53,
+      "report": "${EVIDENCE_TMP}/ssmcp-dashboard-080.json",
+      "count": 84,
+      "tail": []
+    },
+    {
+      "stage": "observer",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/e2e_tty_observer.py",
+        "--binary",
+        "${BUILD_ROOT}/debug/ssmcp",
+        "--report",
+        "${EVIDENCE_TMP}/ssmcp-observer-080.json"
+      ],
+      "exit_code": 0,
+      "seconds": 15.41,
+      "report": "${EVIDENCE_TMP}/ssmcp-observer-080.json",
+      "count": 7,
+      "tail": []
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "checks": 37,
+  "transport": "loopback WebSocket",
+  "oauth": "synthetic GitHub provider",
+  "ssh": false,
+  "models_started": false,
+  "_publication": {
+    "private_paths_normalized": true,
+    "source_object_sha256": "1ac15211201113bce1087c10d11768acdf0c3e7f9019b216fe5ae563794759d8",
+    "source_object_digest_algorithm": "SHA-256 of UTF-8 json.dumps(original, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
+    "note": "Nested report_sha256 fields identify the original private files, before publication path normalization."
+  }
+}

@@ -25,7 +25,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use reqwest::Url;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -38,7 +38,6 @@ use subtle::ConstantTimeEq;
 
 const TRANSACTION_TTL: Duration = Duration::from_secs(crate::broker::LOGIN_LIFETIME);
 const CODE_TTL: Duration = Duration::from_secs(60);
-const PROVIDER_TTL: Duration = Duration::from_secs(600);
 const MAX_CLIENTS: usize = 1024;
 const MAX_TRANSACTIONS: usize = 2048;
 const MAX_CODES: usize = 4096;
@@ -175,7 +174,9 @@ impl Binding {
     }
 }
 
+#[derive(Clone)]
 struct ProviderLogin {
+    started: bool,
     transaction_id: String,
     provider: String,
     verifier: String,
@@ -187,21 +188,24 @@ struct ProviderLogin {
 // an interrupted exchange unlocks the form without accepting that state twice.
 struct ProviderAttempt {
     state: Arc<Mutex<Store>>,
+    key: Key,
     login: ProviderLogin,
     transaction: Transaction,
 }
 
 impl Drop for ProviderAttempt {
     fn drop(&mut self) {
-        if let Some(transaction) = self
-            .state
-            .lock()
-            .unwrap()
+        let mut state = self.state.lock().unwrap();
+        if let Some(transaction) = state
             .transactions
             .get_mut(&hash(&self.login.transaction_id))
         {
             transaction.provider_busy = false;
+            if transaction.identity.is_some() {
+                return;
+            }
         }
+        state.upstream.remove(&self.key);
     }
 }
 
@@ -226,6 +230,32 @@ struct Family {
 struct AccessToken {
     family: Key,
     expires: Instant,
+}
+
+/// Non-secret references to the original grant, never a replacement controller
+/// credential. The access entry keeps the original monotonic deadline even when
+/// its family later refreshes; the wall deadline can only shorten delegation.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Delegation {
+    family: Key,
+    access: Key,
+    pub(crate) user: String,
+    resource: String,
+    pub(crate) subject: String,
+    pub(crate) expires_at: u64,
+}
+
+impl Delegation {
+    pub(crate) fn valid_for(&self, subject: &str) -> bool {
+        let Some(username) = crate::portal::store::stable_username(subject) else {
+            return false;
+        };
+        self.subject == subject
+            && (self.user == crate::broker::IDENTITY_RESOURCE || self.user == username)
+            && self.resource.len() <= 2048
+            && self.expires_at > 0
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -458,6 +488,122 @@ impl OAuth {
             return None;
         }
         family.binding.live()
+    }
+
+    /// Delegate only a verified account's existing resource and fixed access
+    /// lifetime. This snapshots under the OAuth lock and performs no storage I/O.
+    pub(crate) fn delegation(
+        &self,
+        user: &str,
+        access_token: &str,
+    ) -> Option<(Delegation, Identity)> {
+        if !valid_username(user) || !opaque(access_token, "at_") {
+            return None;
+        }
+        let instant = Instant::now();
+        let mut state = self.state.lock().ok()?;
+        state.sweep(instant);
+        let access_key = hash(access_token);
+        let access = state.access.get(&access_key)?;
+        let family = state.families.get(&access.family)?;
+        if instant >= access.expires
+            || instant >= family.expires
+            || instant >= family.absolute_expires
+            || family.revoked
+            || family.binding.user != user
+            || family.binding.resource != self.resource(user)
+        {
+            return None;
+        }
+        let Authorization::Identity(identity) = family.binding.live()? else {
+            return None;
+        };
+        if identity.provider != "github" {
+            return None;
+        }
+        let remaining = access
+            .expires
+            .min(family.expires)
+            .min(family.absolute_expires)
+            .saturating_duration_since(instant)
+            .as_secs();
+        if remaining == 0 {
+            return None;
+        }
+        let parent = Delegation {
+            family: access.family,
+            access: access_key,
+            user: user.into(),
+            resource: family.binding.resource.clone(),
+            subject: identity.subject.clone(),
+            expires_at: crate::management::now().checked_add(remaining)?,
+        };
+        parent
+            .valid_for(&identity.subject)
+            .then_some((parent, identity))
+    }
+
+    /// Called after dropping the device-ledger lock. No await or disk I/O may
+    /// run while the OAuth mutex is held.
+    pub(crate) fn delegation_is_live(&self, parent: &Delegation) -> bool {
+        if !parent.valid_for(&parent.subject)
+            || parent.expires_at <= crate::management::now()
+            || parent.resource != self.resource(&parent.user)
+        {
+            return false;
+        }
+        let instant = Instant::now();
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        state.sweep(instant);
+        let Some(access) = state.access.get(&parent.access) else {
+            return false;
+        };
+        let Some(family) = state.families.get(&parent.family) else {
+            return false;
+        };
+        access.family == parent.family
+            && instant < access.expires
+            && instant < family.expires
+            && instant < family.absolute_expires
+            && !family.revoked
+            && family.binding.user == parent.user
+            && family.binding.resource == parent.resource
+            && matches!(
+                family.binding.live(),
+                Some(Authorization::Identity(identity))
+                    if identity.provider == "github" && identity.subject == parent.subject
+            )
+    }
+
+    /// Revoke current MCP grants and pending codes for a banned account.
+    pub(crate) fn revoke_subject(&self, subject: &str) {
+        let mut state = self.state.lock().unwrap();
+        let matches = |authorization: &Authorization| {
+            matches!(
+                authorization, Authorization::Identity(identity) if identity.subject == subject
+            )
+        };
+        for family in state.families.values_mut() {
+            if matches(&family.binding.authorization) {
+                family.revoked = true;
+            }
+        }
+        state
+            .codes
+            .retain(|_, code| !matches(&code.binding.authorization));
+        state.transactions.retain(|_, transaction| {
+            transaction
+                .identity
+                .as_ref()
+                .is_none_or(|identity| identity.subject != subject)
+        });
+        state.pending_codes = state
+            .transactions
+            .values()
+            .filter(|transaction| transaction.busy)
+            .count();
     }
 
     fn resource(&self, user: &str) -> String {
@@ -907,12 +1053,13 @@ impl OAuth {
         let state_value = random("idp_")?;
         let verifier = random("pkce_")?;
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let expires = (now + PROVIDER_TTL).min(transaction.expires);
+        let expires = transaction.expires;
         transaction.provider_busy = true;
         transaction.attempts += 1;
         state.upstream.insert(
             hash(&state_value),
             ProviderLogin {
+                started: false,
                 transaction_id: id.into(),
                 provider: provider.into(),
                 verifier,
@@ -942,7 +1089,8 @@ impl OAuth {
             .upstream
             .get(&key)
             .filter(|login| {
-                now < login.expires
+                !login.started
+                    && now < login.expires
                     && login.provider == provider
                     && bool::from(login.csrf.ct_eq(&hash(csrf)))
             })
@@ -962,12 +1110,40 @@ impl OAuth {
             })
             .cloned()
             .ok_or_else(|| OAuthError::invalid("Authorization form has expired"))?;
-        let login = state.upstream.remove(&key).unwrap();
+        let login = state.upstream.get_mut(&key).unwrap();
+        login.started = true;
+        let attempt_login = login.clone();
+        login.verifier.clear();
         Ok(ProviderAttempt {
             state: self.state.clone(),
-            login,
+            key,
+            login: attempt_login,
             transaction,
         })
+    }
+
+    fn resumed_provider_login(
+        &self,
+        raw: &str,
+        csrf: &str,
+        provider: &str,
+    ) -> Option<(String, Option<Transaction>)> {
+        let now = Instant::now();
+        let state = self.state.lock().unwrap();
+        let login = state.upstream.get(&hash(raw)).filter(|login| {
+            login.started
+                && now < login.expires
+                && login.provider == provider
+                && bool::from(login.csrf.ct_eq(&hash(csrf)))
+        })?;
+        let transaction = state
+            .transactions
+            .get(&hash(&login.transaction_id))
+            .filter(|t| now < t.expires && !t.busy && bool::from(t.csrf.ct_eq(&hash(csrf))))?;
+        Some((
+            login.transaction_id.clone(),
+            transaction.identity.is_some().then(|| transaction.clone()),
+        ))
     }
 
     fn finish_provider_login(
@@ -1517,12 +1693,12 @@ fn form_redirect(target: &RedirectTarget, issuer: &str, values: &[(&str, &str)])
     let callback = escape(callback_url(target, issuer, values).as_str());
     Html(page_with_head(
         "连接已授权",
-        &format!("<p>正在返回 MCP 客户端。</p><p><a href=\"{callback}\" rel=noreferrer>返回客户端</a></p>"),
+        &format!("<p>正在返回 MCP 客户端。</p><p><a class=button href=\"{callback}\" rel=noreferrer>返回客户端</a></p>"),
         &format!("<meta http-equiv=refresh content=\"0;url={callback}\">"),
     )).into_response()
 }
 
-const CSS: &str = "*{box-sizing:border-box}body{margin:0;background:#fff;color:#202124;font:16px/1.6 system-ui,sans-serif}main{max-width:460px;margin:10vh auto;padding:32px}header{font:14px ui-monospace,monospace;color:#5f6368;letter-spacing:.05em}h1{font-size:28px;line-height:1.3;font-weight:500;margin:32px 0 20px}p{margin:14px 0}.muted,dt{color:#5f6368;font-size:14px}dl{margin:28px 0}dd{margin:2px 0 14px;overflow-wrap:anywhere;font-family:ui-monospace,monospace;font-size:13px}label{display:block;margin:24px 0 8px}input{width:100%;padding:13px;border:1px solid #dadce0;border-radius:6px;font:14px ui-monospace,monospace}input:focus{outline:2px solid #1a73e8;outline-offset:1px}button{display:block;width:100%;margin-top:20px;padding:12px;border:0;border-radius:6px;background:#1a73e8;color:white;font:500 16px system-ui;cursor:pointer}.error{color:#b3261e;font-size:14px}@media(max-width:540px){main{margin:4vh auto;padding:24px}}";
+const CSS: &str = include_str!("oauth/page.css");
 
 fn escape(text: &str) -> String {
     text.chars()
@@ -1543,7 +1719,29 @@ fn page(title: &str, content: &str) -> String {
 
 fn page_with_head(title: &str, content: &str, extra_head: &str) -> String {
     format!(
-        "<!doctype html><html lang=zh-CN><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>{} · ssmcp</title><style>{CSS}</style>{extra_head}</head><body><main><header>ssmcp</header><h1>{}</h1>{content}</main></body></html>",
+        r###"<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d0f">
+<title>{} · ssmcp</title>
+<style>{CSS}</style>{extra_head}
+</head>
+<body>
+<header class="oauth-header container">
+<a class="brand" href="/" aria-label="ssmcp 首页"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="11" fill="#18251f"/><path d="M28 8H17a6 6 0 0 0 0 12h6a6 6 0 0 1 0 12H12" stroke="#c6ebd9" stroke-width="3" stroke-linecap="round"/><circle cx="28" cy="8" r="2.5" fill="#eff8f2"/><circle cx="12" cy="32" r="2.5" fill="#eff8f2"/></svg><span class="brand-name">ssmcp</span></a>
+<span class="header-label">YOUR MACHINE. YOUR WORKSPACE.</span>
+</header>
+<main class="oauth-shell" id="content" aria-labelledby="auth-title">
+<p class="eyebrow">SSMCP / AUTHORIZATION</p>
+<h1 id="auth-title">{}</h1>
+<div class="auth-content">{content}</div>
+</main>
+<footer class="oauth-footer container"><p>your machine, connected.</p><a href="/">返回账户门户 <span aria-hidden="true">↗</span></a></footer>
+</body>
+</html>"###,
         escape(title),
         escape(title)
     )
@@ -1602,7 +1800,7 @@ fn consent_page(
         return page(
             "允许客户端连接？",
             &format!(
-                "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
+                "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form class=consent-actions method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
                 escape(&identity.login),
                 escape(&identity.provider)
             ),
@@ -1818,7 +2016,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
             // A 303 can inherit the original form-action CSP in some browsers.
             let location = escape(&location);
             return Ok(Html(page_with_head("登录你的账号",
-                &format!("<p>正在前往登录页面。</p><p><a href=\"{location}\" rel=noreferrer>继续登录</a></p>"),
+                &format!("<p>正在前往登录页面。</p><p><a class=button href=\"{location}\" rel=noreferrer>继续登录</a></p>"),
                 &format!("<meta http-equiv=refresh content=\"0;url={location}\">"))).into_response());
         }
         let attempt = broker.oauth.begin_login(id, csrf)?;
@@ -1831,6 +2029,10 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
             }
             let identity = attempt.transaction.identity.clone()
                 .ok_or_else(|| OAuthError::invalid("Sign in before granting this client access"))?;
+            let _policy_update = broker.user_policy_updates.lock().await;
+            if broker.user_policies.is_banned(&identity.subject) {
+                return Err(OAuthError::grant());
+            }
             let authorization = Authorization::Identity(identity);
             return broker.oauth.finish_authorization(attempt, authorization);
         }
@@ -1848,6 +2050,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
                 None,
             ));
         }
+        let _policy_update = broker.user_policy_updates.lock().await;
         let Some(session) = broker.redeem_login(&attempt.transaction.user, code).await else {
             return Ok(consent_response(
                 id,
@@ -1858,6 +2061,12 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
                 None,
             ));
         };
+        let authorization = Authorization::Legacy {
+            user: attempt.transaction.user.clone(),
+            anchor: Arc::downgrade(&session),
+        };
+        broker.clients(&attempt.transaction.user, &authorization)
+            .await.map_err(|_| OAuthError::grant())?;
         broker.oauth.finish_login(attempt, session)
     }
     .await;
@@ -1883,7 +2092,28 @@ async fn provider_callback(
         let parameters = Parameters::parse(query.as_deref().unwrap_or(""))?;
         let csrf = cookie(&headers).ok_or_else(|| OAuthError::invalid(
             "Authorization cookie is missing; restart the connection in the same browser"))?;
-        let attempt = broker.oauth.take_provider_login(parameters.required("state")?, csrf, &provider)?;
+        let state = parameters.required("state")?;
+        let attempt = match broker.oauth.take_provider_login(state, csrf, &provider) {
+            Ok(attempt) => attempt,
+            Err(error) => {
+                let resumed = tokio::time::timeout(Duration::from_secs(15), async {
+                    loop {
+                        match broker.oauth.resumed_provider_login(state, csrf, &provider) {
+                            Some((id, Some(transaction))) => return Some((id, transaction)),
+                            Some((_, None)) => tokio::time::sleep(Duration::from_millis(100)).await,
+                            None => return None,
+                        }
+                    }
+                }).await.ok().flatten();
+                let (id, transaction) = resumed.ok_or(error)?;
+                let identity = transaction.identity.clone().ok_or_else(OAuthError::grant)?;
+                let _policy_update = broker.user_policy_updates.lock().await;
+                let allowed = broker.clients(&transaction.user, &Authorization::Identity(identity)).await
+                    .map_err(|_| OAuthError::grant())?.len();
+                return Ok(consent_response(&id, &transaction, None, StatusCode::OK,
+                    &broker.identities.names(), Some(allowed)));
+            }
+        };
         if parameters.get("error").is_some() {
             return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
                 Some("第三方登录已取消或未成功。你可以重新登录。"), StatusCode::BAD_REQUEST,
@@ -1893,16 +2123,25 @@ async fn provider_callback(
         if code.is_empty() || code.len() > 2048 {
             return Err(OAuthError::invalid("Invalid identity-provider authorization code"));
         }
-        let identity = match broker.identities.exchange(&provider, code, &attempt.login.verifier).await {
-            Ok(identity) => identity,
-            Err(_) => return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
-                Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
-                StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
-        };
-        let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
-            .map_err(|_| OAuthError::grant())?.len();
-        let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
-        Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed)))
+        let code = code.to_owned();
+        let broker = broker.clone();
+        tokio::spawn(async move {
+            let identity = match broker.identities.exchange(&provider, &code, &attempt.login.verifier).await {
+                Ok(identity) => identity,
+                Err(_) => return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
+                    Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
+                    StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
+            };
+            // A ban can occur during the upstream exchange. Validate and save the
+            // identity under the policy lock so its consent cannot outlive revocation.
+            let _policy_update = broker.user_policy_updates.lock().await;
+            let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
+                .map_err(|_| OAuthError::grant())?.len();
+            let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
+            Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed)))
+        })
+        .await
+        .map_err(|_| OAuthError::internal())?
     }.await;
     match outcome {
         Ok(response) => response,
@@ -1917,6 +2156,7 @@ async fn token(State(broker): State<Arc<Broker>>, request: Request) -> Response 
         let parameters = Parameters::parse(
             std::str::from_utf8(&bytes).map_err(|_| OAuthError::invalid("Invalid form text"))?,
         )?;
+        let _policy_update = broker.user_policy_updates.lock().await;
         broker.oauth.token(&parameters, &headers)
     }
     .await;
@@ -1929,6 +2169,78 @@ async fn token(State(broker): State<Arc<Broker>>, request: Request) -> Response 
 #[cfg(test)]
 #[path = "oauth_github_tests.rs"]
 mod github_tests;
+
+#[cfg(test)]
+impl OAuth {
+    /// Exercise the normal code/PKCE exchange with a fixture provider identity;
+    /// no network, real provider token, or production authorization bypass.
+    pub(crate) fn test_identity_tokens(&self, user: &str, subject: &str) -> Value {
+        fn checked<T>(result: OResult<T>) -> T {
+            result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.description))
+        }
+        let parameters = |pairs: &[(&str, &str)]| {
+            Parameters(
+                pairs
+                    .iter()
+                    .map(|(key, value)| ((*key).into(), (*value).into()))
+                    .collect(),
+            )
+        };
+        let registration = checked(
+            self.register(
+                serde_json::from_value(json!({
+                    "redirect_uris":["https://controller.example/callback"],
+                    "token_endpoint_auth_method":"none",
+                    "grant_types":["authorization_code","refresh_token"]
+                }))
+                .unwrap(),
+            ),
+        );
+        let client = registration["client_id"].as_str().unwrap();
+        let resource = self.resource(user);
+        let consent = checked(self.begin_authorization(
+            &parameters(&[
+                ("client_id", client),
+                ("redirect_uri", "https://controller.example/callback"),
+                ("response_type", "code"),
+                ("resource", &resource),
+                ("scope", "mcp"),
+                ("code_challenge_method", "S256"),
+                (
+                    "code_challenge",
+                    "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                ),
+            ]),
+            &HeaderMap::new(),
+        ));
+        let (state, _) = checked(self.begin_provider_login(&consent.id, &consent.csrf, "github"));
+        let upstream = checked(self.take_provider_login(&state, &consent.csrf, "github"));
+        let identity = Identity {
+            provider: "github".into(),
+            subject: subject.into(),
+            login: "alice".into(),
+        };
+        checked(self.finish_provider_login(upstream, identity.clone()));
+        let attempt = checked(self.begin_login(&consent.id, &consent.csrf));
+        let code = attempt.code.clone();
+        checked(self.finish_authorization(attempt, Authorization::Identity(identity)));
+        let mut tokens = checked(self.token(
+            &parameters(&[
+                ("client_id", client),
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                (
+                    "code_verifier",
+                    "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+                ),
+                ("resource", &resource),
+            ]),
+            &HeaderMap::new(),
+        ));
+        tokens["client_id"] = json!(client);
+        tokens
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1975,6 +2287,16 @@ mod tests {
             ok(oauth.finish_provider_login(attempt, github_identity("42", "alice")));
         assert_eq!(id, form.id);
         assert_eq!(transaction.identity.unwrap().subject, "42");
+        let (resumed_id, resumed) = oauth
+            .resumed_provider_login(&state, &form.csrf, "github")
+            .unwrap();
+        assert_eq!(resumed_id, form.id);
+        assert_eq!(resumed.unwrap().identity.unwrap().subject, "42");
+        assert!(
+            oauth
+                .resumed_provider_login(&state, &ok(random("csrf_")), "github")
+                .is_none()
+        );
         assert!(
             oauth
                 .begin_provider_login(&form.id, &form.csrf, "github")
@@ -2109,6 +2431,115 @@ mod tests {
         );
     }
 
+    fn identity_code(oauth: &OAuth, client: &str, subject: &str) -> String {
+        let form = consent(oauth, client);
+        let (state, _) = ok(oauth.begin_provider_login(&form.id, &form.csrf, "github"));
+        let upstream = ok(oauth.take_provider_login(&state, &form.csrf, "github"));
+        ok(oauth.finish_provider_login(upstream, github_identity(subject, "alice")));
+        let attempt = ok(oauth.begin_login(&form.id, &form.csrf));
+        let code = attempt.code.clone();
+        ok(oauth.finish_authorization(
+            attempt,
+            Authorization::Identity(github_identity(subject, "alice")),
+        ));
+        code
+    }
+
+    #[tokio::test]
+    async fn account_ban_revokes_pending_codes_access_and_refresh_families() {
+        let broker = Broker::new(ISSUER.into());
+        let registered = ok(broker.oauth.register(registration(true)));
+        let client = registered["client_id"].as_str().unwrap();
+        let code = identity_code(&broker.oauth, client, "42");
+        let exchange = |code: &str| {
+            parameters(&[
+                ("client_id", client),
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("code_verifier", VERIFIER),
+                ("resource", RESOURCE),
+            ])
+        };
+        let tokens = ok(broker.oauth.token(&exchange(&code), &HeaderMap::new()));
+        let pending = identity_code(&broker.oauth, client, "42");
+        let other = identity_code(&broker.oauth, client, "43");
+        broker.user_policies.set("42", true, None);
+        broker.oauth.revoke_subject("42");
+        assert!(
+            broker
+                .authenticate("alice", tokens["access_token"].as_str().unwrap())
+                .await
+                .is_none()
+        );
+        assert!(
+            broker
+                .oauth
+                .token(&exchange(&pending), &HeaderMap::new())
+                .is_err()
+        );
+        assert!(
+            broker
+                .oauth
+                .token(
+                    &parameters(&[
+                        ("client_id", client),
+                        ("grant_type", "refresh_token"),
+                        ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+                        ("resource", RESOURCE),
+                    ]),
+                    &HeaderMap::new()
+                )
+                .is_err()
+        );
+        assert!(
+            broker
+                .oauth
+                .token(&exchange(&other), &HeaderMap::new())
+                .is_ok()
+        );
+        broker.user_policies.set("42", false, None);
+        assert!(
+            broker
+                .authenticate("alice", tokens["access_token"].as_str().unwrap())
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_late_verified_identity_cannot_authorize_while_banned() {
+        let broker = Arc::new(Broker::new(ISSUER.into()));
+        let registered = ok(broker.oauth.register(registration(true)));
+        let client = registered["client_id"].as_str().unwrap();
+        let form = consent(&broker.oauth, client);
+        let (state, _) = ok(broker
+            .oauth
+            .begin_provider_login(&form.id, &form.csrf, "github"));
+        let upstream = ok(broker
+            .oauth
+            .take_provider_login(&state, &form.csrf, "github"));
+        // The upstream request began before the ban, when its subject was not known.
+        broker.user_policies.set("42", true, None);
+        broker.oauth.revoke_subject("42");
+        ok(broker
+            .oauth
+            .finish_provider_login(upstream, github_identity("42", "alice")));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/oauth/authorize")
+            .header(header::ORIGIN, ISSUER)
+            .header(header::COOKIE, format!("{COOKIE}={}", form.csrf))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(format!(
+                "transaction_id={}&decision=allow",
+                form.id
+            )))
+            .unwrap();
+        let response = login(State(broker.clone()), request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(broker.oauth.state.lock().unwrap().codes.is_empty());
+    }
+
     #[test]
     fn lifetimes_reject_zero_fractional_unbounded_and_inconsistent_values() {
         let defaults = OAuthConfig::default();
@@ -2147,6 +2578,86 @@ mod tests {
         }
         .validate()
         .unwrap();
+    }
+
+    #[test]
+    fn delegation_keeps_original_scope_and_deadline_through_refresh_and_replay() {
+        let oauth = OAuth::new(ISSUER.into());
+        let tokens = oauth.test_identity_tokens("mcp", "42");
+        let access = tokens["access_token"].as_str().unwrap();
+        let (parent, identity) = oauth.delegation("mcp", access).unwrap();
+        assert_eq!(identity.subject, "42");
+        assert!(oauth.delegation_is_live(&parent));
+        assert!(oauth.delegation("gh-42", access).is_none());
+        let other = oauth.test_identity_tokens("gh-43", "42");
+        assert!(
+            oauth
+                .delegation("gh-43", other["access_token"].as_str().unwrap())
+                .is_none()
+        );
+        let scoped = oauth.test_identity_tokens("gh-42", "42");
+        assert!(
+            oauth
+                .delegation("gh-42", scoped["access_token"].as_str().unwrap())
+                .is_some()
+        );
+        let original_deadline = parent.expires_at;
+        let refresh = parameters(&[
+            ("client_id", tokens["client_id"].as_str().unwrap()),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+            ("resource", "https://ssmcp.example/mcp"),
+        ]);
+        let refreshed = ok(oauth.token(&refresh, &HeaderMap::new()));
+        assert!(oauth.delegation_is_live(&parent));
+        assert_eq!(parent.expires_at, original_deadline);
+        assert_ne!(tokens["access_token"], refreshed["access_token"]);
+        assert!(oauth.token(&refresh, &HeaderMap::new()).is_err());
+        assert!(
+            !oauth.delegation_is_live(&parent),
+            "refresh replay revokes the original family"
+        );
+    }
+
+    #[test]
+    fn delegation_rejects_changed_subject_resource_and_original_access_expiry() {
+        let oauth = OAuth::new(ISSUER.into());
+        let tokens = oauth.test_identity_tokens("mcp", "42");
+        let (parent, _) = oauth
+            .delegation("mcp", tokens["access_token"].as_str().unwrap())
+            .unwrap();
+        let mut changed = parent.clone();
+        changed.subject = "43".into();
+        assert!(!oauth.delegation_is_live(&changed));
+        let mut changed = parent.clone();
+        changed.resource = "https://other.example/mcp".into();
+        assert!(!oauth.delegation_is_live(&changed));
+        {
+            let mut state = oauth.state.lock().unwrap();
+            state.access.get_mut(&parent.access).unwrap().expires = Instant::now();
+            state.families.get_mut(&parent.family).unwrap().expires += Duration::from_secs(300);
+        }
+        assert!(
+            !oauth.delegation_is_live(&parent),
+            "refresh must not extend the original access grant"
+        );
+        assert!(
+            !OAuth::new(ISSUER.into()).delegation_is_live(&parent),
+            "restart loses the original authorization"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_login_codes_cannot_delegate_an_account() {
+        let fixture = Fixture::new(true).await;
+        let tokens = fixture.tokens();
+        assert!(
+            fixture
+                .broker
+                .oauth
+                .delegation("alice", tokens["access_token"].as_str().unwrap())
+                .is_none()
+        );
     }
 
     const ISSUER: &str = "https://ssmcp.example";

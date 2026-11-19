@@ -216,8 +216,19 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         username: "gh-1".into(),
         github_login: "<script>".into(),
         keys: vec![],
+        handle: None,
+        banned: false,
+        rate_limit_bps: None,
+        has_recharged: false,
     };
-    let html = view::home(Some(&a), Some("csrf"), true, false);
+    let html = view::home(
+        Some(&a),
+        Some("csrf"),
+        true,
+        false,
+        "https://ssmcp.lmm.best",
+        None,
+    );
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
     for step in [
@@ -227,7 +238,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         "Connection",
         "https://ssmcp.lmm.best/mcp",
         "Create",
-        "gh-1",
+        "ssmcp myname@ssmcp.lmm.best",
     ] {
         assert!(html.contains(step), "missing {step}");
     }
@@ -342,7 +353,7 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
             .text()
             .await
             .unwrap()
-            .contains("href=\"/portal.css\"")
+            .contains(&format!("href=\"{}\"", assets::url("portal.css")))
     );
     let callback = client
         .get(&callback_url)
@@ -378,7 +389,11 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .text()
         .await
         .unwrap();
-    assert!(html.contains("alice") && html.contains("gh-123"));
+    assert!(html.contains("<dt>GitHub 账户</dt><dd>alice</dd>"));
+    assert!(html.contains("尚未注册"));
+    assert!(html.contains("action=\"/account/username\""));
+    assert!(html.contains("复制命令"));
+    assert!(html.contains("ssmcp myname@ssmcp.test"));
     assert!(!html.contains("bob key"));
     let csrf = html
         .split("name=\"csrf\" value=\"")
@@ -387,6 +402,36 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .split('"')
         .next()
         .unwrap();
+    let register = format!("{base}/account/username");
+    let unauthorized_origin = client
+        .post(&register)
+        .header("cookie", &new_cookie)
+        .header("origin", "https://other.test")
+        .form(&[("csrf", csrf), ("username", "alice-dev")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized_origin.status(), 403);
+    let registered = client
+        .post(&register)
+        .header("cookie", &new_cookie)
+        .header("origin", "https://ssmcp.test")
+        .form(&[("csrf", csrf), ("username", "alice-dev")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 303);
+    let registered_home = client
+        .get(&base)
+        .header("cookie", &new_cookie)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(registered_home.contains("ssmcp alice-dev@ssmcp.test"));
+    assert!(!registered_home.contains("注册用户名"));
     let fingerprint = parse_key(&key(), "").unwrap().fingerprint;
     let denied = client
         .post(format!("{base}/account/keys/delete"))
@@ -784,4 +829,229 @@ async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits()
     let _ = server.await;
     management_task.abort();
     let _ = management_task.await;
+}
+
+async fn persisted_test_login(portal: &Portal) -> (String, String) {
+    let previous = digest(&random().unwrap());
+    portal.browser.lock().unwrap().sessions.insert(
+        previous,
+        Session {
+            subject: None,
+            csrf: random().unwrap(),
+            expires: Instant::now() + LOGIN_TTL,
+        },
+    );
+    let response = finish_identity(portal, previous, identity("123", "alice"))
+        .await
+        .unwrap();
+    let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(set_cookie.contains("Max-Age=2592000"));
+    let raw = set_cookie
+        .split(';')
+        .next()
+        .unwrap()
+        .split_once('=')
+        .unwrap()
+        .1
+        .to_owned();
+    let csrf = portal.browser.lock().unwrap().sessions[&digest(&raw)]
+        .csrf
+        .clone();
+    (raw, csrf)
+}
+
+fn persisted_test_headers(raw: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::COOKIE, format!("{COOKIE}={raw}").parse().unwrap());
+    headers.insert(header::ORIGIN, "https://ssmcp.test".parse().unwrap());
+    headers
+}
+
+#[tokio::test]
+async fn persistent_login_restores_csrf_and_logout_survives_restart() {
+    let tmp = Temp::new();
+    let portal = Portal::open(&tmp.0).unwrap();
+    let (raw, csrf) = persisted_test_login(&portal).await;
+    let headers = persisted_test_headers(&raw);
+    drop(portal);
+
+    let portal = Portal::open(&tmp.0).unwrap();
+    let form = HashMap::from([("csrf".to_owned(), csrf.clone())]);
+    assert_eq!(
+        portal
+            .verify(&headers, &form, "https://ssmcp.test")
+            .unwrap()
+            .1
+            .as_deref(),
+        Some("123")
+    );
+    assert_eq!(portal.session(&headers).unwrap().1, csrf);
+    let mut broker = Broker::new("https://ssmcp.test".into());
+    broker.portal = portal;
+    let broker = Arc::new(broker);
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/account/logout")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(axum::body::Body::from(format!("csrf={csrf}")))
+        .unwrap();
+    request.headers_mut().extend(headers.clone());
+    let response = logout_inner(State(broker.clone()), request).await.unwrap();
+    assert!(
+        response.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    assert_eq!(broker.portal.session(&headers), Err(Problem::Unauthorized));
+    drop(broker);
+    let restarted = Portal::open(&tmp.0).unwrap();
+    assert_eq!(restarted.session(&headers), Err(Problem::Unauthorized));
+}
+
+#[tokio::test]
+async fn banned_account_cannot_renew_or_relogin_and_revocation_survives_unban() {
+    let tmp = Temp::new();
+    let portal = Portal::open(&tmp.0).unwrap();
+    let (raw, _) = persisted_test_login(&portal).await;
+    portal
+        .storage(|store| store.set_policy("123", Some(true), None))
+        .await
+        .unwrap();
+    assert_eq!(portal.renew_session(&raw).await, Err(Problem::Banned));
+    assert!(matches!(
+        finish_identity(&portal, digest(&raw), identity("123", "alice")).await,
+        Err(Problem::Banned)
+    ));
+    portal.revoke_browser_sessions("123").unwrap();
+    portal
+        .storage(|store| store.set_policy("123", Some(false), None))
+        .await
+        .unwrap();
+    drop(portal);
+    let restarted = Portal::open(&tmp.0).unwrap();
+    assert_eq!(
+        restarted.session(&persisted_test_headers(&raw)),
+        Err(Problem::Unauthorized)
+    );
+    assert_eq!(restarted.renew_session(&raw).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn portal_http_renews_active_login_but_not_assets_failed_forms_or_logout() {
+    use crate::identity::{GitHubConfig, IdentityProviders};
+    use tokio::net::TcpListener;
+
+    let tmp = Temp::new();
+    let portal = Portal::open(&tmp.0).unwrap();
+    let (raw, csrf) = persisted_test_login(&portal).await;
+    drop(portal);
+    // Age only this test's private fixture, avoiding real clocks, accounts, and sleeps.
+    let path = tmp.0.join("browser-sessions.json");
+    let mut records: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let record = records
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    let now = crate::management::now();
+    record["renewed_at"] = (now - 2 * 86400).into();
+    record["expires_at"] = (now + 28 * 86400).into();
+    record["absolute_expires_at"] = (now + 88 * 86400).into();
+    fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+
+    let mut broker = Broker::new("https://ssmcp.test".into());
+    broker.identities = IdentityProviders::with_github_test_endpoints(
+        "https://ssmcp.test",
+        GitHubConfig {
+            client_id: "fixture".into(),
+            client_secret: "fixture".into(),
+        },
+        "http://127.0.0.1:9",
+    )
+    .unwrap();
+    broker.portal = Portal::open(&tmp.0).unwrap();
+    let broker = Arc::new(broker);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let router = crate::http::router(broker.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let cookie = format!("{COOKIE}={raw}");
+
+    let asset = client
+        .get(format!("{base}/portal.css"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(asset.status(), 200);
+    assert!(!asset.headers().contains_key(header::SET_COOKIE));
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        serde_json::to_vec(&records).unwrap()
+    );
+
+    let home = client
+        .get(&base)
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(home.status(), 200);
+    let refreshed = home.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(refreshed.starts_with(&cookie));
+    assert!(refreshed.contains("Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000"));
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let record = saved.as_object().unwrap().values().next().unwrap();
+    assert!(record["renewed_at"].as_u64().unwrap() >= now);
+    assert_eq!(record["absolute_expires_at"], now + 88 * 86400);
+    assert_eq!(
+        record["expires_at"].as_u64().unwrap() - record["renewed_at"].as_u64().unwrap(),
+        SESSION_TTL.as_secs()
+    );
+
+    let denied = client
+        .post(format!("{base}/account/logout"))
+        .header("cookie", &cookie)
+        .header("origin", "https://evil.test")
+        .form(&[("csrf", &csrf)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+    assert!(!denied.headers().contains_key(header::SET_COOKIE));
+
+    let logout = client
+        .post(format!("{base}/account/logout"))
+        .header("cookie", &cookie)
+        .header("origin", "https://ssmcp.test")
+        .form(&[("csrf", &csrf)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), 303);
+    assert!(
+        logout.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    assert_eq!(
+        logout.headers().get_all(header::SET_COOKIE).iter().count(),
+        1
+    );
+    assert_eq!(broker.portal.renew_session(&raw).await.unwrap(), None);
+    server.abort();
+    let _ = server.await;
+    drop(broker);
+    let restarted = Portal::open(&tmp.0).unwrap();
+    assert_eq!(
+        restarted.session(&persisted_test_headers(&raw)),
+        Err(Problem::Unauthorized)
+    );
 }

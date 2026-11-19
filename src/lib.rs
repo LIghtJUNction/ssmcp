@@ -3,9 +3,12 @@ pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod broker;
 pub mod browser;
+pub(crate) mod catalog;
 pub mod client;
 #[cfg(target_os = "linux")]
 pub mod code_mode;
+#[cfg(target_os = "linux")]
+mod collab;
 pub mod computer;
 pub mod context;
 #[cfg(target_os = "linux")]
@@ -16,8 +19,10 @@ pub mod http;
 pub mod identity;
 #[cfg(target_os = "linux")]
 pub mod management;
+pub(crate) mod memory;
 #[cfg(target_os = "linux")]
 pub mod oauth;
+pub(crate) mod observer;
 pub mod omarchy;
 pub mod output;
 pub mod platform;
@@ -30,6 +35,8 @@ pub mod registry;
 #[cfg(target_os = "linux")]
 pub mod resources;
 pub mod session;
+#[cfg(target_os = "linux")]
+mod steering;
 pub mod terminals;
 pub mod wire;
 pub mod workspace;
@@ -50,3 +57,12 @@ pub mod device;
 pub mod client_downloads;
 
 mod ssh_public_key;
+
+#[cfg(target_os = "linux")]
+pub mod user_policy;
+pub(crate) mod username;
+
+#[cfg(target_os = "linux")]
+pub mod commerce;
+
+pub mod webhooks;

@@ -1,0 +1,621 @@
+{
+  "schema_version": 1,
+  "source": "Rust OAuth templates with synthetic fixture data",
+  "browser": "Chrome/157.0.8103.38",
+  "source_sha256": {
+    "src/oauth.rs": "261d667e78f89067f0458ec6547de18af4646c8ec4ae1d293a33feffae0e51c9",
+    "src/oauth/page.css": "aa2b86278188f5cd42477dd616fcaa6237c69a301eb58bc458dc2abee2fbb2ee"
+  },
+  "unit_tests": {
+    "filter": "oauth::tests",
+    "passed": 22,
+    "failed": 0
+  },
+  "responsive": [
+    {
+      "state": "provider-choice",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "provider-unavailable",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "redirect",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "return",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "error",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "consent",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "login-code",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "code-error",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "long-values",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "provider-choice",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "provider-unavailable",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "redirect",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "return",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "error",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "consent",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "login-code",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "code-error",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "long-values",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "provider-choice",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "provider-unavailable",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "redirect",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "return",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "error",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "consent",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "login-code",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "code-error",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "long-values",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "provider-choice",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "provider-unavailable",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "redirect",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "return",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "error",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "consent",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "login-code",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "code-error",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    },
+    {
+      "state": "long-values",
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "passed": true,
+      "horizontal_overflow": 0,
+      "js_exceptions": 0,
+      "console_errors": 0,
+      "network_errors": 0
+    }
+  ],
+  "behavior": [
+    {
+      "name": "Consent POST, transaction and allow/deny controls",
+      "passed": true
+    },
+    {
+      "name": "Consent decisions remain keyboard reachable",
+      "passed": true
+    },
+    {
+      "name": "Login code required password field preserves 64-character constraints",
+      "passed": true
+    },
+    {
+      "name": "GitHub provider and POST field retained",
+      "passed": true
+    },
+    {
+      "name": "Form rejects short login code locally without submission",
+      "passed": true
+    },
+    {
+      "name": "Error text remains visible and announced",
+      "passed": true
+    },
+    {
+      "name": "Actual served CSP uses exact stylesheet hash, no inline or script relaxation",
+      "passed": true,
+      "policy": "default-src 'none'; style-src 'sha256-qiuGJ4GI9c1CR33WFvyqYjfGmjAetYvEWNwqvuL7su4='; form-action 'self' https://client.example; base-uri 'none'; frame-ancestors 'none'"
+    },
+    {
+      "name": "Zero-delay meta redirect reaches synthetic callback without JavaScript",
+      "passed": true
+    },
+    {
+      "name": "Long client label renders completely as text",
+      "passed": true
+    },
+    {
+      "name": "Manual login link preserved without inline handler",
+      "passed": true
+    }
+  ],
+  "no_javascript": [
+    {
+      "state": "consent",
+      "passed": true,
+      "heading": "允许客户端连接？"
+    },
+    {
+      "state": "login-code",
+      "passed": true,
+      "heading": "连接你的会话"
+    },
+    {
+      "state": "provider-choice",
+      "passed": true,
+      "heading": "连接你的会话"
+    },
+    {
+      "state": "error",
+      "passed": true,
+      "heading": "无法继续授权"
+    }
+  ],
+  "pricing": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "box": {
+        "left": 160,
+        "right": 1280,
+        "width": 1120
+      },
+      "background": "rgb(11, 13, 15)",
+      "overflow": [],
+      "passed": true
+    },
+    {
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "box": {
+        "left": 48,
+        "right": 720,
+        "width": 672
+      },
+      "background": "rgb(11, 13, 15)",
+      "overflow": [],
+      "passed": true
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "box": {
+        "left": 24,
+        "right": 366,
+        "width": 342
+      },
+      "background": "rgb(11, 13, 15)",
+      "overflow": [],
+      "passed": true
+    },
+    {
+      "viewport": {
+        "width": 320,
+        "height": 740
+      },
+      "box": {
+        "left": 20,
+        "right": 300,
+        "width": 280
+      },
+      "background": "rgb(11, 13, 15)",
+      "overflow": [],
+      "passed": true
+    }
+  ],
+  "fixture_corrections": [
+    "The long-value fixture contains plain long text; the corrected check matches that exact synthetic client name. Escaping is separately covered by the OAuth unit tests.",
+    "The fixture redirects to a local synthetic callback; the corrected link check matches that safe target instead of a live OAuth URL."
+  ],
+  "final_stylesheet": "Includes pricing width and spacing follow-up. Six screenshots regenerated; four pricing viewport checks added.",
+  "screenshots": [
+    {
+      "file": "desktop-redirect.png",
+      "bytes": 28525,
+      "width": 1440,
+      "height": 1100,
+      "sha256": "7025c3f9928d5e2431c9468a612e28e72071bd5e31ec5e491c8253941acd0720"
+    },
+    {
+      "file": "desktop-consent.png",
+      "bytes": 65216,
+      "width": 1440,
+      "height": 1100,
+      "sha256": "d2aa4c729d13a9b0f902aecc95c6cf6e93e72ff58089b131a1e424bf45f41c88"
+    },
+    {
+      "file": "mobile-redirect.png",
+      "bytes": 20723,
+      "width": 390,
+      "height": 844,
+      "sha256": "e28154b94e5bab2c68925163fae77320b7104fd8a15eded9daef9c67994570fa"
+    },
+    {
+      "file": "mobile-consent.png",
+      "bytes": 50403,
+      "width": 390,
+      "height": 844,
+      "sha256": "08af3bf53a8e23a95e89b1c580f2d7685433ee12dc434ad0d198de484c7714dc"
+    },
+    {
+      "file": "mobile-login-code.png",
+      "bytes": 60069,
+      "width": 390,
+      "height": 1118,
+      "sha256": "a6b74552932ca323bcb02d2a5c5cf33b063160cea5ce618445ad30d8f4c1a02c"
+    },
+    {
+      "file": "small-mobile-error.png",
+      "bytes": 22167,
+      "width": 320,
+      "height": 740,
+      "sha256": "4604f975d856a19956e66328da0ccb00acd24e55ecac6961d538e21bd9e07289"
+    }
+  ],
+  "failures": []
+}

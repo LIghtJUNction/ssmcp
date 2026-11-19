@@ -17,6 +17,9 @@ use std::{
 };
 use tokio::process::Command;
 
+pub(super) mod login;
+pub(super) mod status;
+
 pub(super) const DEFAULT_SERVER: &str = "https://ssmcp.lmm.best";
 const STORE_LIMIT: usize = 32 * 1024;
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
@@ -29,6 +32,8 @@ pub(super) struct Credential {
     pub principal: String,
     #[serde(default)]
     pub subject: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
     pub expires_at: u64,
 }
 
@@ -37,12 +42,16 @@ impl std::fmt::Debug for Credential {
         f.debug_struct("Credential")
             .field("server", &self.server)
             .field("principal", &self.principal)
+            .field("username", &self.username)
             .field("expires_at", &self.expires_at)
             .finish_non_exhaustive()
     }
 }
 
 pub(super) fn normalize_server(raw: &str) -> Result<String> {
+    if raw.bytes().any(|b| b.is_ascii_whitespace() || b == b'\\') {
+        return Err("server must not contain whitespace or backslashes".into());
+    }
     let url = Url::parse(raw).map_err(|_| "server must be an absolute HTTPS origin")?;
     let loopback = url.host_str().is_some_and(|host| {
         host.trim_matches(['[', ']'])
@@ -56,10 +65,34 @@ pub(super) fn normalize_server(raw: &str) -> Result<String> {
         || url.fragment().is_some()
         || !matches!(url.path(), "" | "/")
         || url.host_str().is_none()
+        || url.port() == Some(0)
     {
         return Err("server must be an HTTPS origin without credentials, path, query or fragment; HTTP is allowed only for literal loopback addresses".into());
     }
     Ok(url.origin().ascii_serialization())
+}
+
+/// A named account destination always selects HTTPS; it never becomes an SSH alias.
+pub(super) fn parse_target(raw: &str) -> Result<(String, String)> {
+    let (username, host) = raw
+        .split_once('@')
+        .ok_or("use username@server, for example alice@ssmcp.lmm.best")?;
+    let username = crate::username::normalize(username)?;
+    if host.is_empty()
+        || host.contains('@')
+        || host.bytes().any(|b| b.is_ascii_whitespace() || b == b'\\')
+    {
+        return Err("invalid server in username@server".into());
+    }
+    let server = if host.contains("://") {
+        normalize_server(host)?
+    } else {
+        if host.contains(['/', '?', '#', '%']) {
+            return Err("server must be a hostname, IPv4 address or bracketed IPv6 address with an optional port".into());
+        }
+        normalize_server(&format!("https://{host}"))?
+    };
+    Ok((username, server))
 }
 
 fn now() -> u64 {
@@ -84,6 +117,10 @@ fn valid_credential(value: &Credential) -> Result<()> {
             .subject
             .as_ref()
             .is_some_and(|v| v.is_empty() || v.len() > 64 || !v.bytes().all(|b| b.is_ascii_digit()))
+        || value
+            .username
+            .as_ref()
+            .is_some_and(|name| crate::username::normalize(name).as_deref() != Ok(name.as_str()))
         || value.expires_at == 0
     {
         return Err("invalid saved account credential; run ssmcp login again".into());
@@ -276,9 +313,25 @@ fn save_at(root: &Path, credential: &Credential) -> Result<()> {
     Ok(())
 }
 
+/// One selector for login, account commands, normal connections and invitation redemption.
+pub(super) fn resolve_server(explicit: Option<&str>) -> Result<String> {
+    if let Some(server) = explicit {
+        return normalize_server(server);
+    }
+    if let Some(server) = super::config::server()? {
+        return Ok(server);
+    }
+    let root = state_root()?;
+    if root.exists() {
+        verify_directory(&root)?;
+    }
+    selected_server(&root, None)
+}
+
 /// Resolve only the selected origin; never borrow another server's credential.
 pub(super) async fn credentials(server: Option<&str>) -> Result<Option<Credential>> {
-    load_at(&state_root()?, server, false)
+    let server = resolve_server(server)?;
+    load_at(&state_root()?, Some(&server), false)
 }
 
 #[derive(Clone)]
@@ -294,14 +347,18 @@ struct Reply {
 
 impl Api {
     fn new(server: &str) -> Result<Self> {
+        let server = normalize_server(server)?;
+        let mut builder = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION"), " client"));
+        if let Some(tls) = super::trust::tls_config(&server)? {
+            builder = builder.use_preconfigured_tls((*tls).clone());
+        }
         Ok(Self {
-            client: Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_secs(5))
-                .timeout(Duration::from_secs(15))
-                .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION"), " client"))
-                .build()?,
-            server: normalize_server(server)?,
+            client: builder.build()?,
+            server,
         })
     }
     async fn request(
@@ -323,7 +380,7 @@ impl Api {
         let mut response = request
             .send()
             .await
-            .map_err(|_| "server request failed or timed out")?;
+            .map_err(|_| "server request failed or timed out; check connectivity, the TLS certificate and trusted server public keys")?;
         let status = response.status();
         if status.is_redirection() {
             return Err("server API redirected the request; credentials were not forwarded".into());
@@ -371,16 +428,35 @@ impl Api {
     }
     fn checked(reply: Reply) -> Result<Value> {
         if !reply.status.is_success() {
-            if matches!(
-                reply.status,
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-            ) {
+            // Match only known codes: arbitrary error bodies may reflect request secrets.
+            let message = match reply.value["error"].as_str() {
+                Some("account_banned") => {
+                    Some("this account is banned on this server; contact its administrator")
+                }
+                Some("username_taken") => {
+                    Some("this username is already registered to another GitHub account")
+                }
+                Some("username_mismatch" | "username_bound") => {
+                    Some("this GitHub account is already registered with a different username")
+                }
+                Some("username_invalid" | "invalid_username") => Some(
+                    "choose a valid, unreserved username: 3–32 ASCII letters, digits, underscores or hyphens; begin with a letter and end with a letter or digit",
+                ),
+                _ => None,
+            };
+            if let Some(message) = message {
+                return Err(message.into());
+            }
+            if reply.status == StatusCode::UNAUTHORIZED {
                 return Err(
-                    "account authorization was rejected; run ssmcp login for this server again"
-                        .into(),
+                    "account authorization expired; reconnect with ssmcp username@server".into(),
                 );
             }
-            // A server error body may reflect request secrets. Never log it.
+            if reply.status == StatusCode::FORBIDDEN {
+                return Err(
+                    "account access is disabled on this server; contact its administrator".into(),
+                );
+            }
             return Err(format!("server rejected the request ({})", reply.status).into());
         }
         Ok(reply.value)
@@ -453,7 +529,12 @@ impl Arguments {
                     .to_owned())
             };
             match arg.to_str() {
-                Some("--server") => result.server = Some(normalize_server(&value()?)?),
+                Some("--server") => {
+                    if result.server.is_some() {
+                        return Err("--server may be supplied only once".into());
+                    }
+                    result.server = Some(normalize_server(&value()?)?);
+                }
                 Some("--json") => result.json = true,
                 Some("-i" | "--interactive") => result.interactive = true,
                 Some("--remote") => {}
@@ -518,7 +599,18 @@ fn public_identity(value: &Value) -> Result<Value> {
         .or_else(|| identity["github_id"].as_str())
         .filter(|s| !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_digit()))
         .ok_or("server omitted the stable GitHub subject")?;
-    Ok(json!({"provider":"github","subject":subject,"login":login,"principal":principal}))
+    let mut public =
+        json!({"provider":"github","subject":subject,"login":login,"principal":principal});
+    if let Some(value) = identity.get("username").filter(|value| !value.is_null()) {
+        let username = value
+            .as_str()
+            .ok_or("server returned an invalid username")?;
+        if crate::username::normalize(username).as_deref() != Ok(username) {
+            return Err("server returned an invalid username".into());
+        }
+        public["username"] = json!(username);
+    }
+    Ok(public)
 }
 
 fn verification_url(server: &str, raw: &str, secret: &str) -> Result<Url> {
@@ -560,14 +652,27 @@ async fn open_browser(url: &Url) -> Result<()> {
     Ok(())
 }
 
-async fn login(args: &Arguments) -> Result<()> {
-    let root = state_root()?;
-    let server = if root.exists() {
-        verify_directory(&root)?;
-        selected_server(&root, args.server.as_deref())?
-    } else {
-        normalize_server(args.server.as_deref().unwrap_or(DEFAULT_SERVER))?
-    };
+struct Authorization {
+    api: Api,
+    server: String,
+    code: String,
+    url: Url,
+    user_code: Option<String>,
+    username: Option<String>,
+    interval: u64,
+    deadline: tokio::time::Instant,
+}
+
+async fn begin_authorization(
+    root: &Path,
+    args: &Arguments,
+    username: Option<&str>,
+) -> Result<Authorization> {
+    let username = username.map(crate::username::normalize).transpose()?;
+    if root.exists() {
+        verify_directory(root)?;
+    }
+    let server = resolve_server(args.server.as_deref())?;
     let api = Api::new(&server)?;
     let name = args
         .name
@@ -577,38 +682,62 @@ async fn login(args: &Arguments) -> Result<()> {
         return Err("--name must contain 1..=80 bytes without control characters".into());
     }
     let start = api
-        .post("/api/client/login/start", None, json!({"name":name}))
+        .post(
+            "/api/client/login/start",
+            None,
+            json!({"name":name,"username":username}),
+        )
         .await?;
     let code = start["device_code"]
         .as_str()
         .filter(|v| valid_secret(v))
-        .ok_or("invalid device login code")?;
+        .ok_or("invalid device login code")?
+        .to_owned();
     let raw_url = start["verification_uri_complete"]
         .as_str()
         .or_else(|| start["verification_uri"].as_str())
         .ok_or("server omitted the login URL")?;
-    let url = verification_url(&server, raw_url, code)?;
+    let url = verification_url(&server, raw_url, &code)?;
     let expires = start["expires_in"]
         .as_u64()
         .filter(|n| (1..=1800).contains(n))
         .ok_or("invalid device login lifetime")?;
-    let mut interval = start["interval"].as_u64().unwrap_or(2).clamp(1, 60);
-    eprintln!("Open this link to sign in with GitHub:\n{url}");
-    if let Some(user_code) = start["user_code"].as_str() {
-        eprintln!("Confirmation code: {}", safe(user_code));
-    }
-    if !args.no_browser && open_browser(&url).await.is_err() {
-        eprintln!("Open the printed link in your browser.");
-    }
+    let interval = start["interval"].as_u64().unwrap_or(2).clamp(1, 60);
+    // Removing controls must not reassemble the private polling code for display.
+    let user_code = start["user_code"]
+        .as_str()
+        .map(safe)
+        .filter(|value| !value.contains(code.as_str()));
+    Ok(Authorization {
+        api,
+        server,
+        code,
+        url,
+        user_code,
+        username,
+        interval,
+        deadline: tokio::time::Instant::now() + Duration::from_secs(expires),
+    })
+}
+
+async fn finish_authorization(root: &Path, authorization: Authorization) -> Result<Credential> {
+    let Authorization {
+        api,
+        server,
+        code,
+        username,
+        mut interval,
+        deadline,
+        ..
+    } = authorization;
     let mut interrupt = platform::interrupt_signal()?;
     let mut terminate = platform::terminate_signal()?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(expires);
     let response = loop {
         let reply = tokio::select! {
             result = api.request(Method::POST, "/api/client/login/poll", None, Some(json!({"device_code":code}))) => result?,
             _ = interrupt.recv() => return Err("login cancelled".into()),
             _ = terminate.recv() => return Err("login cancelled".into()),
-            _ = tokio::time::sleep_until(deadline) => return Err("login link expired; run ssmcp login again".into()),
+            _ = tokio::time::sleep_until(deadline) => return Err("authorization link expired; run the connection command again".into()),
         };
         let state = reply.value["status"]
             .as_str()
@@ -622,9 +751,12 @@ async fn login(args: &Arguments) -> Result<()> {
                 return Err("GitHub login was declined".into());
             }
             if matches!(state, "expired" | "expired_token") {
-                return Err("login link expired; run ssmcp login again".into());
+                return Err("authorization link expired; run the connection command again".into());
             }
-            return Err("device login failed; run ssmcp login again".into());
+            if !reply.status.is_success() {
+                Api::checked(reply)?;
+            }
+            return Err("device authorization failed; run the connection command again".into());
         }
         if state == "slow_down" || reply.status == StatusCode::TOO_MANY_REQUESTS {
             interval = interval.saturating_add(1).max(reply.retry_after).min(60);
@@ -633,10 +765,19 @@ async fn login(args: &Arguments) -> Result<()> {
             _ = tokio::time::sleep(Duration::from_secs(interval)) => {},
             _ = interrupt.recv() => return Err("login cancelled".into()),
             _ = terminate.recv() => return Err("login cancelled".into()),
-            _ = tokio::time::sleep_until(deadline) => return Err("login link expired; run ssmcp login again".into()),
+            _ = tokio::time::sleep_until(deadline) => return Err("authorization link expired; run the connection command again".into()),
         }
     };
     let identity = public_identity(&response)?;
+    if username
+        .as_deref()
+        .is_some_and(|requested| identity["username"].as_str() != Some(requested))
+    {
+        return Err(
+            "GitHub authorization did not bind the requested username; no credential was saved"
+                .into(),
+        );
+    }
     let token = response["access_token"]
         .as_str()
         .filter(|v| valid_secret(v))
@@ -650,9 +791,39 @@ async fn login(args: &Arguments) -> Result<()> {
         token: token.into(),
         principal: identity["principal"].as_str().unwrap().into(),
         subject: Some(identity["subject"].as_str().unwrap().into()),
+        username: identity["username"].as_str().map(str::to_owned),
         expires_at: now().saturating_add(expires),
     };
-    save_at(&root, &credential)?;
+    save_at(root, &credential)?;
+    Ok(credential)
+}
+
+async fn authorize_at(root: &Path, args: &Arguments, username: Option<&str>) -> Result<Credential> {
+    let authorization = begin_authorization(root, args, username).await?;
+    eprintln!(
+        "Open this link to sign in with GitHub:\n{}",
+        authorization.url
+    );
+    if let Some(user_code) = &authorization.user_code {
+        eprintln!("Confirmation code: {user_code}");
+    }
+    if !args.no_browser && open_browser(&authorization.url).await.is_err() {
+        eprintln!("Open the printed link in your browser.");
+    }
+    finish_authorization(root, authorization).await
+}
+
+async fn login(args: &Arguments) -> Result<()> {
+    let credential = authorize_at(&state_root()?, args, None).await?;
+    let mut identity = json!({
+        "provider":"github",
+        "subject":credential.subject,
+        "login":credential.principal.trim_end_matches("@github"),
+        "principal":credential.principal,
+    });
+    if let Some(username) = &credential.username {
+        identity["username"] = json!(username);
+    }
     if args.json {
         println!(
             "{}",
@@ -665,6 +836,111 @@ async fn login(args: &Arguments) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Obtain and validate the selected server's account without a separate login command.
+pub(super) async fn connect_credential(
+    server: Option<&str>,
+    username: Option<&str>,
+    no_browser: bool,
+    allow_login: bool,
+) -> Result<Credential> {
+    let server = resolve_server(server)?;
+    connect_at(
+        &state_root()?,
+        Some(&server),
+        username,
+        no_browser,
+        allow_login,
+    )
+    .await
+}
+
+fn same_subject(credential: &Credential, identity: &Value) -> Result<()> {
+    if credential
+        .subject
+        .as_deref()
+        .is_some_and(|subject| identity["subject"].as_str() != Some(subject))
+    {
+        return Err("the server returned a different GitHub account for this credential".into());
+    }
+    Ok(())
+}
+
+async fn connect_at(
+    root: &Path,
+    server: Option<&str>,
+    username: Option<&str>,
+    no_browser: bool,
+    allow_login: bool,
+) -> Result<Credential> {
+    let requested = username.map(crate::username::normalize).transpose()?;
+    let server = selected_server(root, server)?;
+    let saved = load_at(root, Some(&server), true)?;
+    let api = Api::new(&server)?;
+    if let Some(credential) = saved.as_ref().filter(|value| value.expires_at > now()) {
+        let reply = api
+            .request(
+                Method::GET,
+                "/api/client/whoami",
+                Some(&credential.token),
+                None,
+            )
+            .await?;
+        // Only rejected/expired tokens restart OAuth. Outages and bans retain
+        // the saved credential and return their own error.
+        if reply.status != StatusCode::UNAUTHORIZED {
+            let mut identity = public_identity(&Api::checked(reply)?)?;
+            same_subject(credential, &identity)?;
+            if identity["username"].is_null()
+                && let Some(username) = requested.as_deref()
+            {
+                identity = public_identity(
+                    &api.post(
+                        "/api/client/username",
+                        Some(&credential.token),
+                        json!({"username":username}),
+                    )
+                    .await?,
+                )?;
+                same_subject(credential, &identity)?;
+            }
+            if let Some(requested) = requested.as_deref()
+                && identity["username"].as_str() != Some(requested)
+            {
+                return Err("this account is registered with a different username; use its registered username or sign out with ssmcp logout to switch accounts".into());
+            }
+            let mut current = credential.clone();
+            current.subject = Some(identity["subject"].as_str().unwrap().into());
+            current.principal = identity["principal"].as_str().unwrap().into();
+            current.username = identity["username"].as_str().map(str::to_owned);
+            save_at(root, &current)?;
+            return Ok(current);
+        }
+    }
+    let username = requested
+        .as_deref()
+        .or_else(|| saved.as_ref().and_then(|value| value.username.as_deref()));
+    if !allow_login {
+        return Err("this background session needs authorization; run ssmcp username@server in a terminal, then restart the session".into());
+    }
+    if saved.is_none() && username.is_none() {
+        return Err(format!(
+            "choose a username to connect: ssmcp username@{}",
+            server.strip_prefix("https://").unwrap_or(&server)
+        )
+        .into());
+    }
+    authorize_at(
+        root,
+        &Arguments {
+            server: Some(server),
+            no_browser,
+            ..Arguments::default()
+        },
+        username,
+    )
+    .await
 }
 
 /// A legacy SSH ACL resolves a login name. Verify that it still refers to the
@@ -719,14 +995,22 @@ async fn whoami(args: &Arguments) -> Result<()> {
             json!({"server":credential.server,"identity":identity,"expires_at":credential.expires_at})
         );
     } else {
-        println!("{} · {}", credential.principal, credential.server);
+        if let Some(username) = identity["username"].as_str() {
+            println!(
+                "{username} · {} · {}",
+                credential.principal, credential.server
+            );
+        } else {
+            println!("{} · {}", credential.principal, credential.server);
+        }
     }
     Ok(())
 }
 
 async fn logout(args: &Arguments) -> Result<()> {
     let root = state_root()?;
-    let Some(credential) = load_at(&root, args.server.as_deref(), true)? else {
+    let server = resolve_server(args.server.as_deref())?;
+    let Some(credential) = load_at(&root, Some(&server), true)? else {
         println!("Not signed in.");
         return Ok(());
     };
@@ -788,6 +1072,7 @@ pub(super) async fn enroll(server: &str, token: &str) -> Result<Credential> {
         token: token.into(),
         principal,
         subject: None,
+        username: None,
         expires_at: now().saturating_add(expires),
     })
 }
@@ -804,7 +1089,12 @@ fn join_command(server: &str, token: &str) -> Result<String> {
     command(server, token, false, false)
 }
 
-fn command(server: &str, token: &str, bootstrap: bool, powershell: bool) -> Result<String> {
+pub(crate) fn command(
+    server: &str,
+    token: &str,
+    bootstrap: bool,
+    powershell: bool,
+) -> Result<String> {
     let server = normalize_server(server)?;
     if !valid_secret(token) {
         return Err("server returned an invalid enrollment token".into());
@@ -829,6 +1119,47 @@ fn command(server: &str, token: &str, bootstrap: bool, powershell: bool) -> Resu
     }
 }
 
+/// Carry device A's explicitly trusted keys to an already installed client on B.
+/// Downloaded shell code cannot enforce a pin before it has itself been verified.
+fn pinned_join_command(
+    server: &str,
+    token: &str,
+    pins: &[String],
+    powershell: bool,
+) -> Result<String> {
+    let server = normalize_server(server)?;
+    let join = command(&server, token, false, powershell)?;
+    let mut trust = Vec::new();
+    for pin in pins {
+        let encoded = pin
+            .strip_prefix("sha256//")
+            .ok_or("invalid server public key pin")?;
+        if STANDARD
+            .decode(encoded)
+            .map_or(true, |bytes| bytes.len() != 32)
+        {
+            return Err("invalid server public key pin".into());
+        }
+        trust.push(format!(
+            "ssmcp trust add --server {} --pin {}",
+            shell_quote(&server, powershell),
+            shell_quote(pin, powershell),
+        ));
+    }
+    if trust.is_empty() {
+        return Ok(join);
+    }
+    if powershell {
+        // Windows PowerShell 5.1 does not support &&. Check every native exit code.
+        let guard =
+            "; if ($LASTEXITCODE -ne 0) { throw 'Cannot save trusted server public key' }; ";
+        Ok(format!("& {{ {}{guard}{join} }}", trust.join(guard)))
+    } else {
+        trust.push(join);
+        Ok(trust.join(" && "))
+    }
+}
+
 async fn invite(args: &Arguments) -> Result<()> {
     let ttl = args.ttl.unwrap_or(600);
     let session_ttl = args.session_ttl.unwrap_or(3600);
@@ -848,12 +1179,23 @@ async fn invite(args: &Arguments) -> Result<()> {
     let token = value["token"]
         .as_str()
         .ok_or("server omitted the enrollment token")?;
-    let sh = if args.no_bootstrap {
-        join_command(&credential.server, token)?
+    let pins = super::trust::pins(&credential.server)?;
+    let bootstrap = !args.no_bootstrap && pins.is_empty();
+    let (sh, powershell) = if pins.is_empty() {
+        (
+            if bootstrap {
+                command(&credential.server, token, true, false)?
+            } else {
+                join_command(&credential.server, token)?
+            },
+            command(&credential.server, token, bootstrap, true)?,
+        )
     } else {
-        command(&credential.server, token, true, false)?
+        (
+            pinned_join_command(&credential.server, token, &pins, false)?,
+            pinned_join_command(&credential.server, token, &pins, true)?,
+        )
     };
-    let powershell = command(&credential.server, token, !args.no_bootstrap, true)?;
     let selected =
         if args
             .shell
@@ -868,11 +1210,33 @@ async fn invite(args: &Arguments) -> Result<()> {
     if args.json {
         println!(
             "{}",
-            json!({"command":selected,"command_sh":sh,"command_powershell":powershell,
+            json!({"server":credential.server,"command":selected,"command_sh":sh,"command_powershell":powershell,
+            "bootstrap":bootstrap,"requires_installed_client":!bootstrap,"server_pins":pins,
+            "release":value["release"],"release_error":value["release_error"],
+            "wire_version":crate::wire::VERSION,"supported_targets":value["supported_targets"],
             "expires_in":value["expires_in"],"session_expires_in":value["session_expires_in"]})
         );
     } else {
         println!("{selected}");
+        if bootstrap {
+            if let Some(version) = value["release"]["version"].as_str() {
+                eprintln!(
+                    "Gateway publication: ssmcp {}; wire {}. The installer verifies the current compatible release before replacing the user installation.",
+                    safe(version),
+                    crate::wire::VERSION
+                );
+            } else if let Some(error) = value["release_error"].as_str() {
+                eprintln!(
+                    "Bootstrap publication unavailable: {}. Use --no-bootstrap with an installed compatible client.",
+                    safe(error)
+                );
+            }
+        }
+        if !pins.is_empty() {
+            eprintln!(
+                "Server public key pinning is enabled. Install ssmcp on device B from a trusted source first; this command saves the trusted keys before joining."
+            );
+        }
         eprintln!(
             "Run this once on device B. Claim within {} seconds; session access lasts {} seconds.",
             value["expires_in"].as_u64().unwrap_or(ttl),
@@ -927,8 +1291,20 @@ fn select_client<'a>(entries: &'a [Value], selected: &str) -> Result<&'a str> {
         .as_str()
         .ok_or_else(|| "session has no ID".into())
 }
+fn interactive_selection_help() -> &'static str {
+    "Choose an online session to open its existing remote terminal.\nEnter a listed number, exact ID or name; Ctrl+C cancels selection.\nOnce connected, Ctrl+] returns to your local terminal; the remote session and its jobs keep running."
+}
+
+fn interactive_connection_hint(id: &str, terminal: &str) -> String {
+    format!(
+        "Connected to {} / {} · Ctrl+] returns to your local terminal; remote session keeps running · Ctrl+C reaches the remote shell",
+        safe(id),
+        safe(terminal)
+    )
+}
+
 async fn prompt_selection() -> Result<String> {
-    eprint!("Session number, ID or name: ");
+    eprint!("Choose a session number, exact ID or name: ");
     io::stderr().flush()?;
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
@@ -972,6 +1348,7 @@ async fn list(args: &Arguments) -> Result<()> {
             "interactive mode requires a terminal; use ssmcp list --json for scripts".into(),
         );
     }
+    eprintln!("{}", interactive_selection_help());
     if entries.is_empty() {
         print!("{}", list_table(entries));
         return Ok(());
@@ -1009,12 +1386,9 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
         json!({"terminal_id":terminal}),
     )
     .await?;
-    let mut keyboard = input::Keyboard::open()?;
-    eprintln!(
-        "Connected to {} / {} · Ctrl-] detaches · Ctrl-C reaches the remote shell",
-        safe(id),
-        safe(terminal)
-    );
+    let mut keyboard = input::Keyboard::open(false)?;
+    let mut utf8 = input::Utf8Input::default();
+    eprintln!("{}", interactive_connection_hint(id, terminal));
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);
     let (reader_api, reader_credential, reader_id, reader_terminal) = (
         api.clone(),
@@ -1041,9 +1415,23 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
             tokio::select!{
                 _=terminate.recv()=>break,
                 event=keyboard.next()=>match event?{
-                    input::Event::Detach|input::Event::End=>break,
-                    input::Event::Text(text)=>{
+                    input::Event::Detach=>break,
+                    input::Event::InputProgress(_)=>{}
+                    input::Event::PasteExpired=>{utf8=input::Utf8Input::default();}
+                    input::Event::End=>{
+                        let text=utf8.push(&[],true);
+                        if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
+                        break;
+                    }
+                    input::Event::Interrupt=>{
+                        // This interactive command owns a remote shell, not a
+                        // dashboard. Preserve the advertised remote Ctrl-C.
+                        let text=utf8.push(b"\x03",false);
                         api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;
+                    }
+                    input::Event::Bytes(bytes)|input::Event::PasteBytes(bytes)=>{
+                        let text=utf8.push(&bytes,false);
+                        if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
                     }
                     input::Event::Resize(rows,cols)=>{
                         api.call(credential,id,"terminal.resize",json!({"terminal_id":terminal,"rows":rows.clamp(1,1000),"cols":cols.clamp(1,1000)})).await?;
@@ -1144,6 +1532,18 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interactive_help_explains_selection_and_the_local_detach_key() {
+        let help = interactive_selection_help();
+        assert!(help.contains("online session"));
+        assert!(help.contains("existing remote terminal"));
+        assert!(help.contains("Ctrl+C cancels selection"));
+        assert!(help.contains("Ctrl+] returns to your local terminal"));
+        let connected = interactive_connection_hint("session\u{1b}[31m", "main\n");
+        assert!(!connected.chars().any(char::is_control));
+        assert!(connected.contains("Ctrl+]"));
+        assert!(connected.contains("remote session keeps running"));
+    }
     fn temporary() -> PathBuf {
         let mut random = [0; 16];
         platform::random_bytes(&mut random).unwrap();
@@ -1157,6 +1557,7 @@ mod tests {
             token: "a".repeat(64),
             principal: "alice@github".into(),
             subject: Some("123".into()),
+            username: None,
             expires_at: now() + 3600,
         }
     }
@@ -1289,6 +1690,51 @@ mod tests {
         assert!(join_command("https://example.com", &(token + "'")).is_err());
     }
     #[test]
+    fn pinned_invitations_carry_keys_and_never_download_unverified_code() {
+        let pin = format!("sha256//{}", STANDARD.encode([7u8; 32]));
+        let token = "b".repeat(64);
+        let shell = pinned_join_command(
+            "https://relay.example",
+            &token,
+            std::slice::from_ref(&pin),
+            false,
+        )
+        .unwrap();
+        assert!(
+            shell.starts_with("ssmcp trust add --server 'https://relay.example' --pin 'sha256//")
+        );
+        assert!(shell.contains(" && ssmcp join --server 'https://relay.example' --token "));
+        assert!(!shell.contains("curl"));
+        assert!(!shell.contains("install.sh"));
+        let powershell =
+            pinned_join_command("https://relay.example", &token, &[pin], true).unwrap();
+        assert!(powershell.contains("if ($LASTEXITCODE -ne 0)"));
+        assert!(!powershell.contains("&&"));
+        assert!(!powershell.contains("Invoke-WebRequest"));
+        assert!(
+            pinned_join_command(
+                "https://relay.example",
+                &token,
+                &["$(whoami)".into()],
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn duplicate_account_servers_are_rejected() {
+        let args = [
+            "--server",
+            "https://one.example",
+            "--server",
+            "https://two.example",
+        ]
+        .map(OsString::from);
+        assert!(Arguments::parse(&args).is_err());
+    }
+
+    #[test]
     fn login_link_never_carries_poll_secret_or_changes_origin() {
         let code = "a".repeat(64);
         assert!(
@@ -1390,3 +1836,7 @@ mod tests {
         server.await.unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "account/named_tests.rs"]
+mod named_tests;

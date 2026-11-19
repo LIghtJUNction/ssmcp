@@ -6,10 +6,12 @@
 
 ## 用标题说明本次任务
 
-`--title` 把任务说明放进客户端元数据，agent 调用 `list` 就能看到它。标题支持中文和空格，最多 512 个 UTF-8 字节；空值、纯空白和控制字符会被拒绝。
+`--title` 设置本次会话的任务标题。对话界面顶部显示 `ssmcp / activity / 项目名 / 会话标题`：项目名取自客户端真实启动目录的末级目录名，未设置标题时省略最后一段。切换视图时，`activity` 随之更新；长标题按终端宽度裁剪，不挤占正文。
+
+标题也进入客户端元数据，agent 调用 `list` 就能看到它。标题支持中文和空格，最多 512 个 UTF-8 字节；空值、纯空白和控制字符会被拒绝。
 
 ```sh
-ssmcp --name dev --title "完善 ssmcp 客户端重载和输出转储" \
+ssmcp --ssh --name dev --title "完善 ssmcp 客户端重载和输出转储" \
   --allow octocat@github my-ssmcp
 ```
 
@@ -76,7 +78,7 @@ Unix 使用 `exec` 替换当前进程映像。Windows 启动替代客户端，�
 在项目目录中创建一个具名后台会话：
 
 ```sh
-ssmcp --daemon --reconnect-delay 5 \
+ssmcp --ssh --daemon --reconnect-delay 5 \
   --name workstation --title "修复项目并执行测试" \
   --allow octocat@github my-ssmcp
 ssmcp sessions status workstation --json

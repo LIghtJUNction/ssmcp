@@ -15,6 +15,8 @@ from __future__ import annotations
 import argparse
 import base64
 from collections import defaultdict
+from contextlib import ExitStack
+import fcntl
 import hashlib
 import json
 import os
@@ -30,6 +32,7 @@ from e2e_session_features import SessionFeatures
 
 TITLE = "统一能力验收：独立命令、事件、审计与生命周期"
 LONG_BYTES = 160 * 1024 + 17  # Exceeds both inline storage and the executor's live tail.
+LONG_CHUNK_BYTES = 32 * 1024  # Each unacknowledged event burst fits the bounded ring.
 LONG_PREFIX = b"UNIFIED_LONG_BEGIN\n"
 LONG_LIVE = b"\nUNIFIED_LONG_AFTER_SPILL\n"
 LONG_DONE = b"UNIFIED_LONG_DONE\n"
@@ -56,11 +59,21 @@ sys.exit(0 if name == 'alpha' else 7)
 '''
 
 LONG_PROGRAM = r'''
-import sys, time
+import fcntl, sys, time
 from pathlib import Path
-sys.stdout.buffer.write(b'UNIFIED_LONG_BEGIN\n' + b'Z' * int(sys.argv[1])
-                        + b'\nUNIFIED_LONG_AFTER_SPILL\n')
-sys.stdout.flush()
+payload = (b'UNIFIED_LONG_BEGIN\n' + b'Z' * int(sys.argv[1])
+           + b'\nUNIFIED_LONG_AFTER_SPILL\n')
+ack_directory, chunk_bytes = Path(sys.argv[2]), int(sys.argv[3])
+for start in range(0, len(payload), chunk_bytes):
+    end = min(start + chunk_bytes, len(payload))
+    sys.stdout.buffer.write(payload[start:end])
+    sys.stdout.flush()
+    # The consumer owns this lock until it verifies every event byte in the chunk.
+    # ACK files are private to this fixture; stdin keeps its original null mode.
+    with (ack_directory / f'{end}.ack').open('rb') as ack:
+        fcntl.flock(ack, fcntl.LOCK_SH)
+        if ack.read() != f'{end}\n'.encode():
+            raise RuntimeError('consumer did not acknowledge the exact output offset')
 print('UNIFIED_LONG_STDERR', file=sys.stderr, flush=True)
 Path('long.ready').write_text('ready')
 deadline = time.monotonic() + 60
@@ -261,11 +274,16 @@ class Unified(SessionFeatures):
         return wait_for(complete, timeout=timeout, description="final independent command state")
 
     def events(self, tool, *, cursor=0, client_id=None, secret=None):
-        rows = []
-        while True:
-            page = self.call(tool, {"cursor": cursor, "max_events": 8, "wait_ms": 0}, client_id=client_id, secret=secret)
+        rows, end_cursor = [], None
+        # Every call is itself audited. Freeze the first page's stream boundary,
+        # or audit polling produces new events faster than an empty page can occur.
+        while end_cursor is None or cursor < end_cursor:
+            count = 8 if end_cursor is None else min(8, end_cursor - cursor)
+            page = self.call(tool, {"cursor": cursor, "max_events": count, "wait_ms": 0}, client_id=client_id, secret=secret)
             if page["truncated"]:
                 raise AssertionError(f"{tool} lost a test event before it could be inspected")
+            if end_cursor is None:
+                end_cursor = page["end_cursor"]
             batch = page["events"]
             for row in batch:
                 if row["cursor"] != cursor:
@@ -273,9 +291,10 @@ class Unified(SessionFeatures):
                 cursor += 1
             if cursor != page["next_cursor"]:
                 raise AssertionError(f"{tool} returned an inconsistent next_cursor")
+            if not cursor <= end_cursor <= page["end_cursor"] or (not batch and cursor < end_cursor):
+                raise AssertionError(f"{tool} returned an inconsistent event snapshot")
             rows.extend(batch)
-            if not batch:
-                return rows, cursor
+        return rows, cursor
 
     def poll_exec(self):
         rows, self.exec_cursor = self.events("ssmcp.exec.events", cursor=self.exec_cursor)
@@ -313,25 +332,21 @@ class Unified(SessionFeatures):
     def catalog(self):
         for modern in (False, True):
             status, result, _ = self.rpc("tools/list", modern=modern)
-            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["list", "code_mode"],
-                       f"public MCP exposes exactly list/code_mode (modern={modern})")
+            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
+                       f"public MCP exposes exactly list/code_mode/collab/invite (modern={modern})")
         harness_names = {"codex", "claude", "pi", "opencode"}
         provider_names = harness_names | {"playwright"}
-        def settled():
-            result = self.call("ssmcp.harnesses.list")
-            rows = result["harnesses"]
-            return result if (len(rows) == len(provider_names)
-                              and {row["provider"] for row in rows} == provider_names
-                              and all(row["status"] != "discovering" for row in rows)) else None
-        discovery = wait_for(settled, timeout=10,
-                             description="four independent absent-Harness probes and the optional Playwright provider")
-        providers = {row["provider"]: row for row in discovery["harnesses"]}
-        self.check(all(providers[name]["status"] == "unavailable" and providers[name]["tools"] == 0
-                       for name in harness_names),
-                   "all four absent Harnesses are diagnosed without preventing Shell access")
-        playwright = providers["playwright"]
-        self.check(playwright["status"] == "unavailable" and playwright["tools"] == 0,
-                   "the absent optional Playwright MCP provider is diagnosed independently of the four Harnesses")
+        discovery = self.call("ssmcp.harnesses.list")
+        rows = discovery["harnesses"]
+        providers = {row["provider"]: row for row in rows}
+        self.check(len(rows) == len(provider_names) and set(providers) == provider_names,
+                   "all optional providers have independent lazy state records")
+        self.check(all(row["status"] == "not_loaded" and row["tools"] == 0
+                       and "executable" in row and row["executable"] is None
+                       and "version" in row and row["version"] is None for row in rows),
+                   "native startup lists optional providers without probing executables or versions")
+        self.check(self.external_invocations("unified-primary") == [],
+                   "native startup and observation execute no external fixture programs")
         inventory = self.public_call("list")
         selected = next(client for client in inventory["clients"] if client["id"] == self.client_id)
         self.check(selected["title"] == TITLE and selected["cwd"] == str(self.workspace.resolve()),
@@ -344,7 +359,7 @@ class Unified(SessionFeatures):
                    and len(index(invoked)) == len(invoked),
                    "list and code_mode tools return one identical collision-free full-schema catalog")
         self.check(not any(t["name"].startswith(("codex.", "claude.", "pi.", "opencode.", "playwright.")) for t in listed),
-                   "unavailable Harnesses and the optional Playwright provider contribute no invented native tools")
+                   "unloaded Harnesses and the optional Playwright provider contribute no invented native tools")
         self.initial_catalog = index(listed)
         self.save("catalog.json", {"client": selected, "tools": listed, "discovery": discovery})
 
@@ -450,14 +465,47 @@ class Unified(SessionFeatures):
         })
 
     def outputs(self):
-        job = self.call("ssmcp.exec.start", {"command": [self.python, "-u", "-c", LONG_PROGRAM, str(LONG_BYTES)]})
-        self.wait_stream(job["job_id"], "stdout", LONG_LIVE)
-        live = self.call("ssmcp.exec.status", {"job_id": job["job_id"]})
-        self.check(live["running"] and live["stdout"]["artifact"] and not live["stdout"]["artifact"]["complete"],
-                   "output spilling does not stop live events and active capture remains explicitly incomplete")
-        self.call("ssmcp.fs.write_text", {"path": "long.release", "text": "release\n"})
-        done = self.finish_job(job)
-        self.poll_exec()
+        payload = LONG_PREFIX + b"Z" * LONG_BYTES + LONG_LIVE
+        # A single 160 KiB burst becomes larger than the event ring when both its
+        # base64 and decoded text are retained. Drain and verify each bounded
+        # chunk before releasing the next one; never hide a truncated event page.
+        with tempfile.TemporaryDirectory(prefix="long-output-acks-", dir=self.workspace) as directory, ExitStack() as locks:
+            gates = []
+            for start in range(0, len(payload), LONG_CHUNK_BYTES):
+                end = min(start + LONG_CHUNK_BYTES, len(payload))
+                ack = locks.enter_context((Path(directory) / f"{end}.ack").open("x+b"))
+                os.fchmod(ack.fileno(), 0o600)
+                fcntl.flock(ack, fcntl.LOCK_EX)
+                gates.append((end, ack))
+            job = self.call("ssmcp.exec.start", {
+                "command": [self.python, "-u", "-c", LONG_PROGRAM, str(LONG_BYTES),
+                            directory, str(LONG_CHUNK_BYTES)],
+            })
+            acknowledged = []
+
+            def acknowledge_chunk():
+                self.poll_exec()
+                end, ack = gates[len(acknowledged)]
+                observed = bytes(self.streams[job["job_id"]]["stdout"])
+                if len(observed) > end or observed != payload[:len(observed)]:
+                    raise AssertionError("long output crossed its ACK gate or changed a verified prefix")
+                if len(observed) < end:
+                    return False
+                ack.write(f"{end}\n".encode())
+                ack.flush()
+                fcntl.flock(ack, fcntl.LOCK_UN)
+                acknowledged.append(end)
+                return len(acknowledged) == len(gates)
+
+            wait_for(acknowledge_chunk, timeout=20, description="verified long-output chunks before ACK")
+            self.check(acknowledged[-1] == len(payload),
+                       "each bounded output chunk is acknowledged only after exact live event verification")
+            live = self.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+            self.check(live["running"] and live["stdout"]["artifact"] and not live["stdout"]["artifact"]["complete"],
+                       "output spilling does not stop live events and active capture remains explicitly incomplete")
+            self.call("ssmcp.fs.write_text", {"path": "long.release", "text": "release\n"})
+            done = self.finish_job(job)
+            self.poll_exec()
         expected = LONG_PREFIX + b"Z" * LONG_BYTES + LONG_LIVE + LONG_DONE
         artifact = done["stdout"]["artifact"]
         raw = self.artifact_path(artifact).read_bytes()
@@ -472,7 +520,8 @@ class Unified(SessionFeatures):
         pages = self.verify_pagination(self.client_id, artifact)
         self.retained_artifact = artifact
         self.save("long-stdout.log", raw)
-        self.save("long-output.json", {"live": live, "final": done, "pages": pages})
+        self.save("long-output.json", {"live": live, "final": done, "pages": pages,
+                                      "chunk_bytes": LONG_CHUNK_BYTES, "acknowledged_offsets": acknowledged})
         line_job = self.call("ssmcp.exec.start", {"command": [self.python, "-c", "import sys; sys.stdout.write('x\\n'*600)"]})
         lines = self.finish_job(line_job)["stdout"]["artifact"]
         self.check(lines["complete"] and lines["lines"] == 600 and lines["bytes"] < 32768,
@@ -564,7 +613,22 @@ class Unified(SessionFeatures):
                    "a separate client cannot list or address the first client's tasks")
         for tool in ("ssmcp.exec.events", "ssmcp.fs.events", "ssmcp.audit.events"):
             rows, _ = self.events(tool, client_id=self.sibling_id, secret=self.sibling_token)
-            self.check(not rows, f"{tool} on another client does not expose the first client's audit stream")
+            isolated = not rows
+            if tool == "ssmcp.audit.events":
+                # The sibling records our own observations. Every event must be
+                # tied to a run whose source targets this sibling, never the primary.
+                own_runs = {
+                    row["event"]["run_id"] for row in rows
+                    if row["event"]["type"] == "ssmcp.code_mode"
+                    and row["event"].get("phase") == "started"
+                    and json.dumps(self.sibling_id) in row["event"].get("code", "")
+                    and json.dumps(self.client_id) not in row["event"].get("code", "")
+                }
+                isolated = bool(own_runs) and all(
+                    row["event"]["type"] == "ssmcp.code_mode"
+                    and row["event"].get("run_id") in own_runs for row in rows
+                )
+            self.check(isolated, f"{tool} on another client does not expose the first client's audit stream")
         self.call("ssmcp.output.cleanup", client_id=self.sibling_id, secret=self.sibling_token)
         self.check(self.artifact_path(self.retained_artifact).is_file(),
                    "another client's cleanup leaves the first client's retained artifact intact")

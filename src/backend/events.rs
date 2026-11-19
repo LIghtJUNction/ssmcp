@@ -1,7 +1,7 @@
 //! Bounded, cursor-addressed native events, also visible on the local terminal.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value, json, value::RawValue};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -12,7 +12,10 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
-const CAPACITY: usize = 8 * 1024 * 1024;
+// Full audit events remain in the output archive. This is only the recent
+// cursor window; tiny events also need a count bound for queue/allocation cost.
+const CAPACITY: usize = 256 * 1024;
+const MAX_RETAINED_EVENTS: usize = 1024;
 const MAX_EVENT: usize = 256 * 1024;
 const MAX_PAGE: usize = 512 * 1024;
 
@@ -174,7 +177,7 @@ fn scalar_metadata(value: &Value) -> Map<String, Value> {
 
 #[derive(Default)]
 struct Buffer {
-    entries: VecDeque<(u64, Value, usize)>,
+    entries: VecDeque<(u64, Box<RawValue>, usize)>,
     bytes: usize,
     next: u64,
     closed: bool,
@@ -186,6 +189,7 @@ pub struct EventLog {
     buffer: Mutex<Buffer>,
     changed: Notify,
     archive: Mutex<Option<crate::output::Capture>>,
+    observer: Option<std::sync::Weak<crate::observer::Pool>>,
 }
 
 impl EventLog {
@@ -219,15 +223,39 @@ impl EventLog {
             audit_mode,
             buffer: Mutex::new(Buffer::default()),
             changed: Notify::new(),
+            observer: output
+                .as_ref()
+                .and_then(|output| output.observer())
+                .map(|pool| Arc::downgrade(&pool)),
             archive: Mutex::new(output.map(|store| store.capture(format!("events:{label}:jsonl")))),
         })
     }
 
+    pub(crate) fn map_background(&self, path: &std::path::Path) {
+        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+            pool.map_background(path);
+        }
+    }
     pub fn push(&self, event: Value) {
         let mut event = self.audit_mode.event(event);
+        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+            pool.native_event(&self.label, &event);
+        }
         // Serialise persistence, display and sequence assignment for this stream.
         let mut archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
-        crate::client::render::event(&self.label, &event);
+        let external_output = self
+            .observer
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some()
+            && (event["method"] == "command/exec/outputDelta"
+                || matches!(
+                    event["type"].as_str(),
+                    Some("background_output" | "bash_execution_update")
+                ));
+        if !external_output {
+            crate::client::render::event(&self.label, &event);
+        }
         // Codex command streaming carries bytes as base64. Keep the original event
         // and add readable text so both the local transcript and MCP consumers can inspect it.
         if event["method"] == "command/exec/outputDelta"
@@ -237,22 +265,45 @@ impl EventLog {
             event["ssmcp_output_text"] = json!(String::from_utf8_lossy(&bytes));
         }
         let encoded = event.to_string();
+        drop(event);
         if let Some(capture) = archive.as_mut() {
             let _ = capture.push(encoded.as_bytes());
             let _ = capture.push(b"\n");
         }
         let artifact = archive.as_ref().and_then(|capture| capture.metadata());
 
-        if encoded.len() > MAX_EVENT {
+        let encoded = if encoded.len() > MAX_EVENT {
             let mut end = MAX_EVENT / 2;
-            while !encoded.is_char_boundary(end) {
-                end -= 1;
+            loop {
+                while !encoded.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let preview = json!({"type":"ssmcp.event_truncated", "original_bytes":encoded.len(), "preview":&encoded[..end], "artifact":artifact, "format":"jsonl"}).to_string();
+                // Escaping the JSON preview can double its byte length.
+                if preview.len() <= MAX_EVENT {
+                    break preview;
+                }
+                if end == 0 {
+                    // The page also exposes full archive metadata. Keep its ID
+                    // usable even if a provider supplied an unusually long label.
+                    break json!({"type":"ssmcp.event_truncated", "original_bytes":encoded.len(), "preview":"", "artifact":artifact.as_ref().map(|value| json!({"id":value.id})), "format":"jsonl"}).to_string();
+                }
+                end /= 2;
             }
-            event = json!({"type":"ssmcp.event_truncated", "original_bytes":encoded.len(), "preview":&encoded[..end], "artifact":artifact, "format":"jsonl"});
-        }
-        let bytes = event.to_string().len();
+        } else {
+            encoded
+        };
+        let bytes = encoded.len();
+        let event = RawValue::from_string(encoded).expect("serialized event is valid JSON");
         let mut buffer = self.buffer.lock().unwrap();
-        while buffer.bytes + bytes > CAPACITY {
+        if (buffer.bytes + bytes > CAPACITY || buffer.entries.len() >= MAX_RETAINED_EVENTS)
+            && let Some(capture) = archive.as_mut()
+            && !capture.is_spilled()
+        {
+            // Preserve recovery even with a custom large inline-output policy.
+            let _ = capture.spill();
+        }
+        while buffer.bytes + bytes > CAPACITY || buffer.entries.len() >= MAX_RETAINED_EVENTS {
             let Some((_, _, size)) = buffer.entries.pop_front() else {
                 break;
             };
@@ -326,11 +377,14 @@ impl EventLog {
                         next = cursor + 1;
                     }
                     let closed = buffer.closed;
+                    // A consumer can freeze this boundary instead of following
+                    // producers (including its own audit reads) indefinitely.
+                    let end = buffer.next;
                     drop(buffer);
                     let archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
                     let artifact = archive.as_ref().and_then(|capture| capture.metadata());
                     return Ok(
-                        json!({"events":events,"next_cursor":next,"start_cursor":start,"truncated":args.cursor < start,"closed":closed,"artifact":artifact,"archive_format":"jsonl","archive_error":archive.as_ref().and_then(|capture|capture.error())}),
+                        json!({"events":events,"next_cursor":next,"start_cursor":start,"end_cursor":end,"truncated":args.cursor < start,"closed":closed,"artifact":artifact,"archive_format":"jsonl","archive_error":archive.as_ref().and_then(|capture|capture.error())}),
                     );
                 }
             }
@@ -433,6 +487,119 @@ mod tests {
             AuditMode::default().event(json!({"type":"stderr","text":MARKER}))["text"],
             MARKER
         );
+    }
+
+    #[tokio::test]
+    async fn evicted_events_are_recoverable_from_the_complete_archive() {
+        let output = crate::output::OutputStore::new_connection().unwrap();
+        let log = EventLog::with_output("bounded-events-fixture", output.clone());
+        let values: Vec<_> = (0..3)
+            .map(|index| json!({"index":index,"payload":"x".repeat(CAPACITY / 2 - 128)}))
+            .collect();
+        for value in &values {
+            log.push(value.clone());
+        }
+        log.close();
+        let page = log.read(json!({"max_events":256})).await.unwrap();
+        assert_eq!(page["truncated"], true);
+        assert_eq!(page["start_cursor"], 1);
+        assert_eq!(page["next_cursor"], 3);
+        assert_eq!(page["events"][0]["event"], values[1]);
+        assert_eq!(page["events"][1]["event"], values[2]);
+        assert!(log.buffer.lock().unwrap().bytes <= CAPACITY);
+
+        let mut offset = 0;
+        let mut archived = String::new();
+        loop {
+            let chunk = output
+                .perform(
+                    "ssmcp.output.read",
+                    json!({"id":page["artifact"]["id"],"offset":offset,"max_bytes":16384}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(chunk["complete"], true);
+            archived.push_str(chunk["text"].as_str().unwrap());
+            if chunk["eof"] == true {
+                break;
+            }
+            offset = chunk["next_offset"].as_u64().unwrap();
+        }
+        let recovered: Vec<Value> = archived
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(recovered, values);
+    }
+
+    #[tokio::test]
+    async fn tiny_events_have_a_count_bound_and_escaped_previews_fit_the_byte_bound() {
+        let log = EventLog::create("event-bounds-fixture", None, AuditMode::default());
+        for index in 0..=MAX_RETAINED_EVENTS {
+            log.push(json!({"index":index}));
+        }
+        assert_eq!(
+            log.buffer.lock().unwrap().entries.len(),
+            MAX_RETAINED_EVENTS
+        );
+        let page = log.read(json!({"max_events":1})).await.unwrap();
+        assert_eq!(page["truncated"], true);
+        assert_eq!(page["start_cursor"], 1);
+        assert_eq!(page["events"][0]["event"]["index"], 1);
+
+        log.push(json!({"payload":"\\\\".repeat(MAX_EVENT)}));
+        let page = log
+            .read(json!({"cursor":MAX_RETAINED_EVENTS + 1,"max_events":1}))
+            .await
+            .unwrap();
+        assert_eq!(page["events"][0]["event"]["type"], "ssmcp.event_truncated");
+        assert!(log.buffer.lock().unwrap().bytes <= CAPACITY);
+        log.close();
+    }
+
+    #[tokio::test]
+    async fn snapshot_boundary_stays_usable_when_the_stream_grows() {
+        let log = EventLog::create("event-snapshot-fixture", None, AuditMode::default());
+        for index in 0..5 {
+            log.push(json!({"index":index}));
+        }
+        let first = log.read(json!({"max_events":2})).await.unwrap();
+        assert_eq!(first["next_cursor"], 2);
+        assert_eq!(first["end_cursor"], 5);
+
+        // A producer may append between pages, as code-mode audit polling does.
+        let producer = log.clone();
+        tokio::spawn(async move {
+            for index in 5..9 {
+                producer.push(json!({"index":index}));
+            }
+        })
+        .await
+        .unwrap();
+        let end = first["end_cursor"].as_u64().unwrap();
+        let next = first["next_cursor"].as_u64().unwrap();
+        let remainder = log
+            .read(json!({"cursor":next,"max_events":end-next}))
+            .await
+            .unwrap();
+        assert_eq!(remainder["end_cursor"], 9);
+        assert_eq!(remainder["next_cursor"], end);
+        assert_eq!(
+            remainder["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["cursor"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
+        let later = log.read(json!({"cursor":end})).await.unwrap();
+        assert_eq!(later["events"][0]["cursor"], 5);
+        assert_eq!(later["next_cursor"], 9);
+        assert_eq!(later["end_cursor"], 9);
+        let empty = log.read(json!({"cursor":9})).await.unwrap();
+        assert_eq!(empty["events"], json!([]));
+        assert_eq!(empty["end_cursor"], 9);
     }
 
     #[tokio::test]

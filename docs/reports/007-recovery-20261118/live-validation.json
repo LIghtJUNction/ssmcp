@@ -1,0 +1,48 @@
+{
+  "environment": "Developer Linux machine, real configured HTTPS broker; existing control sessions retained.",
+  "binary_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+  "resident": {
+    "name": "007-light",
+    "pid": 1073481,
+    "unit": "ssmcp-007.service",
+    "connection_state": "connected",
+    "client_id": "66d1983f734aaf716b0fd1e320af89338cbaba3225579dd9e85bdc0d42edb691",
+    "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/ssmcp-007.service"
+  },
+  "acceptance_session": {
+    "name": "007-acceptance-20261118",
+    "connection_state": "connected",
+    "client_id": "6b73b08f65d34529f6516b2d372e45dcc811b5bff42c705d58614168022d6b2a",
+    "pid": 1098618,
+    "manager": "systemd-user",
+    "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/ssmcp-session-5b45d826e109b02d70b172e6b366bf6d82347d40b7b91902df34df91f6cd793c.service"
+  },
+  "command": {
+    "argv": [
+      "python3",
+      "-c",
+      "print(\"007 wake ok\")"
+    ],
+    "exit_code": 0,
+    "stdout": "007 wake ok\n"
+  },
+  "cleanup": {
+    "remove_result": {
+      "connection_state": "disconnected",
+      "manager_state": "removed",
+      "name": "007-acceptance-20261118",
+      "removed": true
+    },
+    "remaining_007_sessions": 0
+  },
+  "checks": {
+    "real_broker_connection": true,
+    "five_management_tools_registered": true,
+    "real_full_session_woken": true,
+    "real_command_completed": true,
+    "independent_systemd_cgroups": true,
+    "acceptance_session_removed": true
+  },
+  "recorded_at_utc": "2026-11-17T21:39:01.763836+00:00",
+  "observed_window_utc": "2026-11-17 21:34–21:38 UTC"
+}

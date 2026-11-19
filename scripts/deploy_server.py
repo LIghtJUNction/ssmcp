@@ -58,6 +58,25 @@ def wait_health(base):
     raise RuntimeError('health check failed')
 
 
+def stage_service_command(stage_unit, state_name, binary, config):
+    state = Path('/var/lib') / state_name
+    return ['systemd-run', '--quiet', '--collect', '--unit='+stage_unit,
+        '--uid=ssmcpd', '--gid=ssmcp',
+        '--property=StateDirectory='+state_name, '--property=StateDirectoryMode=0700',
+        '--property=RuntimeDirectory='+state_name, '--property=RuntimeDirectoryMode=0750',
+        '--property=NoNewPrivileges=yes', '--property=ProtectSystem=strict',
+        '--property=ProtectHome=yes', '--property=PrivateTmp=yes',
+        '--property=PrivateDevices=yes', '--property=ProtectKernelTunables=yes',
+        '--property=ProtectControlGroups=yes', '--property=ReadWritePaths=/proc/sys/user',
+        '--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK',
+        '--property=UMask=0077', '--property=TimeoutStopSec=15',
+        '--property=ExecStartPre='+str(binary)+' check-runtime',
+        '--setenv=PATH=/usr/bin:/bin', str(binary), 'serve',
+        '--config', str(config), '--listen', '127.0.0.1:18087',
+        '--socket', '/run/'+state_name+'/control.sock',
+        '--client-registry', str(state/'oauth-clients.toml')]
+
+
 def registration(base,issuer):
     status,body=request(base,'/oauth/register',{'client_name':'ssmcp deployment restart check',
         'redirect_uris':['https://client.example/ssmcp-deploy-callback'],
@@ -158,7 +177,6 @@ def main():
         stage_unit='ssmcp-stage-'+args.commit[:8]
         state_name='ssmcp-stage-'+args.commit[:8]
         state=Path('/var/lib')/state_name
-        sock='/run/'+state_name+'/control.sock'
         receipt=checkpoint/'prepared.json'
         stage_base='http://127.0.0.1:18087'
         if args.phase=='stage':
@@ -171,14 +189,7 @@ def main():
             for directory in ['usr','usr/bin','usr/libexec','usr/libexec/ssmcp']:
                 (stage_root/directory).chmod(0o755)
             check('staged_binary_version',run([str(stage_root/'usr/bin/ssmcpd'),'--version'])==expected_binary)
-            command=['systemd-run','--quiet','--collect','--unit='+stage_unit,'--uid=ssmcpd','--gid=ssmcp',
-                '--property=StateDirectory='+state_name,'--property=StateDirectoryMode=0700',
-                '--property=RuntimeDirectory='+state_name,'--property=RuntimeDirectoryMode=0750',
-                '--property=NoNewPrivileges=yes','--property=ProtectSystem=strict','--property=ProtectHome=yes',
-                '--property=PrivateTmp=yes','--property=UMask=0077','--property=TimeoutStopSec=15',
-                '--setenv=PATH=/usr/bin:/bin',str(stage_root/'usr/bin/ssmcpd'),'serve',
-                '--config',str(args.config),'--listen','127.0.0.1:18087','--socket',sock,
-                '--client-registry',str(state/'oauth-clients.toml')]
+            command=stage_service_command(stage_unit,state_name,stage_root/'usr/bin/ssmcpd',args.config)
             # A staged portal uses a fresh store, never the production account data.
             if config.get('portal',{}).get('state_dir'):
                 command += ['--portal-state-dir',str(state/'portal')]
@@ -193,6 +204,7 @@ def main():
             try:
                 check('stage_unit_unused',run(['systemctl','show',stage_unit,'-p','LoadState','--value'])=='not-found')
                 run(command);owned=True;wait_health(stage_base)
+                check('staged_runtime_preflight')
                 metadata(stage_base,issuer);check('staged_health_and_discovery')
                 url=registration(stage_base,issuer)
                 check('staged_authorization_before_restart',request(stage_base,url)[0]==200)
@@ -228,8 +240,6 @@ def main():
             check('checkpoint_created')
             portal_active=run(['systemctl','show','ssmcp-portal.service','-p','ActiveState','--value'])=='active'
             try:
-                if portal_active:
-                    run(['systemctl','stop','ssmcp-portal.service'],timeout=45)
                 run(['pacman','-U','--noconfirm',str(args.package)],timeout=120)
                 check('installed_version',run(['/usr/bin/ssmcpd','--version'])==expected_binary)
                 if args.proxy_config:
@@ -249,11 +259,10 @@ def main():
                 run(['systemctl','restart','ssmcpd.service'],timeout=45)
                 wait_health('http://127.0.0.1:8080')
                 check('production_DCR_survives_restart',request('http://127.0.0.1:8080',url)[0]==200)
-                # The account portal and client relay now share one gateway.
-                for unit in ('ssmcp-portal.service', 'ssmcp-portal-ssh.timer', 'ssmcp-portal-ssh.service'):
-                    if run(['systemctl','show',unit,'-p','LoadState','--value']) not in ('not-found',''):
-                        run(['systemctl','disable','--now',unit])
-                check('unified_portal', request('http://127.0.0.1:8080','/')[0]==200)
+                if portal_active:
+                    run(['systemctl','restart','ssmcp-portal.service'],timeout=45)
+                    wait_health('http://127.0.0.1:8086')
+                    check('portal_remains_healthy')
                 wait_health(issuer);metadata(issuer,issuer)
                 check('public_health_discovery_and_auth_rejection')
                 check('public_homepage',request(issuer,'/')[0]==200)

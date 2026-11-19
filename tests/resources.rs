@@ -7,6 +7,7 @@ use ssmcp::{
     wire::{self, ClientMetadata, Frame, Mode, Operation},
 };
 use std::{
+    collections::BTreeSet,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -21,6 +22,34 @@ use tokio::{
 };
 
 type NativeReply = Result<Value, String>;
+
+const CLIENT_RESOURCE_KINDS: [&str; 9] = [
+    "info",
+    "tools",
+    "capabilities",
+    "resources",
+    "resource-templates",
+    "context",
+    "skills",
+    "skills/view",
+    "agents",
+];
+
+fn client_resource_uris(id: &str) -> BTreeSet<String> {
+    CLIENT_RESOURCE_KINDS
+        .iter()
+        .map(|kind| format!("ssmcp://clients/{id}/{kind}"))
+        .collect()
+}
+
+fn resource_uris(body: &Value) -> BTreeSet<String> {
+    body["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|resource| resource["uri"].as_str().unwrap().to_owned())
+        .collect()
+}
 
 struct Client {
     access_token: String,
@@ -64,6 +93,14 @@ impl Server {
     }
 
     async fn attach(&mut self, mode: Mode) -> String {
+        self.attach_with_context(mode, None).await
+    }
+
+    async fn attach_with_context(
+        &mut self,
+        mode: Mode,
+        context: Option<ssmcp::context::Context>,
+    ) -> String {
         let (server, client) = UnixStream::pair().unwrap();
         let attachment = tokio::spawn(self.broker.clone().attach(server));
         let (reader, mut writer) = client.into_split();
@@ -107,9 +144,12 @@ impl Server {
         let native_gate = Arc::new(Notify::new());
         let recorded_native_gate = native_gate.clone();
         let task = tokio::spawn(async move {
-            while let Some(Frame::Call { id, operation, .. }) =
-                wire::read_frame(&mut reader).await.unwrap()
-            {
+            while let Some(frame) = wire::read_frame(&mut reader).await.unwrap() {
+                let (id, operation) = match frame {
+                    Frame::Call { id, operation, .. } => (id, operation),
+                    Frame::CodeModeFinished { .. } => continue,
+                    _ => panic!("unexpected fixture frame"),
+                };
                 let result = match operation {
                     Operation::ListTools { cursor: None } => Ok(json!({
                         "tools":[{
@@ -143,7 +183,12 @@ impl Server {
                     Operation::CallTool { name, arguments }
                         if matches!(
                             name.as_str(),
-                            "ssmcp.context.roots" | "ssmcp.skills.list" | "ssmcp.agents.resolve"
+                            "ssmcp.context.roots"
+                                | "ssmcp.skills.list"
+                                | "ssmcp.skills.view"
+                                | "ssmcp.skills.read"
+                                | "ssmcp.agents.resolve"
+                                | "ssmcp.agents.read"
                         ) =>
                     {
                         recorded_calls.fetch_add(1, Ordering::Release);
@@ -157,6 +202,11 @@ impl Server {
                         let override_reply = recorded_native_reply.lock().unwrap().take();
                         if let Some(reply) = override_reply {
                             reply
+                        } else if let Some(context) = &context {
+                            context
+                                .perform(&name, arguments)
+                                .await
+                                .map(|view| json!({"structuredContent":view,"isError":false}))
                         } else {
                             let root = arguments.get("root").cloned().unwrap_or(json!("workspace"));
                             let root_info =
@@ -181,6 +231,21 @@ impl Server {
                                         panic!("unexpected fixture skill cursor: {arguments}");
                                     }
                                 }
+                                "ssmcp.skills.view" => json!({
+                                    "root":root_info,
+                                    "scope":arguments.get("scope").cloned().unwrap_or(json!("effective")),
+                                    "markdown":"# Skills\n\n- first skill: current description\n",
+                                    "next_cursor":if arguments.get("cursor").is_none() { json!("skills /+=?&:界") } else { Value::Null }
+                                }),
+                                "ssmcp.skills.read" | "ssmcp.agents.read" => json!({
+                                    "root":root_info,
+                                    "path":arguments["path"],
+                                    "content":if name == "ssmcp.skills.read" {
+                                        "---\nname: first skill\ndescription: current description\n---\nExact skill body.\n"
+                                    } else {
+                                        "# Rules\nKeep the workspace scoped.\n"
+                                    }
+                                }),
                                 "ssmcp.agents.resolve" => json!({
                                     "root":root_info,
                                     "target":arguments["path"],
@@ -382,7 +447,7 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["list", "code_mode"]);
+        assert_eq!(names, ["list", "code_mode", "collab", "invite"]);
         let method = if modern {
             "server/discover"
         } else {
@@ -411,25 +476,46 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
         let (status, body) = server.rpc("resources/list", json!({}), modern, 0).await;
         assert_eq!(status, 200, "{body}");
         let resources = body["result"]["resources"].as_array().unwrap();
-        assert_eq!(resources.len(), 9);
-        for kind in ["info", "tools", "context", "skills", "agents"] {
-            assert!(
-                resources
-                    .iter()
-                    .any(|resource| resource["uri"] == format!("ssmcp://clients/{id}/{kind}"))
-            );
-        }
-        assert!(resources.iter().any(|r| r["uri"] == "ssmcp://skill"));
+        assert_eq!(resources.len(), 14);
+        let expected = [
+            "ssmcp://guide",
+            "ssmcp://limits",
+            "ssmcp://collaboration",
+            "ssmcp://skill",
+            "ssmcp://clients",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain(client_resource_uris(&id))
+        .collect::<BTreeSet<_>>();
+        assert_eq!(resource_uris(&body), expected);
         let (_, body) = server
             .rpc("resources/templates/list", json!({}), modern, 0)
             .await;
-        assert_eq!(
-            body["result"]["resourceTemplates"]
-                .as_array()
-                .unwrap()
-                .len(),
-            6
-        );
+        let templates = body["result"]["resourceTemplates"].as_array().unwrap();
+        assert_eq!(templates.len(), 13);
+        let actual = templates
+            .iter()
+            .map(|template| template["uriTemplate"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "ssmcp://clients/{client_id}/capabilities",
+            "ssmcp://clients/{client_id}/resources{?cursor}",
+            "ssmcp://clients/{client_id}/resource-templates{?cursor}",
+            "ssmcp://clients/{client_id}/resource{?uri}",
+            "ssmcp://clients{?cursor}",
+            "ssmcp://clients/{client_id}/info",
+            "ssmcp://clients/{client_id}/tools{?cursor}",
+            "ssmcp://clients/{client_id}/context",
+            "ssmcp://clients/{client_id}/skills{?root,scope,cursor}",
+            "ssmcp://clients/{client_id}/skills/view{?root,scope,cursor}",
+            "ssmcp://clients/{client_id}/skills/read{?root,path}",
+            "ssmcp://clients/{client_id}/agents/read{?root,path}",
+            "ssmcp://clients/{client_id}/agents{?root,path}",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected);
 
         let (_, body) = server
             .rpc(
@@ -457,7 +543,7 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
         let page = data(&body);
         assert_eq!(page["tools"][0]["name"], "fixture.second");
         assert!(page.get("nextUri").is_none());
-        for uri in ["ssmcp://guide", "ssmcp://skill"] {
+        for uri in ["ssmcp://guide", "ssmcp://skill", "ssmcp://collaboration"] {
             let (status, body) = server
                 .rpc("resources/read", json!({"uri":uri}), modern, 0)
                 .await;
@@ -473,7 +559,10 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
         let (_, body) = server
             .rpc("resources/read", json!({"uri":"ssmcp://limits"}), modern, 0)
             .await;
-        assert_eq!(data(&body)["public_tools"], json!(["list", "code_mode"]));
+        assert_eq!(
+            data(&body)["public_tools"],
+            json!(["list", "code_mode", "collab", "invite"])
+        );
         assert_eq!(server.clients[0].calls.load(Ordering::Acquire), 0);
     }
 }
@@ -487,7 +576,17 @@ async fn snapshots_change_with_connections_and_offline_resource_ids_are_denied()
     let (_, after) = server.rpc("resources/list", json!({}), false, 0).await;
     assert_eq!(
         after["result"]["resources"].as_array().unwrap().len(),
-        before["result"]["resources"].as_array().unwrap().len() + 5
+        before["result"]["resources"].as_array().unwrap().len() + 9
+    );
+    let before_uris = resource_uris(&before);
+    let after_uris = resource_uris(&after);
+    assert!(before_uris.is_subset(&after_uris));
+    assert_eq!(
+        after_uris
+            .difference(&before_uris)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        client_resource_uris(&sibling)
     );
     let uri = format!("ssmcp://clients/{sibling}/info");
     let (_, info) = server
@@ -496,7 +595,11 @@ async fn snapshots_change_with_connections_and_offline_resource_ids_are_denied()
     assert_eq!(data(&info)["type"], "pi");
     server.disconnect(1).await;
     for modern in [false, true] {
-        for kind in ["info", "tools", "context", "skills", "agents"] {
+        for kind in
+            CLIENT_RESOURCE_KINDS
+                .into_iter()
+                .chain(["resource", "skills/read", "agents/read"])
+        {
             let uri = format!("ssmcp://clients/{sibling}/{kind}");
             let (status, body) = server
                 .rpc("resources/read", json!({"uri":uri}), modern, 0)
@@ -504,6 +607,12 @@ async fn snapshots_change_with_connections_and_offline_resource_ids_are_denied()
             assert_eq!(body["error"]["code"], -32002, "{body}");
             assert_eq!(status, if modern { 404 } else { 200 });
         }
+        let (_, remaining) = server.rpc("resources/list", json!({}), modern, 0).await;
+        assert_eq!(
+            remaining["result"]["resources"].as_array().unwrap().len(),
+            14
+        );
+        assert_eq!(resource_uris(&remaining), before_uris);
     }
     let (_, inventory) = server
         .rpc("resources/read", json!({"uri":"ssmcp://clients"}), false, 0)
@@ -575,6 +684,22 @@ async fn malformed_uris_cursors_and_resource_parameters_do_not_execute_native_wo
         (
             "resources/read",
             json!({"uri":format!("ssmcp://clients/{id}/skills?path=.")}),
+        ),
+        (
+            "resources/read",
+            json!({"uri":format!("ssmcp://clients/{id}/skills?scope=unknown")}),
+        ),
+        (
+            "resources/read",
+            json!({"uri":format!("ssmcp://clients/{id}/skills/view?scope=effective&scope=root")}),
+        ),
+        (
+            "resources/read",
+            json!({"uri":format!("ssmcp://clients/{id}/skills/read")}),
+        ),
+        (
+            "resources/read",
+            json!({"uri":format!("ssmcp://clients/{id}/agents/read?root=workspace")}),
         ),
         (
             "resources/read",
@@ -817,4 +942,362 @@ async fn native_views_recheck_authorization_and_target_after_await() {
             assert_eq!(data(&body)["files"][0]["path"], "AGENTS.md");
         }
     }
+}
+
+#[tokio::test]
+async fn skill_views_preserve_scope_and_pagination_and_content_reads_are_exact() {
+    let mut server = Server::start().await;
+    let id = server.attach(Mode::Shell).await;
+    for modern in [false, true] {
+        for scope in ["root", "effective"] {
+            let uri = format!("ssmcp://clients/{id}/skills/view?scope={scope}");
+            let (status, body) = server
+                .rpc("resources/read", json!({"uri":uri}), modern, 0)
+                .await;
+            assert_eq!(status, 200, "{body}");
+            let item = &body["result"]["contents"][0];
+            assert_eq!(item["mimeType"], "text/markdown");
+            let markdown = item["text"].as_str().unwrap();
+            assert!(markdown.contains("# Skills"));
+            let next_uri = markdown
+                .split_once("[Next skill page](")
+                .unwrap()
+                .1
+                .split_once(')')
+                .unwrap()
+                .0;
+            assert!(next_uri.contains(&format!("scope={scope}")));
+            assert!(next_uri.contains("%26"));
+            let (_, next) = server
+                .rpc("resources/read", json!({"uri":next_uri}), modern, 0)
+                .await;
+            assert!(
+                !next["result"]["contents"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Next skill page")
+            );
+            let calls = server.clients[0].native_calls.lock().unwrap();
+            assert_eq!(
+                calls[calls.len() - 2],
+                ("ssmcp.skills.view".to_owned(), json!({"scope":scope}))
+            );
+            assert_eq!(
+                calls[calls.len() - 1],
+                (
+                    "ssmcp.skills.view".to_owned(),
+                    json!({"scope":scope,"cursor":"skills /+=?&:界"})
+                )
+            );
+        }
+        for (kind, path, expected) in [
+            (
+                "skills",
+                "skills/first/SKILL.md",
+                "---\nname: first skill\ndescription: current description\n---\nExact skill body.\n",
+            ),
+            (
+                "agents",
+                "AGENTS.md",
+                "# Rules\nKeep the workspace scoped.\n",
+            ),
+        ] {
+            let query =
+                serde_urlencoded::to_string([("root", "workspace"), ("path", path)]).unwrap();
+            let uri = format!("ssmcp://clients/{id}/{kind}/read?{query}");
+            let (_, body) = server
+                .rpc("resources/read", json!({"uri":uri}), modern, 0)
+                .await;
+            assert_eq!(body["result"]["contents"][0]["mimeType"], "text/markdown");
+            assert_eq!(body["result"]["contents"][0]["text"], expected);
+        }
+        for kind in ["skills", "agents"] {
+            let (_, body) = server
+                .rpc(
+                    "resources/read",
+                    json!({"uri":format!("ssmcp://clients/{id}/{kind}")}),
+                    modern,
+                    0,
+                )
+                .await;
+            let value = data(&body);
+            let entry = if kind == "skills" {
+                &value["skills"][0]
+            } else {
+                &value["files"][0]
+            };
+            let read_uri = entry["readUri"].as_str().unwrap();
+            let (_, read) = server
+                .rpc("resources/read", json!({"uri":read_uri}), modern, 0)
+                .await;
+            assert!(read.get("result").is_some(), "{read}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn default_skill_views_require_effective_scope_and_never_fall_back_on_old_clients() {
+    let mut server = Server::start().await;
+    let id = server.attach(Mode::Shell).await;
+    for modern in [false, true] {
+        for (query, expected) in [
+            ("", json!({"scope":"effective"})),
+            ("?cursor=next", json!({"scope":"effective","cursor":"next"})),
+            ("?root=workspace", json!({"root":"workspace"})),
+            (
+                "?root=context-1&cursor=next",
+                json!({"root":"context-1","cursor":"next"}),
+            ),
+            ("?scope=root", json!({"scope":"root"})),
+            ("?scope=effective", json!({"scope":"effective"})),
+        ] {
+            let uri = format!("ssmcp://clients/{id}/skills/view{query}");
+            let before = server.clients[0].calls.load(Ordering::Acquire);
+            let (_, body) = server
+                .rpc("resources/read", json!({"uri":uri}), modern, 0)
+                .await;
+            assert!(body.get("result").is_some(), "{body}");
+            assert_eq!(server.clients[0].calls.load(Ordering::Acquire), before + 1);
+            assert_eq!(
+                server.clients[0].native_calls.lock().unwrap().last(),
+                Some(&("ssmcp.skills.view".to_owned(), expected)),
+            );
+        }
+        for old_reply in [
+            Err("invalid context arguments: unknown field scope".into()),
+            Ok(json!({"isError":true,"content":[
+                {"type":"text","text":"invalid context arguments: unknown field scope"}
+            ]})),
+        ] {
+            *server.clients[0].native_reply.lock().unwrap() = Some(old_reply);
+            let before = server.clients[0].calls.load(Ordering::Acquire);
+            let (_, body) = server
+                .rpc(
+                    "resources/read",
+                    json!({"uri":format!("ssmcp://clients/{id}/skills/view")}),
+                    modern,
+                    0,
+                )
+                .await;
+            assert_eq!(body["error"]["code"], -32603, "{body}");
+            assert!(body.get("result").is_none());
+            assert_eq!(server.clients[0].calls.load(Ordering::Acquire), before + 1);
+            assert_eq!(
+                server.clients[0].native_calls.lock().unwrap().last(),
+                Some(&("ssmcp.skills.view".to_owned(), json!({"scope":"effective"}))),
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn resources_read_live_project_files_and_explicit_global_overlay_without_restart() {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    struct Directory(PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = Directory(std::env::temp_dir().join(format!(
+        "ssmcp-live-resource-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
+    )));
+    let project = directory.0.join("project");
+    let global = directory.0.join("global");
+    for path in [
+        project.join("skills/shared"),
+        global.join("skills/shared"),
+        global.join("skills/global-only"),
+    ] {
+        fs::create_dir_all(path).unwrap();
+    }
+    fs::write(
+        project.join("AGENTS.md"),
+        "# Project instructions\nfirst revision\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("skills/shared/SKILL.md"),
+        "---\nname: shared\ndescription: Project description\n---\nProject body\n",
+    )
+    .unwrap();
+    fs::write(
+        global.join("skills/shared/SKILL.md"),
+        "---\nname: shared\ndescription: Global duplicate\n---\nGlobal body\n",
+    )
+    .unwrap();
+    let global_skill_path = format!(
+        "skills/{}/{}/global +&?=/SKILL.md",
+        "目录".repeat(30),
+        "说明".repeat(30),
+    );
+    fs::create_dir_all(global.join(&global_skill_path).parent().unwrap()).unwrap();
+    fs::write(
+        global.join(&global_skill_path),
+        "---\nname: global-only\ndescription: Available globally\n---\nGlobal-only body\n",
+    )
+    .unwrap();
+    let context = ssmcp::context::Context::new(project.clone(), vec![global.clone()]).unwrap();
+    let mut server = Server::start().await;
+    let id = server.attach_with_context(Mode::Shell, Some(context)).await;
+    for modern in [false, true] {
+        let (_, instructions) = server
+            .rpc(
+                "resources/read",
+                json!({"uri":format!("ssmcp://clients/{id}/agents")}),
+                modern,
+                0,
+            )
+            .await;
+        assert_eq!(
+            data(&instructions)["files"][0]["content"],
+            "# Project instructions\nfirst revision\n"
+        );
+        let uri = format!("ssmcp://clients/{id}/skills?scope=effective");
+        let (_, body) = server
+            .rpc("resources/read", json!({"uri":uri}), modern, 0)
+            .await;
+        let value = data(&body);
+        let skills = value["skills"].as_array().unwrap();
+        assert_eq!(skills.len(), 2);
+        let shared = skills.iter().find(|item| item["name"] == "shared").unwrap();
+        assert_eq!(shared["root"]["id"], "workspace");
+        assert_eq!(shared["description"], "Project description");
+        let global_skill = skills
+            .iter()
+            .find(|item| item["name"] == "global-only")
+            .unwrap();
+        assert_eq!(global_skill["root"]["id"], "context-1");
+        assert!(global_skill["readUri"].as_str().unwrap().len() > 1024);
+        assert!(global_skill["readUri"].as_str().unwrap().contains("%26"));
+        for item in [shared, global_skill] {
+            let (_, body) = server
+                .rpc("resources/read", json!({"uri":item["readUri"]}), modern, 0)
+                .await;
+            let text = body["result"]["contents"][0]["text"].as_str().unwrap();
+            assert_eq!(
+                text,
+                fs::read_to_string(
+                    if item["root"]["id"] == "workspace" {
+                        &project
+                    } else {
+                        &global
+                    }
+                    .join(item["path"].as_str().unwrap())
+                )
+                .unwrap()
+            );
+        }
+        let (_, body) = server
+            .rpc(
+                "resources/read",
+                json!({"uri":format!("ssmcp://clients/{id}/skills/view")}),
+                modern,
+                0,
+            )
+            .await;
+        let markdown = body["result"]["contents"][0]["text"].as_str().unwrap();
+        assert!(markdown.contains("Project description"), "{markdown}");
+        assert!(markdown.contains("Available globally"), "{markdown}");
+        assert!(!markdown.contains("Global duplicate"), "{markdown}");
+    }
+
+    // Editing the same files on a live client is visible through the same URIs.
+    fs::write(
+        project.join("AGENTS.md"),
+        "# Project instructions\nsecond revision\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("skills/shared/SKILL.md"),
+        "---\nname: shared\ndescription: Updated description\n---\nUpdated body\n",
+    )
+    .unwrap();
+    for modern in [false, true] {
+        let (_, body) = server
+            .rpc(
+                "resources/read",
+                json!({"uri":format!("ssmcp://clients/{id}/agents")}),
+                modern,
+                0,
+            )
+            .await;
+        let value = data(&body);
+        assert_eq!(
+            value["files"][0]["content"],
+            "# Project instructions\nsecond revision\n"
+        );
+        let (_, raw) = server
+            .rpc(
+                "resources/read",
+                json!({"uri":value["files"][0]["readUri"]}),
+                modern,
+                0,
+            )
+            .await;
+        assert_eq!(
+            raw["result"]["contents"][0]["text"],
+            value["files"][0]["content"]
+        );
+        let (_, body) = server
+            .rpc(
+                "resources/read",
+                json!({"uri":format!("ssmcp://clients/{id}/skills?scope=effective")}),
+                modern,
+                0,
+            )
+            .await;
+        let value = data(&body);
+        let skill = value["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["name"] == "shared")
+            .unwrap();
+        assert_eq!(skill["description"], "Updated description");
+        let (_, raw) = server
+            .rpc("resources/read", json!({"uri":skill["readUri"]}), modern, 0)
+            .await;
+        assert!(
+            raw["result"]["contents"][0]["text"]
+                .as_str()
+                .unwrap()
+                .ends_with("Updated body\n")
+        );
+    }
+
+    fs::remove_file(project.join("AGENTS.md")).unwrap();
+    fs::remove_file(project.join("skills/shared/SKILL.md")).unwrap();
+    let (_, body) = server
+        .rpc(
+            "resources/read",
+            json!({"uri":format!("ssmcp://clients/{id}/agents")}),
+            false,
+            0,
+        )
+        .await;
+    assert!(data(&body)["files"].as_array().unwrap().is_empty());
+    let (_, body) = server
+        .rpc(
+            "resources/read",
+            json!({"uri":format!("ssmcp://clients/{id}/skills?scope=effective")}),
+            false,
+            0,
+        )
+        .await;
+    let value = data(&body);
+    let shared = value["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "shared")
+        .unwrap();
+    assert_eq!(shared["root"]["id"], "context-1");
+    assert_eq!(shared["description"], "Global duplicate");
 }

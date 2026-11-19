@@ -1,0 +1,8 @@
+{
+  "status": "passed",
+  "checks": 37,
+  "transport": "loopback WebSocket",
+  "oauth": "synthetic GitHub provider",
+  "ssh": false,
+  "models_started": false
+}

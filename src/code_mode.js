@@ -143,20 +143,27 @@ function emitImage(encoded) {
   }
   let item;
   try { item = decode(encoded); } catch { return failure('image content must be JSON'); }
-  if (!item || item.type !== 'image' || !['image/png', 'image/jpeg'].includes(item.mimeType)
+  if (!item || item.type !== 'image' || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(item.mimeType)
       || typeof item.data !== 'string' || !item.data
       || item.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4
       || item.data.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(item.data)) {
-    return failure('image requires PNG or JPEG content and canonical base64 data within 400 KiB');
+    return failure('image requires PNG, JPEG, GIF or WebP content and canonical base64 data within 400 KiB');
   }
   const data = Buffer.from(item.data, 'base64');
   if (data.length > MAX_IMAGE_BYTES || data.toString('base64') !== item.data) {
     return failure('image requires canonical base64 data within 400 KiB');
   }
+  // Match output::image_mime_type: check raster headers, not full codec validity.
   const magic = item.mimeType === 'image/png'
     ? data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
-    : data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255;
-  if (!magic) return failure('image bytes do not match their PNG or JPEG MIME type');
+    : item.mimeType === 'image/jpeg'
+      ? data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255
+      : item.mimeType === 'image/gif'
+        ? data.subarray(0, 6).equals(Buffer.from('GIF87a'))
+          || data.subarray(0, 6).equals(Buffer.from('GIF89a'))
+        : data.subarray(0, 4).equals(Buffer.from('RIFF'))
+          && data.subarray(8, 12).equals(Buffer.from('WEBP'));
+  if (!magic) return failure('image bytes do not match their declared raster MIME type');
   if (imageCount >= MAX_IMAGES || imageBytes + item.data.length > MAX_IMAGE_ENCODED_BYTES) {
     return failure('code_mode images exceed 4 images or 2 MiB of encoded data');
   }
@@ -214,6 +221,35 @@ const bootstrap = `(() => {
     }
     return dispatch('call', id, name, args);
   };
+  // Future client tools need no relay helper or provider-name update.
+  // This object only constructs names; the live client registry remains authoritative.
+  const NativeProxy = Proxy;
+  const nativeApi = id => {
+    if (typeof id !== 'string' || !id || id.length > 128) {
+      throw new Failure('native() requires a client ID');
+    }
+    const path = name => new NativeProxy(() => {}, {
+      get: (_target, key) => {
+        if (key === 'then' || key === 'toJSON' || typeof key !== 'string') return undefined;
+        if (!/^[A-Za-z0-9_-]+$/.test(key) || ['constructor','prototype','__proto__'].includes(key)) {
+          throw new Failure('invalid native API component');
+        }
+        const next = name ? name + '.' + key : key;
+        if (next.length > 128) throw new Failure('native tool name exceeds 128 bytes');
+        return path(next);
+      },
+      apply: (_target, _this, args) => {
+        if (!name || args.length > 1) throw new Failure('native calls accept one argument object');
+        return call(id, name, args[0] === undefined ? {} : args[0]);
+      },
+      set: () => false,
+      defineProperty: () => false,
+      deleteProperty: () => false,
+      setPrototypeOf: () => false,
+    });
+    return path('');
+  };
+  const capabilities = id => call(id, 'ssmcp.client.capabilities', {});
   const image = value => {
     if (value?.isError) {
       const detail = value.content?.find(item => item?.type === 'text')?.text;
@@ -229,11 +265,11 @@ const bootstrap = `(() => {
     }
   };
   const browser = freeze(Object.fromEntries(
-    ['discover','status','launch','connect','tabs','open','navigate','snapshot','click','fill','key','scroll','evaluate','screenshot','close','disconnect']
+    ['discover','status','launch','connect','tabs','open','navigate','snapshot','wait_for','click','fill','key','scroll','act','wait','evaluate','screenshot','close','disconnect']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.browser.' + name, args)])
   ));
   const computer = freeze(Object.fromEntries(
-    ['status','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
+    ['status','desktop_start','desktop_status','desktop_stop','app_launch','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.computer.' + name, args)])
   ));
   // CUA reuses native desktop and browser calls, preserving complete MCP results.
@@ -277,15 +313,19 @@ const bootstrap = `(() => {
       throw new Failure('tools.search requires a client ID of at most 128 UTF-8 bytes');
     }
     if (!options || typeof options !== 'object' || isArray(options)
-        || keys(options).some(key => !['query','limit','include_schemas','cursor','max_pages'].includes(key))) {
-      throw new Failure('tools.search accepts query, limit, include_schemas, cursor and max_pages');
+        || keys(options).some(key => !['query','name_prefix','limit','include_schemas','cursor','max_pages'].includes(key))) {
+      throw new Failure('tools.search accepts query, name_prefix, limit, include_schemas, cursor and max_pages');
     }
     const query = options.query === undefined ? '' : options.query;
+    const namePrefix = options.name_prefix === undefined ? '' : options.name_prefix;
     const limit = options.limit === undefined ? 20 : options.limit;
     const includeSchemas = options.include_schemas === undefined ? false : options.include_schemas;
     const maxPages = options.max_pages === undefined ? 32 : options.max_pages;
     if (typeof query !== 'string' || searchUtf8Bytes(query) > 256) {
       throw new Failure('tools.search query must be a string of at most 256 UTF-8 bytes');
+    }
+    if (typeof namePrefix !== 'string' || !/^[A-Za-z0-9_.-]{0,128}$/u.test(namePrefix)) {
+      throw new Failure('tools.search name_prefix must contain at most 128 registered-name characters: A-Z, a-z, 0-9, _, . or -');
     }
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
       throw new Failure('tools.search limit must be 1..=50');
@@ -297,6 +337,7 @@ const bootstrap = `(() => {
       throw new Failure('tools.search max_pages must be 1..=32');
     }
     const needle = query.trim().toLowerCase();
+    const prefix = namePrefix.toLowerCase();
     let cursor = null, offset = 0, expectedPageHash = null, totalScanned = 0;
     let visited = [];
     if (options.cursor !== undefined && options.cursor !== null) {
@@ -306,10 +347,13 @@ const bootstrap = `(() => {
       let state;
       try { state = parse(options.cursor); }
       catch { throw new Failure('invalid tools.search cursor; restart the search'); }
+      const fields = ['v','client','query','limit','include_schemas','page','offset','page_hash','visited','scanned'];
+      if (prefix) fields.push('name_prefix');
       if (!state || typeof state !== 'object' || isArray(state)
-          || keys(state).length !== 10
-          || keys(state).some(key => !['v','client','query','limit','include_schemas','page','offset','page_hash','visited','scanned'].includes(key))
-          || state.v !== 1 || state.client !== id || state.query !== needle
+          || keys(state).length !== fields.length
+          || keys(state).some(key => !fields.includes(key))
+          || state.v !== (prefix ? 2 : 1) || (prefix && state.name_prefix !== prefix)
+          || state.client !== id || state.query !== needle
           || state.limit !== limit || state.include_schemas !== includeSchemas
           || !searchCursorValid(state.page)
           || !Number.isSafeInteger(state.offset) || state.offset < 0 || state.offset > 64
@@ -332,7 +376,8 @@ const bootstrap = `(() => {
     let itemBytes = 2, pagesRead = 0, scanned = 0;
     const result = (complete, reason, pageHash = null) => {
       const continuation = complete ? null : stringify({
-        v:1, client:id, query:needle, limit, include_schemas:includeSchemas,
+        v:prefix ? 2 : 1, ...(prefix ? {name_prefix:prefix} : {}),
+        client:id, query:needle, limit, include_schemas:includeSchemas,
         page:cursor, offset, page_hash:pageHash, visited, scanned:totalScanned,
       });
       if (continuation !== null && searchUtf8Bytes(continuation) > 12 * 1024) {
@@ -341,6 +386,7 @@ const bootstrap = `(() => {
       const value = {
         tools:matches, nextCursor:continuation, complete, stopped_reason:reason,
         include_schemas:includeSchemas, namespace_source:'registered_tool_name',
+        ...(prefix ? {name_prefix:prefix} : {}),
         stats:{pages_read:pagesRead, tools_scanned:scanned, total_tools_scanned:totalScanned},
       };
       if (searchUtf8Bytes(stringify(value)) > 128 * 1024) {
@@ -384,8 +430,9 @@ const bootstrap = `(() => {
           throw new Failure('tools.search received an invalid native tool descriptor');
         }
         const description = typeof descriptor.description === 'string' ? descriptor.description : '';
-        const match = !needle || descriptor.name.toLowerCase().includes(needle)
-          || description.toLowerCase().includes(needle);
+        const name = descriptor.name.toLowerCase();
+        const match = name.startsWith(prefix)
+          && (!needle || name.includes(needle) || description.toLowerCase().includes(needle));
         if (match) {
           const parts = descriptor.name.split('.');
           // This is the observed routing namespace, not an invented provider ID.
@@ -423,6 +470,19 @@ const bootstrap = `(() => {
   freeze(tools);
 
   const builtin = (name, args = {}) => dispatch('builtin', '_', name, args);
+  const collab = freeze(Object.fromEntries(
+    ['join', 'list', 'update', 'send', 'receive', 'ack', 'leave', 'bind'].map(action => [
+      action, (clientId, args = {}) => {
+        if (!args || typeof args !== 'object' || isArray(args)) {
+          throw new Failure('collab arguments must be an object');
+        }
+        if (action === 'receive' && (args.wait_ms ?? 0) > 1000) {
+          throw new Failure('Use the direct collab tool for wait_ms above 1000; it does not occupy a code_mode worker');
+        }
+        return builtin('collab.' + action, {...args, client_id: clientId});
+      }
+    ])
+  ));
   const workspaceResult = async (id, name, args = {}) => {
     const reply = await call(id, name, args);
     if (reply.isError) {
@@ -434,9 +494,24 @@ const bootstrap = `(() => {
   };
   const file = (name, id, args) => workspaceResult(id, 'ssmcp.fs.' + name, args);
   const reload = id => workspaceResult(id, 'ssmcp.client.reload');
+  const say = (id, message) => workspaceResult(id, 'ssmcp.ui.message',
+    typeof message === 'string' ? {text: message} : message);
+  const ui = freeze(Object.fromEntries(
+    ['get', 'set', 'action', 'filter', 'queue', 'message', 'present', 'ask', 'questions', 'history', 'harness'].map(name =>
+      [name, (id, args = {}) => workspaceResult(id, 'ssmcp.ui.' + name, args)])
+  ));
   const sessions = freeze(Object.fromEntries(
     ['list', 'status', 'create', 'restart', 'close'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.session.' + name, args)])
+  ));
+  const history = freeze(Object.fromEntries(
+    ['list', 'metadata', 'read', 'search'].map(action =>
+      [action, (id, args = {}) => {
+        if (!args || typeof args !== 'object' || isArray(args) || Object.hasOwn(args, 'action')) {
+          throw new Failure('history arguments must be an object without an action field');
+        }
+        return workspaceResult(id, 'ssmcp.ui.history', {...args, action});
+      }])
   ));
   const outputs = freeze({
     read: (id, args) => workspaceResult(id, 'ssmcp.output.read', args),
@@ -455,11 +530,23 @@ const bootstrap = `(() => {
   });
   const context = freeze({
     roots: id => workspaceResult(id, 'ssmcp.context.roots'),
+    status: id => workspaceResult(id, 'ssmcp.context.status'),
+    read: (id, args = {}) => workspaceResult(id, 'ssmcp.context.read', args),
+    list: id => workspaceResult(id, 'ssmcp.context.list'),
+    compact: (id, args = {}) => workspaceResult(id, 'ssmcp.context.compact', args),
+    fork: (id, args = {}) => workspaceResult(id, 'ssmcp.context.fork', args),
+    switch: (id, args) => workspaceResult(id, 'ssmcp.context.switch', args),
   });
   const skills = freeze({
     list: (id, args) => workspaceResult(id, 'ssmcp.skills.list', args),
     read: (id, args) => workspaceResult(id, 'ssmcp.skills.read', args),
-    view: (id, args) => workspaceResult(id, 'ssmcp.skills.view', args),
+    view: (id, args = {}) => {
+      if (args && typeof args === 'object' && !isArray(args)
+          && args.root === undefined && args.scope === undefined) {
+        args = {...args, scope:'effective'};
+      }
+      return workspaceResult(id, 'ssmcp.skills.view', args);
+    },
   });
   const agents = freeze({
     list: (id, args) => workspaceResult(id, 'ssmcp.agents.list', args),
@@ -467,17 +554,20 @@ const bootstrap = `(() => {
     resolve: (id, args) => workspaceResult(id, 'ssmcp.agents.resolve', args),
   });
   const execution = (name, id, args) => workspaceResult(id, 'ssmcp.exec.' + name, args);
-  const executeCommand = async (id, args) => {
+  const commandOptions = (args, defaultMaxBytes = 16384) => {
     if (!args || typeof args !== 'object' || isArray(args)) {
       throw new Failure('exec.run requires a command options object');
     }
-    const {wait_ms = 5000, max_bytes = 16384, ...startArgs} = args;
+    const {wait_ms = 5000, max_bytes = defaultMaxBytes, ...startArgs} = args;
     if (!Number.isSafeInteger(wait_ms) || wait_ms < 0 || wait_ms > 60000) {
       throw new Failure('exec.run wait_ms must be 0..=60000; it never cancels the command');
     }
     if (!Number.isSafeInteger(max_bytes) || max_bytes < 1 || max_bytes > 32768) {
       throw new Failure('exec.run max_bytes must be 1..=32768 per stream');
     }
+    return {wait_ms, max_bytes, startArgs};
+  };
+  const executePreparedCommand = async (id, {wait_ms, max_bytes, startArgs}) => {
     const started = await execution('start', id, startArgs);
     const job = started.job_id;
     if (typeof job !== 'string' || !job) {
@@ -495,6 +585,7 @@ const bootstrap = `(() => {
       throw failure;
     }
   };
+  const executeCommand = async (id, args) => executePreparedCommand(id, commandOptions(args));
   const parallelCommands = async (id, commands, options = {}) => {
     if (!isArray(commands) || commands.length > 32) {
       throw new Failure('exec.parallel accepts an array of at most 32 command options objects');
@@ -512,13 +603,19 @@ const bootstrap = `(() => {
     const worker = async () => {
       while (next < commands.length) {
         const index = next++;
+        let prepared;
+        try {
+          prepared = commandOptions(commands[index], 2048);
+        } catch (error) {
+          results[index] = {
+            status:'rejected', not_started:true,
+            reason:(error?.message ?? text(error)).slice(0, 4096),
+          };
+          continue;
+        }
         let job;
         try {
-          const command = commands[index];
-          if (!command || typeof command !== 'object' || isArray(command)) {
-            throw new Failure('each parallel command must be an options object');
-          }
-          let value = await executeCommand(id, {max_bytes:2048, ...command});
+          let value = await executePreparedCommand(id, prepared);
           job = value.job_id;
           // A polling deadline never frees a running process's concurrency slot.
           while (value.running === true) {
@@ -529,7 +626,7 @@ const bootstrap = `(() => {
             value = {...value, ...status, snapshot:status};
             if (!status.running) {
               const output = await execution('read', id, {
-                job_id:job, max_bytes:command.max_bytes ?? 2048,
+                job_id:job, max_bytes:prepared.max_bytes,
               });
               value = {...value, ...output.snapshot, ...output, snapshot:output.snapshot ?? status};
             }
@@ -559,18 +656,87 @@ const bootstrap = `(() => {
     }
     return results;
   };
+  const executionJob = async (name, id, job, args) => {
+    if (typeof job === 'string') {
+      if (args === undefined) args = {};
+      if (!args || typeof args !== 'object' || isArray(args)) {
+        throw new Failure('exec.' + name + ' options must be a JSON object');
+      }
+      args = {...args, job_id:job};
+    } else {
+      if (args !== undefined) {
+        throw new Failure('exec.' + name + ' takes either a job options object or a job ID and options');
+      }
+      args = job;
+    }
+    if (!args || typeof args !== 'object' || isArray(args)
+        || typeof args.job_id !== 'string' || !args.job_id) {
+      throw new Failure('exec.' + name + ' requires a nonempty job ID or an options object with job_id');
+    }
+    return execution(name, id, args);
+  };
   const exec = freeze({
     start: (id, args) => execution('start', id, args),
     list: id => execution('list', id),
-    status: (id, job) => execution('status', id, {job_id:job}),
-    wait: (id, job, args = {}) => execution('wait', id, {...args, job_id:job}),
-    read: (id, job, args = {}) => execution('read', id, {...args, job_id:job}),
-    write: (id, job, args = {}) => execution('write', id, {...args, job_id:job}),
-    cancel: (id, job) => execution('cancel', id, {job_id:job}),
-    forget: (id, job) => execution('forget', id, {job_id:job}),
+    status: (id, job, args) => executionJob('status', id, job, args),
+    wait: (id, job, args) => executionJob('wait', id, job, args),
+    read: (id, job, args) => executionJob('read', id, job, args),
+    write: (id, job, args) => executionJob('write', id, job, args),
+    cancel: (id, job, args) => executionJob('cancel', id, job, args),
+    forget: (id, job, args) => executionJob('forget', id, job, args),
     events: (id, args) => execution('events', id, args),
     run: executeCommand,
     parallel: parallelCommands,
+  });
+  // Explicit RTK argv: the same execution/approval path as exec, never a shell
+  // rewrite, implicit installation or retry without filtering. The output is
+  // RTK's output; its recall/tee hints remain intact for recovery.
+  const rtkCommand = (args, running) => {
+    const allowed = ['command', 'cwd', 'env', 'stdin', 'timeout_ms'];
+    if (running) allowed.push('wait_ms', 'max_bytes');
+    if (!args || typeof args !== 'object' || isArray(args)
+        || keys(args).some(key => !allowed.includes(key))) {
+      throw new Failure('rtk.' + (running ? 'run' : 'start')
+        + ' accepts ' + allowed.join(', '));
+    }
+    const command = args.command;
+    if (!isArray(command) || !command.length || command.length > 255
+        || command.some(arg => typeof arg !== 'string' || arg.includes(String.fromCharCode(0)))
+        || !command[0]) {
+      throw new Failure('rtk command must contain 1..=255 literal argv strings, without the rtk prefix');
+    }
+    return {...args, command:['rtk', ...command]};
+  };
+  const rtkStatus = async (id, args = {}) => {
+    if (!args || typeof args !== 'object' || isArray(args)
+        || keys(args).some(key => !['cwd', 'env'].includes(key))) {
+      throw new Failure('rtk.status accepts cwd and env');
+    }
+    let probe;
+    try {
+      probe = await executeCommand(id, {
+        ...args, command:['rtk', '--version'], timeout_ms:5000, wait_ms:5000, max_bytes:1024,
+      });
+    } catch (error) {
+      // Only a native spawn failure proves RTK cannot run. Authorization and
+      // connection failures must stay errors, with any launched job_id intact.
+      if (!error?.job_id && error?.message?.startsWith('could not start command:')) {
+        return {available:false, version:null, error:error.message};
+      }
+      throw error;
+    }
+    const version = typeof probe.stdout === 'string'
+      ? probe.stdout.trim().split(String.fromCharCode(10))[0] : '';
+    return {
+      ...probe,
+      available:probe.running === true ? null : probe.exit_code === 0 && /^rtk\\s+/.test(version),
+      version:/^rtk\\s+/.test(version) ? version : null,
+    };
+  };
+  const rtk = freeze({
+    status: rtkStatus,
+    start: async (id, args) => execution('start', id, rtkCommand(args, false)),
+    run: async (id, args) => executeCommand(id, rtkCommand(args, true)),
   });
   const terminal = freeze(Object.fromEntries(
     ['open','list','select','close','read','write','status','resize']
@@ -592,6 +758,11 @@ const bootstrap = `(() => {
     list: (cursor = null) => builtin('resources.list', {cursor}),
     read: uri => builtin('resources.read', {uri}),
     templates: () => builtin('resources.templates'),
+    forClient: id => freeze({
+      list: (args = {}) => workspaceResult(id, 'ssmcp.resources.list', args),
+      read: uri => workspaceResult(id, 'ssmcp.resources.read', {uri}),
+      templates: (args = {}) => workspaceResult(id, 'ssmcp.resources.templates', args),
+    }),
   });
   const print = (...args) => {
     const line = args.map(value => typeof value === 'string' ? value : stringify(value) ?? text(value)).join(' ');
@@ -600,6 +771,8 @@ const bootstrap = `(() => {
   Object.defineProperties(globalThis, {
     clients: { value: clients, enumerable: true },
     call: { value: call, enumerable: true },
+    native: { value: nativeApi, enumerable: true },
+    capabilities: { value: capabilities, enumerable: true },
     tools: { value: tools, enumerable: true },
     image: { value: image, enumerable: true },
     browser: { value: browser, enumerable: true },
@@ -607,13 +780,18 @@ const bootstrap = `(() => {
     cua: { value: cua, enumerable: true },
     omarchy: { value: omarchy, enumerable: true },
     reload: { value: reload, enumerable: true },
+    say: { value: say, enumerable: true },
+    ui: { value: ui, enumerable: true },
     sessions: { value: sessions, enumerable: true },
+    history: { value: history, enumerable: true },
+    collab: { value: collab, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
     context: { value: context, enumerable: true },
     skills: { value: skills, enumerable: true },
     agents: { value: agents, enumerable: true },
     exec: { value: exec, enumerable: true },
+    rtk: { value: rtk, enumerable: true },
     terminal: { value: terminal, enumerable: true },
     rsync: { value: rsync, enumerable: true },
     sync: { value: rsync, enumerable: true },

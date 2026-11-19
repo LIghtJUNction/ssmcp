@@ -1,0 +1,276 @@
+{
+  "schema": "ssmcp.iteration-validation.v2",
+  "date": "2026-11-18",
+  "timezone": "Asia/Taipei",
+  "status": "r14_installed_guide_live_additional_requests_in_progress",
+  "source_commit": "aa8b95d66655adfd4d97ac8191e2b935bcd57c44",
+  "previous_validation_at": "https://github.com/LIghtJUNction/ssmcp/blob/aa8b95d66655adfd4d97ac8191e2b935bcd57c44/docs/reports/ssmcp-iteration-20261118-validation.json",
+  "r14": {
+    "source": "aa8b95d66655adfd4d97ac8191e2b935bcd57c44",
+    "steps": [
+      {
+        "label": "fetch",
+        "exit_code": 0,
+        "seconds": 0.035
+      },
+      {
+        "label": "checkout",
+        "exit_code": 0,
+        "seconds": 0.033
+      },
+      {
+        "label": "fmt",
+        "exit_code": 0,
+        "seconds": 1.835
+      },
+      {
+        "label": "build-bins",
+        "exit_code": 0,
+        "seconds": 20.705
+      },
+      {
+        "label": "test-workspace",
+        "exit_code": 0,
+        "seconds": 223.602
+      },
+      {
+        "label": "clippy",
+        "exit_code": 0,
+        "seconds": 41.192
+      },
+      {
+        "label": "code-mode-including-ignored",
+        "exit_code": 0,
+        "seconds": 4.264
+      },
+      {
+        "label": "node-exec",
+        "exit_code": 0,
+        "seconds": 3.474
+      },
+      {
+        "label": "bootstrap",
+        "exit_code": 0,
+        "seconds": 1.465
+      },
+      {
+        "label": "release-tests",
+        "exit_code": 0,
+        "seconds": 1.482
+      },
+      {
+        "label": "package-workspace",
+        "exit_code": 0,
+        "seconds": 5.767
+      },
+      {
+        "label": "release-build",
+        "exit_code": 0,
+        "seconds": 187.513
+      }
+    ],
+    "active": null,
+    "default_rust": {
+      "groups": [
+        {
+          "passed": 1021,
+          "failed": 0,
+          "ignored": 10
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 14,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 9,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 7
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 3
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 1142,
+      "failed": 0,
+      "ignored": 26
+    },
+    "explicit_code_mode": {
+      "passed": 29,
+      "failed": 0,
+      "ignored": 0,
+      "overlaps_default": true
+    },
+    "node": {
+      "passed": 62,
+      "failed": 0
+    },
+    "bootstrap_python": {
+      "passed": 7,
+      "failed": 0
+    },
+    "release_python": {
+      "passed": 58,
+      "failed": 0
+    },
+    "checkpoint_note": "Pinned aa8b95d before the subsequently requested Windows dependencies and lazy harness work."
+  },
+  "r7_pty": {
+    "source_commit": "aa8b95d66655adfd4d97ac8191e2b935bcd57c44",
+    "client_ui": 45,
+    "native_images": 50,
+    "guide": 34,
+    "assertions": 129,
+    "note": "Separate suites, with shared fixture assertions; not a unique-test count."
+  },
+  "release_binaries": {
+    "source": "aa8b95d66655adfd4d97ac8191e2b935bcd57c44",
+    "profile": "release",
+    "binaries": [
+      {
+        "name": "ssmcp",
+        "bytes": 9837544,
+        "sha256": "96982543f6cb430306e6b0fdffc141d0de17b4bb87ec2c08398bb085c6155d04"
+      },
+      {
+        "name": "ssmcpd",
+        "bytes": 5547872,
+        "sha256": "4eb7610f71768fed716397da9e0cbfcb282307c9b2536a31764a71f4f99519c4"
+      }
+    ]
+  },
+  "installation": {
+    "package": "ssmcp-git 0.9.0.r364.gaa8b95d-1",
+    "system_and_cargo_launchers_sha_match": true,
+    "receipt_sha256": "601fde203305bfd65ea350f7abdf56865d86cc7b4ea57c9c2e33d0f9e67c805d",
+    "runtime_note": "Actual foreground executable SHA confirmed. Installing ssmcp does not upgrade the running ztty 0.1.2 terminal."
+  },
+  "production_guide": {
+    "status": "deployed_and_verified",
+    "http_url_count": 6,
+    "http_check_count": 44,
+    "public_report": "ssmcp-iteration-20261118/guide-public-validation.json",
+    "deployment_report": "ssmcp-iteration-20261118/guide-deployment.json",
+    "relay_upgraded": false
+  },
+  "pending_requests": [
+    "Windows native Node.js, Playwright and Chromium dependency bootstrap",
+    "Default native-only startup and on-demand external harness loading"
+  ],
+  "evidence_index": "ssmcp-iteration-20261118/evidence-index.json",
+  "public_crates_published": false,
+  "runtime_platform": "Linux x86_64",
+  "windows_runtime_verified": false
+}

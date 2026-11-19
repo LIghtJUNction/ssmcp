@@ -1,0 +1,131 @@
+{
+  "schema": "ssmcp.client-main-release-build.v1",
+  "status": "passed",
+  "core_gate_equivalence": {
+    "base_commit": "73a775d74661fec26767ccac9d4b6102b0c42843",
+    "current_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+    "changed_paths": [
+      "docs/client-ui.md",
+      "tests/resources.rs"
+    ],
+    "production_inputs_unchanged": true
+  },
+  "source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+  "source_tree": "c7ccc2bb4d9722f52b314f0c0dc650c624cfb074",
+  "integrated_main": "95b5f26125ede8825f12feb79b7f870055d004b5",
+  "started_at": "2026-11-17T23:11:30.957698+00:00",
+  "target_dir": "$TARGET",
+  "installed_prefix": "$INSTALLED_PREFIX",
+  "source_archive": {
+    "path": "$OUT/client-080-main-source-778f6cc.tar",
+    "sha256": "14fa6f4a36de55f4dd1ec80e8e300371f20deb7c32d4ec7eb980e871b8312a0d",
+    "bytes": 13957120
+  },
+  "prerequisite_report": "rust-gates.json",
+  "results": [
+    {
+      "stage": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--bins",
+        "--example",
+        "vt_snapshot",
+        "-j1"
+      ],
+      "scope_unit": "ssmcp-main-accept-release-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 150.277,
+      "log": "$PRIVATE_EVIDENCE-release.log"
+    },
+    {
+      "stage": "install",
+      "command": [
+        "make",
+        "install",
+        "DESTDIR=$INSTALLED_PREFIX",
+        "PREFIX=/usr"
+      ],
+      "scope_unit": "ssmcp-main-accept-install-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.065,
+      "log": "$PRIVATE_EVIDENCE-install.log"
+    }
+  ],
+  "current_stage": null,
+  "finished_at": "2026-11-17T23:14:01.556736+00:00",
+  "artifacts": {
+    "ssmcp": {
+      "built_or_source_path": "$TARGET/release/ssmcp",
+      "installed_path": "$INSTALLED_PREFIX/usr/bin/ssmcp",
+      "sha256": "53882aa0fc9d8c95a6966c6191771931194858a3df6f586fb0644d92db815b50",
+      "bytes": 8021528,
+      "matches": true
+    },
+    "ssmcpd": {
+      "built_or_source_path": "$TARGET/release/ssmcpd",
+      "installed_path": "$INSTALLED_PREFIX/usr/bin/ssmcpd",
+      "sha256": "4efaf996193c075bb3328963c1e9728333e5a6f1430eb9d1f96896432a56862f",
+      "bytes": 5375864,
+      "matches": true
+    },
+    "code_mode_js": {
+      "built_or_source_path": "$SOURCE/src/code_mode.js",
+      "installed_path": "$INSTALLED_PREFIX/usr/libexec/ssmcp/code-mode.js",
+      "sha256": "57f014501bf0313f966935fbe1a05613aaf75816a569b65ff15346cc9d2a8bdf",
+      "bytes": 37747,
+      "matches": true
+    },
+    "vt_snapshot": {
+      "built_or_source_path": "$TARGET/release/examples/vt_snapshot",
+      "installed_path": "$INSTALLED_PREFIX/usr/bin/examples/vt_snapshot",
+      "sha256": "409e630cd3390d105f7de74200b1cdb97fecbe0cadd9da50ef2ef63b3572e58b",
+      "bytes": 438592,
+      "matches": true
+    }
+  },
+  "versions": {
+    "ssmcp": "ssmcp 0.8.0",
+    "ssmcpd": "ssmcpd 0.8.0"
+  },
+  "fixture": {
+    "source_commit": "73a775d74661fec26767ccac9d4b6102b0c42843",
+    "source_tree": "e732bbbcc1e4e76aadace70e65e9ef95b2000eb7",
+    "binary": "$TARGET/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988",
+    "sha256": "5716476f9fb7f44d82100300d72b25146e61164090b38db0e7d2e4ca048ceffd",
+    "bytes": 176295696,
+    "extracted_from": "$INITIAL_EVIDENCE-gates/fixture.log",
+    "validated_for_source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+    "runtime_equivalence": {
+      "base_commit": "73a775d74661fec26767ccac9d4b6102b0c42843",
+      "current_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+      "changed_paths": [
+        "docs/client-ui.md",
+        "tests/resources.rs"
+      ],
+      "production_inputs_unchanged": true
+    },
+    "prior_metadata": "$INITIAL_EVIDENCE-fixture-binary.json"
+  },
+  "source_clean_after_build": true,
+  "_publication": {
+    "private_paths_normalized": true,
+    "source_object_sha256": "389fafc65c21e7053fd1debc05f4314c14160b4fc661057ee329a6852d795fdd",
+    "source_object_digest_algorithm": "SHA-256 of UTF-8 json.dumps(original, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
+    "note": "Nested report_sha256 fields identify the original private files, before publication path normalization."
+  }
+}

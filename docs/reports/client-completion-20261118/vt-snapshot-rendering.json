@@ -1,0 +1,328 @@
+{
+  "kind": "VT snapshot rendering",
+  "fonts": [
+    {
+      "family": "Obel Mono",
+      "path": "/home/lightjunction/.local/share/fonts/obel-mono/ObelMono[wght].ttf",
+      "face": 0,
+      "weight": 400
+    },
+    {
+      "family": "Obel Mono",
+      "path": "/home/lightjunction/.local/share/fonts/obel-mono/ObelMono[wght].ttf",
+      "face": 0,
+      "weight": 700
+    },
+    {
+      "family": "Noto Sans Mono CJK SC",
+      "path": "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+      "face": 7,
+      "weight": 400
+    },
+    {
+      "family": "Noto Sans Mono CJK SC",
+      "path": "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+      "face": 7,
+      "weight": 700
+    }
+  ],
+  "snapshots": [
+    {
+      "source": "/home/lightjunction/Documents/GITHUB/ssmcp/out/completion-20261118/client-ui-verified/ui-chat.json",
+      "output": "/home/lightjunction/Documents/GITHUB/ssmcp/out/completion-20261118/client-ui-verified/ui-chat.png",
+      "source_sha256": "2e46d8fc3c3ade56cacda39c926ff1c395952477e1dda4d1ad18314c44dab55e",
+      "pixels": [
+        1320,
+        840
+      ],
+      "cells": [
+        30,
+        120
+      ],
+      "cell_pixels": [
+        11,
+        28
+      ],
+      "baseline": 21,
+      "wide_cells": 0,
+      "continuation_cells": 0,
+      "missing_glyphs": [],
+      "divider_columns_one_based": {
+        "1": [
+          83
+        ],
+        "2": [
+          83
+        ],
+        "3": [
+          83
+        ],
+        "4": [
+          83
+        ],
+        "5": [
+          83
+        ],
+        "6": [
+          83
+        ],
+        "7": [
+          83
+        ],
+        "8": [
+          83
+        ],
+        "9": [
+          83
+        ],
+        "10": [
+          83
+        ],
+        "11": [
+          83
+        ],
+        "12": [
+          83
+        ],
+        "13": [
+          83
+        ],
+        "14": [
+          83
+        ],
+        "15": [
+          83
+        ],
+        "16": [
+          83
+        ],
+        "17": [
+          83
+        ],
+        "18": [
+          83
+        ],
+        "19": [
+          83
+        ],
+        "20": [
+          83
+        ],
+        "21": [
+          83
+        ],
+        "22": [
+          83
+        ],
+        "23": [
+          83
+        ],
+        "24": [
+          83
+        ],
+        "25": [
+          83
+        ],
+        "26": [
+          83
+        ],
+        "27": [
+          83
+        ],
+        "28": [
+          83
+        ],
+        "29": [
+          83
+        ]
+      },
+      "description": "VT snapshot rendering from captured foreground/background and cell text. Not a real ztty screenshot. Cursor shape/blink and native image overlays are not reconstructed."
+    },
+    {
+      "source": "/home/lightjunction/Documents/GITHUB/ssmcp/out/completion-20261118/client-ui-verified/ui-audit.json",
+      "output": "/home/lightjunction/Documents/GITHUB/ssmcp/out/completion-20261118/client-ui-verified/ui-audit.png",
+      "source_sha256": "5fdfc6b6d2074cdb5de7df4886ccb28751c37a0aecc43e8eb535d62ac8a948b7",
+      "pixels": [
+        1320,
+        840
+      ],
+      "cells": [
+        30,
+        120
+      ],
+      "cell_pixels": [
+        11,
+        28
+      ],
+      "baseline": 21,
+      "wide_cells": 0,
+      "continuation_cells": 0,
+      "missing_glyphs": [],
+      "divider_columns_one_based": {
+        "1": [
+          83
+        ],
+        "2": [
+          83
+        ],
+        "3": [
+          83
+        ],
+        "4": [
+          83
+        ],
+        "5": [
+          83
+        ],
+        "6": [
+          83
+        ],
+        "7": [
+          83
+        ],
+        "8": [
+          83
+        ],
+        "9": [
+          83
+        ],
+        "10": [
+          83
+        ],
+        "11": [
+          83
+        ],
+        "12": [
+          83
+        ],
+        "13": [
+          83
+        ],
+        "14": [
+          83
+        ],
+        "15": [
+          83
+        ],
+        "16": [
+          83
+        ],
+        "17": [
+          83
+        ],
+        "18": [
+          83
+        ],
+        "19": [
+          83
+        ],
+        "20": [
+          83
+        ],
+        "21": [
+          83
+        ],
+        "22": [
+          83
+        ],
+        "23": [
+          83
+        ],
+        "24": [
+          83
+        ],
+        "25": [
+          83
+        ],
+        "26": [
+          83
+        ],
+        "27": [
+          83
+        ],
+        "28": [
+          83
+        ],
+        "29": [
+          83
+        ]
+      },
+      "description": "VT snapshot rendering from captured foreground/background and cell text. Not a real ztty screenshot. Cursor shape/blink and native image overlays are not reconstructed."
+    },
+    {
+      "source": "/home/lightjunction/Documents/GITHUB/ssmcp/out/completion-20261118/client-ui-verified/ui-scroll-hint.json",
+      "output": "/home/lightjunction/Documents/GITHUB/ssmcp/out/completion-20261118/client-ui-verified/ui-scroll-hint.png",
+      "source_sha256": "c52af051a4ab7576d7b1b8174423138d984e820b99ccefe9d6184d5ecf5839e2",
+      "pixels": [
+        1320,
+        504
+      ],
+      "cells": [
+        18,
+        120
+      ],
+      "cell_pixels": [
+        11,
+        28
+      ],
+      "baseline": 21,
+      "wide_cells": 0,
+      "continuation_cells": 0,
+      "missing_glyphs": [],
+      "divider_columns_one_based": {
+        "1": [
+          83
+        ],
+        "2": [
+          83
+        ],
+        "3": [
+          83
+        ],
+        "4": [
+          83
+        ],
+        "5": [
+          83
+        ],
+        "6": [
+          83
+        ],
+        "7": [
+          83
+        ],
+        "8": [
+          83
+        ],
+        "9": [
+          83
+        ],
+        "10": [
+          83
+        ],
+        "11": [
+          83
+        ],
+        "12": [
+          83
+        ],
+        "13": [
+          83
+        ],
+        "14": [
+          83
+        ],
+        "15": [
+          83
+        ],
+        "16": [
+          83
+        ],
+        "17": [
+          83
+        ]
+      },
+      "description": "VT snapshot rendering from captured foreground/background and cell text. Not a real ztty screenshot. Cursor shape/blink and native image overlays are not reconstructed."
+    }
+  ]
+}

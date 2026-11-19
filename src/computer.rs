@@ -1,4 +1,6 @@
 //! Computer-use desktop primitives with native Linux, Windows and macOS adapters.
+mod host_control;
+mod isolated;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(windows)]
@@ -27,6 +29,50 @@ const TEXT_LIMIT: usize = 256 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(10);
 const RELEASE_HELPER_TIMEOUT: Duration = Duration::from_secs(3);
 const RELEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+// Serialize this process's physical desktop input across native connections.
+static HOST_INPUT_SERIAL: Mutex<()> = Mutex::const_new(());
+static HOST_INPUT_CLEANUP_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// Retain the process input lock even if the entire remote call is cancelled.
+/// Platform release guards register cleanup before this outer guard is dropped.
+struct HostInputGuard {
+    serial: Option<tokio::sync::MutexGuard<'static, ()>>,
+    releases: Arc<ReleaseTasks>,
+}
+
+impl HostInputGuard {
+    async fn finish(mut self) -> Result<(), String> {
+        let result = self.releases.wait(RELEASE_WAIT_TIMEOUT).await;
+        if result.is_err() {
+            HOST_INPUT_CLEANUP_FAILED.store(true, Ordering::Release);
+        }
+        self.serial.take();
+        result
+    }
+}
+
+impl Drop for HostInputGuard {
+    fn drop(&mut self) {
+        let Some(serial) = self.serial.take() else {
+            return;
+        };
+        let releases = self.releases.clone();
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    if releases.wait(RELEASE_WAIT_TIMEOUT).await.is_err() {
+                        HOST_INPUT_CLEANUP_FAILED.store(true, Ordering::Release);
+                    }
+                    drop(serial);
+                });
+            }
+            Err(_) => {
+                // No runtime is available to prove release completion.
+                HOST_INPUT_CLEANUP_FAILED.store(true, Ordering::Release);
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Session {
@@ -42,6 +88,9 @@ pub struct Computer {
     serial: Mutex<()>,
     closed: AtomicBool,
     releases: Arc<ReleaseTasks>,
+    environment: Option<isolated::Environment>,
+    isolated: Mutex<Option<isolated::Desktop>>,
+    host_control: host_control::HostControl,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq)]
@@ -234,6 +283,9 @@ impl Computer {
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            environment: None,
+            isolated: Mutex::new(None),
+            host_control: host_control::HostControl::default(),
         })
     }
 
@@ -241,10 +293,38 @@ impl Computer {
         let coordinate = json!({"type":"integer","minimum":-100000,"maximum":100000});
         let point = json!({"type":"object","properties":{"x":coordinate,"y":coordinate},"required":["x","y"],"additionalProperties":false});
         let button = json!({"type":"string","enum":["left","middle","right"],"default":"left"});
-        vec![
+        let mut tools = vec![
+            tool(
+                "desktop_start",
+                "Start a private Linux desktop on demand. Subsequent computer operations target it by default and leave the host mouse and focus untouched. No host applications are moved.",
+                json!({"width":{"type":"integer","minimum":320,"maximum":3840,"default":1280},"height":{"type":"integer","minimum":240,"maximum":2160,"default":800}}),
+                &[],
+                false,
+            ),
+            tool(
+                "desktop_status",
+                "Inspect the owned private desktop and required helpers without starting a display or sending input.",
+                json!({}),
+                &[],
+                true,
+            ),
+            tool(
+                "desktop_stop",
+                "Stop only this connection's private desktop and its owned applications. Host input stays locked unless the operator makes a short local handoff.",
+                json!({}),
+                &[],
+                false,
+            ),
+            tool(
+                "app_launch",
+                "Launch an argv application in a private desktop, starting the desktop automatically when needed. Uses a separate display, runtime directory and D-Bus session; never moves host focus. Use browser tools for existing browser sessions.",
+                json!({"command":{"type":"array","items":{"type":"string","maxLength":4096},"minItems":1,"maxItems":128,"description":"Literal argv: existing executable first, at most 4096 UTF-8 bytes per item and 32 KiB total. Validated before automatic desktop startup."}}),
+                &["command"],
+                false,
+            ),
             tool(
                 "status",
-                "Inspect native desktop capabilities and missing system helpers; no screenshot or input is produced.",
+                "Inspect the selected private desktop, or report private-desktop readiness and missing helpers when none is running. Does not start a display. Host inspection requires desktop: host.",
                 json!({}),
                 &[],
                 true,
@@ -319,10 +399,86 @@ impl Computer {
                 &["direction"],
                 false,
             ),
-        ]
+        ];
+        for descriptor in &mut tools {
+            let name = descriptor["name"].as_str().unwrap_or("");
+            if !matches!(
+                name,
+                "ssmcp.computer.desktop_start"
+                    | "ssmcp.computer.desktop_status"
+                    | "ssmcp.computer.desktop_stop"
+                    | "ssmcp.computer.app_launch"
+            ) {
+                descriptor["inputSchema"]["properties"]["desktop"] = json!({
+                    "type":"string", "enum":["isolated","host"], "default":"isolated",
+                    "description":"All observation and input defaults to isolated. Without a private desktop, status reports readiness and other operations require app_launch or desktop_start; read-only calls never start one. Host observation requires explicit host selection. Host input also requires a short handoff made locally in the ssmcp terminal using /computer host [seconds]; remote tool arguments cannot enable or renew it."
+                });
+            }
+        }
+        tools
     }
 
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
+        isolated::dispatch(self, name, args).await
+    }
+
+    pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
+        if self.closed.load(Ordering::Acquire) || self.environment.is_some() {
+            return Err("a live host connection is required for local handoff".into());
+        }
+        if HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire) {
+            return Err("host input remains locked after incomplete release cleanup; restart the client after checking the desktop input state".into());
+        }
+        self.host_control.handoff_local(seconds)
+    }
+
+    pub(crate) fn revoke_host_input(&self) -> bool {
+        self.host_control.revoke()
+    }
+
+    pub(crate) fn host_input_status(&self) -> Value {
+        self.host_control.status()
+    }
+
+    async fn perform_host(&self, name: &str, args: Value) -> Result<Value, String> {
+        let mut response = if host_control::input_tool(name) {
+            let ticket = self.host_control.ticket()?;
+            let serial = tokio::select! {
+                biased;
+                _ = self.host_control.cancelled(ticket) => return Err(host_control::ENDED.into()),
+                serial = HOST_INPUT_SERIAL.lock() => serial,
+            };
+            if HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire) {
+                return Err("host input remains locked after incomplete release cleanup".into());
+            }
+            let serial = HostInputGuard {
+                serial: Some(serial),
+                releases: self.releases.clone(),
+            };
+            // Dropping a cancelled platform future invokes the existing release guard.
+            // Keep the process lock until those releases finish, before another caller can act.
+            let result = self
+                .host_control
+                .run(ticket, self.perform_local(name, args))
+                .await;
+            if let Err(error) = serial.finish().await {
+                self.host_control.revoke();
+                return Err(format!("host input release cleanup incomplete: {error}"));
+            }
+            result?
+        } else {
+            self.perform_local(name, args).await?
+        };
+        if let Some(metadata) = response
+            .get_mut("structuredContent")
+            .and_then(Value::as_object_mut)
+        {
+            metadata.insert("host_input".into(), self.host_control.status());
+        }
+        Ok(response)
+    }
+
+    async fn perform_local(&self, name: &str, args: Value) -> Result<Value, String> {
         let _lock = self.serial.lock().await;
         if self.closed.load(Ordering::Acquire) {
             return Err("computer connection is closed".into());
@@ -411,6 +567,16 @@ impl Computer {
 
     pub async fn shutdown(&self) -> Result<(), String> {
         self.closed.store(true, Ordering::Release);
+        self.host_control.revoke();
+        if let Some(mut desktop) = self.isolated.lock().await.take() {
+            desktop.shutdown().await;
+        }
+        self.shutdown_local().await
+    }
+
+    async fn shutdown_local(&self) -> Result<(), String> {
+        self.closed.store(true, Ordering::Release);
+        self.host_control.revoke();
         tokio::time::timeout(RELEASE_WAIT_TIMEOUT, async {
             let _lock = self.serial.lock().await;
             self.releases.wait(RELEASE_WAIT_TIMEOUT).await
@@ -429,7 +595,21 @@ impl Computer {
         input: Option<&[u8]>,
         limit: usize,
     ) -> Result<Vec<u8>, String> {
-        run_helper(&self.root, program, args, input, limit, TIMEOUT).await
+        run_helper_in(
+            &self.root,
+            program,
+            args,
+            input,
+            limit,
+            TIMEOUT,
+            self.environment.as_ref(),
+        )
+        .await
+    }
+    fn release_guard(&self, program: &str, args: Vec<String>) -> Result<ReleaseGuard, String> {
+        let mut guard = ReleaseGuard::new(program, args, &self.releases)?;
+        guard.environment = self.environment.clone();
+        Ok(guard)
     }
     async fn text(&self, program: &str, args: &[&str]) -> Result<String, String> {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -551,11 +731,25 @@ impl Computer {
             }
             Session::X11 => {
                 let props = self.text("xprop", &["-root", "_NET_CLIENT_LIST"]).await?;
-                let ids: Vec<_> = props
-                    .split([' ', ',', '\n'])
-                    .filter(|p| p.starts_with("0x"))
-                    .take(101)
-                    .collect();
+                let fallback;
+                let ids: Vec<_> = if self.environment.is_some() && !props.contains("0x") {
+                    // Xvfb can run without a window manager or EWMH root properties.
+                    fallback = self
+                        .text("xdotool", &["search", "--onlyvisible", "--name", "."])
+                        .await
+                        .unwrap_or_default();
+                    fallback
+                        .split_whitespace()
+                        .filter(|p| valid_window_id(p))
+                        .take(101)
+                        .collect()
+                } else {
+                    props
+                        .split([' ', ',', '\n'])
+                        .filter(|p| p.starts_with("0x"))
+                        .take(101)
+                        .collect()
+                };
                 let mut windows = Vec::new();
                 for id in ids.iter().take(100) {
                     if !valid_window_id(id) {
@@ -637,8 +831,12 @@ impl Computer {
                 })??;
             }
             Session::X11 => {
-                self.text("xdotool", &["windowactivate", "--sync", id])
-                    .await?;
+                let action = if self.environment.is_some() {
+                    "windowfocus"
+                } else {
+                    "windowactivate"
+                };
+                self.text("xdotool", &[action, "--sync", id]).await?;
             }
             _ => return Err("Window focus requires Hyprland or X11".into()),
         }
@@ -714,7 +912,7 @@ impl Computer {
         } else {
             return Err("No desktop input session is available".into());
         };
-        let mut guard = ReleaseGuard::new(program, release.clone(), &self.releases)?;
+        let mut guard = self.release_guard(program, release.clone())?;
         let outcome = self.run(program, &args, None, TEXT_LIMIT).await;
         if outcome.is_ok() || self.run(program, &release, None, TEXT_LIMIT).await.is_ok() {
             guard.disarm();
@@ -756,7 +954,7 @@ impl Computer {
             return Err("Dragging requires Hyprland or X11".into());
         };
         self.move_pointer(v.path[0]).await?;
-        let mut guard = ReleaseGuard::new(program, up.clone(), &self.releases)?;
+        let mut guard = self.release_guard(program, up.clone())?;
         let outcome = async {
             self.run(program, &down, None, TEXT_LIMIT).await?;
             for p in &v.path[1..] {
@@ -802,11 +1000,8 @@ impl Computer {
                 let mut chord = v.modifiers.clone();
                 chord.push(v.key);
                 let chord = chord.join("+");
-                let mut guard = ReleaseGuard::new(
-                    "xdotool",
-                    vec!["keyup".into(), chord.clone()],
-                    &self.releases,
-                )?;
+                let mut guard =
+                    self.release_guard("xdotool", vec!["keyup".into(), chord.clone()])?;
                 let outcome = self
                     .text("xdotool", &["key", "--clearmodifiers", &chord])
                     .await;
@@ -1145,7 +1340,7 @@ fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Err("JPEG dimensions are missing".into())
 }
 
-async fn run_helper(
+pub(crate) async fn run_helper(
     root: &std::path::Path,
     program: &str,
     args: &[String],
@@ -1153,8 +1348,23 @@ async fn run_helper(
     limit: usize,
     deadline: Duration,
 ) -> Result<Vec<u8>, String> {
+    run_helper_in(root, program, args, input, limit, deadline, None).await
+}
+
+async fn run_helper_in(
+    root: &std::path::Path,
+    program: &str,
+    args: &[String],
+    input: Option<&[u8]>,
+    limit: usize,
+    deadline: Duration,
+    environment: Option<&isolated::Environment>,
+) -> Result<Vec<u8>, String> {
     let executable = crate::program::executable(program)?;
     let mut command = tokio::process::Command::new(executable);
+    if let Some(environment) = environment {
+        environment.apply(command.as_std_mut());
+    }
     command
         .args(args)
         .current_dir(root)
@@ -1229,7 +1439,13 @@ struct ReleaseState {
 }
 
 impl ReleaseTasks {
-    fn start(self: &Arc<Self>, program: PathBuf, args: Vec<String>, deadline: Duration) {
+    fn start(
+        self: &Arc<Self>,
+        program: PathBuf,
+        args: Vec<String>,
+        deadline: Duration,
+        environment: Option<isolated::Environment>,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         // Keep the tracker alive even if a failed shutdown drops the Computer.
         // A task is complete only after its owned helper has actually been reaped.
@@ -1237,7 +1453,7 @@ impl ReleaseTasks {
         match std::thread::Builder::new()
             .name("ssmcp-input-release".into())
             .spawn(move || {
-                let result = release_helper(program, args, deadline);
+                let result = release_helper(program, args, deadline, environment);
                 drop(keepalive);
                 result
             }) {
@@ -1282,8 +1498,17 @@ impl ReleaseTasks {
     }
 }
 
-fn release_helper(program: PathBuf, args: Vec<String>, deadline: Duration) -> Result<(), String> {
-    let mut child = std::process::Command::new(program)
+fn release_helper(
+    program: PathBuf,
+    args: Vec<String>,
+    deadline: Duration,
+    environment: Option<isolated::Environment>,
+) -> Result<(), String> {
+    let mut command = std::process::Command::new(program);
+    if let Some(environment) = environment {
+        environment.apply(&mut command);
+    }
+    let mut child = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1333,6 +1558,7 @@ struct ReleaseGuard {
     armed: bool,
     releases: Arc<ReleaseTasks>,
     deadline: Duration,
+    environment: Option<isolated::Environment>,
 }
 impl ReleaseGuard {
     fn new(program: &str, args: Vec<String>, releases: &Arc<ReleaseTasks>) -> Result<Self, String> {
@@ -1342,6 +1568,7 @@ impl ReleaseGuard {
             armed: true,
             releases: releases.clone(),
             deadline: RELEASE_HELPER_TIMEOUT,
+            environment: None,
         })
     }
     fn disarm(&mut self) {
@@ -1351,8 +1578,12 @@ impl ReleaseGuard {
 impl Drop for ReleaseGuard {
     fn drop(&mut self) {
         if self.armed {
-            self.releases
-                .start(self.executable.clone(), self.args.clone(), self.deadline);
+            self.releases.start(
+                self.executable.clone(),
+                self.args.clone(),
+                self.deadline,
+                self.environment.clone(),
+            );
         }
     }
 }
@@ -1499,6 +1730,9 @@ mod tests {
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            environment: None,
+            isolated: Mutex::new(None),
+            host_control: host_control::HostControl::default(),
         };
         assert!(
             computer
@@ -1616,6 +1850,7 @@ if events.read_text().count("keyup\n") == 1:
                 ],
                 armed: true,
                 releases: computer.releases.clone(),
+                environment: computer.environment.clone(),
                 deadline: Duration::from_secs(10),
             }
         }
@@ -1698,10 +1933,35 @@ if root.exists():
     #[cfg(unix)]
     #[tokio::test]
     async fn release_wait_deadlines_preserve_tracking_and_order_later_input() {
+        use std::{
+            future::{Future, poll_fn},
+            task::Poll,
+        };
+
         let fixture = ReleaseFixture::new();
         let computer = Arc::new(Computer::new(fixture.0.clone()).unwrap());
-        drop(fixture.guard(&computer, WAITING_RELEASE));
-        fixture.started().await;
+        let released = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let task = std::thread::spawn({
+            let released = released.clone();
+            move || {
+                let _ = started_tx.send(());
+                release_rx
+                    .recv()
+                    .map_err(|_| "release fixture was cancelled".to_owned())?;
+                released.store(true, Ordering::Release);
+                Ok(())
+            }
+        });
+        computer.releases.state.lock().unwrap().tasks.push(task);
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // The release cannot finish until this test opens the channel, even if
+        // the executor is delayed beyond the requested wait deadline.
         let error = computer
             .releases
             .wait(Duration::from_millis(20))
@@ -1709,35 +1969,36 @@ if root.exists():
             .unwrap_err();
         assert!(error.contains("remain tracked"), "{error}");
         assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
+
+        // Cancelling a polled waiter must not remove the still-owned cleanup.
+        let mut waiting = Box::pin(computer.releases.wait(RELEASE_WAIT_TIMEOUT));
         assert!(
-            tokio::time::timeout(
-                Duration::from_millis(20),
-                computer.releases.wait(RELEASE_WAIT_TIMEOUT)
-            )
-            .await
-            .is_err()
+            poll_fn(|cx| Poll::Ready(waiting.as_mut().poll(cx)))
+                .await
+                .is_pending()
         );
+        drop(waiting);
         assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
 
-        let mut next = tokio::spawn({
-            let computer = computer.clone();
-            async move {
-                computer
-                    .perform("ssmcp.computer.not_a_tool", json!({}))
-                    .await
-            }
-        });
+        // Test local input serialization directly: the public dispatcher now
+        // defaults to an isolated desktop and may reject before this queue.
+        // An unknown operation cannot send input to any host desktop.
+        let mut next = Box::pin(computer.perform_local("ssmcp.computer.not_a_tool", json!({})));
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut next)
+            poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx)))
                 .await
-                .is_err()
+                .is_pending()
         );
-        fixture.release();
+        assert!(!released.load(Ordering::Acquire));
+        assert!(computer.serial.try_lock().is_err());
+        assert_eq!(computer.releases.state.lock().unwrap().tasks.len(), 1);
+
+        release_tx.send(()).unwrap();
         let error = tokio::time::timeout(Duration::from_secs(5), next)
             .await
             .unwrap()
-            .unwrap()
             .unwrap_err();
+        assert!(released.load(Ordering::Acquire));
         assert!(error.contains("unknown computer tool"), "{error}");
         computer.shutdown().await.unwrap();
         assert!(computer.releases.state.lock().unwrap().tasks.is_empty());
@@ -1766,10 +2027,18 @@ if root.exists():
             serial: Mutex::new(()),
             closed: AtomicBool::new(false),
             releases: Arc::new(ReleaseTasks::default()),
+            environment: None,
+            isolated: Mutex::new(None),
+            host_control: host_control::HostControl::default(),
         };
+        // The fixture asserts its fake hyprctl path above; never grant a real desktop here.
+        computer.handoff_host_input_local(15).unwrap();
         let start = std::time::Instant::now();
         let outcome = computer
-            .perform("ssmcp.computer.focus", json!({"window_id":"0x123"}))
+            .perform(
+                "ssmcp.computer.focus",
+                json!({"window_id":"0x123","desktop":"host"}),
+            )
             .await;
         match case.as_str() {
             "immediate" | "delayed" => {
@@ -1909,5 +2178,91 @@ else:
         }
         let _ = std::fs::remove_dir_all(&root);
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod host_handoff_tests {
+    use super::*;
+
+    fn computer() -> Computer {
+        let mut computer = Computer::new(std::env::temp_dir()).unwrap();
+        // No real desktop helper is called by these tests.
+        computer.session = Session::Unavailable;
+        computer
+    }
+
+    #[tokio::test]
+    async fn remote_host_parameters_cannot_enable_any_input_operation() {
+        let computer = computer();
+        for suffix in ["focus", "move", "click", "drag", "key", "type", "scroll"] {
+            let error = computer
+                .perform(
+                    &format!("ssmcp.computer.{suffix}"),
+                    json!({"desktop":"host","host_input":true,"seconds":60}),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error, host_control::LOCKED, "{suffix}");
+        }
+        assert_eq!(computer.host_input_status()["enabled"], false);
+    }
+
+    #[tokio::test]
+    async fn host_observation_remains_available_while_input_is_locked() {
+        let computer = computer();
+        let status = computer
+            .perform("ssmcp.computer.status", json!({"desktop":"host"}))
+            .await
+            .unwrap();
+        assert_eq!(status["structuredContent"]["desktop"], "host");
+        assert_eq!(status["structuredContent"]["host_input"]["enabled"], false);
+        assert_eq!(
+            status["structuredContent"]["host_input"]["all_application_input_detection"],
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_entire_call_holds_process_lock_until_fake_release_finishes() {
+        static SERIAL: Mutex<()> = Mutex::const_new(());
+        let releases = Arc::new(ReleaseTasks::default());
+        let (finish, finished) = std::sync::mpsc::channel();
+        let fake_release = std::thread::spawn(move || {
+            finished.recv().map_err(|error| error.to_string())?;
+            Ok(())
+        });
+        releases.state.lock().unwrap().tasks.push(fake_release);
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let _guard = HostInputGuard {
+                serial: Some(SERIAL.lock().await),
+                releases,
+            };
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        started_rx.await.unwrap();
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+        assert!(
+            SERIAL.try_lock().is_err(),
+            "cleanup must retain the input lock"
+        );
+        finish.send(()).unwrap();
+        let serial = tokio::time::timeout(Duration::from_secs(1), SERIAL.lock())
+            .await
+            .expect("input lock must become available after fake release completes");
+        drop(serial);
+    }
+
+    #[tokio::test]
+    async fn shutdown_revokes_local_handoff_and_cannot_be_rearmed() {
+        let computer = computer();
+        computer.handoff_host_input_local(15).unwrap();
+        assert_eq!(computer.host_input_status()["enabled"], true);
+        computer.shutdown().await.unwrap();
+        assert_eq!(computer.host_input_status()["enabled"], false);
+        assert!(computer.handoff_host_input_local(15).is_err());
     }
 }

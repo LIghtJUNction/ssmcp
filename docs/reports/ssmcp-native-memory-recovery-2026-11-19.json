@@ -1,0 +1,35 @@
+{
+  "base": "59ef9c6c367029dbcf20721aa5a63aa69cfc7ef1",
+  "state": "uncommitted_candidate_not_compiled",
+  "patch_name": "native-memory-20261119.patch",
+  "patch_sha256": "404a9f61f73fa6cc6903f96d79ed54056dbe182118a7442110b3cae670528c3d",
+  "patch_bytes": 81990,
+  "source_workspace": "ssmcp-native-memory",
+  "files": {
+    "Cargo.toml": "fea265f814ce2496db60efc49b2cc8be669754f15663297826ca0f5d9dd9591a",
+    "docs/code-mode.md": "d428ca17557f028b7a9e722327faecbf46be7d59c281028dbb63152bf7a4943b",
+    "docs/context-memory.md": "f91149ae2489189a69c2af0336071ad8714c8f35ea45effc0fb81ed1b6ab24ca",
+    "docs/markdown-memory.md": "700cb693ee3229618ea4300112f211ff80516acdc01ec278073b641a0a950792",
+    "scripts/e2e.py": "5bf04201487384a52ef00339e0c68ef58e76d81af493565d8825e75ef7ec8019",
+    "scripts/e2e_context_memory.py": "6fd4ad1ff49bf3cce77137105ccc91b7db9fb7dd4fe027cdb57f33771d3ed78b",
+    "src/client.rs": "044134a59e935b5a4da64f0a3812b6f765d8c570c12a3e8a3dfbd8523ec9a2ee",
+    "src/client/markdown_memory.rs": "88e29c393f50999677ab30d2079fcb91e4d24a1c95094ca09ef980b355b30a0f",
+    "src/client/markdown_memory/search.rs": "55a6b08abc1349b7c78e2eecd497db6e97fd564513154c38c7abdfd5c02c2ee5",
+    "src/client/markdown_memory/tests.rs": "90c274b46e17ccad370ab1afc78108e80690911c7279e7d5becfaece4f7bf0c8",
+    "src/code_mode.js": "a478aabca762f5f9bfe2a50843f53cf41b05c4565c26b53e216375a878df49b1",
+    "src/code_mode.rs": "47486ee67d7aa39250d61ff67f9c5b44fa9a0fdb8fa953eb655e6188ce34405d",
+    "src/context.rs": "ff97889dec43ddaccd7828e94a9f5a3838fdf5554600a7993efa613da283d704",
+    "src/http.rs": "2513aa8d009b84a3ba169c9b358336c84489b453750d9135272a73a9ea25aebb",
+    "src/registry.rs": "547c031736c2f26d8572ca83e3d7245dab1b43e92a46b17565ede9a037c70590",
+    "src/runtime/capabilities.rs": "8ea3fc1bc2443d3348ec4cf8210fa42d9ee1fd0285ae3a56f04699e911863d2b",
+    "tests/context.rs": "fce2718d28e49cd5b1ab7379e55236e929c57baa3b750987e013b7588bc8b727"
+  },
+  "verification": {
+    "source_review": true,
+    "compilation_completed": false,
+    "tests_completed": false,
+    "api_conflict_pr": 47,
+    "competing_developer_commit": "437ccdbfabbda1bbe9ac20dd46de7a060f5b2034"
+  },
+  "note": "This is a recovery inventory copied from the observed local manifest, not the source patch. The workspace became unavailable before the patch could be uploaded."
+}

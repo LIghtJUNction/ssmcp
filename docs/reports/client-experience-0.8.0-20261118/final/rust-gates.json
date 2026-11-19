@@ -1,0 +1,716 @@
+{
+  "schema": "ssmcp.client-main-rust-gates.v1",
+  "status": "passed",
+  "source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+  "source_tree": "c7ccc2bb4d9722f52b314f0c0dc650c624cfb074",
+  "integrated_main": "95b5f26125ede8825f12feb79b7f870055d004b5",
+  "started_at": "2026-11-17T23:11:16.058099+00:00",
+  "source_archive": {
+    "path": "$OUT/client-080-main-source-778f6cc.tar",
+    "sha256": "14fa6f4a36de55f4dd1ec80e8e300371f20deb7c32d4ec7eb980e871b8312a0d",
+    "bytes": 13957120
+  },
+  "results": [
+    {
+      "stage": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "scope_unit": "ssmcp-main-accept-fmt-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 1.368,
+      "log": "$PRIVATE_EVIDENCE-gates/fmt.log",
+      "summary": [],
+      "test_groups": []
+    },
+    {
+      "stage": "resources_clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--test",
+        "resources",
+        "-j1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "scope_unit": "ssmcp-main-accept-resources-clippy-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.465,
+      "log": "$PRIVATE_EVIDENCE-gates/resources_clippy.log",
+      "summary": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s"
+      ],
+      "test_groups": []
+    },
+    {
+      "stage": "resources",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "resources",
+        "-j1",
+        "--",
+        "--test-threads=2"
+      ],
+      "scope_unit": "ssmcp-main-accept-resources-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.765,
+      "log": "$PRIVATE_EVIDENCE-gates/resources.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s",
+        "     Running tests/resources.rs ($TARGET/debug/build/ssmcp/b6141e2da2308ee3/out/resources-b6141e2da2308ee3)",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running tests/resources.rs ($TARGET/debug/build/ssmcp/b6141e2da2308ee3/out/resources-b6141e2da2308ee3)",
+          "status": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "summary": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s"
+        }
+      ]
+    },
+    {
+      "stage": "rsync",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "rsync",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "scope_unit": "ssmcp-main-accept-rsync-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.465,
+      "log": "$PRIVATE_EVIDENCE-gates/rsync.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s",
+        "     Running tests/rsync.rs ($TARGET/debug/build/ssmcp/5d07ebb978e9dfb5/out/rsync-5d07ebb978e9dfb5)",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running tests/rsync.rs ($TARGET/debug/build/ssmcp/5d07ebb978e9dfb5/out/rsync-5d07ebb978e9dfb5)",
+          "status": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s"
+        }
+      ]
+    },
+    {
+      "stage": "terminals",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "terminals",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "scope_unit": "ssmcp-main-accept-terminals-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 1.918,
+      "log": "$PRIVATE_EVIDENCE-gates/terminals.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s",
+        "     Running tests/terminals.rs ($TARGET/debug/build/ssmcp/73d2e35fea0bd0a9/out/terminals-73d2e35fea0bd0a9)",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running tests/terminals.rs ($TARGET/debug/build/ssmcp/73d2e35fea0bd0a9/out/terminals-73d2e35fea0bd0a9)",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s"
+        }
+      ]
+    },
+    {
+      "stage": "two_tools_default",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "two_tools",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "scope_unit": "ssmcp-main-accept-two-tools-default-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.264,
+      "log": "$PRIVATE_EVIDENCE-gates/two_tools_default.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s",
+        "     Running tests/two_tools.rs ($TARGET/debug/build/ssmcp/1132b9c4d048af2f/out/two_tools-1132b9c4d048af2f)",
+        "test result: ok. 2 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running tests/two_tools.rs ($TARGET/debug/build/ssmcp/1132b9c4d048af2f/out/two_tools-1132b9c4d048af2f)",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 7,
+          "summary": "test result: ok. 2 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+        }
+      ]
+    },
+    {
+      "stage": "watchdog",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "watchdog",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "scope_unit": "ssmcp-main-accept-watchdog-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 1.266,
+      "log": "$PRIVATE_EVIDENCE-gates/watchdog.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s",
+        "     Running tests/watchdog.rs ($TARGET/debug/build/ssmcp/a8326f0a64260a93/out/watchdog-a8326f0a64260a93)",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running tests/watchdog.rs ($TARGET/debug/build/ssmcp/a8326f0a64260a93/out/watchdog-a8326f0a64260a93)",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s"
+        }
+      ]
+    },
+    {
+      "stage": "workspace_bridge",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "workspace_bridge",
+        "-j1",
+        "--",
+        "--test-threads=4"
+      ],
+      "scope_unit": "ssmcp-main-accept-workspace-bridge-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.214,
+      "log": "$PRIVATE_EVIDENCE-gates/workspace_bridge.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s",
+        "     Running tests/workspace_bridge.rs ($TARGET/debug/build/ssmcp/5f251f8696edb6f4/out/workspace_bridge-5f251f8696edb6f4)",
+        "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running tests/workspace_bridge.rs ($TARGET/debug/build/ssmcp/5f251f8696edb6f4/out/workspace_bridge-5f251f8696edb6f4)",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 3,
+          "summary": "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "stage": "doc",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--doc",
+        "-j1"
+      ],
+      "scope_unit": "ssmcp-main-accept-doc-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 2.018,
+      "log": "$PRIVATE_EVIDENCE-gates/doc.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "test_groups": [
+        {
+          "target": "Doc-tests ssmcp",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        }
+      ]
+    },
+    {
+      "stage": "http",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "two_tools",
+        "-j1",
+        "--",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "scope_unit": "ssmcp-main-accept-http-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 2.068,
+      "log": "$PRIVATE_EVIDENCE-gates/http.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s",
+        "     Running tests/two_tools.rs ($TARGET/debug/build/ssmcp/1132b9c4d048af2f/out/two_tools-1132b9c4d048af2f)",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.83s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running tests/two_tools.rs ($TARGET/debug/build/ssmcp/1132b9c4d048af2f/out/two_tools-1132b9c4d048af2f)",
+          "status": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.83s"
+        }
+      ]
+    },
+    {
+      "stage": "code_mode",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "code_mode::tests",
+        "-j1",
+        "--",
+        "--include-ignored",
+        "--test-threads=2"
+      ],
+      "scope_unit": "ssmcp-main-accept-code-mode-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 2.919,
+      "log": "$PRIVATE_EVIDENCE-gates/code_mode.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s",
+        "     Running unittests src/lib.rs ($TARGET/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988)",
+        "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 742 filtered out; finished in 2.72s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running unittests src/lib.rs ($TARGET/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988)",
+          "status": "ok",
+          "passed": 22,
+          "failed": 0,
+          "ignored": 0,
+          "summary": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 742 filtered out; finished in 2.72s"
+        }
+      ]
+    },
+    {
+      "stage": "context_helpers",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--test",
+        "context_helpers",
+        "-j1",
+        "--",
+        "--ignored",
+        "--test-threads=1"
+      ],
+      "scope_unit": "ssmcp-main-accept-context-helpers-2306691.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 0.815,
+      "log": "$PRIVATE_EVIDENCE-gates/context_helpers.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s",
+        "     Running tests/context_helpers.rs ($TARGET/debug/build/ssmcp/914231b57e8e8e02/out/context_helpers-914231b57e8e8e02)",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s"
+      ],
+      "test_groups": [
+        {
+          "target": "Running tests/context_helpers.rs ($TARGET/debug/build/ssmcp/914231b57e8e8e02/out/context_helpers-914231b57e8e8e02)",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s"
+        }
+      ]
+    }
+  ],
+  "aggregate_only": true,
+  "source_equivalence": {
+    "base_commit": "73a775d74661fec26767ccac9d4b6102b0c42843",
+    "current_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+    "changed_paths": [
+      "docs/client-ui.md",
+      "tests/resources.rs"
+    ],
+    "production_inputs_unchanged": true
+  },
+  "previous_attempt": {
+    "source_commit": "73a775d74661fec26767ccac9d4b6102b0c42843",
+    "report": "$INITIAL_EVIDENCE-gates.json",
+    "sha256": "b43690650214f90cd1be93a29e1a81cb668bf214b8f6541666d357d3723dfaae",
+    "cargo_test_exit_code": 101,
+    "failed_targets": [
+      {
+        "target": "Running tests/resources.rs ($TARGET/debug/build/ssmcp/b6141e2da2308ee3/out/resources-b6141e2da2308ee3)",
+        "status": "FAILED",
+        "passed": 8,
+        "failed": 2,
+        "ignored": 0,
+        "summary": "test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s"
+      }
+    ]
+  },
+  "reused_default_test_groups": [
+    {
+      "target": "Running unittests src/lib.rs ($TARGET/debug/build/ssmcp/b4039da415652988/out/ssmcp-b4039da415652988)",
+      "status": "ok",
+      "passed": 755,
+      "failed": 0,
+      "ignored": 9,
+      "summary": "test result: ok. 755 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 33.39s"
+    },
+    {
+      "target": "Running unittests src/bin/ssmcp.rs ($TARGET/debug/build/ssmcp/ce7f8bb692d7c3fb/out/ssmcp-ce7f8bb692d7c3fb)",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "target": "Running unittests src/bin/ssmcpd.rs ($TARGET/debug/build/ssmcp/2767072b29de56f5/out/ssmcpd-2767072b29de56f5)",
+      "status": "ok",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "target": "Running tests/cc_backend.rs ($TARGET/debug/build/ssmcp/4cae8d30c3763cdd/out/cc_backend-4cae8d30c3763cdd)",
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 1,
+      "summary": "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.52s"
+    },
+    {
+      "target": "Running tests/client_reload.rs ($TARGET/debug/build/ssmcp/19d9a2631ee6b3e7/out/client_reload-19d9a2631ee6b3e7)",
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.95s"
+    },
+    {
+      "target": "Running tests/client_resources.rs ($TARGET/debug/build/ssmcp/011965259be839b3/out/client_resources-011965259be839b3)",
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s"
+    },
+    {
+      "target": "Running tests/client_server_config.rs ($TARGET/debug/build/ssmcp/4bc7eeee4fcec23d/out/client_server_config-4bc7eeee4fcec23d)",
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s"
+    },
+    {
+      "target": "Running tests/client_startup.rs ($TARGET/debug/build/ssmcp/b1fc62002b2d5275/out/client_startup-b1fc62002b2d5275)",
+      "status": "ok",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.04s"
+    },
+    {
+      "target": "Running tests/codex_backend.rs ($TARGET/debug/build/ssmcp/4326c259435f903d/out/codex_backend-4326c259435f903d)",
+      "status": "ok",
+      "passed": 14,
+      "failed": 0,
+      "ignored": 2,
+      "summary": "test result: ok. 14 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 21.72s"
+    },
+    {
+      "target": "Running tests/collaboration.rs ($TARGET/debug/build/ssmcp/5923ebcb7f937219/out/collaboration-5923ebcb7f937219)",
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s"
+    },
+    {
+      "target": "Running tests/context.rs ($TARGET/debug/build/ssmcp/24fd6c3c6b563f89/out/context-24fd6c3c6b563f89)",
+      "status": "ok",
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s"
+    },
+    {
+      "target": "Running tests/context_helpers.rs ($TARGET/debug/build/ssmcp/914231b57e8e8e02/out/context_helpers-914231b57e8e8e02)",
+      "status": "ok",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 2,
+      "summary": "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    },
+    {
+      "target": "Running tests/context_runtime.rs ($TARGET/debug/build/ssmcp/b035ac38745e33c3/out/context_runtime-b035ac38745e33c3)",
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s"
+    },
+    {
+      "target": "Running tests/oauth_security.rs ($TARGET/debug/build/ssmcp/af3dcf1903f877de/out/oauth_security-af3dcf1903f877de)",
+      "status": "ok",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s"
+    },
+    {
+      "target": "Running tests/pi_backend.rs ($TARGET/debug/build/ssmcp/e29c963655bb2d96/out/pi_backend-e29c963655bb2d96)",
+      "status": "ok",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 1,
+      "summary": "test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.72s"
+    },
+    {
+      "target": "Running tests/release_client.rs ($TARGET/debug/build/ssmcp/bbecfb1fd07525a7/out/release_client-bbecfb1fd07525a7)",
+      "status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s"
+    }
+  ],
+  "reused_gate_results": [
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "-j1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "scope_unit": "ssmcp-main-accept-clippy-1937674.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 2.668,
+      "log": "$INITIAL_EVIDENCE-gates/clippy.log",
+      "summary": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.53s"
+      ],
+      "test_groups": []
+    },
+    {
+      "stage": "fixture",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--message-format=json",
+        "-j1"
+      ],
+      "scope_unit": "ssmcp-main-accept-fixture-1937674.scope",
+      "resource_limits": {
+        "MemoryMax": "2G",
+        "MemorySwapMax": "1G",
+        "CPUQuota": "200%"
+      },
+      "exit_code": 0,
+      "timed_out": false,
+      "seconds": 91.761,
+      "log": "$INITIAL_EVIDENCE-gates/fixture.log",
+      "summary": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 31s"
+      ],
+      "test_groups": []
+    }
+  ],
+  "current_stage": null,
+  "finished_at": "2026-11-17T23:11:30.957137+00:00",
+  "source_clean_after": true,
+  "default_target_coverage": {
+    "required": [
+      "src/bin/ssmcp.rs",
+      "src/bin/ssmcpd.rs",
+      "src/lib.rs",
+      "tests/cc_backend.rs",
+      "tests/client_reload.rs",
+      "tests/client_resources.rs",
+      "tests/client_server_config.rs",
+      "tests/client_startup.rs",
+      "tests/codex_backend.rs",
+      "tests/collaboration.rs",
+      "tests/context.rs",
+      "tests/context_helpers.rs",
+      "tests/context_runtime.rs",
+      "tests/oauth_security.rs",
+      "tests/pi_backend.rs",
+      "tests/release_client.rs",
+      "tests/resources.rs",
+      "tests/rsync.rs",
+      "tests/terminals.rs",
+      "tests/two_tools.rs",
+      "tests/watchdog.rs",
+      "tests/workspace_bridge.rs"
+    ],
+    "passed": [
+      "src/bin/ssmcp.rs",
+      "src/bin/ssmcpd.rs",
+      "src/lib.rs",
+      "tests/cc_backend.rs",
+      "tests/client_reload.rs",
+      "tests/client_resources.rs",
+      "tests/client_server_config.rs",
+      "tests/client_startup.rs",
+      "tests/codex_backend.rs",
+      "tests/collaboration.rs",
+      "tests/context.rs",
+      "tests/context_helpers.rs",
+      "tests/context_runtime.rs",
+      "tests/oauth_security.rs",
+      "tests/pi_backend.rs",
+      "tests/release_client.rs",
+      "tests/resources.rs",
+      "tests/rsync.rs",
+      "tests/terminals.rs",
+      "tests/two_tools.rs",
+      "tests/watchdog.rs",
+      "tests/workspace_bridge.rs"
+    ],
+    "complete": true
+  },
+  "original_cargo_test_exit_code": 101,
+  "_publication": {
+    "private_paths_normalized": true,
+    "source_object_sha256": "fe46e42407c299cd32d6e463d39a18b684494be3e2fa39bf81f9f251d60ba526",
+    "source_object_digest_algorithm": "SHA-256 of UTF-8 json.dumps(original, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
+    "note": "Nested report_sha256 fields identify the original private files, before publication path normalization."
+  }
+}

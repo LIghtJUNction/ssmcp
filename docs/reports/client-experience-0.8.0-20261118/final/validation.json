@@ -1,0 +1,55 @@
+{
+  "schema": "ssmcp.client-main-validation.v1",
+  "status": "passed",
+  "source_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+  "source_tree": "c7ccc2bb4d9722f52b314f0c0dc650c624cfb074",
+  "integrated_main": "95b5f26125ede8825f12feb79b7f870055d004b5",
+  "started_at": "2026-11-17T23:11:15.837487+00:00",
+  "driver_sha256": "8b86e8b1036da78620044002dfef829df87c1d223a50abbe91126a94319c3407",
+  "resource_limits": {
+    "MemoryMax": "2G",
+    "MemorySwapMax": "1G",
+    "CPUQuota": "200%"
+  },
+  "target_dir": "$TARGET",
+  "reports": {
+    "rust": "rust-gates.json",
+    "build": "release-build.json",
+    "ui": "release-ui-gates.json",
+    "fixture": "fixture-binary.json"
+  },
+  "core_gate_equivalence": {
+    "base_commit": "73a775d74661fec26767ccac9d4b6102b0c42843",
+    "current_commit": "778f6cc6148fcd8bb8d88cdae4fc98f58378c4dc",
+    "changed_paths": [
+      "docs/client-ui.md",
+      "tests/resources.rs"
+    ],
+    "production_inputs_unchanged": true
+  },
+  "environment": {
+    "inherited_ssmcp_removed": true,
+    "proxy_variables_removed": true,
+    "loopback_no_proxy": true,
+    "models_invoked": false
+  },
+  "source_archive": {
+    "path": "$OUT/client-080-main-source-778f6cc.tar",
+    "sha256": "14fa6f4a36de55f4dd1ec80e8e300371f20deb7c32d4ec7eb980e871b8312a0d",
+    "bytes": 13957120
+  },
+  "phase": "completed",
+  "current_stage": null,
+  "updated_at": "2026-11-17T23:15:08.679748+00:00",
+  "finished_at": "2026-11-17T23:15:10.555441+00:00",
+  "installed_prefix": "$INSTALLED_PREFIX",
+  "source_clean_after": true,
+  "ui_checks": 299,
+  "total_functional_checks": 324,
+  "_publication": {
+    "private_paths_normalized": true,
+    "source_object_sha256": "b308b9e3143a14c370c81a96ba8f40b9da3b9ca2a7a3e0c7f760b862d68223c6",
+    "source_object_digest_algorithm": "SHA-256 of UTF-8 json.dumps(original, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
+    "note": "Nested report_sha256 fields identify the original private files, before publication path normalization."
+  }
+}

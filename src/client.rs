@@ -1,24 +1,50 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
-mod account;
+pub(crate) mod account;
+pub(crate) mod attachments;
+mod audit_view;
+mod browser_setup;
+mod clipboard;
+pub(crate) mod completion;
+mod composer;
+mod config;
+pub(crate) mod context_memory;
+
+pub(crate) use config::BrowserSettings;
+
+/// Settings are read on demand so setup changes apply on the next client connection.
+pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
+    config::browser()
+}
 mod git_status;
+mod handoff;
+mod highlight;
 pub(crate) mod input;
+pub(crate) mod interface;
 mod onboarding;
 mod panel;
+pub(crate) mod presentation;
 #[cfg(test)]
 mod protocol_tests;
+pub(crate) mod references;
 mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;
+mod steering;
 pub(crate) mod terminal;
+mod trust;
 pub(crate) mod ui;
+mod ui_command;
+mod update;
+#[cfg(target_os = "linux")]
+mod zero;
 
 use crate::{
     backend::Backend,
     platform::{interrupt_signal, terminate_signal},
     runtime::Runtime,
     wire::{
-        ClientMetadata, Frame, LEGACY_VERSION, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT,
-        Mode, VERSION, canonical_github_principal, read_frame, validate_title, write_frame,
+        ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
+        canonical_github_principal, read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -38,24 +64,60 @@ use tokio::{
     time::timeout,
 };
 
-const HELP: &str = r#"ssmcp — connect your devices and control authorized sessions
+const HELP: &str = r#"ssmcp — connect a device; control its tools remotely
 
-Usage: ssmcp login [--server URL] [--no-browser]
+Usage: ssmcp [username@server] [options]
+
+Start
+  ssmcp                         Reuse your last authorized account
+  ssmcp alice@relay.example     Connect and sign in when needed
+  ssmcp list                    List your online devices
+  ssmcp -i                      Open an authorized remote terminal
+
+Manage
+  config · whoami · logout      Account and server settings
+  update [--check]              Update the installed client
+  invite · join                Share a temporary session
+  sessions · attach · service  Saved and background sessions
+  setup · ui · 007             Setup, appearance and recovery
+
+Options
+  --name NAME   --title TEXT   --server URL   --context-root PATH
+  --no-browser  --no-watchdog  --theme NAME   --no-color
+
+Use ssmcp COMMAND --help for command options; --help-full lists all connection flags.
+In a connected chat: /help, @file, $skill, !command; Left opens Agents.
+"#;
+
+const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized sessions
+
+Usage: ssmcp username@server [options]
+       ssmcp [--server URL] [options]
        ssmcp whoami|logout [--server URL] [--json]
        ssmcp list [--json | -i] [--client ID]
        ssmcp -i [--server URL] [--client ID]
-       ssmcp invite [--ttl 600] [--session-ttl 3600] [--shell sh|powershell]
+       ssmcp config <set|get|unset> server [URL]
+       ssmcp config path
+       ssmcp update [--check]
+       ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
+       ssmcp invite [--server URL] [--ttl 600] [--session-ttl 3600] [--shell sh|powershell]
                     [--no-bootstrap] [--json]
-       ssmcp join --server URL --token INVITATION [options]
+       ssmcp join [--server URL] --token INVITATION [options]
        ssmcp [options] [--server URL]
-       ssmcp [options] [user@]host
+       ssmcp --ssh [options] [user@]host
        ssmcp setup [options] [user@]host
+       ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [NAME|list] [--read-only]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
+       ssmcp ui <show|check|init|preview> [--ui-config FILE]
+       ssmcp 007 <install|run|start|stop|status|uninstall|sessions> [options]
 
-  --server URL         HTTPS server (default: the account used by ssmcp login)
+  --server URL         Relay for this command; overrides config and last login
+  --username NAME      Named account on the selected server
+  --no-browser         Print the GitHub authorization link without opening it
+  --ssh                Explicitly select a legacy SSH destination
   -i, --interactive    Select an authorized account session and open its terminal
   --identity FILE      SSH private key file; legacy -i FILE HOST remains supported
   -p port              SSH port
@@ -68,9 +130,10 @@ Usage: ssmcp login [--server URL] [--no-browser]
   --no-watchdog        Disable automatic reconnects (enabled by default)
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
-  --title TITLE        Session task shown to agents (at most 512 UTF-8 bytes)
+  --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
   --allow USER@github  Allow GitHub identities; repeat or separate with commas
                        (SSH sharing; at most 32 users; your logged-in account is automatic)
+  --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
   --log-format FORMAT  pretty (default), pretty-verbose, or jsonl
@@ -78,17 +141,20 @@ Usage: ssmcp login [--server URL] [--no-browser]
   --verbose            Alias for --log-format pretty-verbose
   --raw, --raw-events   Alias for --log-format jsonl
   --ui-config FILE     Local [ui] TOML; default ~/.config/ssmcp/config.toml
-  --theme NAME         minimal, codex-dark, nord, or solarized
+  --theme NAME         dark, codex-dark, nord, solarized, light, or minimal
   --timestamps         Show UTC timestamps on event headings
-  --max-inline-output N  Maximum lines per buffered output block (default 12)
-  --list-tools         Discover native and workspace tools as JSON, then exit without SSH
+  --max-inline-output N  Maximum lines per buffered output block (default 8)
+  --list-tools         List native and workspace tools as JSON, then exit without SSH
 
-The client always connects as shell. Installed Codex, Claude Code, Pi and OpenCode
-harnesses are discovered automatically and their native tools are registered in
-one code_mode. Tools keep their native schemas and permission/approval behavior.
+The client provides native tools without another harness. Optional Codex, Claude
+Code, Pi, OpenCode and Playwright bridges stay unloaded until explicitly needed.
+Use ssmcp.harnesses.load for one provider, or the local /cc, /codex and /pi commands.
+Tools keep their native schemas and permission/approval behavior.
 
 Examples:
-  ssmcp login
+  ssmcp alice@ssmcp.lmm.best
+  ssmcp alice@my-server.example:8443 --name laptop
+  ssmcp config set server https://relay.example.com
   ssmcp whoami
   ssmcp --name laptop
   ssmcp list
@@ -110,8 +176,12 @@ Examples:
   ssmcp attach workstation
   ssmcp sessions close workstation
 
-GitHub login is saved privately for the selected server. Bare ssmcp uses HTTPS
-and automatically grants your own account access. No SSH key or --allow is needed.
+username@server connects over HTTPS/WSS. The first connection opens GitHub
+authorization, validates and binds your chosen username, then connects automatically.
+The username belongs to this server and can differ from your GitHub login.
+Credentials are saved privately for this origin. Later connections reuse them;
+expired credentials reopen authorization. --no-browser prints a link and code.
+Bare ssmcp reuses your last authorized account. No SSH key or --allow is needed.
 ssmcp list shows the account's online controllable sessions; sessions list keeps
 listing local saved sessions. Ctrl-] leaves remote interactive control; Ctrl-C
 is delivered to the selected terminal. A temporary invitation can be redeemed
@@ -150,7 +220,8 @@ Install the persistent session manager with `ssmcp service install`; choose
 New sessions use the running manager. Legacy --daemon also supports per-session
 systemd --user, launchd and Task Scheduler when the manager is not installed.
 Bare `ssmcp attach` lists sessions. Ctrl-] detaches without stopping the session;
-Ctrl-C inside interactive attach is sent to the selected terminal.
+the dashboard provides audit navigation. Use `ssmcp -i` for interactive input,
+or disable the dashboard when attaching to a saved session.
 --session-control explicitly grants this OS user's saved-session management.
 New remote-created sessions inherit connection settings and stay in the current
 workspace; children do not inherit this management grant.
@@ -272,6 +343,8 @@ fn ssh_ended(status: io::Result<ExitStatus>) -> String {
 struct Options {
     destination: Option<String>,
     server: Option<String>,
+    username: Option<String>,
+    no_browser: bool,
     relay: Option<account::Credential>,
     temporary: bool,
     name: Option<String>,
@@ -295,6 +368,7 @@ struct Options {
     port: Option<u16>,
     config: Option<OsString>,
     shell: PathBuf,
+    tty: Option<String>,
 }
 
 impl Options {
@@ -306,23 +380,37 @@ impl Options {
         args: impl IntoIterator<Item = OsString>,
         default_destination: Option<&str>,
     ) -> Result<Option<Self>, String> {
-        Self::parse_with_policy(args, default_destination, true)
+        Self::parse_with_policy(
+            args,
+            default_destination,
+            true,
+            default_destination.is_some(),
+        )
     }
 
     // Older saved manifests omitted --no-watchdog. Their recorded policy remains
     // authoritative as the parsing default; explicit flags must still match it.
     fn parse_saved(spec: &crate::session::SessionSpec) -> Result<Option<Self>, String> {
-        Self::parse_with_policy(spec.args.iter().map(OsString::from), None, spec.watchdog)
+        Self::parse_with_policy(
+            spec.args.iter().map(OsString::from),
+            None,
+            spec.watchdog,
+            true,
+        )
     }
 
     fn parse_with_policy(
         args: impl IntoIterator<Item = OsString>,
         default_destination: Option<&str>,
         default_watchdog: bool,
+        legacy_destination: bool,
     ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter();
         let mut destination = None;
         let mut server = None;
+        let mut username = None;
+        let mut no_browser = false;
+        let mut ssh = false;
         let mut name = None;
         let mut title = None;
         let mut allow = Vec::new();
@@ -343,10 +431,15 @@ impl Options {
         let mut portal = None;
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = crate::platform::default_shell();
+        let mut tty = None;
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 Some("-h" | "--help") => {
                     print!("{HELP}");
+                    return Ok(None);
+                }
+                Some("--help-full") => {
+                    print!("{HELP_FULL}");
                     return Ok(None);
                 }
                 Some("-V" | "--version") => {
@@ -354,14 +447,22 @@ impl Options {
                     return Ok(None);
                 }
                 Some("-t" | "--type" | "--backend") => {
-                    return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; installed harnesses are discovered automatically".into());
+                    return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; optional harnesses load only when explicitly requested".into());
                 }
                 Some(value)
                     if value.starts_with("--type=")
                         || value.starts_with("--backend=")
                         || value.starts_with("-t=") =>
                 {
-                    return Err("harness selection was removed; remove -t/--type/--backend; installed harnesses are discovered automatically".into());
+                    return Err("harness selection was removed; remove -t/--type/--backend; optional harnesses load only when explicitly requested".into());
+                }
+                Some("--ssh") => ssh = true,
+                Some("--no-browser") => no_browser = true,
+                Some("--username") => {
+                    let value = args.next().ok_or("--username requires a name")?;
+                    username = Some(crate::username::normalize(
+                        value.to_str().ok_or("--username must be UTF-8")?,
+                    )?);
                 }
                 Some("--server") => {
                     let value = args
@@ -489,6 +590,20 @@ impl Options {
                             .ok_or("-p requires a port in 1..=65535")?,
                     );
                 }
+                Some("--tty") => {
+                    let value = args
+                        .next()
+                        .ok_or("--tty requires a terminal executable")?
+                        .into_string()
+                        .map_err(|_| "--tty must be UTF-8")?;
+                    crate::observer::validate_terminal(&value)?;
+                    tty = Some(value);
+                }
+                Some(value) if value.starts_with("--tty=") => {
+                    let value = &value["--tty=".len()..];
+                    crate::observer::validate_terminal(value)?;
+                    tty = Some(value.into());
+                }
                 Some("--shell") => {
                     shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?);
                 }
@@ -501,6 +616,34 @@ impl Options {
         if destination.is_none() && server.is_none() && !list_tools {
             destination = default_destination.map(str::to_owned);
         }
+        // Explicit SSH switches and old saved manifests retain their established
+        // transport. A new username@host invocation always selects HTTPS.
+        ssh |= identity.is_some() || port.is_some() || config.is_some();
+        if !ssh
+            && !legacy_destination
+            && let Some(target) = destination.as_deref().filter(|value| value.contains('@'))
+        {
+            let (account_name, origin) =
+                account::parse_target(target).map_err(|e| e.to_string())?;
+            if username
+                .as_ref()
+                .is_some_and(|value| value != &account_name)
+            {
+                return Err("--username differs from the username in the destination".into());
+            }
+            if server.as_ref().is_some_and(|value| value != &origin) {
+                return Err("--server differs from the server in the destination".into());
+            }
+            username = Some(account_name);
+            server = Some(origin);
+            destination = None;
+        }
+        if username.is_some() && (destination.is_some() || ssh) {
+            return Err("a username selects HTTPS and cannot be combined with SSH options".into());
+        }
+        if ssh && destination.is_none() {
+            return Err("--ssh and SSH options require an explicit SSH destination".into());
+        }
         if let Some(destination) = &destination {
             validate_destination(destination)?;
         }
@@ -512,8 +655,10 @@ impl Options {
                     .into(),
             );
         }
-        if list_tools && server.is_some() {
-            return Err("--list-tools is local and cannot be combined with --server".into());
+        if list_tools && (server.is_some() || username.is_some()) {
+            return Err(
+                "--list-tools is local and cannot be combined with an account destination".into(),
+            );
         }
         if list_tools && destination.is_some() {
             return Err("--list-tools is local and does not take an SSH destination".into());
@@ -549,6 +694,8 @@ impl Options {
         Ok(Some(Self {
             destination,
             server,
+            username,
+            no_browser,
             relay: None,
             temporary: false,
             name,
@@ -572,6 +719,7 @@ impl Options {
             port,
             config,
             shell,
+            tty,
         }))
     }
 
@@ -624,6 +772,9 @@ impl Options {
                 path.clone().into_os_string(),
             ]);
         }
+        if let Some(tty) = &self.tty {
+            args.extend([OsString::from("--tty"), OsString::from(tty)]);
+        }
         args.extend([
             OsString::from("--shell"),
             self.shell.clone().into_os_string(),
@@ -642,7 +793,12 @@ impl Options {
         }
         if let Some(server) = &self.server {
             args.extend([OsString::from("--server"), OsString::from(server)]);
+            if let Some(username) = &self.username {
+                args.extend([OsString::from("--username"), OsString::from(username)]);
+            }
         } else {
+            // Explicitly serialize the legacy transport; @ no longer chooses SSH.
+            args.push(OsString::from("--ssh"));
             args.push(OsString::from(
                 self.destination
                     .as_ref()
@@ -715,7 +871,10 @@ impl Options {
 pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate::Result<()> {
     let mut args = spec.args.iter();
     while let Some(arg) = args.next() {
-        if matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V") {
+        if matches!(
+            arg.as_str(),
+            "--help" | "--help-full" | "-h" | "--version" | "-V"
+        ) {
             return Err("saved sessions cannot contain help or version actions".into());
         }
         if connection_option_takes_value(arg) {
@@ -739,6 +898,23 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
         );
     }
     Ok(())
+}
+
+/// Read display metadata without reopening optional context roots or transports.
+pub(crate) fn session_title(spec: &crate::session::SessionSpec) -> crate::Result<Option<String>> {
+    let mut args = spec.args.iter();
+    let mut title = None;
+    while let Some(arg) = args.next() {
+        if arg == "--title" {
+            title = Some(args.next().ok_or("saved session title is missing")?.clone());
+        } else if let Some(value) = arg.strip_prefix("--title=") {
+            title = Some(value.to_owned());
+        } else if connection_option_takes_value(arg) {
+            args.next();
+        }
+    }
+    validate_title(title.as_deref())?;
+    Ok(title)
 }
 
 /// Child sessions inherit connection identity, but not host-management authority.
@@ -799,7 +975,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help for SSH options."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help-full for SSH options."
         );
         return Ok(());
     }
@@ -828,7 +1004,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     let Some(mut options) = Options::parse(connection)? else {
         return Ok(());
     };
-    apply_account(&mut options, None).await?;
+    apply_account(&mut options, None, true).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
     validate_session_spec(&spec)?;
@@ -851,6 +1027,7 @@ fn connection_option_takes_value(option: &str) -> bool {
         option,
         "--name"
             | "--server"
+            | "--username"
             | "--identity"
             | "--title"
             | "--allow"
@@ -865,6 +1042,7 @@ fn connection_option_takes_value(option: &str) -> bool {
             | "-p"
             | "-F"
             | "--shell"
+            | "--tty"
     )
 }
 
@@ -961,14 +1139,18 @@ fn join_request(args: &mut Vec<OsString>) -> crate::Result<Option<JoinRequest>> 
             _ => remaining.push(arg),
         }
     }
-    let server = server.unwrap_or_else(|| account::DEFAULT_SERVER.into());
+    let server = account::resolve_server(server.as_deref())?;
     let token = token.ok_or("usage: ssmcp join --server URL --token INVITATION [--name NAME]")?;
     remaining.extend([OsString::from("--server"), OsString::from(&server)]);
     *args = remaining;
     Ok(Some(JoinRequest { server, token }))
 }
 
-async fn apply_account(options: &mut Options, join: Option<JoinRequest>) -> crate::Result<()> {
+async fn apply_account(
+    options: &mut Options,
+    join: Option<JoinRequest>,
+    allow_login: bool,
+) -> crate::Result<()> {
     if options.list_tools {
         if join.is_some() {
             return Err("join starts a controlled session; --list-tools is local".into());
@@ -991,12 +1173,22 @@ async fn apply_account(options: &mut Options, join: Option<JoinRequest>) -> crat
         }
         options.temporary = true;
         Some(account::enroll(&join.server, &join.token).await?)
+    } else if options.server.is_some() || options.destination.is_none() {
+        Some(
+            account::connect_credential(
+                options.server.as_deref(),
+                options.username.as_deref(),
+                options.no_browser,
+                allow_login,
+            )
+            .await?,
+        )
     } else {
-        account::credentials(options.server.as_deref()).await?
+        account::credentials(None).await?
     };
     if options.server.is_some() || options.destination.is_none() {
         let credential =
-            credential.ok_or("not logged in; run ssmcp login [--server URL], then run ssmcp")?;
+            credential.ok_or("connect with ssmcp username@server to authorize this device")?;
         if options
             .allow
             .iter()
@@ -1005,6 +1197,7 @@ async fn apply_account(options: &mut Options, join: Option<JoinRequest>) -> crat
             return Err("HTTPS account sessions belong to the logged-in account; --allow for additional users is supported on SSH connections".into());
         }
         options.server = Some(credential.server.clone());
+        options.username = credential.username.clone();
         options.allow = vec![credential.principal.clone()];
         options.relay = Some(credential);
         options.no_setup = true;
@@ -1020,6 +1213,17 @@ async fn apply_account(options: &mut Options, join: Option<JoinRequest>) -> crat
 }
 
 pub async fn run() -> crate::Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__tty-view")) {
+        let args: Vec<_> = std::env::args_os().skip(2).collect();
+        if args.len() != 2 {
+            return Err("terminal viewer requires endpoint directory and slot".into());
+        }
+        let slot = args[1]
+            .to_str()
+            .and_then(|value| value.parse().ok())
+            .ok_or("invalid observer slot")?;
+        return crate::observer::viewer(std::path::Path::new(&args[0]), slot).await;
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__relay")) {
         let code = match relay::run().await {
             Ok(()) => 0,
@@ -1040,6 +1244,23 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "update") {
+        return update::run(args.into_iter().skip(1).collect()).await;
+    }
+    if args.first().is_some_and(|arg| arg == "ui") {
+        return ui_command::run(args.into_iter().skip(1).collect()).await;
+    }
+    if args.first().is_some_and(|arg| arg == "007") {
+        #[cfg(target_os = "linux")]
+        return zero::dispatch(args.into_iter().skip(1).collect()).await;
+        #[cfg(not(target_os = "linux"))]
+        return Err("007 recovery mode currently requires Linux and systemd".into());
+    }
+    config::normalize_args(&mut args)?;
+    if browser_setup::dispatch(&args).await? || config::dispatch(&args)? || trust::dispatch(&args)?
+    {
+        return Ok(());
+    }
     if account::dispatch(&args).await? {
         return Ok(());
     }
@@ -1047,7 +1268,7 @@ pub async fn run() -> crate::Result<()> {
         && args.iter().any(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp join --server URL --token INVITATION [--name NAME] [--no-watchdog]\nStarts a temporary controlled session over HTTPS. Keep this terminal open; Ctrl-C stops it."
+            "Usage: ssmcp join [--server URL] --token INVITATION [--name NAME] [--no-watchdog]\nStarts a temporary controlled session over HTTPS. Keep this terminal open; Ctrl-C stops it."
         );
         return Ok(());
     }
@@ -1101,7 +1322,7 @@ pub async fn run() -> crate::Result<()> {
             "setup configures SSH; use ssmcp login --server URL for HTTPS account access".into(),
         );
     }
-    apply_account(&mut options, join).await?;
+    apply_account(&mut options, join, service.is_none()).await?;
     if let Some(runner) = &service
         && (options.daemon
             || options.list_tools
@@ -1120,6 +1341,7 @@ pub async fn run() -> crate::Result<()> {
         if !onboarding::verify_after_setup(&options).await? {
             return Ok(());
         }
+        browser_setup::configure_existing().await?;
     } else if options.daemon && !options.no_setup && onboarding::interactive() {
         match onboarding::probe(&options).await {
             Ok(true) => {}
@@ -1173,7 +1395,18 @@ pub async fn run() -> crate::Result<()> {
         ui.log_format = render::LogFormat::Jsonl;
         ui.show_raw_json = false;
     }
+    interface::initialize_path(options.ui_config.as_deref());
     render::configure(ui.clone());
+    if let Err(error) = context_memory::initialize() {
+        render::status(
+            "context",
+            "Warning",
+            &format!(
+                "Local memory unavailable; conversation history and drafts remain usable: {error}"
+            ),
+        );
+    }
+    steering::restore_handoff()?;
     let mut attachment = if let Some(runner) = &service {
         Some(crate::session::attach::serve(runner.directory().to_path_buf(), None).await?)
     } else {
@@ -1184,7 +1417,7 @@ pub async fn run() -> crate::Result<()> {
     if options.list_tools {
         let management = session_control(&options, service.as_ref())?;
         let backend = tokio::select! {
-            result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
+            result = timeout(Duration::from_secs(120), Backend::start_with_tty(&options.shell, options.tty.as_deref())) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
@@ -1193,7 +1426,11 @@ pub async fn run() -> crate::Result<()> {
             std::env::current_dir()?,
             options.context_roots.clone(),
             management,
-        ) {
+        )
+        .and_then(|runtime| {
+            runtime.enable_default_skill_sources()?;
+            Ok(runtime)
+        }) {
             Ok(runtime) => runtime,
             Err(error) => {
                 backend.shutdown().await;
@@ -1212,7 +1449,7 @@ pub async fn run() -> crate::Result<()> {
     let mut attempt = 0u64;
     let mut setup_attempted = setup_requested;
     let mut ever_registered = false;
-    let mut protocol = VERSION;
+    let mut reauthenticated = false;
     loop {
         if let Some(runner) = &service
             && runner.stop_requested()
@@ -1227,16 +1464,26 @@ pub async fn run() -> crate::Result<()> {
                 .as_secs()
                 >= credential.expires_at
         }) {
-            if let Some(runner) = &service {
-                runner.record(
-                    "disconnected",
-                    attempt,
-                    None,
-                    None,
-                    Some(relay::AUTH_EXPIRED),
-                )?;
+            if service.is_none()
+                && !options.temporary
+                && options.username.is_some()
+                && !reauthenticated
+            {
+                reauthenticated = true;
+                options.allow.clear();
+                apply_account(&mut options, None, true).await?;
+            } else {
+                if let Some(runner) = &service {
+                    runner.record(
+                        "disconnected",
+                        attempt,
+                        None,
+                        None,
+                        Some(relay::AUTH_EXPIRED),
+                    )?;
+                }
+                return Err(relay::failure(relay::AUTH_EXPIRED.into()));
             }
-            return Err(relay::failure(relay::AUTH_EXPIRED.into()));
         }
         attempt = attempt.saturating_add(1);
         if let Some(runner) = &service {
@@ -1250,7 +1497,6 @@ pub async fn run() -> crate::Result<()> {
             attachment.as_ref(),
             attempt,
             &mut registered,
-            &mut protocol,
         )
         .await
         {
@@ -1317,6 +1563,18 @@ pub async fn run() -> crate::Result<()> {
             .as_ref()
             .err()
             .is_some_and(|error| error.downcast_ref::<relay::PermanentFailure>().is_some());
+        if permanent
+            && error.as_deref() == Some(relay::AUTH_EXPIRED)
+            && service.is_none()
+            && !options.temporary
+            && options.username.is_some()
+            && !reauthenticated
+        {
+            reauthenticated = true;
+            options.allow.clear();
+            apply_account(&mut options, None, true).await?;
+            continue;
+        }
         if !options.watchdog || unsupported_protocol || permanent {
             if let Some(runner) = &service {
                 runner.record("disconnected", attempt, None, None, error.as_deref())?;
@@ -1380,7 +1638,7 @@ impl std::fmt::Display for UnsupportedWireProtocol {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected versions {VERSION} and {LEGACY_VERSION}; no further compatibility retry in this process"
+            "{UNSUPPORTED_WIRE_PROTOCOL}: gateway rejected wire protocol {VERSION}; update ssmcp and ssmcpd; older protocol versions are not supported"
         )
     }
 }
@@ -1413,132 +1671,186 @@ async fn stop_registration(
 
 async fn register_ssh(
     metadata: &ClientMetadata,
-    protocol: &mut u32,
     registered: &mut bool,
     mut command: impl FnMut() -> Command,
     cancelled: impl std::future::Future<Output = ()>,
     deadline: Duration,
 ) -> crate::Result<Option<RegisteredSsh>> {
     tokio::pin!(cancelled);
-    loop {
-        tokio::select! {
-            biased;
-            _ = &mut cancelled => return Ok(None),
-            _ = std::future::ready(()) => {},
-        }
-        let mut ssh = command()
-            .spawn()
-            .map_err(|error| format!("could not start OpenSSH ssh: {error}"))?;
-        let mut stderr_pump = ssh.stderr.take().map(|mut stderr| {
-            SshStderr(tokio::spawn(async move {
-                let mut bytes = [0u8; 4096];
-                while let Ok(count) = stderr.read(&mut bytes).await {
-                    if count == 0 {
-                        break;
-                    }
-                    render::event(
-                        "ssh",
-                        &json!({"stderr":String::from_utf8_lossy(&bytes[..count])}),
-                    );
+    tokio::select! {
+        biased;
+        _ = &mut cancelled => return Ok(None),
+        _ = std::future::ready(()) => {},
+    }
+    let mut ssh = command()
+        .spawn()
+        .map_err(|error| format!("could not start OpenSSH ssh: {error}"))?;
+    let mut stderr_pump = ssh.stderr.take().map(|mut stderr| {
+        SshStderr(tokio::spawn(async move {
+            let mut bytes = [0u8; 4096];
+            while let Ok(count) = stderr.read(&mut bytes).await {
+                if count == 0 {
+                    break;
                 }
-            }))
-        });
-        let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
-        let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
-        let mut wire_metadata = metadata.clone();
-        if *protocol == LEGACY_VERSION {
-            // Early v4 peers have a strict metadata schema predating title.
-            // Keep local display context and every authorization field intact.
-            wire_metadata.title = None;
-        }
-        if let Err(error) = write_frame(
-            &mut writer,
-            &Frame::Hello {
-                version: *protocol,
-                mode: Mode::Shell,
-                metadata: wire_metadata,
-            },
-        )
-        .await
-        {
+                render::event(
+                    "ssh",
+                    &json!({"stderr":String::from_utf8_lossy(&bytes[..count])}),
+                );
+            }
+        }))
+    });
+    let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
+    let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
+    if let Err(error) = write_frame(
+        &mut writer,
+        &Frame::Hello {
+            version: VERSION,
+            mode: Mode::Shell,
+            metadata: metadata.clone(),
+        },
+    )
+    .await
+    {
+        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        return Err(error.into());
+    }
+    let response = tokio::select! {
+        result = timeout(deadline, read_frame(&mut reader)) => {
+            result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSH authentication timed out"))
+                .and_then(|frame| frame)
+        },
+        _ = &mut cancelled => {
+            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            return Ok(None);
+        },
+    };
+    let response = match response {
+        Ok(frame) => frame,
+        Err(error) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
             return Err(error.into());
         }
-        let response = tokio::select! {
-            result = timeout(deadline, read_frame(&mut reader)) => {
-                result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSH authentication timed out"))
-                    .and_then(|frame| frame)
-            },
-            _ = &mut cancelled => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                return Ok(None);
-            },
-        };
-        let response = match response {
-            Ok(frame) => frame,
-            Err(error) => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                return Err(error.into());
-            }
-        };
-        let ready = match response {
-            Some(Frame::Ready {
-                url,
-                login_code,
-                login_expires_in,
-                client_id,
-            }) => (url, login_code, login_expires_in, client_id),
-            Some(Frame::Reject { message }) => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                // Only the first parsed response to this Hello may negotiate.
-                // Text on stderr, EOF, timeouts, and later Reject frames cannot.
-                if message == UNSUPPORTED_WIRE_PROTOCOL {
-                    if *protocol == VERSION {
-                        *protocol = LEGACY_VERSION;
-                        render::status(
-                            "ssh",
-                            "Warning",
-                            &format!(
-                                "Gateway rejected wire protocol {VERSION}; retrying once with version {LEGACY_VERSION}. Task titles stay local; per-call controller attribution is unavailable."
-                            ),
-                        );
-                        continue;
-                    }
-                    if *protocol == LEGACY_VERSION {
-                        return Err(UnsupportedWireProtocol.into());
-                    }
-                }
-                return Err(relay::failure(message));
-            }
-            None => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                return Err(
-                    "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions".into()
-                );
-            }
-            _ => {
-                stop_registration(&mut ssh, &mut stderr_pump).await?;
-                return Err("unexpected registration response".into());
-            }
-        };
-        *registered = true;
-        let github_auth = !metadata.allow.is_empty();
-        if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
+    };
+    let ready = match response {
+        Some(Frame::Ready {
+            url,
+            login_code,
+            login_expires_in,
+            client_id,
+        }) => (url, login_code, login_expires_in, client_id),
+        Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
-            return Err("server did not acknowledge the --allow GitHub access policy; upgrade ssmcpd with GitHub authorization configured before connecting".into());
+            // Only a parsed registration rejection is terminal for the protocol.
+            // Stderr, EOF, timeouts and unrelated authorization errors stay distinct.
+            if message == UNSUPPORTED_WIRE_PROTOCOL
+                || message.starts_with(&format!("{UNSUPPORTED_WIRE_PROTOCOL};"))
+            {
+                return Err(UnsupportedWireProtocol.into());
+            }
+            return Err(relay::failure(message));
         }
-        if !github_auth && (ready.1.is_empty() || ready.2 == 0) {
+        None => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
-            return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
+            return Err(
+                "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions".into()
+            );
         }
-        return Ok(Some(RegisteredSsh {
-            ssh,
-            stderr_pump,
-            writer,
-            reader,
-            ready,
-        }));
+        _ => {
+            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            return Err("unexpected registration response".into());
+        }
+    };
+    *registered = true;
+    let github_auth = !metadata.allow.is_empty();
+    if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
+        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        return Err("server did not acknowledge the --allow GitHub access policy; upgrade ssmcpd with GitHub authorization configured before connecting".into());
     }
+    if !github_auth && (ready.1.is_empty() || ready.2 == 0) {
+        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
+    }
+    Ok(Some(RegisteredSsh {
+        ssh,
+        stderr_pump,
+        writer,
+        reader,
+        ready,
+    }))
+}
+
+async fn send_steering(
+    writer: &Arc<Mutex<tokio::process::ChildStdin>>,
+    id: u64,
+    backend: &Runtime,
+) -> crate::Result<()> {
+    let Some(command) = steering::pending_command(id) else {
+        return Ok(());
+    };
+    let command = if let crate::wire::SteeringCommand::Publish { text, .. } = &command {
+        let prepared = match timeout(Duration::from_secs(5), backend.expand_references(text)).await {
+            Ok(Ok(text)) => steering::prepare_publish(id, text),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err("Preparing the file or skill references timed out. The request was not sent; review the retained draft and retry.".into()),
+        };
+        match prepared {
+            Ok(Some(command)) => command,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                steering::fail_unsent(id, &error);
+                terminal::notice(&error);
+                return Ok(());
+            }
+        }
+    } else {
+        command
+    };
+    timeout(Duration::from_secs(10), async {
+        let mut writer = writer.lock().await;
+        // Preparation and lock acquisition cannot consume the reply deadline.
+        // A cancelled or superseded request must never reach the wire.
+        if !steering::sent(id) {
+            return Ok(());
+        }
+        write_frame(&mut *writer, &Frame::Steering { id, command }).await
+    })
+    .await
+    .map_err(|_| "request queue write timed out")??;
+    Ok(())
+}
+
+/// Freeze mutations and reclaim queued requests before tearing down their room.
+/// Delivery can win a takeback race; those requests remain delivered and never replay.
+async fn reclaim_steering(
+    incoming: &mut Incoming,
+    writer: &Arc<Mutex<tokio::process::ChildStdin>>,
+    commands: &mut mpsc::Receiver<steering::Transport>,
+    backend: &Runtime,
+) -> crate::Result<()> {
+    steering::begin_reload()?;
+    timeout(Duration::from_secs(15), async {
+        loop {
+            if steering::reload_ready()? { return Ok::<(), crate::Error>(()); }
+            tokio::select! {
+                command = commands.recv() => match command {
+                    Some(steering::Transport::Wire { id, .. }) => send_steering(writer, id, backend).await?,
+                    Some(steering::Transport::Reload) => {},
+                    None => return Err("client control channel ended while preparing reload".into()),
+                },
+                frame = incoming.frames.recv() => match frame {
+                    Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::reply(id, result)?,
+                    Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
+                    Some(Ok(Some(Frame::Call { id, .. }))) => {
+                        let mut writer = writer.lock().await;
+                        write_frame(&mut *writer, &Frame::Reply { id, result: Err("client reload is preparing; refresh clients after reconnection".into()) }).await?;
+                    },
+                    Some(Ok(Some(Frame::Reject { message }))) => return Err(message.into()),
+                    Some(Err(error)) => return Err(error.into()),
+                    _ => return Err("connection ended while preserving queued requests".into()),
+                }
+            }
+        }
+    }).await.map_err(|_| "queued requests could not be reclaimed in time; client remains running")?
 }
 
 async fn connect(
@@ -1548,7 +1860,6 @@ async fn connect(
     attachment: Option<&crate::session::attach::Handle>,
     attempt: u64,
     registered: &mut bool,
-    protocol: &mut u32,
 ) -> crate::Result<ConnectionExit> {
     let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
@@ -1587,7 +1898,6 @@ async fn connect(
     };
     let registration = register_ssh(
         &metadata,
-        protocol,
         registered,
         || {
             let mut command =
@@ -1633,22 +1943,23 @@ async fn connect(
     };
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
-    let display_session = match terminal::Session::start(ui) {
-        Ok(session) => session,
-        Err(error) => {
-            render::status(
-                "display",
-                "Warning",
-                &format!("Dashboard unavailable: {error}"),
-            );
-            None
-        }
-    };
+    let display_session =
+        match terminal::Session::start(ui, &metadata.cwd, metadata.title.as_deref(), Some(&url)) {
+            Ok(session) => session,
+            Err(error) => {
+                render::status(
+                    "display",
+                    "Warning",
+                    &format!("Dashboard unavailable: {error}"),
+                );
+                None
+            }
+        };
     let mut incoming = Incoming::start(reader);
     render::status(
         "shell",
         "Progress",
-        "Starting shell and discovering installed harness tools",
+        "Starting native tools; optional harnesses stay unloaded",
     );
     let backend = tokio::select! {
         biased;
@@ -1660,14 +1971,18 @@ async fn connect(
         },
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
-        result = timeout(Duration::from_secs(120), Backend::start(&options.shell)) => result.map_err(|_| "local backend startup timed out")??,
+        result = timeout(Duration::from_secs(120), Backend::start_with_tty(&options.shell, options.tty.as_deref())) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = match Runtime::with_session_control(
         backend.clone(),
         PathBuf::from(&metadata.cwd),
         options.context_roots.clone(),
         management,
-    ) {
+    )
+    .and_then(|runtime| {
+        runtime.enable_default_skill_sources()?;
+        Ok(runtime)
+    }) {
         Ok(runtime) => runtime,
         Err(error) => {
             let _ = ssh.start_kill();
@@ -1690,7 +2005,7 @@ async fn connect(
             return Err(error);
         }
     };
-    // Core tools are ready immediately; optional providers continue discovery independently.
+    // Native tools are ready immediately; optional providers stay unloaded until requested.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
@@ -1775,6 +2090,9 @@ async fn connect(
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
+    let mut steering_commands = steering::connect(&client_id, VERSION);
+    let mut steering_updates = tokio::time::interval(Duration::from_secs(1));
+    steering_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
     let mut reload_requested = false;
     let mut intentionally_stopped = false;
@@ -1782,6 +2100,36 @@ async fn connect(
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result: crate::Result<()> = 'connected: loop {
         tokio::select! {
+            _ = steering_updates.tick() => {
+                if let Err(error) = steering::poll() { terminal::notice(&error); }
+            },
+            command = steering_commands.recv() => match command {
+                Some(steering::Transport::Wire { id, .. }) => {
+                    if let Err(error) = send_steering(&writer, id, &backend).await { break Err(error); }
+                },
+                Some(steering::Transport::Reload) => {
+                    while let Some(completed) = requests.try_join_next() {
+                        match completed {
+                            Ok(Ok(_)) => {},
+                            Ok(Err(error)) => break 'connected Err(error.into()),
+                            Err(error) => break 'connected Err(error.into()),
+                        }
+                    }
+                    let accepted = if options.temporary {
+                        Err("temporary joined sessions keep their credential only in memory; stop this session and create a new invitation to restart it".into())
+                    } else {
+                        backend.validate_reload().and_then(|()| restart.accept(&json!({}), requests.len(), &client_id, github_auth)).map(|_| ())
+                    };
+                    match accepted {
+                        Err(error) => { steering::abort_reload(&error); terminal::notice(&error); }
+                        Ok(()) => match reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend).await {
+                            Ok(()) => { reload_requested = true; break Ok(()); }
+                            Err(error) => { steering::abort_reload(&error.to_string()); terminal::notice(&error.to_string()); }
+                        },
+                    }
+                },
+                None => {},
+            },
             _ = service_updates.tick(), if service.is_some() => {
                 if service.expect("guarded service runner").stop_requested() {
                     intentionally_stopped = true;
@@ -1789,12 +2137,16 @@ async fn connect(
                 }
             },
             _ = ui_updates.tick(), if git_status.is_some() => {
+                if terminal::exit_requested() {
+                    intentionally_stopped = true;
+                    break Ok(());
+                }
                 if let Some(observer) = &git_status {
                     render::set_git_status(observer.snapshot());
                 }
             },
             frame = incoming.frames.recv() => match frame {
-                Some(Ok(Some(Frame::Call {id,operation,controller}))) => {
+                Some(Ok(Some(Frame::Call {id,operation,controller,code_context}))) => {
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
                             Ok(Ok(was_tool)) => {
@@ -1804,15 +2156,25 @@ async fn connect(
                             Err(error) => break 'connected Err(error.into()),
                         }
                     }
+                    let mut code_call = match backend.begin_code_call(&operation, id, controller.as_ref(), code_context) {
+                        Ok(call) => call,
+                        Err(error) => break Err(error.into()),
+                    };
                     if reload::is_reload(&operation) {
                         let _controller = render::controller_started(id, controller.as_ref());
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
-                        let response = if options.temporary {
+                        let mut response = if options.temporary {
                             Err("temporary joined sessions keep their credential only in memory; stop this session and create a new invitation to restart it".into())
                         } else {
                             backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
                         };
+                        if response.is_ok()
+                            && let Err(error) = reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend).await {
+                                steering::abort_reload(&error.to_string());
+                                response = Err(error.to_string());
+                            }
                         let accepted = response.is_ok();
+                        if let Some(call) = &mut code_call { call.finish(&response); }
                         let sent = timeout(Duration::from_secs(10), async {
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer, &Frame::Reply { id, result: response }).await
@@ -1830,6 +2192,8 @@ async fn connect(
                                 loop {
                                     match incoming.frames.recv().await {
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
+                                        Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
+                                        Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result)?; }
                                         Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
                                             let mut writer = writer.lock().await;
                                             write_frame(&mut *writer, &Frame::Reply { id: next_id, result: Err("client reload is already pending; call list after reconnection".into()) }).await?;
@@ -1843,6 +2207,7 @@ async fn connect(
                                 Ok(Ok(())) => {},
                                 Ok(Err(error)) => break Err(error),
                                 Err(_) => {
+                                    steering::abort_reload("Server did not confirm reload receipt; client remains running");
                                     render::status("ssmcp", "Error", "Server did not confirm reload receipt; client remains running. Update ssmcpd before using reload.");
                                     continue 'connected;
                                 }
@@ -1861,6 +2226,7 @@ async fn connect(
                             .then(|| render::controller_started(id, controller.as_ref()));
                         let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
                         let mut result = backend.perform(operation).await;
+                        if let Some(call) = &mut code_call { call.finish(&result); }
                         // A large native response must not corrupt/disconnect the SSH stream.
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
                             result = Err("native call finished but its result exceeds the 4 MiB bridge frame limit; do not blindly repeat a mutating call, inspect native state or request a smaller output page".into());
@@ -1870,8 +2236,15 @@ async fn connect(
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer,&Frame::Reply {id,result}).await
                         }).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut,"SSH write timed out"))??;
+                        crate::memory::release_unused_heap();
                         Ok(was_tool)
                     });
+                }
+                Some(Ok(Some(Frame::CodeModeFinished { completion }))) => {
+                    if let Err(error) = backend.code_mode_finished(completion) { break Err(error.into()); }
+                }
+                Some(Ok(Some(Frame::SteeringReply { id, result }))) => {
+                    if let Err(error) = steering::reply(id, result) { terminal::notice(&error); }
                 }
                 Some(Ok(None)) | None => break Ok(()),
                 Some(Ok(Some(Frame::Reject {message}))) => break Err(relay::failure(message)),
@@ -1893,6 +2266,7 @@ async fn connect(
     if let Some(input) = local_input {
         input.shutdown().await;
     }
+    steering::disconnect();
     requests.abort_all();
     while requests.join_next().await.is_some() {}
     if let Some(observer) = git_status {
@@ -2237,6 +2611,7 @@ mod tests {
         assert!(spec.cwd.is_absolute());
         assert!(spec.watchdog);
         assert_eq!(spec.reconnect_delay_secs, 7);
+        assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
         let restored = Options::parse(spec.args.into_iter().map(OsString::from))
             .unwrap()
             .unwrap();
@@ -2348,9 +2723,10 @@ mod tests {
 
     #[test]
     fn client_names_are_bounded_display_metadata() {
-        let options = Options::parse(["--name", "My workstation", "user@host"].map(OsString::from))
-            .unwrap()
-            .unwrap();
+        let options =
+            Options::parse(["--name", "My workstation", "alice@host"].map(OsString::from))
+                .unwrap()
+                .unwrap();
         let info = options.metadata().unwrap();
         assert_eq!(info.name, "My workstation");
         assert!(std::path::Path::new(&info.cwd).is_absolute());
@@ -2360,7 +2736,7 @@ mod tests {
                 Options::parse([
                     OsString::from("--name"),
                     OsString::from(bad),
-                    OsString::from("user@host")
+                    OsString::from("alice@host")
                 ])
                 .is_err()
             );
@@ -2371,13 +2747,27 @@ mod tests {
     fn session_title_preserves_unicode_task_context_without_becoming_an_ssh_argument() {
         let title = "修复会话重启 · issue #42";
         let options = Options::parse(
-            ["--name", "workstation", "--title", title, "user@host"].map(OsString::from),
+            [
+                "--ssh",
+                "--name",
+                "workstation",
+                "--title",
+                title,
+                "user@host",
+            ]
+            .map(OsString::from),
         )
         .unwrap()
         .unwrap();
         let metadata = options.metadata().unwrap();
         assert_eq!(metadata.name, "workstation");
         assert_eq!(metadata.title.as_deref(), Some(title));
+        assert_eq!(
+            session_title(&options.session_spec().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some(title)
+        );
         assert!(
             !options
                 .command()
@@ -2395,11 +2785,41 @@ mod tests {
             .unwrap();
         assert!(absent.title.is_none());
         assert!(
+            session_title(&absent.session_spec().unwrap())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
             serde_json::to_value(absent.metadata().unwrap())
                 .unwrap()
                 .get("title")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn session_title_reads_saved_display_metadata_without_context_root_validation() {
+        let spec = crate::session::SessionSpec {
+            name: "fixture".into(),
+            cwd: std::env::temp_dir(),
+            args: [
+                "--context-root",
+                "/unused/display/metadata-only",
+                "--name",
+                "--title",
+                "--title=修复客户端",
+                "--title",
+                "--daemon",
+                "--ssh",
+                "fixture.invalid",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            watchdog: true,
+            reconnect_delay_secs: 5,
+        };
+        assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
     }
 
     #[test]
@@ -2609,5 +3029,114 @@ mod tests {
         args.push(OsString::from("my-server"));
         let error = Options::parse(args).err().unwrap();
         assert!(error.contains("at most 8"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod named_entry_tests {
+    use super::*;
+
+    fn options(args: &[&str]) -> Options {
+        Options::parse(args.iter().map(OsString::from))
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn username_destination_uses_https_without_ssh_options() {
+        let options = options(&["Alice@EXAMPLE.com:8443", "--no-browser", "--name", "dev"]);
+        assert!(options.destination.is_none());
+        assert_eq!(options.server.as_deref(), Some("https://example.com:8443"));
+        assert_eq!(options.username.as_deref(), Some("alice"));
+        assert!(options.no_browser);
+        assert!(options.identity.is_none());
+        let spec = options.session_spec().unwrap();
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|args| args == ["--username", "alice"])
+        );
+        let restored = Options::parse_saved(&spec).unwrap().unwrap();
+        assert_eq!(restored.username.as_deref(), Some("alice"));
+        assert_eq!(restored.server, options.server);
+        assert!(restored.destination.is_none());
+    }
+
+    #[test]
+    fn named_destination_rejects_conflicting_transport_or_identity() {
+        for args in [
+            vec!["--server", "https://other.example", "alice@example.com"],
+            vec!["--username", "bob", "alice@example.com"],
+            vec!["--username", "alice", "--ssh", "alice@example.com"],
+            vec!["--list-tools", "alice@example.com"],
+            vec!["admin@example.com"],
+            vec!["alice@example.com/path"],
+        ] {
+            assert!(
+                Options::parse(args.iter().map(OsString::from)).is_err(),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_ssh_and_existing_saved_sessions_preserve_their_transport() {
+        for args in [
+            vec!["--ssh", "alice@example.com"],
+            vec!["-p", "22", "alice@example.com"],
+            vec!["--identity", "/tmp/key", "alice@example.com"],
+        ] {
+            let options = options(&args);
+            assert_eq!(options.destination.as_deref(), Some("alice@example.com"));
+            assert!(options.server.is_none());
+            assert!(options.username.is_none());
+        }
+        let saved = crate::session::SessionSpec {
+            name: "legacy".into(),
+            cwd: std::env::current_dir().unwrap(),
+            args: vec!["--name".into(), "legacy".into(), "old@host".into()],
+            watchdog: true,
+            reconnect_delay_secs: 5,
+        };
+        let restored = Options::parse_saved(&saved).unwrap().unwrap();
+        assert_eq!(restored.destination.as_deref(), Some("old@host"));
+        assert!(restored.server.is_none());
+        assert!(
+            restored
+                .session_spec()
+                .unwrap()
+                .args
+                .iter()
+                .any(|arg| arg == "--ssh")
+        );
+    }
+}
+
+#[cfg(test)]
+mod tty_option_tests {
+    use super::*;
+    #[test]
+    fn terminal_selection_survives_saved_sessions_without_entering_ssh_argv() {
+        let options =
+            Options::parse(["--ssh", "fixture.invalid", "--tty", "kitty"].map(OsString::from))
+                .unwrap()
+                .unwrap();
+        assert_eq!(options.tty.as_deref(), Some("kitty"));
+        let saved = options.session_spec().unwrap();
+        let restored = Options::parse_saved(&saved).unwrap().unwrap();
+        assert_eq!(restored.tty.as_deref(), Some("kitty"));
+        let options = Options::parse(
+            [
+                "--ssh",
+                "fixture.invalid",
+                "--tty=/tmp/terminal with spaces",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.tty.as_deref(), Some("/tmp/terminal with spaces"));
+        assert!(Options::parse(["--tty"].map(OsString::from)).is_err());
+        assert!(Options::parse(["--tty="].map(OsString::from)).is_err());
     }
 }

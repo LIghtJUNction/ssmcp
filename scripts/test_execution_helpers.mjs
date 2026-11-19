@@ -223,3 +223,220 @@ test('piped input and multiple terminal helpers preserve native arguments and st
   });
   assert.deepEqual(result(record).replies, expected.map(([name, args]) => ({ name, arguments: args, nativeResult: true })));
 });
+
+
+test('skill views declare effective defaults while preserving explicit scope and roots', async () => {
+  const record = await run(`
+    const options = {cursor:'next',limit:8};
+    const replies = [
+      await skills.view('one'),
+      await skills.view('one', {}),
+      await skills.view('one', options),
+      await skills.view('one', {root:'workspace'}),
+      await skills.view('one', {root:'context-1',cursor:'next'}),
+      await skills.view('one', {scope:'root'}),
+      await skills.view('one', {scope:'effective'}),
+    ];
+    return {replies,options};
+  `, request => {
+    assert.equal(request.op, 'call');
+    assert.equal(request.client_id, 'one');
+    assert.equal(request.name, 'ssmcp.skills.view');
+    return native(request.arguments);
+  });
+  succeeded(record);
+  const expected = [
+    {scope:'effective'},
+    {scope:'effective'},
+    {cursor:'next',limit:8,scope:'effective'},
+    {root:'workspace'},
+    {root:'context-1',cursor:'next'},
+    {scope:'root'},
+    {scope:'effective'},
+  ];
+  assert.deepEqual(record.requests.map(request => request.arguments), expected);
+  assert.deepEqual(result(record).replies, expected);
+  assert.deepEqual(result(record).options, {cursor:'next',limit:8}, 'caller options are not mutated');
+});
+
+test('skill views preserve invalid argument errors and never retry a rejected effective request', async () => {
+  const invalid = await run(`
+    const failures = [];
+    for (const args of [null,[],1,'invalid',true]) {
+      try { await skills.view('one',args); failures.push('unexpected success'); }
+      catch (failure) { failures.push(failure.message); }
+    }
+    return failures;
+  `, () => assert.fail('invalid argument types must not reach the native provider'));
+  succeeded(invalid);
+  assert.deepEqual(result(invalid), Array(5).fill('tool arguments must be a JSON object'));
+  assert.equal(invalid.requests.length, 0);
+
+  for (const response of [
+    {ok:false,error:'invalid context arguments: unknown field scope'},
+    {ok:true,value:{isError:true,content:[{type:'text',text:'invalid context arguments: unknown field scope'}]}},
+  ]) {
+    const record = await run(`return await skills.view('one');`, request => {
+      assert.equal(request.name, 'ssmcp.skills.view');
+      assert.deepEqual(request.arguments, {scope:'effective'});
+      return response;
+    });
+    assert.match(error(record), /unknown field scope/);
+    assert.equal(result(record), undefined);
+    assert.equal(record.requests.length, 1, 'an older client must fail without a single-root fallback');
+  }
+});
+
+test('local validation errors leave parallel workers available for later valid commands', async () => {
+  for (const concurrency of [1, 2]) {
+    const record = await run(`
+      return await exec.parallel('one', [
+        null, ['invalid'],
+        {command:['invalid-wait'], wait_ms:60001},
+        {command:['first'], wait_ms:0},
+        {command:['invalid-output'], max_bytes:0},
+        {command:['last'], wait_ms:0, max_bytes:17},
+      ], {concurrency:${concurrency}});
+    `, request => {
+      const id = request.name === 'ssmcp.exec.start'
+        ? request.arguments.command[0] : request.arguments.job_id;
+      assert(['first', 'last'].includes(id), 'invalid options must never reach native execution');
+      const state = {job_id:id, running:false, exit_code:0};
+      if (request.name === 'ssmcp.exec.start') return native(state);
+      assert.equal(request.name, 'ssmcp.exec.read');
+      assert.equal(request.arguments.max_bytes, id === 'last' ? 17 : 2048);
+      return native({snapshot:state, stdout:id, stderr:''});
+    });
+    succeeded(record);
+    const entries = result(record);
+    assert.deepEqual(entries.map(entry => entry.status),
+      ['rejected', 'rejected', 'rejected', 'fulfilled', 'rejected', 'fulfilled']);
+    for (const index of [0, 1, 2, 4]) {
+      assert.equal(entries[index].not_started, true);
+      assert(!Object.hasOwn(entries[index], 'job_id'));
+    }
+    assert.equal(entries[3].value.stdout, 'first');
+    assert.equal(entries[5].value.stdout, 'last');
+    assert.equal(record.requests.filter(request => request.name === 'ssmcp.exec.start').length, 2);
+  }
+});
+
+test('a lost start response reserves its parallel worker even without a job ID', async () => {
+  const record = await run(`
+    return await exec.parallel('one', [
+      {command:['uncertain']}, {command:['must-not-start']}
+    ], {concurrency:1});
+  `, request => {
+    assert.equal(request.name, 'ssmcp.exec.start');
+    assert.deepEqual(request.arguments.command, ['uncertain']);
+    return {ok:false, error:'start transport interrupted'};
+  });
+  succeeded(record);
+  assert.equal(record.requests.length, 1);
+  assert.match(result(record)[0].reason, /start transport interrupted/);
+  assert(!Object.hasOwn(result(record)[0], 'not_started'));
+  assert.equal(result(record)[1].not_started, true);
+});
+
+test('job helpers accept native option objects and legacy IDs with identical routing', async () => {
+  const calls = [
+    ['status', {}],
+    ['wait', {wait_ms:0}],
+    ['read', {stdout_cursor:41, stderr_cursor:7, max_bytes:64, wait_ms:1}],
+    ['write', {data:'中文', close_stdin:true, wait_ms:10}],
+    ['cancel', {}],
+    ['forget', {}],
+  ];
+  const record = await run(`
+    const calls = ${JSON.stringify(calls)};
+    const replies = [];
+    for (const [name,options] of calls) {
+      const object = Object.freeze({...options,job_id:'job'});
+      replies.push(await exec[name]('one',object));
+      replies.push(await exec[name]('one','job',Object.freeze({...options,job_id:'cannot-override'})));
+      if (JSON.stringify(object) !== JSON.stringify({...options,job_id:'job'})) throw new Error('mutated options');
+    }
+    return replies;
+  `, request => native({name:request.name, arguments:request.arguments}));
+  succeeded(record);
+  const expected = calls.flatMap(([name, options]) => Array(2).fill({
+    name:'ssmcp.exec.' + name, arguments:{...options,job_id:'job'}
+  }));
+  assert.deepEqual(result(record), expected);
+  assert.deepEqual(record.requests.map(({name,arguments:args}) => ({name,arguments:args})), expected);
+  assert(record.requests.every(request => request.client_id === 'one' && request.op === 'call'));
+});
+
+test('invalid and ambiguous job arguments fail before any native request', async () => {
+  const record = await run(`
+    const failures = [];
+    for (const name of ['status','wait','read','write','cancel','forget']) {
+      const invalid = [
+        [], [null], [[]], [1], [true], [''], [{}],
+        [{job_id:''}], [{job_id:2}], [{job_id:{}}],
+        [{job_id:'job'}, {}], [{job_id:'job'}, null],
+        ['job',null], ['job',[]], ['job',1], ['job',true], ['job','text'],
+      ];
+      for (const args of invalid) {
+        await exec[name]('one',...args).then(
+          () => failures.push('unexpected success'),
+          failure => failures.push(failure.message)
+        );
+      }
+    }
+    return failures;
+  `, () => assert.fail('invalid helper arguments must not reach a native tool'));
+  succeeded(record);
+  assert.equal(record.requests.length, 0);
+  assert.equal(result(record).length, 102);
+  assert(result(record).every(message => /^exec\.(status|wait|read|write|cancel|forget) /.test(message)));
+  assert(result(record).every(message => message !== 'unexpected success'));
+});
+
+test('job object calls preserve native failures without retrying side effects', async () => {
+  for (const response of [
+    {ok:false,error:'transport interrupted'},
+    {ok:true,value:{isError:true,content:[{type:'text',text:'native approval required'}]}},
+  ]) {
+    const record = await run(`
+      const failures = [];
+      for (const name of ['status','wait','read','write','cancel','forget']) {
+        try { await exec[name]('one',{job_id:'job'}); }
+        catch (failure) { failures.push(failure.message); }
+      }
+      return failures;
+    `, () => response);
+    succeeded(record);
+    const message = response.error ?? response.value.content[0].text;
+    assert.deepEqual(result(record), Array(6).fill(message));
+    assert.equal(record.requests.length, 6);
+    assert.deepEqual(record.requests.map(request => request.name),
+      ['status','wait','read','write','cancel','forget'].map(name => 'ssmcp.exec.'+name));
+  }
+});
+
+
+test('UI helpers expose registered workflows and preserve native arguments and failures', async () => {
+  const names = ['get','set','action','filter','queue','message','present','ask','questions','history','harness'];
+  const record = await run(
+    'const names=' + JSON.stringify(names) + ';'
+    + 'const values=await Promise.all(names.map(name=>ui[name]("one",{fixture:name})));'
+    + 'return {values,frozen:Object.isFrozen(ui),unsupported:typeof ui.messages};',
+    request => {
+      assert(names.some(name => request.name === 'ssmcp.ui.' + name));
+      assert.equal(request.client_id, 'one');
+      assert.equal(request.arguments.fixture, request.name.slice('ssmcp.ui.'.length));
+      return native({name:request.name});
+    },
+  );
+  succeeded(record);
+  assert.equal(result(record).frozen, true);
+  assert.equal(result(record).unsupported, 'undefined');
+  assert.deepEqual(result(record).values.map(value=>value.name), names.map(name=>'ssmcp.ui.'+name));
+  const rejected = await run(
+    'try{await ui.history("one",{action:"read"});return "unexpected";}catch(error){return error.message;}',
+    () => ({ok:true,value:{isError:true,content:[{type:'text',text:'history unavailable'}]}}),
+  );
+  succeeded(rejected);
+  assert.match(result(rejected), /history unavailable/);
+});

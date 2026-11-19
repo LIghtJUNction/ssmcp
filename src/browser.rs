@@ -1,10 +1,14 @@
 //! Browser primitives implemented directly with the Chrome DevTools Protocol.
 //! The browser is a system dependency; no model or external MCP process is involved.
+mod actions;
 mod discovery;
+mod routing;
 use crate::backend::{process::Managed, result};
+use actions::{Act, WaitArgs};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
+pub(crate) use routing::control_routes;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -34,9 +38,14 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const INPUT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PAGES: usize = 64;
 
+/// Observe installed browser metadata without creating a browser runtime.
+pub fn discovery() -> Value {
+    discovery::inspect()
+}
+
 pub struct Browser {
     root: PathBuf,
-    http: reqwest::Client,
+    http: OnceCell<reqwest::Client>,
     session: Mutex<Option<Arc<Session>>>,
     closed: AtomicBool,
     next_snapshot: AtomicU64,
@@ -141,6 +150,7 @@ struct Connection {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     sequence: u64,
     closed: bool,
+    focus_emulated: bool,
 }
 impl Cdp {
     async fn connect(url: &str) -> Result<Self, String> {
@@ -159,6 +169,7 @@ impl Cdp {
                 socket,
                 sequence: 0,
                 closed: false,
+                focus_emulated: false,
             })),
             url: url.to_owned(),
         })
@@ -177,6 +188,30 @@ impl Cdp {
         .map_err(|_| format!("CDP {method} timed out"))?
     }
 
+    /// Chromium can acknowledge trusted input to a hidden tab without delivering
+    /// it. Emulate focus only inside this explicit input target; never activate a
+    /// tab or focus an OS window. Keep rendering active until this CDP connection
+    /// closes, including while waiting for asynchronous results.
+    async fn prepare_input(&self) -> Result<(), String> {
+        tokio::time::timeout(CALL_TIMEOUT, async {
+            let mut connection = self.connection.lock().await;
+            // Mark before sending: a cancelled request may already have applied.
+            // Re-send on every input rather than assuming an interrupted request
+            // succeeded; the marker is used only for unconditional restoration.
+            connection.focus_emulated = true;
+            connection
+                .call(
+                    "Emulation.setFocusEmulationEnabled",
+                    json!({"enabled":true}),
+                    CALL_TIMEOUT,
+                )
+                .await
+                .map(|_| ())
+        })
+        .await
+        .map_err(|_| "browser input focus emulation timed out".to_owned())?
+    }
+
     async fn input_pair(&self, method: &str, press: Value, release: Value) -> Result<(), String> {
         let cdp = self.clone();
         let method = method.to_owned();
@@ -193,9 +228,15 @@ impl Cdp {
             if released.is_err() {
                 // The press may have reached Chromium before a connection broke.
                 // Reconnect to that same verified target for one bounded release.
+                let focus_emulated = connection.focus_emulated;
                 released = match tokio::time::timeout(Duration::from_secs(6), async {
                     let fresh = Cdp::connect(&cdp.url).await?;
-                    fresh.call(&method, release).await
+                    if focus_emulated {
+                        fresh.prepare_input().await?;
+                    }
+                    let released = fresh.call(&method, release).await;
+                    fresh.close().await;
+                    released
                 })
                 .await
                 {
@@ -217,6 +258,16 @@ impl Cdp {
         // close write itself. Dropping the connection never waits for a peer.
         let _ = tokio::time::timeout(Duration::from_secs(35), async {
             let mut connection = self.connection.lock().await;
+            if connection.focus_emulated && !connection.closed {
+                let _ = connection
+                    .call(
+                        "Emulation.setFocusEmulationEnabled",
+                        json!({"enabled":false}),
+                        Duration::from_secs(2),
+                    )
+                    .await;
+                connection.focus_emulated = false;
+            }
             connection.closed = true;
             let _ =
                 tokio::time::timeout(Duration::from_secs(2), connection.socket.close(None)).await;
@@ -318,16 +369,9 @@ impl Browser {
         let root = root
             .canonicalize()
             .map_err(|e| format!("browser workspace: {e}"))?;
-        let http = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(CALL_TIMEOUT)
-            .build()
-            .map_err(|e| e.to_string())?;
         Ok(Self {
             root,
-            http,
+            http: OnceCell::new(),
             session: Mutex::new(None),
             closed: AtomicBool::new(false),
             next_snapshot: AtomicU64::new(1),
@@ -343,7 +387,7 @@ impl Browser {
         let mut out = vec![
             tool(
                 "discover",
-                "Read bounded browser process and extension-manifest metadata. Distinguish Google Chrome from Chromium; installed files do not prove enabled extensions, native approval or a usable connection. No browser, MCP server or installer is started.",
+                "Read bounded browser metadata and cached native control routes. Prefer an available caller-owned ChatGPT Browser plugin, then actual registered Playwright extension tools, then explicitly selected CDP. Installed manifests do not prove a connection or approval; the client cannot invoke the ChatGPT plugin API. No browser, MCP server or installer is started.",
                 json!({}),
                 &[],
                 true,
@@ -357,10 +401,10 @@ impl Browser {
             ),
             tool(
                 "launch",
-                "Start an installed Chromium browser with an isolated temporary profile and loopback debugging. Existing user profiles are not modified; disconnect stops only this owned browser.",
+                "Start an installed Chromium browser with an isolated temporary profile, loopback debugging, and background surface capture. Headless is the default; headless:false explicitly opens a desktop window. Disconnect stops only this owned browser.",
                 json!({
                     "executable":{"type":"string","maxLength":4096},
-                    "headless":{"type":"boolean","default":false},
+                    "headless":{"type":"boolean","default":true},
                     "width":{"type":"integer","minimum":320,"maximum":4096,"default":1280},
                     "height":{"type":"integer","minimum":240,"maximum":4096,"default":800}
                 }),
@@ -385,8 +429,8 @@ impl Browser {
             ),
             tool(
                 "open",
-                "Open a new browser tab and return its target_id.",
-                json!({"url":{"type":"string","maxLength":32768}}),
+                "Open a new browser tab in the background and return its target_id. Set background=false only when foreground activation is intended.",
+                json!({"url":{"type":"string","maxLength":32768},"background":{"type":"boolean","default":true}}),
                 &["url"],
                 false,
             ),
@@ -463,6 +507,34 @@ impl Browser {
                 false,
             ),
             tool(
+                "act",
+                "Run an ordered batch of fill, click, key, scroll and condition-wait actions on one observed tab, then return a fresh snapshot. Holds the tab lock for the whole batch; stops at the first error and reports completed actions. Never replays a failed batch or falls back to desktop input.",
+                merge(target.clone(), actions::act_schema()),
+                &["target_id", "actions"],
+                false,
+            ),
+            tool(
+                "wait",
+                "Wait for visible, hidden, attached or detached page content using observed CSS selectors and/or literal text. Polls from the host so background tab timer throttling does not delay the check. No input is sent.",
+                merge(target.clone(), actions::wait_schema()),
+                &["target_id"],
+                true,
+            ),
+            tool(
+                "wait_for",
+                "Wait on this client for visible page text to appear or disappear without moving the system pointer or repeatedly transferring snapshots. Bounded timeout; holds this target's action order.",
+                merge(
+                    target.clone(),
+                    json!({
+                        "text":{"type":"string","minLength":1,"maxLength":1024},
+                        "state":{"type":"string","enum":["present","absent"],"default":"present"},
+                        "timeout_ms":{"type":"integer","minimum":1,"maximum":30000,"default":5000}
+                    }),
+                ),
+                &["target_id", "text"],
+                true,
+            ),
+            tool(
                 "evaluate",
                 "Evaluate explicit JavaScript in the selected page; return a JSON value bounded to 128 KiB. May change page state.",
                 merge(
@@ -499,6 +571,8 @@ impl Browser {
         ];
         for descriptor in &mut out {
             descriptor["annotations"]["openWorldHint"] = json!(true);
+            descriptor["_meta"]["ssmcp/input_scope"] = json!("browser_target");
+            descriptor["_meta"]["ssmcp/moves_system_pointer"] = json!(false);
         }
         out
     }
@@ -526,7 +600,7 @@ impl Browser {
                 let _: Empty = parse(args)?;
                 let session = self.session.lock().await.clone();
                 self.ensure_open()?;
-                let state = if let Some(s) = session.as_ref() {
+                let mut state = if let Some(s) = session.as_ref() {
                     let probe = tokio::time::timeout(Duration::from_secs(2), async {
                         let discovery = self.get_json(&s.endpoint, "json/version").await?;
                         let ws = websocket(
@@ -556,6 +630,20 @@ impl Browser {
                     json!({"connected":false,"native":true,"protocol":"cdp",
                         "executable":installed_browser(None).ok(),"connect_supported":true})
                 };
+                state["input_scope"] = json!("browser_target");
+                state["moves_system_pointer"] = json!(false);
+                state["default_new_tab_background"] = json!(true);
+                state["default_launch_headless"] = json!(true);
+                state["background_screenshot"] = json!(
+                    "owned launch enables background surface capture; attached browsers depend on their startup configuration"
+                );
+                state["page_focus"] = json!(
+                    "emulated only for explicit input targets; emulation disabled on disconnect"
+                );
+                state["foreground_launch_possible"] = json!(true);
+                state["recommended_for"] = json!(
+                    "Use browser tools for web pages; computer tools send desktop-wide input."
+                );
                 Ok(result(state))
             }
             "ssmcp.browser.launch" => {
@@ -578,6 +666,10 @@ impl Browser {
                     .arg("--no-first-run")
                     .arg("--no-default-browser-check")
                     .arg("--disable-background-networking")
+                    // Match Playwright's Chromium startup: use a fresh surface
+                    // instead of waiting on a redraw of an unpresented tab.
+                    // Only our own temporary-profile browser gets this flag.
+                    .arg("--enable-features=CDPScreenshotNewSurface")
                     .arg(format!("--window-size={},{}", args.width, args.height))
                     .arg("about:blank")
                     .stdin(Stdio::null())
@@ -664,8 +756,21 @@ impl Browser {
     }
 
     async fn get_json(&self, endpoint: &Url, path: &str) -> Result<Value, String> {
-        let mut response = self
+        // Native browser tools remain available before any browser is attached.
+        // Initialize HTTP/TLS machinery only when discovery actually needs it.
+        let http = self
             .http
+            .get_or_try_init(|| async {
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .connect_timeout(Duration::from_secs(3))
+                    .timeout(CALL_TIMEOUT)
+                    .build()
+                    .map_err(|e| e.to_string())
+            })
+            .await?;
+        let mut response = http
             .get(endpoint.join(path).map_err(|e| e.to_string())?)
             .send()
             .await
@@ -832,7 +937,10 @@ impl Browser {
                 valid_url(&args.url)?;
                 let opened = session
                     .browser
-                    .call("Target.createTarget", json!({"url":"about:blank"}))
+                    .call(
+                        "Target.createTarget",
+                        json!({"url":"about:blank","background":args.background}),
+                    )
                     .await?;
                 let id = opened["targetId"]
                     .as_str()
@@ -840,7 +948,7 @@ impl Browser {
                 let id = id.to_owned();
                 let mut page = self.page(&session, &id).await?;
                 navigate(&mut page.cdp, &args.url).await?;
-                json!({"target_id":id,"url":args.url})
+                json!({"target_id":id,"url":args.url,"background":args.background,"input_scope":"browser_target","moves_system_pointer":false})
             }
             "ssmcp.browser.navigate" => {
                 let args: Navigate = parse(args)?;
@@ -852,47 +960,15 @@ impl Browser {
             }
             "ssmcp.browser.snapshot" => {
                 let args: SnapshotArgs = parse(args)?;
-                if !(1..=200).contains(&args.max_elements) || !(1..=32768).contains(&args.max_chars)
-                {
-                    return Err("snapshot bounds: max_elements 1..200, max_chars 1..32768".into());
-                }
-                let token = format!("s{}", self.next_snapshot.fetch_add(1, Ordering::Relaxed));
+                snapshot_bounds(args.max_elements, args.max_chars)?;
                 let mut page = self.page(&session, &args.target_id).await?;
-                // Release the old remote object before publishing a new set of refs.
-                if let Some(old) = page.snapshot.take() {
-                    let _ = page
-                        .cdp
-                        .call("Runtime.releaseObject", json!({"objectId":old.object_id}))
-                        .await;
-                }
-                let script = SNAPSHOT_SCRIPT
-                    .replace("$MAX_ELEMENTS", &args.max_elements.to_string())
-                    .replace("$MAX_CHARS", &args.max_chars.to_string())
-                    .replace("$TOKEN", &json!(token).to_string());
-                let reply = page.cdp.call("Runtime.evaluate",json!({
-                    "expression":script,"returnByValue":false,"objectGroup":"ssmcp-snapshot","timeout":10000
-                })).await?;
-                if let Some(exception) = reply.get("exceptionDetails") {
-                    return Err(format!("snapshot JavaScript exception: {exception}"));
-                }
-                let object_id = reply["result"]["objectId"]
-                    .as_str()
-                    .ok_or("snapshot has no DOM object")?
-                    .to_owned();
-                let info = page.cdp.call("Runtime.callFunctionOn",json!({
-                    "objectId":object_id,"functionDeclaration":"function(){ return this.info; }",
-                    "returnByValue":true
-                })).await?;
-                let mut info = remote_value_bounded(info, RPC_LIMIT)?;
-                info["target_id"] = json!(args.target_id);
-                let info = bound_snapshot(info);
-                let count = info["elements"].as_array().map_or(0, Vec::len);
-                page.snapshot = Some(Snapshot {
-                    token,
-                    object_id,
-                    count,
-                });
-                info
+                self.snapshot_page(
+                    &mut page,
+                    &args.target_id,
+                    args.max_elements,
+                    args.max_chars,
+                )
+                .await?
             }
             "ssmcp.browser.click" => {
                 let args: Click = parse(args)?;
@@ -902,6 +978,7 @@ impl Browser {
                     return Err("invalid mouse button or click_count".into());
                 }
                 let mut page = self.page(&session, &args.target_id).await?;
+                page.cdp.prepare_input().await?;
                 let point = ref_action(&mut page, &args.element_ref, CLICK_SCRIPT, vec![]).await?;
                 let x = point["x"].as_f64().ok_or("element has no x coordinate")?;
                 let y = point["y"].as_f64().ok_or("element has no y coordinate")?;
@@ -928,6 +1005,7 @@ impl Browser {
                     return Err("fill text exceeds 32768 UTF-8 bytes".into());
                 }
                 let mut page = self.page(&session, &args.target_id).await?;
+                page.cdp.prepare_input().await?;
                 let prepared = ref_action(
                     &mut page,
                     &args.element_ref,
@@ -947,6 +1025,7 @@ impl Browser {
                 let (code, key, text) = key_spec(&args.key)?;
                 let modifiers = modifier_bits(&args.modifiers)?;
                 let page = self.page(&session, &args.target_id).await?;
+                page.cdp.prepare_input().await?;
                 let mut down = json!({"type":"keyDown","key":key,"windowsVirtualKeyCode":code,
                     "nativeVirtualKeyCode":code,"modifiers":modifiers});
                 if modifiers & (1 | 2 | 4) == 0
@@ -972,6 +1051,7 @@ impl Browser {
                     return Err("scroll delta exceeds 100000 CSS pixels".into());
                 }
                 let page = self.page(&session, &args.target_id).await?;
+                page.cdp.prepare_input().await?;
                 let size = page
                     .cdp
                     .value("({width:innerWidth,height:innerHeight})")
@@ -986,6 +1066,97 @@ impl Browser {
                     )
                     .await?;
                 json!({"target_id":args.target_id,"scrolled":true})
+            }
+            "ssmcp.browser.wait" => {
+                let args: WaitArgs = parse(args)?;
+                let target_id = args.target_id.clone();
+                valid_target(&target_id)?;
+                let condition = args.into_condition();
+                condition.validate()?;
+                let mut value = tokio::time::timeout(Duration::from_millis(condition.timeout_ms), async {
+                    let mut page = self.page(&session, &target_id).await?;
+                    actions::wait(&mut page, &condition).await
+                }).await.map_err(|_| format!("browser wait exceeded its {} ms deadline, including time queued for the target", condition.timeout_ms))??;
+                value["target_id"] = json!(target_id);
+                value
+            }
+            "ssmcp.browser.act" => {
+                let args: Act = parse(args)?;
+                args.validate()?;
+                let started = tokio::time::Instant::now();
+                let mut completed = Vec::with_capacity(args.actions.len());
+                let mut failed_index = 0;
+                let mut phase = "queue";
+                let outcome = tokio::time::timeout_at(started + actions::BATCH_TIMEOUT, async {
+                    let mut page = self.page(&session, &args.target_id).await?;
+                    phase = "actions";
+                    for (index, action) in args.actions.iter().enumerate() {
+                        failed_index = index;
+                        self.ensure_session(&session)?;
+                        let value = actions::run(&mut page, action).await?;
+                        completed.push(json!({"index":index,"type":action.kind(),"result":value}));
+                    }
+                    phase = "snapshot";
+                    if args.snapshot {
+                        self.snapshot_page(&mut page, &args.target_id, args.max_elements, args.max_chars).await.map(Some)
+                    } else { Ok(None) }
+                }).await.map_err(|_| "browser act exceeded its 25-second deadline; inspect completed actions before continuing".to_owned()).and_then(|value| value);
+                let mut report = json!({"target_id":args.target_id,"completed_count":completed.len(),
+                    "completed":completed,"elapsed_ms":started.elapsed().as_millis(),"uses_system_pointer":false});
+                match outcome {
+                    Ok(snapshot) => {
+                        if let Some(snapshot) = snapshot {
+                            report["snapshot"] = snapshot;
+                        }
+                        report
+                    }
+                    Err(error) => {
+                        report["error"] = json!(error);
+                        report["phase"] = json!(phase);
+                        if phase == "actions" {
+                            report["failed_index"] = json!(failed_index);
+                        }
+                        report["replay_safe"] = json!(false);
+                        let mut response = result(report);
+                        response["isError"] = json!(true);
+                        return Ok(response);
+                    }
+                }
+            }
+            "ssmcp.browser.wait_for" => {
+                let args: WaitFor = parse(args)?;
+                args.validate()?;
+                let started = tokio::time::Instant::now();
+                // JSON encoding keeps requested text data, never page code.
+                let expression = format!(
+                    "(document.body ? document.body.innerText : '').includes({})",
+                    json!(args.text)
+                );
+                tokio::time::timeout(Duration::from_millis(args.timeout_ms), async {
+                    let page = self.page(&session, &args.target_id).await?;
+                    loop {
+                        self.ensure_session(&session)?;
+                        let present = page
+                            .cdp
+                            .value(&expression)
+                            .await?
+                            .as_bool()
+                            .ok_or("browser text check returned no boolean")?;
+                        if present == (args.state == "present") {
+                            return Ok::<(), String>(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                })
+                .await
+                .map_err(|_| {
+                    format!(
+                        "browser.wait_for timed out after {} ms waiting for text to be {}",
+                        args.timeout_ms, args.state
+                    )
+                })??;
+                json!({"target_id":args.target_id,"matched":true,"state":args.state,
+                    "elapsed_ms":started.elapsed().as_millis()})
             }
             "ssmcp.browser.evaluate" => {
                 let args: Evaluate = parse(args)?;
@@ -1030,6 +1201,58 @@ impl Browser {
             _ => return Err(format!("unknown browser tool: {name}")),
         };
         Ok(result(value))
+    }
+
+    async fn snapshot_page(
+        &self,
+        page: &mut Page,
+        target_id: &str,
+        max_elements: usize,
+        max_chars: usize,
+    ) -> Result<Value, String> {
+        snapshot_bounds(max_elements, max_chars)?;
+        let token = format!("s{}", self.next_snapshot.fetch_add(1, Ordering::Relaxed));
+        // Release the old remote object before publishing a new set of refs.
+        if let Some(old) = page.snapshot.take() {
+            let _ = page
+                .cdp
+                .call("Runtime.releaseObject", json!({"objectId":old.object_id}))
+                .await;
+        }
+        let script = SNAPSHOT_SCRIPT
+            .replace("$MAX_ELEMENTS", &max_elements.to_string())
+            .replace("$MAX_CHARS", &max_chars.to_string())
+            .replace("$TOKEN", &json!(token).to_string());
+        let reply = page.cdp.call("Runtime.evaluate",json!({
+            "expression":script,"returnByValue":false,"objectGroup":"ssmcp-snapshot","timeout":10000
+        })).await?;
+        if let Some(exception) = reply.get("exceptionDetails") {
+            return Err(format!("snapshot JavaScript exception: {exception}"));
+        }
+        let object_id = reply["result"]["objectId"]
+            .as_str()
+            .ok_or("snapshot has no DOM object")?
+            .to_owned();
+        let info = page
+            .cdp
+            .call(
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId":object_id,"functionDeclaration":"function(){ return this.info; }",
+                    "returnByValue":true
+                }),
+            )
+            .await?;
+        let mut info = remote_value_bounded(info, RPC_LIMIT)?;
+        info["target_id"] = json!(target_id);
+        let info = bound_snapshot(info);
+        let count = info["elements"].as_array().map_or(0, Vec::len);
+        page.snapshot = Some(Snapshot {
+            token,
+            object_id,
+            count,
+        });
+        Ok(info)
     }
 
     async fn disconnect(&self) {
@@ -1227,7 +1450,21 @@ async fn screenshot(cdp: &mut Cdp, target_id: &str, max_width: u32) -> Result<Va
         let reply=cdp.call("Page.captureScreenshot",json!({
             "format":"jpeg","quality":quality,"fromSurface":true,"captureBeyondViewport":false,
             "clip":{"x":x,"y":y,"width":width,"height":height,"scale":scale}
-        })).await?;
+        })).await.map_err(|error| {
+            if error.contains("Page.captureScreenshot timed out") {
+                format!(
+                    "{error}; {}",
+                    concat!(
+                        "This browser did not produce the target's surface within 15 seconds. ",
+                        "The tab was not activated. Use browser.snapshot for page structure, ",
+                        "an isolated headless browser or private desktop for visual capture, ",
+                        "or explicitly choose foreground interaction."
+                    )
+                )
+            } else {
+                error
+            }
+        })?;
         let data = reply["data"]
             .as_str()
             .ok_or("browser returned no screenshot data")?;
@@ -1363,7 +1600,31 @@ fn valid_url(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn installed_browser(explicit: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn installed_browser(explicit: Option<&str>) -> Result<PathBuf, String> {
+    installed_browser_with_override(
+        explicit,
+        std::env::var_os("SSMCP_BROWSER_EXECUTABLE").as_deref(),
+    )
+}
+
+fn installed_browser_with_override(
+    explicit: Option<&str>,
+    configured: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    if explicit.is_none()
+        && let Some(configured) = configured
+    {
+        let path = PathBuf::from(configured);
+        if path.as_os_str().len() > 4096
+            || !path.is_absolute()
+            || !crate::platform::is_executable(&path)
+        {
+            return Err("SSMCP_BROWSER_EXECUTABLE must name an existing absolute browser executable; fix or remove this override".into());
+        }
+        return path
+            .canonicalize()
+            .map_err(|error| format!("SSMCP_BROWSER_EXECUTABLE: {error}"));
+    }
     if let Some(explicit) = explicit {
         if explicit.len() > 4096 {
             return Err("browser executable path is too long".into());
@@ -1479,7 +1740,42 @@ struct Target {
 #[serde(deny_unknown_fields)]
 struct Open {
     url: String,
+    #[serde(default = "default_true")]
+    background: bool,
 }
+fn default_true() -> bool {
+    true
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WaitFor {
+    target_id: String,
+    text: String,
+    #[serde(default = "default_wait_state")]
+    state: String,
+    #[serde(default = "default_wait_timeout")]
+    timeout_ms: u64,
+}
+fn default_wait_state() -> String {
+    "present".into()
+}
+fn default_wait_timeout() -> u64 {
+    5000
+}
+impl WaitFor {
+    fn validate(&self) -> Result<(), String> {
+        if self.text.is_empty() || self.text.len() > 1024 {
+            return Err("wait_for text must contain 1..1024 UTF-8 bytes".into());
+        }
+        if !matches!(self.state.as_str(), "present" | "absent")
+            || !(1..=30000).contains(&self.timeout_ms)
+        {
+            return Err("wait_for requires state present/absent and timeout_ms 1..30000".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Navigate {
@@ -1496,7 +1792,7 @@ struct Evaluate {
 #[serde(deny_unknown_fields)]
 struct Launch {
     executable: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     headless: bool,
     #[serde(default = "default_width")]
     width: u32,
@@ -1526,6 +1822,17 @@ struct SnapshotArgs {
     #[serde(default = "default_chars")]
     max_chars: usize,
 }
+fn enabled() -> bool {
+    true
+}
+
+fn snapshot_bounds(max_elements: usize, max_chars: usize) -> Result<(), String> {
+    if !(1..=200).contains(&max_elements) || !(1..=32768).contains(&max_chars) {
+        return Err("snapshot bounds: max_elements 1..200, max_chars 1..32768".into());
+    }
+    Ok(())
+}
+
 fn default_elements() -> usize {
     100
 }
@@ -1647,14 +1954,25 @@ const SNAPSHOT_SCRIPT: &str = r#"(() => {
         const r=e.getBoundingClientRect(), s=getComputedStyle(e);
         return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none';
     };
-    const candidates=Array.from(document.querySelectorAll('a,button,input,textarea,select,summary,[role],[contenteditable="true"],h1,h2,h3')).filter(visible);
+    const candidates=Array.from(document.querySelectorAll('a,button,input,textarea,select,summary,[role],[contenteditable="true"],h1,h2,h3,h4,h5,h6,img[alt]')).filter(visible);
     const nodes=candidates.slice(0,limit);
-    const text=(document.body ? document.body.innerText : '').slice(0,maxChars);
+    const bodyText=document.body ? document.body.innerText : '';
+    const text=bodyText.slice(0,maxChars);
+    const implicitRole=e=>{
+        const tag=e.tagName.toLowerCase();
+        if(tag==='input') return ({checkbox:'checkbox',radio:'radio',button:'button',submit:'button',reset:'button',image:'button',range:'slider',number:'spinbutton',search:'searchbox'})[e.type] ?? (['text','email','url','tel','password'].includes(e.type) ? 'textbox' : '');
+        if(tag==='select') return e.multiple || e.size>1 ? 'listbox' : 'combobox';
+        if(tag==='a') return e.hasAttribute('href') ? 'link' : '';
+        if(/^h[1-6]$/.test(tag)) return 'heading';
+        return ({button:'button',textarea:'textbox',summary:'button',img:'img'})[tag] || (e.isContentEditable ? 'textbox' : '');
+    };
     const items=nodes.map((e,i)=>{
         const r=e.getBoundingClientRect();
-        const label=e.getAttribute('aria-label') || (e.labels ? Array.from(e.labels).map(x=>x.innerText).join(' ') : '') ||
-            e.getAttribute('placeholder') || e.innerText || e.getAttribute('title') || '';
-        return {ref:token+'e'+(i+1),tag:e.tagName.toLowerCase(),role:(e.getAttribute('role')||'').slice(0,80),
+        const labelled=(e.getAttribute('aria-labelledby')||'').trim().split(/\s+/).slice(0,32)
+            .map(id=>document.getElementById(id)?.textContent||'').join(' ').trim();
+        const label=labelled || e.getAttribute('aria-label') || (e.labels ? Array.from(e.labels).map(x=>x.innerText).join(' ') : '') ||
+            e.getAttribute('alt') || e.getAttribute('placeholder') || e.innerText || e.getAttribute('title') || '';
+        return {ref:token+'e'+(i+1),tag:e.tagName.toLowerCase(),role:(e.getAttribute('role')||implicitRole(e)).slice(0,80),
             name:label.slice(0,400),type:(e.getAttribute('type')||'').slice(0,80),
             value:e.type==='password'?undefined:typeof e.value==='string'?e.value.slice(0,1000):undefined,
             disabled:!!e.disabled,checked:typeof e.checked==='boolean'?e.checked:undefined,
@@ -1662,7 +1980,7 @@ const SNAPSHOT_SCRIPT: &str = r#"(() => {
     });
     return {doc:document,href:location.href,nodes,info:{snapshot_id:token,url:location.href,
         title:document.title,text,elements:items,elements_truncated:candidates.length>limit,
-        text_truncated:!!document.body && document.body.innerText.length>maxChars,
+        text_truncated:bodyText.length>maxChars,
         viewport:{width:innerWidth,height:innerHeight},scope:'main document; iframe contents omitted'}};
 })()"#;
 const REF_SCRIPT: &str = r#"function(index,value){
@@ -1705,6 +2023,31 @@ const FILL_SCRIPT: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_override_is_checked_and_explicit_tool_argument_has_priority() {
+        let path = std::env::current_exe().unwrap().canonicalize().unwrap();
+        assert_eq!(
+            installed_browser_with_override(None, Some(path.as_os_str())).unwrap(),
+            path
+        );
+        let invalid = std::ffi::OsStr::new("relative-browser");
+        assert!(
+            installed_browser_with_override(None, Some(invalid))
+                .unwrap_err()
+                .contains("SSMCP_BROWSER_EXECUTABLE")
+        );
+        assert_eq!(
+            installed_browser_with_override(path.to_str(), Some(invalid)).unwrap(),
+            path
+        );
+        let missing = path.with_file_name("ssmcp-missing-browser-override");
+        assert!(
+            installed_browser_with_override(None, Some(missing.as_os_str()))
+                .unwrap_err()
+                .contains("SSMCP_BROWSER_EXECUTABLE")
+        );
+    }
 
     async fn poll_once<F: std::future::Future>(
         mut future: std::pin::Pin<&mut F>,
@@ -1779,6 +2122,267 @@ mod tests {
             ))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn wait_deadline_includes_time_queued_for_the_page() {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let session = browser.session.lock().await.clone().unwrap();
+            let held_page = browser.page(&session, "a").await.unwrap();
+            let error = browser
+                .perform(
+                    "ssmcp.browser.wait",
+                    json!({"target_id":"a","selector":"#ready","timeout_ms":25}),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("deadline") && error.contains("queued"),
+                "{error}"
+            );
+            drop(held_page);
+            // Expiry removes the queued request; releasing the page must not
+            // trigger a late Runtime.evaluate or any input on this connection.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), socket.next())
+                    .await
+                    .is_err()
+            );
+            browser.disconnect().await;
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Close(_)
+            ));
+        })
+        .await
+        .expect("browser.wait did not expire while the page lock was held");
+    }
+
+    #[tokio::test]
+    async fn act_deadline_includes_time_queued_without_starting_input() {
+        // Keep the production 25-second deadline: this checks cancellation of
+        // the actual queued operation, without a test-only timeout override.
+        tokio::time::timeout(actions::BATCH_TIMEOUT + Duration::from_secs(3), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let session = browser.session.lock().await.clone().unwrap();
+            let held_page = browser.page(&session, "a").await.unwrap();
+            let response = browser
+                .perform(
+                    "ssmcp.browser.act",
+                    json!({"target_id":"a","actions":[{"type":"key","key":"Enter"}],"snapshot":false}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response["isError"], true);
+            let report = &response["structuredContent"];
+            assert_eq!(report["phase"], "queue");
+            assert_eq!(report["completed_count"], 0);
+            assert_eq!(report["completed"], json!([]));
+            assert!(report.get("failed_index").is_none());
+            assert_eq!(report["replay_safe"], false);
+            assert!(report["error"].as_str().unwrap().contains("deadline"));
+            drop(held_page);
+            // A timed-out batch must not start its key press after the holder
+            // releases the lock, nor send any other delayed CDP request.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), socket.next())
+                    .await
+                    .is_err()
+            );
+            browser.disconnect().await;
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                Message::Close(_)
+            ));
+        })
+        .await
+        .expect("browser.act did not expire while the page lock was held");
+    }
+
+    #[tokio::test]
+    async fn wait_retries_missing_default_context_during_navigation() {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let server = tokio::spawn(async move {
+                let first = test_request(&mut socket).await;
+                assert_eq!(first["method"], "Runtime.evaluate");
+                socket
+                    .send(Message::Text(
+                        json!({"id":first["id"],"error":{"code":-32000,"message":"Cannot find default execution context"}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                let second = test_request(&mut socket).await;
+                assert_eq!(second["method"], "Runtime.evaluate");
+                assert_eq!(second["params"]["expression"], first["params"]["expression"]);
+                test_reply(&mut socket, &second, json!({"result":{"value":true}})).await;
+            });
+            let response = browser
+                .perform(
+                    "ssmcp.browser.wait",
+                    json!({"target_id":"a","selector":"#ready","timeout_ms":1000}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response["structuredContent"]["matched"], true);
+            assert_eq!(response["structuredContent"]["target_id"], "a");
+            server.await.unwrap();
+            browser.disconnect().await;
+        })
+        .await
+        .expect("browser.wait did not recover when the new navigation context appeared");
+    }
+
+    #[tokio::test]
+    async fn act_prepares_background_input_and_preserves_partial_completion() {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let server = tokio::spawn(async move {
+                let focus = test_request(&mut socket).await;
+                assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(focus["params"]["enabled"], true);
+                test_reply(&mut socket, &focus, json!({})).await;
+                for kind in ["keyDown", "keyUp"] {
+                    let request = test_request(&mut socket).await;
+                    assert_eq!(request["method"], "Input.dispatchKeyEvent");
+                    assert_eq!(request["params"]["type"], kind);
+                    test_reply(&mut socket, &request, json!({})).await;
+                }
+                let focus = test_request(&mut socket).await;
+                assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(focus["params"]["enabled"], true);
+                test_reply(&mut socket, &focus, json!({})).await;
+                // The stale ref stops the batch; disconnect restores focus
+                // without sending the third action or replaying the first.
+                let restore = test_request(&mut socket).await;
+                assert_eq!(restore["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(restore["params"]["enabled"], false);
+                test_reply(&mut socket, &restore, json!({})).await;
+            });
+            let response = browser
+                .perform(
+                    "ssmcp.browser.act",
+                    json!({
+                        "target_id":"a", "snapshot":false, "actions":[
+                            {"type":"key","key":"Enter"},
+                            {"type":"click","ref":"stale-ref"},
+                            {"type":"key","key":"Escape"}
+                        ]
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response["isError"], true);
+            let report = &response["structuredContent"];
+            assert_eq!(report["completed_count"], 1);
+            assert_eq!(report["completed"][0]["type"], "key");
+            assert_eq!(report["failed_index"], 1);
+            assert_eq!(report["phase"], "actions");
+            assert_eq!(report["replay_safe"], false);
+            browser.disconnect().await;
+            server.await.unwrap();
+        })
+        .await
+        .expect("batch input or cleanup stalled");
+    }
+
+    #[tokio::test]
+    async fn opening_tabs_defaults_to_background_and_allows_explicit_foreground() {
+        for background in [None, Some(false)] {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let expected = background.unwrap_or(true);
+            let server = tokio::spawn(async move {
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["method"], "Target.createTarget");
+                assert_eq!(request["params"]["background"], expected);
+                test_reply(&mut socket, &request, json!({"targetId":"a"})).await;
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["method"], "Page.navigate");
+                test_reply(
+                    &mut socket,
+                    &request,
+                    json!({"frameId":"main","loaderId":"l"}),
+                )
+                .await;
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["method"], "Page.getFrameTree");
+                test_reply(
+                    &mut socket,
+                    &request,
+                    json!({"frameTree":{"frame":{"loaderId":"l"}}}),
+                )
+                .await;
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["params"]["expression"], "document.readyState");
+                test_reply(
+                    &mut socket,
+                    &request,
+                    json!({"result":{"value":"complete"}}),
+                )
+                .await;
+            });
+            let mut args = json!({"url":"https://example.test/"});
+            if let Some(background) = background {
+                args["background"] = json!(background);
+            }
+            let reply = browser.perform("ssmcp.browser.open", args).await.unwrap();
+            assert_eq!(reply["structuredContent"]["background"], expected);
+            assert_eq!(reply["structuredContent"]["moves_system_pointer"], false);
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_for_observes_text_changes_locally_and_times_out_without_input() {
+        let (cdp, mut socket) = test_cdp().await;
+        let browser = test_browser(vec![("a", cdp)]).await;
+        let server = tokio::spawn(async move {
+            for present in [false, true, false] {
+                let request = test_request(&mut socket).await;
+                assert_eq!(request["method"], "Runtime.evaluate");
+                let expression = request["params"]["expression"].as_str().unwrap();
+                assert!(expression.contains(".includes("));
+                test_reply(&mut socket, &request, json!({"result":{"value":present}})).await;
+            }
+            let request = test_request(&mut socket).await;
+            assert_eq!(request["method"], "Runtime.evaluate");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+        let appeared = browser
+            .perform(
+                "ssmcp.browser.wait_for",
+                json!({"target_id":"a","text":"Ready","timeout_ms":1000}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(appeared["structuredContent"]["matched"], true);
+        let absent = browser
+            .perform(
+                "ssmcp.browser.wait_for",
+                json!({"target_id":"a","text":"Ready","state":"absent","timeout_ms":1000}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(absent["structuredContent"]["matched"], true);
+        let started = tokio::time::Instant::now();
+        let error = browser
+            .perform(
+                "ssmcp.browser.wait_for",
+                json!({"target_id":"a","text":"Ready","timeout_ms":20}),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("timed out after 20 ms"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -2100,66 +2704,116 @@ mod tests {
             assert!(names.insert(name.to_owned()));
             assert_eq!(tool["inputSchema"]["additionalProperties"], false);
         }
-        assert_eq!(names.len(), 16);
-        assert!(names.contains("ssmcp.browser.discover"));
+        let expected = [
+            "discover",
+            "status",
+            "launch",
+            "connect",
+            "tabs",
+            "open",
+            "navigate",
+            "snapshot",
+            "click",
+            "fill",
+            "key",
+            "scroll",
+            "act",
+            "wait",
+            "wait_for",
+            "evaluate",
+            "screenshot",
+            "close",
+            "disconnect",
+        ]
+        .into_iter()
+        .map(|name| format!("ssmcp.browser.{name}"))
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(names, expected);
+        // The default must never open a desktop window implicitly.
+        assert!(parse::<Launch>(json!({})).unwrap().headless);
+        assert!(!parse::<Launch>(json!({"headless":false})).unwrap().headless);
+        let launch = Browser::tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "ssmcp.browser.launch")
+            .unwrap();
+        assert_eq!(
+            launch["inputSchema"]["properties"]["headless"]["default"],
+            true
+        );
     }
     #[tokio::test]
     async fn cancelled_input_still_sends_release() {
-        use tokio::sync::oneshot;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (pressed_tx, pressed_rx) = oneshot::channel();
-        let (continue_tx, continue_rx) = oneshot::channel();
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let down: Value =
-                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
-                    .unwrap();
-            assert_eq!(down["params"]["type"], "keyDown");
-            pressed_tx.send(()).unwrap();
-            continue_rx.await.unwrap();
-            ws.send(Message::Text(
-                json!({"id":down["id"],"result":{}}).to_string().into(),
-            ))
+        for (name, args) in [
+            ("ssmcp.browser.key", json!({"target_id":"test","key":"A"})),
+            (
+                "ssmcp.browser.act",
+                json!({
+                    "target_id":"test", "snapshot":false,
+                    "actions":[{"type":"key","key":"A"}]
+                }),
+            ),
+        ] {
+            use tokio::sync::oneshot;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (pressed_tx, pressed_rx) = oneshot::channel();
+            let (continue_tx, continue_rx) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let focus = test_request(&mut ws).await;
+                assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(focus["params"]["enabled"], true);
+                test_reply(&mut ws, &focus, json!({})).await;
+                let down: Value =
+                    serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                        .unwrap();
+                assert_eq!(down["params"]["type"], "keyDown");
+                pressed_tx.send(()).unwrap();
+                continue_rx.await.unwrap();
+                ws.send(Message::Text(
+                    json!({"id":down["id"],"result":{}}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+                let up: Value =
+                    serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                        .unwrap();
+                assert_eq!(up["params"]["type"], "keyUp");
+                ws.send(Message::Text(
+                    json!({"id":up["id"],"result":{}}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+                let restore = test_request(&mut ws).await;
+                assert_eq!(restore["method"], "Emulation.setFocusEmulationEnabled");
+                assert_eq!(restore["params"]["enabled"], false);
+                test_reply(&mut ws, &restore, json!({})).await;
+            });
+            let cdp = Cdp::connect(&format!("ws://{address}/devtools/page/test"))
+                .await
+                .unwrap();
+            let browser = test_browser(vec![("test", cdp)]).await;
+            let request = tokio::spawn({
+                let browser = browser.clone();
+                async move { browser.perform(name, args).await }
+            });
+            pressed_rx.await.unwrap();
+            request.abort();
+            assert!(request.await.unwrap_err().is_cancelled());
+            let disconnect = browser.disconnect();
+            tokio::pin!(disconnect);
+            assert!(poll_once(disconnect.as_mut()).await.is_pending());
+            continue_tx.send(()).unwrap();
+            // Poll disconnect while the peer waits for focus restoration. Merely
+            // constructing the future does not drive its cleanup after input drains.
+            tokio::time::timeout(Duration::from_secs(3), async {
+                let (server, ()) = tokio::join!(server, disconnect);
+                server.unwrap();
+            })
             .await
             .unwrap();
-            let up: Value =
-                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
-                    .unwrap();
-            assert_eq!(up["params"]["type"], "keyUp");
-            ws.send(Message::Text(
-                json!({"id":up["id"],"result":{}}).to_string().into(),
-            ))
-            .await
-            .unwrap();
-        });
-        let cdp = Cdp::connect(&format!("ws://{address}/devtools/page/test"))
-            .await
-            .unwrap();
-        let browser = test_browser(vec![("test", cdp)]).await;
-        let request = tokio::spawn({
-            let browser = browser.clone();
-            async move {
-                browser
-                    .perform("ssmcp.browser.key", json!({"target_id":"test","key":"A"}))
-                    .await
-            }
-        });
-        pressed_rx.await.unwrap();
-        request.abort();
-        assert!(request.await.unwrap_err().is_cancelled());
-        let disconnect = browser.disconnect();
-        tokio::pin!(disconnect);
-        assert!(poll_once(disconnect.as_mut()).await.is_pending());
-        continue_tx.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(3), server)
-            .await
-            .unwrap()
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), disconnect)
-            .await
-            .unwrap();
+        }
     }
 
     #[tokio::test]

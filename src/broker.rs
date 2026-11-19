@@ -1,7 +1,9 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
 mod management;
+mod traffic;
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
+    user_policy::{TrafficError, TrafficFailure, TrafficFailureState, TrafficOutcome},
     wire::{self, ClientInfo, Controller, Frame, Operation},
 };
 use serde_json::Value;
@@ -36,6 +38,7 @@ type CallResult = std::result::Result<Value, String>;
 struct Call {
     operation: Operation,
     controller: Option<Controller>,
+    code_context: Option<wire::CodeContext>,
     reply: oneshot::Sender<CallResult>,
 }
 
@@ -74,13 +77,20 @@ struct LoginCode {
     expires: Instant,
 }
 
+struct SessionTrafficFailure {
+    undispatched: String,
+    pending: String,
+}
+
 pub struct Session {
+    pub(crate) collaboration: crate::collab::Hub,
+    pub(crate) steering: crate::steering::Queue,
     login: Mutex<Option<LoginCode>>,
     // Resolved provider subject IDs are immutable for this SSH connection.
     allow: Vec<Identity>,
     info: ClientInfo,
-    wire_version: u32,
     sender: mpsc::Sender<Call>,
+    reports: mpsc::Sender<wire::CodeCompletion>,
     slots: Semaphore,
     alive: AtomicBool,
     ssh_user: String,
@@ -90,9 +100,22 @@ pub struct Session {
     disconnect: Notify,
     closed: AtomicBool,
     closed_notify: Notify,
+    traffic_failure: Mutex<Option<SessionTrafficFailure>>,
 }
 
 impl Session {
+    fn connection_error(&self, dispatched: bool, fallback: &str) -> String {
+        let failure = self
+            .traffic_failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match failure.as_ref() {
+            Some(failure) if dispatched => failure.pending.clone(),
+            Some(failure) => failure.undispatched.clone(),
+            None => fallback.into(),
+        }
+    }
+
     pub fn client_id(&self) -> &str {
         &self.info.id
     }
@@ -106,7 +129,30 @@ impl Session {
     }
 
     pub fn supports_controller(&self) -> bool {
-        self.wire_version >= wire::VERSION
+        // Registration accepts only the current protocol, which includes attribution.
+        true
+    }
+
+    /// Called only after the HTTP caller rechecks its current token and ACL.
+    pub(crate) fn report_code_mode(&self, completion: wire::CodeCompletion) -> Result<(), String> {
+        completion.validate()?;
+        if !self.is_alive() {
+            return Err("client cannot receive code audit completion".into());
+        }
+        self.reports
+            .try_send(completion)
+            .map_err(|_| "code audit completion queue unavailable".into())
+    }
+
+    fn steering_command(
+        &self,
+        command: wire::SteeringCommand,
+    ) -> Result<wire::SteeringSnapshot, String> {
+        if !self.is_alive() {
+            return Err("client connection is closed".into());
+        }
+        self.steering
+            .command(self.client_id(), self.collaboration.presence()?, command)
     }
 
     pub async fn call(&self, operation: Operation) -> CallResult {
@@ -153,14 +199,21 @@ impl Session {
         audit_required: bool,
     ) -> CallResult {
         operation.validate()?;
+        let audit_run = crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok();
+        // A later collab.bind in the same run must not reattribute this reply.
+        let reply_agent = audit_run
+            .as_ref()
+            .and_then(|run| run.binding(self.client_id()))
+            .map(|binding| binding.agent_id);
+        let controller =
+            controller.or_else(|| audit_run.as_ref().and_then(|run| run.controller.clone()));
         if let Some(controller) = &controller {
             controller.validate()?;
         }
-        // An older client uses a strict frame parser. Omit the new field
-        // entirely; never corrupt its connection merely to improve display.
-        let controller = controller.filter(|_| self.supports_controller());
+        let code_context = audit_run.as_ref().map(|run| (*run.context).clone());
+        let carries_source = code_context.is_some();
         if !self.alive.load(Ordering::Acquire) {
-            return Err("client disconnected".into());
+            return Err(self.connection_error(false, "client disconnected"));
         }
         let _permit = self
             .slots
@@ -190,6 +243,7 @@ impl Session {
             .try_send(Call {
                 operation,
                 controller,
+                code_context,
                 reply,
             })
             .is_err()
@@ -203,14 +257,21 @@ impl Session {
                     )
                     .await;
             }
-            return Err("client disconnected or busy; tool was not dispatched".into());
+            return Err(self.connection_error(
+                false,
+                "client disconnected or busy; tool was not dispatched",
+            ));
+        }
+        if carries_source && let Some(run) = audit_run.as_ref() {
+            run.native_dispatched(self.client_id(), audit_tool.as_deref());
         }
         let started = std::time::Instant::now();
         let result = match timeout(duration, response).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err("client disconnected".into()),
+            Ok(Err(_)) => Err(self.connection_error(true, "client disconnected")),
             Err(_) => Err("client request timed out; its outcome may be unknown".into()),
         };
+        let received_at = std::time::Instant::now();
         if audit_tool.is_some() {
             let outcome = if result
                 .as_ref()
@@ -226,8 +287,30 @@ impl Session {
                 .is_err()
                 && audit_required
             {
+                // Native Frame::Reply errors are untrusted strings. Only the
+                // server's transport state can supply an authoritative quota notice.
+                let traffic_notice = self
+                    .traffic_failure
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .map(|failure| failure.pending.clone());
+                if let Some(notice) = traffic_notice {
+                    return Err(format!(
+                        "{notice}\nAudit completion could not be saved; inspect the operation state before retrying."
+                    ));
+                }
                 return Err("tool may have executed; audit completion could not be saved; inspect its state before retrying".into());
             }
+        }
+        if let (Some(run), Ok(value)) = (audit_run.as_ref(), &result) {
+            run.native_reply(
+                self.client_id(),
+                reply_agent.as_deref(),
+                audit_tool.as_deref(),
+                value,
+                received_at,
+            );
         }
         let timed_out = result.as_ref().is_err_and(|e| e.contains("timed out"));
         crate::observability::log(
@@ -262,7 +345,11 @@ pub struct Broker {
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
+    pub client_downloads: Option<crate::client_downloads::Publisher>,
     management: Option<crate::management::State>,
+    traffic_utc_offset_minutes: std::sync::atomic::AtomicI32,
+    pub(crate) user_policies: Arc<crate::user_policy::UserPolicies>,
+    pub(crate) user_policy_updates: tokio::sync::Mutex<()>,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
 }
 
@@ -290,7 +377,13 @@ impl Broker {
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
             portal: crate::portal::Portal::default(),
+            client_downloads: None,
             management: None,
+            user_policies: Arc::default(),
+            traffic_utc_offset_minutes: std::sync::atomic::AtomicI32::new(
+                crate::user_policy::DEFAULT_TRAFFIC_UTC_OFFSET_MINUTES,
+            ),
+            user_policy_updates: tokio::sync::Mutex::new(()),
             sessions: RwLock::new(HashMap::new()),
         })
     }
@@ -299,7 +392,55 @@ impl Broker {
         if !valid_username(user) {
             return None;
         }
-        self.oauth.authenticate(user, access_token)
+        let authorization = self.oauth.authenticate(user, access_token)?;
+        self.authorized_account(&authorization)
+            .then_some(authorization)
+    }
+
+    fn authorized_account(&self, authorization: &Authorization) -> bool {
+        match authorization {
+            Authorization::Identity(identity) => !self.user_policies.is_banned(&identity.subject),
+            Authorization::Legacy { anchor, .. } => anchor.upgrade().is_some_and(|session| {
+                session
+                    .owner_subject
+                    .as_deref()
+                    .is_none_or(|id| !self.user_policies.is_banned(id))
+            }),
+        }
+    }
+
+    /// Restore durable account restrictions before accepting any connection.
+    pub async fn configure_user_policies(&self, default_rate: u64) -> crate::Result<()> {
+        self.user_policies.set_default(default_rate)?;
+        let accounts = match self.portal.storage(|store| store.summaries()).await {
+            Ok(accounts) => accounts,
+            Err(crate::portal::Problem::Disabled) => return Ok(()),
+            Err(_) => return Err("could not load account restrictions; refusing to start".into()),
+        };
+        for account in accounts {
+            self.user_policies.apply_account(
+                &account.subject,
+                account.banned,
+                account.rate_limit_bps,
+                account.has_recharged,
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn record_recharge(
+        &self,
+        subject: &str,
+    ) -> Result<(), crate::portal::Problem> {
+        let subject = subject.to_owned();
+        let policies = self.user_policies.clone();
+        self.portal
+            .storage(move |store| {
+                let account = store.record_recharge(&subject)?;
+                policies.apply_account(&subject, account.banned, account.rate_limit_bps, true);
+                Ok(())
+            })
+            .await
     }
 
     pub async fn online_session(&self, user: &str) -> Option<Arc<Session>> {
@@ -343,8 +484,11 @@ impl Broker {
     #[cfg(test)]
     pub(crate) async fn test_register(&self, user: &str, login_code: &str) -> Arc<Session> {
         let (sender, _rx) = mpsc::channel(1);
+        let (reports, _reports_rx) = mpsc::channel(1);
         let id = generate_secret().unwrap();
         let session = Arc::new(Session {
+            collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -358,8 +502,8 @@ impl Broker {
                 cwd: "/test".into(),
                 hostname: "localhost".into(),
             },
-            wire_version: wire::VERSION,
             sender,
+            reports,
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
             ssh_user: user.into(),
@@ -372,6 +516,7 @@ impl Broker {
             disconnect: Notify::new(),
             closed: AtomicBool::new(false),
             closed_notify: Notify::new(),
+            traffic_failure: Mutex::new(None),
         });
         self.sessions
             .write()
@@ -389,6 +534,9 @@ impl Broker {
         authorization: &Authorization,
     ) -> Result<Vec<Arc<Session>>, String> {
         let sessions = self.sessions.read().await;
+        if !self.authorized_account(authorization) {
+            return Err("account is banned".into());
+        }
         validate_authorization(&sessions, user, authorization)?;
         let mut result: Vec<_> = accessible_sessions(&sessions, user, authorization)
             .cloned()
@@ -404,6 +552,9 @@ impl Broker {
         id: &str,
     ) -> Result<Arc<Session>, String> {
         let sessions = self.sessions.read().await;
+        if !self.authorized_account(authorization) {
+            return Err("account is banned".into());
+        }
         validate_authorization(&sessions, user, authorization)?;
         accessible_sessions(&sessions, user, authorization)
             .find(|session| session.client_id() == id)
@@ -423,6 +574,7 @@ impl Broker {
             .collect();
         for session in &active {
             session.alive.store(false, Ordering::Release);
+            session.collaboration.close();
             session.disconnect.notify_one();
         }
         // Drain normal wire cleanup and its bounded audit writes before the
@@ -454,12 +606,18 @@ impl Broker {
         self: Arc<Self>,
         stream: T,
         registration: crate::device::Registration,
+        traffic_failure: TrafficFailureState,
     ) -> crate::Result<()>
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        self.attach_stream(stream, registration.username.clone(), Some(registration))
-            .await
+        self.attach_stream_with_traffic(
+            stream,
+            registration.username.clone(),
+            Some(registration),
+            traffic_failure,
+        )
+        .await
     }
 
     async fn attach_stream<T>(
@@ -471,26 +629,33 @@ impl Broker {
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
+        self.attach_stream_with_traffic(stream, user, registration, TrafficFailureState::default())
+            .await
+    }
+
+    async fn attach_stream_with_traffic<T>(
+        self: Arc<Self>,
+        stream: T,
+        user: String,
+        registration: Option<crate::device::Registration>,
+        traffic_failure: TrafficFailureState,
+    ) -> crate::Result<()>
+    where
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
         let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
-        let (wire_version, mode, metadata) = match timeout(
-            IO_TIMEOUT,
-            wire::read_frame(&mut reader),
-        )
-        .await??
-        {
+        let (mode, metadata) = match timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await?? {
             Some(Frame::Hello {
                 version,
                 mode,
                 metadata,
-            }) if matches!(version, wire::VERSION | wire::LEGACY_VERSION) => {
-                (version, mode, metadata)
-            }
+            }) if version == wire::VERSION => (mode, metadata),
             _ => {
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "unsupported ssmcp wire protocol; update ssmcpd and ssmcp to compatible versions (server accepts v4 and v5)".into(),
+                        message: format!("unsupported ssmcp wire protocol; server requires version {}; update ssmcp and ssmcpd", wire::VERSION),
                     },
                 )
                 .await?;
@@ -518,6 +683,42 @@ impl Broker {
                 &mut writer,
                 &Frame::Reject {
                     message: "ssmcp authorization expired or revoked".into(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        let owner = registration
+            .as_ref()
+            .map(|r| r.identity.subject.clone())
+            .or_else(|| {
+                self.management
+                    .as_ref()
+                    .and_then(|state| state.policy.owner_subject(&user))
+            })
+            .or_else(|| {
+                user.strip_prefix("gh-")
+                    .filter(|id| crate::management::valid_subject(id))
+                    .map(str::to_owned)
+            });
+        if self.portal.has_storage() && owner.is_none() {
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reject {
+                    message: crate::user_policy::TrafficError::AccountRequired.to_string(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        if owner
+            .as_deref()
+            .is_some_and(|id| self.user_policies.is_banned(id))
+        {
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reject {
+                    message: "account is banned".into(),
                 },
             )
             .await?;
@@ -563,7 +764,10 @@ impl Broker {
         let resource = if restricted { IDENTITY_RESOURCE } else { &user };
         let client_id = generate_secret()?;
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
+        let (reports, mut code_reports) = mpsc::channel::<wire::CodeCompletion>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
+            collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -577,24 +781,18 @@ impl Broker {
                 cwd: metadata.cwd,
                 hostname: metadata.hostname,
             },
-            wire_version,
             sender,
+            reports,
             slots: Semaphore::new(wire::MAX_INFLIGHT),
             alive: AtomicBool::new(true),
             ssh_user: user.clone(),
-            owner_subject: registration
-                .as_ref()
-                .map(|r| r.identity.subject.clone())
-                .or_else(|| {
-                    self.management
-                        .as_ref()
-                        .and_then(|state| state.policy.owner_subject(&user))
-                }),
+            owner_subject: owner,
             connected_at: crate::management::now(),
             audit: self.management.as_ref().map(|state| state.audit.clone()),
             disconnect: Notify::new(),
             closed: AtomicBool::new(false),
             closed_notify: Notify::new(),
+            traffic_failure: Mutex::new(None),
         });
         {
             let mut sessions = self.sessions.write().await;
@@ -643,8 +841,26 @@ impl Broker {
                 ("mode", mode.name().into()),
             ],
         );
-        let result: crate::Result<()> = tokio::select! {
+        let owner_policy = session
+            .owner_subject
+            .as_deref()
+            .map(|id| self.user_policies.get(id));
+        let legacy_subject = registration
+            .is_none()
+            .then(|| session.owner_subject.as_deref())
+            .flatten();
+        // Keep reply senders alive until the trusted terminal cause is known.
+        let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant, bool)> =
+            HashMap::new();
+        let mut result: crate::Result<()> = tokio::select! {
+            biased;
             _ = session.disconnect.notified() => Ok(()),
+            _ = async {
+                match &owner_policy {
+                    Some(policy) => policy.wait_banned().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => Ok(()),
             _ = async {
                 match &registration {
                     Some(registration) => registration.wait_revoked(&self).await,
@@ -659,8 +875,8 @@ impl Broker {
             result = async {
             session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone() }).await?;
-            let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant, bool)> = HashMap::new();
             let mut next_id = 0u64;
+            let mut delivered_runs = std::collections::VecDeque::<String>::new();
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
             loop {
                 // Keep the same read future across requests/ticks: partial JSON frames
@@ -679,7 +895,30 @@ impl Broker {
                             next_id = next_id.checked_add(1).ok_or("request id exhausted")?;
                             let reload = crate::client::reload::is_reload(&call.operation);
                             pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation), reload));
-                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::Call { id:next_id, operation:call.operation, controller:call.controller })).await??;
+                            let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
+                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, code_context:call.code_context };
+                            if let Some(subject) = legacy_subject {
+                                self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1)
+                                    .await.map_err(|error| TrafficFailure::rejected_call(error, next_id))?;
+                            }
+                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                            if let Some(run_id) = run_id && !delivered_runs.contains(&run_id) {
+                                if delivered_runs.len() >= 256 { delivered_runs.pop_front(); }
+                                delivered_runs.push_back(run_id);
+                            }
+                        }
+                        Some(completion) = code_reports.recv() => {
+                            // A cancelled, queued call may never have reached the
+                            // client. Do not send a source-less run to that client.
+                            if let Some(index) = delivered_runs.iter().position(|id| *id == completion.run_id) {
+                                delivered_runs.remove(index);
+                                let frame = Frame::CodeModeFinished { completion };
+                                if let Some(subject) = legacy_subject {
+                                    self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1)
+                                        .await.map_err(TrafficFailure::new)?;
+                                }
+                                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                            }
                         }
                         _ = expiry.tick() => {
                             if pending.values().any(|(_, deadline, _)| Instant::now() >= *deadline) {
@@ -688,7 +927,23 @@ impl Broker {
                         }
                     }
                 };
+                if let (Some(subject), Some(frame)) = (legacy_subject, &received) {
+                    self.charge_relay(subject, false, serde_json::to_vec(frame)?.len() + 1)
+                        .await.map_err(|error| match frame {
+                            Frame::Reply { id, .. } => TrafficFailure::rejected_reply(error, *id),
+                            _ => TrafficFailure::new(error),
+                        })?;
+                }
                 match received {
+                    Some(Frame::Steering { id, command }) => {
+                        let result = session.steering_command(command);
+                        let frame = Frame::SteeringReply { id, result };
+                        if let Some(subject) = legacy_subject {
+                            self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1)
+                                .await.map_err(TrafficFailure::new)?;
+                        }
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                    }
                     Some(Frame::Reply {id, result}) => {
                         if let Some((reply, _, reload)) = pending.remove(&id) {
                             if reload && result.as_ref().is_ok_and(crate::client::reload::accepted) {
@@ -704,10 +959,59 @@ impl Broker {
             Ok(())
         } => result,
         };
+        let failure = traffic_failure.get().or_else(|| {
+            result.as_ref().err().and_then(|error| {
+                error.downcast_ref::<TrafficFailure>().copied().or_else(|| {
+                    error
+                        .downcast_ref::<TrafficError>()
+                        .copied()
+                        .map(TrafficFailure::new)
+                })
+            })
+        });
+        if let Some(failure) = failure {
+            // Publish the cause before closing admission: calls racing with this
+            // teardown must not fall back to a generic disconnected/oneshot error.
+            let undispatched = failure
+                .error
+                .notice(&self.public_url, TrafficOutcome::NotDispatched);
+            *session
+                .traffic_failure
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(SessionTrafficFailure {
+                undispatched: undispatched.clone(),
+                pending: failure
+                    .error
+                    .notice(&self.public_url, TrafficOutcome::Unknown),
+            });
+            session.alive.store(false, Ordering::Release);
+            requests.close();
+            for (id, (reply, _, _)) in pending.drain() {
+                let _ = reply.send(Err(failure.call_notice(&self.public_url, id)));
+            }
+            while let Ok(call) = requests.try_recv() {
+                let _ = call.reply.send(Err(undispatched.clone()));
+            }
+            result = Err(failure.into());
+            let _ = timeout(
+                IO_TIMEOUT,
+                wire::write_frame(
+                    &mut writer,
+                    &Frame::Reject {
+                        message: failure.notice(&self.public_url),
+                    },
+                ),
+            )
+            .await;
+        }
+        // Non-quota shutdown keeps the existing disconnected fallback.
+        drop(pending);
+        drop(requests);
         // Drop both wire halves before reporting the disconnect complete.
         drop(reader);
         drop(writer);
         session.alive.store(false, Ordering::Release);
+        session.collaboration.close();
         let mut sessions = self.sessions.write().await;
         if let Some(clients) = sessions.get_mut(&user) {
             if clients
@@ -859,11 +1163,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn controller_attribution_negotiates_real_version_four_and_five_connections() {
-        for version in [wire::LEGACY_VERSION, wire::VERSION] {
+    async fn registration_rejects_every_noncurrent_wire_version() {
+        for version in [0, 4, 5, 6, wire::VERSION + 1] {
             let broker = Arc::new(Broker::new("https://example.test".into()));
             let (server, client) = UnixStream::pair().unwrap();
-            let server_task = tokio::spawn(broker.clone().attach(server));
+            let server_task = tokio::spawn(broker.attach(server));
             let (reader, mut writer) = client.into_split();
             let mut reader = BufReader::new(reader);
             wire::write_frame(
@@ -871,60 +1175,20 @@ mod tests {
                 &Frame::Hello {
                     version,
                     mode: wire::Mode::Shell,
-                    metadata: metadata("controller test", "/project"),
+                    metadata: metadata("unsupported protocol", "/project"),
                 },
             )
             .await
             .unwrap();
-            let Some(Frame::Ready {
-                url, login_code, ..
-            }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
-                .await
-                .unwrap()
-                .unwrap()
-            else {
-                panic!("registration failed");
-            };
-            let user = url.rsplit('/').next().unwrap();
-            let subject = broker.redeem_login(user, &login_code).await.unwrap();
-            assert_eq!(subject.supports_controller(), version == wire::VERSION);
-            let request = tokio::spawn(async move {
-                subject
-                    .call_with_controller(
-                        Operation::Status {},
-                        Some(wire::Controller {
-                            name: Some("ChatGPT".into()),
-                            model: Some("test-model".into()),
-                            source: wire::ControllerSource::CallerReported,
-                        }),
-                    )
-                    .await
-            });
-            let Some(Frame::Call { id, controller, .. }) =
+            let Some(Frame::Reject { message }) =
                 timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
                     .await
                     .unwrap()
                     .unwrap()
             else {
-                panic!("missing call");
+                panic!("noncurrent version {version} was not rejected");
             };
-            if version == wire::LEGACY_VERSION {
-                assert!(controller.is_none());
-            } else {
-                assert_eq!(controller.unwrap().model.as_deref(), Some("test-model"));
-            }
-            wire::write_frame(
-                &mut writer,
-                &Frame::Reply {
-                    id,
-                    result: Ok(serde_json::json!({"ok":true})),
-                },
-            )
-            .await
-            .unwrap();
-            assert!(request.await.unwrap().unwrap()["ok"] == true);
-            drop(reader);
-            drop(writer);
+            assert!(message.contains(&format!("server requires version {}", wire::VERSION)));
             timeout(Duration::from_secs(2), server_task)
                 .await
                 .unwrap()
@@ -934,68 +1198,301 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn controller_metadata_is_per_call_and_omitted_for_version_four_clients() {
-        for version in [wire::LEGACY_VERSION, wire::VERSION] {
-            let (sender, mut receiver) = mpsc::channel(4);
-            let mut subject = session("controller-test", "secret");
-            let mutable = Arc::get_mut(&mut subject).unwrap();
-            mutable.sender = sender;
-            mutable.slots = Semaphore::new(4);
-            mutable.wire_version = version;
-            let mut tasks = Vec::new();
-            for (tool, model) in [("tool.a", "model-a"), ("tool.b", "model-b")] {
-                let subject = subject.clone();
-                tasks.push(tokio::spawn(async move {
-                    subject
-                        .call_with_controller(
-                            Operation::CallTool {
+    async fn current_protocol_carries_controller_and_code_audit() {
+        let broker = Arc::new(Broker::new("https://example.test".into()));
+        let (server, client) = UnixStream::pair().unwrap();
+        let server_task = tokio::spawn(broker.clone().attach(server));
+        let (reader, mut writer) = client.into_split();
+        let mut reader = BufReader::new(reader);
+        wire::write_frame(
+            &mut writer,
+            &Frame::Hello {
+                version: wire::VERSION,
+                mode: wire::Mode::Shell,
+                metadata: metadata("controller test", "/project"),
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::Ready {
+            url, login_code, ..
+        }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("registration failed");
+        };
+        let user = url.rsplit('/').next().unwrap();
+        let subject = broker.redeem_login(user, &login_code).await.unwrap();
+        assert!(subject.supports_controller());
+        let reports = subject.clone();
+        let code =
+            "// preserve source spacing\n  return await exec.run('one', {command:['true']});\n";
+        let run = crate::code_mode::AuditRun::new(code, None).unwrap();
+        let request = tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+            subject
+                .call_with_controller(
+                    Operation::Status {},
+                    Some(wire::Controller {
+                        name: Some("ChatGPT".into()),
+                        model: Some("test-model".into()),
+                        source: wire::ControllerSource::CallerReported,
+                    }),
+                )
+                .await
+        }));
+        let Some(Frame::Call {
+            id,
+            controller,
+            code_context,
+            ..
+        }) = timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("missing call");
+        };
+        assert_eq!(controller.unwrap().model.as_deref(), Some("test-model"));
+        assert_eq!(code_context.unwrap().code, code);
+        assert_eq!(run.targets(), vec![reports.client_id().to_owned()]);
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(serde_json::json!({"ok":true})),
+            },
+        )
+        .await
+        .unwrap();
+        let result = request.await.unwrap();
+        assert!(result.as_ref().unwrap()["ok"] == true);
+        reports.report_code_mode(run.completion(&result)).unwrap();
+        let Some(Frame::CodeModeFinished { completion }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing run completion");
+        };
+        assert_eq!(completion.run_id, run.context.run_id);
+        assert!(completion.success);
+        drop(reader);
+        drop(writer);
+        timeout(Duration::from_secs(2), server_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn code_source_is_scoped_to_queued_target_and_never_changes_native_arguments() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let mut target = session("target", "secret");
+        Arc::get_mut(&mut target).unwrap().sender = sender;
+        let (untouched_sender, mut untouched_receiver) = mpsc::channel(4);
+        let mut untouched = session("untouched", "secret");
+        Arc::get_mut(&mut untouched).unwrap().sender = untouched_sender;
+        let source = "return await call('target', 'tool.run', {value: 3});\n";
+        let run = crate::code_mode::AuditRun::new(
+            source,
+            Some(wire::Controller {
+                name: Some("caller".into()),
+                model: None,
+                source: wire::ControllerSource::CallerReported,
+            }),
+        )
+        .unwrap();
+        let called = target.clone();
+        let request = tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+            called
+                .call(Operation::CallTool {
+                    name: "tool.run".into(),
+                    arguments: serde_json::json!({"value":3}),
+                })
+                .await
+        }));
+        let call = receiver.recv().await.unwrap();
+        assert_eq!(call.code_context.unwrap().code, source);
+        assert_eq!(call.controller.unwrap().name.as_deref(), Some("caller"));
+        let Operation::CallTool { arguments, .. } = call.operation else {
+            panic!("expected a tool call");
+        };
+        assert_eq!(arguments, serde_json::json!({"value":3}));
+        call.reply.send(Ok(Value::Null)).unwrap();
+        request.await.unwrap().unwrap();
+        assert_eq!(run.targets(), ["target"]);
+        assert!(matches!(
+            untouched_receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        untouched.alive.store(false, Ordering::Release);
+        assert!(
+            crate::code_mode::AUDIT_RUN
+                .scope(run.clone(), untouched.call(Operation::Status {}))
+                .await
+                .is_err()
+        );
+        assert_eq!(run.targets(), ["target"]);
+        let request = tokio::spawn(async move { target.call(Operation::Status {}).await });
+        let call = receiver.recv().await.unwrap();
+        assert!(call.code_context.is_none());
+        call.reply.send(Ok(Value::Null)).unwrap();
+        request.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn dialogue_receipts_use_native_ack_and_binding_at_dispatch() {
+        for tool in ["ssmcp.ui.message", "ssmcp.ui.present"] {
+            for bind_after_dispatch in [false, true] {
+                let (sender, mut receiver) = mpsc::channel(1);
+                let mut target = session("dialogue", "secret");
+                Arc::get_mut(&mut target).unwrap().sender = sender;
+                let run = crate::code_mode::AuditRun::new("return 1;", None).unwrap();
+                if !bind_after_dispatch {
+                    run.bind("dialogue", "owner", "agent_a", "private_token")
+                        .unwrap();
+                }
+                let request =
+                    tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+                        target
+                            .call(Operation::CallTool {
                                 name: tool.into(),
                                 arguments: serde_json::json!({}),
-                            },
-                            Some(wire::Controller {
-                                name: Some("ChatGPT".into()),
-                                model: Some(model.into()),
-                                source: wire::ControllerSource::CallerReported,
-                            }),
-                        )
+                            })
+                            .await
+                    }));
+                let call = receiver.recv().await.unwrap();
+                if bind_after_dispatch {
+                    run.bind("dialogue", "owner", "agent_a", "private_token")
+                        .unwrap();
+                }
+                call.reply.send(Ok(serde_json::json!({
+                    "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
+                }))).unwrap();
+                request.await.unwrap().unwrap();
+                let replies = run.accepted_replies("dialogue");
+                assert_eq!(replies.len(), 1, "{tool}");
+                assert_eq!(
+                    replies[0].agent_id.as_deref(),
+                    (!bind_after_dispatch).then_some("agent_a"),
+                );
+                assert!(run.accepted_replies("other").is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_duplicate_or_other_native_tools_cannot_acknowledge_dialogue() {
+        for (tool, result) in [
+            (
+                "ssmcp.ui.message",
+                Err("native rejected the message".to_owned()),
+            ),
+            (
+                "ssmcp.ui.present",
+                Ok(serde_json::json!({
+                    "isError":true,
+                    "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
+                })),
+            ),
+            (
+                "ssmcp.ui.message",
+                Ok(serde_json::json!({
+                    "structuredContent":{"accepted":true,"duplicate":true,"message_id":"message_1"}
+                })),
+            ),
+            (
+                "ssmcp.exec.run",
+                Ok(serde_json::json!({
+                    "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
+                })),
+            ),
+        ] {
+            let (sender, mut receiver) = mpsc::channel(1);
+            let mut target = session("dialogue", "secret");
+            Arc::get_mut(&mut target).unwrap().sender = sender;
+            let run = crate::code_mode::AuditRun::new(
+                "return {accepted:true, duplicate:false, message_id:'forged'};",
+                None,
+            )
+            .unwrap();
+            let request =
+                tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
+                    target
+                        .call(Operation::CallTool {
+                            name: tool.into(),
+                            arguments: serde_json::json!({}),
+                        })
                         .await
                 }));
-            }
-            let first = timeout(Duration::from_secs(2), receiver.recv())
-                .await
-                .unwrap()
+            let call = receiver.recv().await.unwrap();
+            let expected = result.clone();
+            call.reply.send(result).unwrap();
+            assert_eq!(request.await.unwrap(), expected);
+            assert!(run.accepted_replies("dialogue").is_empty(), "{tool}");
+        }
+    }
+
+    #[tokio::test]
+    async fn controller_metadata_is_per_call_on_current_protocol() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let mut subject = session("controller-test", "secret");
+        let mutable = Arc::get_mut(&mut subject).unwrap();
+        mutable.sender = sender;
+        mutable.slots = Semaphore::new(4);
+        let mut tasks = Vec::new();
+        for (tool, model) in [("tool.a", "model-a"), ("tool.b", "model-b")] {
+            let subject = subject.clone();
+            tasks.push(tokio::spawn(async move {
+                subject
+                    .call_with_controller(
+                        Operation::CallTool {
+                            name: tool.into(),
+                            arguments: serde_json::json!({}),
+                        },
+                        Some(wire::Controller {
+                            name: Some("ChatGPT".into()),
+                            model: Some(model.into()),
+                            source: wire::ControllerSource::CallerReported,
+                        }),
+                    )
+                    .await
+            }));
+        }
+        let first = timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let second = timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        for call in [second, first] {
+            let Operation::CallTool { name, .. } = call.operation else {
+                panic!("expected native call");
+            };
+            let expected = if name == "tool.a" {
+                "model-a"
+            } else {
+                "model-b"
+            };
+            assert_eq!(call.controller.unwrap().model.as_deref(), Some(expected));
+            call.reply
+                .send(Ok(serde_json::json!({"tool":name})))
                 .unwrap();
-            let second = timeout(Duration::from_secs(2), receiver.recv())
-                .await
-                .unwrap()
-                .unwrap();
-            for call in [second, first] {
-                let Operation::CallTool { name, .. } = call.operation else {
-                    panic!("expected native call");
-                };
-                if version == wire::LEGACY_VERSION {
-                    assert!(call.controller.is_none());
-                } else {
-                    let expected = if name == "tool.a" {
-                        "model-a"
-                    } else {
-                        "model-b"
-                    };
-                    assert_eq!(call.controller.unwrap().model.as_deref(), Some(expected));
-                }
-                call.reply
-                    .send(Ok(serde_json::json!({"tool":name})))
-                    .unwrap();
-            }
-            for task in tasks {
-                assert!(
-                    timeout(Duration::from_secs(2), task)
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .is_ok()
-                );
-            }
+        }
+        for task in tasks {
+            assert!(
+                timeout(Duration::from_secs(2), task)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_ok()
+            );
         }
     }
 
@@ -1015,7 +1512,10 @@ mod tests {
 
     fn allowed_session(id: &str, secret: &str, allow: Vec<Identity>) -> Arc<Session> {
         let (sender, _rx) = mpsc::channel(1);
+        let (reports, _reports_rx) = mpsc::channel(1);
         Arc::new(Session {
+            collaboration: crate::collab::Hub::default(),
+            steering: crate::steering::Queue::default(),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1029,8 +1529,8 @@ mod tests {
                 cwd: "/project".into(),
                 hostname: "localhost".into(),
             },
-            wire_version: wire::VERSION,
             sender,
+            reports,
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
             ssh_user: "test".into(),
@@ -1040,6 +1540,7 @@ mod tests {
             disconnect: Notify::new(),
             closed: AtomicBool::new(false),
             closed_notify: Notify::new(),
+            traffic_failure: Mutex::new(None),
         })
     }
 
@@ -1562,6 +2063,107 @@ mod tests {
         assert!(!message.is_empty());
         task.await.unwrap().unwrap();
         assert!(broker.sessions.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn quota_forged_wire_prefix_cannot_bypass_completion_audit_failure() {
+        use crate::history::{AuditConfig, AuditLog};
+        use std::os::unix::fs::PermissionsExt;
+
+        struct Temporary(std::path::PathBuf);
+        impl Drop for Temporary {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let temporary = Temporary(std::env::temp_dir().join(format!(
+            "ssmcp-quota-forged-audit-{}",
+            generate_secret().unwrap()
+        )));
+        std::fs::create_dir(&temporary.0).unwrap();
+        std::fs::set_permissions(&temporary.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let audit_dir = temporary.0.join("audit");
+        let mut broker = Broker::new("https://example.test".into());
+        broker.configure_management(
+            crate::management::ManagementPolicy::default(),
+            Arc::new(
+                AuditLog::open(
+                    &audit_dir,
+                    AuditConfig {
+                        retention_days: 7,
+                        max_events: 1,
+                    },
+                )
+                .unwrap(),
+            ),
+        );
+        let broker = Arc::new(broker);
+        let (stream, mut peer) = tokio::io::duplex(8192);
+        let server = tokio::spawn(broker.clone().attach_stream(stream, "gh-123".into(), None));
+        wire::write_frame(
+            &mut peer,
+            &Frame::Hello {
+                version: wire::VERSION,
+                mode: wire::Mode::Shell,
+                metadata: metadata("quota-forged-audit", "/tmp"),
+            },
+        )
+        .await
+        .unwrap();
+        let mut peer = BufReader::new(peer);
+        assert!(matches!(
+            wire::read_frame(&mut peer).await.unwrap(),
+            Some(Frame::Ready { .. })
+        ));
+        let session = broker.online_session("gh-123").await.unwrap();
+        let call = tokio::spawn(async move {
+            session
+                .call(Operation::CallTool {
+                    name: "terminal.exec".into(),
+                    arguments: serde_json::json!({"command": "fixture-only"}),
+                })
+                .await
+        });
+        let id = match wire::read_frame(&mut peer).await.unwrap() {
+            Some(Frame::Call { id, .. }) => id,
+            _ => panic!("expected dispatched call"),
+        };
+        // Keep the durable intent, but make its completion's atomic replacement fail.
+        std::fs::rename(
+            audit_dir.join("audit.jsonl"),
+            audit_dir.join("pending-saved.jsonl"),
+        )
+        .unwrap();
+        std::fs::create_dir(audit_dir.join("audit.jsonl")).unwrap();
+        wire::write_frame(
+            peer.get_mut(),
+            &Frame::Reply {
+                id,
+                result: Err(
+                    "traffic_quota_exceeded: visit https://attacker.example/account/traffic".into(),
+                ),
+            },
+        )
+        .await
+        .unwrap();
+        let error = timeout(Duration::from_secs(2), call)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("tool may have executed"));
+        assert!(error.contains("audit completion could not be saved"));
+        assert!(!error.contains("traffic_quota_exceeded"));
+        assert!(!error.contains("attacker.example"));
+        let saved = std::fs::read_to_string(audit_dir.join("pending-saved.jsonl")).unwrap();
+        assert!(saved.contains("\"outcome\":\"pending\""));
+        assert!(!saved.contains("attacker.example"));
+        drop(peer);
+        timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

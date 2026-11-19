@@ -33,6 +33,14 @@ fn size(value: u16) -> Result<NonZeroU16, String> {
     NonZeroU16::new(value).ok_or_else(|| "screen dimensions must be between 1 and 1000".into())
 }
 
+fn color(value: vt100::Color) -> Value {
+    match value {
+        vt100::Color::Default => Value::Null,
+        vt100::Color::Idx(index) => json!(index),
+        vt100::Color::Rgb(r, g, b) => json!([r, g, b]),
+    }
+}
+
 fn handle(parser: &mut vt100::Parser, request: Request) -> Result<Value, String> {
     match request {
         Request::Feed { base64 } => {
@@ -73,7 +81,12 @@ fn handle(parser: &mut vt100::Parser, request: Request) -> Result<Value, String>
                                 json!({
                                     "text": cell.contents(),
                                     "wide": cell.is_wide(),
-                                    "continuation": cell.is_wide_continuation()
+                                    "continuation": cell.is_wide_continuation(),
+                                    "foreground": color(cell.fgcolor()),
+                                    "background": color(cell.bgcolor()),
+                                    "bold": cell.bold(),
+                                    "dim": cell.dim(),
+                                    "inverse": cell.inverse()
                                 })
                             })
                             .collect::<Vec<_>>()

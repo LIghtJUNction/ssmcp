@@ -25,6 +25,7 @@ use tokio::{
 const MAX_JOBS: usize = 32;
 const MAX_RETAINED: usize = 128;
 const MAX_OUTPUT: usize = 64 * 1024;
+const COMPLETED_INLINE_BYTES: usize = 4 * 1024;
 const MAX_COMMAND_ARGS: usize = 256;
 const MAX_WAIT: u64 = 60_000;
 const MAX_TIMEOUT: u64 = 900_000;
@@ -42,6 +43,7 @@ struct Output {
     start: u64,
     end: u64,
     eof: bool,
+    read_from_capture: bool,
     capture: Capture,
 }
 impl Output {
@@ -51,6 +53,7 @@ impl Output {
             start: 0,
             end: 0,
             eof: false,
+            read_from_capture: false,
             capture: store.capture(scope),
         }
     }
@@ -71,6 +74,11 @@ impl Output {
         if cursor > self.end {
             return Err("output cursor is ahead of the stream".into());
         }
+        if self.read_from_capture {
+            let data = self.capture.read_range(cursor, limit)?;
+            let next = cursor + data.len() as u64;
+            return Ok((data, next, false));
+        }
         let next = cursor.max(self.start);
         let offset = (next - self.start) as usize;
         let data: Vec<u8> = self
@@ -87,7 +95,18 @@ impl Output {
         if let Some(error) = error {
             self.capture.fail(error);
         }
-        let _ = self.capture.finish();
+        // Successful completed jobs can read their full capture directly. Keep
+        // tiny output inline; larger output uses the existing artifact store.
+        // A failed archive keeps the live tail and its explicit error metadata.
+        if self.capture.error().is_none() && self.capture.bytes() > COMPLETED_INLINE_BYTES as u64 {
+            let _ = self.capture.spill();
+        }
+        let archived = self.capture.finish().is_ok() && self.capture.bytes() == self.end;
+        if archived {
+            self.read_from_capture = true;
+            self.start = 0;
+            self.bytes = VecDeque::new();
+        }
         self.eof = true;
     }
 }
@@ -132,6 +151,9 @@ struct Job {
     input_mode: InputMode,
     stdin: AsyncMutex<Option<ChildStdin>>,
     input_stopped: watch::Sender<bool>,
+    observation: Mutex<Option<crate::observer::Lease>>,
+    output_mode: &'static str,
+    tty_slot: Option<usize>,
 }
 impl Job {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -143,6 +165,7 @@ impl Job {
             "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
             "duration_ms":state.finished.unwrap_or_else(Instant::now).duration_since(self.started).as_millis() as u64,
+            "output_mode":self.output_mode,"tty_slot":self.tty_slot,
             "stdin":self.input_snapshot(state),
             "stdout":state.stdout.metadata(),"stderr":state.stderr.metadata()})
     }
@@ -183,6 +206,7 @@ pub struct Shell {
     registry: Mutex<Registry>,
     slots: Arc<Semaphore>,
     events: Arc<EventLog>,
+    observer: Option<Arc<crate::observer::Pool>>,
 }
 impl Shell {
     pub fn new() -> Arc<Self> {
@@ -206,6 +230,7 @@ impl Shell {
         let events = EventLog::with_output("shell", output.clone());
         Ok(Arc::new(Self {
             root,
+            observer: output.observer(),
             output,
             namespace,
             registry: Mutex::new(Registry::default()),
@@ -225,7 +250,7 @@ impl Shell {
         vec![
             tool(
                 "ssmcp.exec.start",
-                "Start an independent argv command immediately and return job_id. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked.",
+                "Start an independent argv command immediately and return job_id. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. With --tty on Unix, output_mode is pty and stdout contains the combined terminal stream; stdin remains null or pipe.",
                 json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":MAX_COMMAND_ARGS},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
@@ -257,7 +282,7 @@ impl Shell {
             ),
             tool(
                 "ssmcp.exec.read",
-                "Read incremental stdout/stderr and an atomic status snapshot. Each stream has its own byte cursor; base64 preserves exact bytes. Large output is retained in artifacts accessible through outputs.read.",
+                "Read incremental stdout/stderr and an atomic status snapshot. Each stream has its own byte cursor; base64 preserves exact bytes. Live streams use bounded tails; completed streams read full saved output until artifact retention expires. Artifacts are also accessible through outputs.read.",
                 json!({"job_id":{"type":"string"},"stdout_cursor":{"type":"integer","minimum":0,"default":0},
                     "stderr_cursor":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1,"maximum":32768,"default":16384},
                     "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_WAIT,"default":0}}),
@@ -300,7 +325,7 @@ impl Shell {
     }
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         match name {
-            "ssmcp.exec.start" => self.start(args),
+            "ssmcp.exec.start" => self.start(args).await,
             "ssmcp.exec.write" => self.write_input(args).await,
             "ssmcp.exec.list" => {
                 empty(args)?;
@@ -330,16 +355,22 @@ impl Shell {
                 }
                 let job = self.job(&args.job_id)?;
                 wait_output(&job, args.stdout_cursor, args.stderr_cursor, args.wait_ms).await?;
-                let state = job.state();
-                let (out, on, ot) = state.stdout.read(args.stdout_cursor, args.max_bytes)?;
-                let (err, en, et) = state.stderr.read(args.stderr_cursor, args.max_bytes)?;
-                Ok(
-                    json!({"job_id":job.id,"snapshot":job.snapshot_locked(&state),"running":state.running,
-                    "exit_code":state.exit_code,"stdout":String::from_utf8_lossy(&out),"stderr":String::from_utf8_lossy(&err),
-                    "stdout_base64":STANDARD.encode(&out),"stderr_base64":STANDARD.encode(&err),
-                    "stdout_cursor":on,"stderr_cursor":en,"stdout_truncated":ot,"stderr_truncated":et,
-                    "stdout_eof":state.stdout.eof && on==state.stdout.end,"stderr_eof":state.stderr.eof && en==state.stderr.end}),
-                )
+                // Archive reads can touch disk. Keep their atomic output/status
+                // snapshot on a blocking worker without holding a guard across await.
+                tokio::task::spawn_blocking(move || -> Result<Value, String> {
+                    let state = job.state();
+                    let (out, on, ot) = state.stdout.read(args.stdout_cursor, args.max_bytes)?;
+                    let (err, en, et) = state.stderr.read(args.stderr_cursor, args.max_bytes)?;
+                    Ok(
+                        json!({"job_id":job.id,"snapshot":job.snapshot_locked(&state),"running":state.running,
+                        "exit_code":state.exit_code,"stdout":String::from_utf8_lossy(&out),"stderr":String::from_utf8_lossy(&err),
+                        "stdout_base64":STANDARD.encode(&out),"stderr_base64":STANDARD.encode(&err),
+                        "stdout_cursor":on,"stderr_cursor":en,"stdout_truncated":ot,"stderr_truncated":et,
+                        "stdout_eof":state.stdout.eof && on==state.stdout.end,"stderr_eof":state.stderr.eof && en==state.stderr.end}),
+                    )
+                })
+                .await
+                .map_err(|error| format!("could not read command output: {error}"))?
             }
             "ssmcp.exec.cancel" => {
                 let args: Id = parse(args)?;
@@ -473,7 +504,7 @@ impl Shell {
         Ok(result)
     }
 
-    fn start(&self, args: Value) -> Result<Value, String> {
+    async fn start(&self, args: Value) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Start {
@@ -529,6 +560,16 @@ impl Shell {
         let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
             format!("at most {MAX_JOBS} commands may run at once; wait or cancel an existing job")
         })?;
+        let id = format!(
+            "{}-{:x}",
+            self.namespace,
+            NEXT_JOB.fetch_add(1, Ordering::Relaxed)
+        );
+        let observation = match &self.observer {
+            Some(pool) => Some(pool.begin(id.clone(), &json!(args.command), &cwd).await?),
+            None => None,
+        };
+        let tty_slot = observation.as_ref().map(crate::observer::Lease::slot_id);
         let mut registry = self.registry();
         if registry.closed {
             return Err("shell command manager is closed".into());
@@ -554,27 +595,54 @@ impl Shell {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let pty_reader: Option<Box<dyn AsyncRead + Unpin + Send>> = {
+            #[cfg(unix)]
+            {
+                if let Some(lease) = &observation {
+                    let (reader, stdout, stderr) = crate::observer::pty::Output::open(lease)
+                        .map_err(|error| format!("could not open command PTY: {error}"))?;
+                    command
+                        .stdout(stdout)
+                        .stderr(stderr)
+                        .env("TERM", "xterm-256color");
+                    Some(Box::new(reader))
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        };
+        let output_mode = if pty_reader.is_some() { "pty" } else { "pipes" };
         if let Some(env) = args.env {
             command.envs(env);
         }
         let mut process =
             Managed::spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
         let pid = process.child.id().ok_or("command has no process ID")?;
-        let stdout = process
-            .child
-            .stdout
-            .take()
-            .ok_or("command stdout unavailable")?;
-        let stderr = process
-            .child
-            .stderr
-            .take()
-            .ok_or("command stderr unavailable")?;
-        let id = format!(
-            "{}-{:x}",
-            self.namespace,
-            NEXT_JOB.fetch_add(1, Ordering::Relaxed)
-        );
+        let stdout: Box<dyn AsyncRead + Unpin + Send> = match pty_reader {
+            Some(reader) => reader,
+            None => Box::new(
+                process
+                    .child
+                    .stdout
+                    .take()
+                    .ok_or("command stdout unavailable")?,
+            ),
+        };
+        let stderr: Box<dyn AsyncRead + Unpin + Send> = if output_mode == "pty" {
+            Box::new(tokio::io::empty())
+        } else {
+            Box::new(
+                process
+                    .child
+                    .stderr
+                    .take()
+                    .ok_or("command stderr unavailable")?,
+            )
+        };
         let (cancel, cancel_rx) = watch::channel(false);
         let (input_stopped, _) = watch::channel(args.stdin != InputMode::Pipe);
         let job = Arc::new(Job {
@@ -601,6 +669,9 @@ impl Shell {
             input_mode: args.stdin,
             stdin: AsyncMutex::new(process.child.stdin.take()),
             input_stopped,
+            observation: Mutex::new(observation),
+            output_mode,
+            tty_slot,
         });
         // A failed spawn must leave the retained history untouched.
         if let Some(id) = &evicted {
@@ -639,6 +710,9 @@ impl Shell {
             );
             {
                 let mut state = worker.state();
+                // Status reads can observe completion without a notification.
+                // Release capacity before publishing it under the same lock.
+                drop(permit);
                 state.running = false;
                 state.exit_code = outcome.0;
                 state.cancelled = outcome.1;
@@ -647,8 +721,21 @@ impl Shell {
                 state.exit_signal = outcome.4;
                 state.finished = Some(Instant::now());
             }
-            // Release the running slot before publishing completion to waiters.
-            drop(permit);
+            if let Some(lease) = worker.observation.lock().unwrap().take() {
+                let state = worker.state();
+                let status = if state.cancelled {
+                    "cancelled".into()
+                } else if state.timed_out {
+                    "timed out".into()
+                } else if let Some(error) = &state.error {
+                    format!("failed: {error}")
+                } else if let Some(code) = state.exit_code {
+                    format!("exit {code}")
+                } else {
+                    format!("signal {}", state.exit_signal.unwrap_or(0))
+                };
+                lease.finish(&status);
+            }
             worker.changed.notify_waiters();
             let mut snapshot = worker.snapshot();
             snapshot["type"] = json!("exec.exited");
@@ -752,6 +839,9 @@ async fn capture<R: AsyncRead + Unpin>(
                 break;
             }
             Ok(count) => {
+                if let Some(lease) = job.observation.lock().unwrap().as_ref() {
+                    lease.append(&buffer[..count]);
+                }
                 let (offset, notice) = {
                     let mut state = job.state();
                     let output = if stream == "stdout" {
@@ -887,6 +977,24 @@ mod tests {
     use serde_json::json;
     use std::io::Write;
 
+    struct OutputDirectory(PathBuf);
+
+    impl Drop for OutputDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn isolated_output() -> (OutputDirectory, Arc<OutputStore>) {
+        let mut random = [0u8; 16];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let directory =
+            OutputDirectory(std::env::temp_dir().join(format!("ssmcp-shell-output-{suffix}")));
+        let store = OutputStore::at_for_test(directory.0.clone()).unwrap();
+        (directory, store)
+    }
+
     fn completed_job(store: &Arc<OutputStore>) -> Arc<Job> {
         let id = format!("test-{}", NEXT_JOB.fetch_add(1, Ordering::Relaxed));
         let (cancel, _) = watch::channel(false);
@@ -919,6 +1027,9 @@ mod tests {
             input_mode: InputMode::Null,
             stdin: AsyncMutex::new(None),
             input_stopped,
+            observation: Mutex::new(None),
+            output_mode: "pipes",
+            tty_slot: None,
         })
     }
 
@@ -945,6 +1056,161 @@ mod tests {
         assert_eq!(registry.jobs.len(), MAX_RETAINED);
         assert!(jobs.iter().all(|job| registry.jobs.contains_key(&job.id)));
         assert_eq!(shell.slots.available_permits(), MAX_JOBS);
+    }
+
+    fn remove_capture_artifact(output: &Output) {
+        if let Some(artifact) = output.capture.metadata() {
+            let path = PathBuf::from(artifact.path);
+            let _ = std::fs::remove_file(path.with_extension("meta.json"));
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_completed_output_is_bounded_and_reads_exact_archive_ranges() {
+        let (_directory, store) = isolated_output();
+        let shell = Shell::with_workspace(std::env::current_dir().unwrap(), store).unwrap();
+        let payload: Vec<u8> = (0..MAX_OUTPUT + 137).map(|i| (i % 251) as u8).collect();
+        let reversed: Vec<u8> = payload.iter().rev().copied().collect();
+        let mut jobs = Vec::new();
+        for _ in 0..MAX_RETAINED {
+            let job = completed_job(&shell.output);
+            {
+                let mut state = job.state();
+                state.stdout = Output::new(&shell.output, format!("job:{}:stdout", job.id));
+                state.stderr = Output::new(&shell.output, format!("job:{}:stderr", job.id));
+                state.stdout.append(&payload);
+                assert_eq!(state.stdout.bytes.len(), MAX_OUTPUT);
+                state.stdout.finish(None);
+                state.stderr.append(&reversed);
+                state.stderr.finish(None);
+                for output in [&state.stdout, &state.stderr] {
+                    assert_eq!(output.bytes.capacity(), 0);
+                    assert!(output.capture.inline_bytes().is_empty());
+                    assert!(output.read_from_capture);
+                    assert_eq!(output.metadata()["start_cursor"], 0);
+                    assert_eq!(output.metadata()["truncated"], false);
+                    assert!(output.capture.metadata().unwrap().complete);
+                }
+            }
+            shell.registry().jobs.insert(job.id.clone(), job.clone());
+            jobs.push(job);
+        }
+        assert_eq!(shell.registry().jobs.len(), MAX_RETAINED);
+
+        let id = &jobs[0].id;
+        let mut cursor = 0;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        loop {
+            let page = shell
+                .call(
+                    "ssmcp.exec.read",
+                    json!({
+                        "job_id":id,"stdout_cursor":cursor,"stderr_cursor":cursor,"max_bytes":32768
+                    }),
+                )
+                .await
+                .unwrap();
+            stdout.extend(
+                STANDARD
+                    .decode(page["stdout_base64"].as_str().unwrap())
+                    .unwrap(),
+            );
+            stderr.extend(
+                STANDARD
+                    .decode(page["stderr_base64"].as_str().unwrap())
+                    .unwrap(),
+            );
+            assert_eq!(page["stdout_truncated"], false);
+            assert_eq!(page["stderr_truncated"], false);
+            assert_eq!(page["stdout_cursor"], page["stderr_cursor"]);
+            cursor = page["stdout_cursor"].as_u64().unwrap();
+            if page["stdout_eof"] == true {
+                assert_eq!(page["stderr_eof"], true);
+                break;
+            }
+            assert!(cursor < payload.len() as u64);
+        }
+        assert_eq!(stdout, payload);
+        assert_eq!(stderr, reversed);
+        for (offset, limit) in [(17, 29), (payload.len() - 11, 127), (payload.len(), 127)] {
+            let page = shell
+                .call(
+                    "ssmcp.exec.read",
+                    json!({
+                        "job_id":id,"stdout_cursor":offset,"stderr_cursor":offset,"max_bytes":limit
+                    }),
+                )
+                .await
+                .unwrap();
+            let end = payload.len().min(offset + limit);
+            assert_eq!(
+                STANDARD
+                    .decode(page["stdout_base64"].as_str().unwrap())
+                    .unwrap(),
+                payload[offset..end]
+            );
+            assert_eq!(page["stdout_cursor"], end);
+            assert_eq!(page["stdout_eof"], end == payload.len());
+        }
+        for job in &jobs {
+            let state = job.state();
+            remove_capture_artifact(&state.stdout);
+            remove_capture_artifact(&state.stderr);
+        }
+        shell.shutdown().await;
+    }
+
+    #[test]
+    fn completed_small_output_keeps_only_one_inline_copy() {
+        let (_directory, store) = isolated_output();
+        let mut output = Output::new(&store, "small-completed-fixture".into());
+        let data = vec![b'x'; COMPLETED_INLINE_BYTES];
+        output.append(&data);
+        output.finish(None);
+        assert_eq!(output.bytes.capacity(), 0);
+        assert_eq!(output.capture.inline_bytes(), data);
+        assert!(!output.capture.is_spilled());
+        assert_eq!(
+            output.read(0, 32768).unwrap(),
+            (data, COMPLETED_INLINE_BYTES as u64, false)
+        );
+    }
+
+    #[test]
+    fn failed_archive_preserves_the_tail_and_unavailable_archives_are_errors() {
+        let (_directory, store) = isolated_output();
+        let data = vec![b'x'; MAX_OUTPUT + 137];
+        let mut failed = Output::new(&store, "failed-completed-fixture".into());
+        failed.append(&data);
+        failed.finish(Some("fixture capture failure".into()));
+        assert!(!failed.read_from_capture);
+        assert_eq!(failed.bytes.len(), MAX_OUTPUT);
+        assert_eq!(failed.read(0, 127).unwrap(), (vec![b'x'; 127], 264, true));
+        assert_eq!(failed.metadata()["error"], "fixture capture failure");
+        assert!(!failed.capture.metadata().unwrap().complete);
+        remove_capture_artifact(&failed);
+
+        let mut archived = Output::new(&store, "unavailable-completed-fixture".into());
+        archived.append(&data);
+        archived.finish(None);
+        let path = PathBuf::from(archived.capture.metadata().unwrap().path);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(7)
+            .unwrap();
+        assert!(archived.read(0, 127).unwrap_err().contains("shorter"));
+        remove_capture_artifact(&archived);
+        assert!(archived.read(0, 127).unwrap_err().contains("unavailable"));
+        assert!(
+            archived
+                .read(data.len() as u64, 127)
+                .unwrap_err()
+                .contains("unavailable")
+        );
     }
 
     #[tokio::test]
@@ -1431,6 +1697,127 @@ mod tests {
             .unwrap();
         shell.shutdown().await;
     }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn completed_job_releases_capacity_before_reporting_finished() {
+        let (_directory, store) = isolated_output();
+        let shell = Shell::with_workspace(std::env::current_dir().unwrap(), store).unwrap();
+        let occupied = shell
+            .slots
+            .clone()
+            .acquire_many_owned((MAX_JOBS - 1) as u32)
+            .await
+            .unwrap();
+        let id = start_fixture_with_input(&shell, "stdin", 15000, "pipe").await;
+        // Consume the fixture's initial output before taking the observation
+        // lock. Closing its stdin then exits without emitting any further bytes.
+        timeout(Duration::from_secs(5), async {
+            let mut stdout = String::new();
+            let mut cursor = 0;
+            loop {
+                let page = shell
+                    .call(
+                        "ssmcp.exec.read",
+                        json!({"job_id":id,"stdout_cursor":cursor,"wait_ms":100}),
+                    )
+                    .await
+                    .unwrap();
+                stdout.push_str(page["stdout"].as_str().unwrap());
+                cursor = page["stdout_cursor"].as_u64().unwrap();
+                if stdout.contains(OUTPUT_START) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("stdin fixture must be ready before holding its observation lock");
+
+        let job = shell.job(&id).unwrap();
+        let slots = shell.slots.clone();
+        let (cancel, cancelled) = std::sync::mpsc::channel::<()>();
+        let (locked, acquired) = tokio::sync::oneshot::channel();
+        let (finished, completion) = tokio::sync::oneshot::channel();
+        // This OS thread observes and releases the gate itself. It never needs
+        // a blocked Tokio worker or timer to advance before dropping the mutex.
+        let observer = std::thread::spawn(move || {
+            let result = {
+                let _observation = job.observation.lock().unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                let _ = locked.send(());
+                loop {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break Err("observation gate reached its independent cleanup deadline");
+                    }
+                    // snapshot() is also used by the public exec.status path.
+                    let state = job.snapshot();
+                    if state["running"] == false {
+                        break Ok((state, slots.available_permits()));
+                    }
+                    // Dropping the test future closes this channel and releases
+                    // the guard even when the async path panics or is cancelled.
+                    match cancelled.recv_timeout(remaining.min(Duration::from_millis(1))) {
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            break Err("observation gate was cancelled");
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+            };
+            // Publish only after the observation mutex guard has been dropped.
+            let _ = finished.send(());
+            result
+        });
+        timeout(Duration::from_secs(5), acquired)
+            .await
+            .expect("observation gate must acquire the existing mutex")
+            .unwrap();
+        shell
+            .call("ssmcp.exec.write", json!({"job_id":id,"close_stdin":true}))
+            .await
+            .unwrap();
+        completion.await.expect("observation gate thread stopped");
+        let observed = observer.join().expect("observation gate thread failed");
+        drop(cancel);
+
+        // The gate is now open. Public status and a replacement native process
+        // run without deliberately blocking any runtime worker.
+        let public_state = shell.call("ssmcp.exec.status", json!({"job_id":id})).await;
+        let replacement = if observed.is_ok() {
+            Some(
+                shell
+                    .call(
+                        "ssmcp.exec.start",
+                        json!({
+                            "command":[std::env::current_exe().unwrap(),"--exact",
+                                "backend::shell::tests::fixture_process","--nocapture"],
+                            "env":{"SSMCP_SHELL_TEST_FIXTURE":"next"},
+                            "timeout_ms":5000
+                        }),
+                    )
+                    .await,
+            )
+        } else {
+            None
+        };
+        // Clean up every owned process and permit before checking the results.
+        drop(occupied);
+        shell.shutdown().await;
+
+        let (completed, available_permits) = observed.expect("observation gate failed");
+        assert_eq!(completed["exit_code"], 0);
+        assert!(completed["error"].is_null(), "{completed}");
+        assert_eq!(public_state.unwrap()["running"], false);
+        assert_eq!(
+            available_permits, 1,
+            "a job reported complete while its execution permit was still held"
+        );
+        let replacement = replacement.unwrap();
+        assert!(
+            replacement.is_ok(),
+            "the released execution slot must accept a new command: {replacement:?}"
+        );
+    }
+
     #[tokio::test]
     async fn rejected_capacity_never_executes_the_command() {
         let shell = Shell::new();
@@ -1688,7 +2075,7 @@ with socket.create_connection(("127.0.0.1", {port}), timeout=5) as gate:
     }
 
     #[tokio::test]
-    async fn large_output_keeps_the_full_artifact_and_the_bounded_tail() {
+    async fn large_output_keeps_the_full_artifact_after_releasing_the_live_tail() {
         let shell = Shell::new();
         let id = py(&shell, "import sys; sys.stdout.buffer.write(b'x'*100000)").await;
         // wait_ms is an observation window, not a guarantee of command completion.
@@ -1719,7 +2106,11 @@ with socket.create_connection(("127.0.0.1", {port}), timeout=5) as gate:
             .call("ssmcp.exec.read", json!({"job_id":id}))
             .await
             .unwrap();
-        assert_eq!(page["stdout_truncated"], true);
+        assert_eq!(page["stdout_truncated"], false);
+        assert_eq!(page["stdout_cursor"], 16384);
+        assert_eq!(page["stdout_eof"], false);
+        assert_eq!(page["stdout"], "x".repeat(16384));
+        assert_eq!(shell.job(&id).unwrap().state().stdout.bytes.capacity(), 0);
         let artifact = &page["snapshot"]["stdout"]["artifact"];
         assert_eq!(artifact["bytes"], 100000);
         assert_eq!(artifact["complete"], true, "snapshot: {}", page["snapshot"]);

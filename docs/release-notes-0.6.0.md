@@ -15,7 +15,7 @@ ssmcp --name workstation --title "修复项目并执行测试" \
 
 ## 一个目录保留原生能力
 
-`list({client_id})` 与 `tools(clientId)` 读取同一注册表。提供者命名空间分别为 `codex.*`、`claude.*`、`pi.*`、`opencode.*`；名称以实际发现为准。原生描述和 JSON Schema 保留，路由信息不应替代原生参数契约。目录更新和调用验证使用当前提供者状态，连接失效后不能依赖旧目录继续路由。[注册表](../src/backend/mod.rs)
+`list({client_id})` 与 `tools(clientId)` 读取同一注册表。提供者命名空间分别为 `codex.*`、`claude.*`、`pi.*`、`opencode.*`；名称以实际发现为准。原生描述和 JSON Schema 保留，路由信息不应替代原生参数契约。目录更新和调用验证使用当前提供者状态，连接失效后不能依赖旧目录继续路由。[注册表](../src/backend.rs)
 
 Codex 通过 App Server 的 `mcpServerStatus/list` 枚举已配置、可访问的 MCP 工具，并通过 `mcpServer/tool/call` 真实转发。名称采用 `codex.mcp.<server>.<tool>` 命名空间并进行稳定转义，不硬编码某个 MCP Server。完整分页成功才发布目录；刷新失败、取消或连接失效时清除过期 MCP 路由。结果中的 `content`、`structuredContent`、`isError` 和原生审批状态仍由原生接口决定。[Codex 适配器](../src/backend/codex.rs)
 
