@@ -11,6 +11,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import signal
 import struct
@@ -106,6 +107,29 @@ def text(shot):
     return "\n".join(shot["rows"])
 
 
+def column(shot):
+    # The breadcrumb also names neighboring columns. Match the active name
+    # together with its position/count instead of accepting any visible name.
+    header = shot["rows"][0].partition("ssmcp  /  ")[2].split("  /  ", 1)[0]
+    match = re.search(
+        r"\b(agents|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
+        header, re.IGNORECASE,
+    )
+    if not match:
+        return None
+    name, position, count = match.groups()
+    return name.lower(), int(position), int(count)
+
+
+def view(shot, name):
+    current = column(shot)
+    return current is not None and current[0] == name and 1 <= current[1] <= current[2]
+
+
+def logs_open(shot):
+    return view(shot, "logs")
+
+
 def left_rows(shot):
     return [row.split("│", 1)[0] for row in shot["rows"]]
 
@@ -186,8 +210,11 @@ def main():
                 shot = vt.request(op="snapshot", cells=True)
             finally:
                 vt.close()
-            check("ssmcp  /  activity" in text(shot) and "❯" in prompt_text(shot)
-                  and "exit=0" in text(shot), f"{name} layout shows activity and its bottom composer")
+            check(column(shot) == ("conversation", 2, 8) and "❯" in prompt_text(shot)
+                  and "exit=0" in body_text(shot),
+                  f"{name} layout shows the conversation column and its bottom composer")
+            check("A quieter workspace" not in body_text(shot),
+                  f"{name} conversation excludes background diagnostics")
             if rows >= 30:
                 check("cargo test --lib" in text(shot), f"{name} layout retains the command and result")
             check(not shot["hide_cursor"] and shot["cursor"][0] >= rows - 4,
@@ -199,9 +226,10 @@ def main():
 
         preview = Preview(binary, decoder, config)
         try:
-            initial = preview.until(lambda s: "ssmcp  /  activity" in text(s)
+            initial = preview.until(lambda s: column(s) == ("conversation", 2, 8)
                                     and "cargo test --lib" in text(s)
-                                    and "Message the agent" in prompt_text(s), "default activity and composer")
+                                    and "Message the agent" in prompt_text(s),
+                                    "default conversation column and composer")
             check(not initial["hide_cursor"] and initial["bracketed_paste"]
                   and not initial["application_cursor"] and not initial["application_keypad"],
                   "default keyboard modes belong to the visible composer")
@@ -212,9 +240,10 @@ def main():
             check("exit=0" in body_text(initial)
                   and "test client::ui::custom_colors" not in body_text(initial),
                   "commands default to a compact row with the real exit status")
-            check("- let expanded = true" in body_text(initial)
-                  and "+ let expanded = false" in body_text(initial),
-                  "editing diff remains expanded in compact activity")
+            check("src/client/terminal/events.rs" in body_text(initial)
+                  and "expanded = true" not in body_text(initial)
+                  and "expanded = false" not in body_text(initial),
+                  "diffs start as collapsed tool cards in the conversation")
             command_row = next(index for index, row in enumerate(initial["rows"])
                                if "▸" in row and "cargo test --lib" in row)
             preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
@@ -222,21 +251,45 @@ def main():
                                      "click-expanded command output")
             check("exit=0" in body_text(expanded), "expanded commands retain their status")
             save_shot(args.out, "command-expanded", expanded)
+            command_row = next(index for index, row in enumerate(expanded["rows"])
+                               if "▾" in row and "cargo test --lib" in row)
             preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
-            preview.until(lambda s: "test client::ui::custom_colors" not in body_text(s),
-                          "click-collapsed command output")
+            collapsed = preview.until(lambda s: view(s, "conversation")
+                                      and "test client::ui::custom_colors" not in body_text(s),
+                                      "click-collapsed command output")
+            diff_row = next(index for index, row in enumerate(collapsed["rows"])
+                            if "▸" in row and "src/client/terminal/events.rs" in row)
+            preview.send(f"\x1b[<0;3;{diff_row + 1}M".encode())
+            diff = preview.until(lambda s: view(s, "conversation")
+                                 and "expanded = true" in body_text(s)
+                                 and "expanded = false" in body_text(s),
+                                 "click-expanded diff with both source versions")
+            check("test client::ui::custom_colors" not in body_text(diff),
+                  "expanding a diff keeps the neighboring command collapsed")
+            save_shot(args.out, "diff-expanded", diff)
+            diff_row = next(index for index, row in enumerate(diff["rows"])
+                            if "▾" in row and "src/client/terminal/events.rs" in row)
+            preview.send(f"\x1b[<0;3;{diff_row + 1}M".encode())
+            preview.until(lambda s: view(s, "conversation")
+                          and "src/client/terminal/events.rs" in body_text(s)
+                          and "expanded = false" not in body_text(s),
+                          "click-collapsed diff card")
             preview.send(b"\x1b")
             preview.until(lambda s: not s["hide_cursor"], "input focus after compact navigation")
             slash(preview, "/raw")
-            raw = preview.until(lambda s: "raw transcript" in s["rows"][0]
-                                and "test client::ui::custom_colors" in body_text(s),
-                                "original unfolded transcript")
-            save_shot(args.out, "raw-activity", raw)
+            raw = preview.until(lambda s: column(s) == ("logs", 7, 8)
+                                and "test client::ui::custom_colors" in body_text(s)
+                                and "A quieter workspace" in body_text(s),
+                                "original output and diagnostics in the Logs column")
+            save_shot(args.out, "logs", raw)
             slash(preview, "/raw")
-            preview.until(lambda s: "raw transcript" not in s["rows"][0]
-                          and "exit=0" in body_text(s),
-                          "raw toggle returning to compact activity")
-            check(True, "/raw toggles the original transcript and compact display")
+            preview.until(lambda s: column(s) == ("conversation", 2, 8)
+                          and "exit=0" in body_text(s)
+                          and "A quieter workspace" not in body_text(s)
+                          and "test client::ui::custom_colors" not in body_text(s)
+                          and "expanded = false" not in body_text(s),
+                          "raw toggle restoring the conversation and collapsed cards")
+            check(True, "/raw opens Logs and restores the source column without expanding its cards")
 
 
             preview.send(b"q")
@@ -270,11 +323,12 @@ def main():
             clear_draft(preview)
 
             preview.send(b"\x0f")
-            audit = preview.until(lambda s: "code audit" in s["rows"][0]
-                                  and "#example-01" in text(s), "Ctrl+O audit view")
-            if "Enter inspect" in text(audit):
-                preview.send(b"\r")
-            audit = preview.until(lambda s: "#example-01" in text(s)
+            preview.until(lambda s: column(s) == ("code audit", 3, 8)
+                          and "#example-01" in body_text(s)
+                          and "Enter inspect" in body_text(s), "Ctrl+O audit list")
+            preview.send(b"\r")
+            audit = preview.until(lambda s: view(s, "code audit")
+                                  and "#example-01" in body_text(s)
                                   and "command:" in body_text(s)
                                   and "print(" in body_text(s), "selected source details")
             code_rows = [index for index, row in enumerate(left_rows(audit))
@@ -285,99 +339,143 @@ def main():
                       for cell in audit["cells"][index][:left_width] if cell["text"].strip()}
             check(len(colors) >= 3 and audit["hide_cursor"], "focused source audit is syntax highlighted")
             save_shot(args.out, "audit", audit)
-            preview.send(b"\x1b[D")
-            preview.until(lambda s: "1 runs" in text(s), "Left returning to audit list")
-            preview.send(b"\x1b[B\x1b[A\r")
-            preview.until(lambda s: "#example-01" in text(s), "Enter opening selected source")
-            check(True, "audit arrows navigate and Enter opens source")
+            preview.send(b"\x1b")
+            listed = preview.until(lambda s: view(s, "code audit")
+                                   and "1 runs" in body_text(s)
+                                   and "Enter inspect" in body_text(s),
+                                   "Escape returning to the audit list in its column")
+            check(not listed["hide_cursor"], "Escape leaves the audit list with composer focus")
+            preview.send(b"\x1b[Z\x1b[B\x1b[A\r")
+            preview.until(lambda s: view(s, "code audit")
+                          and "#example-01" in body_text(s)
+                          and "command:" in body_text(s), "Enter opening selected source")
+            check(True, "focused audit Up/Down navigates and Enter opens the selected source")
             preview.send(b"\x1b[<0;3;3M")
-            preview.until(lambda s: "1 runs" in text(s), "left mouse returning to audit list")
-            preview.send(b"\x1b[<2;3;3M")
-            preview.until(lambda s: "#example-01" in text(s), "right mouse opening source")
-            check(True, "mouse audit open and back preserve source selection")
+            preview.until(lambda s: view(s, "code audit")
+                          and "1 runs" in body_text(s), "left mouse returning to audit list")
+            preview.send(b"\r")
+            preview.until(lambda s: view(s, "code audit")
+                          and "#example-01" in body_text(s)
+                          and "command:" in body_text(s), "reopening the same audit source")
+            preview.send(b"\x1b[<2;3;3M\x1b[<2;3;3m")
+            preview.until(lambda s: column(s) == ("logs", 7, 8)
+                          and "A quieter workspace" in body_text(s), "right-click Logs from audit")
+            preview.send(b"\x1b[<2;3;3M\x1b[<2;3;3m")
+            restored_audit = preview.until(lambda s: column(s) == ("code audit", 3, 8)
+                                          and "#example-01" in body_text(s)
+                                          and "command:" in body_text(s),
+                                          "right-click restoring the selected audit source")
+            check(restored_audit["hide_cursor"],
+                  "the Logs round trip preserves audit details and content focus")
             preview.send(b"\x0f")
-            preview.until(lambda s: "activity" in s["rows"][0] and not s["hide_cursor"], "Ctrl+O returning to input")
+            preview.until(lambda s: column(s) == ("conversation", 2, 8) and not s["hide_cursor"],
+                          "Ctrl+O returning to the conversation composer")
 
-            slash(preview, "/filter cargo")
-            filtered = preview.until(lambda s: "activity" in s["rows"][0] and "· all /cargo" in s["rows"][0], "text filter")
-            check("cargo test --lib" in text(filtered) and "exit=0" in text(filtered),
-                  "matching commands retain their result during filtering")
+            slash(preview, "/filter cargo test --lib")
+            filtered = preview.until(lambda s: logs_open(s) and "· all /cargo test --lib" in s["rows"][0],
+                                     "text filtering in the independent Logs column")
+            check("cargo test --lib" in body_text(filtered) and "exit=0" in body_text(filtered)
+                  and "A quieter workspace" not in body_text(filtered),
+                  "matching commands retain their result while unrelated diagnostics are filtered out")
             slash(preview, "/filter")
-            preview.until(lambda s: "/cargo" not in s["rows"][0], "cleared filter")
-            preview.send(b"\x1b[20~\x1b[20~")
-            preview.until(lambda s: "activity" in s["rows"][0] and "· errors /" in s["rows"][0], "error category filter")
+            preview.until(lambda s: logs_open(s) and "/cargo" not in s["rows"][0]
+                          and "A quieter workspace" in body_text(s), "cleared filter")
+            preview.send(b"\x1b[20~")
+            preview.until(lambda s: logs_open(s) and "· commands /" in s["rows"][0]
+                          and "cargo test --lib" in body_text(s), "command category filter")
+            preview.send(b"\x1b[20~")
+            preview.until(lambda s: logs_open(s) and "· errors /" in s["rows"][0],
+                          "error category filter")
             check(True, "F9 selects command and error categories")
             slash(preview, "/filter --all")
-            preview.until(lambda s: "errors /" not in s["rows"][0], "category clear")
+            preview.until(lambda s: logs_open(s) and "errors /" not in s["rows"][0]
+                          and "A quieter workspace" in body_text(s), "category clear")
 
-            slash(preview, "/raw")
-            preview.until(lambda s: "raw transcript" in s["rows"][0], "raw scrolling fixture")
+            slash(preview, "/logs")
+            preview.until(lambda s: column(s) == ("logs", 7, 8), "idempotent Logs scrolling entry")
             preview.resize(18, 120)
-            live = preview.until(lambda s: "Write a requirement below" in body_text(s)
-                                 and prompt_start(s) == 13, "compact live activity")
+            live = preview.until(lambda s: logs_open(s) and "Write a requirement below" in body_text(s)
+                                 and prompt_start(s) == 13, "compact live diagnostic output")
             preview.send(b"wheel draft")
-            preview.until(lambda s: "wheel draft" in prompt_text(s), "draft before direct scrolling")
+            preview.until(lambda s: logs_open(s) and "wheel draft" in prompt_text(s)
+                          and not s["hide_cursor"], "shared draft edited inside Logs before scrolling")
             before_scroll = body_text(live)
             preview.send(b"\x1b[<64;3;2M")
-            scrolled = preview.until(lambda s: body_text(s) != before_scroll
+            scrolled = preview.until(lambda s: logs_open(s) and body_text(s) != before_scroll
                                      and "rows below" in text(s)
                                      and "Ctrl+End to return to latest" in text(s),
                                      "wheel scroll and return-to-latest hint without F6")
             check("wheel draft" in prompt_text(scrolled) and not scrolled["hide_cursor"],
-                  "wheel scrolls activity directly while preserving composer text and focus")
+                  "wheel scrolls Logs directly while preserving composer text and focus")
             check("rows below" in text(scrolled) and "Ctrl+End to return to latest" in text(scrolled),
                   "scrolled output shows remaining rows and its return-to-latest shortcut")
             save_shot(args.out, "scroll-hint", scrolled)
             preview.send(b"\x1b[<64;3;2M" * 8)
-            preview.until(lambda s: "Improve the client experience" in body_text(s), "retained activity history")
+            preview.until(lambda s: logs_open(s) and "Improve the client experience" in body_text(s),
+                          "retained original transcript in Logs")
             preview.send(b"\x1b[1;5F")
-            following = preview.until(lambda s: "Write a requirement below" in body_text(s)
+            following = preview.until(lambda s: logs_open(s) and "Write a requirement below" in body_text(s)
                                       and "rows below" not in text(s),
                                       "Ctrl+End following live output")
             check("wheel draft" in prompt_text(following) and not following["hide_cursor"],
                   "Ctrl+End resumes following without changing the draft or composer focus")
             clear_draft(preview)
-            slash(preview, "/logs")
+            preview.send(b"\x1b")
+            preview.until(lambda s: column(s) == ("conversation", 2, 8),
+                          "Escape returning from filtered Logs to the original conversation")
             preview.resize(30, 120)
-            preview.until(lambda s: prompt_start(s) == 25, "restored full-height composer")
+            preview.until(lambda s: view(s, "conversation") and prompt_start(s) == 25,
+                          "restored full-height conversation composer")
 
             slash(preview, "/agents")
             removed = preview.until(lambda s: "Unknown command" in text(s), "removed agent slash command")
-            check("ssmcp  /  activity" in text(removed) and "/agents" in prompt_text(removed),
+            check(column(removed) == ("conversation", 2, 8) and "/agents" in prompt_text(removed),
                   "the removed command neither opens a view nor submits its text")
             clear_draft(preview)
             preview.send(b"\x1b[D")
-            agents = preview.until(lambda s: "ssmcp  /  agents" in text(s)
-                                   and "Reviewer" in body_text(s), "Left opening the sample agent panel")
+            agents = preview.until(lambda s: column(s) == ("agents", 1, 8)
+                                   and "Reviewer" in body_text(s), "Left entering the adjacent Agents column")
             check("Next caller" in body_text(agents) and "Builder" in body_text(agents)
                   and agents["hide_cursor"], "the agent panel shows selectable named recipients")
             save_shot(args.out, "agents", agents)
             preview.send(b"\x1b")
-            returned = preview.until(lambda s: "ssmcp  /  activity" in text(s) and not s["hide_cursor"],
+            returned = preview.until(lambda s: column(s) == ("conversation", 2, 8) and not s["hide_cursor"],
                                      "Escape returning to the default conversation")
             check("Message the agent" in prompt_text(returned), "closing agents restores the empty composer")
             preview.send("切换保留 界".encode() + b"\x01\x1b[D")
-            preview.until(lambda s: "ssmcp  /  agents" in text(s)
+            preview.until(lambda s: column(s) == ("agents", 1, 8)
                           and "切换保留 界" in prompt_text(s), "opening agents with a Unicode draft")
             preview.send(b"\x1b[B\r")
             chosen = preview.until(lambda s: "To · Builder" in text(s)
-                                   and "ssmcp  /  activity" in text(s) and not s["hide_cursor"],
+                                   and column(s) == ("conversation", 2, 8) and not s["hide_cursor"],
                                    "explicit agent selection returning to the conversation")
             check("切换保留 界" in prompt_text(chosen)
                   and chosen["cursor"][0] >= chosen["size"][0] - 4,
                   "agent selection preserves the Unicode draft and returns cursor focus to the composer")
             clear_draft(preview)
             slash(preview, "/queue")
-            queued = preview.until(lambda s: "example-request" in text(s) and "Requests ·" in text(s), "sample request queue")
+            queued = preview.until(lambda s: column(s) == ("queue", 4, 8)
+                                   and "example-request" in body_text(s)
+                                   and "Requests ·" in body_text(s), "sample request queue column")
             save_shot(args.out, "queue", queued)
-            preview.send(b"\x1b[C")
-            detail = preview.until(lambda s: "← back" in text(s)
-                                   and "verify command output and source audit" in text(s), "queue request details")
+            preview.send(b"i")
+            detail = preview.until(lambda s: view(s, "queue") and "Esc back" in body_text(s)
+                                   and "verify command output and source audit" in body_text(s),
+                                   "i inspecting queue request details")
             check(detail["hide_cursor"], "queue details use content focus without publishing data")
-            preview.send(b"\x1b[D")
-            preview.until(lambda s: "← back" not in text(s) and "example-request" in text(s), "queue list navigation")
+            preview.send(b"\x1b")
+            preview.until(lambda s: view(s, "queue") and "Esc back" not in body_text(s)
+                          and "example-request" in body_text(s), "Escape returning to the queue list")
             slash(preview, "/logs")
-            preview.until(lambda s: "activity" in s["rows"][0], "activity slash command")
+            preview.until(lambda s: column(s) == ("logs", 7, 8), "Logs opened from the queue column")
+            preview.send(b"\x1b")
+            queue_return = preview.until(lambda s: column(s) == ("queue", 4, 8)
+                                         and "example-request" in body_text(s),
+                                         "Escape restoring the originating queue column")
+            check("To · Builder" in text(queue_return), "Logs preserves the shared recipient")
+            preview.send(b"\x1b[1;3D\x1b[1;3D")
+            preview.until(lambda s: column(s) == ("conversation", 2, 8)
+                          and not s["hide_cursor"], "horizontal navigation back to the conversation")
 
             preview.send(b"\x1bOR")
             preview.until(lambda s: "│" not in text(s) and "Builder" not in body_text(s), "collapsed sidebar")
@@ -415,7 +513,10 @@ def main():
                   "invalid F5 configuration leaves the previous theme and display active")
             config.write_text(saved_config, encoding="utf-8")
             preview.send(b"\x1b[15~")
-            slash(preview, "/logs")
+            preview.until(lambda s: column(s) == ("conversation", 2, 8)
+                          and s["cells"][0][0]["background"] == [255, 255, 255]
+                          and "sidebar_width" not in text(s),
+                          "appearance reload preserving the conversation column")
 
             preview.resize(6, 40)
             preview.send("tiny界".encode("utf-8"))

@@ -23,6 +23,7 @@ import tempfile
 import time
 
 from e2e_dashboard import Dashboard, sha256, text
+from e2e_client_ui import column
 
 
 ESC = b"\x1b"
@@ -30,6 +31,8 @@ UP = b"\x1b[A"
 DOWN = b"\x1b[B"
 LEFT = b"\x1b[D"
 RIGHT = b"\x1b[C"
+ALT_LEFT = b"\x1b[1;3D"
+ALT_RIGHT = b"\x1b[1;3C"
 HOME = b"\x1b[H"
 DELETE = b"\x1b[3~"
 ENTER = b"\r"
@@ -143,8 +146,17 @@ class Composer(Dashboard):
         if self.ui("/display/conversation")["draft"]["text"]:
             raise AssertionError("local command helper would overwrite a nonempty draft")
         front.send(command + "\r")
-        view = {"/queue": "queue", "/logs": "activity"}[command]
-        front.until(lambda shot: f"ssmcp  /  {view}" in text(shot), f"local {command} view")
+        destination = {"/queue": ("queue", 4, 8), "/logs": ("logs", 7, 8)}[command]
+        front.until(lambda shot: column(shot) == destination, f"local {command} column")
+
+    def activate_column(self, front, name):
+        state = self.ui("/display/conversation")["canvas"]
+        index = state["columns"].index(name)
+        distance = index - state["active"]
+        if distance:
+            front.send((ALT_RIGHT if distance > 0 else ALT_LEFT) * abs(distance))
+        front.until(lambda shot: column(shot) == (name, index + 1, len(state["columns"])),
+                    f"horizontal navigation to the existing {name} column")
 
     def submit(self, front, request_text):
         self.focus_input(front)
@@ -174,12 +186,16 @@ class Composer(Dashboard):
 
     def agents(self, front):
         self.focus_input(front)
+        # Queue, audit and history are independent columns. Reach the existing
+        # conversation first, then exercise ordinary Left at the draft edge.
+        self.activate_column(front, "conversation")
+        self.focus_input(front)
         draft = self.ui("/display/conversation")["draft"]
         if draft["cursor"] != 0:
             raise AssertionError("agent panel helper requires the start of the current draft")
         front.send(LEFT)
-        front.until(lambda shot: "ssmcp  /  agents" in text(shot) and shot["hide_cursor"],
-                    "Left opening the agent panel")
+        front.until(lambda shot: column(shot) == ("agents", 1, 8) and shot["hide_cursor"],
+                    "Left entering the adjacent Agents column")
 
     def recipient(self, front, member=None):
         self.agents(front)
@@ -193,7 +209,7 @@ class Composer(Dashboard):
             label = roster[index - 1]["name"]
         front.send(HOME + DOWN * index + ENTER)
         front.until(lambda shot: f"To · {label}" in text(shot)
-                                 and "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+                                 and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
         self.check(self.ui("/display/conversation")["target"]
                    == (None if member is None else member["agent_id"]),
@@ -347,7 +363,7 @@ class Composer(Dashboard):
                    and all(member["token"] not in json.dumps(roster) for member in members),
                    "the roster shows actual members and public status without participant tokens")
         front.send(ESC)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "Escape returning from agents to the default conversation")
         navigation_draft = "保留草稿 界"
         front.send(navigation_draft.encode() + LEFT)
@@ -359,14 +375,14 @@ class Composer(Dashboard):
                                                 "cursor": len(navigation_draft.encode()) - len("界".encode())},
                    "Left within nonempty UTF-8 input moves the cursor without opening agents")
         front.send(b"\x01" + LEFT)
-        front.until(lambda shot: "ssmcp  /  agents" in text(shot) and navigation_draft in input_text(shot),
+        front.until(lambda shot: column(shot) == ("agents", 1, 8) and navigation_draft in input_text(shot),
                     "Left at the start of a draft opening the agent panel")
         before_choice = self.ui("/display/conversation")
         self.check(before_choice["draft"] == {"text": navigation_draft, "cursor": 0}
                    and before_choice["target"] is None and before_choice["editing"] is None,
                    "opening agents preserves the draft and does not choose or send a recipient")
         front.send(ESC)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "Escape closing the panel without clearing the Unicode draft")
         after_escape = self.ui("/display/conversation")
         self.check(after_escape["draft"] == before_choice["draft"] and after_escape["target"] is None,
@@ -375,18 +391,28 @@ class Composer(Dashboard):
         selected_index = 1 + next(index for index, item in enumerate(self.queue()["agents"])
                                   if item["agent_id"] == members[0]["agent_id"])
         front.send(HOME + DOWN * selected_index + RIGHT)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+                                 and "To · next caller" in text(shot) and not shot["hide_cursor"],
+                    "Right moving to the conversation without choosing a member")
+        navigated = self.ui("/display/conversation")
+        self.check(navigated["target"] is None and navigated["draft"] == before_choice["draft"],
+                   "Right changes only the active column, preserving the draft and recipient")
+        self.agents(front)
+        self.check(self.ui("/display/conversation")["selected_agent"] == "member:" + members[0]["agent_id"],
+                   "horizontal navigation preserves the independently highlighted member")
+        front.send(ENTER)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
                                  and "To · Shared name" in text(shot) and not shot["hide_cursor"],
-                    "Right choosing the member and closing the panel")
+                    "Enter choosing the member and returning to the conversation")
         chosen = self.ui("/display/conversation")
         self.check(chosen["target"] == members[0]["agent_id"]
                    and chosen["draft"] == before_choice["draft"],
-                   "Right changes only the authenticated recipient while preserving the draft")
+                   "Enter changes only the authenticated recipient while preserving the draft")
         self.agents(front)
         self.check(self.ui("/display/conversation")["selected_agent"] == "member:" + members[0]["agent_id"],
                    "reopening agents highlights the currently selected member")
         front.send(ESC)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "the selected member conversation restored")
         front.send(b"\x01\x0b")
         front.until(lambda shot: "Message the agent" in input_text(shot), "the navigation fixture draft cleared")
@@ -405,18 +431,17 @@ class Composer(Dashboard):
         front.until(lambda shot: "Editing · Shared name" in text(shot)
                                  and retargeted["text"] in input_text(shot),
                     "an exact-agent requirement taken back for recipient editing")
-        # Open recipients directly at the beginning of the active edit. No
-        # slash command or view cycling may replace or publish the held text.
-        front.send(b"\x01" + LEFT)
-        front.until(lambda shot: "ssmcp  /  agents" in text(shot),
-                    "the agent panel while retaining the active edit")
+        # Keep the held edit while navigating from Queue through the canvas;
+        # the ordinary Left boundary action enters Agents from conversation.
+        front.send(b"\x01")
+        self.agents(front)
         held = self.ui("/display/conversation")
         self.check(held["editing"] == retargeted["id"]
                    and held["draft"] == {"text": retargeted["text"], "cursor": 0},
                    "Left preserves the held request identity and original text during retargeting")
         front.send(HOME + ENTER)
         front.until(lambda shot: "Editing · next caller" in text(shot)
-                                 and "ssmcp  /  activity" in text(shot) and not shot["hide_cursor"],
+                                 and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "the explicit Next caller choice returning to the active edit")
         retargeted_text = "COMPOSER_RETARGET_NEXT_CALLER"
         front.send(b"\x01\x0b" + retargeted_text.encode() + ENTER)
@@ -489,10 +514,11 @@ class Composer(Dashboard):
                    "reexec restores parked text as the visible draft rather than stranding it in hidden state")
         self.check(self.record(restored, message_id=first["id"])["status"] == "delivered",
                    "delivered history remains delivered after the room changes")
-        # Inspect the physical queue without overwriting the restored draft.
-        # Chat starts in Activity; three F2 presses select its Queue tab.
-        front.send(b"\x1bOQ" * 3)
-        front.until(lambda shot: visible_record(shot, handoff["text"], "queued", handoff["id"]),
+        # Inspect the existing Queue column without writing a slash command
+        # into the restored draft or relying on the old F2 view order.
+        self.activate_column(front, "queue")
+        front.until(lambda shot: column(shot) == ("queue", 4, 8)
+                                 and visible_record(shot, handoff["text"], "queued", handoff["id"]),
                     "confirmed undelivered work republished after the reload handoff")
         # Restored records are locally queued at revision zero until the client
         # publishes them. Wait for a server acknowledgement before requiring a
@@ -545,7 +571,9 @@ def main():
               "binaries": {name: sha256(path) for name, path in (
                   ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"), ("vt_snapshot", decoder))},
               "sources": {path.name: sha256(path) for path in (
-                  Path(__file__), Path(__file__).with_name("e2e.py"), Path(__file__).with_name("e2e_dashboard.py"))}}
+                  Path(__file__), Path(__file__).with_name("e2e.py"),
+                  Path(__file__).with_name("e2e_dashboard.py"),
+                  Path(__file__).with_name("e2e_client_ui.py"))}}
     with tempfile.TemporaryDirectory(prefix="ssmcp-composer-e2e-") as directory:
         harness = Composer(Path(directory), args.bin_dir, decoder)
         try:

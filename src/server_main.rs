@@ -33,6 +33,12 @@ const HELP: &str = r#"ssmcpd - SSH-authenticated terminal MCP gateway
 Usage:
   ssmcpd serve [--config PATH] [--public-url https://HOST] [--listen 127.0.0.1:8080] [--socket PATH] [--portal-only]
   ssmcpd attach [--socket PATH]
+  ssmcpd check-runtime
+
+Runtime check:
+  check-runtime verifies the installed code_mode runner and mandatory OS sandbox.
+  It takes no options and needs no gateway configuration, credentials, or network.
+  Success prints {"code_mode":"ok"}; failure exits nonzero with a diagnostic.
 
 Configuration:
   --config PATH selects a TOML file; SSMCP_CONFIG also selects a file.
@@ -255,10 +261,25 @@ fn run() -> ssmcp::Result<()> {
         println!("ssmcpd {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let remaining: Vec<String> = args.collect();
+    if mode == "check-runtime" {
+        if remaining.len() == 1 && matches!(remaining[0].as_str(), "--help" | "-h") {
+            print!("{HELP}");
+            return Ok(());
+        }
+        if !remaining.is_empty() {
+            return Err("check-runtime takes no options or arguments; see --help".into());
+        }
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(ssmcp::code_mode::check_runtime())?;
+        println!(r#"{{"code_mode":"ok"}}"#);
+        return Ok(());
+    }
     if mode != "serve" && mode != "attach" {
         return Err(format!("unknown command {mode}; see --help").into());
     }
-    let remaining: Vec<String> = args.collect();
     if remaining
         .iter()
         .any(|arg| matches!(arg.as_str(), "--help" | "-h"))

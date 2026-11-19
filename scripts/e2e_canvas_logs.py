@@ -9,10 +9,9 @@ belongs to this test and never receives input through the user's desktop.
 import argparse
 import json
 from pathlib import Path
-import re
 import tempfile
 
-from e2e_client_ui import Preview, prompt_start, prompt_text, save_shot, text
+from e2e_client_ui import Preview, column, logs_open, prompt_start, prompt_text, save_shot, text, view
 
 
 LEFT = b"\x1b[D"
@@ -26,29 +25,6 @@ DIAGNOSTIC = "A quieter workspace"
 def body(shot):
     end = prompt_start(shot)
     return "\n".join(shot["rows"][1:end if end is not None else -1])
-
-
-def column(shot):
-    # Only the active column has an adjacent position/count. Names of its two
-    # neighbors also occur in the breadcrumb, so text containment is ambiguous.
-    header = shot["rows"][0].partition("ssmcp  /  ")[2].split("  /  ", 1)[0]
-    match = re.search(
-        r"\b(agents|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
-        header, re.IGNORECASE,
-    )
-    if not match:
-        return None
-    name, position, count = match.groups()
-    return name.lower(), int(position), int(count)
-
-
-def view(shot, name):
-    current = column(shot)
-    return current is not None and current[0] == name and 1 <= current[1] <= current[2]
-
-
-def logs_open(shot):
-    return view(shot, "logs")
 
 
 def mouse(button, *, release=False, x=8, y=4):
