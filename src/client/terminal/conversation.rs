@@ -9,6 +9,8 @@ mod history;
 mod login;
 pub(super) mod logout;
 mod questions;
+#[cfg(all(test, target_os = "linux"))]
+mod skill_picker_tests;
 mod tasks;
 
 const EXIT_CONFIRMATION: &str =

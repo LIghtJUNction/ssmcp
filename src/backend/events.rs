@@ -183,6 +183,13 @@ struct Buffer {
     closed: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Presentation {
+    Native,
+    Control,
+    LocalDiscovery,
+}
+
 pub struct EventLog {
     label: String,
     audit_mode: AuditMode,
@@ -240,7 +247,7 @@ impl EventLog {
         if crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_inner(event, false);
+        self.push_inner(event, Presentation::Native);
     }
 
     /// Only client-owned audit lifecycle code may publish these reserved events.
@@ -249,10 +256,19 @@ impl EventLog {
         if !crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_inner(event, true);
+        self.push_inner(event, Presentation::Control);
     }
 
-    fn push_inner(&self, event: Value, trusted_control: bool) {
+    /// Retain local picker reads in the security audit without publishing them
+    /// as conversation activity. No provider-controlled JSON selects this path.
+    pub(crate) fn push_local_discovery(&self, event: Value) {
+        if crate::client::render::reserved_control_event(&event) {
+            return;
+        }
+        self.push_inner(event, Presentation::LocalDiscovery);
+    }
+
+    fn push_inner(&self, event: Value, presentation: Presentation) {
         let mut event = self.audit_mode.event(event);
         if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
             pool.native_event(&self.label, &event);
@@ -269,8 +285,8 @@ impl EventLog {
                     event["type"].as_str(),
                     Some("background_output" | "bash_execution_update")
                 ));
-        if !external_output {
-            if trusted_control {
+        if !external_output && presentation != Presentation::LocalDiscovery {
+            if presentation == Presentation::Control {
                 crate::client::render::trusted_event(&self.label, &event);
             } else {
                 crate::client::render::event(&self.label, &event);

@@ -379,7 +379,7 @@ async fn discover_skills(
         if let Some(cursor) = &cursor {
             arguments["cursor"] = json!(cursor);
         }
-        let page = context.perform("ssmcp.skills.list", arguments).await?;
+        let page = context.local_skill_index(arguments).await?;
         if page["truncated"] == true {
             return Err("The configured skill index is incomplete; narrow the configured skill directories before selecting a skill.".into());
         }

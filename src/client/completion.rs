@@ -444,7 +444,7 @@ pub(crate) async fn enumerate(
                 if let Some(cursor) = &cursor {
                     args["cursor"] = json!(cursor);
                 }
-                context.perform("ssmcp.skills.list", args).await?
+                context.local_skill_index(args).await?
             }
         };
         if matches!(key, Key::Skills) && page["truncated"] == true {

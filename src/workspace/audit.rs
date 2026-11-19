@@ -160,6 +160,19 @@ impl FileAudit {
 
 impl Root {
     pub(super) fn perform_audited(&self, name: &str, args: Value) -> Result<Value, String> {
+        self.perform_audited_with_source(name, args, false)
+    }
+
+    pub(super) fn read_metadata_for_completion(&self, args: Value) -> Result<Value, String> {
+        self.perform_audited_with_source("ssmcp.fs.read", args, true)
+    }
+
+    fn perform_audited_with_source(
+        &self,
+        name: &str,
+        args: Value,
+        local_discovery: bool,
+    ) -> Result<Value, String> {
         let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
         let result = self.perform(name, args)?;
         if matches!(
@@ -172,13 +185,18 @@ impl Root {
             } else {
                 (result["offset"].as_u64(), result["next_offset"].as_u64())
             };
-            self.audit.events.push(json!({
+            let event = json!({
                 "type":"ssmcp.file.read","tool":name,"path":path,
                 "offset":offset,"next_offset":next_offset,
                 "bytes":next_offset.zip(offset).map(|(end, start)| end.saturating_sub(start)),
                 "sensitive":sensitive_path(&path),
                 "observation":"native_file_read","external_operations":"unknown"
-            }));
+            });
+            if local_discovery {
+                self.audit.events.push_local_discovery(event);
+            } else {
+                self.audit.events.push(event);
+            }
         }
         Ok(result)
     }
