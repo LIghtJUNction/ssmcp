@@ -49,6 +49,7 @@ struct Call {
     attribution: Option<wire::ControlAttribution>,
     code_context: Option<wire::CodeContext>,
     authorization: Option<Authorization>,
+    binding: Option<crate::code_mode::RunBinding>,
     traffic_failure: TrafficFailureState,
     reply: oneshot::Sender<CallResult>,
 }
@@ -59,6 +60,7 @@ struct PendingCall {
     reload: bool,
     authorization: Option<Authorization>,
     subject: Option<String>,
+    binding: Option<crate::code_mode::RunBinding>,
     traffic_failure: TrafficFailureState,
 }
 
@@ -86,6 +88,7 @@ async fn charge_pending(
     uploaded: bool,
     bytes: usize,
 ) -> Result<(), String> {
+    session.validate_binding(call.binding.as_ref())?;
     if call.authorization.as_ref().is_some_and(|auth| {
         !auth.is_live() || !auth.permits(session) || !broker.authorized_account(auth)
     }) {
@@ -165,7 +168,6 @@ pub struct Session {
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
     thread_scope: OnceCell<bool>,
-    queue_changed: Notify,
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
     allow: Mutex<Vec<Identity>>,
@@ -244,63 +246,19 @@ impl Session {
             .command(self.client_id(), self.collaboration.presence()?, command)
     }
 
-    /// The caller must authorize this session before invoking this user action.
-    pub(crate) fn dispatch_user_message(
+    /// A captured credential must remain valid across every dispatch/result wait.
+    fn validate_binding(
         &self,
-        thread_id: Option<&str>,
-        text: &str,
-        broadcast: bool,
-        idempotency_key: Option<&str>,
-    ) -> Result<Value, String> {
-        self.dispatch_message(
-            thread_id,
-            text,
-            broadcast,
-            idempotency_key,
-            crate::steering::MessageSource::User,
-        )
-    }
-
-    /// Webhook events remain external data at delivery; they cannot impersonate
-    /// a user requirement merely by using the same waiting queue.
-    pub(crate) fn dispatch_notification(
-        &self,
-        thread_id: Option<&str>,
-        text: &str,
-        broadcast: bool,
-        idempotency_key: Option<&str>,
-    ) -> Result<Value, String> {
-        self.dispatch_message(
-            thread_id,
-            text,
-            broadcast,
-            idempotency_key,
-            crate::steering::MessageSource::Webhook,
-        )
-    }
-
-    fn dispatch_message(
-        &self,
-        thread_id: Option<&str>,
-        text: &str,
-        broadcast: bool,
-        idempotency_key: Option<&str>,
-        source: crate::steering::MessageSource,
-    ) -> Result<Value, String> {
-        if !self.is_alive() {
-            return Err("client connection is closed".into());
+        binding: Option<&crate::code_mode::RunBinding>,
+    ) -> Result<(), String> {
+        if let Some(binding) = binding {
+            self.collaboration
+                .bind(&binding.owner, &binding.agent_id, &binding.token)
+                .map_err(
+                    |_| "thread_binding_invalid: registered participant is no longer active",
+                )?;
         }
-        let receipt = self.steering.enqueue(
-            self.client_id(),
-            self.collaboration.presence()?,
-            thread_id,
-            text,
-            broadcast,
-            idempotency_key,
-            source,
-        )?;
-        self.queue_changed.notify_one();
-        Ok(receipt)
+        Ok(())
     }
 
     /// Probe with the legacy-safe frame before adding optional scope metadata.
@@ -321,7 +279,11 @@ impl Session {
                             arguments: serde_json::json!({}),
                         },
                         controller: None,
+                        attribution: None,
                         code_context: None,
+                        authorization: None,
+                        binding: None,
+                        traffic_failure: TrafficFailureState::default(),
                         reply,
                     })
                     .map_err(|_| "client disconnected or busy; scope probe was not dispatched")?;
@@ -404,17 +366,21 @@ impl Session {
             controller.validate()?;
         }
         let mut code_context = audit_run.as_ref().map(|run| (*run.context).clone());
-        if let Some(binding) = audit_run
-            .as_ref()
-            .and_then(|run| run.binding(self.client_id()))
-        {
-            self.collaboration
-                .bind(&binding.owner, &binding.agent_id, &binding.token)?;
-            if self.supports_thread_scope().await?
+        if let Some(binding) = binding.as_ref() {
+            if attribution
+                .as_ref()
+                .is_some_and(|source| source.agent.is_some())
+                && self.supports_thread_scope().await?
                 && let Some(context) = &mut code_context
             {
                 context.session_id = Some(self.client_id().into());
-                context.thread_id = Some(binding.agent_id);
+                context.thread_id = Some(binding.agent_id.clone());
+            }
+            // Capability discovery can wait. Keep the original binding and
+            // recheck it, rather than relabelling this call with a later bind.
+            self.validate_binding(Some(binding))?;
+            if authorization.is_some_and(|auth| !auth.is_live() || !auth.permits(self)) {
+                return Err("session access was revoked; tool was not dispatched".into());
             }
         }
         let carries_source = code_context.is_some();
@@ -455,6 +421,7 @@ impl Session {
                 attribution: attribution.clone(),
                 code_context,
                 authorization: authorization.cloned(),
+                binding: binding.clone(),
                 traffic_failure: call_traffic.clone(),
                 reply,
             })
@@ -489,6 +456,11 @@ impl Session {
             .is_some_and(|authorization| !authorization.is_live() || !authorization.permits(self))
         {
             Err("session access was revoked; response withheld".into())
+        } else if self.validate_binding(binding.as_ref()).is_err() {
+            Err(
+                "thread_binding_invalid: response withheld after participant expiry or departure"
+                    .into(),
+            )
         } else {
             result
         };
@@ -721,7 +693,6 @@ impl Broker {
             collaboration: crate::collab::Hub::for_session(&id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
-            queue_changed: Notify::new(),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1056,7 +1027,6 @@ impl Broker {
             collaboration: crate::collab::Hub::for_session(&client_id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
-            queue_changed: Notify::new(),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1173,6 +1143,10 @@ impl Broker {
                         frame = &mut next_frame => break frame?,
                         Some(call) = requests.recv() => {
                             if call.reply.is_closed() { continue; }
+                            if let Err(error) = session.validate_binding(call.binding.as_ref()) {
+                                let _ = call.reply.send(Err(error));
+                                continue;
+                            }
                             // Queue admission does not retain authority after a local revoke.
                             if call.authorization.as_ref().is_some_and(|authorization| !authorization.is_live() || !authorization.permits(&session) || !self.authorized_account(authorization)) {
                                 let _ = call.reply.send(Err("session access was revoked; tool was not dispatched".into()));
@@ -1192,7 +1166,7 @@ impl Broker {
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
                             let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context };
                             let bytes = serde_json::to_vec(&frame)?.len() + 1;
-                            let mut queued = PendingCall { reply:call.reply, deadline, reload, authorization:call.authorization, subject, traffic_failure:call.traffic_failure };
+                            let mut queued = PendingCall { reply:call.reply, deadline, reload, authorization:call.authorization, subject, binding:call.binding, traffic_failure:call.traffic_failure };
                             let broker = self.clone();
                             let target = session.clone();
                             let id = next_id;
@@ -1212,6 +1186,10 @@ impl Broker {
                                 let _ = call.reply.send(Err("session access was revoked; tool was not dispatched".into()));
                                 continue;
                             }
+                            if let Err(error) = session.validate_binding(call.binding.as_ref()) {
+                                let _ = call.reply.send(Err(error));
+                                continue;
+                            }
                             let authorization = call.authorization.clone();
                             pending.insert(id, call);
                             timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
@@ -1229,6 +1207,10 @@ impl Broker {
                             }
                             if call.authorization.as_ref().is_some_and(|auth| !auth.is_live() || !auth.permits(&session) || !self.authorized_account(auth)) {
                                 let _ = call.reply.send(Err("session access was revoked; response withheld".into()));
+                                continue;
+                            }
+                            if let Err(error) = session.validate_binding(call.binding.as_ref()) {
+                                let _ = call.reply.send(Err(error));
                                 continue;
                             }
                             if call.reload && result.as_ref().is_ok_and(crate::client::reload::accepted) {
@@ -1263,13 +1245,6 @@ impl Broker {
                             if let Some(frame) = frame {
                                 timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                             }
-                        }
-                        _ = session.queue_changed.notified() => {
-                            let frame = Frame::SteeringReply { id:0, result:session.steering_command(wire::SteeringCommand::Snapshot {}) };
-                            if let Some(subject) = legacy_subject {
-                                self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1).await?;
-                            }
-                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                         }
                         _ = expiry.tick() => {
                             let expired: Vec<_> = pending.iter().filter(|(_, call)| Instant::now() >= call.deadline).map(|(id, _)| *id).collect();
@@ -1710,26 +1685,47 @@ mod tests {
         for tool in ["ssmcp.ui.message", "ssmcp.ui.present"] {
             for bind_after_dispatch in [false, true] {
                 let (sender, mut receiver) = mpsc::channel(1);
-                let mut target = session("dialogue", "secret");
+                let account = Identity {
+                    provider: "github".into(),
+                    subject: "123".into(),
+                    login: "alice".into(),
+                };
+                let authorization = Authorization::Identity(account.clone());
+                let owner = crate::bridge::owner("mcp", &authorization).unwrap();
+                let mut target = allowed_session("dialogue", "secret", vec![account]);
                 Arc::get_mut(&mut target).unwrap().sender = sender;
+                target.thread_scope.set(true).unwrap();
+                let agent = target
+                    .collaboration
+                    .dispatch(
+                        &owner,
+                        "join",
+                        serde_json::json!({"name":"dialogue worker"}),
+                    )
+                    .await
+                    .unwrap();
+                let agent_id = agent["agent_id"].as_str().unwrap();
+                let token = agent["token"].as_str().unwrap();
                 let run = crate::code_mode::AuditRun::new("return 1;", None).unwrap();
                 if !bind_after_dispatch {
-                    run.bind("dialogue", "owner", "agent_a", "private_token")
-                        .unwrap();
+                    run.bind("dialogue", &owner, agent_id, token).unwrap();
                 }
                 let request =
                     tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run.clone(), async move {
                         target
-                            .call(Operation::CallTool {
-                                name: tool.into(),
-                                arguments: serde_json::json!({}),
-                            })
+                            .call_with_authorization(
+                                Operation::CallTool {
+                                    name: tool.into(),
+                                    arguments: serde_json::json!({}),
+                                },
+                                None,
+                                &authorization,
+                            )
                             .await
                     }));
                 let call = receiver.recv().await.unwrap();
                 if bind_after_dispatch {
-                    run.bind("dialogue", "owner", "agent_a", "private_token")
-                        .unwrap();
+                    run.bind("dialogue", &owner, agent_id, token).unwrap();
                 }
                 call.reply.send(Ok(serde_json::json!({
                     "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
@@ -1739,7 +1735,7 @@ mod tests {
                 assert_eq!(replies.len(), 1, "{tool}");
                 assert_eq!(
                     replies[0].agent_id.as_deref(),
-                    (!bind_after_dispatch).then_some("agent_a"),
+                    (!bind_after_dispatch).then_some(agent_id),
                 );
                 assert!(run.accepted_replies("other").is_empty());
             }
@@ -1878,7 +1874,6 @@ mod tests {
             collaboration: crate::collab::Hub::for_session(id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
-            queue_changed: Notify::new(),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -2587,19 +2582,26 @@ mod tests {
     #[tokio::test]
     async fn native_thread_scope_is_bound_and_capability_gated_once() {
         for supported in [false, true] {
-            let mut session = session("session_one", "unused");
+            let account = Identity {
+                provider: "github".into(),
+                subject: "123".into(),
+                login: "alice".into(),
+            };
+            let authorization = Authorization::Identity(account.clone());
+            let owner = crate::bridge::owner("mcp", &authorization).unwrap();
+            let mut session = allowed_session("session_one", "unused", vec![account]);
             let (sender, mut receiver) = mpsc::channel::<Call>(4);
             Arc::get_mut(&mut session).unwrap().sender = sender;
             let joined = session
                 .collaboration
-                .dispatch("owner", "join", serde_json::json!({"name":"worker"}))
+                .dispatch(&owner, "join", serde_json::json!({"name":"worker"}))
                 .await
                 .unwrap();
             let thread = joined["thread_id"].as_str().unwrap().to_owned();
             let run = crate::code_mode::AuditRun::new("return true;", None).unwrap();
             run.bind(
                 "session_one",
-                "owner",
+                &owner,
                 &thread,
                 joined["token"].as_str().unwrap(),
             )
@@ -2614,6 +2616,16 @@ mod tests {
                 probe.reply.send(Ok(serde_json::json!({"structuredContent":{"thread_scope":if supported {1} else {0}}}))).unwrap();
                 for _ in 0..2 {
                     let call = receiver.recv().await.unwrap();
+                    assert_eq!(
+                        call.attribution
+                            .as_ref()
+                            .unwrap()
+                            .agent
+                            .as_ref()
+                            .unwrap()
+                            .id,
+                        expected
+                    );
                     let context = call.code_context.unwrap();
                     assert_eq!(
                         context.session_id.as_deref(),
@@ -2630,11 +2642,17 @@ mod tests {
                 Duration::from_secs(3),
                 crate::code_mode::AUDIT_RUN.scope(run, async {
                     assert_eq!(
-                        session.call(Operation::Status {}).await.unwrap()["ok"],
+                        session
+                            .call_with_authorization(Operation::Status {}, None, &authorization)
+                            .await
+                            .unwrap()["ok"],
                         true
                     );
                     assert_eq!(
-                        session.call(Operation::Status {}).await.unwrap()["ok"],
+                        session
+                            .call_with_authorization(Operation::Status {}, None, &authorization)
+                            .await
+                            .unwrap()["ok"],
                         true
                     );
                     client.await.unwrap();

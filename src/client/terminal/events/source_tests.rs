@@ -56,6 +56,8 @@ fn scope(runtime: &Runtime, request_id: u64, subject: &str, run: char) -> Arc<Ca
                 run_id: run.to_string().repeat(32),
                 code: "native fixture".into(),
                 timestamp_ms: 1,
+                session_id: None,
+                thread_id: None,
             }),
         )
         .unwrap()

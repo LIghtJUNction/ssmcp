@@ -451,6 +451,7 @@ mod tests {
             session
                 .sender
                 .try_send(super::super::Call {
+                    binding: None,
                     traffic_failure: Default::default(),
                     attribution: None,
                     operation: Operation::ListTools { cursor: None },

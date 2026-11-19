@@ -48,7 +48,7 @@ class ForceSend(InputHistory):
         self.check(lease["schema_version"] == 1 and lease["connection_id"] == self.client_id
                    and len(lease["listener_id"]) == 32 and len(lease["token"]) == 64,
                    "explicit open binds an exclusive credential to this exact connection")
-        self.check(lease["expires_in_ms"] == 30000 and lease["ack_timeout_ms"] == 5000,
+        self.check(lease["lease_ms"] == 30000 and 29000 <= lease["expires_in_ms"] <= 30000 and lease["ack_timeout_ms"] == 5000,
                    "the advertised lease and ACK budgets match the protocol")
         return {"listener_id": lease["listener_id"], "token": lease["token"]}
 

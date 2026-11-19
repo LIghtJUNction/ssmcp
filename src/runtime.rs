@@ -406,6 +406,11 @@ impl Runtime {
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         self.registry.catalog()
     }
+    /// Opaque runtime generation used to reject work retained across reconnects.
+    pub(crate) fn connection_generation(&self) -> u64 {
+        self.call_connection
+    }
+
     /// Accept only metadata supplied by the authenticated relay frame, before
     /// entering a provider. Tool arguments cannot create this scope.
     pub(crate) fn call_scope(

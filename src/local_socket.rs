@@ -1,4 +1,4 @@
-//! A private, single-writer Unix endpoint. No account or OAuth state is opened.
+//! Shared Linux private-socket ownership, peer and inode checks.
 use std::{
     ffi::{CString, OsStr},
     fs::{self, File, Metadata},
@@ -25,10 +25,10 @@ fn uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-pub(super) fn syntax(path: &Path) -> io::Result<()> {
+pub(crate) fn syntax(path: &Path) -> io::Result<()> {
     let name = path
         .file_name()
-        .ok_or_else(|| invalid("frontend socket needs a filename"))?
+        .ok_or_else(|| invalid("local socket needs a filename"))?
         .as_bytes();
     if !path.is_absolute()
         || name.is_empty()
@@ -42,14 +42,13 @@ pub(super) fn syntax(path: &Path) -> io::Result<()> {
             .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
     {
         return Err(invalid(
-            "frontend socket must be an absolute, normalized path with a short filename",
+            "local socket must be an absolute, normalized path with a short filename",
         ));
     }
     Ok(())
 }
 fn open_at(directory: &File, name: &OsStr, flags: i32) -> io::Result<File> {
-    let name =
-        CString::new(name.as_bytes()).map_err(|_| invalid("invalid frontend socket path"))?;
+    let name = CString::new(name.as_bytes()).map_err(|_| invalid("invalid local socket path"))?;
     // SAFETY: name and directory live for this call. The returned FD is owned.
     let fd = unsafe {
         libc::openat(
@@ -65,12 +64,12 @@ fn open_at(directory: &File, name: &OsStr, flags: i32) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-pub(super) struct SocketPath {
+pub(crate) struct SocketPath {
     directory: File,
     name: PathBuf,
 }
 impl SocketPath {
-    pub(super) fn open(path: &Path) -> io::Result<Self> {
+    pub(crate) fn open(path: &Path) -> io::Result<Self> {
         syntax(path)?;
         let mut directory = File::open("/")?;
         for component in path.parent().unwrap().components() {
@@ -85,13 +84,13 @@ impl SocketPath {
             if ![0, uid()].contains(&meta.uid())
                 || (mode & 0o022 != 0 && !(meta.uid() == 0 && mode & 0o1000 != 0))
             {
-                return Err(denied("frontend socket ancestor is not trusted"));
+                return Err(denied("local socket ancestor is not trusted"));
             }
         }
         let meta = directory.metadata()?;
         if meta.uid() != uid() || meta.mode() & 0o777 != 0o700 {
             return Err(denied(
-                "frontend socket parent must be daemon-owned and mode 0700",
+                "local socket parent must be daemon-owned and mode 0700",
             ));
         }
         Ok(Self {
@@ -99,16 +98,16 @@ impl SocketPath {
             name: PathBuf::from(path.file_name().unwrap()),
         })
     }
-    pub(super) fn anchored(&self) -> PathBuf {
+    pub(crate) fn anchored(&self) -> PathBuf {
         PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd())).join(&self.name)
     }
-    pub(super) fn metadata(&self) -> io::Result<Metadata> {
+    pub(crate) fn metadata(&self) -> io::Result<Metadata> {
         fs::symlink_metadata(self.anchored())
     }
-    pub(super) fn verify(&self) -> io::Result<Metadata> {
+    pub(crate) fn verify(&self) -> io::Result<Metadata> {
         let meta = self.metadata()?;
         if !meta.file_type().is_socket() || meta.uid() != uid() || meta.mode() & 0o777 != 0o600 {
-            return Err(denied("frontend endpoint is not a private owned socket"));
+            return Err(denied("local endpoint is not a private owned socket"));
         }
         Ok(meta)
     }
@@ -125,7 +124,7 @@ impl SocketPath {
             || meta.nlink() != 1
             || meta.mode() & 0o777 != 0o600
         {
-            return Err(denied("frontend writer lock is not private"));
+            return Err(denied("local writer lock is not private"));
         }
         // SAFETY: file is a live descriptor. flock is held until its last close.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
@@ -136,33 +135,33 @@ impl SocketPath {
     fn remove_if_same(&self, expected: &Metadata) -> io::Result<()> {
         let actual = self.verify()?;
         if actual.dev() != expected.dev() || actual.ino() != expected.ino() {
-            return Err(denied("frontend endpoint changed during cleanup"));
+            return Err(denied("local endpoint changed during cleanup"));
         }
         fs::remove_file(self.anchored())
     }
 }
 
-pub(super) fn peer(stream: &UnixStream) -> io::Result<()> {
+pub(crate) fn peer(stream: &UnixStream) -> io::Result<()> {
     if stream.peer_cred()?.uid() != uid() {
-        return Err(denied("frontend peer UID differs"));
+        return Err(denied("local peer UID differs"));
     }
     Ok(())
 }
 
-pub(super) struct Bound {
-    pub(super) listener: UnixListener,
+pub(crate) struct Bound {
+    pub(crate) listener: UnixListener,
     path: SocketPath,
     metadata: Metadata,
     _lock: File,
 }
 impl Bound {
-    pub(super) async fn bind(path: &Path) -> io::Result<Self> {
+    pub(crate) async fn bind(path: &Path) -> io::Result<Self> {
         let path = SocketPath::open(path)?;
         let lock = path.lock()?;
         match path.verify() {
             Ok(meta) => {
                 match tokio::time::timeout(
-                    super::REQUEST_TIMEOUT,
+                    std::time::Duration::from_millis(250),
                     UnixStream::connect(path.anchored()),
                 )
                 .await
@@ -173,7 +172,7 @@ impl Bound {
                     _ => {
                         return Err(io::Error::new(
                             io::ErrorKind::AddrInUse,
-                            "frontend socket is already active",
+                            "local socket is already active",
                         ));
                     }
                 }

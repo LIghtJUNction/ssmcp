@@ -22,6 +22,7 @@ fn fixture() -> (Arc<Session>, mpsc::Receiver<Call>) {
     mutable.slots = Semaphore::new(4);
     mutable.owner_subject = Some(alice.subject.clone());
     mutable.owner_identity = Some(alice);
+    mutable.thread_scope.set(true).unwrap();
     (session, receiver)
 }
 
@@ -189,4 +190,101 @@ async fn control_attribution_is_captured_before_later_agent_binding() {
     assert!(call.attribution.as_ref().unwrap().agent.is_none());
     call.reply.send(Ok(json!({}))).unwrap();
     first.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn thread_binding_is_rechecked_after_capability_probe_without_dispatching_or_relabelling() {
+    let (mut session, mut receiver) = fixture();
+    Arc::get_mut(&mut session).unwrap().thread_scope = OnceCell::new();
+    let alice = identity("123", "alice");
+    let (run, id, token) = bound_run(&session, &alice).await;
+    let request = tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run, {
+        let session = session.clone();
+        async move {
+            session
+                .call_with_authorization(
+                    operation("fixture.must_not_dispatch"),
+                    None,
+                    &Authorization::Identity(alice),
+                )
+                .await
+        }
+    }));
+    let probe = receiver.recv().await.unwrap();
+    assert_eq!(probe.operation.name(), "ssmcp.client.capabilities");
+    let owner =
+        crate::bridge::owner("mcp", &Authorization::Identity(identity("123", "alice"))).unwrap();
+    session
+        .collaboration
+        .dispatch(&owner, "leave", json!({"agent_id":id,"token":token}))
+        .await
+        .unwrap();
+    probe.reply.send(Ok(json!({"thread_scope":1}))).unwrap();
+    assert!(
+        request
+            .await
+            .unwrap()
+            .unwrap_err()
+            .contains("thread_binding_invalid")
+    );
+    assert!(receiver.try_recv().is_err());
+    assert!(session.is_alive());
+}
+
+#[tokio::test]
+async fn thread_binding_departure_withholds_only_its_reply_and_preserves_other_controller() {
+    let (session, mut receiver) = fixture();
+    let alice = identity("123", "alice");
+    let (run, id, token) = bound_run(&session, &alice).await;
+    let request = tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run, {
+        let session = session.clone();
+        async move {
+            session
+                .call_with_authorization(
+                    operation("fixture.waiting"),
+                    None,
+                    &Authorization::Identity(alice),
+                )
+                .await
+        }
+    }));
+    let call = receiver.recv().await.unwrap();
+    assert_eq!(
+        call.code_context.as_ref().unwrap().thread_id.as_deref(),
+        Some(id.as_str())
+    );
+    let owner =
+        crate::bridge::owner("mcp", &Authorization::Identity(identity("123", "alice"))).unwrap();
+    session
+        .collaboration
+        .dispatch(&owner, "leave", json!({"agent_id":id,"token":token}))
+        .await
+        .unwrap();
+    call.reply
+        .send(Ok(json!({"private":"must not be returned"})))
+        .unwrap();
+    assert!(
+        request
+            .await
+            .unwrap()
+            .unwrap_err()
+            .contains("response withheld")
+    );
+    let request = tokio::spawn({
+        let session = session.clone();
+        async move {
+            session
+                .call_with_authorization(
+                    operation("fixture.bob"),
+                    None,
+                    &Authorization::Identity(identity("456", "bob")),
+                )
+                .await
+        }
+    });
+    let other = receiver.recv().await.unwrap();
+    assert_eq!(other.attribution.as_ref().unwrap().account.subject, "456");
+    other.reply.send(Ok(json!({"ok":true}))).unwrap();
+    assert_eq!(request.await.unwrap().unwrap()["ok"], true);
+    assert!(session.is_alive());
 }

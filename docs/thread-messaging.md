@@ -12,16 +12,18 @@ The user can target a registered thread, queue a request for the next caller, or
 
 ## Isolation
 
-The gateway verifies the participant binding before adding session and thread scope to a native call. It first asks the connected client for `ssmcp.client.capabilities`; only clients advertising `thread_scope: 1` receive the optional scope fields. Existing wire-v7 clients continue receiving the original source-audit envelope.
+The gateway verifies the participant binding before adding session and thread scope to a native call. It first asks the connected client for `ssmcp.client.capabilities`; only clients advertising `thread_scope: 1` receive the optional scope fields. Clients that do not advertise this capability receive the source-audit envelope without the optional scope fields; normal wire-version admission still applies.
 
-A thread's token cannot read another thread's mailbox. User requests addressed to one thread are not claimed by unbound calls or another participant. Native memory and trigger handlers receive the authenticated scope through the runtime, rather than accepting a controller name as identity.
+A thread's token cannot read another thread's mailbox. User requests addressed to one thread are not claimed by unbound calls or another participant. The runtime now retains the authenticated scope as an immutable in-process capability, consumed by the program listener. Native memory and trigger handlers have not been connected to this scope. Exact-thread user requests remain in their original history/outbox and are excluded from the shared workspace checkpoint.
 
 ## Notifications
 
-User messages and webhook notifications share bounded waiting queues while retaining their origin. A delivered webhook has `source: "webhook"` and a webhook message identifier. Webhook events do not enter the shared user-memory checkpoint as a user requirement. The interface can display an external-event prefix, and the structured origin remains available to the caller.
+The production local-user path is SteeringCommand::Publish through Queue::command, including an atomic snapshot for the /global target. Routing, retry, and capacity tests exercise this actual path. Unconnected generic dispatch/enqueue prototypes were removed from this integration; there is no public webhook-to-thread listener endpoint. Existing peer messages, ordinary user steering, and explicit `/send` program listeners retain separate delivery rules. Webhook-tagged records are excluded from the shared user-memory checkpoint.
 
 ## Lifetime and limits
 
 A session ID lasts for that live connection. Thread registrations have a renewable 15-minute lease; reconnecting or expired registration requires discovery and a new registration. Queued peer messages remain until acknowledged, expired, or the session ends. The session supports 64 participants, with bounded payloads and mailboxes reported by the collaboration `limits` object.
 
 This change queues and routes messages. It does not launch a model, invoke an external harness, or interrupt a running native operation.
+
+For the implemented authenticated MCP and private Unix program listener, see [thread-listeners.md](thread-listeners.md).
