@@ -2139,6 +2139,9 @@ mod tests {
             json!({"model":"x".repeat(129)}),
             json!({"model":false}),
             json!({"model":"model-a","source":"mcp-client-info"}),
+            json!({"name":"claimed","account":{"provider":"github","subject":"123","login":"alice"}}),
+            json!({"name":"claimed","attribution":{"account":{"subject":"123"}}}),
+            json!({"name":"claimed","agent_id":"agent_forged"}),
         ] {
             value["params"]["arguments"]["controller"] = claim;
             assert!(operation(&parse(&value)).is_err());

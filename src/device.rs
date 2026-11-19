@@ -385,6 +385,8 @@ pub(crate) struct Registration {
     pub username: String,
     /// Negotiated only for an authenticated controller login, never an enrolled device.
     pub session_access: bool,
+    /// Display-only account attribution is available to login and enrolled peers.
+    pub control_attribution: bool,
     key: String,
 }
 
@@ -527,6 +529,7 @@ async fn authenticate(
         },
         username: account.username,
         session_access: false,
+        control_attribution: false,
         key,
     })
 }
@@ -900,6 +903,10 @@ async fn call_tool(
     Ok(Json(result))
 }
 fn session_access_requested(headers: &HeaderMap) -> bool {
+    capability_requested(headers, wire::SESSION_ACCESS_CAPABILITY)
+}
+
+fn capability_requested(headers: &HeaderMap, wanted: &str) -> bool {
     let mut values = headers.get_all(wire::CAPABILITIES_HEADER).iter();
     let Some(value) = values.next() else {
         return false;
@@ -911,7 +918,7 @@ fn session_access_requested(headers: &HeaderMap) -> bool {
         value.len() <= 256
             && value
                 .split(',')
-                .any(|capability| capability.trim() == wire::SESSION_ACCESS_CAPABILITY)
+                .any(|capability| capability.trim() == wanted)
     })
 }
 
@@ -926,6 +933,8 @@ async fn connect(
     // invited devices connected, but leave the broker's Access gate disabled.
     registration.session_access =
         session_access_requested(&headers) && authenticate(&broker, &headers, true).await.is_ok();
+    registration.control_attribution =
+        capability_requested(&headers, wire::CONTROL_ATTRIBUTION_CAPABILITY);
     let quota = broker
         .traffic_quota(&registration.identity.subject)
         .await
@@ -1405,6 +1414,24 @@ mod tests {
         allow: Vec<String>,
         access: bool,
     ) -> Socket {
+        open_socket_with_capabilities(
+            base,
+            token,
+            allow,
+            if access {
+                &[wire::SESSION_ACCESS_CAPABILITY]
+            } else {
+                &[]
+            },
+        )
+        .await
+    }
+    async fn open_socket_with_capabilities(
+        base: &str,
+        token: &str,
+        allow: Vec<String>,
+        capabilities: &[&str],
+    ) -> Socket {
         use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
         let mut request = format!("{}/api/client/connect", base.replace("http://", "ws://"))
             .into_client_request()
@@ -1412,10 +1439,10 @@ mod tests {
         request
             .headers_mut()
             .insert("authorization", format!("Bearer {token}").parse().unwrap());
-        if access {
+        if !capabilities.is_empty() {
             request.headers_mut().insert(
                 wire::CAPABILITIES_HEADER,
-                wire::SESSION_ACCESS_CAPABILITY.parse().unwrap(),
+                capabilities.join(", ").parse().unwrap(),
             );
         }
         let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
@@ -1437,8 +1464,225 @@ mod tests {
         socket
     }
 
+    #[tokio::test]
+    async fn control_attribution_websocket_negotiates_without_changing_legacy_frames() {
+        use tokio_tungstenite::tungstenite::Message;
+        let directory = Temporary::new();
+        let mut broker = Broker::with_identity_config(
+            "https://ssmcp.test".into(),
+            crate::oauth::OAuthConfig::default(),
+            Some(crate::identity::GitHubConfig {
+                client_id: "test-client".into(),
+                client_secret: "test-secret".into(),
+            }),
+        )
+        .unwrap();
+        broker.portal = crate::portal::Portal::open(&directory.0).unwrap();
+        let alice = Identity {
+            provider: "github".into(),
+            subject: "123".into(),
+            login: "alice".into(),
+        };
+        broker
+            .portal
+            .storage(move |store| store.login(&alice))
+            .await
+            .unwrap();
+        let login = broker
+            .portal
+            .client_storage(|store| store.login("123".into()))
+            .await
+            .unwrap()
+            .0;
+        let access = broker.oauth.test_identity_tokens("mcp", "123")["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let broker = Arc::new(broker);
+        let authorization = broker
+            .authenticate(IDENTITY_RESOURCE, &access)
+            .await
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let router = crate::http::router(broker.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let offers: [&[&str]; 4] = [
+            &[],
+            &[wire::SESSION_ACCESS_CAPABILITY],
+            &[wire::CONTROL_ATTRIBUTION_CAPABILITY],
+            &[
+                wire::SESSION_ACCESS_CAPABILITY,
+                wire::CONTROL_ATTRIBUTION_CAPABILITY,
+            ],
+        ];
+        for capabilities in offers {
+            let mut socket =
+                open_socket_with_capabilities(&base, &login, vec![], capabilities).await;
+            let id = match receive(&mut socket).await.unwrap() {
+                wire::Frame::Ready {
+                    client_id,
+                    capabilities: accepted,
+                    ..
+                } => {
+                    assert_eq!(accepted, capabilities);
+                    client_id
+                }
+                _ => panic!("ready frame"),
+            };
+            let session = broker
+                .client(IDENTITY_RESOURCE, &authorization, &id)
+                .await
+                .unwrap();
+            for bound in [false, true] {
+                let run = crate::code_mode::AuditRun::new("return 1;", None).unwrap();
+                let owner = crate::bridge::owner(IDENTITY_RESOURCE, &authorization).unwrap();
+                let agent = if bound {
+                    let agent = session
+                        .collaboration
+                        .dispatch(&owner, "join", json!({"name":"fixture worker"}))
+                        .await
+                        .unwrap();
+                    run.bind(
+                        &id,
+                        &owner,
+                        agent["agent_id"].as_str().unwrap(),
+                        agent["token"].as_str().unwrap(),
+                    )
+                    .unwrap();
+                    Some(agent)
+                } else {
+                    None
+                };
+                let called = session.clone();
+                let caller = authorization.clone();
+                let request = tokio::spawn(crate::code_mode::AUDIT_RUN.scope(run, async move {
+                    called
+                        .call_with_authorization(
+                            Operation::Status {},
+                            Some(wire::Controller {
+                                name: Some("bob (unverified claim)".into()),
+                                model: Some("claimed-model".into()),
+                                source: wire::ControllerSource::CallerReported,
+                            }),
+                            &caller,
+                        )
+                        .await
+                }));
+                let bytes = loop {
+                    match tokio::time::timeout(Duration::from_secs(4), socket.next())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .unwrap()
+                    {
+                        Message::Binary(bytes) => break bytes.to_vec(),
+                        Message::Text(text) => break text.as_bytes().to_vec(),
+                        Message::Ping(_) | Message::Pong(_) => continue,
+                        _ => panic!("call frame"),
+                    }
+                };
+                let raw: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(raw["type"], "call");
+                let frame: wire::Frame = serde_json::from_slice(&bytes).unwrap();
+                let (call_id, attribution) = match frame {
+                    wire::Frame::Call {
+                        id,
+                        attribution,
+                        controller,
+                        ..
+                    } => {
+                        assert_eq!(
+                            controller.unwrap().name.as_deref(),
+                            Some("bob (unverified claim)")
+                        );
+                        (id, attribution)
+                    }
+                    _ => panic!("call frame"),
+                };
+                if capabilities.contains(&wire::CONTROL_ATTRIBUTION_CAPABILITY) {
+                    let attribution = attribution.unwrap();
+                    assert_eq!(attribution.account.subject, "123");
+                    assert_eq!(attribution.account.login, "alice");
+                    assert_eq!(attribution.owner.unwrap().subject, "123");
+                    if let Some(agent) = &agent {
+                        assert_eq!(
+                            attribution.agent.unwrap().id,
+                            agent["agent_id"].as_str().unwrap()
+                        );
+                        assert!(
+                            !String::from_utf8_lossy(&bytes)
+                                .contains(agent["token"].as_str().unwrap())
+                        );
+                    } else {
+                        assert!(attribution.agent.is_none());
+                    }
+                } else {
+                    assert!(attribution.is_none());
+                    assert!(
+                        raw.get("attribution").is_none(),
+                        "legacy strict decoder must see no new field"
+                    );
+                }
+                socket
+                    .send(Message::Binary(
+                        serde_json::to_vec(&wire::Frame::Reply {
+                            id: call_id,
+                            result: Ok(json!({"fixture":true})),
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(4), request)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .unwrap(),
+                    json!({"fixture":true})
+                );
+                if let Some(agent) = agent {
+                    session
+                        .collaboration
+                        .dispatch(
+                            &owner,
+                            "leave",
+                            json!({
+                                "agent_id":agent["agent_id"], "token":agent["token"],
+                            }),
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
+            socket.close(None).await.unwrap();
+        }
+        server.abort();
+        let _ = server.await;
+    }
+
     #[test]
     fn session_access_capability_requires_an_exact_bounded_http_token() {
+        let mut control = HeaderMap::new();
+        control.insert(
+            wire::CAPABILITIES_HEADER,
+            wire::CONTROL_ATTRIBUTION_CAPABILITY.parse().unwrap(),
+        );
+        assert!(capability_requested(
+            &control,
+            wire::CONTROL_ATTRIBUTION_CAPABILITY
+        ));
+        assert!(!session_access_requested(&control));
+        control.insert(
+            wire::CAPABILITIES_HEADER,
+            "control_attribution_v10".parse().unwrap(),
+        );
+        assert!(!capability_requested(
+            &control,
+            wire::CONTROL_ATTRIBUTION_CAPABILITY
+        ));
         for value in ["session_access_v1", "other, session_access_v1"] {
             let mut headers = HeaderMap::new();
             headers.insert(wire::CAPABILITIES_HEADER, value.parse().unwrap());

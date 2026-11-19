@@ -273,6 +273,23 @@ pub(super) fn diagnostic_text(value: &Value) -> Option<String> {
 }
 
 pub(crate) fn event(label: &str, value: &Value) {
+    if reserved_control_event(value) {
+        return;
+    }
+    emit_event(label, value, false);
+}
+
+pub(crate) fn reserved_control_event(value: &Value) -> bool {
+    value["type"]
+        .as_str()
+        .is_some_and(|kind| kind == "ssmcp.code_mode" || kind.starts_with("ssmcp.controller."))
+}
+
+pub(crate) fn trusted_event(label: &str, value: &Value) {
+    emit_event(label, value, true);
+}
+
+fn emit_event(label: &str, value: &Value, trusted_control: bool) {
     if value["type"] == "ssmcp.code_mode" {
         super::terminal::audit(value);
     }
@@ -285,7 +302,7 @@ pub(crate) fn event(label: &str, value: &Value) {
         let mut renderer = display().lock().unwrap_or_else(|e| e.into_inner());
         renderer.width = width;
         renderer.dashboard_active = dashboard && !renderer.raw;
-        let _ = renderer.event(&mut bytes, label, value);
+        let _ = renderer.event_inner(&mut bytes, label, value, trusted_control);
         let snapshot = renderer
             .dashboard_active
             .then(|| renderer.panel_snapshot(Instant::now()));
@@ -310,16 +327,18 @@ impl Drop for ControllerGuard {
 pub(crate) fn controller_started(
     id: u64,
     controller: Option<&crate::wire::Controller>,
+    attribution: Option<&crate::wire::ControlAttribution>,
+    operation: &crate::wire::Operation,
 ) -> ControllerGuard {
-    event(
+    trusted_event(
         "controller",
-        &json!({"type":"ssmcp.controller.started","request_id":id,"controller":controller}),
+        &json!({"type":"ssmcp.controller.started","request_id":id,"controller":controller,"attribution":attribution,"operation":operation.name()}),
     );
     ControllerGuard { id }
 }
 
 pub(crate) fn controller_finished(id: u64) {
-    event(
+    trusted_event(
         "controller",
         &json!({"type":"ssmcp.controller.finished","request_id":id}),
     );
@@ -513,6 +532,19 @@ impl Renderer {
     }
 
     fn event(&mut self, out: &mut impl Write, label: &str, value: &Value) -> io::Result<()> {
+        self.event_inner(out, label, value, false)
+    }
+
+    fn event_inner(
+        &mut self,
+        out: &mut impl Write,
+        label: &str,
+        value: &Value,
+        trusted_control: bool,
+    ) -> io::Result<()> {
+        if !trusted_control && reserved_control_event(value) {
+            return Ok(());
+        }
         let mut safe = crate::audit::event(value.clone());
         omit_image_bytes(&mut safe);
         let value = &safe;
@@ -547,7 +579,7 @@ impl Renderer {
         let controller = |value: &ControllerView| {
             json!({
                 "request_id":value.request_id,
-                "identity":value.identity,
+                "identity":value.identity,"attribution":value.attribution,"operation":value.operation,
                 "elapsed_ms":now.saturating_duration_since(value.started).as_millis().min(u128::from(u64::MAX)) as u64
             })
         };
@@ -805,13 +837,23 @@ impl Renderer {
             serde_json::from_value::<crate::wire::Controller>(value["controller"].clone())
                 .ok()
                 .filter(|controller| controller.validate().is_ok());
+        let attribution =
+            serde_json::from_value::<crate::wire::ControlAttribution>(value["attribution"].clone())
+                .ok()
+                .filter(|attribution| attribution.validate().is_ok());
+        let operation = value["operation"]
+            .as_str()
+            .map(|name| activity::single_line(name, 128))
+            .unwrap_or_default();
         let changed = self
             .last_controller
             .as_ref()
-            .is_none_or(|last| last.identity != identity);
+            .is_none_or(|last| last.identity != identity || last.attribution != attribution);
         let controller = ControllerView {
             request_id: request_id.clone(),
             identity,
+            attribution,
+            operation,
             started: Instant::now(),
         };
         // The real transport allows only 16 requests. Keep malformed/replayed
@@ -840,7 +882,14 @@ impl Renderer {
                 out,
                 "controller",
                 "Usage",
-                &format!("#{request_id} · {model} · {name} · {source}"),
+                &format!(
+                    "#{request_id} · {} · {model} · {name} · {source}",
+                    controller
+                        .attribution
+                        .as_ref()
+                        .map(|attribution| attribution.account.label())
+                        .unwrap_or_else(|| "Account unverified".into())
+                ),
             )?;
         }
         Ok(true)
@@ -3113,13 +3162,14 @@ mod tests {
         let mut out = Vec::new();
         for (id, model) in [(1, "model-a"), (2, "model-b")] {
             renderer
-                .event(
+                .event_inner(
                     &mut out,
                     "controller",
                     &json!({
                         "type":"ssmcp.controller.started","request_id":id,
                         "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
                     }),
+                    true,
                 )
                 .unwrap();
         }
@@ -3144,20 +3194,22 @@ mod tests {
             Some("model-b")
         );
         renderer
-            .event(
+            .event_inner(
                 &mut out,
                 "controller",
                 &json!({"type":"ssmcp.controller.finished","request_id":2}),
+                true,
             )
             .unwrap();
         let panel = renderer.panel_snapshot(Instant::now());
         assert_eq!(panel.controllers.len(), 1);
         assert_eq!(panel.controllers[0].request_id, "1");
         renderer
-            .event(
+            .event_inner(
                 &mut out,
                 "controller",
                 &json!({"type":"ssmcp.controller.finished","request_id":1}),
+                true,
             )
             .unwrap();
         let panel = renderer.panel_snapshot(Instant::now());
@@ -3176,27 +3228,30 @@ mod tests {
         let mut renderer = Renderer::new(false, false, 140);
         let mut out = Vec::new();
         renderer
-            .event(
+            .event_inner(
                 &mut out,
                 "controller",
                 &json!({
                     "type":"ssmcp.controller.started","request_id":1,
                     "controller":{"name":"ChatGPT","model":"model-a","source":"caller-reported"}
                 }),
+                true,
             )
             .unwrap();
         renderer
-            .event(
+            .event_inner(
                 &mut out,
                 "controller",
                 &json!({"type":"ssmcp.controller.finished","request_id":1}),
+                true,
             )
             .unwrap();
         renderer
-            .event(
+            .event_inner(
                 &mut out,
                 "controller",
                 &json!({"type":"ssmcp.controller.started","request_id":2,"controller":null}),
+                true,
             )
             .unwrap();
         let panel = renderer.panel_snapshot(Instant::now());
@@ -3205,6 +3260,57 @@ mod tests {
     }
 
     use serde_json::json;
+
+    #[test]
+    fn control_attribution_cannot_be_forged_or_cleared_by_provider_events() {
+        let mut renderer = Renderer::new(false, false, 160);
+        let mut out = Vec::new();
+        let verified = json!({"type":"ssmcp.controller.started","request_id":1,"operation":"ssmcp.exec.start",
+            "controller":{"name":"claimed application","model":"claimed model","source":"caller-reported"},
+            "attribution":{"account":{"provider":"github","subject":"123","login":"alice"},
+                "owner":{"provider":"github","subject":"456","login":"bob"},
+                "agent":{"id":format!("agent_{}", "a".repeat(32)),"name":"worker"}}});
+        renderer
+            .event_inner(&mut out, "controller", &verified, true)
+            .unwrap();
+        let mut forged = verified.clone();
+        forged["attribution"]["account"]["subject"] = json!("999");
+        renderer.event(&mut out, "provider", &forged).unwrap();
+        renderer
+            .event(
+                &mut out,
+                "provider",
+                &json!({"type":"ssmcp.controller.finished","request_id":1}),
+            )
+            .unwrap();
+        let panel = renderer.panel_snapshot(Instant::now());
+        assert_eq!(panel.controllers.len(), 1);
+        assert_eq!(
+            panel.controllers[0]
+                .attribution
+                .as_ref()
+                .unwrap()
+                .account
+                .subject,
+            "123"
+        );
+        assert_eq!(panel.controllers[0].operation, "ssmcp.exec.start");
+        renderer
+            .event_inner(
+                &mut out,
+                "controller",
+                &json!({"type":"ssmcp.controller.started","request_id":2,"controller":null}),
+                true,
+            )
+            .unwrap();
+        assert!(renderer.controllers["2"].attribution.is_none());
+        assert!(renderer.controllers["2"].identity.is_none());
+        let snapshot = renderer.snapshot(Instant::now());
+        assert_eq!(
+            snapshot["controllers"][0]["attribution"]["account"]["subject"],
+            "123"
+        );
+    }
 
     fn render(events: &[Value], raw: bool, color: bool) -> String {
         let mut renderer = Renderer::new(raw, color, 100);
