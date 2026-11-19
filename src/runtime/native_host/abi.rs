@@ -144,9 +144,9 @@ pub(super) fn catalog(
         }
         result.push((provider, entry.tools));
     }
-    if seen.len() != providers.len() {
-        return Err("native plugin catalog omitted a provider".into());
-    }
+    // Ownership may include optional providers that are not registered until an
+    // explicit load succeeds. Omitting them must not publish an empty catalog
+    // that would revoke already accepted lazy-provider registrations.
     Ok(result)
 }
 
