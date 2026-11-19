@@ -383,7 +383,7 @@ impl Credentials {
 pub(crate) struct Registration {
     pub identity: Identity,
     pub username: String,
-    /// Negotiation only; identity still comes exclusively from the authenticated credential.
+    /// Negotiated only for an authenticated controller login, never an enrolled device.
     pub session_access: bool,
     key: String,
 }
@@ -924,8 +924,8 @@ async fn connect(
     // Enrollment permits a controlled device, not delegation to other identities.
     // The existing controller check accepts only a full login credential. Keep
     // invited devices connected, but leave the broker's Access gate disabled.
-    registration.session_access = session_access_requested(&headers)
-        && authenticate(&broker, &headers, true).await.is_ok();
+    registration.session_access =
+        session_access_requested(&headers) && authenticate(&broker, &headers, true).await.is_ok();
     let quota = broker
         .traffic_quota(&registration.identity.subject)
         .await
@@ -1747,7 +1747,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn websocket_registration_enforces_owner_acl_and_logout_disconnects() {
+    async fn session_access_invited_device_keeps_controller_scope_and_logout() {
+        use tokio_tungstenite::tungstenite::Message;
         let directory = Temporary::new();
         let mut broker = Broker::with_identity_config(
             "https://ssmcp.test".into(),
@@ -1839,20 +1840,63 @@ mod tests {
             receive(&mut invalid).await,
             Some(wire::Frame::Reject { .. })
         ));
-        let mut socket = open_socket(&base, device, vec![]).await;
+        // This is a real invitation-enrolled Kind::Device credential, not a login.
+        // Claiming the capability must neither reject ordinary device use nor
+        // turn the invitation into authority to share the inviter's session.
+        let mut socket = open_socket_with_access(&base, device, vec![], true).await;
         let id = match receive(&mut socket).await.unwrap() {
             wire::Frame::Ready {
                 client_id,
                 login_code,
                 login_expires_in,
+                capabilities,
                 ..
             } => {
                 assert!(login_code.is_empty());
                 assert_eq!(login_expires_in, 0);
+                assert!(capabilities.is_empty());
                 client_id
             }
             _ => panic!("expected ready"),
         };
+        // Exercise the server's authorization gate directly: hiding the Ready
+        // capability alone would not stop a peer from writing these frames.
+        for (index, command) in [
+            wire::AccessCommand::List {},
+            wire::AccessCommand::Add {
+                principal: "bob@github".into(),
+            },
+            wire::AccessCommand::Remove {
+                principal: "alice@github".into(),
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let request_id = index as u64 + 1;
+            socket
+                .send(Message::Binary(
+                    serde_json::to_vec(&wire::Frame::Access {
+                        id: request_id,
+                        command,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            match receive(&mut socket).await.unwrap() {
+                wire::Frame::AccessReply { id, result } => {
+                    assert_eq!(id, request_id);
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .contains("not negotiated on an authenticated account connection")
+                    );
+                }
+                _ => panic!("expected access rejection"),
+            }
+        }
         let alice_list: Value = client
             .get(format!("{base}/api/client/sessions"))
             .bearer_auth(&alice)
