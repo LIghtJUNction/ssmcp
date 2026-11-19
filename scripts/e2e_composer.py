@@ -284,7 +284,7 @@ class Composer(Dashboard):
         front.until(empty_composer_ready,
                     "the live chat composer in the owned terminal")
         self.command(front, "/queue")
-        self.check(self.queue()["supported"], "SSH negotiated the request-queue wire protocol")
+        self.check(self.queue()["supported"], "the account relay negotiated the request-queue wire protocol")
 
         first_text = "touch composer-hidden-shell-leak"
         following_draft = "COMPOSER_DRAFT_TYPED_BEFORE_ACK"
