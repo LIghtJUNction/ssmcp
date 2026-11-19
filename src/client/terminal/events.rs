@@ -148,6 +148,107 @@ impl Event {
         }
     }
 
+    /// At most two result lines, drawn from the retained redacted transcript.
+    /// The existing render cache keeps scanning out of idle repaint frames.
+    fn chat_preview(&self, width: usize) -> Vec<String> {
+        let plain = unstyled(&self.text);
+        let summary = unstyled(&self.summary);
+        let mut first = Vec::new();
+        let mut last = VecDeque::new();
+        let mut errors = Vec::new();
+        let mut error_section = false;
+        let mut source = false;
+        let mut result = false;
+        let mut count = 0;
+        for line in plain.lines() {
+            let mut text = heading(line);
+            if let Some((tag, detail)) =
+                text.strip_prefix('[').and_then(|text| text.split_once(']'))
+            {
+                match tag.trim() {
+                    "STDOUT" | "STDERR" | "RES" | "OUT" | "RESULT" => {
+                        error_section = tag.trim() == "STDERR";
+                        source = false;
+                        result = true;
+                        continue;
+                    }
+                    "RUN" | "REQ" | "OK" | "SAVE" | "READ" | "WRITE" | "EDIT" => continue,
+                    "ERR" | "WARN" => {
+                        error_section = true;
+                        source = false;
+                        result = true;
+                        let detail = detail.trim();
+                        if text == heading(&summary)
+                            || self
+                                .meta
+                                .keys
+                                .iter()
+                                .any(|key| key.split('\0').next() == Some(detail))
+                            || (self.meta.command
+                                && detail.split_whitespace().any(|word| {
+                                    word.starts_with("exit=")
+                                        || word.starts_with("signal=")
+                                        || matches!(word, "completed" | "cancelled" | "timed_out")
+                                }))
+                        {
+                            continue;
+                        }
+                        text = detail;
+                    }
+                    _ => {}
+                }
+            }
+            if text.is_empty() {
+                continue;
+            }
+            if self.meta.command && !result {
+                source |= text.starts_with("script · ");
+                if source || text.starts_with("cwd ") || text.starts_with("cmd=") {
+                    continue;
+                }
+            }
+            result = true;
+            count += 1;
+            if first.len() < 2 {
+                first.push(text);
+            }
+            if last.len() == 2 {
+                last.pop_front();
+            }
+            last.push_back(text);
+            if error_section && errors.len() < 2 {
+                errors.push(text);
+            }
+        }
+        let selected = if self.meta.status.is_some_and(Status::failed) {
+            if errors.is_empty() {
+                last.into_iter().collect()
+            } else {
+                errors
+            }
+        } else {
+            first
+        };
+        let more = self.truncated
+            || count > selected.len()
+            || selected.iter().any(|line| line.width() > width);
+        let mut rows = selected
+            .into_iter()
+            .map(|line| clip_plain(line, width))
+            .collect::<Vec<_>>();
+        if !rows.is_empty() {
+            rows.push(clip_plain(
+                if more {
+                    "… Enter expand"
+                } else {
+                    "Enter expand"
+                },
+                width,
+            ));
+        }
+        rows
+    }
+
     fn append(&mut self, text: String, truncated: bool) {
         if !text.is_empty() {
             self.text.push_str(&text);
@@ -1154,6 +1255,38 @@ impl EventView {
                         paint(&label, tone, ui, selected && focused)
                     ),
                 ));
+                if chat && event.meta.kind == Kind::Tool && event.image.is_none() {
+                    let preview_width = body_width.saturating_sub(2).max(1);
+                    let preview_palette = format!("{palette}:preview");
+                    if event
+                        .cache
+                        .as_ref()
+                        .is_none_or(|(cached_width, cached_palette, _)| {
+                            *cached_width != preview_width || *cached_palette != preview_palette
+                        })
+                    {
+                        event.cache = Some((
+                            preview_width,
+                            preview_palette,
+                            event.chat_preview(preview_width),
+                        ));
+                    }
+                    let preview = &event.cache.as_ref().unwrap().2;
+                    if !preview.is_empty() {
+                        previous_compact_tool = false;
+                    }
+                    for (index, line) in preview.iter().enumerate() {
+                        let hint = index + 1 == preview.len();
+                        let tone = if !hint && event.meta.status.is_some_and(Status::failed) {
+                            tone
+                        } else {
+                            "muted"
+                        };
+                        let prefix = if index == 0 { "⎿ " } else { "  " };
+                        let line = format!("{}{prefix}{line}", " ".repeat(indent));
+                        rows.push((event.id, paint(&clip_plain(&line, width), tone, ui, false)));
+                    }
+                }
             }
         }
         self.total_rows = rows.len();
@@ -1701,8 +1834,8 @@ mod tests {
     fn conversation_command_updates_replace_lifecycle_chrome_without_changing_logs() {
         let mut view = EventView::new();
         let job = "1234567890abcdef1234567890abcdef-1a";
-        let started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\n";
-        let output = b"first-result\nsecond-result\n";
+        let started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\n       cwd /example\n";
+        let output = b"[STDOUT] shell #1a\nfirst-result\nsecond-result\nthird-result\n";
         let finished =
             b"[OK ] shell #1a completed exit=0 0.04s \xc2\xb7 bash -lc \xc2\xb7 2 lines\n";
         view.ingest_event(
@@ -1725,7 +1858,18 @@ mod tests {
         );
         let done = view.render(100, 12, &plain_ui(), false).join("\n");
         assert!(done.contains("bash -lc · 2 lines · done"), "{done}");
-        assert!(!done.contains("exit=0") && !done.contains("first-result"));
+        assert!(done.contains("first-result") && done.contains("second-result"));
+        assert!(done.contains("Enter expand"));
+        for hidden in [
+            "exit=0",
+            "third-result",
+            "cwd /example",
+            "[RUN",
+            "[STDOUT",
+            "[OK",
+        ] {
+            assert!(!done.contains(hidden), "unexpected {hidden}: {done}");
+        }
         let retained = [started.as_slice(), output.as_slice(), finished.as_slice()].concat();
         assert_eq!(view.events.len(), 1);
         assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
@@ -1740,6 +1884,8 @@ mod tests {
             "exit=0",
             "first-result",
             "second-result",
+            "third-result",
+            "[STDOUT]",
         ] {
             assert!(logs.contains(detail), "missing {detail}: {logs}");
         }
@@ -1777,6 +1923,10 @@ mod tests {
             preview.set_scope(EventScope::Conversation);
             let rendered = preview.render(100, 8, &plain_ui(), false).join("\n");
             assert!(rendered.contains(expected), "{rendered}");
+            assert!(
+                !rendered.contains("Enter expand"),
+                "no output yet: {rendered}"
+            );
             assert_eq!(preview.events[0].text, summary);
         }
     }
@@ -1796,9 +1946,18 @@ mod tests {
                 &json!({"type":"exec.started","job_id":job,"command":["printf","#123","started"]}),
                 b"[RUN ] shell #abc printf '#123' started started\n",
             );
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":job}),
+                b"[STDOUT] shell #abc\nwarming up\nloading inputs\n",
+            );
             outcome["type"] = json!("exec.exited");
             outcome["job_id"] = json!(job);
-            view.ingest_event("shell", &outcome, b"[ERR ] diagnostic-detail\n");
+            view.ingest_event(
+                "shell",
+                &outcome,
+                b"[ERR ] shell exit=7\n[STDERR] shell #abc\ndiagnostic-detail\nretry-detail\nfull-tail\n",
+            );
             view.set_scope(EventScope::Conversation);
             let ui = Ui::default();
             let rendered = view.render(100, 8, &ui, true).join("\n");
@@ -1808,11 +1967,17 @@ mod tests {
                 "{plain}"
             );
             assert!(!plain.contains("shell #abc") && !plain.contains(" · done"));
-            assert!(!plain.contains("diagnostic-detail"));
+            assert!(plain.contains("diagnostic-detail") && plain.contains("retry-detail"));
+            for hidden in ["warming up", "full-tail", "[STDERR]", "[ERR"] {
+                assert!(!plain.contains(hidden), "unexpected {hidden}: {plain}");
+            }
             assert!(rendered.contains(&ui.color(tone)), "{rendered:?}");
             view.open();
             let expanded = view.render(100, 12, &plain_ui(), true).join("\n");
-            assert!(expanded.contains("diagnostic-detail"), "{expanded}");
+            assert!(
+                expanded.contains("diagnostic-detail") && expanded.contains("full-tail"),
+                "{expanded}"
+            );
         }
     }
 
@@ -1820,14 +1985,11 @@ mod tests {
     fn compact_tool_runs_keep_message_spacing_and_exact_mouse_targets() {
         let mut view = EventView::new();
         view.ingest_conversation(b"[USER] queued\nPlease check the project.\n");
-        for (id, command, detail) in [
-            ("a", "cargo check", "first-result"),
-            ("b", "cargo test", "second-result"),
-        ] {
+        for (id, command) in [("a", "cargo check"), ("b", "cargo test")] {
             view.ingest_event(
                 "shell",
                 &json!({"type":"exec.started","job_id":id,"command":["cargo",command]}),
-                format!("[RUN ] shell {id} {command} started\n{detail}\n").as_bytes(),
+                format!("[RUN ] shell {id} {command} started\n").as_bytes(),
             );
         }
         view.ingest_event(
@@ -1855,12 +2017,37 @@ mod tests {
         );
         assert_eq!(view.hit_rows[first], Some(view.events[1].id));
         assert_eq!(view.hit_rows[second], Some(view.events[2].id));
-        assert!(view.mouse_select(second as u16));
+        for (id, detail) in [
+            ("a", "first-result\nfirst-context\nfirst-tail\n"),
+            ("b", "second-result\nsecond-context\nsecond-tail\n"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":id}),
+                detail.as_bytes(),
+            );
+        }
+        let rows = view.render(100, 24, &plain_ui(), false);
+        let result_row = rows
+            .iter()
+            .position(|row| row.contains("second-result"))
+            .unwrap();
+        assert_eq!(view.hit_rows[result_row], Some(view.events[2].id));
+        assert_eq!(view.hit_rows[result_row + 1], Some(view.events[2].id));
+        assert_eq!(view.hit_rows[result_row + 2], Some(view.events[2].id));
+        assert!(rows[result_row + 2].contains("Enter expand"), "{rows:?}");
+        let collapsed = rows.join("\n");
+        assert!(collapsed.contains("first-result") && collapsed.contains("second-context"));
+        assert!(!collapsed.contains("first-tail") && !collapsed.contains("second-tail"));
+        assert!(view.mouse_select((result_row + 2) as u16));
         assert_eq!(view.selected, Some(view.events[2].id));
         assert!(view.open());
         let expanded = view.render(100, 20, &plain_ui(), false).join("\n");
-        assert!(expanded.contains("second-result"), "{expanded}");
-        assert!(!expanded.contains("first-result"), "{expanded}");
+        assert!(
+            expanded.contains("second-result") && expanded.contains("second-tail"),
+            "{expanded}"
+        );
+        assert!(!expanded.contains("first-tail"), "{expanded}");
         assert_eq!(view.events.len(), 4);
     }
 
@@ -1903,6 +2090,7 @@ mod tests {
             "I found the parser issue.",
             "cargo test",
             "exit=7",
+            "compiler failure detail",
         ] {
             assert!(chat.contains(expected), "missing {expected}: {chat}");
         }
@@ -1917,7 +2105,6 @@ mod tests {
             "[ERR",
             "long-private",
             "long-internal",
-            "compiler failure detail",
         ] {
             assert!(!chat.contains(hidden), "unexpected {hidden}: {chat}");
         }

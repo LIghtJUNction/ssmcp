@@ -549,6 +549,12 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
         traffic: account_status::Traffic::Remaining(750_000_000),
     };
     state.log_message("user", "Improve the client experience\nKeep commands, results and the original code easy to inspect.", "\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
+    state.log_message(
+        "assistant",
+        "I’ll keep the conversation focused, with command details one step away.",
+        "\n[AGENT] I’ll keep the conversation focused, with command details one step away.\n\n"
+            .as_bytes(),
+    );
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"17","exit_code":0}), "[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"preview-diff","exit_code":0}), "[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
     state.log("[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
