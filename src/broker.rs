@@ -38,6 +38,9 @@ fn request_timeout(operation: &Operation) -> Duration {
     match operation {
         Operation::CallTool { .. } => Duration::from_secs(910),
         Operation::ListTools { .. } => Duration::from_secs(120),
+        Operation::PeerMessages {
+            request: crate::messaging::NativeRequest::Wait { wait_ms, .. },
+        } => Duration::from_millis((*wait_ms).min(crate::messaging::MAX_WAIT_MS) + 10_000),
         _ => Duration::from_secs(10),
     }
 }

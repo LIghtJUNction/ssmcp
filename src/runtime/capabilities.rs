@@ -319,6 +319,7 @@ impl Runtime {
         manifest["schema"] = json!("ssmcp.client.capabilities.v1");
         manifest["client_version"] = json!(env!("CARGO_PKG_VERSION"));
         manifest["wire_version"] = json!(crate::wire::VERSION);
+        manifest["peer_messages"] = self.peer_inbox.capability();
         manifest["resources"] = json!({
             "list":"ssmcp.resources.list","templates":"ssmcp.resources.templates","read":"ssmcp.resources.read",
             "max_response_bytes":MAX_BYTES,"page_size":PAGE_SIZE,"guide":"ssmcp-client://guide","skill":"ssmcp-client://skill",
