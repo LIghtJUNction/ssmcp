@@ -1659,12 +1659,12 @@ fn form_redirect(target: &RedirectTarget, issuer: &str, values: &[(&str, &str)])
     let callback = escape(callback_url(target, issuer, values).as_str());
     Html(page_with_head(
         "连接已授权",
-        &format!("<p>正在返回 MCP 客户端。</p><p><a href=\"{callback}\" rel=noreferrer>返回客户端</a></p>"),
+        &format!("<p>正在返回 MCP 客户端。</p><p><a class=button href=\"{callback}\" rel=noreferrer>返回客户端</a></p>"),
         &format!("<meta http-equiv=refresh content=\"0;url={callback}\">"),
     )).into_response()
 }
 
-const CSS: &str = "*{box-sizing:border-box}body{margin:0;background:#fff;color:#202124;font:16px/1.6 system-ui,sans-serif}main{max-width:460px;margin:10vh auto;padding:32px}header{font:14px ui-monospace,monospace;color:#5f6368;letter-spacing:.05em}h1{font-size:28px;line-height:1.3;font-weight:500;margin:32px 0 20px}p{margin:14px 0}.muted,dt{color:#5f6368;font-size:14px}dl{margin:28px 0}dd{margin:2px 0 14px;overflow-wrap:anywhere;font-family:ui-monospace,monospace;font-size:13px}label{display:block;margin:24px 0 8px}input{width:100%;padding:13px;border:1px solid #dadce0;border-radius:6px;font:14px ui-monospace,monospace}input:focus{outline:2px solid #1a73e8;outline-offset:1px}button{display:block;width:100%;margin-top:20px;padding:12px;border:0;border-radius:6px;background:#1a73e8;color:white;font:500 16px system-ui;cursor:pointer}.error{color:#b3261e;font-size:14px}@media(max-width:540px){main{margin:4vh auto;padding:24px}}";
+const CSS: &str = include_str!("oauth/page.css");
 
 fn escape(text: &str) -> String {
     text.chars()
@@ -1685,7 +1685,29 @@ fn page(title: &str, content: &str) -> String {
 
 fn page_with_head(title: &str, content: &str, extra_head: &str) -> String {
     format!(
-        "<!doctype html><html lang=zh-CN><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>{} · ssmcp</title><style>{CSS}</style>{extra_head}</head><body><main><header>ssmcp</header><h1>{}</h1>{content}</main></body></html>",
+        r###"<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d0f">
+<title>{} · ssmcp</title>
+<style>{CSS}</style>{extra_head}
+</head>
+<body>
+<header class="oauth-header container">
+<a class="brand" href="/" aria-label="ssmcp 首页"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="11" fill="#18251f"/><path d="M28 8H17a6 6 0 0 0 0 12h6a6 6 0 0 1 0 12H12" stroke="#c6ebd9" stroke-width="3" stroke-linecap="round"/><circle cx="28" cy="8" r="2.5" fill="#eff8f2"/><circle cx="12" cy="32" r="2.5" fill="#eff8f2"/></svg><span class="brand-name">ssmcp</span></a>
+<span class="header-label">YOUR MACHINE. YOUR WORKSPACE.</span>
+</header>
+<main class="oauth-shell" id="content" aria-labelledby="auth-title">
+<p class="eyebrow">SSMCP / AUTHORIZATION</p>
+<h1 id="auth-title">{}</h1>
+<div class="auth-content">{content}</div>
+</main>
+<footer class="oauth-footer container"><p>your machine, connected.</p><a href="/">返回账户门户 <span aria-hidden="true">↗</span></a></footer>
+</body>
+</html>"###,
         escape(title),
         escape(title)
     )
@@ -1744,7 +1766,7 @@ fn consent_page(
         return page(
             "允许客户端连接？",
             &format!(
-                "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
+                "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form class=consent-actions method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
                 escape(&identity.login),
                 escape(&identity.provider)
             ),
@@ -1960,7 +1982,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
             // A 303 can inherit the original form-action CSP in some browsers.
             let location = escape(&location);
             return Ok(Html(page_with_head("登录你的账号",
-                &format!("<p>正在前往登录页面。</p><p><a href=\"{location}\" rel=noreferrer>继续登录</a></p>"),
+                &format!("<p>正在前往登录页面。</p><p><a class=button href=\"{location}\" rel=noreferrer>继续登录</a></p>"),
                 &format!("<meta http-equiv=refresh content=\"0;url={location}\">"))).into_response());
         }
         let attempt = broker.oauth.begin_login(id, csrf)?;
