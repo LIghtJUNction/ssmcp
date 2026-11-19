@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-19T20:07:33.011983+00:00",
-  "status": "checkpoint: functional acceptance complete; v0.10.12 blocked by Windows fixture tests; PR99 validation and subsequent formal release/live007 migration pending",
+  "generated_at": "2026-11-19T20:31:18.339972+00:00",
+  "status": "checkpoint: PR99 merged after Linux targeted validation; v0.10.11 and v0.10.12 release failures retained; next official Windows gate, production rollout and live 007 migration pending",
   "files": [
     {
       "path": "README.md",
-      "sha256": "951a73437694c8b0e06246a32c04837b5b4f0be340b346a60c459415e866c9bf",
-      "bytes": 28258
+      "sha256": "1f2d7cfaabfe23f5599a1ad56723f711b8486e64ef561db0cfce4467df1ddd24",
+      "bytes": 29176
     },
     {
       "path": "checks/007-live-baseline-20261119.json",
@@ -190,8 +190,8 @@
     },
     {
       "path": "checks/native-plugin-validation-20261119.json",
-      "sha256": "f3e951e91ac2c671d42f15b13ae36c93117d0689c32710885599763da6ab5e42",
-      "bytes": 27619
+      "sha256": "9a4e3df55d52ae0bb36951f6ba49e5a7c3ab804d2c6148f1f0273a598798cc66",
+      "bytes": 27610
     },
     {
       "path": "checks/owner-unlimited-quota-validation-20261119.json",
@@ -332,6 +332,16 @@
       "path": "checks/wait-user-main-merge-20261119.json",
       "sha256": "cf3d36f05ff535a592ce488a916f66629cae84621906f672fcfe2bb193dddb44",
       "bytes": 3522
+    },
+    {
+      "path": "checks/windows-files-fixture-validation-20261119.json",
+      "sha256": "9f6f11fae76b38285e320bef87e6ba27ff2f4e96212070afdebc34f30858a6ca",
+      "bytes": 10585
+    },
+    {
+      "path": "checks/windows-files-main-merge-validation.json",
+      "sha256": "d74f8c6442dee6a92652e06810ebc153dc6f1ff2718c883340a966b891c6d824",
+      "bytes": 592
     },
     {
       "path": "checks/ztui-frame-benchmark-20261119.json",

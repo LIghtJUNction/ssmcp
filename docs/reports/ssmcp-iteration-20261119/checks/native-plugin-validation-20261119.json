@@ -573,7 +573,7 @@
     "        156 │ +native file payload",
     "        157 │ +native file payload",
     "[SAVE] workspace diff saved 210050 bytes · 10003 lines",
-    "       /tmp/ssmcp-native-files-3478681-2/output/output-473007dd6adabe54fc6458b14404ee11.log",
+    "       <isolated-files-fixture>/output/output-473007dd6adabe54fc6458b14404ee11.log",
     "       artifact 473007dd6adabe54fc6458b14404ee11 · outputs.read",
     "[SAVE] workspace diff preview folded; full diff: outputs.read · 473007dd6adabe54fc6458b14404ee11",
     "[READ] workspace large.txt",
