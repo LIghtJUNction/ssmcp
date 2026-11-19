@@ -40,6 +40,7 @@ type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 const HELP: &str = "ssmcp 007 — minimal Linux recovery and session control
 Usage:
   ssmcp 007 install [--server URL] [--name NAME] [--cwd DIR] [--client PATH] [--dry-run]
+  ssmcp 007 upgrade [--dry-run] [--json]
   ssmcp 007 start|stop|status|uninstall [--json]
   ssmcp 007 run
   ssmcp 007 sessions [list|status|start|close|restart|remove] [NAME]
@@ -226,6 +227,7 @@ impl Control {
     fn status(&self) -> Value {
         json!({
             "mode":"007", "version":env!("CARGO_PKG_VERSION"),
+            "wire_version":VERSION,
             "pid":std::process::id(), "name":self.config.name, "server":self.config.server,
             "workspace":self.config.cwd, "uptime_secs":self.started.elapsed().as_secs(),
             "session_directory":self.root.join("sessions"),
@@ -603,7 +605,7 @@ async fn connect(control: Arc<Control>) -> Result<()> {
                         // Source-audit observation must not start a runtime or interrupt recovery.
                         completion.validate()?;
                     }
-                    Some(Frame::Reject { .. }) => return Err("007 registration rejected; check authorization and relay version".into()),
+                    Some(Frame::Reject { message }) => return Err(format!("007 registration rejected: {}", safe_error(&message)).into()),
                     Some(_) => return Err("unexpected 007 protocol frame".into()),
                     None => {}
                 }
@@ -616,6 +618,8 @@ async fn connect(control: Arc<Control>) -> Result<()> {
 fn record(root: &Path, mut value: Value) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static WARNED: AtomicBool = AtomicBool::new(false);
+    value["version"] = json!(env!("CARGO_PKG_VERSION"));
+    value["wire_version"] = json!(VERSION);
     value["observed_at"] = json!(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -627,6 +631,23 @@ fn record(root: &Path, mut value: Value) {
     {
         eprintln!("ssmcp 007: state cache unavailable; recovery connection continues");
     }
+}
+
+fn safe_error(message: &str) -> String {
+    let redacted = crate::audit::event(json!({"message":message}));
+    let mut text = redacted["message"]
+        .as_str()
+        .unwrap_or("007 connection failed")
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(1024)
+        .collect::<String>();
+    let mut end = text.len().min(1024);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text
 }
 
 fn backoff(attempt: u32, entropy: u8) -> Duration {
@@ -652,7 +673,7 @@ async fn run() -> Result<()> {
     loop {
         record(
             &control.root,
-            json!({"state":"connecting","pid":std::process::id()}),
+            json!({"state":"connecting","pid":std::process::id(),"last_error":previous_error}),
         );
         let started = Instant::now();
         let result = tokio::select! {
@@ -665,11 +686,11 @@ async fn run() -> Result<()> {
         }
         let message = result
             .err()
-            .map(|error| error.to_string())
+            .map(|error| safe_error(&error.to_string()))
             .unwrap_or_default();
         if previous_error != message {
             eprintln!("ssmcp 007: {message}; reconnecting automatically");
-            previous_error = message;
+            previous_error = message.clone();
         }
         let mut entropy = [0];
         crate::platform::random_bytes(&mut entropy)?;
@@ -677,7 +698,7 @@ async fn run() -> Result<()> {
         attempt = attempt.saturating_add(1);
         record(
             &control.root,
-            json!({"state":"reconnecting","retry_after_ms":delay.as_millis(),"pid":std::process::id()}),
+            json!({"state":"reconnecting","retry_after_ms":delay.as_millis(),"pid":std::process::id(),"last_error":message}),
         );
         tokio::select! {
             _ = interrupted.recv() => break,
@@ -695,6 +716,18 @@ async fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_errors_are_redacted_bounded_and_cannot_control_a_terminal() {
+        let error = format!(
+            "Authorization: Bearer raw-access-value\n{}\u{1b}[2J",
+            "界".repeat(2000)
+        );
+        let safe = safe_error(&error);
+        assert!(!safe.contains("raw-access-value"));
+        assert!(safe.len() <= 1024);
+        assert!(!safe.chars().any(char::is_control));
+    }
 
     #[test]
     fn retry_delay_is_bounded_and_grows() {
