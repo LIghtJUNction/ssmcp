@@ -911,7 +911,7 @@ def run(harness):
         owned_pids = [shell_pid] + ([] if external_pids else pids)
         harness.check(all(process_running(pid) for pid in owned_pids + external_pids),
                       f"{mode}: the shell, native provider and test jobs are alive before disconnect")
-        transcript = local_log(harness, label) + (harness.directory / "daemon.log").read_text(errors="replace")
+        transcript = local_log(harness, label) + (harness.directory / "account-router.log").read_text(errors="replace")
         harness.check(not any(value and value in transcript for value in harness.sensitive),
                       f"{mode}: account credentials and OAuth tokens never enter activity or daemon logs")
         old_access, old_client = harness.secret, harness.client_id
