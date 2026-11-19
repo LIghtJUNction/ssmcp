@@ -91,7 +91,7 @@ impl Definition {
     fn catalog(&self) -> Result<Vec<(Provider, Vec<Value>)>, String> {
         // An ephemeral ABI instance can read declarations on this thread. It
         // starts no async work and is destroyed here, before returning plain data.
-        let instance = self.instance()?;
+        let mut instance = self.instance()?;
         let bytes = instance.catalog().map_err(abi::error)?;
         abi::catalog(&bytes, self.id, self.providers)
     }
@@ -341,10 +341,18 @@ impl Drop for NativeHost {
 }
 
 fn next_number(next: &AtomicU64) -> Result<u64, String> {
-    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-        value.checked_add(1)
-    })
-    .map_err(|_| "native plugin request IDs exhausted".into())
+    // A small CAS loop keeps the declared MSRV and avoids the deprecated
+    // fetch_update spelling on newer toolchains.
+    let mut current = next.load(Ordering::Relaxed);
+    loop {
+        let following = current
+            .checked_add(1)
+            .ok_or("native plugin request IDs exhausted")?;
+        match next.compare_exchange_weak(current, following, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(current),
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 fn instance(

@@ -205,6 +205,14 @@ struct Ticket {
     results: Results,
     complete: bool,
 }
+impl Ticket {
+    fn finish(mut self, bytes: Vec<u8>) {
+        self.results
+            .borrow_mut()
+            .insert(self.id, Slot::Complete(bytes));
+        self.complete = true;
+    }
+}
 impl Drop for Ticket {
     fn drop(&mut self) {
         if !self.complete {
@@ -226,7 +234,7 @@ impl<P: NativePlugin> Adapter<P> {
         } else {
             return Err(Error::Busy);
         }
-        let mut ticket = Ticket {
+        let ticket = Ticket {
             id: request_id,
             results: self.results.clone(),
             complete: false,
@@ -238,11 +246,11 @@ impl<P: NativePlugin> Adapter<P> {
                 result,
             })
             .map_err(|_| Error::InvalidArgument)?;
-            ticket
-                .results
-                .borrow_mut()
-                .insert(request_id, Slot::Complete(bytes));
-            ticket.complete = true;
+            // Calling a consuming method captures the whole Drop guard in the
+            // future, rather than relying on disjoint field-capture analysis.
+            // Cancellation drops the same ticket that owns the pending slot;
+            // completion marks it before its destructor can remove that slot.
+            ticket.finish(bytes);
             Ok(())
         }))
     }
