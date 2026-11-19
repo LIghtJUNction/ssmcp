@@ -627,6 +627,10 @@ impl Options {
         {
             return Err("ssmcp local is a foreground OS-user session; omit destinations, account/SSH options, --allow, --daemon, --session-control and --list-tools".into());
         }
+        #[cfg(target_os = "linux")]
+        if let Some(settings) = &local {
+            settings.validate()?;
+        }
         if !local_mode && destination.is_none() && server.is_none() && !list_tools {
             destination = default_destination.map(str::to_owned);
         }
@@ -2417,6 +2421,35 @@ mod tests {
         assert!(options.relay.is_none());
         assert_eq!(options.title.as_deref(), Some("--server"));
         assert!(options.session_spec().is_err());
+        assert!(
+            Options::parse(
+                ["local", "--public-url", "https://workstation.local"].map(OsString::from)
+            )
+            .is_err()
+        );
+        for flags in [
+            [
+                "local",
+                "--public-url",
+                "https://workstation.local",
+                "--listen",
+                "127.0.0.1:8765",
+            ],
+            [
+                "local",
+                "--listen",
+                "127.0.0.1:8765",
+                "--public-url",
+                "https://workstation.local",
+            ],
+        ] {
+            assert!(
+                Options::parse(flags.map(OsString::from))
+                    .unwrap()
+                    .unwrap()
+                    .is_local()
+            );
+        }
         for flags in [
             vec!["local", "--server", "https://remote.example"],
             vec!["local", "--username", "alice"],

@@ -25,7 +25,8 @@ Run this Linux session without a remote server or GitHub login. Keep the
 terminal open. The displayed MCP URL uses one-time connection-code OAuth.
 
   --listen IP:PORT       Loopback listener (default 127.0.0.1:0, automatic port)
-  --public-url URL       HTTPS NAME.local origin of an existing local TLS proxy
+  --public-url URL       HTTPS NAME.local origin of an existing local TLS proxy;
+                         requires --listen with a fixed, nonzero port
   --name NAME            Device name
   --title TEXT           Session title
   --context-root PATH    Additional local context directory
@@ -52,6 +53,13 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.public_url.is_some() && self.listen.port() == 0 {
+            return Err("--public-url requires --listen with a fixed nonzero loopback port for the existing TLS reverse proxy".into());
+        }
+        Ok(())
+    }
+
     pub fn set_listen(&mut self, value: &str) -> Result<(), String> {
         let address: SocketAddr = value
             .parse()
@@ -193,6 +201,7 @@ pub(super) struct Host {
 
 impl Host {
     pub async fn start(settings: &Settings) -> crate::Result<Self> {
+        settings.validate()?;
         if !settings.listen.ip().is_loopback() {
             return Err("local mode only binds loopback addresses".into());
         }
@@ -234,6 +243,10 @@ impl Host {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        command
+            .env_remove("SSMCP_RELAY_SERVER")
+            .env_remove("SSMCP_RELAY_TOKEN")
+            .env_remove("SSMCP_RELAY_CAPABILITIES");
         command
     }
 
@@ -327,6 +340,9 @@ mod tests {
             settings.public_url.as_deref(),
             Some("https://workstation.local:8443")
         );
+        assert!(settings.validate().is_err());
+        settings.set_listen("127.0.0.1:8765").unwrap();
+        settings.validate().unwrap();
     }
 
     #[tokio::test]
