@@ -343,6 +343,22 @@ class UserWait(InputHistory):
         for secret in self.sensitive:
             self.check(secret.encode() not in front.transcript,
                        "automatic user-wait terminal output contains no owned credential")
+        # The integrated composer clears a draft, then asks for a second
+        # empty-input Ctrl-C. Follow that contract before checking shutdown.
+        self.focus_input(front)
+        front.resize(28, 120)
+        front.until(lambda shot: shot["size"] == [28, 120], "the exit confirmation viewport")
+        queued = self.queue()["queue"]
+        front.send(b"\x03")
+        self.wait_state(front, lambda state: not state["draft"]["text"],
+                        "Ctrl-C clears only the owned draft before exit")
+        self.check(front.process.poll() is None and self.queue()["queue"] == queued,
+                   "clearing the user-wait draft leaves the client and ordinary queue intact")
+        front.send(b"\x03")
+        front.until(lambda shot: "Press Ctrl+C again to exit" in text(shot),
+                    "the explicit exit confirmation")
+        self.check(front.process.poll() is None,
+                   "empty-input Ctrl-C warns before the user-wait client exits")
         final, restored = front.disconnect()
         self.check(not final["alternate_screen"] and restored == front.original_termios,
                    "the isolated user-wait terminal restores its own termios")
