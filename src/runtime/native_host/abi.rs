@@ -104,7 +104,10 @@ impl<P: NativePlugin> Descriptor<P> {
 }
 
 pub(super) fn descriptor<P: NativePlugin>() -> &'static zplugin::abi::Header {
-    &Descriptor::<P>::VALUE.header
+    // Promote the complete descriptor, not just its Header projection: zplugin
+    // validates the prefix and then reads the containing PluginDescriptor.
+    let descriptor: &'static zplugin::abi::PluginDescriptor = &Descriptor::<P>::VALUE;
+    &descriptor.header
 }
 
 #[derive(Serialize, Deserialize)]
