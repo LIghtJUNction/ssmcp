@@ -7,6 +7,7 @@ Requires Pillow and a monospace TrueType font; neither is used by the client.
 
 import argparse
 import json
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -33,21 +34,47 @@ def rgb(value, default):
     return (8 + 10 * (value - 232),) * 3
 
 
+@lru_cache(maxsize=4096)
+def glyph_mask(font, character):
+    mask = font.getmask(character, mode="L")
+    return mask.size, bytes(mask)
+
+
+def font_for_text(primary, fallback, text):
+    if fallback is not None:
+        # A Unicode noncharacter gives this font's missing-glyph template.
+        missing = glyph_mask(primary, "\U0010ffff")
+        if any(glyph_mask(primary, char) == missing for char in text):
+            fallback_missing = glyph_mask(fallback, "\U0010ffff")
+            if all(glyph_mask(fallback, char) != fallback_missing for char in text):
+                return fallback
+    return primary
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("snapshot", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--font", type=Path,
                         default=Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
+    parser.add_argument("--font-index", type=int, default=0,
+                        help="font face within a TrueType/OpenType collection")
+    parser.add_argument("--fallback-font", type=Path,
+                        help="font for characters missing from the primary font")
+    parser.add_argument("--fallback-font-index", type=int, default=0,
+                        help="fallback font face within a TrueType/OpenType collection")
     parser.add_argument("--size", type=int, default=18)
     args = parser.parse_args()
     snapshot = json.loads(args.snapshot.read_text())
     rows, cols = snapshot["size"]
     if not 1 <= rows <= 1000 or not 1 <= cols <= 1000:
         raise ValueError("snapshot size is outside the VT decoder bounds")
-    font = ImageFont.truetype(str(args.font), args.size)
+    font = ImageFont.truetype(str(args.font), args.size, index=args.font_index)
     bold_path = args.font.with_name(args.font.stem + "-Bold.ttf")
     bold = ImageFont.truetype(str(bold_path), args.size) if bold_path.is_file() else font
+    fallback = (ImageFont.truetype(str(args.fallback_font), args.size,
+                                   index=args.fallback_font_index)
+                if args.fallback_font is not None else None)
     cell_width = round(font.getlength("M"))
     cell_height = round(args.size * 1.55)
     padding = 24
@@ -73,10 +100,13 @@ def main():
             x, y = padding + col_index * cell_width, padding + row_index * cell_height
             draw.rectangle((x, y, x + cell_width - 1, y + cell_height - 1), fill=bg)
             if cell["text"] and not cell.get("continuation"):
-                glyphs.append((x, y, cell["text"], fg, bold if cell.get("bold") else font))
+                primary = bold if cell.get("bold") else font
+                glyph_font = font_for_text(primary, fallback, cell["text"])
+                baseline = y + 3 + primary.getmetrics()[0]
+                glyphs.append((x, baseline, cell["text"], fg, glyph_font))
     # A wide glyph spans its continuation cell, whose background must be drawn first.
     for x, y, value, fg, glyph_font in glyphs:
-        draw.text((x, y + 3), value, fill=fg, font=glyph_font)
+        draw.text((x, y), value, fill=fg, font=glyph_font, anchor="ls")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(args.output, optimize=True)
     print(f"{args.output}: {canvas.width}×{canvas.height}, {cols}×{rows} VT cells")

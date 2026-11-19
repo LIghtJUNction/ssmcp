@@ -371,9 +371,14 @@ impl Fixture {
         assert!(html.contains("<meta http-equiv=refresh"));
         assert!(!html.contains(GITHUB_SECRET));
         let href = html
-            .split("<a href=\"")
+            .split("<a ")
             .skip(1)
-            .filter_map(|link| link.split_once('"').map(|(href, _)| href))
+            .filter_map(|link| link.split_once('>').map(|(attributes, _)| attributes))
+            .filter_map(|attributes| {
+                attributes
+                    .split_whitespace()
+                    .find_map(|attribute| attribute.strip_prefix("href=\"")?.strip_suffix('"'))
+            })
             .find(|href| href.starts_with(&self.upstream))
             .expect("identity provider continuation link")
             .replace("&amp;", "&");

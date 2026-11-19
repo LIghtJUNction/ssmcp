@@ -108,16 +108,15 @@ def text(shot):
 
 
 def column(shot):
-    # The breadcrumb also names neighboring columns. Match the active name
-    # together with its position/count instead of accepting any visible name.
-    header = shot["rows"][0].partition("ssmcp  /  ")[2].split("  /  ", 1)[0]
-    match = re.search(
+    # Read the final exact page tuple, independently of the project title.
+    header = shot["rows"][0].split("│", 1)[0]
+    matches = list(re.finditer(
         r"\b(agents|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
         header, re.IGNORECASE,
-    )
-    if not match:
+    ))
+    if not matches:
         return None
-    name, position, count = match.groups()
+    name, position, count = matches[-1].groups()
     return name.lower(), int(position), int(count)
 
 
@@ -135,8 +134,12 @@ def left_rows(shot):
 
 
 def prompt_start(shot):
-    return next((index for index, row in enumerate(left_rows(shot))
-                 if row.startswith("─ To") or row.startswith("─ Editing")), None)
+    # The default recipient row has no label. Check the bottom composer itself.
+    rows = shot["size"][0]
+    if rows < 6:
+        return None
+    start = rows - (5 if rows >= 10 else 3)
+    return start if left_rows(shot)[start + 1].lstrip().startswith("❯") else None
 
 
 def prompt_text(shot):
@@ -147,6 +150,11 @@ def prompt_text(shot):
 def body_text(shot):
     start = prompt_start(shot)
     return "\n".join(left_rows(shot)[1:start]) if start is not None else ""
+
+
+def empty_composer_ready(shot):
+    return (shot["alternate_screen"] and column(shot) == ("conversation", 2, 8)
+            and "Message the agent" in prompt_text(shot) and not shot["hide_cursor"])
 
 
 def clear_draft(preview):
@@ -189,8 +197,9 @@ def main():
                              capture_output=True).returncode != 0,
               "init preserves an existing configuration")
         initial_config = config.read_text(encoding="utf-8")
-        check('theme = "dark"' in initial_config and 'layout = "chat"' in initial_config,
-              "new configuration defaults to the dark conversation layout")
+        check('theme = "dark"' in initial_config and 'layout = "chat"' in initial_config
+              and 'sidebar = false' in initial_config,
+              "new configuration defaults to the dark conversation without a sidebar")
         for name, theme, rows, cols in [("dark", None, 36, 120),
                                       ("light", "light", 36, 120),
                                       ("narrow", None, 18, 80)]:
@@ -211,7 +220,7 @@ def main():
             finally:
                 vt.close()
             check(column(shot) == ("conversation", 2, 8) and "❯" in prompt_text(shot)
-                  and "exit=0" in body_text(shot),
+                  and "done" in body_text(shot),
                   f"{name} layout shows the conversation column and its bottom composer")
             check("A quieter workspace" not in body_text(shot),
                   f"{name} conversation excludes background diagnostics")
@@ -233,46 +242,68 @@ def main():
             check(not initial["hide_cursor"] and initial["bracketed_paste"]
                   and not initial["application_cursor"] and not initial["application_keypad"],
                   "default keyboard modes belong to the visible composer")
-            check("Builder" in text(initial) and "Reviewer" in text(initial),
-                  "preview sidebar labels its two sample agents")
+            check("Reviewer" not in text(initial) and "│" not in text(initial),
+                  "the default conversation keeps the sidebar hidden")
+            account_row = left_rows(initial)[prompt_start(initial)]
+            check("example" in account_row and "0.75 GB" in account_row,
+                  "the composer still shows its account and remaining traffic")
             save_shot(args.out, "chat", initial)
+            preview.send(b"\x1bOR")
+            initial = preview.until(lambda s: "Builder" in text(s) and "Reviewer" in text(s)
+                                    and "│" in text(s), "the explicitly opened sample-agent sidebar")
+            check(column(initial) == ("conversation", 2, 8)
+                  and "Message the agent" in prompt_text(initial),
+                  "F3 exposes both sample agents while preserving the current page and composer")
 
-            check("exit=0" in body_text(initial)
-                  and "test client::ui::custom_colors" not in body_text(initial),
-                  "commands default to a compact row with the real exit status")
+            check("done" in body_text(initial)
+                  and "test client::ui::custom_colors" in body_text(initial)
+                  and "test client::audit_view::browse" in body_text(initial)
+                  and "Source retained in the code audit" not in body_text(initial),
+                  "completed commands show two result lines while longer output stays collapsed")
             check("src/client/terminal/events.rs" in body_text(initial)
-                  and "expanded = true" not in body_text(initial)
-                  and "expanded = false" not in body_text(initial),
-                  "diffs start as collapsed tool cards in the conversation")
+                  and "expanded = true" in body_text(initial)
+                  and "expanded = false" in body_text(initial)
+                  and "@@ -1 +1 @@" not in body_text(initial),
+                  "collapsed diff cards preview changes without showing the full hunk")
             command_row = next(index for index, row in enumerate(initial["rows"])
                                if "▸" in row and "cargo test --lib" in row)
             preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
-            expanded = preview.until(lambda s: "test client::ui::custom_colors" in body_text(s),
-                                     "click-expanded command output")
-            check("exit=0" in body_text(expanded), "expanded commands retain their status")
+            expanded = preview.until(lambda s: "Source retained in the code audit" in body_text(s),
+                                     "click-expanded command output beyond its two-line preview")
+            check("done" in body_text(expanded)
+                  and "test client::ui::custom_colors" in body_text(expanded)
+                  and "test client::audit_view::browse" in body_text(expanded),
+                  "expanded commands retain their completed status and original results")
+            check(sum(bool(line.strip()) for line in body_text(expanded).splitlines())
+                  > sum(bool(line.strip()) for line in body_text(initial).splitlines()),
+                  "explicit expansion reveals more content than the compact preview")
             save_shot(args.out, "command-expanded", expanded)
             command_row = next(index for index, row in enumerate(expanded["rows"])
                                if "▾" in row and "cargo test --lib" in row)
             preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
             collapsed = preview.until(lambda s: view(s, "conversation")
-                                      and "test client::ui::custom_colors" not in body_text(s),
-                                      "click-collapsed command output")
+                                      and "test client::ui::custom_colors" in body_text(s)
+                                      and "Source retained in the code audit" not in body_text(s),
+                                      "click-collapsed command output returning to its result preview")
             diff_row = next(index for index, row in enumerate(collapsed["rows"])
                             if "▸" in row and "src/client/terminal/events.rs" in row)
             preview.send(f"\x1b[<0;3;{diff_row + 1}M".encode())
             diff = preview.until(lambda s: view(s, "conversation")
                                  and "expanded = true" in body_text(s)
-                                 and "expanded = false" in body_text(s),
+                                 and "expanded = false" in body_text(s)
+                                 and "@@ -1 +1 @@" in body_text(s),
                                  "click-expanded diff with both source versions")
-            check("test client::ui::custom_colors" not in body_text(diff),
-                  "expanding a diff keeps the neighboring command collapsed")
+            check("test client::ui::custom_colors" in body_text(diff)
+                  and "Source retained in the code audit" not in body_text(diff),
+                  "expanding a diff keeps the neighboring command at its compact preview")
             save_shot(args.out, "diff-expanded", diff)
             diff_row = next(index for index, row in enumerate(diff["rows"])
                             if "▾" in row and "src/client/terminal/events.rs" in row)
             preview.send(f"\x1b[<0;3;{diff_row + 1}M".encode())
             preview.until(lambda s: view(s, "conversation")
                           and "src/client/terminal/events.rs" in body_text(s)
-                          and "expanded = false" not in body_text(s),
+                          and "expanded = false" in body_text(s)
+                          and "@@ -1 +1 @@" not in body_text(s),
                           "click-collapsed diff card")
             preview.send(b"\x1b")
             preview.until(lambda s: not s["hide_cursor"], "input focus after compact navigation")
@@ -284,10 +315,12 @@ def main():
             save_shot(args.out, "logs", raw)
             slash(preview, "/raw")
             preview.until(lambda s: column(s) == ("conversation", 2, 8)
-                          and "exit=0" in body_text(s)
+                          and "done" in body_text(s)
                           and "A quieter workspace" not in body_text(s)
-                          and "test client::ui::custom_colors" not in body_text(s)
-                          and "expanded = false" not in body_text(s),
+                          and "test client::ui::custom_colors" in body_text(s)
+                          and "Source retained in the code audit" not in body_text(s)
+                          and "expanded = false" in body_text(s)
+                          and "@@ -1 +1 @@" not in body_text(s),
                           "raw toggle restoring the conversation and collapsed cards")
             check(True, "/raw opens Logs and restores the source column without expanding its cards")
 

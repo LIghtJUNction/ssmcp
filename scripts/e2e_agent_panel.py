@@ -21,7 +21,8 @@ import sys
 import tempfile
 import time
 
-from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT
+from e2e_composer import Composer, DOWN, ENTER, ESC, HOME
+from e2e_client_ui import column, empty_composer_ready
 from e2e_dashboard import sha256, text
 
 
@@ -50,7 +51,7 @@ class AgentPanel(Composer):
         path = self.directory / f"{name}.toml"
         path.write_text(
             '[ui]\ndashboard=true\ncolor=true\nlog_format="pretty"\n'
-            'timestamps=false\nlayout="chat"\nsidebar=true\nsidebar_width=32\n'
+            'timestamps=false\nlayout="chat"\nsidebar=false\nsidebar_width=32\n'
             'panels=["agents", "queue"]\n',
             encoding="utf-8",
         )
@@ -109,8 +110,8 @@ class AgentPanel(Composer):
         roster = self.queue()["agents"]
         index = 1 + next(index for index, value in enumerate(roster)
                          if value["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * index + RIGHT)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot)
+        front.send(HOME + DOWN * index + ENTER)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"]
                     and "To · Builder" in text(shot), "the selected member's composer")
         state = self.ui("/display/conversation")
         self.check(state["target"] == member["agent_id"],
@@ -128,8 +129,10 @@ class AgentPanel(Composer):
         front = self.frontend("agent-panel", self.config("agent-panel"))
         self.oauth_login(front.credentials)
         front.resize(30, 160)
-        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
-                    "the isolated conversation composer")
+        front.until(empty_composer_ready, "the isolated conversation composer")
+        front.send(b"\x1bOR")
+        front.until(lambda shot: "│" in text(shot) and "Members" in text(shot),
+                    "the explicitly opened member sidebar")
 
         for _ in range(3):
             self.work(controller=CALLER)
@@ -141,7 +144,7 @@ class AgentPanel(Composer):
                    "observed callers do not fabricate authenticated session members")
         self.save_shot("callers", front)
         front.send(ESC)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot), "the original composer")
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"], "the original composer")
 
         members = []
         for role in ("Implementation", "Review"):
@@ -213,7 +216,7 @@ class AgentPanel(Composer):
         self.save_shot("narrow-models", front)
 
         front.send(ESC)
-        front.until(lambda shot: "ssmcp  /  activity" in text(shot), "the preserved composer")
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"], "the preserved composer")
         returned = self.ui("/display/conversation")
         self.check({key: returned[key] for key in composition} == composition,
                    "returning from the resized roster preserves the exact original composition")

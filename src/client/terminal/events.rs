@@ -2265,7 +2265,8 @@ mod tests {
             view.ingest_event(
                 "files",
                 &json!({"type": "ssmcp.file.read", "path": path}),
-                format!("[READ] {path}\n{detail}\n").as_bytes(),
+                format!("[READ] {path}\nfirst preview line\nsecond preview line\n{detail}\n")
+                    .as_bytes(),
             );
         }
         let retained = (view.events.len(), view.bytes);

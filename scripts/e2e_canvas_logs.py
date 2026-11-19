@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import tempfile
 
-from e2e_client_ui import Preview, column, logs_open, prompt_start, prompt_text, save_shot, text, view
+from e2e_client_ui import Preview, column, left_rows, logs_open, prompt_start, prompt_text, save_shot, text, view
 
 
 LEFT = b"\x1b[D"
@@ -69,8 +69,11 @@ def run(binary, decoder, output, checks):
             )
             check("Improve the client experience" in body(initial)
                   and "src/client/terminal/events.rs" in body(initial)
-                  and "exit=0" in body(initial)
-                  and "expanded = false" not in body(initial),
+                  and "done" in body(initial)
+                  and "test client::ui::custom_colors" in body(initial)
+                  and "Source retained in the code audit" not in body(initial)
+                  and "expanded = false" in body(initial)
+                  and "@@ -1 +1 @@" not in body(initial),
                   "conversation retains user messages and result summaries while tool and diff details start collapsed")
             check(DIAGNOSTIC not in text(initial),
                   "background diagnostics do not appear in the conversation")
@@ -271,7 +274,8 @@ def run_diff_login(binary, decoder, output, checks):
                    for row in body(shot).splitlines())
 
     def changes_visible(shot):
-        return "expanded = true" in body(shot) and "expanded = false" in body(shot)
+        return ("expanded = true" in body(shot) and "expanded = false" in body(shot)
+                and "@@ -1 +1 @@" in body(shot))
 
     with tempfile.TemporaryDirectory(prefix="ssmcp-canvas-diff-login-") as temporary:
         config = Path(temporary) / "config.toml"
@@ -338,7 +342,8 @@ def run_diff_login(binary, decoder, output, checks):
                                       "an independent duplicate conversation")
             expected_column = column(duplicate)
             expected_body = body(duplicate)
-            check("expanded = false" not in expected_body,
+            expected_recipient_row = left_rows(duplicate)[prompt_start(duplicate)]
+            check("expanded = false" in expected_body and "@@ -1 +1 @@" not in expected_body,
                   "a new conversation column starts with its own collapsed tool cards")
             for command in ["/login", "/login open", "/login copy", "/login link"]:
                 preview.send(b"\x01\x0b" + command.encode())
@@ -352,7 +357,8 @@ def run_diff_login(binary, decoder, output, checks):
                 )
                 check(command in prompt_text(rejected) and rejected["cursor"] == cursor
                       and not rejected["hide_cursor"] and column(rejected) == expected_column
-                      and body(rejected) == expected_body and "To · next caller" in text(rejected),
+                      and body(rejected) == expected_body
+                      and left_rows(rejected)[prompt_start(rejected)] == expected_recipient_row,
                       f"{command} is explicitly rejected in preview without changing draft, cursor, recipient or canvas")
             save_shot(output, "canvas-login-preview", rejected)
             preview.send(ALT_LEFT)
