@@ -1,0 +1,187 @@
+{
+  "schema": "ssmcp.007.live-upgrade-verification.v1",
+  "verified_at": "2026-11-19T21:17:24.218652+00:00",
+  "success": true,
+  "official_release": {
+    "tag": "v0.10.13",
+    "source_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+    "release_url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.13",
+    "release_id": 451914506,
+    "published_at": "2026-11-19T20:51:25Z",
+    "asset_url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.13/ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+    "asset_bytes": 9529375,
+    "asset_sha256": "b5042d0125a70356f83b2995453d377ae4ffcbb079aaade53abe896133fbf12b",
+    "workflow_run_id": 44610211292,
+    "workflow_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44610211292",
+    "workflow_conclusion": "success"
+  },
+  "candidate": {
+    "schema": "ssmcp.007.official-candidate.v1",
+    "captured_at": "2026-11-19T21:14:18.628969+00:00",
+    "release_url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.13",
+    "asset_url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.13/ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+    "archive_sha256": "b5042d0125a70356f83b2995453d377ae4ffcbb079aaade53abe896133fbf12b",
+    "archive_bytes": 9529375,
+    "archive_digest_matched_official_metadata": true,
+    "archive_member": "ssmcp",
+    "binary_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "binary_bytes": 12946488,
+    "version": "ssmcp 0.10.13",
+    "version_exit_code": 0,
+    "service_mutations": [],
+    "installation_performed": false
+  },
+  "upgrade": {
+    "unit": "ssmcp-007.service",
+    "success": true,
+    "previous_version": "0.7.4",
+    "source_version": "0.10.13",
+    "source_wire_version": 7,
+    "connection_state": "connected",
+    "candidate_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "configuration_preserved": true,
+    "sessions_preserved": true,
+    "unit_definition_preserved": true
+  },
+  "previous_image_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+  "backup": {
+    "sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+    "matches_previous": true,
+    "independent_file": true,
+    "retained": true,
+    "mode": "0o700"
+  },
+  "before": {
+    "schema": "ssmcp.007.live-readonly-summary.v1",
+    "captured_at": "2026-11-19T21:14:14.768230+00:00",
+    "read_only": true,
+    "service_mutations": 0,
+    "service_state": {
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "SubState": "running",
+      "UnitFileState": "enabled",
+      "NeedDaemonReload": "no"
+    },
+    "connection_state": "reconnecting",
+    "versions": {
+      "command": "0.10.12",
+      "running": null,
+      "running_wire": null,
+      "saved": "0.7.4"
+    },
+    "version_from_running_image": "0.7.4",
+    "saved_image_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+    "running_image_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+    "running_matches_saved": true,
+    "service_pid_stable": true,
+    "known_wire5_image_match": true,
+    "wire_version_directly_observed": null,
+    "saved_sessions": 10,
+    "loaded_session_units": 0,
+    "active_session_units": 0,
+    "session_snapshots_matching_manifest": 10,
+    "existing_image_backups": 0,
+    "saved_sessions_sha256": "808d88b7663bc14173a3c07e97c17fdfe0d5463ec6c434c815da28144ec45d83",
+    "existing_backups_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "preserved_config_and_unit_sha256": "9ea154bc9dc16f99aef6c3428239b16efdf5beee25b0d373f3c7aabca1cc68aa",
+    "collector_sha256": "f02627363794249d757e16d92c9500c0bbac1a1b28b30e24392537a1f156017d",
+    "comparison": {
+      "config_and_unit_preserved": true,
+      "saved_session_files_preserved": true,
+      "saved_session_count_before": 10,
+      "saved_session_count_after": 10,
+      "saved_session_process_identities_preserved": true,
+      "existing_backups_preserved": true,
+      "recovery_process_changed": false,
+      "recovery_image_changed": false
+    }
+  },
+  "after": {
+    "schema": "ssmcp.007.live-readonly-summary.v1",
+    "captured_at": "2026-11-19T21:17:23.986244+00:00",
+    "read_only": true,
+    "service_mutations": 0,
+    "service_state": {
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "SubState": "running",
+      "UnitFileState": "enabled",
+      "NeedDaemonReload": "no"
+    },
+    "connection_state": "connected",
+    "versions": {
+      "command": "0.10.13",
+      "running": "0.10.13",
+      "running_wire": 7,
+      "saved": "0.10.13"
+    },
+    "version_from_running_image": "0.10.13",
+    "saved_image_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "running_image_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "running_matches_saved": true,
+    "service_pid_stable": true,
+    "known_wire5_image_match": false,
+    "wire_version_directly_observed": 7,
+    "saved_sessions": 10,
+    "loaded_session_units": 0,
+    "active_session_units": 0,
+    "session_snapshots_matching_manifest": 10,
+    "existing_image_backups": 1,
+    "saved_sessions_sha256": "808d88b7663bc14173a3c07e97c17fdfe0d5463ec6c434c815da28144ec45d83",
+    "existing_backups_sha256": "48583c56559d6e56f49fc997416421dbe33b7daa17de0be6dac96fbfe16042b7",
+    "preserved_config_and_unit_sha256": "9ea154bc9dc16f99aef6c3428239b16efdf5beee25b0d373f3c7aabca1cc68aa",
+    "collector_sha256": "f02627363794249d757e16d92c9500c0bbac1a1b28b30e24392537a1f156017d",
+    "comparison": {
+      "config_and_unit_preserved": true,
+      "saved_session_files_preserved": true,
+      "saved_session_count_before": 10,
+      "saved_session_count_after": 10,
+      "saved_session_process_identities_preserved": true,
+      "existing_backups_preserved": true,
+      "recovery_process_changed": true,
+      "recovery_image_changed": true
+    }
+  },
+  "active_clients": {
+    "count_before": 11,
+    "all_original_connection_ids_present": true,
+    "all_original_process_identities_preserved": true
+  },
+  "daily_cli": {
+    "preserved": true,
+    "version": "0.10.12",
+    "sha256": "0e2de0037d5ce6ee1c724f1530b171655b8c72e311077619a7903af8ebcde8e3"
+  },
+  "mcp_verification": {
+    "rounds": 2,
+    "read_only_native_calls": 4,
+    "tools": [
+      "ssmcp.007.status",
+      "ssmcp.007.list"
+    ],
+    "same_client_id": true,
+    "same_pid": true,
+    "client_id_sha256": "a2b0005b19a387448bc4f5f74fbf00b05cbde60c1e5dc755676bc4ef7db80f4e",
+    "version": "0.10.13",
+    "wire_version": 7,
+    "saved_sessions_each_round": [
+      10,
+      10
+    ],
+    "uptime_secs_each_round": [
+      26,
+      32
+    ],
+    "all_native_calls_succeeded": true,
+    "still_connected_after_rounds": true
+  },
+  "scope": {
+    "targeted_service": "ssmcp-007.service",
+    "daily_client_installed_or_restarted": false,
+    "other_services_restarted": false,
+    "saved_sessions_started_or_stopped": false,
+    "production_server_redeployed": false,
+    "models_invoked": false
+  }
+}
