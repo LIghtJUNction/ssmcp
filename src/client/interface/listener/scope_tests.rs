@@ -201,3 +201,44 @@ async fn listener_local_delegation_shares_cursors_ack_and_unknown_state_without_
     let (next, next_token) = lease(&hub, &alice, None);
     assert!(hub.read_for(next, next_token, 0, alice).await.unwrap()["delivery"].is_null());
 }
+
+#[tokio::test]
+async fn listener_status_is_atomic_with_connection_generation() {
+    let hub = fixture();
+    let caller = remote("123", None);
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let switching = {
+        let hub = hub.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            for _ in 0..4096 {
+                hub.reset_for(Some("new_scope"), 8);
+                std::thread::yield_now();
+                hub.reset_for(Some("scope_fixture"), 7);
+            }
+        })
+    };
+    barrier.wait();
+    for _ in 0..4096 {
+        if let Ok(status) = hub.call_for(caller.clone(), json!({"op":"status"})).await {
+            assert_eq!(status["connection_id"], "scope_fixture");
+        }
+        std::thread::yield_now();
+    }
+    switching.join().unwrap();
+    assert_eq!(
+        hub.call_for(caller.clone(), json!({"op":"status"}))
+            .await
+            .unwrap()["connection_id"],
+        "scope_fixture"
+    );
+    hub.reset_for(Some("new_scope"), 8);
+    assert!(
+        hub.call_for(caller, json!({"op":"status"}))
+            .await
+            .unwrap_err()
+            .contains("listener_scope_expired")
+    );
+    assert_eq!(hub.snapshot()["connection_id"], "new_scope");
+}
