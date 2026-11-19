@@ -1,8 +1,7 @@
 //! Dashboard input belongs to its composer and navigation; fallback input uses the selected PTY.
 //! Ctrl-C disconnects outside bracketed paste; pasted binary bytes remain intact.
 use crate::{
-    pty::Terminal,
-    terminals::Terminals,
+    terminals::{Session as Terminal, Terminals},
     wire::{MAX_WRITE, Operation},
 };
 use std::{

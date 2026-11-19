@@ -1,5 +1,5 @@
 //! Independent interactive terminals owned by one authenticated connection.
-use crate::{output::OutputStore, pty::Terminal, wire::Operation};
+use crate::{backend::ztty, output::OutputStore, pty::Terminal as NativeTerminal, wire::Operation};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -11,9 +11,43 @@ use std::{
 const MAIN: &str = "main";
 pub(crate) const MAX_TERMINALS: usize = 16;
 
+enum SessionKind {
+    Native(Arc<NativeTerminal>),
+    Ztty(Arc<ztty::Terminal>),
+}
+
+/// One interactive session. The selected host owns its PTY and output lifecycle.
+pub struct Session {
+    inner: SessionKind,
+}
+impl Session {
+    fn native(terminal: Arc<NativeTerminal>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: SessionKind::Native(terminal),
+        })
+    }
+    fn ztty(terminal: Arc<ztty::Terminal>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: SessionKind::Ztty(terminal),
+        })
+    }
+    pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
+        match &self.inner {
+            SessionKind::Native(terminal) => terminal.perform(operation).await,
+            SessionKind::Ztty(terminal) => terminal.perform(operation).await,
+        }
+    }
+    pub async fn shutdown(&self) {
+        match &self.inner {
+            SessionKind::Native(terminal) => terminal.shutdown().await,
+            SessionKind::Ztty(terminal) => terminal.shutdown().await,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Entry {
-    terminal: Arc<Terminal>,
+    terminal: Arc<Session>,
     name: String,
     cwd: PathBuf,
 }
@@ -30,6 +64,8 @@ pub struct Terminals {
     shell: PathBuf,
     output: Arc<OutputStore>,
     state: Mutex<State>,
+    ztty: Option<Arc<ztty::Host>>,
+    opening: tokio::sync::Mutex<()>,
 }
 
 impl Terminals {
@@ -39,7 +75,12 @@ impl Terminals {
             return Err("terminal workspace must be a directory".into());
         }
         crate::client::terminal::register_session(MAIN, MAIN);
-        let terminal = Terminal::spawn_named_with_store(shell, &root, output.clone(), MAIN)?;
+        let terminal = Session::native(NativeTerminal::spawn_named_with_store(
+            shell,
+            &root,
+            output.clone(),
+            MAIN,
+        )?);
         let main = Entry {
             terminal,
             name: MAIN.into(),
@@ -49,6 +90,8 @@ impl Terminals {
             root,
             shell: shell.into(),
             output,
+            ztty: None,
+            opening: tokio::sync::Mutex::new(()),
             state: Mutex::new(State {
                 entries: BTreeMap::from([(MAIN.into(), main)]),
                 selected: MAIN.into(),
@@ -58,11 +101,54 @@ impl Terminals {
         }))
     }
 
+    pub(crate) async fn new_ztty(
+        program: &Path,
+        root: PathBuf,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let root = root.canonicalize()?;
+        if !root.is_dir() {
+            return Err("terminal workspace must be a directory".into());
+        }
+        let host = ztty::Host::start(program, &root, output.clone()).await?;
+        crate::client::terminal::register_session(MAIN, MAIN);
+        let terminal = match host.open(MAIN.into(), root.clone()).await {
+            Ok(terminal) => Session::ztty(terminal),
+            Err(error) => {
+                host.shutdown().await;
+                crate::client::terminal::close_session(MAIN);
+                return Err(error.into());
+            }
+        };
+        let main = Entry {
+            terminal,
+            name: MAIN.into(),
+            cwd: root.clone(),
+        };
+        Ok(Arc::new(Self {
+            root,
+            shell: crate::platform::default_shell(),
+            output,
+            ztty: Some(host),
+            opening: tokio::sync::Mutex::new(()),
+            state: Mutex::new(State {
+                entries: BTreeMap::from([(MAIN.into(), main)]),
+                selected: MAIN.into(),
+                next: 1,
+                closed: false,
+            }),
+        }))
+    }
+
+    pub(crate) fn ztty(&self) -> Option<Arc<ztty::Host>> {
+        self.ztty.clone()
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    pub fn get(&self, id: &str) -> Result<Arc<Terminal>, String> {
+    pub fn get(&self, id: &str) -> Result<Arc<Session>, String> {
         self.state()
             .entries
             .get(id)
@@ -70,11 +156,11 @@ impl Terminals {
             .ok_or_else(|| "unknown or closed terminal_id; use terminal.list".into())
     }
 
-    pub fn primary(&self) -> Arc<Terminal> {
+    pub fn primary(&self) -> Arc<Session> {
         self.get(MAIN).expect("main terminal exists until shutdown")
     }
 
-    pub fn selected(&self) -> Arc<Terminal> {
+    pub fn selected(&self) -> Arc<Session> {
         let state = self.state();
         state
             .entries
@@ -97,6 +183,11 @@ impl Terminals {
     }
 
     pub async fn resize_all(&self, rows: u16, cols: u16) -> Result<(), String> {
+        // A desktop ztty view owns its geometry; dashboard layout is independent.
+        // Explicit terminal.resize and ztty.session_resize still resize that PTY.
+        if self.ztty.is_some() {
+            return Ok(());
+        }
         let entries: Vec<_> = self.state().entries.values().cloned().collect();
         for entry in entries {
             let status = entry.terminal.perform(Operation::Status {}).await?;
@@ -113,7 +204,8 @@ impl Terminals {
         Ok(())
     }
 
-    fn open(&self, args: Value) -> Result<(String, Entry), String> {
+    async fn open(&self, args: Value) -> Result<(String, Entry), String> {
+        let _opening = self.opening.lock().await;
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Open {
@@ -143,36 +235,58 @@ impl Terminals {
                 "terminal cwd must be an existing directory inside the authorized workspace".into(),
             );
         }
-        let mut state = self.state();
-        if state.closed {
-            return Err("terminal manager is closed".into());
-        }
-        if state.entries.len() >= MAX_TERMINALS {
-            return Err(format!(
-                "at most {MAX_TERMINALS} interactive terminals may be open; close an existing terminal"
-            ));
-        }
-        let id = format!("pty-{:04}", state.next);
-        state.next += 1;
+        let id = {
+            let mut state = self.state();
+            if state.closed {
+                return Err("terminal manager is closed".into());
+            }
+            if state.entries.len() >= MAX_TERMINALS {
+                return Err(format!(
+                    "at most {MAX_TERMINALS} interactive terminals may be open; close an existing terminal"
+                ));
+            }
+            let id = format!("pty-{:04}", state.next);
+            state.next += 1;
+            id
+        };
         let name = args.name.unwrap_or_else(|| id.clone());
         crate::client::terminal::register_session(&id, &name);
-        let terminal =
-            match Terminal::spawn_named_with_store(&self.shell, &cwd, self.output.clone(), &id) {
-                Ok(terminal) => terminal,
-                Err(error) => {
-                    crate::client::terminal::close_session(&id);
-                    return Err(error.to_string());
-                }
-            };
+        let created = if let Some(host) = &self.ztty {
+            host.open(id.clone(), cwd.clone()).await.map(Session::ztty)
+        } else {
+            NativeTerminal::spawn_named_with_store(&self.shell, &cwd, self.output.clone(), &id)
+                .map(Session::native)
+                .map_err(|error| error.to_string())
+        };
+        let terminal = match created {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                crate::client::terminal::close_session(&id);
+                return Err(error);
+            }
+        };
         let entry = Entry {
             terminal,
             name,
             cwd,
         };
-        state.entries.insert(id.clone(), entry.clone());
-        if args.select {
-            state.selected = id.clone();
-            crate::client::terminal::select_session(&id);
+        let accepted = {
+            let mut state = self.state();
+            if state.closed {
+                false
+            } else {
+                state.entries.insert(id.clone(), entry.clone());
+                if args.select {
+                    state.selected = id.clone();
+                    crate::client::terminal::select_session(&id);
+                }
+                true
+            }
+        };
+        if !accepted {
+            entry.terminal.shutdown().await;
+            crate::client::terminal::close_session(&id);
+            return Err("terminal manager closed while opening the session".into());
         }
         Ok((id, entry))
     }
@@ -190,7 +304,7 @@ impl Terminals {
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         match name {
             "terminal.open" => {
-                let (id, entry) = self.open(args)?;
+                let (id, entry) = self.open(args).await?;
                 self.snapshot(&id, &entry).await
             }
             "terminal.list" => {
@@ -281,6 +395,9 @@ impl Terminals {
             crate::client::terminal::close_session(&id);
         }))
         .await;
+        if let Some(host) = &self.ztty {
+            host.shutdown().await;
+        }
     }
 
     pub fn management_tools() -> Vec<Value> {

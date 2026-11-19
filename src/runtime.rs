@@ -385,7 +385,7 @@ impl Runtime {
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }
-    pub fn terminal(&self) -> Arc<crate::pty::Terminal> {
+    pub fn terminal(&self) -> Arc<crate::terminals::Session> {
         self.backend.terminal()
     }
     pub fn terminals(&self) -> Arc<crate::terminals::Terminals> {

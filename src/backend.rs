@@ -3,18 +3,19 @@ pub mod cc;
 pub mod codex;
 pub mod events;
 mod lazy;
+mod mcp_stdio;
 pub mod opencode;
 pub mod pi;
 pub mod playwright;
 pub mod process;
 pub mod rpc;
 pub mod shell;
+pub(crate) mod ztty;
 
 use crate::{
     output::OutputStore,
-    pty::Terminal,
     registry::{Provider, RegisteredTool, Registry},
-    terminals::Terminals,
+    terminals::{Session as Terminal, Terminals},
     wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE, Operation},
 };
 use serde_json::{Value, json};
@@ -130,7 +131,11 @@ impl Backend {
         if let Some(observer) = &observer {
             output.set_observer(observer);
         }
-        let terminal = Terminals::new(shell_path, root.clone(), output.clone())?;
+        let terminal = if ztty::selected(shell_path) {
+            Terminals::new_ztty(shell_path, root.clone(), output.clone()).await?
+        } else {
+            Terminals::new(shell_path, root.clone(), output.clone())?
+        };
         let shell = shell::Shell::with_workspace(root, output.clone())?;
         let registry = Registry::new();
         registry.replace(
@@ -140,6 +145,10 @@ impl Backend {
         registry.replace(Provider::Exec, shell::Shell::tools())?;
         registry.replace(Provider::Ui, crate::client::interface::tools())?;
         registry.replace(Provider::Harnesses, lazy::tools())?;
+        if let Some(host) = terminal.ztty() {
+            registry.replace(Provider::Ztty, host.tools())?;
+            host.bind_registry(&registry);
+        }
         let backend = Arc::new(Self {
             terminal,
             observer,
@@ -373,6 +382,13 @@ impl Backend {
                 .call(&tool.native_name, arguments)
                 .await
                 .map(result),
+            Provider::Ztty => {
+                let host = self
+                    .terminal
+                    .ztty()
+                    .ok_or("ztty is not active; connect with --shell ztty")?;
+                host.call(&tool.native_name, arguments).await
+            }
             Provider::Harnesses => match tool.native_name.as_str() {
                 "ssmcp.harnesses.list" => {
                     if !arguments.as_object().is_some_and(|a| a.is_empty()) {
