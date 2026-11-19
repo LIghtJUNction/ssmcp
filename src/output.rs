@@ -1045,6 +1045,12 @@ pub(crate) fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
 
 /// Validate bounded canonical base64 and matching raster headers before forwarding.
 pub(crate) fn validate_image_content(value: &Value) -> Result<usize, String> {
+    decode_image_content(value).map(|bytes| bytes.len())
+}
+
+/// Share the validated bytes with the preview decoder instead of decoding the
+/// same base64 payload again. Header validation does not replace pixel limits.
+pub(crate) fn decode_image_content(value: &Value) -> Result<Vec<u8>, String> {
     if value["type"] != "image" {
         return Err("image content must have type=image".into());
     }
@@ -1070,7 +1076,7 @@ pub(crate) fn validate_image_content(value: &Value) -> Result<usize, String> {
     if image_mime_type(&decoded) != Some(mime) {
         return Err("image bytes do not match the declared raster MIME type".into());
     }
-    Ok(decoded.len())
+    Ok(decoded)
 }
 
 fn inline_image_result(value: &Value, policy: &Policy) -> bool {

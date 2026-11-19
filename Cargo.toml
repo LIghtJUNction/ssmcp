@@ -176,6 +176,7 @@ qrcodegen = "1.8.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 png = "0.18"
 memchr = "2.7"
+crc32fast = "1.5"
 getrandom = "0.3"
 libc = "0.2"
 miniz_oxide = "0.9.1"

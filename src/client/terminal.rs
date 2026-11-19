@@ -27,6 +27,7 @@ mod footer;
 mod guide;
 mod images;
 pub(crate) mod markdown;
+mod output_wait;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -2450,7 +2451,13 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             Ok(()) => {}
             Err(_) => break,
         }
-        std::thread::sleep(FRAME_INTERVAL);
+        if offset < pending.len() {
+            if output.output.wait_writable(FRAME_INTERVAL).is_err() {
+                break;
+            }
+        } else {
+            std::thread::sleep(FRAME_INTERVAL);
+        }
     }
     // RestoringOutput restores alternate-screen/input state and marks the
     // display inactive only after the worker has finished its bounded cleanup.
@@ -2651,6 +2658,19 @@ impl PhysicalOutput {
             handle: handle as isize,
             saved_mode,
         })
+    }
+}
+impl PhysicalOutput {
+    fn wait_writable(&self, timeout: Duration) -> io::Result<bool> {
+        #[cfg(unix)]
+        {
+            output_wait::writable(std::os::fd::AsRawFd::as_raw_fd(&self.file), timeout)
+        }
+        #[cfg(windows)]
+        {
+            std::thread::sleep(timeout);
+            Ok(true)
+        }
     }
 }
 impl Write for PhysicalOutput {

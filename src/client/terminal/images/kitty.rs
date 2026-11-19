@@ -28,6 +28,8 @@ const REJECTED_IMAGES: usize = 256;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 static NEXT_IMAGE: AtomicU32 = AtomicU32::new(0);
 
+mod source_png;
+
 pub(crate) struct Native {
     id: u32,
     pub(crate) width: u32,
@@ -50,6 +52,31 @@ impl Write for PngBuffer {
 }
 
 impl Native {
+    /// Reuse ordinary source PNGs only after the caller has decoded and checked
+    /// all pixels. Animation, color transforms and unfamiliar chunks retain the
+    /// existing conversion path, so this never changes their rendering semantics.
+    pub(crate) fn from_png(
+        decoded: &DynamicImage,
+        bytes: &[u8],
+        encoded: &str,
+    ) -> Option<Arc<Self>> {
+        let (width, height) = (decoded.width(), decoded.height());
+        if bytes.len() > PNG_BYTES || !source_png::compatible(bytes, width, height) {
+            return None;
+        }
+        Some(Self::from_encoded(width, height, encoded.to_owned()))
+    }
+
+    fn from_encoded(width: u32, height: u32, encoded: String) -> Arc<Self> {
+        let id = IMAGE_PREFIX | (NEXT_IMAGE.fetch_add(1, Ordering::Relaxed) % 65535 + 1);
+        Arc::new(Self {
+            id,
+            width,
+            height,
+            encoded,
+        })
+    }
+
     /// Called after the original image's dimension/output checks and outside
     /// the display lock. Try the original pixels first; a single bounded
     /// fallback keeps noisy images from increasing the retained payload budget.
@@ -105,13 +132,7 @@ impl Native {
             stream.finish().ok()?;
         }
         writer.finish().ok()?;
-        let id = IMAGE_PREFIX | (NEXT_IMAGE.fetch_add(1, Ordering::Relaxed) % 65535 + 1);
-        Some(Arc::new(Self {
-            id,
-            width,
-            height,
-            encoded: STANDARD.encode(buffer.0),
-        }))
+        Some(Self::from_encoded(width, height, STANDARD.encode(buffer.0)))
     }
 
     pub(crate) fn bytes(&self) -> usize {
