@@ -162,3 +162,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 ## Native cross-session candidates
 
 Use `messages.list()` for exact live client, Runtime session and native process-generation IDs. `messages.key()` then `messages.send()` supports one session, explicit targets, one process or one authorized global snapshot. `messages.read()` / `receive()` / `wait()` never consume; `messages.ack()` explicitly handles candidates. No model or command starts. Read `resources.read("ssmcp://messages")` or [the full messaging guide](session-messages.md) for private participant bindings, fixed retries, deadlines and byte limits.
+
+## Read the current session before continuing
+
+Use `history.recover(clientId)` for a read-only index of the current local conversation, workspace checkpoint, retained native jobs and audit/output references. It does not resume a conversation or replay historical requests. The structured index is at most 32 KiB; follow the original paginated sources for details. See [recovery and storage bounds](session-recovery.zh-CN.md).

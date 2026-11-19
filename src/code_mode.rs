@@ -146,6 +146,7 @@ impl AuditRun {
                 && !matches!(
                     name,
                     "ssmcp.client.capabilities"
+                        | "ssmcp.client.recover"
                         | "ssmcp.resources.list"
                         | "ssmcp.resources.templates"
                         | "ssmcp.resources.read"
@@ -1066,6 +1067,7 @@ mod tests {
             "ssmcp.ui.harness",
             "ssmcp.ui.messages",
             "ssmcp.client.capabilities",
+            "ssmcp.client.recover",
             "ssmcp.resources.list",
             "ssmcp.resources.templates",
             "ssmcp.resources.read",
@@ -1607,6 +1609,7 @@ mod tests {
     async fn history_helpers_route_metadata_search_and_reject_action_overrides() {
         let _guard = TESTS.lock().await;
         let output = run_code(r#"
+            const recovered = await history.recover('work',{recent_limit:0,job_limit:2});
             const list = await history.list('work',{limit:8});
             const metadata = await history.metadata('work',{id:'conversation_fixture'});
             const read = await history.read('work',{id:'conversation_fixture',offset:4,limit:1});
@@ -1616,9 +1619,15 @@ mod tests {
                 try { await history.search('work',args); }
                 catch (error) { rejected.push(error.message); }
             }
-            return {list,metadata,read,search,rejected,frozen:Object.isFrozen(history)};
+            return {recovered,list,metadata,read,search,rejected,frozen:Object.isFrozen(history)};
         "#).await.unwrap();
         let result = &output["result"];
+        assert_eq!(result["recovered"]["name"], "ssmcp.client.recover");
+        assert_eq!(result["recovered"]["id"], "work");
+        assert_eq!(
+            result["recovered"]["arguments"],
+            json!({"recent_limit":0,"job_limit":2})
+        );
         for action in ["list", "metadata", "read", "search"] {
             assert_eq!(result[action]["name"], "ssmcp.ui.history");
             assert_eq!(result[action]["id"], "work");

@@ -352,6 +352,37 @@ impl EventLog {
         self.changed.notify_waiters();
     }
 
+    /// Read only cursors and an existing capture reference, without copying events.
+    pub(crate) fn recovery_index(&self) -> Value {
+        let (start, end, retained, closed) = {
+            let buffer = self
+                .buffer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            (
+                buffer.entries.front().map_or(buffer.next, |entry| entry.0),
+                buffer.next,
+                buffer.entries.len(),
+                buffer.closed,
+            )
+        };
+        let archive = self
+            .archive
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let artifact = archive
+            .as_ref()
+            .and_then(|capture| capture.metadata())
+            .map(|metadata| {
+                json!({"id":metadata.id,"bytes":metadata.bytes,"complete":metadata.complete,
+                "expires_at_unix":metadata.expires_at_unix})
+            });
+        json!({"start_cursor":start,"end_cursor":end,"retained_events":retained,"closed":closed,
+            "artifact":artifact,"archive_error":archive.as_ref().is_some_and(|capture| capture.error().is_some()),
+            "read":{"tool":"ssmcp.audit.events","arguments":{"cursor":start.max(end.saturating_sub(16)),"max_events":16,"wait_ms":0}},
+            "snapshot_end_cursor":end,"scope":"current Runtime; source coverage follows audit events"})
+    }
+
     pub async fn read(&self, arguments: Value) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -662,5 +693,22 @@ mod tests {
             log.read(json!({"cursor":1,"wait_ms":5000})).await.unwrap()["closed"],
             true
         );
+    }
+
+    #[tokio::test]
+    async fn recovery_event_index_freezes_cursors_without_copying_or_consuming_events() {
+        let log = EventLog::create("recovery-events-fixture", None, AuditMode::default());
+        log.push(json!({"payload":"source-body-only"}));
+        let index = log.recovery_index();
+        assert_eq!(index["retained_events"], 1);
+        assert!(!index.to_string().contains("source-body-only"));
+        assert!(index["artifact"].is_null());
+        let page = log
+            .read(json!({"cursor":index["start_cursor"],"wait_ms":0}))
+            .await
+            .unwrap();
+        assert_eq!(page["events"].as_array().unwrap().len(), 1);
+        assert_eq!(page["end_cursor"], index["snapshot_end_cursor"]);
+        assert_eq!(log.recovery_index(), index);
     }
 }

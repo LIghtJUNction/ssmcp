@@ -2,6 +2,7 @@
 mod capabilities;
 pub mod hooks;
 mod plugins;
+mod recovery;
 use crate::catalog::{self, ToolDescriptor};
 use crate::rsync::Rsync;
 use crate::{
