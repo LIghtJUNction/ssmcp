@@ -155,13 +155,16 @@ impl Event {
         let summary = unstyled(&self.summary);
         let mut first = Vec::new();
         let mut last = VecDeque::new();
-        let mut errors = Vec::new();
+        let mut errors = VecDeque::new();
         let mut error_section = false;
         let mut source = false;
         let mut result = false;
         let mut count = 0;
         for line in plain.lines() {
             let mut text = heading(line);
+            if self.meta.diff && (text.starts_with("[DIFF]") || text.starts_with("@@ ")) {
+                continue;
+            }
             if let Some((tag, detail)) =
                 text.strip_prefix('[').and_then(|text| text.split_once(']'))
             {
@@ -216,15 +219,18 @@ impl Event {
                 last.pop_front();
             }
             last.push_back(text);
-            if error_section && errors.len() < 2 {
-                errors.push(text);
+            if error_section {
+                if errors.len() == 2 {
+                    errors.pop_front();
+                }
+                errors.push_back(text);
             }
         }
         let selected = if self.meta.status.is_some_and(Status::failed) {
             if errors.is_empty() {
                 last.into_iter().collect()
             } else {
-                errors
+                errors.into_iter().collect()
             }
         } else {
             first
@@ -239,9 +245,9 @@ impl Event {
         if !rows.is_empty() {
             rows.push(clip_plain(
                 if more {
-                    "… Enter expand"
+                    "… Click expand"
                 } else {
-                    "Enter expand"
+                    "Click expand"
                 },
                 width,
             ));
@@ -526,7 +532,9 @@ impl EventView {
             // Structured presentations keep their already-rendered cards and tables;
             // their text field is the plain fallback used for copying and history.
             meta.raw_message = true;
-            self.ingest_inner(text.as_bytes(), meta);
+            // Redact only the display copy; the native message stays intact.
+            let display = crate::audit::event(Value::String(text.to_owned()));
+            self.ingest_inner(display.as_str().unwrap_or_default().as_bytes(), meta);
         } else {
             self.ingest_inner(bytes, meta);
         }
@@ -1282,7 +1290,7 @@ impl EventView {
                         } else {
                             "muted"
                         };
-                        let prefix = if index == 0 { "⎿ " } else { "  " };
+                        let prefix = if index == 0 { "└ " } else { "  " };
                         let line = format!("{}{prefix}{line}", " ".repeat(indent));
                         rows.push((event.id, paint(&clip_plain(&line, width), tone, ui, false)));
                     }
@@ -1739,6 +1747,9 @@ mod tests {
             b"[DIFF] example.rs\n@@ -1 +1 @@\n-old value\n+new value\n",
         );
         assert_eq!(view.diff_mode(), DiffMode::Single);
+        let preview = view.render(120, 30, &plain_ui(), false).join("\n");
+        assert!(preview.contains("-old value") && preview.contains("+new value"));
+        assert!(!preview.contains("[DIFF]") && !preview.contains("@@ -1"));
         assert!(view.open());
         let retained = (view.events.len(), view.bytes);
         let single = view.render(120, 30, &plain_ui(), true);
@@ -1788,6 +1799,26 @@ mod tests {
         );
         assert!(rows.contains("Keep this user text."));
         assert!(!rows.contains("#request") && !rows.contains("old rows"));
+
+        let message = json!({
+            "type":"ssmcp.message",
+            "role":"assistant",
+            "text":"Authorization: Bearer ui-fixture-secret\nA public explanation remains visible."
+        });
+        let original = message.clone();
+        view.ingest_event(
+            "agent",
+            &message,
+            b"[AGENT] Progress\nAuthorization: [redacted]\nA public explanation remains visible.\n",
+        );
+        let rows = view.render(100, 30, &plain_ui(), false).join("\n");
+        assert!(!rows.contains("ui-fixture-secret"), "{rows}");
+        assert!(rows.contains("Authorization: [redacted]"), "{rows}");
+        assert!(
+            rows.contains("A public explanation remains visible."),
+            "{rows}"
+        );
+        assert_eq!(message, original);
     }
 
     #[test]
@@ -1859,7 +1890,7 @@ mod tests {
         let done = view.render(100, 12, &plain_ui(), false).join("\n");
         assert!(done.contains("bash -lc · 2 lines · done"), "{done}");
         assert!(done.contains("first-result") && done.contains("second-result"));
-        assert!(done.contains("Enter expand"));
+        assert!(done.contains("Click expand"));
         for hidden in [
             "exit=0",
             "third-result",
@@ -1924,7 +1955,7 @@ mod tests {
             let rendered = preview.render(100, 8, &plain_ui(), false).join("\n");
             assert!(rendered.contains(expected), "{rendered}");
             assert!(
-                !rendered.contains("Enter expand"),
+                !rendered.contains("Click expand"),
                 "no output yet: {rendered}"
             );
             assert_eq!(preview.events[0].text, summary);
@@ -1956,7 +1987,7 @@ mod tests {
             view.ingest_event(
                 "shell",
                 &outcome,
-                b"[ERR ] shell exit=7\n[STDERR] shell #abc\ndiagnostic-detail\nretry-detail\nfull-tail\n",
+                b"[ERR ] shell exit=7\n[STDERR] shell #abc\nwarning: cache unavailable\nwarning: retry exhausted\nfatal: failed to load configuration\n\n",
             );
             view.set_scope(EventScope::Conversation);
             let ui = Ui::default();
@@ -1967,15 +1998,26 @@ mod tests {
                 "{plain}"
             );
             assert!(!plain.contains("shell #abc") && !plain.contains(" · done"));
-            assert!(plain.contains("diagnostic-detail") && plain.contains("retry-detail"));
-            for hidden in ["warming up", "full-tail", "[STDERR]", "[ERR"] {
+            assert!(
+                plain.contains("warning: retry exhausted")
+                    && plain.contains("fatal: failed to load configuration"),
+                "{plain}"
+            );
+            for hidden in [
+                "warming up",
+                "warning: cache unavailable",
+                "[STDERR]",
+                "[ERR",
+            ] {
                 assert!(!plain.contains(hidden), "unexpected {hidden}: {plain}");
             }
             assert!(rendered.contains(&ui.color(tone)), "{rendered:?}");
             view.open();
             let expanded = view.render(100, 12, &plain_ui(), true).join("\n");
             assert!(
-                expanded.contains("diagnostic-detail") && expanded.contains("full-tail"),
+                expanded.contains("warning: cache unavailable")
+                    && expanded.contains("warning: retry exhausted")
+                    && expanded.contains("fatal: failed to load configuration"),
                 "{expanded}"
             );
         }
@@ -2035,7 +2077,7 @@ mod tests {
         assert_eq!(view.hit_rows[result_row], Some(view.events[2].id));
         assert_eq!(view.hit_rows[result_row + 1], Some(view.events[2].id));
         assert_eq!(view.hit_rows[result_row + 2], Some(view.events[2].id));
-        assert!(rows[result_row + 2].contains("Enter expand"), "{rows:?}");
+        assert!(rows[result_row + 2].contains("Click expand"), "{rows:?}");
         let collapsed = rows.join("\n");
         assert!(collapsed.contains("first-result") && collapsed.contains("second-context"));
         assert!(!collapsed.contains("first-tail") && !collapsed.contains("second-tail"));
