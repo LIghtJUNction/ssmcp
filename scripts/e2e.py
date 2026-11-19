@@ -323,8 +323,8 @@ class Harness:
             await fs.writeText(id, {path:"workspace-check/AGENTS.md",text:"Parent rule.\n"});
             await fs.writeText(id, {path:"workspace-check/nested/agents.md",text:"Nested rule.\n"});
             const roots = await context.roots(id);
-            const index = await skills.list(id);
-            const view = await skills.view(id);
+            const index = await skills.list(id, {root:"workspace"});
+            const view = await skills.view(id, {root:"workspace"});
             const full = await skills.read(id, {path:"skills/ssh-skill/SKILL.md"});
             const rules = await agents.resolve(id, {path:"workspace-check/nested/new.rs"});
             const instruction = await agents.read(id, {path:"workspace-check/AGENTS.md"});
@@ -362,9 +362,29 @@ class Harness:
                    == ["Parent rule.\n", "Nested rule.\n"]
                    and result["instruction"]["content"] == "Parent rule.\n",
                    f"{label}: AGENTS resolution keeps parent-to-target order and exact text")
+        expected_client = client_id or self.client_id
+        for resource_key, native_key, field, kind in (
+            ("skillResource", "index", "skills", "skills"),
+            ("ruleResource", "rules", "files", "agents"),
+        ):
+            native = result[native_key]
+            expected = [
+                {
+                    **row,
+                    "readUri": f"ssmcp://clients/{expected_client}/{kind}/read?"
+                    + urlencode({"root": row.get("root", native["root"])["id"],
+                                 "path": row["path"]}),
+                }
+                for row in native[field]
+            ]
+            resource = result[resource_key]
+            self.check(resource["client"]["id"] == expected_client
+                       and resource["root"] == native["root"]
+                       and resource[field] == expected,
+                       f"{label}: dynamic {kind} resource preserves source metadata "
+                       "and binds content links to the exact client and root")
         resource_files = result["ruleResource"]["files"]
         native_files = result["rules"]["files"]
-        expected_client = client_id or self.client_id
         self.check(len(resource_files) == len(native_files),
                    f"{label}: the instruction resource preserves the native chain length")
         for resource_file, native_file in zip(resource_files, native_files):
