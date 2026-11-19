@@ -1,4 +1,4 @@
-//! OAuth authorization-code server for SSH login codes and provider identities.
+//! OAuth authorization-code server for connection login codes and provider identities.
 //!
 //! MCP 2026-07-28 authorization, RFC 7636, 8414, 8707, 9207, 9728 and 9700.
 //! No external metadata fetching: DCR is the advertised registration mechanism.
@@ -46,6 +46,7 @@ const MAX_ACCESS: usize = 8192;
 const MAX_REFRESH: usize = 65536;
 const MAX_BODY: usize = 32 * 1024;
 const COOKIE: &str = "__Host-ssmcp-oauth";
+const LOCAL_COOKIE: &str = "ssmcp-local-oauth";
 type Key = [u8; 32];
 type OResult<T> = Result<T, OAuthError>;
 
@@ -96,9 +97,17 @@ impl OAuthConfig {
 
 pub struct OAuth {
     issuer: String,
+    insecure_loopback: bool,
+    view: ViewContext,
     config: OAuthConfig,
     state: Arc<Mutex<Store>>,
     registry: Option<registry::Registry>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewContext {
+    Remote,
+    Local,
 }
 
 struct Store {
@@ -156,6 +165,7 @@ struct Transaction {
     busy: bool,
     provider_busy: bool,
     identity: Option<Identity>,
+    view: ViewContext,
 }
 
 #[derive(Clone)]
@@ -406,7 +416,7 @@ impl OAuthError {
         }
         response
     }
-    fn page(self, issuer: &str) -> Response {
+    fn page(self, issuer: &str, view: ViewContext) -> Response {
         if let Some(target) = self.redirect {
             return redirect(
                 &target,
@@ -420,6 +430,7 @@ impl OAuthError {
         (
             self.status,
             Html(page(
+                view,
                 "无法继续授权",
                 &format!(
                     "<p>{}</p><p class=muted>请返回 MCP 客户端重新连接。</p>",
@@ -441,6 +452,8 @@ impl OAuth {
         config.validate()?;
         Ok(Self {
             issuer: public_url.trim_end_matches('/').to_owned(),
+            insecure_loopback: false,
+            view: ViewContext::Remote,
             config,
             registry: None,
             state: Arc::new(Mutex::new(Store {
@@ -455,6 +468,40 @@ impl OAuth {
                 next_sweep: Instant::now(),
             })),
         })
+    }
+
+    /// Only the explicit local gateway may use a non-Secure cookie, and only
+    /// for an HTTP literal loopback origin. Remote constructors remain Secure.
+    pub(crate) fn for_local_origin(public_url: String) -> crate::Result<Self> {
+        let origin = local_origin(&public_url)?;
+        let mut oauth = Self::with_config(
+            origin.origin().ascii_serialization(),
+            OAuthConfig::default(),
+        )?;
+        oauth.insecure_loopback = origin.scheme() == "http";
+        oauth.view = ViewContext::Local;
+        Ok(oauth)
+    }
+
+    fn cookie_name(&self) -> &'static str {
+        if self.insecure_loopback {
+            LOCAL_COOKIE
+        } else {
+            COOKIE
+        }
+    }
+
+    fn consent_cookie(&self, csrf: &str) -> String {
+        let secure = if self.insecure_loopback {
+            ""
+        } else {
+            " Secure;"
+        };
+        format!(
+            "{}={csrf}; Path=/;{secure} HttpOnly; SameSite=Lax; Max-Age={}",
+            self.cookie_name(),
+            TRANSACTION_TTL.as_secs()
+        )
     }
 
     /// Enable durable registrations before accepting requests. Invalid files,
@@ -860,7 +907,7 @@ impl OAuth {
             return Err(OAuthError::capacity());
         }
         let transaction_id = random("tx_")?;
-        let csrf = cookie(headers)
+        let csrf = cookie(headers, self.cookie_name())
             .filter(|value| opaque(value, "csrf_"))
             .map(str::to_owned)
             .map_or_else(|| random("csrf_"), Ok)?;
@@ -877,6 +924,7 @@ impl OAuth {
             busy: false,
             provider_busy: false,
             identity: None,
+            view: self.view,
         };
         state
             .transactions
@@ -1004,6 +1052,7 @@ impl OAuth {
             },
         );
         let response = form_redirect(
+            self.view,
             &transaction.redirect,
             &self.issuer,
             &[("code", attempt.code.as_str())],
@@ -1178,6 +1227,7 @@ impl OAuth {
             state.pending_codes = state.pending_codes.saturating_sub(1);
         }
         let response = form_redirect(
+            self.view,
             &attempt.transaction.redirect,
             &self.issuer,
             &[
@@ -1621,14 +1671,53 @@ fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>,
     value.to_str().map(Some).map_err(|_| ())
 }
 
-fn cookie(headers: &HeaderMap) -> Option<&str> {
+/// Origins admitted by the explicit local mode, never by remote login setup.
+pub(crate) fn local_origin(value: &str) -> crate::Result<Url> {
+    if value.len() > 2048
+        || value
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return Err("local public URL must be a bounded origin without whitespace".into());
+    }
+    let url = Url::parse(value)?;
+    let host = url.host_str().ok_or("local public URL requires a host")?;
+    let loopback = host
+        .trim_matches(['[', ']'])
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|address| address.is_loopback());
+    let mdns = host.ends_with(".local")
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port_or_known_default() == Some(0)
+        || !((url.scheme() == "http" && loopback) || (url.scheme() == "https" && mdns))
+    {
+        return Err("local public URL must be HTTP on a literal loopback address or HTTPS on NAME.local, with no credentials, path, query or fragment".into());
+    }
+    Ok(url)
+}
+
+fn cookie<'a>(headers: &'a HeaderMap, expected_name: &str) -> Option<&'a str> {
     let mut found = None;
     for value in headers.get_all(header::COOKIE) {
         for part in value.to_str().ok()?.split(';') {
             let Some((name, value)) = part.trim().split_once('=') else {
                 continue;
             };
-            if name == COOKIE {
+            if name == expected_name {
                 if found.is_some() {
                     return None;
                 }
@@ -1682,7 +1771,12 @@ fn csp_callback_origin(uri: &str) -> Option<String> {
     Some(url.origin().ascii_serialization())
 }
 
-fn form_redirect(target: &RedirectTarget, issuer: &str, values: &[(&str, &str)]) -> Response {
+fn form_redirect(
+    view: ViewContext,
+    target: &RedirectTarget,
+    issuer: &str,
+    values: &[(&str, &str)],
+) -> Response {
     if csp_callback_origin(&target.uri).is_some() {
         return redirect(target, issuer, values);
     }
@@ -1692,6 +1786,7 @@ fn form_redirect(target: &RedirectTarget, issuer: &str, values: &[(&str, &str)])
     // code/state/iss reach the callback; the one-time login POST stays here.
     let callback = escape(callback_url(target, issuer, values).as_str());
     Html(page_with_head(
+        view,
         "连接已授权",
         &format!("<p>正在返回 MCP 客户端。</p><p><a class=button href=\"{callback}\" rel=noreferrer>返回客户端</a></p>"),
         &format!("<meta http-equiv=refresh content=\"0;url={callback}\">"),
@@ -1713,11 +1808,23 @@ fn escape(text: &str) -> String {
         .collect()
 }
 
-fn page(title: &str, content: &str) -> String {
-    page_with_head(title, content, "")
+fn page(view: ViewContext, title: &str, content: &str) -> String {
+    page_with_head(view, title, content, "")
 }
 
-fn page_with_head(title: &str, content: &str, extra_head: &str) -> String {
+fn page_with_head(view: ViewContext, title: &str, content: &str, extra_head: &str) -> String {
+    let (brand_open, brand_close, navigation) = match view {
+        ViewContext::Remote => (
+            r#"<a class="brand" href="/" aria-label="ssmcp 首页">"#,
+            "</a>",
+            r#"<a href="/">返回账户门户 <span aria-hidden="true">↗</span></a>"#,
+        ),
+        ViewContext::Local => (
+            r#"<span class="brand" aria-label="ssmcp 本地会话">"#,
+            "</span>",
+            "<span>本地会话 · 返回当前终端查看状态</span>",
+        ),
+    };
     format!(
         r###"<!doctype html>
 <html lang="zh-CN">
@@ -1731,7 +1838,7 @@ fn page_with_head(title: &str, content: &str, extra_head: &str) -> String {
 </head>
 <body>
 <header class="oauth-header container">
-<a class="brand" href="/" aria-label="ssmcp 首页"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="11" fill="#18251f"/><path d="M28 8H17a6 6 0 0 0 0 12h6a6 6 0 0 1 0 12H12" stroke="#c6ebd9" stroke-width="3" stroke-linecap="round"/><circle cx="28" cy="8" r="2.5" fill="#eff8f2"/><circle cx="12" cy="32" r="2.5" fill="#eff8f2"/></svg><span class="brand-name">ssmcp</span></a>
+{brand_open}<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="11" fill="#18251f"/><path d="M28 8H17a6 6 0 0 0 0 12h6a6 6 0 0 1 0 12H12" stroke="#c6ebd9" stroke-width="3" stroke-linecap="round"/><circle cx="28" cy="8" r="2.5" fill="#eff8f2"/><circle cx="12" cy="32" r="2.5" fill="#eff8f2"/></svg><span class="brand-name">ssmcp</span>{brand_close}
 <span class="header-label">YOUR MACHINE. YOUR WORKSPACE.</span>
 </header>
 <main class="oauth-shell" id="content" aria-labelledby="auth-title">
@@ -1739,7 +1846,7 @@ fn page_with_head(title: &str, content: &str, extra_head: &str) -> String {
 <h1 id="auth-title">{}</h1>
 <div class="auth-content">{content}</div>
 </main>
-<footer class="oauth-footer container"><p>your machine, connected.</p><a href="/">返回账户门户 <span aria-hidden="true">↗</span></a></footer>
+<footer class="oauth-footer container"><p>your machine, connected.</p>{navigation}</footer>
 </body>
 </html>"###,
         escape(title),
@@ -1798,6 +1905,7 @@ fn consent_page(
     if let Some(identity) = &transaction.identity {
         let count = count.map_or_else(String::new, |count| format!("<p>当前可用会话：{count}</p>"));
         return page(
+            transaction.view,
             "允许客户端连接？",
             &format!(
                 "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form class=consent-actions method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
@@ -1807,7 +1915,10 @@ fn consent_page(
         );
     }
     let mut choices = String::new();
-    for provider in providers {
+    for provider in providers
+        .iter()
+        .filter(|_| transaction.view == ViewContext::Remote)
+    {
         let label = match *provider {
             "github" => "GitHub",
             other => other,
@@ -1815,15 +1926,34 @@ fn consent_page(
         choices.push_str(&format!("<form method=post action=/oauth/authorize>{hidden}<button type=submit name=provider value=\"{}\">使用 {} 登录</button></form>", escape(provider), escape(label)));
     }
     if transaction.user != "mcp" {
-        choices.push_str(&format!("<p>也可粘贴本机 ssmcp 显示的一次性登录码，控制同一 SSH 账号下未设置 --allow 的会话。</p><form method=post action=/oauth/authorize>{hidden}<label for=login_code>一次性登录码</label><input id=login_code name=login_code type=password autocomplete=one-time-code minlength=64 maxlength=64 required spellcheck=false><button type=submit>使用登录码授权</button></form><p class=muted>登录码只使用一次。提供该登录码的 SSH 连接断开后，本次授权立即失效。设置了 --allow 的会话只接受其允许的第三方身份。</p>"));
+        let (instruction, lifetime) = match transaction.view {
+            ViewContext::Remote => (
+                "也可粘贴本机 ssmcp 显示的一次性登录码，控制同一本地系统用户下未设置 --allow 的会话。",
+                "登录码只使用一次。提供该登录码的连接断开后，本次授权立即失效。设置了 --allow 的会话只接受其允许的第三方身份。",
+            ),
+            ViewContext::Local => (
+                "此授权用于当前终端的本地会话，无需远程账号或 GitHub 登录。",
+                "登录码只使用一次。关闭当前终端或断开本次会话后，授权立即失效。",
+            ),
+        };
+        choices.push_str(&format!("<p>{instruction}</p><form method=post action=/oauth/authorize>{hidden}<label for=login_code>一次性登录码</label><input id=login_code name=login_code type=password autocomplete=one-time-code minlength=64 maxlength=64 required spellcheck=false><button type=submit>使用登录码授权</button></form><p class=muted>{lifetime}</p>"));
     } else if providers.is_empty() {
         choices.push_str("<p class=error>此服务器尚未配置身份提供方，请联系服务器管理员。</p>");
     }
-    page(
-        "连接你的会话",
-        &format!(
-            "<p>使用会话允许的账号登录，再确认是否授权此客户端。</p>{details}{error}{choices}"
+    let (title, instruction) = match transaction.view {
+        ViewContext::Remote => (
+            "连接你的会话",
+            "使用会话允许的账号登录，再确认是否授权此客户端。",
         ),
+        ViewContext::Local => (
+            "连接本地会话",
+            "在当前 ssmcp local 终端执行 /logs，复制本次会话的一次性登录码，授权此 MCP 客户端。",
+        ),
+    };
+    page(
+        transaction.view,
+        title,
+        &format!("<p>{instruction}</p>{details}{error}{choices}"),
     )
 }
 
@@ -1962,16 +2092,11 @@ async fn authorize(
             );
             response.headers_mut().insert(
                 header::SET_COOKIE,
-                HeaderValue::from_str(&format!(
-                    "{COOKIE}={}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={}",
-                    consent.csrf,
-                    TRANSACTION_TTL.as_secs()
-                ))
-                .unwrap(),
+                HeaderValue::from_str(&broker.oauth.consent_cookie(&consent.csrf)).unwrap(),
             );
             response
         }
-        Err(error) => error.page(&broker.oauth.issuer),
+        Err(error) => error.page(&broker.oauth.issuer, broker.oauth.view),
     }
 }
 
@@ -1981,9 +2106,9 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
             status: StatusCode::FORBIDDEN,
             ..OAuthError::invalid("Authorization form must be submitted from this origin")
         }
-        .page(&broker.oauth.issuer);
+        .page(&broker.oauth.issuer, broker.oauth.view);
     }
-    let csrf = cookie(request.headers()).map(str::to_owned);
+    let csrf = cookie(request.headers(), broker.oauth.cookie_name()).map(str::to_owned);
     let outcome = async {
         let bytes = body(request, "application/x-www-form-urlencoded").await?;
         let parameters = Parameters::parse(
@@ -2015,7 +2140,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
             // Finish the same-origin POST before navigating to the provider.
             // A 303 can inherit the original form-action CSP in some browsers.
             let location = escape(&location);
-            return Ok(Html(page_with_head("登录你的账号",
+            return Ok(Html(page_with_head(broker.oauth.view, "登录你的账号",
                 &format!("<p>正在前往登录页面。</p><p><a class=button href=\"{location}\" rel=noreferrer>继续登录</a></p>"),
                 &format!("<meta http-equiv=refresh content=\"0;url={location}\">"))).into_response());
         }
@@ -2072,7 +2197,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
     .await;
     match outcome {
         Ok(response) => response,
-        Err(error) => error.page(&broker.oauth.issuer),
+        Err(error) => error.page(&broker.oauth.issuer, broker.oauth.view),
     }
 }
 
@@ -2090,7 +2215,7 @@ async fn provider_callback(
             return Err(OAuthError::invalid("This identity provider is not configured"));
         }
         let parameters = Parameters::parse(query.as_deref().unwrap_or(""))?;
-        let csrf = cookie(&headers).ok_or_else(|| OAuthError::invalid(
+        let csrf = cookie(&headers, broker.oauth.cookie_name()).ok_or_else(|| OAuthError::invalid(
             "Authorization cookie is missing; restart the connection in the same browser"))?;
         let state = parameters.required("state")?;
         let attempt = match broker.oauth.take_provider_login(state, csrf, &provider) {
@@ -2145,7 +2270,7 @@ async fn provider_callback(
     }.await;
     match outcome {
         Ok(response) => response,
-        Err(error) => error.page(&broker.oauth.issuer),
+        Err(error) => error.page(&broker.oauth.issuer, broker.oauth.view),
     }
 }
 
@@ -2245,6 +2370,94 @@ impl OAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_http_cookies_are_scoped_and_remote_cookies_remain_secure() {
+        let local = OAuth::for_local_origin("http://127.0.0.1:43123".into()).unwrap();
+        let header = local.consent_cookie("csrf_fixture");
+        assert!(header.starts_with("ssmcp-local-oauth="));
+        assert!(header.contains("; HttpOnly; SameSite=Lax;"));
+        assert!(!header.contains("Secure"));
+        let secure = OAuth::for_local_origin("https://workstation.local".into()).unwrap();
+        assert!(
+            secure
+                .consent_cookie("csrf_fixture")
+                .starts_with("__Host-ssmcp-oauth=")
+        );
+        assert!(secure.consent_cookie("csrf_fixture").contains("; Secure;"));
+        let remote = OAuth::new("https://remote.example".into());
+        assert!(remote.consent_cookie("csrf_fixture").contains("; Secure;"));
+        // Merely passing HTTP to the existing constructor cannot opt into the
+        // browser-cookie exception. The explicit local constructor is required.
+        assert!(
+            OAuth::new("http://127.0.0.1:43123".into())
+                .consent_cookie("csrf_fixture")
+                .contains("; Secure;")
+        );
+        for invalid in [
+            "http://localhost:43123",
+            "http://192.0.2.1:80",
+            "https://remote.example",
+            "https://workstation.local/path",
+            "https://user@workstation.local",
+            "https://workstation.local?x=1",
+            "https://workstation.local#fragment",
+            "http://127.0.0.1:0",
+        ] {
+            assert!(
+                OAuth::for_local_origin(invalid.into()).is_err(),
+                "{invalid}"
+            );
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("__Host-ssmcp-oauth=remote; ssmcp-local-oauth=local"),
+        );
+        assert_eq!(cookie(&headers, local.cookie_name()), Some("local"));
+        assert_eq!(cookie(&headers, remote.cookie_name()), Some("remote"));
+    }
+
+    #[test]
+    fn local_consent_view_is_explicit_for_http_and_https_without_portal_links() {
+        for origin in ["http://127.0.0.1:43123", "https://workstation.local"] {
+            let oauth = OAuth::for_local_origin(origin.into()).unwrap();
+            let registered = ok(oauth.register(registration(true)));
+            let resource = format!("{origin}/alice");
+            let form = ok(oauth.begin_authorization(
+                &parameters(&[
+                    ("client_id", registered["client_id"].as_str().unwrap()),
+                    ("redirect_uri", CALLBACK),
+                    ("response_type", "code"),
+                    ("resource", &resource),
+                    ("code_challenge_method", "S256"),
+                    ("code_challenge", CHALLENGE),
+                ]),
+                &HeaderMap::new(),
+            ));
+            assert!(form.transaction.view == ViewContext::Local);
+            for error in [None, Some("Synthetic retry")] {
+                let html = consent_page(&form.id, &form.transaction, error, &[], None);
+                assert!(html.contains("连接本地会话"));
+                assert!(html.contains("/logs"));
+                assert!(html.contains("name=login_code"));
+                assert!(html.contains("本次会话后，授权立即失效"));
+                assert!(!html.contains("--allow"));
+                assert!(!html.contains("使用会话允许的账号登录"));
+                assert!(!html.contains("返回账户门户"));
+                assert!(!html.contains("href=\"/\""));
+            }
+            assert!(!page(oauth.view, "无法继续授权", "Synthetic error").contains("href=\"/\""));
+        }
+        let remote = OAuth::new(ISSUER.into());
+        let registered = ok(remote.register(registration(true)));
+        let form = consent(&remote, registered["client_id"].as_str().unwrap());
+        let html = consent_page(&form.id, &form.transaction, None, &["github"], None);
+        assert!(html.contains("使用会话允许的账号登录"));
+        assert!(html.contains("--allow"));
+        assert!(html.contains("返回账户门户"));
+        assert!(html.contains("href=\"/\""));
+    }
 
     fn github_identity(subject: &str, login: &str) -> Identity {
         Identity {
@@ -3161,8 +3374,13 @@ mod tests {
             uri: "http://[::1]:54321/callback".into(),
             state: Some("state & <angle>".into()),
         };
-        let response =
-            security_headers(form_redirect(&target, ISSUER, &[("code", "ac_test")])).await;
+        let response = security_headers(form_redirect(
+            ViewContext::Remote,
+            &target,
+            ISSUER,
+            &[("code", "ac_test")],
+        ))
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let policy = response.headers()["content-security-policy"]
             .to_str()

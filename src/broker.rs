@@ -367,6 +367,9 @@ pub struct Broker {
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
     pub client_downloads: Option<crate::client_downloads::Publisher>,
+    /// The foreground local host owns a private runner from the same binary.
+    /// Remote servers keep their installed runner and existing runtime checks.
+    pub(crate) code_mode_runner: Option<std::path::PathBuf>,
     management: Option<crate::management::State>,
     traffic_utc_offset_minutes: std::sync::atomic::AtomicI32,
     pub(crate) user_policies: Arc<crate::user_policy::UserPolicies>,
@@ -392,13 +395,38 @@ impl Broker {
         config: crate::oauth::OAuthConfig,
         github: Option<GitHubConfig>,
     ) -> crate::Result<Self> {
-        Ok(Self {
-            oauth: crate::oauth::OAuth::with_config(public_url.clone(), config)?,
-            identities: IdentityProviders::new(&public_url, github)?,
+        let oauth = crate::oauth::OAuth::with_config(public_url.clone(), config)?;
+        let identities = IdentityProviders::new(&public_url, github)?;
+        Ok(Self::with_authorization(public_url, oauth, identities))
+    }
+
+    /// A local gateway authorizes the OS user over a private Unix socket. Its
+    /// one-use OAuth grants still expire with the originating connection.
+    pub(crate) fn local(public_url: String) -> crate::Result<Self> {
+        let public_url = crate::oauth::local_origin(&public_url)?
+            .origin()
+            .ascii_serialization();
+        let oauth = crate::oauth::OAuth::for_local_origin(public_url.clone())?;
+        Ok(Self::with_authorization(
+            public_url,
+            oauth,
+            IdentityProviders::disabled(),
+        ))
+    }
+
+    fn with_authorization(
+        public_url: String,
+        oauth: crate::oauth::OAuth,
+        identities: IdentityProviders,
+    ) -> Self {
+        Self {
+            oauth,
+            identities,
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
             portal: crate::portal::Portal::default(),
             client_downloads: None,
+            code_mode_runner: None,
             management: None,
             user_policies: Arc::default(),
             traffic_utc_offset_minutes: std::sync::atomic::AtomicI32::new(
@@ -406,7 +434,7 @@ impl Broker {
             ),
             user_policy_updates: tokio::sync::Mutex::new(()),
             sessions: RwLock::new(HashMap::new()),
-        })
+        }
     }
 
     pub async fn authenticate(&self, user: &str, access_token: &str) -> Option<Authorization> {

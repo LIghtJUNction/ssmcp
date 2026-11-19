@@ -43,6 +43,7 @@ impl Traffic {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::client) enum Status {
+    Local,
     Loading,
     SignedOut,
     Unavailable,
@@ -137,6 +138,12 @@ impl Status {
 
     pub(in crate::client) fn rows(&self) -> [String; 2] {
         let (account, remaining) = match self {
+            Self::Local => {
+                return [
+                    " 本地会话  当前系统用户".into(),
+                    " 授权  /logs 查看 MCP 地址和一次性登录码".into(),
+                ];
+            }
             Self::Loading => ("加载中…".into(), "加载中…".into()),
             Self::SignedOut => ("未登录".into(), "未知".into()),
             Self::Unavailable => ("暂不可用".into(), "未知".into()),
