@@ -15,6 +15,19 @@ mod portable;
 #[cfg(not(target_os = "linux"))]
 pub use portable::Managed;
 
+/// Register only the real CLI, before Tokio starts. Library consumers retain
+/// the fork-only guardian; their executable need not implement our private mode.
+pub fn initialize() -> Option<std::process::ExitCode> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(code) = guardian::entry() {
+            return Some(std::process::ExitCode::from(code));
+        }
+        guardian::register_executable();
+    }
+    None
+}
+
 #[cfg(target_os = "linux")]
 pub struct Managed {
     pub child: Child,
@@ -31,11 +44,14 @@ impl Managed {
         command.kill_on_drop(false);
         let parent = std::process::id() as libc::pid_t;
         let max_fd = guardian::descriptor_limit()?;
+        let bootstrap = guardian::bootstrap();
+        let launch = bootstrap.as_ref().map(guardian::Bootstrap::launch);
         // SAFETY: guardian::prepare contains only stack data and libc operations.
         unsafe {
-            command.pre_exec(move || guardian::prepare(parent, max_fd));
+            command.pre_exec(move || guardian::prepare(parent, max_fd, launch));
         }
         let child = command.spawn()?;
+        drop(bootstrap);
         let pid = child
             .id()
             .ok_or_else(|| io::Error::other("child has no PID"))? as libc::pid_t;
@@ -162,7 +178,207 @@ fn exited(leader: &OwnedFd, wait: Duration) -> bool {
 /// This runs after std::process forks: no allocator, Rust locks, or atfork hooks.
 #[cfg(target_os = "linux")]
 mod guardian {
-    use std::io;
+    use std::{
+        ffi::OsStr,
+        io,
+        os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+        sync::OnceLock,
+    };
+
+    const ENTRY: &str = "__process_guardian";
+    static EXECUTABLE: OnceLock<OwnedFd> = OnceLock::new();
+
+    pub(super) struct Bootstrap {
+        executable: RawFd,
+        read: OwnedFd,
+        write: OwnedFd,
+    }
+
+    #[derive(Clone, Copy)]
+    pub(super) struct Launch {
+        executable: RawFd,
+        read: RawFd,
+        write: RawFd,
+    }
+
+    impl Bootstrap {
+        pub(super) fn launch(&self) -> Launch {
+            Launch {
+                executable: self.executable,
+                read: self.read.as_raw_fd(),
+                write: self.write.as_raw_fd(),
+            }
+        }
+    }
+
+    fn above_reserved(fd: OwnedFd) -> io::Result<OwnedFd> {
+        // Reserve 3 and 4 only inside the guardian. Normalizing in the parent
+        // avoids descriptor aliases even if its standard streams are closed.
+        let next = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 5) };
+        if next < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { OwnedFd::from_raw_fd(next) })
+    }
+
+    pub(super) fn register_executable() {
+        // Pin the running inode, including across atomic CLI upgrades. O_PATH
+        // also works for an executable that has no read permission.
+        let fd = unsafe { libc::open(c"/proc/self/exe".as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        if fd >= 0
+            && let Ok(fd) = above_reserved(unsafe { OwnedFd::from_raw_fd(fd) })
+        {
+            let _ = EXECUTABLE.set(fd);
+        }
+    }
+
+    pub(super) fn bootstrap() -> Option<Bootstrap> {
+        let executable = EXECUTABLE.get()?.as_raw_fd();
+        let mut fds = [-1; 2];
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return None;
+        }
+        let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+        Some(Bootstrap {
+            executable,
+            read: above_reserved(read).ok()?,
+            write: above_reserved(write).ok()?,
+        })
+    }
+
+    pub(super) fn entry() -> Option<u8> {
+        let mut args = std::env::args_os().skip(1);
+        if args.next().as_deref() != Some(OsStr::new(ENTRY)) {
+            return None;
+        }
+        let pid = |arg: Option<std::ffi::OsString>| {
+            arg?.to_str()?
+                .parse::<libc::pid_t>()
+                .ok()
+                .filter(|pid| *pid > 0)
+        };
+        let (Some(command), Some(parent)) = (pid(args.next()), pid(args.next())) else {
+            return Some(125);
+        };
+        if args.next().is_some() {
+            return Some(125);
+        }
+        // This is a fresh exec, so ordinary Rust startup allocations are safe.
+        // The private entry cannot supervise an arbitrary process: it must
+        // already be the session-leading subreaper and the command's parent.
+        unsafe {
+            let mut subreaper: libc::c_int = 0;
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            if libc::getsid(0) != libc::getpid()
+                || libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut subreaper, 0, 0, 0) != 0
+                || subreaper != 1
+                || libc::waitid(
+                    libc::P_PID,
+                    command as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT | libc::__WALL,
+                ) != 0
+            {
+                return Some(125);
+            }
+            let mut blocked: libc::sigset_t = std::mem::zeroed();
+            libc::sigfillset(&mut blocked);
+            if libc::sigprocmask(libc::SIG_SETMASK, &blocked, std::ptr::null_mut()) != 0 {
+                return Some(125);
+            }
+            release_command(4, command);
+            // A parent may have died during exec; the original loop must then
+            // reap the complete owned tree, rather than rejecting the entry.
+            supervise(command, parent, &blocked)
+        }
+    }
+
+    unsafe fn release_command(fd: RawFd, command: libc::pid_t) {
+        // A loader/entry failure must never allow the real command to fork
+        // descendants before this guardian is ready to supervise them.
+        unsafe {
+            let mut ready = false;
+            loop {
+                let written = libc::write(fd, b"R".as_ptr().cast(), 1);
+                if written == 1 {
+                    ready = true;
+                    break;
+                }
+                if written < 0 && *libc::__errno_location() == libc::EINTR {
+                    continue;
+                }
+                break;
+            }
+            libc::close(fd);
+            if !ready {
+                // The command has not been reaped, so this PID cannot be reused.
+                libc::kill(command, libc::SIGKILL);
+            }
+        }
+    }
+
+    unsafe fn await_ready(fd: RawFd) -> io::Result<()> {
+        unsafe {
+            let mut byte = 0_u8;
+            let result = loop {
+                let read = libc::read(fd, (&mut byte as *mut u8).cast(), 1);
+                if read < 0 && *libc::__errno_location() == libc::EINTR {
+                    continue;
+                }
+                break read;
+            };
+            libc::close(fd);
+            if result == 1 && byte == b'R' {
+                Ok(())
+            } else {
+                Err(io::Error::from_raw_os_error(libc::ECANCELED))
+            }
+        }
+    }
+
+    fn decimal_argument(pid: libc::pid_t, bytes: &mut [u8; 24]) -> *const libc::c_char {
+        let mut number = pid as u32;
+        let mut index = bytes.len() - 1;
+        bytes[index] = 0;
+        loop {
+            index -= 1;
+            bytes[index] = b'0' + (number % 10) as u8;
+            number /= 10;
+            if number == 0 {
+                return bytes[index..].as_ptr().cast();
+            }
+        }
+    }
+
+    unsafe fn exec_guardian(fd: RawFd, command: libc::pid_t, parent: libc::pid_t) {
+        let mut command_bytes = [0_u8; 24];
+        let mut parent_bytes = [0_u8; 24];
+        let argv = [
+            c"ssmcp".as_ptr(),
+            c"__process_guardian".as_ptr(),
+            decimal_argument(command, &mut command_bytes),
+            decimal_argument(parent, &mut parent_bytes),
+            std::ptr::null(),
+        ];
+        unsafe extern "C" {
+            static mut environ: *mut *mut libc::c_char;
+        }
+        // Keep the same PID, subreaper, signal mask, parent-death signal and
+        // standard streams. Only the inherited client address space is replaced.
+        // Preserve the original loader environment; no Rust allocation or lock
+        // is permitted between fork and this syscall. Errors use the old loop.
+        unsafe {
+            libc::syscall(
+                libc::SYS_execveat,
+                fd,
+                c"".as_ptr(),
+                argv.as_ptr(),
+                environ,
+                libc::AT_EMPTY_PATH,
+            );
+        }
+    }
 
     pub fn descriptor_limit() -> io::Result<libc::rlim_t> {
         // SAFETY: getrlimit initializes this local structure.
@@ -175,7 +391,11 @@ mod guardian {
         }
     }
 
-    pub fn prepare(parent: libc::pid_t, max_fd: libc::rlim_t) -> io::Result<()> {
+    pub fn prepare(
+        parent: libc::pid_t,
+        max_fd: libc::rlim_t,
+        launch: Option<Launch>,
+    ) -> io::Result<()> {
         // SAFETY: this is the single thread created by Command's fork. Every
         // operation until the command returns to exec is a libc syscall wrapper
         // or stack-only operation. In particular SYS_clone avoids libc atfork
@@ -220,29 +440,53 @@ mod guardian {
             if child == 0 {
                 // The actual command retains Command's CLOEXEC error pipe.
                 // Its exec failure therefore still fails Command::spawn.
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) < 0
-                    || libc::sigaction(libc::SIGCHLD, &original_child, std::ptr::null_mut()) != 0
-                    || libc::sigprocmask(libc::SIG_SETMASK, &original_mask, std::ptr::null_mut())
-                        != 0
-                {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) < 0 {
                     return Err(io::Error::last_os_error());
                 }
                 if libc::getppid() != owner {
                     libc::_exit(125);
+                }
+                if let Some(launch) = launch {
+                    libc::close(launch.write);
+                    await_ready(launch.read)?;
+                }
+                if libc::sigaction(libc::SIGCHLD, &original_child, std::ptr::null_mut()) != 0
+                    || libc::sigprocmask(libc::SIG_SETMASK, &original_mask, std::ptr::null_mut())
+                        != 0
+                {
+                    return Err(io::Error::last_os_error());
                 }
                 return Ok(());
             }
             // Closing the guardian's copy of the exec-error pipe is essential:
             // otherwise spawn waits for the entire job instead of only exec.
             // Also release every unrelated SSH, output, and reactor descriptor.
-            if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 0_u32) != 0 {
-                let mut fd = 3;
+            // The native command already has its own descriptor table. Reserve
+            // fd 3 for exec and fd 4 for the ready acknowledgment. All source
+            // descriptors were normalized above 4 before forking.
+            let helper = launch.is_some_and(|launch| {
+                libc::close(launch.read);
+                let copied = libc::dup3(launch.executable, 3, libc::O_CLOEXEC) == 3
+                    && libc::dup3(launch.write, 4, 0) == 4;
+                if !copied {
+                    release_command(launch.write, child as libc::pid_t);
+                }
+                copied
+            });
+            let first = if helper { 5_u32 } else { 3_u32 };
+            if libc::syscall(libc::SYS_close_range, first, u32::MAX, 0_u32) != 0 {
+                let mut fd = first as libc::c_int;
                 while (fd as libc::rlim_t) < max_fd {
                     libc::close(fd);
                     fd += 1;
                 }
             }
             libc::close(libc::STDIN_FILENO);
+            if helper {
+                exec_guardian(3, child as libc::pid_t, parent);
+                libc::close(3);
+                release_command(4, child as libc::pid_t);
+            }
             supervise(child as libc::pid_t, parent, &blocked)
         }
     }
