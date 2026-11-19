@@ -161,19 +161,27 @@ impl State {
             }
             _ => return Err("用法：/wait 或 /wait cancel <等待编号或唯一前缀>".into()),
         };
-        let text = panel::safe_text(&text);
+        self.chat_show_user_wait(&text, arguments.is_empty());
+        Ok(())
+    }
+
+    fn chat_show_user_wait(&mut self, text: &str, inspecting: bool) {
+        let text = text
+            .split('\n')
+            .map(panel::safe_text)
+            .collect::<Vec<_>>()
+            .join("\n");
         self.log_event(
             "user_wait",
             &json!({"type":"ssmcp.message","author":"User wait","text":text}),
             format!("\n[USER WAIT] {text}\n").as_bytes(),
         );
-        self.notice = Some(if arguments.is_empty() {
+        self.notice = Some(if inspecting {
             "等待状态已显示 · /wait cancel <唯一编号> 可取消等待".into()
         } else {
             text
         });
         self.dirty = true;
-        Ok(())
     }
 
     pub(super) fn chat_user_wait_hint(&self) -> Option<String> {
@@ -206,6 +214,15 @@ mod tests {
     use super::*;
     use crate::client::interface::user_wait::Completion;
     use crate::client::notification::{Reason, Report};
+
+    fn screen(state: &mut State) -> String {
+        let frame = state.chat_frame(Instant::now());
+        let rows = std::num::NonZeroU16::new(frame.geometry.rows).expect("nonzero frame rows");
+        let cols = std::num::NonZeroU16::new(frame.geometry.cols).expect("nonzero frame cols");
+        let mut parser = vt100::Parser::new(rows, cols, 0);
+        parser.process(&frame.diff(None));
+        parser.screen().contents()
+    }
 
     fn entry(id: &str, episode: &str, intent: Intent) -> Entry {
         Entry {
@@ -315,14 +332,6 @@ mod tests {
 
     #[test]
     fn user_wait_real_frame_keeps_wait_visible_with_a_draft_and_preserves_specific_controls() {
-        fn screen(state: &mut State) -> String {
-            let frame = state.chat_frame(Instant::now());
-            let rows = std::num::NonZeroU16::new(frame.geometry.rows).expect("nonzero frame rows");
-            let cols = std::num::NonZeroU16::new(frame.geometry.cols).expect("nonzero frame cols");
-            let mut parser = vt100::Parser::new(rows, cols, 0);
-            parser.process(&frame.diff(None));
-            parser.screen().contents()
-        }
         for width in [120, 48] {
             let mut state = super::super::super::preview_state(28, width, &Ui::default());
             state.events.clear();
@@ -402,6 +411,44 @@ mod tests {
             }
             assert!(!rendered.contains("等待你确认是否结束"));
             assert_eq!(state.conversation.composer.text(), original);
+        }
+    }
+
+    #[test]
+    fn user_wait_real_detail_frame_preserves_lines_and_escapes_terminal_controls() {
+        let mut active = entry("wait-lines", "same-episode", Intent::NeedUser);
+        active.reason = Some("Synthetic reason \u{1b}[2J\u{7}".into());
+        let snapshot = Snapshot {
+            connected: true,
+            active: vec![active],
+            ..Snapshot::default()
+        };
+        for width in [120, 48] {
+            let mut state = super::super::super::preview_state(28, width, &Ui::default());
+            state.events.clear();
+            state.conversation.composer.set_text("/wait");
+            state.chat_show_user_wait(&detail(&snapshot), true);
+            let rendered = screen(&mut state);
+            assert!(!rendered.contains("\\n"), "{rendered}");
+            assert!(
+                rendered.contains("\\x1b[2J") && rendered.contains("\\u{7}"),
+                "{rendered}"
+            );
+            let lines = rendered.lines().collect::<Vec<_>>();
+            let reason = lines
+                .iter()
+                .position(|line| line.contains("Synthetic reason"))
+                .expect("the reason is visible");
+            let wait_id = lines
+                .iter()
+                .position(|line| line.contains("#wait-lines"))
+                .expect("the precise wait ID is visible");
+            let notification = lines
+                .iter()
+                .position(|line| line.contains("未请求系统通知"))
+                .expect("the notification state is visible");
+            assert!(reason < wait_id && wait_id < notification, "{rendered}");
+            assert_eq!(state.conversation.composer.text(), "/wait");
         }
     }
 }
