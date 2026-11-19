@@ -1051,16 +1051,46 @@ impl LogoutOutcome {
 /// revocation unconfirmed. Callers must also close their in-memory connection.
 pub(super) async fn logout(server: Option<&str>) -> Result<LogoutOutcome> {
     let server = resolve_server(server)?;
-    logout_at(&state_root()?, &server).await
+    let Some(credential) = load_at(&state_root()?, Some(&server), true)? else {
+        return Ok(LogoutOutcome {
+            server,
+            status: LogoutStatus::NotSignedIn,
+        });
+    };
+    logout_connection(&server, &credential.token).await
 }
 
-async fn logout_at(root: &Path, server: &str) -> Result<LogoutOutcome> {
+/// A terminal must use the credential snapshot that opened its connection.
+/// A changed or missing saved login is refused without sending a revoke request.
+pub(super) async fn logout_connection(server: &str, expected_token: &str) -> Result<LogoutOutcome> {
+    if !valid_secret(expected_token) {
+        return Err("this connection has no valid original login credential".into());
+    }
+    let server = normalize_server(server)?;
+    logout_at(&state_root()?, &server, Some(expected_token)).await
+}
+
+async fn logout_at(
+    root: &Path,
+    server: &str,
+    expected_token: Option<&str>,
+) -> Result<LogoutOutcome> {
     let Some(credential) = load_at(root, Some(server), true)? else {
+        if expected_token.is_some() {
+            return Err(
+                "no saved login for this connection; remote revocation was not attempted".into(),
+            );
+        }
         return Ok(LogoutOutcome {
             server: server.into(),
             status: LogoutStatus::NotSignedIn,
         });
     };
+    if expected_token.is_some_and(|token| token != credential.token.as_str()) {
+        return Err(
+            "saved login changed; it was preserved and remote revocation was not attempted".into(),
+        );
+    }
     // Delete before the network await: cancellation or an offline server must
     // not retain this login, nor remove a new login saved while revoking it.
     match fs::remove_file(credential_path(root, &credential.server)) {
@@ -1925,7 +1955,7 @@ mod tests {
             let other = credential("https://other.example");
             save_at(&root, &other).unwrap();
 
-            let outcome = logout_at(&root, &server).await.unwrap();
+            let outcome = logout_at(&root, &server, None).await.unwrap();
             assert_eq!(outcome.server, server);
             assert_eq!(outcome.status, expected);
             assert_eq!(outcome.json()["logged_out"], true);
@@ -1953,7 +1983,7 @@ mod tests {
         let server = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
         save_at(&root, &credential(&server)).unwrap();
-        let outcome = logout_at(&root, &server).await.unwrap();
+        let outcome = logout_at(&root, &server, None).await.unwrap();
         assert_eq!(outcome.status, LogoutStatus::LocalOnly);
         assert!(
             outcome
@@ -1962,13 +1992,13 @@ mod tests {
         );
         assert!(!credential_path(&root, &server).exists());
         assert_eq!(selected_server(&root, None).unwrap(), server);
-        let repeated = logout_at(&root, &server).await.unwrap();
+        let repeated = logout_at(&root, &server, None).await.unwrap();
         assert_eq!(repeated.status, LogoutStatus::NotSignedIn);
         assert_eq!(repeated.json()["status"], "not_signed_in");
         assert_eq!(repeated.json()["logged_out"], true);
         let missing = root.join("missing");
         assert_eq!(
-            logout_at(&missing, &server).await.unwrap().status,
+            logout_at(&missing, &server, None).await.unwrap().status,
             LogoutStatus::NotSignedIn
         );
         assert!(!missing.exists());
@@ -1979,9 +2009,13 @@ mod tests {
     async fn logout_preserves_a_new_login_saved_during_revocation() {
         let root = temporary();
         let (server, task) = logout_fixture(&root, StatusCode::OK, true).await;
-        save_at(&root, &credential(&server)).unwrap();
+        let active = credential(&server);
+        save_at(&root, &active).unwrap();
         assert_eq!(
-            logout_at(&root, &server).await.unwrap().status,
+            logout_at(&root, &server, Some(&active.token))
+                .await
+                .unwrap()
+                .status,
             LogoutStatus::Revoked
         );
         assert_eq!(
@@ -1990,6 +2024,51 @@ mod tests {
         );
         task.abort();
         let _ = task.await;
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn connection_logout_refuses_replaced_or_missing_saved_logins() {
+        let root = temporary();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        let active_token = "a".repeat(64);
+        let mut replacement = credential(&server);
+        replacement.token = "b".repeat(64);
+        save_at(&root, &replacement).unwrap();
+        let path = credential_path(&root, &server);
+        let saved = fs::read(&path).unwrap();
+
+        let error = logout_at(&root, &server, Some(&active_token))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("saved login changed"));
+        assert!(error.contains("remote revocation was not attempted"));
+        assert!(!error.contains(&active_token));
+        assert!(!error.contains(&replacement.token));
+        assert_eq!(fs::read(&path).unwrap(), saved);
+        assert_eq!(selected_server(&root, None).unwrap(), server);
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+        );
+
+        fs::remove_file(&path).unwrap();
+        let error = logout_at(&root, &server, Some(&active_token))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no saved login for this connection"));
+        assert!(error.contains("remote revocation was not attempted"));
+        assert!(!path.exists());
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+        );
+        assert_eq!(
+            logout_at(&root, &server, None).await.unwrap().status,
+            LogoutStatus::NotSignedIn
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
