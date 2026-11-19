@@ -291,6 +291,23 @@ impl Workspace {
         tools
     }
 
+    /// Only local skill metadata discovery uses this presentation path. The
+    /// ordinary rooted read and complete native file audit still apply.
+    pub(crate) async fn read_metadata_for_completion(
+        &self,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<Value, String> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err("workspace is closed".into());
+        }
+        let root = self.root.clone();
+        let args = json!({"path": path, "max_bytes": max_bytes});
+        tokio::task::spawn_blocking(move || root.read_metadata_for_completion(args))
+            .await
+            .map_err(|error| error.to_string())?
+    }
+
     pub async fn perform(&self, name: &str, arguments: Value) -> Result<Value, String> {
         if self.closed.load(Ordering::Acquire) {
             return Err("workspace is closed".into());

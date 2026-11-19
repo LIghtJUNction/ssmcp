@@ -183,6 +183,36 @@ impl Context {
         tools
     }
 
+    /// Metadata discovery initiated by the local picker or reference resolver.
+    /// This entry point is not a native tool and cannot be enabled by JSON flags.
+    pub(crate) async fn local_skill_index(&self, args: Value) -> Result<Value, String> {
+        let args: ScanArgs = parse(args)?;
+        self.skill_list(&args, false, true).await
+    }
+
+    async fn skill_list(
+        &self,
+        args: &ScanArgs,
+        view: bool,
+        local_discovery: bool,
+    ) -> Result<Value, String> {
+        let (all, result) = if args.scope == SkillScope::Effective {
+            if args.root != "workspace" {
+                return Err("effective skills use workspace as the project root; omit root or select scope: root".into());
+            }
+            effective_skills(
+                &self.all_roots(),
+                args,
+                self.skill_sources.get(),
+                local_discovery,
+            )
+            .await?
+        } else {
+            scan_skills(self.root(&args.root)?, args, local_discovery).await?
+        };
+        skill_page(all, result, args, view)
+    }
+
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
         let value = match name {
             "ssmcp.context.status"
@@ -214,15 +244,7 @@ impl Context {
                     object.insert("scope".into(), json!("effective"));
                 }
                 let args: ScanArgs = parse(args)?;
-                let (all, result) = if args.scope == SkillScope::Effective {
-                    if args.root != "workspace" {
-                        return Err("effective skills use workspace as the project root; omit root or select scope: root".into());
-                    }
-                    effective_skills(&self.all_roots(), &args, self.skill_sources.get()).await?
-                } else {
-                    scan_skills(self.root(&args.root)?, &args).await?
-                };
-                skill_page(all, result, &args, view)?
+                self.skill_list(&args, view, false).await?
             }
             "ssmcp.skills.read" | "ssmcp.agents.read" => {
                 let args: ReadArgs = parse(args)?;
@@ -427,10 +449,17 @@ async fn bytes(
     workspace: &Workspace,
     path: &str,
     max_bytes: usize,
+    local_discovery: bool,
 ) -> Result<(Vec<u8>, u64, bool), String> {
-    let result = workspace
-        .perform("ssmcp.fs.read", json!({"path":path,"max_bytes":max_bytes}))
-        .await?;
+    let result = if local_discovery {
+        workspace
+            .read_metadata_for_completion(path, max_bytes)
+            .await?
+    } else {
+        workspace
+            .perform("ssmcp.fs.read", json!({"path":path,"max_bytes":max_bytes}))
+            .await?
+    };
     let data = STANDARD
         .decode(
             result["data_base64"]
@@ -452,7 +481,7 @@ async fn read_document(
     if max_bytes == 0 || max_bytes > MAX_DOCUMENT_BYTES {
         return Err(format!("max_bytes must be 1..={MAX_DOCUMENT_BYTES}"));
     }
-    let (data, size, eof) = bytes(workspace, path, max_bytes).await?;
+    let (data, size, eof) = bytes(workspace, path, max_bytes, false).await?;
     if !eof {
         return Err(format!(
             "{path} is {size} bytes and exceeds the {max_bytes}-byte full-document limit; no partial instruction content was returned"
@@ -465,11 +494,12 @@ async fn metadata_bytes(
     workspace: &Workspace,
     path: &str,
     budget: usize,
+    local_discovery: bool,
 ) -> Result<(Vec<u8>, u64, bool, usize, bool), String> {
     let mut limit = 512.min(budget).min(MAX_METADATA_BYTES);
     let mut spent = 0;
     loop {
-        let (data, size, eof) = bytes(workspace, path, limit).await?;
+        let (data, size, eof) = bytes(workspace, path, limit, local_discovery).await?;
         spent += data.len();
         let complete = eof || metadata_prefix_complete(&data);
         if complete || limit == MAX_METADATA_BYTES {
@@ -508,7 +538,11 @@ fn metadata_prefix_complete(data: &[u8]) -> bool {
     })
 }
 
-async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>, Value), String> {
+async fn scan_skills(
+    root: &ContextRoot,
+    args: &ScanArgs,
+    local_discovery: bool,
+) -> Result<(Vec<Value>, Value), String> {
     if args.max_depth > 8
         || args.max_nodes == 0
         || args.max_nodes > 4096
@@ -648,7 +682,12 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
                     continue;
                 }
                 if entry["kind"] == "directory" {
-                    if package {
+                    if package
+                        || matches!(
+                            name.to_ascii_lowercase().as_str(),
+                            ".trash" | ".archive" | ".cache"
+                        )
+                    {
                         continue;
                     }
                     if depth < args.max_depth {
@@ -683,7 +722,14 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
                         );
                         continue;
                     }
-                    match metadata_bytes(workspace, &path, MAX_SCAN_BYTES - read_bytes).await {
+                    match metadata_bytes(
+                        workspace,
+                        &path,
+                        MAX_SCAN_BYTES - read_bytes,
+                        local_discovery,
+                    )
+                    .await
+                    {
                         Ok((data, size, eof, spent, limited)) => {
                             read_bytes += spent;
                             if limited {
@@ -749,6 +795,7 @@ async fn effective_skills(
     roots: &[&ContextRoot],
     args: &ScanArgs,
     defaults: Option<&skill_sources::Sources>,
+    local_discovery: bool,
 ) -> Result<(Vec<Value>, Value), String> {
     let paths = args
         .paths
@@ -766,7 +813,7 @@ async fn effective_skills(
     let mut visited_nodes = 0;
     let mut metadata_bytes = 0;
     for root in roots {
-        let (mut candidates, scan) = scan_skills(root, args).await?;
+        let (mut candidates, scan) = scan_skills(root, args, local_discovery).await?;
         snapshots.push(scan["snapshot"].clone());
         truncated |= scan["truncated"] == true;
         visited_nodes += scan["limits"]["visited_nodes"].as_u64().unwrap_or(0);
@@ -1303,3 +1350,6 @@ fn escape_markdown(value: &str) -> String {
     }
     result
 }
+
+#[cfg(test)]
+mod completion_tests;
