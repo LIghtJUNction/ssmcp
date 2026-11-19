@@ -104,6 +104,14 @@ return await exec.run(clientId, {
 
 ## 终端就是工作会话
 
+### 只在本机运行
+
+Linux 上可以使用 `ssmcp local` 在当前项目启动本地 MCP 会话，无需远程服务器或 GitHub 登录。默认监听回环地址的可用端口；在终端执行 `/logs`，将本次 MCP 地址加入同机的 OAuth 客户端，并用其中的一次性登录码授权。终端会保持运行，退出后本次连接授权结束。
+
+已有 `.local` 名称解析和受信任的本机 HTTPS 反向代理时，可运行 `ssmcp local --listen 127.0.0.1:8765 --public-url https://workstation.local`。代理须指向该固定端口；命令不自动配置 mDNS、证书或防火墙。详见[本地运行与 `.local` 入口](docs/local-mode.md)。本段描述源码能力，安装版本是否包含该命令，以 `ssmcp local --help` 为准。
+
+### 对话与工具
+
 默认对话页收起侧栏，把主要空间留给正文和输入。你可以在工具运行期间补充要求，也可以指定某个已登记的 Agent 接收。账号与本月剩余流量显示在输入区上方，底部保留连接来源与操作提示。
 
 | 操作 | 用法 |
