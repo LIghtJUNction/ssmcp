@@ -2982,12 +2982,36 @@ mod tests {
         state.image(rejected, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert_eq!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["expanded"],
+            false,
+            "decoded images initially use thumbnails"
+        );
+        assert!(
+            state.events.open(),
+            "explicitly open before checking placement lifecycle"
+        );
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
         state.image(retained, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert_eq!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["expanded"],
+            false,
+            "decoded images initially use thumbnails"
+        );
+        assert!(
+            state.events.open(),
+            "explicitly open before checking placement lifecycle"
+        );
         let before = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let mut media = images::Renderer::default();
@@ -3024,7 +3048,19 @@ mod tests {
         state.image(next, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert_eq!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["expanded"],
+            false,
+            "decoded images initially use thumbnails"
+        );
+        assert!(
+            state.events.open(),
+            "explicitly open before checking placement lifecycle"
+        );
         let final_frame = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let (_, upload) = media.update(
@@ -3166,7 +3202,19 @@ mod tests {
         state.image(image, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert_eq!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["expanded"],
+            false,
+            "decoded images initially use thumbnails"
+        );
+        assert!(
+            state.events.open(),
+            "explicitly open before checking placement lifecycle"
+        );
         state.selection = true;
         let before = state.frame(now);
         let previous_cell = state.graphics.cell();
