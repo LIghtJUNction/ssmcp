@@ -51,27 +51,9 @@ def version(root=None):
 
 
 def publication_packages(root=None):
-    """Dependency-first workspace packages; independent versions do not follow the app."""
+    """Only this repository's application is published here."""
     root = root or ROOT
-    result = [("ssmcp", version(root))]
-    with (root / "Cargo.toml").open("rb") as stream:
-        dependency = tomllib.load(stream).get("dependencies", {}).get("ztui")
-    member = root / "crates/ztui/Cargo.toml"
-    if dependency is None and not member.is_file():
-        return result
-    if not member.is_file():
-        raise ValueError("ztui-core source is missing; initialize the pinned submodules recursively")
-    with member.open("rb") as stream:
-        core = tomllib.load(stream)
-    if core["package"]["name"] != "ztui-core" or core.get("lib", {}).get("name") != "ztui":
-        raise ValueError("the Project Z package must be ztui-core with library name ztui")
-    core_version = core["package"]["version"]
-    version_key(core_version)
-    if (not isinstance(dependency, dict) or dependency.get("package") != "ztui-core"
-            or dependency.get("path") != "crates/ztui"
-            or dependency.get("version") != "=" + core_version):
-        raise ValueError("ssmcp must pin its local ztui-core package by exact version")
-    return [("ztui-core", core_version), *result]
+    return [("ssmcp", version(root))]
 
 
 def registry_dependencies(root=None):
@@ -82,13 +64,14 @@ def registry_dependencies(root=None):
     dependencies = manifest.get("dependencies", {})
     result = []
     local = {}
-    for name in ("zplugin", "zharness"):
+    for name, package_name in (("zplugin", "zplugin"), ("zharness", "zharness"),
+                               ("ztuio", "ztuio")):
         dependency = dependencies.get(name)
         if dependency is None:
             continue
         expected_path = "crates/" + name
         if (not isinstance(dependency, dict)
-                or dependency.get("package", name) != name
+                or dependency.get("package", name) != package_name
                 or dependency.get("path") != expected_path
                 or not isinstance(dependency.get("version"), str)
                 or not dependency["version"].startswith("=")):
@@ -104,9 +87,11 @@ def registry_dependencies(root=None):
         source_version = package.get("version")
         if source_version == {"workspace": True}:
             source_version = local[name].get("workspace", {}).get("package", {}).get("version")
-        if package["name"] != name or source_version != release_version:
+        if package["name"] != package_name or source_version != release_version:
             raise ValueError(f"{name} source and exact dependency version differ")
-        result.append((name, release_version))
+        if name == "ztuio" and local[name].get("lib", {}).get("name", name) != name:
+            raise ValueError("the ztuio package must expose the ztuio library name")
+        result.append((package_name, release_version))
     if "zharness" in local:
         if "zplugin" not in local:
             raise ValueError("the local zharness integration requires the same pinned zplugin source")
@@ -294,7 +279,6 @@ def bump(level, root=None, *, custom_version=None, dry_run=False):
     old = version(root)
     # Validate every local dependency/lock entry before changing either app file.
     validate_package("v" + old, root)
-    packages = publication_packages(root)
     new = bumped_version(old, level, custom_version)
     manifest_path, lock_path = root / "Cargo.toml", root / "Cargo.lock"
     manifest, manifest_count = re.subn(
@@ -306,8 +290,6 @@ def bump(level, root=None, *, custom_version=None, dry_run=False):
     if manifest_count != 1 or lock_count != 1:
         raise ValueError("expected one matching ssmcp version in Cargo.toml and Cargo.lock")
     result = {"tag": "v" + new, "version": new, "dry_run": str(dry_run).lower()}
-    if packages[0][0] == "ztui-core":
-        result["ztui_core_version"] = packages[0][1]
     if not dry_run:
         manifest_path.write_text(manifest, encoding="utf-8")
         lock_path.write_text(lock, encoding="utf-8")
@@ -432,7 +414,7 @@ def check_registry(root=None, package="ssmcp", release_version=None):
     release_version = release_version or dict(publication_packages(root))[package]
     path = root / "target/package" / f"{package}-{release_version}.crate"
     if not path.is_file():
-        raise ValueError(f"run cargo package --workspace --locked before publishing {package}")
+        raise ValueError(f"run cargo package --locked --package {package} before publishing")
     checksum = digest(path)
     existing = registry_checksum(release_version, package)
     if existing is not None:
@@ -461,7 +443,7 @@ def publish(root=None):
             path = root / "target/package" / f"{package}-{release_version}.crate"
             pending.append((package, release_version, digest(path)))
     for package, release_version, checksum in pending:
-        # finalize jointly verified unpublished workspace dependencies.
+        # Upload only packages verified from this application repository.
         subprocess.run(["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io", "--package", package],
                        cwd=root, check=True)
         for _ in range(18):
@@ -481,7 +463,8 @@ def release_notes(root=None):
     release_version = version(root)
     notes = (
         "Download an archive or use the attached installers. The separate `publish_crates` "
-        "job publishes ztui-core before ssmcp and verifies both checksums; after it succeeds, install with "
+        "job requires the independently published dependencies, then publishes ssmcp "
+        "and verifies its checksum; after it succeeds, install with "
         f"`cargo install ssmcp --version {release_version} --locked --bin ssmcp`.\n\n"
         "Linux / macOS: `curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh`\n\n"
         "Windows PowerShell: `irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex`\n\n"

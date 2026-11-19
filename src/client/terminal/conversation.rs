@@ -2099,7 +2099,7 @@ impl State {
 
     fn chat_line(&self, text: &str, tone: PanelTone, width: u16) -> String {
         let plain = fit(text, width);
-        let row = ztui::Row::measured(&plain, |text| text.width());
+        let row = ztuio::Row::measured(&plain, |text| text.width());
         let mut padded =
             String::with_capacity(plain.len() + usize::from(width).saturating_sub(row.columns()));
         row.write_padded(&mut padded, width)

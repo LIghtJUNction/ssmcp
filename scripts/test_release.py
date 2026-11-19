@@ -391,116 +391,130 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(before, {name: (self.root / name).read_bytes() for name in before})
 
 
-    def add_workspace_package(self):
-        member = self.root / "crates/ztui/Cargo.toml"
+    def add_ztuio_dependency(self):
+        member = self.root / "crates/ztuio/Cargo.toml"
         member.parent.mkdir(parents=True)
-        member.write_text('[package]\nname = "ztui-core"\nversion = "0.1.0"\n[lib]\nname = "ztui"\n')
+        member.write_text('[package]\nname = "ztuio"\nversion = "0.1.0"\n[lib]\nname = "ztuio"\n')
         with (self.root / "Cargo.toml").open("a") as stream:
-            stream.write('\n[dependencies]\nztui = { package = "ztui-core", version = "=0.1.0", path = "crates/ztui" }\n')
+            stream.write('\n[dependencies]\nztuio = { version = "=0.1.0", path = "crates/ztuio" }\n')
         with (self.root / "Cargo.lock").open("a") as stream:
-            stream.write('\n[[package]]\nname = "ztui-core"\nversion = "0.1.0"\n')
+            stream.write('\n[[package]]\nname = "ztuio"\nversion = "0.1.0"\n')
         output = self.root / "target/package"
         output.mkdir(parents=True, exist_ok=True)
-        (output / "ztui-core-0.1.0.crate").write_bytes(b"core crate")
         (output / "ssmcp-0.5.0.crate").write_bytes(b"application crate")
         return member
 
-    def test_workspace_dependency_is_pinned_to_our_registry_package(self):
-        member = self.add_workspace_package()
-        self.assertEqual(release.publication_packages(self.root),
-                         [("ztui-core", "0.1.0"), ("ssmcp", "0.5.0")])
+    def test_ztuio_is_an_independently_published_exact_source_pin(self):
+        member = self.add_ztuio_dependency()
+        self.assertEqual(release.publication_packages(self.root), [("ssmcp", "0.5.0")])
+        self.assertEqual(release.registry_dependencies(self.root), [("ztuio", "0.1.0")])
         self.assertEqual(release.validate_package("v0.5.0", self.root), "0.5.0")
         manifest = self.root / "Cargo.toml"
-        manifest.write_text(manifest.read_text().replace('version = "=0.1.0"', 'version = "0.1.0"'))
-        with self.assertRaisesRegex(ValueError, "pin"):
-            release.publication_packages(self.root)
-        manifest.write_text(manifest.read_text().replace('version = "0.1.0"', 'version = "=0.1.0"'))
-        member.write_text(member.read_text().replace('name = "ztui-core"', 'name = "ztui"'))
-        with self.assertRaisesRegex(ValueError, "Project Z"):
-            release.publication_packages(self.root)
+        original = manifest.read_text()
+        for changed in (original.replace('version = "=0.1.0"', 'version = "0.1.0"'),
+                        original.replace('path = "crates/ztuio"', 'path = "other/ztuio"')):
+            with self.subTest(manifest=changed):
+                manifest.write_text(changed)
+                with self.assertRaisesRegex(ValueError, "pin"):
+                    release.registry_dependencies(self.root)
+        manifest.write_text(original)
+        member.write_text(member.read_text().replace('name = "ztuio"', 'name = "different"', 1))
+        with self.assertRaisesRegex(ValueError, "source and exact dependency version differ"):
+            release.registry_dependencies(self.root)
 
-    def test_workspace_lock_mismatch_blocks_tag_validation(self):
-        self.add_workspace_package()
+    def test_ztuio_library_name_must_match_the_rust_import(self):
+        member = self.add_ztuio_dependency()
+        member.write_text(member.read_text().replace('[lib]\nname = "ztuio"', '[lib]\nname = "different"'))
+        with self.assertRaisesRegex(ValueError, "library name"):
+            release.registry_dependencies(self.root)
+
+    def test_ztuio_lock_mismatch_blocks_tag_validation(self):
+        self.add_ztuio_dependency()
         lock = self.root / "Cargo.lock"
         lock.write_text(lock.read_text().replace('version = "0.1.0"', 'version = "0.0.9"'))
-        with self.assertRaisesRegex(ValueError, "ztui-core"):
+        with self.assertRaisesRegex(ValueError, "ztuio"):
             release.validate_package("v0.5.0", self.root)
 
-    def test_workspace_bump_preserves_independent_core_version_and_source(self):
-        member = self.add_workspace_package()
+    def test_application_bump_preserves_ztuio_version_and_source(self):
+        member = self.add_ztuio_dependency()
         core_before = member.read_bytes()
         result = release.bump("minor", self.root)
         self.assertEqual(result["version"], "0.6.0")
-        self.assertEqual(result["ztui_core_version"], "0.1.0")
         self.assertEqual(member.read_bytes(), core_before)
         self.assertIn('version = "=0.1.0"', (self.root / "Cargo.toml").read_text())
         self.assertEqual(release.validate_package("v0.6.0", self.root), "0.6.0")
 
-    def test_bad_workspace_lock_prevents_every_bump_write(self):
-        member = self.add_workspace_package()
+    def test_bad_ztuio_lock_prevents_every_bump_write(self):
+        member = self.add_ztuio_dependency()
         lock = self.root / "Cargo.lock"
         lock.write_text(lock.read_text().replace('version = "0.1.0"', 'version = "0.0.9"'))
         paths = [member, self.root / "Cargo.toml", lock]
         before = [path.read_bytes() for path in paths]
-        with self.assertRaisesRegex(ValueError, "ztui-core"):
+        with self.assertRaisesRegex(ValueError, "ztuio"):
             release.bump("patch", self.root)
         self.assertEqual(before, [path.read_bytes() for path in paths])
 
-    def test_workspace_publishes_dependency_before_application(self):
-        self.add_workspace_package()
-        checksums = {name: release.digest(self.root / "target/package" / filename)
-                     for name, filename in [("ztui-core", "ztui-core-0.1.0.crate"),
-                                            ("ssmcp", "ssmcp-0.5.0.crate")]}
+    def test_application_publication_never_uploads_ztuio(self):
+        self.add_ztuio_dependency()
+        application = release.digest(self.root / "target/package/ssmcp-0.5.0.crate")
         uploaded = []
 
         def registry(version, package):
-            return checksums[package] if package in uploaded else None
+            if package == "ztuio":
+                self.assertEqual(version, "0.1.0")
+                return "upstream-ztuio-checksum"
+            self.assertEqual((version, package), ("0.5.0", "ssmcp"))
+            return application if uploaded else None
 
         def upload(args, **kwargs):
-            package = args[-1]
-            self.assertEqual(args, ["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io", "--package", package])
-            if package == "ssmcp":
-                self.assertEqual(uploaded, ["ztui-core"])
-            uploaded.append(package)
+            self.assertEqual(args, ["cargo", "publish", "--locked", "--no-verify",
+                                    "--registry", "crates-io", "--package", "ssmcp"])
+            uploaded.append(args[-1])
 
         with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token",
-                                           "CARGO_REGISTRY_DEFAULT": "unrelated-fixture"}, clear=True), \
+                                         "CARGO_REGISTRY_DEFAULT": "unrelated-fixture"}, clear=True), \
              mock.patch.object(release, "registry_checksum", side_effect=registry), \
              mock.patch.object(release.subprocess, "run", side_effect=upload):
             release.publish(self.root)
-        self.assertEqual(uploaded, ["ztui-core", "ssmcp"])
+        self.assertEqual(uploaded, ["ssmcp"])
 
-    def test_later_workspace_collision_stops_before_first_upload(self):
-        self.add_workspace_package()
+    def test_missing_ztuio_publication_stops_before_application_upload(self):
+        self.add_ztuio_dependency()
         with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
-             mock.patch.object(release, "registry_checksum", side_effect=[None, "different"]), \
+             mock.patch.object(release, "registry_checksum", return_value=None), \
+             mock.patch.object(release.subprocess, "run") as upload, \
+             self.assertRaisesRegex(ValueError, "publish ztuio 0.1.0 from its independent repository"):
+            release.publish(self.root)
+        upload.assert_not_called()
+
+    def test_application_collision_stops_after_independent_dependency_check(self):
+        self.add_ztuio_dependency()
+        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
+             mock.patch.object(release, "registry_checksum", side_effect=["upstream-checksum", "different"]), \
              mock.patch.object(release.subprocess, "run") as upload, \
              self.assertRaisesRegex(ValueError, "different bytes"):
             release.publish(self.root)
         upload.assert_not_called()
 
-    def test_workspace_retry_skips_identical_dependency_and_resumes_application(self):
-        self.add_workspace_package()
-        core = release.digest(self.root / "target/package/ztui-core-0.1.0.crate")
+    def test_published_application_and_ztuio_retry_without_upload_credentials(self):
+        self.add_ztuio_dependency()
         application = release.digest(self.root / "target/package/ssmcp-0.5.0.crate")
-        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
-             mock.patch.object(release, "registry_checksum", side_effect=[core, None, application]), \
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(release, "registry_checksum", side_effect=["upstream-checksum", application]), \
              mock.patch.object(release.subprocess, "run") as upload:
             release.publish(self.root)
-        upload.assert_called_once_with(
-            ["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io", "--package", "ssmcp"],
-            cwd=self.root, check=True)
+        upload.assert_not_called()
 
-    def test_failed_core_upload_stops_before_application_upload(self):
-        self.add_workspace_package()
+    def test_failed_application_upload_never_uploads_the_independent_dependency(self):
+        self.add_ztuio_dependency()
         with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
-             mock.patch.object(release, "registry_checksum", return_value=None), \
+             mock.patch.object(release, "registry_checksum", side_effect=["upstream-checksum", None]), \
              mock.patch.object(release.subprocess, "run",
                                side_effect=subprocess.CalledProcessError(1, "cargo")) as upload, \
              self.assertRaises(subprocess.CalledProcessError):
             release.publish(self.root)
         self.assertEqual(upload.call_count, 1)
-        self.assertEqual(upload.call_args.args[0][-1], "ztui-core")
+        self.assertEqual(upload.call_args.args[0][-1], "ssmcp")
 
     def test_registry_only_treats_404_as_unpublished(self):
         for status in (404, 403, 500):
@@ -620,7 +634,7 @@ class ReleaseTests(unittest.TestCase):
         return self.root / "modules/fixture", git
 
     def test_custom_version_and_dry_run_do_not_change_any_file(self):
-        member = self.add_workspace_package()
+        member = self.add_ztuio_dependency()
         paths = [self.root / "Cargo.toml", self.root / "Cargo.lock", member]
         before = [path.read_bytes() for path in paths]
         for level, custom, expected in (("minor", None, "0.6.0"),
@@ -648,11 +662,11 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(release.bumped_version("0.6.0-rc.9", "custom", "0.6.0-rc.10"), "0.6.0-rc.10")
         self.assertEqual(release.bumped_version("0.6.0-rc.10", "custom", "0.6.0"), "0.6.0")
 
-    def test_missing_ztui_checkout_does_not_disappear_from_publication(self):
-        member = self.add_workspace_package()
+    def test_missing_ztuio_checkout_blocks_application_validation(self):
+        member = self.add_ztuio_dependency()
         member.unlink()
         with self.assertRaisesRegex(ValueError, "submodules"):
-            release.publication_packages(self.root)
+            release.validate_package("v0.5.0", self.root)
 
     def test_independent_dependencies_preserve_exact_versions_and_patch_on_bump(self):
         self.add_registry_dependencies()
