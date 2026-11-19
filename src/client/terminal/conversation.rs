@@ -11,6 +11,9 @@ pub(super) mod logout;
 mod questions;
 mod tasks;
 
+const EXIT_CONFIRMATION: &str =
+    "Press Ctrl+C again to exit · any other key keeps this session open";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum View {
     #[default]
@@ -70,6 +73,7 @@ pub(super) struct Conversation {
     canvas: canvas::Canvas,
     pub(super) logs_open: bool,
     pub(super) exit_requested: bool,
+    exit_armed: bool,
     tasks: tasks::TaskPanel,
     selected: usize,
     selected_agent: Option<String>,
@@ -81,6 +85,7 @@ pub(super) struct Conversation {
     target: Option<String>,
     editing: Option<String>,
     submitting: Option<(String, String)>,
+    recalling: Option<String>,
     parked: Option<steering::SavedDraft>,
     text_pending: Vec<u8>,
     paste: Option<Vec<u8>>,
@@ -215,7 +220,9 @@ impl State {
 
     fn chat_block_replacement(&mut self) {
         self.notice = Some(
-            (if self.conversation.submitting.is_some() {
+            (if self.conversation.recalling.is_some() {
+                "Waiting for take-back confirmation · your current draft is preserved"
+            } else if self.conversation.submitting.is_some() {
                 "Waiting for queue confirmation · your current draft is preserved"
             } else if self.conversation.editing.is_some() {
                 "Finish the current edit before opening another request"
@@ -267,6 +274,9 @@ impl State {
     }
 
     fn chat_editable(&mut self, id: String, text: String, target: Option<String>) {
+        if self.conversation.recalling.as_ref() == Some(&id) {
+            self.conversation.recalling = None;
+        }
         let text = references::source(&text).to_owned();
         let same_edit = self.conversation.editing.as_ref() == Some(&id);
         if self.conversation.submitting.is_some()
@@ -329,6 +339,9 @@ impl State {
                     self.chat_editable(id, text, target);
                 }
                 steering::UiEvent::Failed { id, message } => {
+                    if self.conversation.recalling.as_ref() == Some(&id) {
+                        self.conversation.recalling = None;
+                    }
                     failed_notice = Some(message.clone());
                     if self
                         .conversation
@@ -718,6 +731,10 @@ impl State {
             self.notice = Some("Waiting for queue confirmation · your draft is preserved".into());
             return;
         }
+        if self.conversation.recalling.is_some() {
+            self.chat_block_replacement();
+            return;
+        }
         let text = if self.chat_menu_visible() {
             self.conversation
                 .composer
@@ -788,6 +805,7 @@ impl State {
             && self.conversation.view == View::Queue
             && (self.conversation.editing.is_some()
                 || self.conversation.submitting.is_some()
+                || self.conversation.recalling.is_some()
                 || self.conversation.parked.is_some())
         {
             self.chat_block_replacement();
@@ -824,8 +842,9 @@ impl State {
                         && matches!(field(&message, "status"), "queued" | "editing")
                         && !self.preview
                     {
-                        if let Err(error) = steering::take_back(message_id(&message)) {
-                            self.notice = Some(error);
+                        match steering::take_back(message_id(&message)) {
+                            Ok(()) => self.chat_recall_started(message_id(&message).into()),
+                            Err(error) => self.notice = Some(error),
                         }
                     } else {
                         self.conversation.detail = true;
@@ -913,6 +932,99 @@ impl State {
         self.chat_move(delta);
     }
 
+    fn chat_disarm_exit(&mut self) {
+        self.conversation.exit_armed = false;
+        if self.notice.as_deref() == Some(EXIT_CONFIRMATION) {
+            self.notice = None;
+            self.dirty = true;
+        }
+    }
+
+    fn chat_interrupt(&mut self) {
+        if self.conversation.exit_requested {
+            return;
+        }
+        self.selection = false;
+        self.help = false;
+        self.conversation.content_focus = false;
+        self.conversation.text_pending.clear();
+        let answering = self.conversation.view == View::Questions;
+        let editor = if answering {
+            self.conversation
+                .question_id
+                .as_ref()
+                .and_then(|id| self.conversation.answers.get_mut(id))
+        } else {
+            Some(&mut self.conversation.composer)
+        };
+        let cleared = editor.is_some_and(|editor| {
+            if editor.is_empty() {
+                return false;
+            }
+            editor.take_text();
+            editor.dismiss_suggestions();
+            true
+        });
+        if cleared {
+            self.conversation.exit_armed = false;
+            self.notice = Some(format!(
+                "{} cleared · queued requests kept · Ctrl+C for exit reminder",
+                if answering { "Answer" } else { "Input" }
+            ));
+        } else if self.conversation.exit_armed && self.notice.as_deref() == Some(EXIT_CONFIRMATION)
+        {
+            self.conversation.exit_requested = true;
+            self.notice = Some("Closing this client · restoring the terminal".into());
+        } else {
+            self.conversation.exit_armed = true;
+            self.notice = Some(EXIT_CONFIRMATION.into());
+        }
+        self.dirty = true;
+    }
+
+    fn chat_recall_started(&mut self, id: String) {
+        if self
+            .conversation
+            .submitting
+            .as_ref()
+            .is_some_and(|(pending, _)| pending == &id)
+        {
+            self.conversation.submitting = None;
+        }
+        self.conversation.recalling = Some(id);
+        self.notice = Some("Taking back the queued request · waiting for confirmation".into());
+        self.dirty = true;
+    }
+
+    fn chat_recall_latest(&mut self) -> bool {
+        if self.conversation.recalling.is_some() {
+            self.chat_block_replacement();
+            return true;
+        }
+        if self.preview {
+            return false;
+        }
+        let result = if let Some((id, _)) = &self.conversation.submitting {
+            // Locally queued offline input can be reclaimed immediately; an
+            // in-flight publication must still pass the manager's ACK checks.
+            steering::take_back(id).map(|()| Some(id.clone()))
+        } else {
+            steering::take_back_latest()
+        };
+        match result {
+            Ok(None) => false,
+            Ok(Some(id)) => {
+                self.chat_recall_started(id);
+                true
+            }
+            Err(error) => {
+                self.notice = Some(error);
+                self.dirty = true;
+                true
+            }
+        }
+    }
+
     fn chat_resize_input(&mut self, grow: bool) {
         let geometry = self.geometry;
         if geometry.input_rows == 0 {
@@ -932,9 +1044,10 @@ impl State {
     fn chat_key(&mut self, key: Key) {
         self.events.set_scope(events::EventScope::Conversation);
         if matches!(key, Key::Interrupt) {
-            request_interrupt();
+            self.chat_interrupt();
             return;
         }
+        self.chat_disarm_exit();
         self.chat_refresh_completions();
         if matches!(key, Key::Select) || (self.selection && matches!(key, Key::Escape)) {
             self.selection = !self.selection;
@@ -1126,31 +1239,22 @@ impl State {
                     self.dirty = true;
                     return;
                 }
-                if self.conversation.submitting.is_some() {
-                    self.notice =
-                        Some("Waiting for queue confirmation · your draft is preserved".into());
-                    return;
-                }
-                if !self.conversation.composer.up(self.geometry.left) {
-                    if self.conversation.editing.is_none() && self.conversation.parked.is_some() {
+                if !self.conversation.composer.up(self.geometry.left)
+                    && self.conversation.editing.is_none()
+                {
+                    if self.conversation.parked.is_some() {
                         self.chat_block_replacement();
                         return;
                     }
-                    let data = self.chat_data();
-                    let queued = items(&data, "queue")
-                        .into_iter()
-                        .rev()
-                        .find(|entry| field(entry, "status") == "queued");
-                    if self.conversation.editing.is_none()
-                        && !self.preview
-                        && let Some(queued) = queued
-                    {
-                        if let Err(error) = steering::take_back(message_id(&queued)) {
-                            self.notice = Some(error);
-                        }
-                    } else if self.conversation.editing.is_none() {
-                        self.conversation.composer.history_previous();
+                    if self.conversation.composer.is_empty() && self.chat_recall_latest() {
+                        return;
                     }
+                    if self.conversation.submitting.is_some() {
+                        self.notice =
+                            Some("Waiting for queue confirmation · your draft is preserved".into());
+                        return;
+                    }
+                    self.conversation.composer.history_previous();
                 }
             }
             Key::AuditDown => {
@@ -1392,6 +1496,7 @@ impl State {
     }
 
     fn chat_character(&mut self, character: char) {
+        self.chat_disarm_exit();
         self.chat_refresh_completions();
         if self.selection {
             if character == '\u{1b}' {
@@ -1863,6 +1968,9 @@ impl State {
             self.keyboard.paste_last_input = Some(now);
         }
         self.chat_updates();
+        if bytes.iter().any(|byte| *byte != 0x03) {
+            self.chat_disarm_exit();
+        }
         // Keep text and navigation in their original order, including coalesced reads.
         for byte in bytes {
             let (output, keys) = self.keyboard.feed(&[*byte], now, false, true, false);
@@ -4130,6 +4238,155 @@ mod tests {
             );
             assert_eq!(screen.cell(top + 3, 4).unwrap().bgcolor(), background);
         }
+    }
+
+    #[test]
+    fn interrupt_clears_current_edit_then_warns_then_exits_without_cancelling_queue() {
+        let mut state = preview(24, 100);
+        state
+            .conversation
+            .composer
+            .set_text("edited request\n第二行");
+        state.conversation.target = Some("example-builder".into());
+        state.conversation.editing = Some("held-request".into());
+        let parked = steering::SavedDraft {
+            text: "previous draft".into(),
+            cursor: 4,
+            target: Some("example-reviewer".into()),
+        };
+        state.conversation.parked = Some(parked.clone());
+        let queue = state.chat_data()["queue"].clone();
+        input(&mut state, b"\x03");
+        assert!(state.conversation.composer.is_empty());
+        assert_eq!(state.conversation.composer.cursor(), 0);
+        assert_eq!(
+            state.conversation.target.as_deref(),
+            Some("example-builder")
+        );
+        assert_eq!(state.conversation.editing.as_deref(), Some("held-request"));
+        assert_eq!(state.conversation.parked, Some(parked));
+        assert_eq!(state.chat_data()["queue"], queue);
+        assert!(!state.conversation.exit_armed && !state.conversation.exit_requested);
+        input(&mut state, b"\x03");
+        assert_eq!(state.notice.as_deref(), Some(EXIT_CONFIRMATION));
+        assert!(!state.conversation.exit_requested);
+        input(&mut state, b"\x03");
+        assert!(state.conversation.exit_requested);
+        assert_eq!(state.chat_data()["queue"], queue);
+    }
+
+    #[test]
+    fn interrupt_confirmation_is_cancelled_by_partial_keys_typing_or_a_new_notice() {
+        let mut state = preview(24, 100);
+        input(&mut state, b"\x03");
+        assert!(state.conversation.exit_armed);
+        input(&mut state, b"\x1b");
+        assert!(!state.conversation.exit_armed);
+        input(&mut state, b"\x03");
+        assert!(!state.conversation.exit_requested);
+        input(&mut state, b"x");
+        assert!(!state.conversation.exit_armed);
+        input(&mut state, b"\x03\x03");
+        assert!(state.conversation.composer.is_empty());
+        assert!(!state.conversation.exit_requested);
+        state.notice = Some("Another operation needs your attention".into());
+        input(&mut state, b"\x03");
+        assert!(!state.conversation.exit_requested);
+        assert_eq!(state.notice.as_deref(), Some(EXIT_CONFIRMATION));
+        input(&mut state, b"\x03");
+        assert!(state.conversation.exit_requested);
+    }
+
+    #[test]
+    fn interrupt_only_clears_the_active_question_answer() {
+        let mut state = preview(24, 100);
+        state
+            .conversation
+            .composer
+            .set_text("keep the requirement draft");
+        state.conversation.view = View::Questions;
+        state.conversation.detail = true;
+        state.conversation.question_id = Some("question-test".into());
+        let mut answer = Composer::default();
+        answer.set_text("answer draft");
+        state
+            .conversation
+            .answers
+            .insert("question-test".into(), answer);
+        input(&mut state, b"\x03");
+        assert!(state.conversation.answers["question-test"].is_empty());
+        assert_eq!(
+            state.conversation.composer.text(),
+            "keep the requirement draft"
+        );
+        assert!(!state.conversation.exit_requested);
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .starts_with("Answer cleared")
+        );
+    }
+
+    #[test]
+    fn recall_confirmation_blocks_history_until_ack_and_keeps_the_next_draft() {
+        let mut state = preview(24, 100);
+        state
+            .conversation
+            .composer
+            .remember("unrelated input history");
+        state.conversation.submitting = Some(("held-request".into(), "original request".into()));
+        state.chat_recall_started("held-request".into());
+        assert!(state.conversation.submitting.is_none());
+        input(&mut state, b"\x1b[A\x1b[A");
+        assert!(state.conversation.composer.is_empty());
+        assert_eq!(
+            state.conversation.recalling.as_deref(),
+            Some("held-request")
+        );
+        assert!(state.notice.as_deref().unwrap().contains("confirmation"));
+        input(&mut state, b"next draft\r");
+        assert_eq!(state.conversation.composer.text(), "next draft");
+        assert!(state.notice.as_deref().unwrap().contains("confirmation"));
+        assert!(state.conversation.submitting.is_none());
+        state.chat_editable(
+            "held-request".into(),
+            "original request".into(),
+            Some("example-builder".into()),
+        );
+        assert!(state.conversation.recalling.is_none());
+        assert_eq!(state.conversation.composer.text(), "original request");
+        assert_eq!(
+            state.conversation.parked.as_ref().unwrap().text,
+            "next draft"
+        );
+        input(&mut state, b"\x03");
+        assert!(state.conversation.composer.is_empty());
+        assert_eq!(
+            state.conversation.parked.as_ref().unwrap().text,
+            "next draft"
+        );
+        assert_eq!(state.conversation.editing.as_deref(), Some("held-request"));
+    }
+
+    #[test]
+    fn up_keeps_multiline_navigation_available_while_publication_is_pending() {
+        let mut state = preview(24, 100);
+        state
+            .conversation
+            .composer
+            .set_text("first line\nsecond line");
+        state.conversation.submitting = Some(("pending-request".into(), "previous request".into()));
+        let before = state.conversation.composer.cursor();
+        input(&mut state, b"\x1b[A");
+        assert!(state.conversation.composer.cursor() < before);
+        assert_eq!(
+            state.conversation.composer.text(),
+            "first line\nsecond line"
+        );
+        assert!(state.conversation.submitting.is_some());
+        assert!(state.conversation.recalling.is_none());
     }
 
     #[test]

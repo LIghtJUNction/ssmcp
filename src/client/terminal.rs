@@ -787,12 +787,17 @@ impl Geometry {
     }
 }
 
-fn request_interrupt() {
+fn request_interrupt(_state: &mut State) {
     crate::client::interface::computer::local_input();
     #[cfg(unix)]
     // SAFETY: this targets only the current process, whose normal signal handler
     // owns graceful shutdown and restoration of the original terminal mode.
     let _ = unsafe { libc::kill(libc::getpid(), libc::SIGINT) };
+    #[cfg(not(unix))]
+    {
+        _state.conversation.exit_requested = true;
+        _state.dirty = true;
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1577,7 +1582,7 @@ impl State {
         let mut layout_changed = false;
         for action in actions {
             if matches!(action, Key::Interrupt) {
-                request_interrupt();
+                request_interrupt(self);
                 return Vec::new();
             }
             if matches!(action, Key::Escape) && showing_help {
