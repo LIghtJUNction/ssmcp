@@ -287,7 +287,9 @@ impl Event {
         for raw in self.text.lines() {
             let plain = unstyled(raw);
             let text = heading(&plain);
-            if let Some((tag, detail)) = text.strip_prefix('[').and_then(|text| text.split_once(']')) {
+            if let Some((tag, detail)) =
+                text.strip_prefix('[').and_then(|text| text.split_once(']'))
+            {
                 match tag.trim() {
                     "STDOUT" | "STDERR" | "RES" | "OUT" | "RESULT" => {
                         result = true;
@@ -295,22 +297,31 @@ impl Event {
                         continue;
                     }
                     "RUN" | "REQ" | "OK" | "SAVE" | "READ" | "WRITE" | "EDIT" => continue,
-                    "ERR" | "WARN" if detail.split_whitespace().any(|word|
-                        word.starts_with("exit=") || word.starts_with("signal=")
-                        || matches!(word, "completed" | "cancelled" | "timed_out")) => continue,
+                    "ERR" | "WARN"
+                        if detail.split_whitespace().any(|word| {
+                            word.starts_with("exit=")
+                                || word.starts_with("signal=")
+                                || matches!(word, "completed" | "cancelled" | "timed_out")
+                        }) =>
+                    {
+                        continue;
+                    }
                     _ => {}
                 }
             }
             if !result {
                 script |= text.starts_with("script · ");
-                if script || text.is_empty() || text.starts_with("cwd ") || text.starts_with("cmd=") {
+                if script || text.is_empty() || text.starts_with("cwd ") || text.starts_with("cmd=")
+                {
                     continue;
                 }
             }
             result = true;
             rows.push(raw);
         }
-        while rows.last().is_some_and(|row| row.trim().is_empty()) { rows.pop(); }
+        while rows.last().is_some_and(|row| row.trim().is_empty()) {
+            rows.pop();
+        }
         rows.join("\n")
     }
 
@@ -486,7 +497,11 @@ impl EventView {
             follow: self.follow,
             reveal: self.reveal,
             new_image: self.new_image,
-            panel_scroll: self.events.iter().map(|event| (event.id, event.panel.scroll)).collect(),
+            panel_scroll: self
+                .events
+                .iter()
+                .map(|event| (event.id, event.panel.scroll))
+                .collect(),
             chat_expanded: self
                 .events
                 .iter()
@@ -503,7 +518,11 @@ impl EventView {
         self.reveal = position.reveal;
         for event in &mut self.events {
             event.chat_expanded = position.chat_expanded.contains(&event.id);
-            event.panel.scroll = position.panel_scroll.iter().find(|(id, _)| *id == event.id).and_then(|(_, scroll)| *scroll);
+            event.panel.scroll = position
+                .panel_scroll
+                .iter()
+                .find(|(id, _)| *id == event.id)
+                .and_then(|(_, scroll)| *scroll);
         }
         // The deferred first-image anchor belongs to this column's reading
         // position. Switching columns is not an explicit request for latest.
@@ -931,9 +950,13 @@ impl EventView {
         if self.scope != EventScope::Conversation || !self.query.is_empty() {
             return false;
         }
-        let Some(event) = self.events.iter_mut().find(|event| event.id == id
-            && event.meta.command && !event.meta.diff && event.panel.rows > 0
-            && event.matches(&self.query, self.level, self.scope)) else {
+        let Some(event) = self.events.iter_mut().find(|event| {
+            event.id == id
+                && event.meta.command
+                && !event.meta.diff
+                && event.panel.rows > 0
+                && event.matches(&self.query, self.level, self.scope)
+        }) else {
             return false;
         };
         event.panel.scroll_by(delta);
@@ -1199,19 +1222,44 @@ impl EventView {
             } else {
                 event.meta.status.map_or(event.tone, Status::tone)
             };
-            if chat && event.meta.command && !event.meta.diff && event.image.is_none() && self.query.is_empty() {
+            if chat
+                && event.meta.command
+                && !event.meta.diff
+                && event.image.is_none()
+                && self.query.is_empty()
+            {
                 let start = rows.len();
-                rows.push((event.id, format!("{}{}",
-                    paint(&prefix, tone, ui, selected && focused),
-                    paint(&clip_plain(&title, body_width), tone, ui, false))));
+                rows.push((
+                    event.id,
+                    format!(
+                        "{}{}",
+                        paint(&prefix, tone, ui, selected && focused),
+                        paint(&clip_plain(&title, body_width), tone, ui, false)
+                    ),
+                ));
                 let inset = 2.min(body_width.saturating_sub(1));
                 let panel_width = body_width.saturating_sub(inset).max(1);
                 let panel_palette = format!("{palette}:command:{expanded}");
-                if event.cache.as_ref().is_none_or(|(cached_width, cached_palette, _)|
-                    *cached_width != panel_width || *cached_palette != panel_palette) {
-                    let body = if expanded { conversation_body(&event.text).to_owned() } else { event.command_output() };
-                    let lines = if body.is_empty() { Vec::new() } else {
-                        styled_rows(&semantic_text(&body, ui, event.meta.language), panel_width, ui.color)
+                if event
+                    .cache
+                    .as_ref()
+                    .is_none_or(|(cached_width, cached_palette, _)| {
+                        *cached_width != panel_width || *cached_palette != panel_palette
+                    })
+                {
+                    let body = if expanded {
+                        conversation_body(&event.text).to_owned()
+                    } else {
+                        event.command_output()
+                    };
+                    let lines = if body.is_empty() {
+                        Vec::new()
+                    } else {
+                        styled_rows(
+                            &semantic_text(&body, ui, event.meta.language),
+                            panel_width,
+                            ui.color,
+                        )
                     };
                     event.cache = Some((panel_width, panel_palette, lines));
                 }
@@ -1220,7 +1268,9 @@ impl EventView {
                 let limit = if expanded { (page / 2).clamp(3, 12) } else { 3 };
                 event.panel.page = limit.min(content.len());
                 let offset = event.panel.offset();
-                if event.panel.scroll.is_some() { event.panel.scroll = Some(offset); }
+                if event.panel.scroll.is_some() {
+                    event.panel.scroll = Some(offset);
+                }
                 for row in content.iter().skip(offset).take(event.panel.page) {
                     let gutter = paint(&clip_plain("│ ", inset), "muted", ui, false);
                     rows.push((event.id, format!("{}{gutter}{row}", " ".repeat(indent))));
@@ -1228,11 +1278,32 @@ impl EventView {
                 if !content.is_empty() {
                     previous_compact_tool = false;
                     let action = if expanded { "fold" } else { "expand" };
-                    let range = format!("{}–{}/{}", offset + 1, offset + event.panel.page, content.len());
+                    let range = format!(
+                        "{}–{}/{}",
+                        offset + 1,
+                        offset + event.panel.page,
+                        content.len()
+                    );
                     let detail = if width >= 70 {
-                        format!("{range} · wheel / PgUp/PgDn · Enter {action}{}", if event.truncated { " · partial" } else { "" })
-                    } else { format!("{range} · {action}{}", if event.truncated { " · partial" } else { "" }) };
-                    rows.push((event.id, paint(&clip_plain(&format!("{}└ {detail}", " ".repeat(indent)), width), "muted", ui, false)));
+                        format!(
+                            "{range} · wheel / PgUp/PgDn · Enter {action}{}",
+                            if event.truncated { " · partial" } else { "" }
+                        )
+                    } else {
+                        format!(
+                            "{range} · {action}{}",
+                            if event.truncated { " · partial" } else { "" }
+                        )
+                    };
+                    rows.push((
+                        event.id,
+                        paint(
+                            &clip_plain(&format!("{}└ {detail}", " ".repeat(indent)), width),
+                            "muted",
+                            ui,
+                            false,
+                        ),
+                    ));
                     panel_spans.push((event.id, start, rows.len()));
                 }
                 continue;
@@ -2051,13 +2122,7 @@ mod tests {
         assert!(done.contains("bash -lc · 2 lines · done"), "{done}");
         assert!(done.contains("first-result") && done.contains("second-result"));
         assert!(done.contains("1–3/3") && done.contains("Enter expand"));
-        for hidden in [
-            "exit=0",
-            "cwd /example",
-            "[RUN",
-            "[STDOUT",
-            "[OK",
-        ] {
+        for hidden in ["exit=0", "cwd /example", "[RUN", "[STDOUT", "[OK"] {
             assert!(!done.contains(hidden), "unexpected {hidden}: {done}");
         }
         let retained = [started.as_slice(), output.as_slice(), finished.as_slice()].concat();
@@ -2162,11 +2227,7 @@ mod tests {
                     && plain.contains("fatal: failed to load configuration"),
                 "{plain}"
             );
-            for hidden in [
-                "warming up",
-                "[STDERR]",
-                "[ERR",
-            ] {
+            for hidden in ["warming up", "[STDERR]", "[ERR"] {
                 assert!(!plain.contains(hidden), "unexpected {hidden}: {plain}");
             }
             assert!(rendered.contains(&ui.color(tone)), "{rendered:?}");
@@ -2255,16 +2316,31 @@ mod tests {
     fn command_panels_keep_independent_positions_while_streams_append() {
         let mut view = EventView::new();
         for id in ["build", "test"] {
-            view.ingest_event("shell", &json!({"type":"exec.started","job_id":id}),
-                format!("[RUN] shell {id} cargo {id} started\n").as_bytes());
-            view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":id}),
-                (0..30).map(|n| format!("{id}-{n:02}\n")).collect::<String>().as_bytes());
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":id}),
+                format!("[RUN] shell {id} cargo {id} started\n").as_bytes(),
+            );
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":id}),
+                (0..30)
+                    .map(|n| format!("{id}-{n:02}\n"))
+                    .collect::<String>()
+                    .as_bytes(),
+            );
         }
         view.set_scope(EventScope::Conversation);
         let rows = view.render(100, 24, &plain_ui(), false);
         assert_eq!(view.events.len(), 2);
-        assert_eq!(view.total_rows, 11, "two bounded windows and one paragraph gap");
-        let first = rows.iter().position(|row| row.contains("build-27")).unwrap();
+        assert_eq!(
+            view.total_rows, 11,
+            "two bounded windows and one paragraph gap"
+        );
+        let first = rows
+            .iter()
+            .position(|row| row.contains("build-27"))
+            .unwrap();
         let second = rows.iter().position(|row| row.contains("test-27")).unwrap();
         let before = view.scroll;
         assert!(view.scroll_panel_at(first as u16, -9));
@@ -2275,29 +2351,52 @@ mod tests {
         assert_eq!(view.events[0].panel.offset(), 18);
         assert_eq!(view.events[1].panel.offset(), 24);
         for id in ["build", "test"] {
-            view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":id}),
-                format!("{id}-30\n").as_bytes());
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":id}),
+                format!("{id}-30\n").as_bytes(),
+            );
         }
         let rows = view.render(100, 24, &plain_ui(), false);
-        assert_eq!(view.events.len(), 2, "each stream remains in its original command");
+        assert_eq!(
+            view.events.len(),
+            2,
+            "each stream remains in its original command"
+        );
         assert_eq!(view.events[0].panel.offset(), 18);
         assert_eq!(view.events[1].panel.offset(), 24);
         assert!(rows.iter().any(|row| row.contains("build-18")));
         assert!(!rows.iter().any(|row| row.contains("build-30")));
         assert!(view.scroll_panel_at(first as u16, isize::MAX));
         assert!(view.events[0].panel.scroll.is_none());
-        view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":"build"}), b"build-31\n");
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.stdout","job_id":"build"}),
+            b"build-31\n",
+        );
         let rows = view.render(100, 24, &plain_ui(), false);
         assert!(rows.iter().any(|row| row.contains("build-31")));
         assert_eq!(view.events[1].panel.offset(), 24);
-        assert!(!view.scroll_panel_at(5, -3), "the paragraph gap is outside either window");
+        assert!(
+            !view.scroll_panel_at(5, -3),
+            "the paragraph gap is outside either window"
+        );
     }
 
     #[test]
     fn expanded_command_panels_reveal_retained_content_without_growing_unbounded() {
         let mut view = EventView::new();
-        let text = format!("[RUN] cargo test started\n{}", (0..80).map(|n| format!("case-{n:02}\n")).collect::<String>());
-        view.ingest_event("shell", &json!({"type":"exec.started","job_id":"test"}), text.as_bytes());
+        let text = format!(
+            "[RUN] cargo test started\n{}",
+            (0..80)
+                .map(|n| format!("case-{n:02}\n"))
+                .collect::<String>()
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":"test"}),
+            text.as_bytes(),
+        );
         view.set_scope(EventScope::Conversation);
         view.render(80, 24, &plain_ui(), true);
         assert!(view.open());
@@ -2316,14 +2415,23 @@ mod tests {
         assert!(view.back());
         for width in [1, 24, 48, 100] {
             for row in view.render(width, 24, &plain_ui(), true) {
-                assert!(unstyled(&row).width() <= usize::from(width), "{width}: {row}");
+                assert!(
+                    unstyled(&row).width() <= usize::from(width),
+                    "{width}: {row}"
+                );
             }
         }
         view.filter("case-40", 0);
-        assert!(!view.scroll_selected_panel(3), "search retains its existing navigation");
+        assert!(
+            !view.scroll_selected_panel(3),
+            "search retains its existing navigation"
+        );
         let found = view.render(80, 90, &plain_ui(), false).join("\n");
         assert!(found.contains("case-40"));
-        assert_eq!(view.events[0].text, text, "folding and scrolling never discard the retained source");
+        assert_eq!(
+            view.events[0].text, text,
+            "folding and scrolling never discard the retained source"
+        );
     }
 
     #[test]
