@@ -125,7 +125,7 @@ mod tests {
             "\u{7f}".into(),
             "猫".into(),
             "x".repeat(MAX_COLUMNS + 1),
-            vec!["x"; MAX_ROWS + 1].join("\n"),
+            ["x"; MAX_ROWS + 1].join("\n"),
         ] {
             assert!(
                 Pet {

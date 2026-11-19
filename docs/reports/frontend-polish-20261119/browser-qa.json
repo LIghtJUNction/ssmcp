@@ -1,0 +1,1055 @@
+{
+  "started": "2026-11-18T19:00:58.933Z",
+  "scope": "Real Rust renderer; synthetic account state; no production authentication or payment; preview rejects POST",
+  "sourceBefore": {
+    "portal.css": "780644d0590e28411b80e76ea7e1c215f9a38f64e5005e5b69d556bdf722667f",
+    "portal-refresh.css": "b48923a87680342cdd8bf7f69219d731132682b0640d7c83272a1da77b0ef810",
+    "view.rs": "bbd23c5277bb5376814e004386bc5fe7c0fb57d4dee3c67f856cb0d530dd8dd6",
+    "dashboard_view.rs": "861a188db01d5a4d2e1e753fbdcebde870b5eadcefb2df59eb4674ffccfe3cae",
+    "commerce.rs": "cda43951a1b87043b462b4c3e9cc85b5b6dcc05ea18f84cd6fdde1a12dc569c7"
+  },
+  "responsive": [
+    {
+      "page": "sessions",
+      "width": 1440,
+      "height": 1100,
+      "documentWidth": 1425,
+      "bodyWidth": 1425,
+      "overflow": [],
+      "title": "我的会话",
+      "forms": [
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": "page"
+        },
+        {
+          "href": "/account/history",
+          "current": null
+        },
+        {
+          "href": "/account/admin",
+          "current": null
+        }
+      ],
+      "checkbox": [],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "history",
+      "width": 1440,
+      "height": 1100,
+      "documentWidth": 1425,
+      "bodyWidth": 1425,
+      "overflow": [],
+      "title": "历史记录",
+      "forms": [],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": null
+        },
+        {
+          "href": "/account/history",
+          "current": "page"
+        },
+        {
+          "href": "/account/admin",
+          "current": null
+        }
+      ],
+      "checkbox": [],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "admin",
+      "width": 1440,
+      "height": 1100,
+      "documentWidth": 1425,
+      "bodyWidth": 1425,
+      "overflow": [],
+      "title": "服务器管理",
+      "forms": [
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": null
+        },
+        {
+          "href": "/account/history",
+          "current": null
+        },
+        {
+          "href": "/account/admin",
+          "current": "page"
+        }
+      ],
+      "checkbox": [],
+      "rates": [
+        {
+          "left": 744.46875,
+          "right": 984.46875,
+          "width": 240,
+          "height": 46,
+          "scroll": 240,
+          "client": 240
+        },
+        {
+          "left": 744.46875,
+          "right": 984.46875,
+          "width": 240,
+          "height": 46,
+          "scroll": 240,
+          "client": 240
+        },
+        {
+          "left": 744.46875,
+          "right": 984.46875,
+          "width": 240,
+          "height": 46,
+          "scroll": 240,
+          "client": 240
+        }
+      ],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "traffic",
+      "width": 1440,
+      "height": 1100,
+      "documentWidth": 1425,
+      "bodyWidth": 1425,
+      "overflow": [],
+      "title": "流量与订单",
+      "forms": [
+        {
+          "action": "/account/traffic/orders",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [],
+      "checkbox": [
+        {
+          "left": 340.5,
+          "right": 358.5,
+          "width": 18,
+          "height": 18
+        }
+      ],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "sessions",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "bodyWidth": 390,
+      "overflow": [],
+      "title": "我的会话",
+      "forms": [
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": "page"
+        },
+        {
+          "href": "/account/history",
+          "current": null
+        },
+        {
+          "href": "/account/admin",
+          "current": null
+        }
+      ],
+      "checkbox": [],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "history",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "bodyWidth": 390,
+      "overflow": [],
+      "title": "历史记录",
+      "forms": [],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": null
+        },
+        {
+          "href": "/account/history",
+          "current": "page"
+        },
+        {
+          "href": "/account/admin",
+          "current": null
+        }
+      ],
+      "checkbox": [],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "admin",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "bodyWidth": 390,
+      "overflow": [],
+      "title": "服务器管理",
+      "forms": [
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": null
+        },
+        {
+          "href": "/account/history",
+          "current": null
+        },
+        {
+          "href": "/account/admin",
+          "current": "page"
+        }
+      ],
+      "checkbox": [],
+      "rates": [
+        {
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "height": 46,
+          "scroll": 342,
+          "client": 342
+        },
+        {
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "height": 46,
+          "scroll": 342,
+          "client": 342
+        },
+        {
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "height": 46,
+          "scroll": 342,
+          "client": 342
+        }
+      ],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "traffic",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "bodyWidth": 390,
+      "overflow": [],
+      "title": "流量与订单",
+      "forms": [
+        {
+          "action": "/account/traffic/orders",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [],
+      "checkbox": [
+        {
+          "left": 46,
+          "right": 64,
+          "width": 18,
+          "height": 18
+        }
+      ],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "sessions",
+      "width": 320,
+      "height": 740,
+      "documentWidth": 320,
+      "bodyWidth": 320,
+      "overflow": [],
+      "title": "我的会话",
+      "forms": [
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": "page"
+        },
+        {
+          "href": "/account/history",
+          "current": null
+        },
+        {
+          "href": "/account/admin",
+          "current": null
+        }
+      ],
+      "checkbox": [],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "history",
+      "width": 320,
+      "height": 740,
+      "documentWidth": 320,
+      "bodyWidth": 320,
+      "overflow": [],
+      "title": "历史记录",
+      "forms": [],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": null
+        },
+        {
+          "href": "/account/history",
+          "current": "page"
+        },
+        {
+          "href": "/account/admin",
+          "current": null
+        }
+      ],
+      "checkbox": [],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "admin",
+      "width": 320,
+      "height": 740,
+      "documentWidth": 320,
+      "bodyWidth": 320,
+      "overflow": [],
+      "title": "服务器管理",
+      "forms": [
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/admin/users",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        },
+        {
+          "action": "/account/sessions/disconnect",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [
+        {
+          "href": "/",
+          "current": null
+        },
+        {
+          "href": "/account/sessions",
+          "current": null
+        },
+        {
+          "href": "/account/history",
+          "current": null
+        },
+        {
+          "href": "/account/admin",
+          "current": "page"
+        }
+      ],
+      "checkbox": [],
+      "rates": [
+        {
+          "left": 20,
+          "right": 300,
+          "width": 280,
+          "height": 46,
+          "scroll": 280,
+          "client": 280
+        },
+        {
+          "left": 20,
+          "right": 300,
+          "width": 280,
+          "height": 46,
+          "scroll": 280,
+          "client": 280
+        },
+        {
+          "left": 20,
+          "right": 300,
+          "width": 280,
+          "height": 46,
+          "scroll": 280,
+          "client": 280
+        }
+      ],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    },
+    {
+      "page": "traffic",
+      "width": 320,
+      "height": 740,
+      "documentWidth": 320,
+      "bodyWidth": 320,
+      "overflow": [],
+      "title": "流量与订单",
+      "forms": [
+        {
+          "action": "/account/traffic/orders",
+          "method": "post",
+          "csrf": "preview-csrf"
+        }
+      ],
+      "navigation": [],
+      "checkbox": [
+        {
+          "left": 42,
+          "right": 60,
+          "width": 18,
+          "height": 18
+        }
+      ],
+      "rates": [],
+      "empty": false,
+      "errors": [],
+      "resources": [],
+      "passed": true
+    }
+  ],
+  "interactions": [
+    {
+      "name": "POST/CSRF sessions 1440",
+      "passed": true,
+      "forms": 3
+    },
+    {
+      "name": "Navigation sessions 1440",
+      "passed": true
+    },
+    {
+      "name": "Disconnect disclosure 1440",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "POST/CSRF history 1440",
+      "passed": true,
+      "forms": 0
+    },
+    {
+      "name": "Navigation history 1440",
+      "passed": true
+    },
+    {
+      "name": "POST/CSRF admin 1440",
+      "passed": true,
+      "forms": 8
+    },
+    {
+      "name": "Navigation admin 1440",
+      "passed": true
+    },
+    {
+      "name": "Disclosure .user-connections 1440",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "Disclosure .user-ban 1440",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "Rate controls 1440",
+      "passed": true,
+      "controls": [
+        {
+          "left": 710.484375,
+          "right": 950.484375,
+          "width": 240,
+          "height": 46,
+          "scroll": 240,
+          "client": 240
+        },
+        {
+          "left": 710.484375,
+          "right": 950.484375,
+          "width": 240,
+          "height": 46,
+          "scroll": 240,
+          "client": 240
+        },
+        {
+          "left": 710.484375,
+          "right": 950.484375,
+          "width": 240,
+          "height": 46,
+          "scroll": 240,
+          "client": 240
+        }
+      ]
+    },
+    {
+      "name": "POST/CSRF traffic 1440",
+      "passed": true,
+      "forms": 1
+    },
+    {
+      "name": "Checkbox dimensions 1440",
+      "passed": true,
+      "checkbox": [
+        {
+          "left": 340.5,
+          "right": 358.5,
+          "width": 18,
+          "height": 18
+        }
+      ]
+    },
+    {
+      "name": "Acknowledgement required 1440",
+      "passed": true
+    },
+    {
+      "name": "Acknowledgement toggles 1440",
+      "passed": true
+    },
+    {
+      "name": "Long amounts 1440",
+      "passed": true,
+      "overflow": [],
+      "documentWidth": 1425
+    },
+    {
+      "name": "Empty sessions-empty 1440",
+      "passed": true,
+      "title": "我的会话",
+      "overflow": []
+    },
+    {
+      "name": "Empty history-empty 1440",
+      "passed": true,
+      "title": "历史记录",
+      "overflow": []
+    },
+    {
+      "name": "POST/CSRF sessions 390",
+      "passed": true,
+      "forms": 3
+    },
+    {
+      "name": "Navigation sessions 390",
+      "passed": true
+    },
+    {
+      "name": "Disconnect disclosure 390",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "POST/CSRF history 390",
+      "passed": true,
+      "forms": 0
+    },
+    {
+      "name": "Navigation history 390",
+      "passed": true
+    },
+    {
+      "name": "POST/CSRF admin 390",
+      "passed": true,
+      "forms": 8
+    },
+    {
+      "name": "Navigation admin 390",
+      "passed": true
+    },
+    {
+      "name": "Disclosure .user-connections 390",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "Disclosure .user-ban 390",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "Rate controls 390",
+      "passed": true,
+      "controls": [
+        {
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "height": 46,
+          "scroll": 342,
+          "client": 342
+        },
+        {
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "height": 46,
+          "scroll": 342,
+          "client": 342
+        },
+        {
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "height": 46,
+          "scroll": 342,
+          "client": 342
+        }
+      ]
+    },
+    {
+      "name": "POST/CSRF traffic 390",
+      "passed": true,
+      "forms": 1
+    },
+    {
+      "name": "Checkbox dimensions 390",
+      "passed": true,
+      "checkbox": [
+        {
+          "left": 46,
+          "right": 64,
+          "width": 18,
+          "height": 18
+        }
+      ]
+    },
+    {
+      "name": "Acknowledgement required 390",
+      "passed": true
+    },
+    {
+      "name": "Acknowledgement toggles 390",
+      "passed": true
+    },
+    {
+      "name": "Long amounts 390",
+      "passed": true,
+      "overflow": [],
+      "documentWidth": 390
+    },
+    {
+      "name": "Empty sessions-empty 390",
+      "passed": true,
+      "title": "我的会话",
+      "overflow": []
+    },
+    {
+      "name": "Empty history-empty 390",
+      "passed": true,
+      "title": "历史记录",
+      "overflow": []
+    },
+    {
+      "name": "POST/CSRF sessions 320",
+      "passed": true,
+      "forms": 3
+    },
+    {
+      "name": "Navigation sessions 320",
+      "passed": true
+    },
+    {
+      "name": "Disconnect disclosure 320",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "POST/CSRF history 320",
+      "passed": true,
+      "forms": 0
+    },
+    {
+      "name": "Navigation history 320",
+      "passed": true
+    },
+    {
+      "name": "POST/CSRF admin 320",
+      "passed": true,
+      "forms": 8
+    },
+    {
+      "name": "Navigation admin 320",
+      "passed": true
+    },
+    {
+      "name": "Disclosure .user-connections 320",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "Disclosure .user-ban 320",
+      "passed": true,
+      "overflow": []
+    },
+    {
+      "name": "Rate controls 320",
+      "passed": true,
+      "controls": [
+        {
+          "left": 20,
+          "right": 300,
+          "width": 280,
+          "height": 46,
+          "scroll": 280,
+          "client": 280
+        },
+        {
+          "left": 20,
+          "right": 300,
+          "width": 280,
+          "height": 46,
+          "scroll": 280,
+          "client": 280
+        },
+        {
+          "left": 20,
+          "right": 300,
+          "width": 280,
+          "height": 46,
+          "scroll": 280,
+          "client": 280
+        }
+      ]
+    },
+    {
+      "name": "POST/CSRF traffic 320",
+      "passed": true,
+      "forms": 1
+    },
+    {
+      "name": "Checkbox dimensions 320",
+      "passed": true,
+      "checkbox": [
+        {
+          "left": 42,
+          "right": 60,
+          "width": 18,
+          "height": 18
+        }
+      ]
+    },
+    {
+      "name": "Acknowledgement required 320",
+      "passed": true
+    },
+    {
+      "name": "Acknowledgement toggles 320",
+      "passed": true
+    },
+    {
+      "name": "Long amounts 320",
+      "passed": true,
+      "overflow": [],
+      "documentWidth": 320
+    },
+    {
+      "name": "Empty sessions-empty 320",
+      "passed": true,
+      "title": "我的会话",
+      "overflow": []
+    },
+    {
+      "name": "Empty history-empty 320",
+      "passed": true,
+      "title": "历史记录",
+      "overflow": []
+    },
+    {
+      "name": "Navigate to history",
+      "passed": true
+    },
+    {
+      "name": "Navigate to sessions",
+      "passed": true
+    },
+    {
+      "name": "No POST or payment",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "name": "Source frozen",
+      "passed": true
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "desktop-sessions.png",
+      "bytes": 72131
+    },
+    {
+      "file": "desktop-admin.png",
+      "bytes": 79056
+    },
+    {
+      "file": "mobile-history.png",
+      "bytes": 47726
+    },
+    {
+      "file": "mobile-admin.png",
+      "bytes": 40783
+    },
+    {
+      "file": "mobile-traffic.png",
+      "bytes": 49059
+    },
+    {
+      "file": "small-mobile-long-amount.png",
+      "bytes": 34934
+    }
+  ],
+  "failures": [],
+  "sourceAfter": {
+    "portal.css": "780644d0590e28411b80e76ea7e1c215f9a38f64e5005e5b69d556bdf722667f",
+    "portal-refresh.css": "b48923a87680342cdd8bf7f69219d731132682b0640d7c83272a1da77b0ef810",
+    "view.rs": "bbd23c5277bb5376814e004386bc5fe7c0fb57d4dee3c67f856cb0d530dd8dd6",
+    "dashboard_view.rs": "861a188db01d5a4d2e1e753fbdcebde870b5eadcefb2df59eb4674ffccfe3cae",
+    "commerce.rs": "cda43951a1b87043b462b4c3e9cc85b5b6dcc05ea18f84cd6fdde1a12dc569c7"
+  },
+  "passed": true,
+  "finished": "2026-11-18T19:01:01.295Z"
+}

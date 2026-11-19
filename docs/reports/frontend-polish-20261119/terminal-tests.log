@@ -1,0 +1,38 @@
+    Blocking waiting for file lock on build directory
+   Compiling ssmcp v0.9.4 (<checkout>/.worktrees/frame-boundary-20261119)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 08s
+     Running unittests src/lib.rs (<checkout>/target/debug/build/ssmcp/727970303ec1af32/out/ssmcp-727970303ec1af32)
+
+running 29 tests
+test client::terminal::tests::audit_navigation_opens_highlighted_source_and_keeps_final_result ... ok
+test client::terminal::tests::closing_selected_terminal_restores_main_and_ignores_late_output ... ok
+test client::terminal::tests::device_replies_remain_with_the_requesting_terminal_across_selection_and_resize ... ok
+test client::terminal::tests::appearance_resizes_preserve_history_and_render_rgb_defaults ... ok
+test client::terminal::tests::escape_followed_by_an_arrow_remains_two_keys_at_every_read_boundary ... ok
+test client::terminal::tests::frame_diff_erases_old_text_when_a_row_shrinks_or_becomes_empty ... ok
+test client::terminal::tests::escape_closes_help_opened_from_scrolled_logs ... ok
+test client::terminal::tests::geometry_reserves_real_panes_and_survives_narrow_resize ... ok
+test client::terminal::tests::hidden_pty_escape_sequences_cannot_change_audit_layout ... ok
+test client::terminal::tests::image_idle_recovery_releases_real_keys_even_without_an_outer_end ... ok
+test client::terminal::tests::full_screen_logs_remain_scrollable_and_never_forward_input ... ok
+test client::terminal::tests::jsonl_and_disabled_ui_never_initialize_a_physical_display ... ok
+test client::terminal::tests::layout_shortcut_never_forwards_coalesced_text_to_a_hidden_shell ... ok
+test client::terminal::tests::native_queries_reply_with_virtual_coordinates_and_a_bounded_queue ... ok
+test client::terminal::tests::interrupt_is_decoded_only_outside_paste_at_every_input_boundary ... ok
+test client::terminal::tests::nonblocking_output_keeps_partial_bytes_for_the_next_frame ... ok
+test client::terminal::tests::pasted_and_incomplete_keys_never_reach_a_hidden_shell ... ok
+test client::terminal::tests::no_color_does_not_disable_layout_and_log_lf_is_normalized ... ok
+test client::terminal::tests::rejected_native_image_keeps_other_images_and_future_uploads_available ... ok
+test client::terminal::tests::split_unicode_is_preserved_in_logs_and_hidden_native_terminal ... ok
+test client::terminal::tests::synchronized_frame_includes_initial_clear_rows_and_native_images ... ok
+test client::terminal::tests::synchronized_frame_remains_open_until_a_split_scroll_write_completes ... ok
+test client::terminal::tests::terminal_switches_keep_independent_screens_cursors_and_input_modes ... ok
+test client::terminal::tests::text_filter_keeps_matched_command_output_and_completion ... ok
+test client::terminal::tests::typing_keeps_log_scrollback_and_compact_audit_never_exposes_shell ... ok
+test client::terminal::tests::visible_log_diff_keeps_hidden_terminal_modes_out_of_the_client ... ok
+test client::terminal::tests::selection_freeze_releases_native_placements_when_cell_measurement_expires ... ok
+test client::terminal::tests::wheel_and_page_keys_scroll_logs_without_a_focus_shortcut ... ok
+test client::terminal::tests::worker_exit_restores_alternate_screen_and_joins_within_a_deadline ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 1119 filtered out; finished in 0.09s
+

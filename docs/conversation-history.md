@@ -64,6 +64,61 @@ await call(clientId, "ssmcp.ui.history", {
 
 Follow `next_offset` until it is null. List responses contain session summaries; read responses contain session metadata and `messages`. Offsets count records rather than bytes. Native reads do not select a conversation or write a user answer.
 
+### Metadata and keyword search
+
+`metadata` returns the session header and summary without message bodies. The
+summary includes the title, creation and update timestamps, retained message
+count, removed-message count, and whether the session is current.
+
+```javascript
+const sessions = await history.list(clientId, {limit: 16});
+if (sessions.sessions.length) {
+  const sessionId = sessions.sessions[0].id;
+  const metadata = await history.metadata(clientId, {id: sessionId});
+  const found = await history.search(clientId, {
+    query: "登录",
+    id: sessionId,
+    role: "user",
+    limit: 16
+  });
+  if (found.matches.length) {
+    const hit = found.matches[0];
+    const original = await history.read(clientId, {
+      id: hit.conversation_id,
+      offset: hit.message_index,
+      limit: 1
+    });
+  }
+}
+```
+
+The same operations are available through
+`ui.history(clientId, {action: "metadata", id})` and
+`ui.history(clientId, {action: "search", query, ...options})`.
+
+| Search field | Meaning |
+| --- | --- |
+| `query` | A nonblank literal keyword or phrase, at most 256 UTF-8 bytes. Regular expression characters have no special meaning. |
+| `id` | Optional exact conversation ID. Without it, search this workspace's retained conversations. |
+| `role` | Optional `system`, `user`, `assistant`, or `tool` filter. |
+| `case_sensitive` | Defaults to false; matching then uses Unicode lowercase text. This is not locale-specific collation. |
+| `offset`, `limit` | Match offset and page size, with at most 64 matches per page. |
+
+Each match gives `conversation_id`, `message_id`, `message_index`, role, kind,
+timestamp, original content byte count, and a snippet around the first match.
+`snippet_truncated` distinguishes the 384-character preview from full text;
+`source_truncated` reports truncation already present in the stored message.
+One message appears once even if it contains multiple occurrences. Results order
+conversations by latest update, then messages in their original order.
+
+Search reads the same validated and redacted JSONL as ordinary history reads.
+It does not change the active conversation, rewrite files, or replay requirements.
+It scans at most 64 conversations and 16 MiB of retained source data, reports
+`scanned_sessions` and `scan_truncated`, and bounds each response to 64 KiB.
+`total` counts matches in the scanned data. If history changes between calls,
+record offsets may change; use the returned IDs to confirm the source message.
+Files and queries from other workspaces are excluded.
+
 After connecting, agents should use `ssmcp.ui.message` for local progress and result messages, `ssmcp.ui.ask` to queue questions, and `ssmcp.ui.questions` to read answers later. This is the local communication convention; ssmcp does not prevent an external harness from writing somewhere else.
 
 ## /handoff：准备可编辑的交接上下文

@@ -1,6 +1,7 @@
 //! Compose logs and source audit with a configurable observational sidebar.
 //! Only this module writes the physical terminal while a Session is active.
 use super::{
+    account::status::{self as account_status, Status as AccountStatus},
     audit_view::AuditView,
     panel::{self, PanelLayout, PanelSnapshot, PanelTone},
     render::LogFormat,
@@ -29,11 +30,13 @@ pub(crate) mod markdown;
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
 const MAX_SESSIONS: usize = 16;
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+const SYNC_END: &[u8] = b"\x1b[?2026l";
 // Rendered cells cost much more than UTF-8 output. Keep a short interactive
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
-const LEAVE: &[u8] = b"\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
+const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
 fn nonzero(value: u16) -> NonZeroU16 {
@@ -53,6 +56,7 @@ pub(crate) struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
     guide_probe: Option<tokio::task::JoinHandle<()>>,
+    account_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -82,6 +86,12 @@ impl Session {
         let guide = endpoint.and_then(guide::Guide::from_endpoint);
         let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
         state.guide = guide.map(guide::Guide::portal);
+        let account_server = endpoint
+            .and_then(account_status::server_from_endpoint)
+            .filter(|_| tokio::runtime::Handle::try_current().is_ok());
+        if account_server.is_some() {
+            state.account = AccountStatus::Loading;
+        }
         state.graphics = images::Graphics::environment(&options);
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
@@ -133,10 +143,39 @@ impl Session {
                         }
                     }))
                 });
+                let account_probe = account_server.and_then(|server| {
+                    let handle = tokio::runtime::Handle::try_current().ok()?;
+                    let display = Arc::downgrade(&shared);
+                    Some(handle.spawn(async move {
+                        loop {
+                            // Resolve this session's selected origin again on each refresh.
+                            // Requests and waits never hold the compositor lock.
+                            let status = AccountStatus::refresh(&server).await;
+                            {
+                                let Some(shared) = display.upgrade() else {
+                                    return;
+                                };
+                                if shared.stop.load(Ordering::Acquire)
+                                    || !shared.alive.load(Ordering::Acquire)
+                                {
+                                    return;
+                                }
+                                let mut state =
+                                    shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                                if !state.preview && state.account != status {
+                                    state.account = status;
+                                    state.dirty = true;
+                                }
+                            }
+                            tokio::time::sleep(Duration::from_secs(60)).await;
+                        }
+                    }))
+                });
                 Ok(Some(Self {
                     shared,
                     thread: Some(thread),
                     guide_probe,
+                    account_probe,
                 }))
             }
             Err(error) => {
@@ -155,6 +194,9 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
         if let Some(probe) = self.guide_probe.take() {
+            probe.abort();
+        }
+        if let Some(probe) = self.account_probe.take() {
             probe.abort();
         }
         if let Some(thread) = self.thread.take() {
@@ -498,6 +540,11 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
     state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
+    state.account = AccountStatus::Ready {
+        login: "example".into(),
+        username: None,
+        traffic: account_status::Traffic::Remaining(750_000_000),
+    };
     state.log_message("user", "Improve the client experience\nKeep commands, results and the original code easy to inspect.", "\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"17","exit_code":0}), "[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"preview-diff","exit_code":0}), "[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
@@ -1046,6 +1093,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     context_label: String,
     guide: Option<guide::Guide>,
+    account: AccountStatus,
     graphics: images::Graphics,
     media: Vec<images::Placement>,
     geometry: Geometry,
@@ -1083,6 +1131,7 @@ impl State {
             events: events::EventView::new(),
             context_label: String::new(),
             guide: None,
+            account: AccountStatus::Unavailable,
             graphics: images::Graphics::default(),
             media: Vec::new(),
             logs: vt100::Parser::new(
@@ -1851,7 +1900,24 @@ impl State {
         }
     }
     fn guide_rows(&mut self, width: u16, height: u16, _row: u16, _col: u16) -> Vec<String> {
-        guide::pet_rows(width, height, &self.ui)
+        let mut rows = Vec::new();
+        // Keep eight rows for the configured panels before reserving account space.
+        if height >= 10 && width >= 20 {
+            for text in self.account.rows() {
+                let text = fit(&text, width);
+                let padded = format!(
+                    "{text}{}",
+                    " ".repeat(usize::from(width).saturating_sub(text.width()))
+                );
+                rows.push(self.tone(PanelTone::Muted, &padded));
+            }
+        }
+        rows.extend(guide::pet_rows(
+            width,
+            height.saturating_sub(rows.len() as u16),
+            &self.ui,
+        ));
+        rows
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
         if !self.ui.color {
@@ -2087,6 +2153,29 @@ impl Frame {
     }
 }
 
+// Keep row diffs and native-image changes in one terminal presentation, even
+// when nonblocking output splits the bytes across several drain attempts.
+fn append_frame(
+    output: &mut Vec<u8>,
+    frame: &Frame,
+    previous: Option<&Frame>,
+    before: &str,
+    after: &str,
+) {
+    let diff = frame.diff(previous);
+    if previous.is_some() && before.is_empty() && diff.is_empty() && after.is_empty() {
+        return;
+    }
+    output.extend_from_slice(SYNC_BEGIN);
+    if previous.is_none() {
+        output.extend_from_slice(ENTER);
+    }
+    output.extend_from_slice(before.as_bytes());
+    output.extend_from_slice(&diff);
+    output.extend_from_slice(after.as_bytes());
+    output.extend_from_slice(SYNC_END);
+}
+
 struct RestoringOutput<'a> {
     shared: &'a Shared,
     output: PhysicalOutput,
@@ -2131,7 +2220,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
         wrote: false,
         media: images::Renderer::default(),
     };
-    let mut pending = ENTER.to_vec();
+    let mut pending = Vec::new();
     let mut offset = 0;
     let mut previous = None;
     let mut previous_cell = None;
@@ -2162,9 +2251,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             pending = requests;
             if let Some((frame, media)) = refresh {
                 let (before, after) = output.media.update(media, frame.cursor, frame.hidden);
-                pending.extend_from_slice(before.as_bytes());
-                pending.extend_from_slice(&frame.diff(previous.as_ref()));
-                pending.extend_from_slice(after.as_bytes());
+                append_frame(&mut pending, &frame, previous.as_ref(), &before, &after);
                 previous = Some(frame);
             }
             offset = 0;
@@ -2359,6 +2446,30 @@ impl Drop for PhysicalOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_preview_uses_the_shared_sidebar_and_preserves_the_ascii_pet() {
+        for layout in [Layout::Chat, Layout::Split, Layout::Logs] {
+            let mut ui = Ui {
+                color: false,
+                layout,
+                ..Ui::default()
+            };
+            let mut screen = vt100::Parser::new(nonzero(30), nonzero(120), 0);
+            screen.process(&preview_bytes(&ui, 30, 120));
+            let contents = screen.screen().contents();
+            assert!(contents.contains("账号  example"), "{layout:?}: {contents}");
+            assert!(
+                contents.contains("本月剩余  0.75 GB"),
+                "{layout:?}: {contents}"
+            );
+            assert!(contents.contains("( o.o )"), "{layout:?}: {contents}");
+            ui.sidebar = false;
+            let mut hidden = vt100::Parser::new(nonzero(30), nonzero(120), 0);
+            hidden.process(&preview_bytes(&ui, 30, 120));
+            assert!(!hidden.screen().contents().contains("账号"));
+        }
+    }
 
     fn split_ui() -> Ui {
         Ui {
@@ -2817,6 +2928,95 @@ mod tests {
         );
     }
     #[test]
+    fn synchronized_frame_includes_initial_clear_rows_and_native_images() {
+        let mut state = State::new(30, 110, &split_ui());
+        state.log(b"complete frame\n");
+        let frame = state.frame(Instant::now());
+        let before = "\x1b_Ga=d,d=I,i=42\x1b\\";
+        let after = "\x1b_Ga=p,i=43,p=1\x1b\\";
+        let mut bytes = Vec::new();
+        append_frame(&mut bytes, &frame, None, before, after);
+        assert!(bytes.starts_with(SYNC_BEGIN));
+        assert!(bytes.ends_with(SYNC_END));
+        let initial_end = SYNC_BEGIN.len() + ENTER.len();
+        assert_eq!(&bytes[SYNC_BEGIN.len()..initial_end], ENTER);
+        assert!(bytes[initial_end..].starts_with(before.as_bytes()));
+        assert!(bytes[..bytes.len() - SYNC_END.len()].ends_with(after.as_bytes()));
+        assert_eq!(
+            bytes
+                .windows(SYNC_BEGIN.len())
+                .filter(|part| *part == SYNC_BEGIN)
+                .count(),
+            1
+        );
+        let mut screen = vt100::Parser::new(nonzero(30), nonzero(110), 0);
+        screen.process(&bytes);
+        assert!(screen.screen().contents().contains("complete frame"));
+        let mut unchanged = Vec::new();
+        append_frame(&mut unchanged, &frame, Some(&frame), "", "");
+        assert!(unchanged.is_empty());
+        assert!(LEAVE.starts_with(SYNC_END));
+    }
+
+    #[test]
+    fn synchronized_frame_remains_open_until_a_split_scroll_write_completes() {
+        let mut state = State::new(30, 110, &split_ui());
+        for index in 0..80 {
+            state.log(format!("scroll row {index:03}\n").as_bytes());
+        }
+        let first = state.frame(Instant::now());
+        state.keyboard(b"\x1b[5~", Instant::now(), false);
+        let next = state.frame(Instant::now());
+        let mut bytes = Vec::new();
+        append_frame(&mut bytes, &next, Some(&first), "", "");
+        assert!(bytes.starts_with(SYNC_BEGIN));
+        assert!(bytes.ends_with(SYNC_END));
+        assert!(!bytes.windows(ENTER.len()).any(|part| part == ENTER));
+
+        struct Backpressure {
+            bytes: Vec<u8>,
+            limit: usize,
+        }
+        impl Write for Backpressure {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let count = bytes.len().min(self.limit);
+                if count == 0 {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                self.bytes.extend_from_slice(&bytes[..count]);
+                self.limit -= count;
+                Ok(count)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut output = Backpressure {
+            bytes: Vec::new(),
+            limit: bytes.len() / 2,
+        };
+        let mut offset = 0;
+        drain(&mut output, &bytes, &mut offset).unwrap();
+        assert!(offset > SYNC_BEGIN.len() && offset < bytes.len() - SYNC_END.len());
+        assert!(
+            !output
+                .bytes
+                .windows(SYNC_END.len())
+                .any(|part| part == SYNC_END)
+        );
+        output.limit = bytes.len();
+        drain(&mut output, &bytes, &mut offset).unwrap();
+        assert_eq!(offset, bytes.len());
+        assert_eq!(output.bytes, bytes);
+        let mut screen = physical(&first);
+        screen.process(&output.bytes);
+        assert_eq!(
+            screen.screen().contents(),
+            physical(&next).screen().contents()
+        );
+    }
+
+    #[test]
     fn nonblocking_output_keeps_partial_bytes_for_the_next_frame() {
         struct Partial {
             bytes: Vec<u8>,
@@ -3078,6 +3278,7 @@ mod tests {
             shared: shared.clone(),
             thread: Some(thread),
             guide_probe: None,
+            account_probe: None,
         };
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 65536];
