@@ -1647,7 +1647,6 @@ impl State {
         }
         self.dirty |= self.graphics.take_changed();
         let bytes = filtered.as_slice();
-        self.sleep_update();
         if self.ui.layout == Layout::Chat {
             return self.chat_keyboard(bytes, now, flush);
         }

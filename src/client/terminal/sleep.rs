@@ -109,9 +109,11 @@ impl State {
     }
 
     pub(super) fn sleep_key(&mut self, key: Key) -> bool {
-        let before = self.sleep.visible;
+        // Input follows the last composed frame, not a newer Hub snapshot.
+        // A timeout must not let a click through a still-visible overlay.
+        let before = (self.sleep.visible, self.sleep.swallowing_mouse);
         let consumed = self.sleep.consume(key);
-        self.dirty |= before != self.sleep.visible;
+        self.dirty |= before != (self.sleep.visible, self.sleep.swallowing_mouse);
         consumed
     }
 
@@ -130,6 +132,9 @@ impl State {
             self.media.clear();
             dim(frame, self.ui.color);
         }
+        // Copy mode must keep reporting the mouse release after a click wakes
+        // the overlay. Restore its original capture mode only after release.
+        frame.mouse_capture |= self.sleep.swallowing_mouse;
     }
 }
 
@@ -339,6 +344,7 @@ mod tests {
         state.keyboard(b"\x1b[<34;12;6M", now, false);
         // A connection transition must not release the pending mouse gesture.
         state.sleep_fixture = Some(snapshot("connection-b", 3, 3));
+        state.frame(now);
         state.keyboard(b"\x1b[<2;12;6m", now, false);
         assert_eq!(state.conversation.snapshot(), before);
         assert_eq!(state.events.snapshot(), events);
@@ -351,6 +357,29 @@ mod tests {
         assert_ne!(
             state.conversation.snapshot()["logs_open"],
             before["logs_open"]
+        );
+    }
+
+    #[test]
+    fn sleep_timeout_before_redraw_keeps_visible_overlay_input_barrier() {
+        let now = Instant::now();
+        let mut state = state(28, 120);
+        state.frame(now);
+        let before = state.conversation.snapshot();
+        state.sleep_fixture.as_mut().unwrap().active.clear();
+        // The wait has ended, but the terminal still shows the last frame.
+        state.keyboard(b"\x1b[<2;8;4M", now, false);
+        assert!(!state.sleep.visible);
+        assert_eq!(state.conversation.snapshot(), before);
+        state.frame(now);
+        state.keyboard(b"\x1b[<2;8;4m", now, false);
+        assert!(!state.sleep.swallowing_mouse);
+        assert_eq!(state.conversation.snapshot(), before);
+        state.sleep_fixture = Some(snapshot("connection-a", 1, 2));
+        state.frame(now);
+        assert!(
+            !state.sleep.visible,
+            "the click dismissed the displayed episode"
         );
     }
 
@@ -451,11 +480,20 @@ mod tests {
         assert!(state.should_redraw(Some(&before), state.graphics.cell()));
         let asleep = state.frame(now);
         assert!(asleep.mouse_capture && state.selection);
-        state.keyboard(b"\x1b[<0;1;1M\x1b[<0;1;1m", now, false);
+        state.keyboard(b"\x1b[<0;1;1M", now, false);
         assert!(state.selection && !state.sleep.visible);
         assert!(state.should_redraw(Some(&asleep), state.graphics.cell()));
+        let pressed = state.frame(now);
+        assert!(
+            pressed.mouse_capture,
+            "keep terminal release reporting after wake"
+        );
+        state.dirty = false;
+        state.keyboard(b"\x1b[<0;1;1m", now, false);
+        assert!(state.should_redraw(Some(&pressed), state.graphics.cell()));
         let after = state.frame(now);
         assert!(!after.mouse_capture);
+        assert!(!state.sleep.swallowing_mouse);
         assert_eq!(after.rows, before.rows);
         state.dirty = false;
         assert!(!state.should_redraw(Some(&after), state.graphics.cell()));
