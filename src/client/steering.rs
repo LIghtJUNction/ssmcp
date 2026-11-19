@@ -1277,10 +1277,13 @@ pub(super) fn take_events() -> Vec<UiEvent> {
     with(|manager| manager.events.drain(..).collect())
 }
 pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport> {
-    with(|manager| manager.connect(room_id, protocol))
+    let transport = with(|manager| manager.connect(room_id, protocol));
+    super::interface::listener::connect(room_id);
+    transport
 }
 pub(super) fn disconnect() {
     with(Manager::disconnect);
+    super::interface::listener::disconnect();
     // Display invalidation happens only after releasing the request manager lock.
     super::terminal::callers_disconnected();
 }

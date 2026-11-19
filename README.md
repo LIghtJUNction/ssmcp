@@ -4,11 +4,16 @@
 
 ssmcp 是一个可自建的远程 harness 通道。客户端把命令、文件、浏览器和已安装的开发工具接入授权会话；Agent 通过 MCP 选择设备并调用这些工具。模型可以在云端，工作区、执行环境和工具状态留在你的机器上。
 
-[快速开始](#快速开始) · [会话操作](docs/client-input.md) · [工具与浏览器](docs/backends.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
+[演示视频](#演示视频) · [快速开始](#快速开始) · [会话操作](docs/client-input.md) · [工具与浏览器](docs/backends.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
 
 [![Rust](https://img.shields.io/badge/Rust-1.100%2B-64748b?style=flat-square)](Cargo.toml) [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE) [![Releases](https://img.shields.io/badge/Download-Releases-4285f4?style=flat-square)](https://github.com/LIghtJUNction/ssmcp/releases)
 
 ---
+
+## 演示视频
+
+- **中文**：[抖音 · ssmcp 项目介绍](https://v.douyin.com/_3yRZNA-Qls/) · [哔哩哔哩 · ssmcp 项目介绍](https://b23.tv/wA4gzmV)
+- **English**：[YouTube · ssmcp Demo](https://youtu.be/9LqpS5BXRTQ?si=kn2Oy9kPiUUPoFxm)
 
 ## 一条连接，三种用法
 
