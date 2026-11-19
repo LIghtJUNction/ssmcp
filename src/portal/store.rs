@@ -336,6 +336,7 @@ impl Store {
         Ok(account)
     }
 
+    #[cfg(test)]
     pub fn add(&mut self, owner: &str, key: PublicKey) -> Result<(), Problem> {
         self.account(owner)?;
         let mut next = self.database.clone();
@@ -354,6 +355,7 @@ impl Store {
         self.save(next)
     }
 
+    #[cfg(test)]
     pub fn remove(&mut self, owner: &str, fingerprint: &str) -> Result<(), Problem> {
         self.account(owner)?;
         let mut next = self.database.clone();

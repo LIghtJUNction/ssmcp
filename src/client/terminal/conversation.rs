@@ -890,8 +890,11 @@ impl State {
     }
 
     fn chat_page(&mut self, delta: isize) {
-        if self.conversation.content_focus && self.conversation.view == View::Activity
-            && !self.raw_logs && self.events.scroll_selected_panel(delta) {
+        if self.conversation.content_focus
+            && self.conversation.view == View::Activity
+            && !self.raw_logs
+            && self.events.scroll_selected_panel(delta)
+        {
             return;
         }
         self.chat_move(delta);
@@ -1204,9 +1207,14 @@ impl State {
                 if button & 64 != 0 {
                     let delta = if button & 1 == 0 { -3 } else { 3 };
                     if y >= body_top(self.geometry.rows) && y < prompt_top(self.geometry.rows) {
-                        let inside_panel = self.conversation.view == View::Activity && !self.raw_logs
-                            && self.events.scroll_panel_at(y - body_top(self.geometry.rows), delta);
-                        if !inside_panel { self.chat_move(delta); }
+                        let inside_panel = self.conversation.view == View::Activity
+                            && !self.raw_logs
+                            && self
+                                .events
+                                .scroll_panel_at(y - body_top(self.geometry.rows), delta);
+                        if !inside_panel {
+                            self.chat_move(delta);
+                        }
                     }
                 } else if y > prompt_top(self.geometry.rows) {
                     self.conversation.content_focus = false;
@@ -2668,14 +2676,31 @@ mod tests {
     fn command_panel_fixture(rows: u16, cols: u16) -> State {
         let mut state = preview(rows, cols);
         state.events.clear();
-        state.log_message("user", "Run both checks and keep their logs easy to inspect.", b"");
+        state.log_message(
+            "user",
+            "Run both checks and keep their logs easy to inspect.",
+            b"",
+        );
         for (id, command) in [("build", "cargo check"), ("tests", "cargo test --lib")] {
-            state.log_event("preview", &json!({"type":"exec.started","job_id":id}),
-                format!("[RUN] preview {id} {command} started\n").as_bytes());
-            state.log_event("preview", &json!({"type":"exec.stdout","job_id":id}),
-                (0..40).map(|n| format!("{id} step {n:02} · complete\n")).collect::<String>().as_bytes());
+            state.log_event(
+                "preview",
+                &json!({"type":"exec.started","job_id":id}),
+                format!("[RUN] preview {id} {command} started\n").as_bytes(),
+            );
+            state.log_event(
+                "preview",
+                &json!({"type":"exec.stdout","job_id":id}),
+                (0..40)
+                    .map(|n| format!("{id} step {n:02} · complete\n"))
+                    .collect::<String>()
+                    .as_bytes(),
+            );
         }
-        state.log_event("preview", &json!({"type":"exec.exited","job_id":"build","exit_code":0}), b"[OK] preview build exit=0\n");
+        state.log_event(
+            "preview",
+            &json!({"type":"exec.exited","job_id":"build","exit_code":0}),
+            b"[OK] preview build exit=0\n",
+        );
         state.conversation.composer.set_text("Keep this draft");
         state.notice = None;
         state
@@ -2685,8 +2710,11 @@ mod tests {
         if let Some(out) = std::env::var_os("SSMCP_COMMAND_PANEL_PREVIEW_DIR") {
             let out = std::path::PathBuf::from(out);
             std::fs::create_dir_all(&out).unwrap();
-            std::fs::write(out.join(format!("{name}-{}.ansi", state.geometry.cols)),
-                state.chat_frame(Instant::now()).diff(None)).unwrap();
+            std::fs::write(
+                out.join(format!("{name}-{}.ansi", state.geometry.cols)),
+                state.chat_frame(Instant::now()).diff(None),
+            )
+            .unwrap();
         }
     }
 
@@ -2695,28 +2723,65 @@ mod tests {
         for cols in [120, 48] {
             let mut state = command_panel_fixture(28, cols);
             let screen = display(&mut state).screen().contents();
-            assert!(screen.contains("build step 37") && screen.contains("tests step 37"), "{screen}");
+            assert!(
+                screen.contains("build step 37") && screen.contains("tests step 37"),
+                "{screen}"
+            );
             save_command_panel_preview(&mut state, "collapsed");
-            let first_y = screen.lines().position(|row| row.contains("build step 37")).unwrap() as u16;
-            let second_y = screen.lines().position(|row| row.contains("tests step 37")).unwrap() as u16;
+            let first_y = screen
+                .lines()
+                .position(|row| row.contains("build step 37"))
+                .unwrap() as u16;
+            let second_y = screen
+                .lines()
+                .position(|row| row.contains("tests step 37"))
+                .unwrap() as u16;
             let before = state.events.snapshot();
-            state.chat_key(Key::Mouse { button: 64, x: 8, y: first_y, release: false });
+            state.chat_key(Key::Mouse {
+                button: 64,
+                x: 8,
+                y: first_y,
+                release: false,
+            });
             display(&mut state);
             let first = state.events.snapshot();
             assert_eq!(first["scroll"], before["scroll"]);
             assert_eq!(first["events"][1]["panel"]["scroll"], 34);
             assert_eq!(first["events"][2]["panel"]["scroll"], 37);
-            state.chat_key(Key::Mouse { button: 64, x: 8, y: second_y, release: false });
+            state.chat_key(Key::Mouse {
+                button: 64,
+                x: 8,
+                y: second_y,
+                release: false,
+            });
             display(&mut state);
             let both = state.events.snapshot();
             assert_eq!(both["events"][1]["panel"]["scroll"], 34);
             assert_eq!(both["events"][2]["panel"]["scroll"], 34);
             save_command_panel_preview(&mut state, "independent-scroll");
-            state.chat_key(Key::Mouse { button: 64, x: 8, y: prompt_top(state.geometry.rows) + 1, release: false });
-            assert_eq!(state.events.snapshot(), both, "wheel over the composer cannot scroll the transcript");
-            state.chat_key(Key::Mouse { button: 0, x: 8, y: first_y, release: false });
+            state.chat_key(Key::Mouse {
+                button: 64,
+                x: 8,
+                y: prompt_top(state.geometry.rows) + 1,
+                release: false,
+            });
+            assert_eq!(
+                state.events.snapshot(),
+                both,
+                "wheel over the composer cannot scroll the transcript"
+            );
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 8,
+                y: first_y,
+                release: false,
+            });
             display(&mut state);
-            assert!(state.events.snapshot()["events"][1]["expanded"].as_bool().unwrap());
+            assert!(
+                state.events.snapshot()["events"][1]["expanded"]
+                    .as_bool()
+                    .unwrap()
+            );
             state.chat_key(Key::Home);
             let expanded = display(&mut state).screen().contents();
             assert!(expanded.contains("build step 00"), "{expanded}");
@@ -2724,15 +2789,33 @@ mod tests {
             save_command_panel_preview(&mut state, "expanded");
             state.chat_key(Key::Down);
             display(&mut state);
-            assert!(state.events.snapshot()["events"][1]["panel"]["scroll"].as_u64().unwrap() > 0);
+            assert!(
+                state.events.snapshot()["events"][1]["panel"]["scroll"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
             state.chat_key(Key::End);
-            assert!(state.events.snapshot()["events"][1]["panel"]["following"].as_bool().unwrap());
+            assert!(
+                state.events.snapshot()["events"][1]["panel"]["following"]
+                    .as_bool()
+                    .unwrap()
+            );
             assert_eq!(state.conversation.composer.text(), "Keep this draft");
             state.chat_key(Key::Select);
             let selection = state.events.snapshot();
-            state.chat_key(Key::Mouse { button: 64, x: 8, y: first_y, release: false });
+            state.chat_key(Key::Mouse {
+                button: 64,
+                x: 8,
+                y: first_y,
+                release: false,
+            });
             assert!(state.selection);
-            assert_eq!(state.events.snapshot(), selection, "terminal selection keeps its existing copy behavior");
+            assert_eq!(
+                state.events.snapshot(),
+                selection,
+                "terminal selection keeps its existing copy behavior"
+            );
             state.chat_key(Key::Escape);
             assert!(!state.selection);
         }

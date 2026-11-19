@@ -21,7 +21,6 @@ mod handoff;
 mod highlight;
 pub(crate) mod input;
 pub(crate) mod interface;
-mod onboarding;
 mod panel;
 pub(crate) mod presentation;
 #[cfg(test)]
@@ -49,14 +48,7 @@ use crate::{
     },
 };
 use serde_json::json;
-use std::{
-    ffi::OsString,
-    io,
-    path::PathBuf,
-    process::{ExitStatus, Stdio},
-    sync::Arc,
-    time::Duration,
-};
+use std::{ffi::OsString, io, path::PathBuf, process::ExitStatus, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, BufReader},
     process::{Child, ChildStdout, Command},
@@ -106,7 +98,7 @@ Usage: ssmcp username@server [options]
        ssmcp join [--server URL] --token INVITATION [options]
        ssmcp [options] [--server URL]
        ssmcp --ssh [options] [user@]host
-       ssmcp setup [options] [user@]host
+       ssmcp setup [--server URL] [--no-browser]
        ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
@@ -118,22 +110,14 @@ Usage: ssmcp username@server [options]
   --server URL         Relay for this command; overrides config and last login
   --username NAME      Named account on the selected server
   --no-browser         Print the GitHub authorization link without opening it
-  --ssh                Explicitly select a legacy SSH destination
   -i, --interactive    Select an authorized account session and open its terminal
-  --identity FILE      SSH private key file; legacy -i FILE HOST remains supported
-  -p port              SSH port
-  -F ssh_config        OpenSSH configuration file
   --name NAME          Display name (default: hostname-pid)
-  --portal URL         HTTPS account portal for first-connection setup
-  --no-setup           Disable automatic interactive connection repair
   --daemon             Start a quiet, user-owned native background service
   --session-control    Grant this connection local saved-session management tools
   --no-watchdog        Disable automatic reconnects (enabled by default)
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
   --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
-  --allow USER@github  Allow GitHub identities; repeat or separate with commas
-                       (SSH sharing; at most 32 users; your logged-in account is automatic)
   --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
@@ -145,7 +129,7 @@ Usage: ssmcp username@server [options]
   --theme NAME         dark, codex-dark, nord, solarized, light, or minimal
   --timestamps         Show UTC timestamps on event headings
   --max-inline-output N  Maximum lines per buffered output block (default 8)
-  --list-tools         List native and workspace tools as JSON, then exit without SSH
+  --list-tools         List native and workspace tools as JSON, then exit
 
 The client provides native tools without another harness. Optional Codex, Claude
 Code, Pi, OpenCode and Playwright bridges stay unloaded until explicitly needed.
@@ -163,17 +147,11 @@ Examples:
   ssmcp invite
   ssmcp invite --shell powershell
   ssmcp --no-watchdog --name one-shot
-  ssmcp --name laptop my-server
-  ssmcp --title "Fix ssmcp client reload" my-server
-  ssmcp -F ~/.ssh/work_config my-server
-  ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
-  ssmcp --allow octocat@github,alice@github my-server
-  ssmcp --daemon --watchdog --name workstation --allow octocat@github my-server
   ssmcp sessions status workstation
   ssmcp sessions stop workstation
   ssmcp service install --system --user alice
   sudo systemctl enable --now ssmcp
-  ssmcp sessions create workstation --watchdog --allow octocat@github my-server
+  ssmcp sessions create workstation --watchdog alice@my-server.example
   ssmcp attach workstation
   ssmcp sessions close workstation
 
@@ -197,15 +175,6 @@ Redirected stdout (or jsonl mode) emits one connection JSON object.
 Interactive stdout shows the MCP URL and OAuth login instructions.
 Add url to your MCP client, then enter login_code on its OAuth login page.
 login_expires_in deducts local backend startup time.
-With --allow, prints url, client information, allow and auth:"github" instead
-of a login_code. Add url to the MCP client and sign in with an allowed GitHub
-account in the browser. On a first-connection failure, interactive setup opens
-GitHub authorization, checks account keys and offers to create/register a local
-Ed25519 key. Enter confirms a default computer name. Setup backs up and verifies
-SSH configuration. Existing working connections do not run setup. Use --no-setup
-to retain manual provisioning; services never open browsers or prompt.
---allow requires a server that supports GitHub authorization and cannot be
-combined with --list-tools.
 Live input, output and native tool events appear on stderr as readable blocks.
 Independent commands run concurrently and support status, output, wait and cancel.
 Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
@@ -365,8 +334,6 @@ struct Options {
     timestamps: bool,
     max_inline_output: Option<usize>,
     no_color: bool,
-    no_setup: bool,
-    portal: Option<String>,
     identity: Option<OsString>,
     port: Option<u16>,
     config: Option<OsString>,
@@ -430,8 +397,6 @@ impl Options {
         let mut timestamps = false;
         let mut max_inline_output = None;
         let mut no_color = false;
-        let mut no_setup = false;
-        let mut portal = None;
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = crate::platform::default_shell();
         let mut tty = None;
@@ -521,15 +486,8 @@ impl Options {
                     context_roots.push(path);
                 }
                 Some("--list-tools") => list_tools = true,
-                Some("--no-setup") => no_setup = true,
-                Some("--portal") => {
-                    portal = Some(
-                        args.next()
-                            .ok_or("--portal requires an HTTPS origin")?
-                            .into_string()
-                            .map_err(|_| "--portal must be UTF-8")?,
-                    )
-                }
+                Some("--no-setup") => {}
+                Some("--portal") => return Err("--portal has been replaced by --server URL".into()),
                 Some("--daemon") => daemon = true,
                 Some("--session-control") => session_control = true,
                 Some("--watchdog" | "--no-watchdog") => {
@@ -716,8 +674,6 @@ impl Options {
             timestamps,
             max_inline_output,
             no_color,
-            no_setup,
-            portal,
             identity,
             port,
             config,
@@ -824,8 +780,9 @@ impl Options {
         })
     }
 
+    #[cfg(test)]
     fn command(&self) -> Command {
-        let mut command = Command::new(onboarding::ssh_executable());
+        let mut command = Command::new("ssh");
         command.arg("-T");
         // OpenSSH uses the first value for each option, so enforce these before user config.
         for option in [
@@ -862,9 +819,9 @@ impl Options {
             .arg(self.destination.as_ref().expect("SSH destination"))
             .args(["ssmcpd", "attach"]);
         command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         command
     }
@@ -1007,6 +964,9 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     let Some(mut options) = Options::parse(connection)? else {
         return Ok(());
     };
+    if options.destination.is_some() {
+        return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
+    }
     apply_account(&mut options, None, true).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
@@ -1203,7 +1163,6 @@ async fn apply_account(
         options.username = credential.username.clone();
         options.allow = vec![credential.principal.clone()];
         options.relay = Some(credential);
-        options.no_setup = true;
     } else if options.allow.is_empty() {
         // A cached, verified public principal selects the existing SSH ACL.
         // The account bearer credential is never sent to an SSH destination.
@@ -1239,9 +1198,6 @@ pub async fn run() -> crate::Result<()> {
         // blocking stdin reader when the remote WebSocket closes first.
         std::process::exit(code);
     }
-    if let Some(code) = onboarding::run_askpass_helper() {
-        std::process::exit(code);
-    }
     #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__rsync-transport")) {
         return crate::rsync::transport_main().await;
@@ -1263,6 +1219,9 @@ pub async fn run() -> crate::Result<()> {
     if browser_setup::dispatch(&args).await? || config::dispatch(&args)? || trust::dispatch(&args)?
     {
         return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "setup") {
+        args[0] = OsString::from("login");
     }
     if account::dispatch(&args).await? {
         return Ok(());
@@ -1290,10 +1249,6 @@ pub async fn run() -> crate::Result<()> {
     if args.first().is_some_and(|arg| arg == "sessions") {
         return crate::session::manage(args.into_iter().skip(1).collect()).await;
     }
-    let setup_requested = args.first().is_some_and(|arg| arg == "setup");
-    if setup_requested {
-        args.remove(0);
-    }
     let mut service = if args.first().is_some_and(|arg| arg == "__session-run") {
         if args.len() != 2 {
             return Err("internal session runner requires exactly one session name".into());
@@ -1312,18 +1267,14 @@ pub async fn run() -> crate::Result<()> {
     };
     let parsed = if let Some(runner) = &service {
         Options::parse_saved(runner.spec())?
-    } else if setup_requested {
-        Options::parse_with_default(args, Some("ssmcp.lmm.best"))?
     } else {
         Options::parse(args)?
     };
     let Some(mut options) = parsed else {
         return Ok(());
     };
-    if setup_requested && (options.server.is_some() || join.is_some()) {
-        return Err(
-            "setup configures SSH; use ssmcp login --server URL for HTTPS account access".into(),
-        );
+    if options.destination.is_some() {
+        return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
     }
     apply_account(&mut options, join, service.is_none()).await?;
     if let Some(runner) = &service
@@ -1333,32 +1284,6 @@ pub async fn run() -> crate::Result<()> {
             || options.reconnect_delay_secs != runner.spec().reconnect_delay_secs)
     {
         return Err("saved background session options do not match its manifest".into());
-    }
-    if setup_requested {
-        if options.list_tools || options.no_setup {
-            return Err("setup cannot be combined with --list-tools or --no-setup".into());
-        }
-        if !onboarding::run(&mut options).await? {
-            return Ok(());
-        }
-        if !onboarding::verify_after_setup(&options).await? {
-            return Ok(());
-        }
-        browser_setup::configure_existing().await?;
-    } else if options.daemon && !options.no_setup && onboarding::interactive() {
-        match onboarding::probe(&options).await {
-            Ok(true) => {}
-            Ok(false) => return Ok(()),
-            Err(error) => {
-                report_error(&error);
-                if !onboarding::run(&mut options).await? {
-                    return Ok(());
-                }
-                if !onboarding::verify_after_setup(&options).await? {
-                    return Ok(());
-                }
-            }
-        }
     }
     if options.daemon {
         let result = crate::session::start(options.session_spec()?).await?;
@@ -1450,8 +1375,6 @@ pub async fn run() -> crate::Result<()> {
         return Ok(());
     }
     let mut attempt = 0u64;
-    let mut setup_attempted = setup_requested;
-    let mut ever_registered = false;
     let mut reauthenticated = false;
     loop {
         if let Some(runner) = &service
@@ -1537,31 +1460,11 @@ pub async fn run() -> crate::Result<()> {
             }
             return Ok(());
         }
-        ever_registered |= registered;
         let error = result.as_ref().err().map(ToString::to_string);
         let unsupported_protocol = result
             .as_ref()
             .err()
             .is_some_and(|error| error.downcast_ref::<UnsupportedWireProtocol>().is_some());
-        if error.is_some()
-            && !unsupported_protocol
-            && !ever_registered
-            && !setup_attempted
-            && service.is_none()
-            && !options.no_setup
-            && options.relay.is_none()
-            && onboarding::interactive()
-        {
-            setup_attempted = true;
-            report_error(error.as_deref().unwrap_or("SSH connection failed"));
-            if !onboarding::run(&mut options).await? {
-                return Ok(());
-            }
-            if !onboarding::verify_after_setup(&options).await? {
-                return Ok(());
-            }
-            continue;
-        }
         let permanent = result
             .as_ref()
             .err()
@@ -1879,29 +1782,18 @@ async fn connect(
     let mut terminate = terminate_signal()?;
     let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
-    let relay_executable = options
+    let credential = options
         .relay
         .as_ref()
-        .map(|_| std::env::current_exe())
-        .transpose()?;
+        .ok_or("OAuth credentials are required to connect")?;
+    let executable = std::env::current_exe()?;
     render::status(
-        if options.relay.is_some() {
-            "https"
-        } else {
-            "ssh"
-        },
+        "https",
         "Progress",
-        &if let Some(credential) = &options.relay {
-            format!(
-                "Connecting to {} with an authenticated HTTPS relay",
-                credential.server
-            )
-        } else {
-            format!(
-                "Connecting to {} with OpenSSH",
-                options.destination.as_deref().unwrap_or("configured host")
-            )
-        },
+        &format!(
+            "Connecting to {} with an authenticated HTTPS relay",
+            credential.server
+        ),
     );
     let cancelled = async {
         tokio::select! {
@@ -1912,34 +1804,7 @@ async fn connect(
     let registration = register_ssh(
         &metadata,
         registered,
-        || {
-            let mut command =
-                if let (Some(executable), Some(credential)) = (&relay_executable, &options.relay) {
-                    relay::command(executable, credential)
-                } else {
-                    options.command()
-                };
-            if service.is_some() && options.relay.is_none() {
-                // No terminal exists for a service to answer SSH authentication prompts.
-                // Existing keys, agents and host-key policy still decide access.
-                // Insert before the destination: OpenSSH parses options in order.
-                let arguments = command
-                    .as_std()
-                    .get_args()
-                    .map(OsString::from)
-                    .collect::<Vec<_>>();
-                let mut background = Command::new(onboarding::ssh_executable());
-                background
-                    .args(["-o", "BatchMode=yes"])
-                    .args(arguments)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .kill_on_drop(true);
-                command = background;
-            }
-            command
-        },
+        || relay::command(&executable, credential),
         cancelled,
         Duration::from_secs(120),
     )

@@ -6,8 +6,6 @@ pub(super) const CSS: &str = include_str!("portal.css");
 
 const GITHUB_ICON: &str = r#"<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .8a11.2 11.2 0 0 0-3.54 21.83c.56.1.77-.24.77-.54v-2.08c-3.13.68-3.79-1.33-3.79-1.33-.51-1.3-1.25-1.65-1.25-1.65-1.03-.7.08-.69.08-.69 1.13.08 1.73 1.16 1.73 1.16 1 1.72 2.63 1.22 3.27.93.1-.73.4-1.22.72-1.5-2.5-.29-5.14-1.25-5.14-5.57 0-1.23.44-2.23 1.16-3.01-.12-.28-.5-1.43.11-2.98 0 0 .95-.3 3.08 1.15a10.73 10.73 0 0 1 5.6 0c2.14-1.45 3.08-1.15 3.08-1.15.62 1.55.23 2.7.12 2.98.72.78 1.15 1.78 1.15 3.01 0 4.33-2.64 5.28-5.16 5.56.41.35.77 1.03.77 2.08v3.09c0 .3.2.65.77.54A11.2 11.2 0 0 0 12 .8Z"/></svg>"#;
 
-const KEY_ICON: &str = r#"<svg class="empty-symbol" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m11.5 11.5 9 9M17 17l3-3m-6 0 3-3"/><circle cx="7" cy="7" r=".6" fill="currentColor" stroke="none"/></svg>"#;
-
 pub(super) fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -189,58 +187,6 @@ fn account_panel(
     html
 }
 
-fn keys_panel(account: Option<&Account>, csrf: &str, enabled: bool) -> String {
-    let count = account
-        .map(|a| format!(r#"<span class="count">{} / 20</span>"#, a.keys.len()))
-        .unwrap_or_default();
-    let mut html = format!(
-        r#"<section class="workspace-section" id="keys" aria-labelledby="keys-title"><div class="section-heading"><p class="eyebrow">02 / SSH KEYS</p><div class="section-title"><h2 id="keys-title">SSH 公钥</h2>{count}</div><p class="section-description">用一把公钥，识别你的电脑。</p></div>"#
-    );
-    if let Some(a) = account {
-        if a.keys.is_empty() {
-            html.push_str(&format!(
-                r#"<div class="empty-state">{KEY_ICON}<h3>还没有登记公钥</h3><p>把本机的 Ed25519 公钥粘贴到下方，开始连接。</p></div>"#
-            ));
-        }
-        for key in &a.keys {
-            let label = if key.label.is_empty() {
-                "未命名公钥"
-            } else {
-                &key.label
-            };
-            html.push_str(&format!(
-                r#"<article class="key"><div class="key-heading"><span class="key-type">ED25519</span><strong>{}</strong></div><p class="fingerprint"><code>{}</code></p>
-<details class="key-details"><summary>查看完整公钥</summary><pre><code>{}</code></pre></details>
-<details class="key-details key-remove"><summary>删除这把公钥</summary><form method="post" action="/account/keys/delete"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="fingerprint" value="{}"><p>SSH 同步生效后，此公钥不能再发起新的连接；已有连接保持运行。</p><button class="danger" type="submit">确认删除公钥</button></form></details></article>"#,
-                escape(label),
-                escape(&key.fingerprint),
-                escape(&key.public_key),
-                escape(&key.fingerprint)
-            ));
-        }
-        html.push_str(&format!(
-            r#"<form class="key-form" method="post" action="/account/keys"><input type="hidden" name="csrf" value="{csrf}">
-<label for="key-label">备注 <span class="muted">/ 可选</span><input id="key-label" name="label" maxlength="80" placeholder="例如：工作笔记本" autocomplete="off"></label>
-<label for="public-key">SSH 公钥<textarea id="public-key" name="public_key" maxlength="16384" required rows="3" spellcheck="false" autocapitalize="none" autocomplete="off" placeholder="ssh-ed25519 AAAA…" aria-describedby="key-help"></textarea></label>
-<small class="help-note" id="key-help">仅接受单行 Ed25519 公钥。上传 .pub 内容，私钥留在本机。</small><button type="submit">添加公钥 <span class="arrow" aria-hidden="true">+</span></button></form>
-<small class="help-note">每个账户最多 20 把。启用 SSH 同步后，变更通常在 15 秒内生效；同步失败时请联系管理员。</small>"#
-        ));
-    } else {
-        let login_link = if enabled {
-            r##"<a class="text-link" href="#account">前往账户登录 <span class="arrow" aria-hidden="true">↗</span></a>"##
-        } else {
-            r#"<p class="muted">请联系管理员登记公钥。</p>"#
-        };
-        html.push_str(&format!(
-            r##"<div class="empty-state">{KEY_ICON}<h3>为你的电脑准备一把密钥</h3><p>登录后，在这里添加、查看和管理公钥。已有 SSH 账户可继续使用原来的密钥。</p>{login_link}</div>"##
-        ));
-    }
-    html.push_str(
-        r#"<details><summary>在哪里找到我的公钥？</summary><p>在本机终端查看已有的公钥：</p><pre class="command"><code>cat ~/.ssh/id_ed25519.pub</code></pre><p>没有密钥时，创建一把 Ed25519 密钥：</p><pre class="command"><code>ssh-keygen -t ed25519</code></pre><p>只提交 <code>.pub</code> 文件中的单行 SSH 公钥（包括硬件安全密钥），由 OpenSSH 验证。私钥保留在本机，不要上传。</p></details></section>"#,
-    );
-    html
-}
-
 fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
     let copy_script_url = super::assets::url("copy-command.js");
     let origin = public_url.trim_end_matches('/');
@@ -340,9 +286,7 @@ pub(super) fn home(
         super::assets::url("client-install-copy.js"),
     ));
     body.push_str(&connect_panel(account, public_url));
-    body.push_str(r#"<details class="workspace-legacy"><summary>旧版 SSH 公钥管理</summary>"#);
-    body.push_str(&keys_panel(account, &csrf, enabled));
-    body.push_str("</details></div>");
+    body.push_str("</div>");
     let mcp_url = format!("{}/mcp", public_url.trim_end_matches('/'));
     body.push_str(&GUIDE.replace("{mcp_url}", &escape(&mcp_url)));
     body.push_str("</div>");

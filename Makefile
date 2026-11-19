@@ -60,7 +60,7 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/skills/ssmcp
 	install -m 0644 skills/ssmcp/SKILL.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/skills/ssmcp/
 	cp -R docs/. "$(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs/"
-	install -m 0644 packaging/sshd-ssmcp.conf packaging/Caddyfile packaging/nginx-ssmcp.conf.example packaging/ssmcp-client.toml.example packaging/ssmcpd.env packaging/ssmcpd.toml.example $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
+	install -m 0644 packaging/Caddyfile packaging/nginx-ssmcp.conf.example packaging/ssmcp-client.toml.example packaging/ssmcpd.env packaging/ssmcpd.toml.example $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
 
 # Installs the unit and a first-time config; account creation and activation are explicit.
 install-server: install install-portal
@@ -70,15 +70,9 @@ install-server: install install-portal
 	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcpd.service
 	test -e $(DESTDIR)$(SYSCONFDIR)/ssmcpd/ssmcpd.env || install -m 0644 packaging/ssmcpd.env $(DESTDIR)$(SYSCONFDIR)/ssmcpd/ssmcpd.env
 
-# Optional portal integration; does not activate services or modify sshd configuration.
+# Optional split portal service; installation does not activate it.
 .PHONY: install-portal
 install-portal:
 	install -d $(DESTDIR)$(PREFIX)/libexec/ssmcp $(DESTDIR)$(SYSTEMD_DIR) $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples
-	sed 's|/usr/local/bin/|$(PREFIX)/bin/|g' scripts/sync_portal_ssh.py > $(DESTDIR)$(PREFIX)/libexec/ssmcp/sync_portal_ssh.py
-	chmod 0644 $(DESTDIR)$(PREFIX)/libexec/ssmcp/sync_portal_ssh.py
-	install -m 0644 packaging/sshd-ssmcp-portal.conf $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples/
-	sed 's|/usr/local/libexec/|$(PREFIX)/libexec/|g' packaging/ssmcp-portal-ssh.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal-ssh.service
-	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal-ssh.service
-	install -m 0644 packaging/ssmcp-portal-ssh.timer $(DESTDIR)$(SYSTEMD_DIR)/
 	sed 's|/usr/local/bin/|$(PREFIX)/bin/|g; s|/etc/ssmcpd/|$(SYSCONFDIR)/ssmcpd/|g' packaging/ssmcp-portal.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal.service
 	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal.service

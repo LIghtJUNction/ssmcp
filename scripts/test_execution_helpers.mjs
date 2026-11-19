@@ -57,6 +57,44 @@ const native = value => ({ ok: true, value: { isError: false, content: [], struc
 const succeeded = record => assert.equal(record.exitCode, 0, record.stderr || error(record));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+test('execution titles pass through start, run and parallel without changing argv or job IDs', async () => {
+  const command = ['python3', '-c', "print('literal fixture')"];
+  const titles = ['Inspect direct start', '  Inspect run 中文  ', 'Inspect parallel one', 'Inspect parallel two'];
+  const jobs = new Map();
+  const record = await run(`
+    const options = {command:${JSON.stringify(command)},cwd:'fixture',env:{UNCHANGED:'value'},timeout_ms:5000};
+    const titles = ${JSON.stringify(titles)};
+    return [
+      await exec.start('one', {...options,title:titles[0]}),
+      await exec.run('one', {...options,title:titles[1],wait_ms:0,max_bytes:64}),
+      ...await exec.parallel('one', titles.slice(2).map(title => ({...options,title,wait_ms:0})), {concurrency:2}),
+    ];
+  `, request => {
+    const args = request.arguments;
+    if (request.name === 'ssmcp.exec.start') {
+      const index = titles.indexOf(args.title);
+      assert(index >= 0);
+      assert.deepEqual(args, {command,cwd:'fixture',env:{UNCHANGED:'value'},timeout_ms:5000,title:titles[index]});
+      const state = {job_id:`title-job-${index}`,title:args.title,command:args.command,running:false,exit_code:0};
+      assert(!jobs.has(state.job_id), 'each titled command is submitted once');
+      jobs.set(state.job_id, state);
+      return native(state);
+    }
+    assert.equal(request.name, 'ssmcp.exec.read');
+    return native({snapshot:jobs.get(args.job_id),stdout:'fixture output',stderr:''});
+  });
+  succeeded(record);
+  assert.equal(jobs.size, titles.length);
+  const values = result(record);
+  const states = [values[0], values[1], ...values.slice(2).map(item => {
+    assert.equal(item.status, 'fulfilled');
+    return item.value;
+  })];
+  assert.deepEqual(states.map(state => state.title), titles);
+  assert.deepEqual(states.map(state => state.job_id), titles.map((_, index) => `title-job-${index}`));
+  assert(states.every(state => JSON.stringify(state.command) === JSON.stringify(command)));
+});
+
 test('parallel limits actual running jobs after zero and short waits, preserving input order', async () => {
   const jobs = new Map();
   const completed = [];

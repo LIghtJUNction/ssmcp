@@ -1,5 +1,4 @@
 //! Browser account portal, sharing the MCP gateway's verified GitHub identity provider.
-//! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
 mod assets;
 mod commerce;
 mod dashboard;
@@ -138,7 +137,9 @@ pub(crate) enum Problem {
     Busy,
     Storage,
     Limit,
+    #[cfg(test)]
     Duplicate,
+    #[cfg(test)]
     NotFound,
     Disabled,
     Forbidden,
@@ -167,10 +168,12 @@ impl Problem {
             | Self::ManagementDisabled
             | Self::ManagementUnavailable
             | Self::AuditUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Limit | Self::Duplicate | Self::UsernameTaken | Self::UsernameBound => {
-                StatusCode::CONFLICT
-            }
-            Self::NotFound | Self::SessionNotFound => StatusCode::NOT_FOUND,
+            Self::Limit | Self::UsernameTaken | Self::UsernameBound => StatusCode::CONFLICT,
+            #[cfg(test)]
+            Self::Duplicate => StatusCode::CONFLICT,
+            #[cfg(test)]
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::SessionNotFound => StatusCode::NOT_FOUND,
             Self::Disabled => StatusCode::SERVICE_UNAVAILABLE,
             Self::Invalid | Self::ManagementInvalid | Self::UsernameInvalid => {
                 StatusCode::BAD_REQUEST
@@ -187,7 +190,9 @@ impl Problem {
             Self::Busy => "操作过于频繁或服务繁忙，请稍后重试。",
             Self::Storage => "账户存储暂不可用，本次操作未确认完成，请稍后重新查看。",
             Self::Limit => "已达到存储上限；每个账户最多保存 20 把公钥。",
+            #[cfg(test)]
             Self::Duplicate => "你的账户中已存在这把公钥。",
+            #[cfg(test)]
             Self::NotFound => "你的账户中没有这把公钥。",
             Self::Disabled => "账户功能尚未启用，请联系管理员配置 GitHub 登录与账户存储。",
             Self::Forbidden => "你的账户无权查看或操作这项资源。",
@@ -496,8 +501,6 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/account/login", post(login))
         .route("/account/logout", post(logout))
         .route("/account/username", post(register_username))
-        .route("/account/keys", post(add_key))
-        .route("/account/keys/delete", post(delete_key))
         .merge(guide::routes())
         .merge(setup::routes())
         .merge(dashboard::routes())
@@ -716,35 +719,6 @@ async fn logout(State(broker): State<Arc<Broker>>, request: Request) -> Result<R
         &broker.portal,
         identity.as_ref(),
         AuditAction::Logout,
-        completed_outcome(&result),
-    )
-    .await?;
-    result
-}
-
-async fn add_key(State(broker): State<Arc<Broker>>, request: Request) -> Result<Response, Problem> {
-    let identity = broker.portal.identity_for_audit(request.headers()).await;
-    let result = add_key_inner(State(broker.clone()), request).await;
-    record_result(
-        &broker.portal,
-        identity.as_ref(),
-        AuditAction::KeyAdded,
-        completed_outcome(&result),
-    )
-    .await?;
-    result
-}
-
-async fn delete_key(
-    State(broker): State<Arc<Broker>>,
-    request: Request,
-) -> Result<Response, Problem> {
-    let identity = broker.portal.identity_for_audit(request.headers()).await;
-    let result = delete_key_inner(State(broker.clone()), request).await;
-    record_result(
-        &broker.portal,
-        identity.as_ref(),
-        AuditAction::KeyRemoved,
         completed_outcome(&result),
     )
     .await?;
@@ -1012,68 +986,6 @@ async fn register_username(
         .storage(move |store| store.claim_handle(&subject, &username))
         .await?;
     Ok(Redirect::to("/#account").into_response())
-}
-
-async fn key_action(
-    broker: &Broker,
-    headers: &HeaderMap,
-    form: &HashMap<String, String>,
-) -> Result<String, Problem> {
-    let (_, subject) = broker.portal.verify(headers, form, &broker.public_url)?;
-    let subject = subject.ok_or(Problem::Unauthorized)?;
-    broker
-        .portal
-        .browser
-        .lock()
-        .map_err(|_| Problem::Storage)?
-        .charge(format!("keys:{subject}"), 20)?;
-    Ok(subject)
-}
-async fn add_key_inner(
-    State(broker): State<Arc<Broker>>,
-    request: Request,
-) -> Result<Response, Problem> {
-    let (headers, form) = form(request).await?;
-    only(&form, &["csrf", "label", "public_key"])?;
-    let owner = key_action(&broker, &headers, &form).await?;
-    let key = parse_key(&form["public_key"], &form["label"])?;
-    let identity = broker.portal.identity_for_subject(owner.clone()).await?;
-    broker
-        .portal
-        .record_audit(
-            Some(&identity),
-            AuditAction::KeyAdded,
-            AuditOutcome::Pending,
-        )
-        .await?;
-    broker.portal.storage(move |s| s.add(&owner, key)).await?;
-    Ok(Redirect::to("/#keys").into_response())
-}
-async fn delete_key_inner(
-    State(broker): State<Arc<Broker>>,
-    request: Request,
-) -> Result<Response, Problem> {
-    let (headers, form) = form(request).await?;
-    only(&form, &["csrf", "fingerprint"])?;
-    let owner = key_action(&broker, &headers, &form).await?;
-    let fingerprint = form["fingerprint"].clone();
-    if fingerprint.len() != 50 || !fingerprint.starts_with("SHA256:") {
-        return Err(Problem::Invalid);
-    }
-    let identity = broker.portal.identity_for_subject(owner.clone()).await?;
-    broker
-        .portal
-        .record_audit(
-            Some(&identity),
-            AuditAction::KeyRemoved,
-            AuditOutcome::Pending,
-        )
-        .await?;
-    broker
-        .portal
-        .storage(move |s| s.remove(&owner, &fingerprint))
-        .await?;
-    Ok(Redirect::to("/#keys").into_response())
 }
 
 /// Validate a single public-key line through the installed OpenSSH implementation.

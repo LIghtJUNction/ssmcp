@@ -4573,6 +4573,44 @@ mod tests {
     }
 
     #[test]
+    fn exec_title_uses_redacted_metadata_and_keeps_the_actual_command() {
+        let script = "print('fixture command')\nprint('done')";
+        let event = json!({"type":"exec.started","job_id":"title-81",
+            "title":"Inspect API_TOKEN=private-title-secret",
+            "command":["python3","-c",script],"cwd":"/work"});
+        let original = event.clone();
+        for (raw, verbose) in [(false, false), (true, false), (false, true)] {
+            let mut renderer = Renderer::new(raw, false, 160);
+            renderer.verbose = verbose;
+            let mut output = Vec::new();
+            renderer.event(&mut output, "fixture", &event).unwrap();
+            let shown = String::from_utf8(output).unwrap();
+            assert!(shown.contains("Inspect API_TOKEN=[redacted]"), "{shown}");
+            assert!(!shown.contains("private-title-secret"), "{shown}");
+            if !raw {
+                assert!(shown.contains("python3 -c"), "{shown}");
+                let activity = renderer.activities.snapshot().pop().unwrap();
+                assert_eq!(activity.id, "title-81");
+                assert!(
+                    activity
+                        .description
+                        .starts_with("Inspect API_TOKEN=[redacted] · ")
+                );
+                assert!(activity.description.ends_with("python3 -c · 2 lines"));
+                assert!(!activity.description.contains("private-title-secret"));
+            }
+            assert_eq!(shown.contains("fixture command"), raw || verbose, "{shown}");
+            if verbose {
+                assert!(shown.contains("python3 -c <script>"), "{shown}");
+            }
+        }
+        assert_eq!(
+            event, original,
+            "rendering must not change the native job event"
+        );
+    }
+
+    #[test]
     fn pretty_labels_inline_scripts_and_verbose_or_jsonl_keep_source() {
         let script = "script_statement_visible();\n".repeat(200);
         let id = format!("request-{}-17", "a".repeat(128));
