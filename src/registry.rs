@@ -274,14 +274,24 @@ impl Registry {
             .materialize(id)
     }
     pub fn validate(&self, tool: &RegisteredTool) -> Result<(), String> {
+        self.validate_route(&tool.id, tool.provider, tool.generation, &tool.native_name)
+    }
+    /// Validate a queued route without retaining a second copy of its schemas.
+    pub(crate) fn validate_route(
+        &self,
+        id: &str,
+        provider: Provider,
+        generation: u64,
+        native_name: &str,
+    ) -> Result<(), String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         if state.closed {
             return Err("client connection is closed".into());
         }
-        if !state.tools.get(&tool.id).is_some_and(|current| {
-            current.provider == tool.provider
-                && current.generation == tool.generation
-                && current.native_name == tool.native_name
+        if !state.tools.get(id).is_some_and(|current| {
+            current.provider == provider
+                && current.generation == generation
+                && current.native_name == native_name
         }) {
             return Err("tool registration changed before dispatch; refresh tools".into());
         }

@@ -23,7 +23,7 @@ impl ControlAccount {
     }
 
     pub fn label(&self) -> String {
-        format!("{}@{} #{}", self.login, self.provider, self.subject)
+        format!("{} · {} #{}", self.login, self.provider, self.subject)
     }
 }
 

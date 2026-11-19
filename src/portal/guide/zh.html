@@ -35,10 +35,9 @@
   </section>
 
   <section id="devices" aria-labelledby="devices-title">
-    <div class="section-heading"><p class="eyebrow">02 / 设备与桌面</p><h2 id="devices-title">让另一台设备临时接入。</h2></div>
+    <div class="section-heading"><p class="eyebrow">02 / 设备与桌面</p><h2 id="devices-title">连接另一台被控设备。</h2></div>
     <div class="scenarios">
-      <article><h3>生成设备邀请。</h3><p>在已经登录的电脑上运行 <code>ssmcp invite</code>，把生成的完整命令复制到另一台设备。命令从同一网关下载并校验客户端，安装到用户目录后，启动临时连接。</p><pre><code>ssmcp invite
-ssmcp invite --shell powershell</code></pre><p>邀请只能兑换一次，通常在 10 分钟后失效；兑换后的连接最多使用 1 小时，并受原授权剩余期限约束。结束被控设备上的进程即可停止该会话。已安装兼容客户端时，可加上 <code>--no-bootstrap</code>。</p><details><summary>从已授权的 MCP 应用发出邀请</summary><p>让已连接的应用调用公共 <code>invite</code> 工具。它使用应用当前的授权，无需先取得在线客户端 ID。目标是 Windows 时，把 <code>shell</code> 改为 <code>powershell</code>。</p><pre><code>{"ttl_secs": 600, "session_ttl_secs": 3600, "shell": "sh"}</code></pre></details></article>
+      <article><h3>指定已注册的控制账号。</h3><p>在被控设备安装客户端后，直接指定当前中继上的用户名。被控设备可以不登录；控制者必须登录该服务器的账号。</p><pre><code>ssmcp --server {{gateway_origin}} --allow yourname@{{gateway_authority}}</code></pre><p>可重复 <code>--allow</code> 或使用逗号，最多 32 个账号。显式名单仅授权列出的人；已有有效登录时省略名单仅允许自己。裸用户名、<code>@github</code> 和其他服务器的目标会被拒绝。结束设备进程即可关闭连接。</p><p>CLI 的 <code>invite</code> / <code>join</code> 和 MCP 的 <code>invite</code> 已移除，会话内 agent 的 <code>collab.join</code> 保留。流量按实际控制账号计费，一个账号的额度或权限变化不会断开其他获准控制者。</p></article>
       <article><h3>在私有桌面里操作应用。</h3><p>桌面观察和输入默认使用当前连接的私有显示。在 Linux 上，启动已安装的应用时会按需创建这个显示；你正在使用的桌面保留鼠标位置和焦点。</p><pre><code>在私有桌面打开编辑器。
 检查文档，并截图展示结果。</code></pre><p class="note">私有桌面需要 Linux、Xvfb 以及状态工具列出的辅助程序。其他平台会报告缺少的支持；只有调用者明确选择 <code>desktop: "host"</code>，才会操作日常桌面。浏览器页面控制是独立入口。</p></article>
     </div>

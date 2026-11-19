@@ -1,5 +1,6 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
 mod access;
+mod allow;
 mod attribution;
 #[cfg(test)]
 mod attribution_tests;
@@ -10,11 +11,14 @@ use crate::{
     user_policy::{TrafficError, TrafficFailure, TrafficFailureState, TrafficOutcome},
     wire::{self, ClientInfo, Controller, Frame, Operation},
 };
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde_json::Value;
 use std::{
     collections::HashMap,
     ffi::CStr,
+    future::Future,
     io::{self, Read},
+    pin::Pin,
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
@@ -45,7 +49,76 @@ struct Call {
     attribution: Option<wire::ControlAttribution>,
     code_context: Option<wire::CodeContext>,
     authorization: Option<Authorization>,
+    traffic_failure: TrafficFailureState,
     reply: oneshot::Sender<CallResult>,
+}
+
+struct PendingCall {
+    reply: oneshot::Sender<CallResult>,
+    deadline: Instant,
+    reload: bool,
+    authorization: Option<Authorization>,
+    subject: Option<String>,
+    traffic_failure: TrafficFailureState,
+}
+
+// Rate-limit waits belong to a request, never to the shared device read loop.
+// These futures live inside that loop and are dropped with the connection.
+type BillingQueue<T> = FuturesUnordered<Pin<Box<dyn Future<Output = T> + Send>>>;
+struct DispatchReady {
+    id: u64,
+    frame: Frame,
+    call: PendingCall,
+    run_id: Option<String>,
+    charge: Result<(), String>,
+}
+struct ReplyReady {
+    id: u64,
+    call: PendingCall,
+    result: CallResult,
+    charge: Result<(), String>,
+}
+async fn charge_pending(
+    broker: &Broker,
+    session: &Session,
+    id: u64,
+    call: &mut PendingCall,
+    uploaded: bool,
+    bytes: usize,
+) -> Result<(), String> {
+    if call.authorization.as_ref().is_some_and(|auth| {
+        !auth.is_live() || !auth.permits(session) || !broker.authorized_account(auth)
+    }) {
+        return Err(if uploaded {
+            "session access was revoked; tool was not dispatched"
+        } else {
+            "session access was revoked; response withheld"
+        }
+        .into());
+    }
+    let Some(subject) = call.subject.clone() else {
+        return Ok(());
+    };
+    let outcome = tokio::select! {
+        biased;
+        _ = call.reply.closed() => return Err("request was cancelled".into()),
+        _ = tokio::time::sleep_until(call.deadline) => return Err(if uploaded {
+            "traffic admission timed out; tool was not dispatched"
+        } else {
+            "result delivery timed out; this operation may have executed"
+        }.into()),
+        outcome = broker.charge_relay(&subject, uploaded, bytes) => outcome,
+    };
+    outcome.map_err(|error| {
+        let failure = if uploaded {
+            TrafficFailure::rejected_call(error, id)
+        } else {
+            TrafficFailure::rejected_reply(error, id)
+        };
+        call.traffic_failure
+            .record(failure)
+            .notice(&broker.public_url)
+    })
 }
 
 pub const LOGIN_LIFETIME: u64 = 1800;
@@ -70,7 +143,7 @@ impl Authorization {
 
     fn permits(&self, session: &Session) -> bool {
         match self {
-            Self::Legacy { .. } => session.allowed().is_empty(),
+            Self::Legacy { .. } => !session.identity_required && session.allowed().is_empty(),
             Self::Identity(identity) => session.allowed().iter().any(|allowed| {
                 allowed.provider == identity.provider && allowed.subject == identity.subject
             }),
@@ -94,7 +167,10 @@ pub struct Session {
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
     allow: Mutex<Vec<Identity>>,
+    identity_required: bool,
+    locally_owned_peer: bool,
     info: ClientInfo,
+    public_url: String,
     sender: mpsc::Sender<Call>,
     reports: mpsc::Sender<wire::CodeCompletion>,
     slots: Semaphore,
@@ -258,6 +334,7 @@ impl Session {
         {
             return Err("audit intent could not be saved; tool was not dispatched".into());
         }
+        let call_traffic = TrafficFailureState::default();
         let (reply, response) = oneshot::channel();
         if self
             .sender
@@ -267,6 +344,7 @@ impl Session {
                 attribution: attribution.clone(),
                 code_context,
                 authorization: authorization.cloned(),
+                traffic_failure: call_traffic.clone(),
                 reply,
             })
             .is_err()
@@ -327,12 +405,16 @@ impl Session {
             {
                 // Native Frame::Reply errors are untrusted strings. Only the
                 // server's transport state can supply an authoritative quota notice.
-                let traffic_notice = self
-                    .traffic_failure
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .as_ref()
-                    .map(|failure| failure.pending.clone());
+                let traffic_notice = call_traffic
+                    .get()
+                    .map(|failure| failure.notice(&self.public_url))
+                    .or_else(|| {
+                        self.traffic_failure
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .as_ref()
+                            .map(|failure| failure.pending.clone())
+                    });
                 if let Some(notice) = traffic_notice {
                     return Err(format!(
                         "{notice}\nAudit completion could not be saved; inspect the operation state before retrying."
@@ -531,7 +613,10 @@ impl Broker {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
+            identity_required: false,
+            locally_owned_peer: false,
             allow: Mutex::new(Vec::new()),
+            public_url: self.public_url.clone(),
             info: ClientInfo {
                 id: id.clone(),
                 name: "test".into(),
@@ -664,7 +749,7 @@ impl Broker {
     pub(crate) async fn attach_device<T>(
         self: Arc<Self>,
         stream: T,
-        registration: crate::device::Registration,
+        peer: crate::device::DevicePeer,
         traffic_failure: TrafficFailureState,
     ) -> crate::Result<()>
     where
@@ -672,8 +757,11 @@ impl Broker {
     {
         self.attach_stream_with_traffic(
             stream,
-            registration.username.clone(),
-            Some(registration),
+            peer.account
+                .as_ref()
+                .map(|account| account.username.clone())
+                .unwrap_or_else(|| "_anonymous".into()),
+            Some(peer),
             traffic_failure,
         )
         .await
@@ -688,20 +776,28 @@ impl Broker {
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        self.attach_stream_with_traffic(stream, user, registration, TrafficFailureState::default())
-            .await
+        self.attach_stream_with_traffic(
+            stream,
+            user,
+            registration.map(Into::into),
+            TrafficFailureState::default(),
+        )
+        .await
     }
 
     async fn attach_stream_with_traffic<T>(
         self: Arc<Self>,
         stream: T,
         user: String,
-        registration: Option<crate::device::Registration>,
+        peer: Option<crate::device::DevicePeer>,
         traffic_failure: TrafficFailureState,
     ) -> crate::Result<()>
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
+        let is_device = peer.is_some();
+        let anonymous = peer.as_ref().is_some_and(|peer| peer.account.is_none());
+        let registration = peer.as_ref().and_then(|peer| peer.account.as_ref());
         let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
         let (mode, metadata) = match timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await?? {
@@ -748,19 +844,26 @@ impl Broker {
             return Ok(());
         }
         let owner = registration
-            .as_ref()
             .map(|r| r.identity.subject.clone())
             .or_else(|| {
-                self.management
-                    .as_ref()
-                    .and_then(|state| state.policy.owner_subject(&user))
+                if is_device {
+                    None
+                } else {
+                    self.management
+                        .as_ref()
+                        .and_then(|state| state.policy.owner_subject(&user))
+                }
             })
             .or_else(|| {
-                user.strip_prefix("gh-")
-                    .filter(|id| crate::management::valid_subject(id))
-                    .map(str::to_owned)
+                if is_device {
+                    None
+                } else {
+                    user.strip_prefix("gh-")
+                        .filter(|id| crate::management::valid_subject(id))
+                        .map(str::to_owned)
+                }
             });
-        if self.portal.has_storage() && owner.is_none() {
+        if self.portal.has_storage() && owner.is_none() && !anonymous {
             wire::write_frame(
                 &mut writer,
                 &Frame::Reject {
@@ -783,46 +886,44 @@ impl Broker {
             .await?;
             return Ok(());
         }
-        let restricted = registration.is_some() || !metadata.allow.is_empty();
-        let allow = if let Some(registration) = &registration {
-            let principal = format!(
-                "{}@github",
-                registration.identity.login.to_ascii_lowercase()
-            );
-            if metadata.allow.iter().any(|allowed| allowed != &principal) {
-                wire::write_frame(
-                    &mut writer,
-                    &Frame::Reject {
-                        message: "account devices cannot grant access to another identity".into(),
-                    },
-                )
-                .await?;
+        if is_device
+            && !metadata.allow.is_empty()
+            && !peer.as_ref().is_some_and(|peer| peer.session_access)
+        {
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reject {
+                    message: "explicit allow policy requires negotiated account access controls"
+                        .into(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        let restricted = is_device || !metadata.allow.is_empty();
+        let resolved = if let Some(registration) = &registration {
+            self.resolve_account_allow(registration, &metadata.allow)
+                .await
+        } else if restricted {
+            self.resolve_initial_allow(&metadata.allow).await
+        } else {
+            Ok(Vec::new())
+        };
+        let allow = match resolved {
+            Ok(identities) if !restricted || !identities.is_empty() => identities,
+            result => {
+                let message = result
+                    .err()
+                    .unwrap_or_else(|| "allow list resolved to no identities".into());
+                wire::write_frame(&mut writer, &Frame::Reject { message }).await?;
                 return Ok(());
             }
-            vec![registration.identity.clone()]
-        } else if restricted {
-            match self.identities.resolve_allow(&metadata.allow).await {
-                Ok(identities) if !identities.is_empty() => identities,
-                result => {
-                    let message = result
-                        .err()
-                        .unwrap_or_else(|| "allow list resolved to no identities".into());
-                    wire::write_frame(&mut writer, &Frame::Reject { message }).await?;
-                    return Ok(());
-                }
-            }
-        } else {
-            Vec::new()
         };
-        let access_owner = registration
-            .as_ref()
-            .filter(|registration| registration.session_access)
-            .map(|registration| registration.identity.clone());
-        let control_attribution = registration
-            .as_ref()
-            .is_some_and(|registration| registration.control_attribution);
+        let access_owner = registration.map(|registration| registration.identity.clone());
+        let access_supported = peer.as_ref().is_some_and(|peer| peer.session_access);
+        let control_attribution = peer.as_ref().is_some_and(|peer| peer.control_attribution);
         let mut capabilities = Vec::new();
-        if access_owner.is_some() {
+        if access_supported {
             capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
         }
         if control_attribution {
@@ -845,7 +946,10 @@ impl Broker {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
+            identity_required: !allow.is_empty(),
+            locally_owned_peer: is_device,
             allow: Mutex::new(allow),
+            public_url: self.public_url.clone(),
             info: ClientInfo {
                 id: client_id.clone(),
                 name: metadata.name,
@@ -917,17 +1021,15 @@ impl Broker {
                 ("mode", mode.name().into()),
             ],
         );
-        let owner_policy = session
-            .owner_subject
-            .as_deref()
-            .map(|id| self.user_policies.get(id));
-        let legacy_subject = registration
-            .is_none()
+        // The registering account is provenance. A controlled stream belongs to
+        // its local peer; one controller's ban/revocation must not disconnect others.
+        let owner_policy = (!is_device)
             .then(|| session.owner_subject.as_deref())
-            .flatten();
-        // Keep reply senders alive until the trusted terminal cause is known.
-        let mut pending: HashMap<u64, (oneshot::Sender<CallResult>, Instant, bool)> =
-            HashMap::new();
+            .flatten()
+            .map(|id| self.user_policies.get(id));
+        // Each pending ID retains its authenticated caller, independent of
+        // later ACL edits and of other controllers on this device.
+        let mut pending: HashMap<u64, PendingCall> = HashMap::new();
         let mut result: crate::Result<()> = tokio::select! {
             biased;
             _ = session.disconnect.notified() => Ok(()),
@@ -937,22 +1039,14 @@ impl Broker {
                     None => std::future::pending::<()>().await,
                 }
             } => Ok(()),
-            _ = async {
-                match &registration {
-                    Some(registration) => registration.wait_revoked(&self).await,
-                    None => std::future::pending::<()>().await,
-                }
-            } => {
-                let _ = timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::Reject {
-                    message: "ssmcp authorization expired or revoked".into(),
-                })).await;
-                Ok(())
-            },
             result = async {
             session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities }).await?;
             let mut next_id = 0u64;
-            let mut delivered_runs = std::collections::VecDeque::<String>::new();
+            let mut delivered_runs = std::collections::VecDeque::<(String, Option<Authorization>)>::new();
+            let mut dispatches: BillingQueue<DispatchReady> = FuturesUnordered::new();
+            let mut deliveries: BillingQueue<ReplyReady> = FuturesUnordered::new();
+            let mut completion_reports: BillingQueue<Option<Frame>> = FuturesUnordered::new();
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
             loop {
                 // Keep the same read future across requests/ticks: partial JSON frames
@@ -969,79 +1063,130 @@ impl Broker {
                                 let _ = call.reply.send(Err("session access was revoked; tool was not dispatched".into()));
                                 continue;
                             }
-                            if pending.len() >= wire::MAX_INFLIGHT {
+                            if pending.len() + dispatches.len() + deliveries.len() >= wire::MAX_INFLIGHT {
                                 let _ = call.reply.send(Err("client busy; retry later".into()));
                                 continue;
                             }
                             next_id = next_id.checked_add(1).ok_or("request id exhausted")?;
                             let reload = crate::client::reload::is_reload(&call.operation);
-                            pending.insert(next_id, (call.reply, Instant::now() + request_timeout(&call.operation), reload));
+                            let deadline = Instant::now() + request_timeout(&call.operation);
+                            let subject = match &call.authorization {
+                                Some(Authorization::Identity(identity)) => Some(identity.subject.clone()),
+                                _ => None,
+                            };
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
                             let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context };
-                            if let Some(subject) = legacy_subject {
-                                self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1)
-                                    .await.map_err(|error| TrafficFailure::rejected_call(error, next_id))?;
+                            let bytes = serde_json::to_vec(&frame)?.len() + 1;
+                            let mut queued = PendingCall { reply:call.reply, deadline, reload, authorization:call.authorization, subject, traffic_failure:call.traffic_failure };
+                            let broker = self.clone();
+                            let target = session.clone();
+                            let id = next_id;
+                            dispatches.push(Box::pin(async move {
+                                let charge = charge_pending(&broker, &target, id, &mut queued, true, bytes).await;
+                                DispatchReady {id, frame, call:queued, run_id, charge}
+                            }));
+                        }
+                        Some(ready) = dispatches.next(), if !dispatches.is_empty() => {
+                            let DispatchReady {id, frame, call, run_id, charge} = ready;
+                            if call.reply.is_closed() { continue; }
+                            if let Err(error) = charge {
+                                let _ = call.reply.send(Err(error));
+                                continue;
                             }
+                            if call.authorization.as_ref().is_some_and(|auth| !auth.is_live() || !auth.permits(&session) || !self.authorized_account(auth)) {
+                                let _ = call.reply.send(Err("session access was revoked; tool was not dispatched".into()));
+                                continue;
+                            }
+                            let authorization = call.authorization.clone();
+                            pending.insert(id, call);
                             timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
-                            if let Some(run_id) = run_id && !delivered_runs.contains(&run_id) {
+                            if let Some(run_id) = run_id && !delivered_runs.iter().any(|(id, _)| id == &run_id) {
                                 if delivered_runs.len() >= 256 { delivered_runs.pop_front(); }
-                                delivered_runs.push_back(run_id);
+                                delivered_runs.push_back((run_id, authorization));
                             }
                         }
-                        Some(completion) = code_reports.recv() => {
-                            // A cancelled, queued call may never have reached the
-                            // client. Do not send a source-less run to that client.
-                            if let Some(index) = delivered_runs.iter().position(|id| *id == completion.run_id) {
-                                delivered_runs.remove(index);
+                        Some(ready) = deliveries.next(), if !deliveries.is_empty() => {
+                            let ReplyReady {id, call, result, charge} = ready;
+                            if call.reply.is_closed() { continue; }
+                            if let Err(error) = charge {
+                                let _ = call.reply.send(Err(error));
+                                continue;
+                            }
+                            if call.authorization.as_ref().is_some_and(|auth| !auth.is_live() || !auth.permits(&session) || !self.authorized_account(auth)) {
+                                let _ = call.reply.send(Err("session access was revoked; response withheld".into()));
+                                continue;
+                            }
+                            if call.reload && result.as_ref().is_ok_and(crate::client::reload::accepted) {
+                                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::ReloadCommit { id })).await??;
+                            }
+                            let _ = call.reply.send(result);
+                        }
+                        Some(completion) = code_reports.recv(), if completion_reports.len() < wire::MAX_INFLIGHT => {
+                            // A report keeps the account that dispatched its original run.
+                            if let Some(index) = delivered_runs.iter().position(|(id, _)| *id == completion.run_id) {
+                                let (_, authorization) = delivered_runs.remove(index).expect("existing run");
                                 let frame = Frame::CodeModeFinished { completion };
-                                if let Some(subject) = legacy_subject {
-                                    self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1)
-                                        .await.map_err(TrafficFailure::new)?;
-                                }
+                                let bytes = serde_json::to_vec(&frame)?.len() + 1;
+                                let broker = self.clone();
+                                let target = session.clone();
+                                completion_reports.push(Box::pin(async move {
+                                    if authorization.as_ref().is_some_and(|auth| !auth.is_live() || !auth.permits(&target) || !broker.authorized_account(auth)) {
+                                        return None;
+                                    }
+                                    if let Some(Authorization::Identity(identity)) = &authorization
+                                        && !matches!(timeout(IO_TIMEOUT, broker.charge_relay(&identity.subject, true, bytes)).await, Ok(Ok(()))) {
+                                        return None;
+                                    }
+                                    if authorization.as_ref().is_some_and(|auth| !auth.is_live() || !auth.permits(&target) || !broker.authorized_account(auth)) {
+                                        return None;
+                                    }
+                                    Some(frame)
+                                }));
+                            }
+                        }
+                        Some(frame) = completion_reports.next(), if !completion_reports.is_empty() => {
+                            if let Some(frame) = frame {
                                 timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                             }
                         }
                         _ = expiry.tick() => {
-                            if pending.values().any(|(_, deadline, _)| Instant::now() >= *deadline) {
-                                return Err("client response timeout".into());
+                            let expired: Vec<_> = pending.iter().filter(|(_, call)| Instant::now() >= call.deadline).map(|(id, _)| *id).collect();
+                            for id in expired {
+                                if let Some(call) = pending.remove(&id) {
+                                    let _ = call.reply.send(Err("client response timeout; this operation may have executed".into()));
+                                }
                             }
                         }
                     }
                 };
-                if let (Some(subject), Some(frame)) = (legacy_subject, &received) {
-                    self.charge_relay(subject, false, serde_json::to_vec(frame)?.len() + 1)
-                        .await.map_err(|error| match frame {
-                            Frame::Reply { id, .. } => TrafficFailure::rejected_reply(error, *id),
-                            _ => TrafficFailure::new(error),
-                        })?;
-                }
                 match received {
                     Some(Frame::Access { id, command }) => {
                         // Only this credential-bound connection can edit its own session.
                         // Capability negotiation grants no authority by itself.
-                        let result = match (access_owner.as_ref(), registration.as_ref()) {
-                            (Some(owner), Some(registration)) if registration.is_live(&self).await => {
-                                session.access_command(&self.identities, owner, command).await
-                            }
-                            _ => Err("session access controls were not negotiated on an authenticated account connection".into()),
+                        let result = if access_supported {
+                            session.access_command(&self, access_owner.as_ref(), command).await
+                        } else {
+                            Err("session access controls were not negotiated on this controlled connection".into())
                         };
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::AccessReply { id, result })).await??;
                     }
                     Some(Frame::Steering { id, command }) => {
                         let result = session.steering_command(command);
                         let frame = Frame::SteeringReply { id, result };
-                        if let Some(subject) = legacy_subject {
-                            self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1)
-                                .await.map_err(TrafficFailure::new)?;
-                        }
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                     }
                     Some(Frame::Reply {id, result}) => {
-                        if let Some((reply, _, reload)) = pending.remove(&id) {
-                            if reload && result.as_ref().is_ok_and(crate::client::reload::accepted) {
-                                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::ReloadCommit { id })).await??;
-                            }
-                            let _ = reply.send(result);
+                        if let Some(mut call) = pending.remove(&id) {
+                            if call.reply.is_closed() { continue; }
+                            let frame = Frame::Reply { id, result };
+                            let bytes = serde_json::to_vec(&frame)?.len() + 1;
+                            let Frame::Reply { result, .. } = frame else { unreachable!() };
+                            let broker = self.clone();
+                            let target = session.clone();
+                            deliveries.push(Box::pin(async move {
+                                let charge = charge_pending(&broker, &target, id, &mut call, false, bytes).await;
+                                ReplyReady {id, call, result, charge}
+                            }));
                         }
                     }
                     None => break,
@@ -1078,8 +1223,10 @@ impl Broker {
             });
             session.alive.store(false, Ordering::Release);
             requests.close();
-            for (id, (reply, _, _)) in pending.drain() {
-                let _ = reply.send(Err(failure.call_notice(&self.public_url, id)));
+            for (id, call) in pending.drain() {
+                let _ = call
+                    .reply
+                    .send(Err(failure.call_notice(&self.public_url, id)));
             }
             while let Ok(call) = requests.try_recv() {
                 let _ = call.reply.send(Err(undispatched.clone()));
@@ -1612,7 +1759,10 @@ mod tests {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
+            identity_required: !allow.is_empty(),
+            locally_owned_peer: false,
             allow: Mutex::new(allow),
+            public_url: "https://ssmcp.example".into(),
             info: ClientInfo {
                 id: id.into(),
                 name: "same display name".into(),
