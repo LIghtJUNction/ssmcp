@@ -158,9 +158,12 @@ fn main() {
     cursor.cursor.position.column += 1;
     let mut mode = before.clone();
     mode.modes.application_cursor = true;
+    let unchanged_clone = before.clone();
+    assert_ne!(unchanged_clone.rows[0].as_ptr(), before.rows[0].as_ptr());
     let cases = [
         ("first", &before, None),
         ("unchanged", &before, Some(&before)),
+        ("unchanged_clone", &unchanged_clone, Some(&before)),
         ("one_row", &one, Some(&before)),
         ("all_rows", &all, Some(&before)),
         ("resize", &resized, Some(&before)),
