@@ -127,7 +127,7 @@ impl State {
             },
             code,
             if offered {
-                "发送结果未确认：消息已交给监听程序，但未收到接收确认；不会自动重发".into()
+                "发送结果未确认：已尝试投递，但未收到监听程序的接收确认；不会自动重发".into()
             } else {
                 before_offer.into()
             },
@@ -628,4 +628,279 @@ pub(crate) fn tool() -> Value {
                 "status":{"enum":["accepted","rejected"]},
                 "reason":{"type":"string","minLength":1,"maxLength":512}}},
         "annotations":{"readOnlyHint":false,"destructiveHint":false}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    fn hub() -> Arc<Hub> {
+        let hub = Arc::new(Hub::default());
+        hub.reset(Some("synthetic-connection"));
+        hub
+    }
+
+    fn credentials(hub: &Hub) -> (String, String) {
+        let opened = hub.open("Synthetic receiver".into()).unwrap();
+        (
+            opened["listener_id"].as_str().unwrap().into(),
+            opened["token"].as_str().unwrap().into(),
+        )
+    }
+
+    fn accepted() -> Ack {
+        Ack {
+            status: AckStatus::Accepted,
+            reason: None,
+        }
+    }
+
+    fn rejected() -> Ack {
+        Ack {
+            status: AckStatus::Rejected,
+            reason: Some("receiver cannot store this message".into()),
+        }
+    }
+
+    fn submit(hub: &Arc<Hub>) -> Ticket {
+        hub.submit(
+            hub.target().unwrap(),
+            "@\"中文 空格.txt\"\n    code\n".into(),
+            "Expanded synthetic file\n    code\n".into(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn force_listener_registration_is_exclusive_and_audit_redacts_the_credential() {
+        let hub = hub();
+        assert_eq!(hub.target().err().as_deref(), Some(NO_LISTENER));
+        let barrier = Arc::new(Barrier::new(3));
+        let results = std::thread::scope(|scope| {
+            let contenders = (0..2)
+                .map(|index| {
+                    let hub = hub.clone();
+                    let barrier = barrier.clone();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        hub.open(format!("Receiver {index}"))
+                    })
+                })
+                .collect::<Vec<_>>();
+            barrier.wait();
+            contenders
+                .into_iter()
+                .map(|task| task.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|value| value.is_ok()).count(), 1);
+        assert!(
+            results
+                .iter()
+                .filter_map(|value| value.as_ref().err())
+                .all(|error| error.starts_with("listener_busy"))
+        );
+        let opened = results.into_iter().find_map(Result::ok).unwrap();
+        let token = opened["token"].as_str().unwrap();
+        assert_eq!(token.len(), 64);
+        assert!(!hub.snapshot().to_string().contains(token));
+        let automatic = crate::audit::event(json!({
+            "type":"response",
+            "arguments":{"op":"read","listener_id":opened["listener_id"],"token":token},
+            "result":crate::backend::result(opened.clone()),
+        }));
+        assert!(
+            !automatic.to_string().contains(token),
+            "automatic request/result audit must redact the lease credential"
+        );
+        let id = opened["listener_id"].as_str().unwrap();
+        assert!(hub.close(id, &"0".repeat(64)).is_err());
+        assert!(hub.snapshot()["listener"].is_object());
+        hub.close(id, token).unwrap();
+    }
+
+    #[tokio::test]
+    async fn force_listener_repeated_reads_and_ack_keep_one_delivery_identity() {
+        let hub = hub();
+        let (id, token) = credentials(&hub);
+        let ticket = submit(&hub);
+        let delivery_id = ticket.id.clone();
+        assert!(hub.target().is_err());
+        assert!(hub.ack(&id, &token, &delivery_id, accepted()).is_err());
+        assert!(hub.read(id.clone(), "0".repeat(64), 0).await.is_err());
+        assert_eq!(hub.snapshot()["pending"]["status"], "waiting");
+        let first = hub.read(id.clone(), token.clone(), 0).await.unwrap();
+        let repeated = hub.read(id.clone(), token.clone(), 0).await.unwrap();
+        assert_eq!(first, repeated);
+        assert_eq!(first["delivery"]["delivery_id"], delivery_id);
+        assert_eq!(
+            first["delivery"]["source_text"],
+            "@\"中文 空格.txt\"\n    code\n"
+        );
+        assert_eq!(
+            first["delivery"]["text"],
+            "Expanded synthetic file\n    code\n"
+        );
+        let receipt = hub.ack(&id, &token, &delivery_id, accepted()).unwrap();
+        assert_eq!(
+            hub.ack(&id, &token, &delivery_id, accepted()).unwrap(),
+            receipt
+        );
+        assert!(
+            hub.ack(&id, &token, &delivery_id, rejected())
+                .unwrap_err()
+                .starts_with("ack_conflict")
+        );
+        assert_eq!(ticket.wait().await.unwrap().status, Status::Accepted);
+        assert_eq!(hub.snapshot()["receipts"].as_array().unwrap().len(), 1);
+        assert!(hub.read(id, token, 0).await.unwrap()["delivery"].is_null());
+    }
+
+    #[tokio::test]
+    async fn force_listener_cancelled_read_releases_the_exclusive_waiter() {
+        let hub = hub();
+        let (id, token) = credentials(&hub);
+        let waiting = {
+            let hub = hub.clone();
+            let id = id.clone();
+            let token = token.clone();
+            tokio::spawn(async move { hub.read(id, token, 5000).await })
+        };
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !hub.state.lock().unwrap().lease.as_ref().unwrap().reading {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            hub.read(id.clone(), token.clone(), 0)
+                .await
+                .unwrap_err()
+                .starts_with("read_busy")
+        );
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+        assert!(!hub.state.lock().unwrap().lease.as_ref().unwrap().reading);
+        let available = hub.read(id.clone(), token.clone(), 0).await.unwrap();
+        assert_eq!(available["timed_out"], true);
+        hub.close(&id, &token).unwrap();
+    }
+
+    #[tokio::test]
+    async fn force_listener_reconnect_and_expiry_reject_old_tokens_and_targets() {
+        let hub = hub();
+        let (old_id, old_token) = credentials(&hub);
+        let stale = hub.target().unwrap();
+        let ticket = submit(&hub);
+        let delivery_id = ticket.id.clone();
+        hub.reset(Some("synthetic-next-connection"));
+        assert_eq!(ticket.wait().await.unwrap().status, Status::Failed);
+        let (id, token) = credentials(&hub);
+        assert!(
+            hub.submit(stale, "old source".into(), "old text".into())
+                .is_err()
+        );
+        assert!(
+            hub.read(old_id.clone(), old_token.clone(), 0)
+                .await
+                .is_err()
+        );
+        assert!(
+            hub.ack(&old_id, &old_token, &delivery_id, accepted())
+                .is_err()
+        );
+        assert!(hub.close(&old_id, &old_token).is_err());
+        assert_eq!(hub.snapshot()["listener"]["listener_id"], id);
+        let offered = submit(&hub);
+        hub.read(id.clone(), token.clone(), 0).await.unwrap();
+        hub.reset(None);
+        assert_eq!(offered.wait().await.unwrap().status, Status::Unknown);
+        assert_eq!(hub.target().err().as_deref(), Some(NO_LISTENER));
+        hub.reset(Some("synthetic-next-connection"));
+        let (expired_id, expired_token) = credentials(&hub);
+        hub.state.lock().unwrap().lease.as_mut().unwrap().expires =
+            Instant::now() - Duration::from_millis(1);
+        assert_eq!(hub.target().err().as_deref(), Some(NO_LISTENER));
+        assert!(hub.read(expired_id, expired_token, 0).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn force_listener_unknown_failure_and_rejection_never_replay_automatically() {
+        let hub = hub();
+        let (id, token) = credentials(&hub);
+        let offered = submit(&hub);
+        let offered_id = offered.id.clone();
+        hub.read(id.clone(), token.clone(), 0).await.unwrap();
+        hub.state.lock().unwrap().pending.as_mut().unwrap().deadline =
+            Instant::now() - Duration::from_millis(1);
+        assert!(hub.snapshot()["pending"].is_null());
+        assert_eq!(offered.wait().await.unwrap().status, Status::Unknown);
+        assert!(hub.ack(&id, &token, &offered_id, accepted()).is_err());
+        assert!(hub.read(id.clone(), token.clone(), 0).await.unwrap()["delivery"].is_null());
+
+        let unread = submit(&hub);
+        assert_ne!(unread.id, offered_id);
+        hub.state.lock().unwrap().pending.as_mut().unwrap().deadline =
+            Instant::now() - Duration::from_millis(1);
+        hub.snapshot();
+        assert_eq!(unread.wait().await.unwrap().status, Status::Failed);
+
+        let refused = submit(&hub);
+        hub.read(id.clone(), token.clone(), 0).await.unwrap();
+        hub.ack(&id, &token, &refused.id, rejected()).unwrap();
+        let receipt = refused.wait().await.unwrap();
+        assert_eq!(receipt.status, Status::Rejected);
+        assert!(
+            receipt
+                .detail
+                .contains("receiver cannot store this message")
+        );
+
+        let closed = submit(&hub);
+        hub.read(id.clone(), token.clone(), 0).await.unwrap();
+        hub.close(&id, &token).unwrap();
+        assert_eq!(closed.wait().await.unwrap().status, Status::Unknown);
+        assert!(hub.snapshot()["pending"].is_null());
+        assert_eq!(hub.snapshot()["receipts"].as_array().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn force_listener_ack_racing_timeout_commits_one_terminal_receipt() {
+        let hub = hub();
+        let (id, token) = credentials(&hub);
+        let ticket = submit(&hub);
+        let delivery_id = ticket.id.clone();
+        hub.read(id.clone(), token.clone(), 0).await.unwrap();
+        let barrier = Arc::new(Barrier::new(3));
+        let ack_result = std::thread::scope(|scope| {
+            let ack_hub = hub.clone();
+            let ack_barrier = barrier.clone();
+            let ack = scope.spawn(move || {
+                ack_barrier.wait();
+                ack_hub.ack(&id, &token, &delivery_id, accepted())
+            });
+            let expiry_hub = hub.clone();
+            let expiry_barrier = barrier.clone();
+            let expiry = scope.spawn(move || {
+                expiry_barrier.wait();
+                expiry_hub
+                    .state
+                    .lock()
+                    .unwrap()
+                    .expire(Instant::now() + ACK_WAIT);
+            });
+            barrier.wait();
+            let result = ack.join().unwrap();
+            expiry.join().unwrap();
+            result
+        });
+        let receipt = ticket.wait().await.unwrap();
+        assert!(matches!(receipt.status, Status::Accepted | Status::Unknown));
+        assert_eq!(ack_result.is_ok(), receipt.status == Status::Accepted);
+        let snapshot = hub.snapshot();
+        assert_eq!(snapshot["receipts"].as_array().unwrap().len(), 1);
+        assert!(snapshot["pending"].is_null());
+    }
 }
