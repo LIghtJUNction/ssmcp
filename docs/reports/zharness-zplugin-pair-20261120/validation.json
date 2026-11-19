@@ -1,0 +1,214 @@
+{
+  "source_commit": "9c13277d1eacb68c2378f692a4d4660cb92f0c62",
+  "consumer_base": "fab35e11425cdd147434de6d2eaa20510bf6db1e",
+  "application_version": "0.10.14",
+  "scope": "Reusable zharness/zplugin pair checkpoint; not the final four-library cohort",
+  "source_pins": {
+    "zharness": "e3580c01c7252da090d04e59b59762bc561777d1",
+    "zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305"
+  },
+  "retained_zuse": {
+    "version": "0.1.0",
+    "commit": "c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41"
+  },
+  "registry": [
+    {
+      "name": "zharness",
+      "version": "0.5.1",
+      "checksum": "0d68598de76bf21e9b0c37558cc850685eafc83e69b5d6d8bdf24b0c6f8b785b",
+      "archive_sha256": "0d68598de76bf21e9b0c37558cc850685eafc83e69b5d6d8bdf24b0c6f8b785b",
+      "yanked": false,
+      "published_at": "2026-11-19T22:39:40.060354Z"
+    },
+    {
+      "name": "zplugin",
+      "version": "0.3.1",
+      "checksum": "094cd57c6b7759cbbf7834e96aed75c9d025558a7d2cc4b742e78b33f8e7a448",
+      "archive_sha256": "094cd57c6b7759cbbf7834e96aed75c9d025558a7d2cc4b742e78b33f8e7a448",
+      "yanked": false,
+      "published_at": "2026-11-19T22:07:54.343703Z"
+    },
+    {
+      "name": "zplugin-macros",
+      "version": "0.3.1",
+      "checksum": "f39a8e67a3405ad54b2780d74360dabdbbcaa6f33fb44474e13433c0b34ca395",
+      "archive_sha256": "f39a8e67a3405ad54b2780d74360dabdbbcaa6f33fb44474e13433c0b34ca395",
+      "yanked": false,
+      "published_at": "2026-11-19T22:07:50.969909Z"
+    },
+    {
+      "name": "zsys",
+      "version": "0.1.1",
+      "checksum": "929d282f08df7fbe2456414924e126a29dfde04e93eb2515721b596404610548",
+      "archive_sha256": "929d282f08df7fbe2456414924e126a29dfde04e93eb2515721b596404610548",
+      "yanked": false,
+      "published_at": "2026-11-19T21:37:15.414438Z"
+    }
+  ],
+  "resolved_packages": [
+    {
+      "name": "zharness",
+      "version": "0.5.1",
+      "instances": 1,
+      "source": "pinned-submodule",
+      "features": [
+        "std"
+      ]
+    },
+    {
+      "name": "zplugin",
+      "version": "0.3.1",
+      "instances": 1,
+      "source": "pinned-submodule",
+      "features": [
+        "alloc",
+        "macros",
+        "std"
+      ]
+    },
+    {
+      "name": "zplugin-macros",
+      "version": "0.3.1",
+      "instances": 1,
+      "source": "pinned-submodule",
+      "features": []
+    },
+    {
+      "name": "zsys",
+      "version": "0.1.1",
+      "instances": 1,
+      "source": "registry",
+      "features": [
+        "dylib"
+      ]
+    },
+    {
+      "name": "zcall",
+      "version": "0.3.0",
+      "instances": 1,
+      "source": "registry",
+      "features": []
+    },
+    {
+      "name": "zconv",
+      "version": "0.4.0",
+      "instances": 1,
+      "source": "registry",
+      "features": []
+    }
+  ],
+  "cargo_lock_sha256": "ad9899c43afba2598c8906126f07061951f91d980a6983abbb1cae45d2bc2722",
+  "completed_validation": {
+    "locked_full_dependency_graph": {
+      "critical_package_instances": "one each; no duplicate zplugin/zsys",
+      "status": "passed"
+    },
+    "registry_preflight": {
+      "status": "passed"
+    },
+    "release_python": {
+      "passed": 73,
+      "failed": 0
+    },
+    "zplugin_library_and_integration": {
+      "status": "passed",
+      "passed": 75,
+      "suites": 10,
+      "test_seconds": 0.18,
+      "elapsed_seconds_including_queue_and_build": 466.997,
+      "command": [
+        "rtk",
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "crates/zplugin/Cargo.toml",
+        "--features",
+        "std,macros,hot-reload,wasm",
+        "--lib",
+        "--tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0
+    }
+  },
+  "incomplete_validation": {
+    "zharness_native_wasm_contracts": {
+      "status": "handed_off",
+      "result": "no test result; queued/build sequence cancelled by coordination",
+      "command": [
+        "rtk",
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "crates/zharness/Cargo.toml",
+        "--all-features",
+        "--lib",
+        "--tests",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    "ssmcp_integration": {
+      "status": "not_started",
+      "scope": "No new SSMCP Clippy/build/libtest or native fixture run for this pair"
+    },
+    "final_four_library_graph": {
+      "status": "handed_off",
+      "reason": "The coordinated cohort also updates zuse-computer to 0.1.1"
+    }
+  },
+  "coordination": {
+    "owner": "Project Z aggregate SSMCP owner",
+    "branch": "coord/shared-cohort-20261120",
+    "reuse_commit": "9c13277d1eacb68c2378f692a4d4660cb92f0c62",
+    "application_release": "No new application release or version bump performed",
+    "next_steps": [
+      "Integrate the reusable pair without overriding the aggregate zuse pin",
+      "Resolve and verify the final four-library graph and checksums",
+      "Complete native/Wasm/harness and SSMCP integration validation on the final immutable source",
+      "Record reverse dependencies, downstream propagation, blockers and owners until closure"
+    ],
+    "cohort_at_handoff": {
+      "zplugin": "0.3.1",
+      "zplugin-macros": "0.3.1",
+      "zharness": "0.5.1",
+      "zuse-computer": "0.1.1",
+      "ztuio": "0.1.0"
+    },
+    "later_owner_notice": {
+      "component": "zuse-computer",
+      "requested_version": "0.2.0",
+      "downstream_owner": "oh-my-ztty suite owner",
+      "status": "forwarded to root and aggregate coordination; source/tag/assets not validated by this checkpoint",
+      "requested_handoff": [
+        "formal ssmcp tag and source",
+        "Linux x86_64 and aarch64 archives and digests",
+        "ABI and installer acceptance"
+      ]
+    }
+  },
+  "cancelled_sequence": {
+    "state": "cancelled",
+    "stdout_eof": true,
+    "stderr_eof": true,
+    "owned_processes_reaped": true,
+    "owned_target_locks_released": true,
+    "other_processes_and_lock_files_untouched": true
+  },
+  "preserved_v14_artifacts": {
+    "libtest": "b74d457c9934557a6588107c4478e68804f238a71e7e677c998d57b143a54793",
+    "fixture": "f432324f95b5a3de32bf5c82e81a6fadd017fd97071ceab6c9e81f7202b6858a"
+  },
+  "log_sha256": {
+    "registry.json": "b3bd045ceb76e596a973bdb93fd13be1a9b007bba16e0d9f506d11fdc2bddf7f",
+    "cargo-update.log": "653703ed2197c61040bf6f9c43ddc1e1a5691c6b00a23b3e16b73922a6e72411",
+    "cargo-metadata.json": "07ca1d9a2c0317cb6eeeb278f6fd69441955815651f6209a4410e3bcc86d01cf",
+    "release-python.log": "8bdc3d2dbf811c3e7eeee474d67f5466090db871b42dbe194e948429892b802a",
+    "zplugin-contracts.log": "05813418a751090bac1af5f68a16385b5bf60cfa639066ae044f24a0914524da",
+    "independent-contracts.json": "7d1b5c64a4eb1522efa78a21cdeecdf2b0590cb7fa8eb04ef34b0a3ffbad6270",
+    "cancellation.json": "9a743b678f66cc9e30b598c49ac432d26b0b846eb50a043993b177de215770de"
+  }
+}
