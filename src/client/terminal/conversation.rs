@@ -1127,6 +1127,9 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        if self.sleep_key(key) {
+            return;
+        }
         self.events.set_scope(events::EventScope::Conversation);
         if matches!(key, Key::Interrupt) {
             self.chat_interrupt();
@@ -2067,6 +2070,7 @@ impl State {
             if !self.preview && (!output.is_empty() || !keys.is_empty()) {
                 crate::client::interface::computer::local_input();
             }
+            self.sleep_wake_text(&output);
             self.chat_output(&output);
             for key in keys {
                 self.chat_key(key);
@@ -2077,6 +2081,7 @@ impl State {
             if !self.preview && (!output.is_empty() || !keys.is_empty()) {
                 crate::client::interface::computer::local_input();
             }
+            self.sleep_wake_text(&output);
             self.chat_output(&output);
             for key in keys {
                 self.chat_key(key);
@@ -2099,7 +2104,7 @@ impl State {
 
     fn chat_line(&self, text: &str, tone: PanelTone, width: u16) -> String {
         let plain = fit(text, width);
-        let row = ztui::Row::measured(&plain, |text| text.width());
+        let row = ztuio::Row::measured(&plain, |text| text.width());
         let mut padded =
             String::with_capacity(plain.len() + usize::from(width).saturating_sub(row.columns()));
         row.write_padded(&mut padded, width)

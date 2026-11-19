@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.10.13"
+version = "0.10.14"
 edition = "2024"
 rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -14,7 +14,6 @@ include = [
     "/Makefile",
     "/rust-toolchain.toml",
     "/src/**",
-    "/crates/ztui/**",
     "/skills/**",
     "/docs/workspaces.md",
     "/docs/context.md",
@@ -97,6 +96,8 @@ include = [
     "/scripts/e2e_browser_background.py",
     "/scripts/e2e_browser_setup.py",
     "/scripts/e2e_private_desktop.py",
+    "/scripts/e2e_zuse_worker.py",
+    "/docs/reports/zuse-integration-20261120/**",
     "/docs/browser-desktop.md",
     "/docs/validation-cua-client-capabilities.md",
     "/docs/reports/cua-client-capabilities-20261118/**",
@@ -162,12 +163,13 @@ include = [
 ]
 
 [workspace]
-members = ["crates/ztui"]
-exclude = ["crates/zharness", "crates/zplugin"]
+members = []
+exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zuse"]
 resolver = "3"
 
 [dependencies]
-ztui = { package = "ztui-core", version = "=0.1.2", path = "crates/ztui" }
+zuse = { package = "zuse-computer", version = "=0.1.0", path = "crates/zuse", default-features = false, features = ["std"] }
+ztuio = { version = "=0.1.0", path = "crates/ztuio" }
 zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
 zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
