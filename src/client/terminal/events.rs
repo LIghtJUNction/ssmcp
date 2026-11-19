@@ -2685,7 +2685,10 @@ mod tests {
         view.attach_image(image_preview(2, 2, false));
         assert!(!view.is_empty());
         assert_eq!(view.snapshot()["events"][0]["kind"], "tool");
-        assert!(!view.open(), "decoded images start expanded in Conversation");
+        assert!(
+            !view.open(),
+            "decoded images start expanded in Conversation"
+        );
         assert!(
             !view
                 .render(80, 12, &plain_ui(), true)
@@ -2801,7 +2804,10 @@ mod tests {
             width: 10,
             height: 20,
         }));
-        let ui = Ui { color: true, ..Ui::default() };
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
         view.render(80, 18, &ui, true);
         let initial = view.image_placements(0);
         assert_eq!(initial.len(), 1, "a decoded image is visible without Enter");
@@ -2811,12 +2817,19 @@ mod tests {
 
         assert!(view.toggle());
         view.render(80, 18, &ui, true);
-        assert!(view.image_placements(0).is_empty(), "manual folding hides native pixels");
+        assert!(
+            view.image_placements(0).is_empty(),
+            "manual folding hides native pixels"
+        );
         renderer.update(view.image_placements(0), (17, 0), false);
 
         assert!(view.toggle());
         view.render(80, 18, &ui, true);
-        assert_eq!(view.image_placements(0).len(), 1, "reopening uses the retained image");
+        assert_eq!(
+            view.image_placements(0).len(),
+            1,
+            "reopening uses the retained image"
+        );
         let (_, output) = renderer.update(view.image_placements(0), (17, 0), false);
         assert!(output.contains("a=p"));
     }

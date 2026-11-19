@@ -677,7 +677,10 @@ impl State {
     fn chat_submit(&mut self) {
         // Exit and logout remain local while editing a queued request or awaiting acknowledgement.
         let text = self.conversation.composer.text().to_owned();
-        if matches!(text.split_whitespace().next(), Some("/exit" | "/quit" | "/logout")) {
+        if matches!(
+            text.split_whitespace().next(),
+            Some("/exit" | "/quit" | "/logout")
+        ) {
             if let Err(error) = self.chat_command(text.trim()) {
                 self.notice = Some(error);
             }

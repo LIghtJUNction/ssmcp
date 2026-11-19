@@ -18,15 +18,21 @@ pub(in crate::client::terminal) struct Task {
 }
 
 impl Task {
-    fn start(runtime: tokio::runtime::Handle, target: Option<Target>, login: Option<account::login::Task>) -> Self {
+    fn start(
+        runtime: tokio::runtime::Handle,
+        target: Option<Target>,
+        login: Option<account::login::Task>,
+    ) -> Self {
         let (sender, receiver) = oneshot::channel();
         let handle = runtime.spawn(async move {
             if let Some(login) = login {
                 login.cancel_and_wait().await;
             }
             let result = match target {
-                Some(target) => account::logout_connection(&target.server, &target.token).await
-                    .map(Some).map_err(|error| panel::safe_text(&error.to_string())),
+                Some(target) => account::logout_connection(&target.server, &target.token)
+                    .await
+                    .map(Some)
+                    .map_err(|error| panel::safe_text(&error.to_string())),
                 None => Ok(None),
             };
             let _ = sender.send(result);
@@ -39,19 +45,28 @@ impl Task {
         match self.receiver.try_recv() {
             Ok(result) => Some(result),
             Err(oneshot::error::TryRecvError::Empty) => None,
-            Err(oneshot::error::TryRecvError::Closed) => Some(Err("Logout stopped before its result was confirmed".into())),
+            Err(oneshot::error::TryRecvError::Closed) => {
+                Some(Err("Logout stopped before its result was confirmed".into()))
+            }
         }
     }
 
     pub(in crate::client::terminal) async fn finish(mut self) -> Completion {
-        (&mut self.receiver).await
+        (&mut self.receiver)
+            .await
             .unwrap_or_else(|_| Err("Logout stopped before its result was confirmed".into()))
     }
 
     #[cfg(test)]
     fn pending_for_test() -> (Self, oneshot::Sender<Completion>) {
         let (sender, receiver) = oneshot::channel();
-        (Self { receiver, handle: tokio::spawn(std::future::pending()) }, sender)
+        (
+            Self {
+                receiver,
+                handle: tokio::spawn(std::future::pending()),
+            },
+            sender,
+        )
     }
 }
 
@@ -77,18 +92,26 @@ impl State {
             self.chat_finish_logout(Ok(None));
             return Ok(());
         }
-        let runtime = tokio::runtime::Handle::try_current().ok()
-            .or_else(|| crate::client::interface::harness::local_runtime().ok().map(|(_, handle)| handle))
+        let runtime = tokio::runtime::Handle::try_current()
+            .ok()
+            .or_else(|| {
+                crate::client::interface::harness::local_runtime()
+                    .ok()
+                    .map(|(_, handle)| handle)
+            })
             .ok_or("Logout requires an active client runtime")?;
         let login = self.conversation.login_task.take();
-        self.conversation.logout_task = Some(Task::start(runtime, self.logout_target.clone(), login));
+        self.conversation.logout_task =
+            Some(Task::start(runtime, self.logout_target.clone(), login));
         self.notice = Some("Signing out of this connection…".into());
         self.dirty = true;
         Ok(())
     }
 
     pub(super) fn chat_poll_logout(&mut self) {
-        let Some(result) = self.conversation.logout_task.as_mut().and_then(Task::poll) else { return; };
+        let Some(result) = self.conversation.logout_task.as_mut().and_then(Task::poll) else {
+            return;
+        };
         self.conversation.logout_task = None;
         self.chat_finish_logout(result);
     }
@@ -123,7 +146,11 @@ mod tests {
         let mut state = state();
         state.conversation.composer.set_text("Keep this draft");
         let before = state.chat_input_stamp().unwrap();
-        for command in ["/logout", "/logout other", "/logout --server https://other.example"] {
+        for command in [
+            "/logout",
+            "/logout other",
+            "/logout --server https://other.example",
+        ] {
             assert!(state.chat_command(command).is_err());
             assert!(!state.conversation.exit_requested);
             assert!(state.conversation.logout_task.is_none());
@@ -139,7 +166,14 @@ mod tests {
         assert!(state.chat_command("/logout").unwrap());
         assert!(state.conversation.exit_requested);
         assert!(state.conversation.logout_task.is_none());
-        assert!(state.conversation.exit_message.as_deref().unwrap().contains("No saved account login was revoked"));
+        assert!(
+            state
+                .conversation
+                .exit_message
+                .as_deref()
+                .unwrap()
+                .contains("No saved account login was revoked")
+        );
     }
 
     #[tokio::test]
@@ -152,17 +186,28 @@ mod tests {
         state.conversation.logout_task = Some(task);
         state.chat_poll_logout();
         assert!(!state.conversation.exit_requested);
-        sender.send(Err("A newer saved login is present".into())).unwrap();
+        sender
+            .send(Err("A newer saved login is present".into()))
+            .unwrap();
         state.chat_poll_logout();
         assert!(!state.conversation.exit_requested);
         assert!(state.conversation.exit_message.is_none());
-        assert!(state.notice.as_deref().unwrap().contains("newer saved login"));
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("newer saved login")
+        );
         assert_eq!(state.chat_input_stamp().as_ref(), Some(&before));
         let (task, sender) = Task::pending_for_test();
         state.conversation.logout_task = Some(task);
-        sender.send(Ok(Some(account::LogoutOutcome {
-            server: "https://selected.example".into(), status: account::LogoutStatus::LocalOnly,
-        }))).unwrap();
+        sender
+            .send(Ok(Some(account::LogoutOutcome {
+                server: "https://selected.example".into(),
+                status: account::LogoutStatus::LocalOnly,
+            })))
+            .unwrap();
         state.chat_poll_logout();
         assert!(state.conversation.exit_requested);
         let message = state.conversation.exit_message.as_deref().unwrap();
@@ -176,13 +221,20 @@ mod tests {
         tokio::spawn(async move {
             tokio::task::yield_now().await;
             let _ = sender.send(Ok(Some(account::LogoutOutcome {
-                server: "https://selected.example".into(), status: account::LogoutStatus::Revoked,
+                server: "https://selected.example".into(),
+                status: account::LogoutStatus::Revoked,
             })));
         });
         let mut state = state();
         state.chat_finish_logout(task.finish().await);
         assert!(state.conversation.exit_requested);
-        assert!(state.conversation.exit_message.unwrap().contains("were revoked"));
+        assert!(
+            state
+                .conversation
+                .exit_message
+                .unwrap()
+                .contains("were revoked")
+        );
     }
 
     #[tokio::test]
@@ -190,6 +242,10 @@ mod tests {
         let (login, _actions, events) = account::login::Task::pending_for_test();
         let task = Task::start(tokio::runtime::Handle::current(), None, Some(login));
         assert!(task.finish().await.unwrap().is_none());
-        assert!(events.send(account::login::Event::Notice("late login".into())).is_err());
+        assert!(
+            events
+                .send(account::login::Event::Notice("late login".into()))
+                .is_err()
+        );
     }
 }

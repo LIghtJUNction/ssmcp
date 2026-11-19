@@ -258,9 +258,16 @@ pub(super) async fn finish_pending_logout() -> Option<String> {
         .logout_task
         .take()?;
     let result = task.finish().await;
-    let mut state = shared.state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     state.chat_finish_logout(result);
-    state.conversation.exit_message.clone().or_else(|| state.notice.clone())
+    state
+        .conversation
+        .exit_message
+        .clone()
+        .or_else(|| state.notice.clone())
 }
 
 /// Read before Session is dropped, print only after the physical screen is restored.
@@ -2575,12 +2582,12 @@ mod tests {
         state.image(rejected, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(state.events.open());
+        assert!(!state.events.open(), "decoded images are already expanded");
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
         state.image(retained, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(state.events.open());
+        assert!(!state.events.open(), "decoded images are already expanded");
         let before = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let mut media = images::Renderer::default();
@@ -2617,7 +2624,7 @@ mod tests {
         state.image(next, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(state.events.open());
+        assert!(!state.events.open(), "decoded images are already expanded");
         let final_frame = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let (_, upload) = media.update(
@@ -2666,7 +2673,7 @@ mod tests {
         state.image(image, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(state.events.open());
+        assert!(!state.events.open(), "decoded images are already expanded");
         state.selection = true;
         let before = state.frame(now);
         let previous_cell = state.graphics.cell();
