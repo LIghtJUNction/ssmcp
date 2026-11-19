@@ -4,11 +4,11 @@ ssmcp 把终端绘制、原生扩展接口和动态库加载拆成三个独立 R
 
 | 源码目录 | 固定库版本 | 在 ssmcp 中的职责 | 独立仓库 |
 |---|---|---|---|
-| `crates/ztui` | `ztui-core = 0.1.1`，Rust 库名 `ztui` | 现有终端布局、文本行和差分帧 | [ztui](https://github.com/LIghtJUNction/ztui) |
+| `crates/ztuio` | `ztuio = 0.1.0`，Rust 库名 `ztuio` | 终端布局、文本行和 ANSI 差分帧 | [ztuio](https://github.com/LIghtJUNction/ztuio) |
 | `crates/zharness` | `zharness = 0.5.0` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
 | `crates/zplugin` | `zplugin = 0.3.0` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
 
-zharness 和 zplugin 的 Git 提交由父仓库的 gitlink 固定；`.gitmodules` 只记录这两个公开仓库地址。ztui-core 保留父仓库中的普通源码目录及主线已有的 0.1.1 版本；当前独立 ztui 仓库仍为 0.1.0，因此本轮不把它改成会降版的子模块。两份终端运行时源码、测试、示例和基准一致，后续版本对齐后再迁移其源码来源。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
+三个库的 Git 提交均由父仓库的 gitlink 固定，`.gitmodules` 记录公开仓库地址。ztuio 固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，复用独立仓库合并后的公共 API、ANSI 帧优化与契约测试，父仓库不再保留另一份终端核心源码。新包名和 Rust 导入名均为 `ztuio`；其版本由独立仓库维护。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
 
 ## 获取与构建
 
@@ -28,13 +28,13 @@ GitHub 自动生成的源码压缩包不展开 Git 子模块。需要从源码�
 
 ## 独立修改与验收
 
-更新 zharness 或 zplugin 时，先在相应子库提交并推送修改，再在 ssmcp 更新 gitlink 和精确依赖版本。提交父仓库前检查 `git submodule status --recursive`；不要只提交父仓库指针而遗漏子库提交。ztui-core 目前直接修改父仓库内的源码目录，版本继续独立维护。
+更新任一库时，先在相应独立仓库提交并推送修改，再在 ssmcp 更新 gitlink 和精确依赖版本。提交父仓库前检查 `git submodule status --recursive`；不要只提交父仓库指针而遗漏子库提交。
 
-ztui 保留为 ssmcp workspace 成员。zharness、zplugin 自带独立 workspace，父 workspace 显式排除其目录，并通过路径依赖使用它们。根级 `[patch.crates-io]` 将 zharness 传递使用的 zplugin 统一到同一个子模块，防止本机构建出现两套相同 ABI 类型。
+ztuio、zharness、zplugin 均从父 workspace 显式排除，应用通过路径依赖使用固定源码。ztuio 虽然是单包仓库，也明确排除，以免 Cargo 自动把路径依赖收入父 workspace。根级 `[patch.crates-io]` 将 zharness 传递使用的 zplugin 统一到同一个子模块，防止本机构建出现两套相同 ABI 类型。
 
-父项目的 `cargo test --workspace` 不会替代两个独立 workspace 的测试。更新子库时，应在该子库执行自己的测试和发布检查，再对 ssmcp 做集成验证。发布到 crates.io 时使用精确 registry 版本；不把子库的正式依赖改成只在相邻目录才成立的路径。
+父项目的 `cargo test --workspace` 不会执行已排除子库的独立契约测试。ztuio 使用 `cargo test --manifest-path crates/ztuio/Cargo.toml --locked` 验证；正式发布复用的 CI 配置也保留此显式检查。更新子库时，应在该子库执行自己的测试和发布检查，再对 ssmcp 做集成验证。发布到 crates.io 时使用精确 registry 版本；不把子库的正式依赖改成只在相邻目录才成立的路径。
 
-版本按实际变更分别递增。ssmcp 的版本递增不自动递增三个库。首次发布或升级公共依赖时，先发布对应库并核对包摘要，再发布应用。zplugin 的宏包先于 zplugin，新的 zharness 版本应依赖已发布的精确 zplugin 版本；ztui-core 独立先于依赖它的 ssmcp。
+版本按实际变更分别递增。ssmcp 的版本递增不自动递增三个库。首次发布或升级公共依赖时，先发布对应库并核对包摘要，再发布应用。zplugin 的宏包先于 zplugin，新的 zharness 版本应依赖已发布的精确 zplugin 版本；ztuio 同样从自己的仓库发布，SSMCP 工作流只发布应用包。
 
 ## 执行边界
 
