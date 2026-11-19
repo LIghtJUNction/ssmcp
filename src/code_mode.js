@@ -514,6 +514,7 @@ const bootstrap = `(() => {
       }])
   ));
   const outputs = freeze({
+    search: (id, args) => workspaceResult(id, 'ssmcp.output.search', args),
     read: (id, args) => workspaceResult(id, 'ssmcp.output.read', args),
     stat: (id, args) => workspaceResult(id, 'ssmcp.output.stat', args),
     cleanup: id => workspaceResult(id, 'ssmcp.output.cleanup'),
