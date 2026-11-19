@@ -1214,20 +1214,19 @@ async fn eligible_user_response(report: &CodeRunReport) -> Result<Vec<EligibleUs
             || report.run.binding(&client_id),
             |recipient| recipient.binding.clone(),
         );
-        if let Some(binding) = &binding {
-            if owner != binding.owner
+        if let Some(binding) = &binding
+            && (owner != binding.owner
                 || session
                     .collaboration
                     .bind(&owner, &binding.agent_id, &binding.token)
-                    .is_err()
-            {
-                report.run.finish_wait_state(
-                    &client_id,
-                    code_mode::user_wait::Outcome::BindingInvalid,
-                    "agent_binding_changed_before_delivery",
-                );
-                continue;
-            }
+                    .is_err())
+        {
+            report.run.finish_wait_state(
+                &client_id,
+                code_mode::user_wait::Outcome::BindingInvalid,
+                "agent_binding_changed_before_delivery",
+            );
+            continue;
         }
         let may_claim = steering_targets.contains(&client_id);
         eligible.push(EligibleUserResponse {
