@@ -1,0 +1,106 @@
+{
+  "consumer_base": "fab35e11425cdd147434de6d2eaa20510bf6db1e",
+  "application_version": "0.10.14",
+  "source_pins": {
+    "zharness": "e3580c01c7252da090d04e59b59762bc561777d1",
+    "zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305"
+  },
+  "registry": [
+    {
+      "name": "zharness",
+      "version": "0.5.1",
+      "checksum": "0d68598de76bf21e9b0c37558cc850685eafc83e69b5d6d8bdf24b0c6f8b785b",
+      "archive_sha256": "0d68598de76bf21e9b0c37558cc850685eafc83e69b5d6d8bdf24b0c6f8b785b",
+      "yanked": false,
+      "published_at": "2026-11-19T22:39:40.060354Z"
+    },
+    {
+      "name": "zplugin",
+      "version": "0.3.1",
+      "checksum": "094cd57c6b7759cbbf7834e96aed75c9d025558a7d2cc4b742e78b33f8e7a448",
+      "archive_sha256": "094cd57c6b7759cbbf7834e96aed75c9d025558a7d2cc4b742e78b33f8e7a448",
+      "yanked": false,
+      "published_at": "2026-11-19T22:07:54.343703Z"
+    },
+    {
+      "name": "zplugin-macros",
+      "version": "0.3.1",
+      "checksum": "f39a8e67a3405ad54b2780d74360dabdbbcaa6f33fb44474e13433c0b34ca395",
+      "archive_sha256": "f39a8e67a3405ad54b2780d74360dabdbbcaa6f33fb44474e13433c0b34ca395",
+      "yanked": false,
+      "published_at": "2026-11-19T22:07:50.969909Z"
+    },
+    {
+      "name": "zsys",
+      "version": "0.1.1",
+      "checksum": "929d282f08df7fbe2456414924e126a29dfde04e93eb2515721b596404610548",
+      "archive_sha256": "929d282f08df7fbe2456414924e126a29dfde04e93eb2515721b596404610548",
+      "yanked": false,
+      "published_at": "2026-11-19T21:37:15.414438Z"
+    }
+  ],
+  "resolved_packages": [
+    {
+      "name": "zharness",
+      "version": "0.5.1",
+      "instances": 1,
+      "source": "pinned-submodule",
+      "features": [
+        "std"
+      ]
+    },
+    {
+      "name": "zplugin",
+      "version": "0.3.1",
+      "instances": 1,
+      "source": "pinned-submodule",
+      "features": [
+        "alloc",
+        "macros",
+        "std"
+      ]
+    },
+    {
+      "name": "zplugin-macros",
+      "version": "0.3.1",
+      "instances": 1,
+      "source": "pinned-submodule",
+      "features": []
+    },
+    {
+      "name": "zsys",
+      "version": "0.1.1",
+      "instances": 1,
+      "source": "registry",
+      "features": [
+        "dylib"
+      ]
+    },
+    {
+      "name": "zcall",
+      "version": "0.3.0",
+      "instances": 1,
+      "source": "registry",
+      "features": []
+    },
+    {
+      "name": "zconv",
+      "version": "0.4.0",
+      "instances": 1,
+      "source": "registry",
+      "features": []
+    }
+  ],
+  "cargo_lock_sha256": "ad9899c43afba2598c8906126f07061951f91d980a6983abbb1cae45d2bc2722",
+  "validation": {
+    "cargo_update": "passed; real offline resolver with inherited wrapper/jobs",
+    "cargo_metadata": "passed; locked full graph",
+    "release_python": {
+      "passed": 73,
+      "failed": 0
+    },
+    "registry_preflight": "passed for all pinned independent packages",
+    "rust_compilation": "pending",
+    "native_wasm_harness_regressions": "pending"
+  }
+}

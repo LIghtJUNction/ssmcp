@@ -5,10 +5,12 @@ ssmcp 把终端绘制、原生扩展接口和动态库加载拆成三个独立 R
 | 源码目录 | 固定库版本 | 在 ssmcp 中的职责 | 独立仓库 |
 |---|---|---|---|
 | `crates/ztuio` | `ztuio = 0.1.0`，Rust 库名 `ztuio` | 终端布局、文本行和 ANSI 差分帧 | [ztuio](https://github.com/LIghtJUNction/ztuio) |
-| `crates/zharness` | `zharness = 0.5.0` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
-| `crates/zplugin` | `zplugin = 0.3.0` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
+| `crates/zharness` | `zharness = 0.5.1` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
+| `crates/zplugin` | `zplugin = 0.3.1` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
 
 三个库的 Git 提交均由父仓库的 gitlink 固定，`.gitmodules` 记录公开仓库地址。ztuio 固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，复用独立仓库合并后的公共 API、ANSI 帧优化与契约测试，父仓库不再保留另一份终端核心源码。新包名和 Rust 导入名均为 `ztuio`；其版本由独立仓库维护。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
+
+zharness 0.5.1 固定到 `e3580c01c7252da090d04e59b59762bc561777d1`，zplugin 0.3.1 固定到 `00d566eedcff7b2932e90b9dfeb44910c783d305`；宏包也使用 0.3.1。两者是已正式发布的配对版本，zharness 的精确 zplugin 依赖与应用一致。zplugin 通过 `zsys = 0.1.1` 的 `dylib` 特性复用系统动态库加载，显式关闭与默认保留映像的生命周期约定不变。应用继续启用 zplugin 的 `std, macros`，并保留 zcall 0.3.0、zconv 0.4.0；本次依赖更新不改变应用版本。来源、摘要与后续验证范围见[配对升级记录](reports/zharness-zplugin-pair-20261120/source-checkpoint.json)。
 
 ## 获取与构建
 
