@@ -101,7 +101,7 @@ class Socket(relay.WebSocket):
             self.hello = self.read()
             assert self.hello["type"] == "hello"
             if self.hello["metadata"]["name"] == self.state.recovery_name:
-                assert self.hello["version"] == 5, "007 must advertise its implemented v5 protocol"
+                assert self.hello["version"] == 7, "007 must advertise the current v7 protocol"
             else:
                 assert self.hello["version"] in relay.SUPPORTED_WIRE_VERSIONS
             assert self.hello["mode"] == "shell"
