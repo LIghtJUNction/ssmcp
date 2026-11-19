@@ -14,7 +14,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 const WORKER_FLAG: &str = "--internal-zuse-worker";
 const WORKER_READY: &[u8] = b"ssmcp-zuse-worker-v1\n";
 static WORKER_ENTRY_REGISTERED: AtomicBool = AtomicBool::new(false);
-const REQUEST_LIMIT: usize = 64 * 1024;
+// JSON escaping can expand each of the 16,384 allowed text bytes sixfold.
+const REQUEST_LIMIT: usize = 128 * 1024;
 const RESPONSE_LIMIT: usize = 768 * 1024;
 const CANCELLED: &str = "zuse operation cancelled";
 
@@ -154,7 +155,7 @@ async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<
     })
     .map_err(|error| error.to_string())?;
     if request.len() > REQUEST_LIMIT {
-        return Err("zuse request exceeds 64 KiB".into());
+        return Err("zuse request exceeds 128 KiB".into());
     }
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut command = tokio::process::Command::new(executable);
@@ -1067,6 +1068,50 @@ mod tests {
             .is_err()
         );
         assert!(read_request(&mut std::io::Cursor::new(b"{}\n")).is_err());
+    }
+
+    #[test]
+    fn bounded_transport_accepts_the_full_declared_literal_text_limit() {
+        let mut request = serde_json::to_vec(&Request {
+            operation: "type".into(),
+            arguments: json!({"text":"\u{1}".repeat(16384)}),
+            capture_path: None,
+        })
+        .unwrap();
+        request.push(b'\n');
+        assert!(read_request(&mut std::io::Cursor::new(request)).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn forced_readonly_worker_exit_removes_parent_owned_capture() {
+        let directory = CaptureDirectory::new().unwrap();
+        let path = directory.0.clone();
+        let mut command =
+            tokio::process::Command::new(crate::program::executable("python3").unwrap());
+        command.args(["-c", "import pathlib,sys,time; (pathlib.Path(sys.argv[1])/'capture.png').write_bytes(b'partial capture'); print('ready',flush=True); time.sleep(60)"])
+            .arg(&path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut process = Managed::spawn(&mut command).unwrap();
+        let mut worker = Worker {
+            input: None,
+            output: process.child.stdout.take().map(BufReader::new),
+            error: process.child.stderr.take(),
+            process,
+            input_pending: false,
+            _capture_directory: Some(directory),
+        };
+        assert_eq!(
+            read_line(worker.output.as_mut().unwrap(), 256)
+                .await
+                .unwrap(),
+            b"ready\n"
+        );
+        assert!(path.join("capture.png").is_file());
+        worker.finish().await.unwrap();
+        assert!(
+            !path.exists(),
+            "reaped workers must not leave their capture directory behind"
+        );
     }
 
     #[test]

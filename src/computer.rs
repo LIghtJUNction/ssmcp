@@ -511,6 +511,7 @@ impl Computer {
                     return windows::perform(&self.root, name, args).await;
                     #[cfg(target_os = "macos")]
                     return macos::perform(&self.root, name, args).await;
+                    #[cfg(not(any(windows, target_os = "macos")))]
                     if matches!(self.session, Session::Hyprland | Session::Wayland) {
                         return self.screenshot(screenshot).await;
                     }
