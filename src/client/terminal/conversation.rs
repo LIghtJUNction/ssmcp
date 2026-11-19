@@ -3402,75 +3402,178 @@ mod tests {
     }
 
     #[test]
-    fn mouse_selects_visible_items_after_a_list_has_scrolled() {
+    fn mouse_selects_visible_agents_after_a_list_has_scrolled() {
         let data = json!({
             "agents":(0..24).map(|index| json!({"agent_id":format!("agent_{index}"),"name":format!("Agent {index}"),"role":"worker","status":"working"})).collect::<Vec<_>>(),
             "queue":(0..24).map(|index| json!({"id":format!("request_{index}"),"text":format!("Request {index}"),"status":"queued"})).collect::<Vec<_>>()
         });
-        for view in [View::Agents, View::Queue] {
-            let mut state = preview(18, 120);
-            state.canvas_focus(view);
-            state.conversation.content_focus = true;
-            state.conversation.selected = 15;
-            state.conversation.selected_agent = None;
-            let rows = state.chat_list_rows(&data, body_rows(state.geometry.rows));
-            let start = state.conversation.list_start;
-            assert!(start > 0);
-            assert_eq!(state.conversation.list_count, 5);
-            assert!(!rows[1].contains("Agent 0  ·"));
-            let first = body_top(state.geometry.rows) + 1;
-            state.chat_key(Key::Mouse {
-                button: 0,
-                x: 1,
-                y: first,
-                release: false,
-            });
-            assert_eq!(state.conversation.selected, start);
-            state.chat_key(Key::Mouse {
-                button: 0,
-                x: 1,
-                y: first + 3,
-                release: false,
-            });
-            assert_eq!(
-                state.conversation.selected,
-                start + 1,
-                "subtitle selects its visible item"
-            );
-            state.chat_key(Key::Mouse {
-                button: 0,
-                x: 1,
-                y: body_top(state.geometry.rows),
-                release: false,
-            });
-            assert_eq!(
-                state.conversation.selected,
-                start + 1,
-                "list header is not an entry"
-            );
-            assert!(!state.conversation.detail);
-            state.chat_key(Key::Mouse {
-                button: 2,
-                x: 1,
-                y: body_top(state.geometry.rows),
-                release: false,
-            });
-            assert_eq!(state.conversation.view, View::Logs);
-            assert!(state.conversation.logs_open);
-            state.chat_key(Key::Mouse {
-                button: 2,
-                x: 1,
-                y: prompt_top(state.geometry.rows),
-                release: false,
-            });
-            assert_eq!(
-                state.conversation.selected,
-                start + 1,
-                "prompt border is not an entry"
-            );
-            assert!(!state.conversation.logs_open);
-            assert_eq!(state.conversation.view, view);
+        let view = View::Agents;
+        let mut state = preview(18, 120);
+        state.canvas_focus(view);
+        state.conversation.content_focus = true;
+        state.conversation.selected = 15;
+        state.conversation.selected_agent = None;
+        let rows = state.chat_list_rows(&data, body_rows(state.geometry.rows));
+        let start = state.conversation.list_start;
+        assert!(start > 0);
+        assert_eq!(state.conversation.list_count, 5);
+        assert!(!rows[1].contains("Agent 0  ·"));
+        let first = body_top(state.geometry.rows) + 1;
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: first,
+            release: false,
+        });
+        assert_eq!(state.conversation.selected, start);
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: first + 3,
+            release: false,
+        });
+        assert_eq!(
+            state.conversation.selected,
+            start + 1,
+            "subtitle selects its visible item"
+        );
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: body_top(state.geometry.rows),
+            release: false,
+        });
+        assert_eq!(
+            state.conversation.selected,
+            start + 1,
+            "list header is not an entry"
+        );
+        assert!(!state.conversation.detail);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: body_top(state.geometry.rows),
+            release: false,
+        });
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(state.conversation.logs_open);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: prompt_top(state.geometry.rows),
+            release: false,
+        });
+        assert_eq!(
+            state.conversation.selected,
+            start + 1,
+            "prompt border is not an entry"
+        );
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.view, view);
+    }
+
+    #[test]
+    fn mouse_targets_scrolled_request_cards_by_full_id_and_ignores_spacing() {
+        let data = json!({
+            "queue":(0..24).map(|index| json!({"id":format!("request_{index}"),"text":format!("Request {index}"),"status":"queued"})).collect::<Vec<_>>()
+        });
+        let mut state = preview(18, 120);
+        state.canvas_focus(View::Queue);
+        state.conversation.content_focus = true;
+        state.conversation.selected = 15;
+        let rows = state.chat_list_rows(&data, body_rows(state.geometry.rows));
+        let start = state.conversation.list_start;
+        assert!(start > 0);
+        assert_eq!(state.conversation.list_count, 4);
+        assert!(rows[1].contains(&format!("Request {start}")));
+        let top = body_top(state.geometry.rows);
+        for offset in 0..state.conversation.list_count {
+            let first = 1 + offset * 3;
+            let expected = start + offset;
+            for row in [first, first + 1] {
+                let hit = state.chat_queue_hit(&data, top + row as u16);
+                assert_eq!(
+                    hit,
+                    Some(expected),
+                    "body and metadata select the same card"
+                );
+                assert_eq!(
+                    message_id(&data["queue"][hit.unwrap()]),
+                    format!("request_{expected}"),
+                    "the visible row resolves to its complete request ID"
+                );
+            }
+            if offset + 1 < state.conversation.list_count {
+                assert_eq!(state.chat_queue_hit(&data, top + (first + 2) as u16), None);
+            }
         }
+        for row in [top, prompt_top(state.geometry.rows)] {
+            assert_eq!(
+                state.chat_queue_hit(&data, row),
+                None,
+                "chrome is not an entry"
+            );
+        }
+        // The live preview has a different queue. A stale rendered ID must not
+        // select a same-position request from that replacement snapshot.
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: top + 1,
+            release: false,
+        });
+        assert_eq!(
+            state.conversation.selected, 15,
+            "removed IDs are not mouse targets"
+        );
+
+        // Exercise the real mouse entry point with the same queue it renders.
+        let live = state.chat_data();
+        state.chat_list_rows(&live, body_rows(state.geometry.rows));
+        for row in [top + 1, top + 2] {
+            state.conversation.selected = 15;
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 1,
+                y: row,
+                release: false,
+            });
+            assert_eq!(state.conversation.selected, 0);
+            assert_eq!(
+                message_id(&state.chat_selected().unwrap()),
+                "example-request"
+            );
+        }
+        for row in [top, prompt_top(state.geometry.rows)] {
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 1,
+                y: row,
+                release: false,
+            });
+            assert_eq!(
+                state.conversation.selected, 0,
+                "chrome does not move selection"
+            );
+        }
+        assert!(!state.conversation.detail);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: top,
+            release: false,
+        });
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(state.conversation.logs_open);
+        state.chat_key(Key::Mouse {
+            button: 2,
+            x: 1,
+            y: prompt_top(state.geometry.rows),
+            release: false,
+        });
+        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.view, View::Queue);
+        assert_eq!(state.conversation.selected, 0);
     }
 
     #[test]
