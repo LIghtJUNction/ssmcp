@@ -777,7 +777,7 @@ fn paint_row(parts: &[(&str, &str)], width: usize, ui: &Ui) -> String {
     if ui.color {
         result.push_str(&format!(
             "\x1b[{};{}m",
-            ui.background(),
+            ui.input_background(),
             ui.color("foreground")
         ));
     }

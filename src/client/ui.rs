@@ -379,6 +379,22 @@ impl Ui {
         }
     }
 
+    /// A quiet input surface; explicit background overrides remain authoritative.
+    pub(crate) fn input_background(&self) -> String {
+        if !self.colors.background.is_empty() {
+            return self.background();
+        }
+        match self.theme {
+            Theme::Dark => "48;2;44;46;50",
+            Theme::CodexDark => "48;2;41;44;50",
+            Theme::Nord => "48;2;59;66;82",
+            Theme::Solarized => "48;2;7;54;66",
+            Theme::Light => "48;2;241;243;244",
+            Theme::Minimal => return self.background(),
+        }
+        .into()
+    }
+
     pub(crate) fn to_toml(&self) -> Result<String, String> {
         self.validate()?;
         #[derive(Serialize)]

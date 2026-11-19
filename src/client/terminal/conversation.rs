@@ -1851,6 +1851,23 @@ impl State {
         self.tone(tone, &padded)
     }
 
+    fn chat_input_line(&self, text: &str, width: u16) -> String {
+        let text = fit(text, width);
+        let padded = format!(
+            "{text}{}",
+            " ".repeat(usize::from(width).saturating_sub(text.width()))
+        );
+        if self.ui.color {
+            format!(
+                "\x1b[{};{}m{padded}\x1b[0m",
+                self.ui.input_background(),
+                self.ui.color("muted")
+            )
+        } else {
+            padded
+        }
+    }
+
     fn chat_list_window(&mut self, count: usize, height: u16) -> std::ops::Range<usize> {
         self.conversation.selected = self.conversation.selected.min(count.saturating_sub(1));
         let capacity = usize::from(height.saturating_sub(1) / 2).max(1);
@@ -2317,12 +2334,14 @@ impl State {
         );
         if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
         {
-            prompt.lines[0] = self.chat_line(
-                "❯ Type an answer · number selects an option",
-                PanelTone::Muted,
-                g.left,
-            );
+            prompt.lines[0] =
+                self.chat_input_line("❯ Type an answer · number selects an option", g.left);
         }
+        prompt
+            .lines
+            .resize_with(usize::from(prompt_rows(g.rows)), || {
+                self.chat_input_line("", g.left)
+            });
         let mut label = self
             .conversation
             .target
@@ -2448,10 +2467,27 @@ impl State {
                 } else {
                     String::new()
                 };
-                let width = g.left.saturating_sub(4);
-                let mut border = fit(&title, width);
-                border.push_str(&"─".repeat(usize::from(width).saturating_sub(border.width())));
-                self.chat_line(&format!("  {border}"), PanelTone::Muted, g.left)
+                let title = fit(title.trim(), g.left.saturating_sub(4));
+                let available = usize::from(g.left).saturating_sub(title.width() + 4);
+                let detail = if g.left == g.cols {
+                    let [account, remaining] = self.account.rows();
+                    let full = format!("{} · {}", account.trim(), remaining.trim());
+                    if full.width() <= available {
+                        full
+                    } else if remaining.trim().width() <= available {
+                        remaining.trim().into()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+                let gap = " ".repeat(available.saturating_sub(detail.width()));
+                self.chat_line(
+                    &format!("  {title}{gap}{detail}  "),
+                    PanelTone::Muted,
+                    g.left,
+                )
             } else {
                 prompt
                     .lines
