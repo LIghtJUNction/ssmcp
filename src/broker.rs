@@ -930,7 +930,9 @@ impl Broker {
         let registration = peer.as_ref().and_then(|peer| peer.account.as_ref());
         let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
-        let (mode, metadata) = match timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await?? {
+        let (mode, mut metadata) = match timeout(IO_TIMEOUT, wire::read_frame(&mut reader))
+            .await??
+        {
             Some(Frame::Hello {
                 version,
                 mode,
@@ -947,6 +949,19 @@ impl Broker {
                 return Ok(());
             }
         };
+        // Old authenticated account clients encoded the default self-only policy as
+        // their verified GitHub principal. Recognize only that exact singleton;
+        // authority still comes from the credential's stable subject, never this label.
+        let legacy_account_self = registration.is_some_and(|registration| {
+            registration.identity.provider == "github"
+                && matches!(metadata.allow.as_slice(), [principal]
+                    if wire::canonical_github_principal(
+                        &format!("{}@github", registration.identity.login)
+                    ).is_ok_and(|expected| principal == &expected))
+        });
+        if legacy_account_self {
+            metadata.allow.clear();
+        }
         if let Err(message) = metadata.validate() {
             wire::write_frame(&mut writer, &Frame::Reject { message }).await?;
             return Ok(());
@@ -1050,7 +1065,9 @@ impl Broker {
             }
         };
         let access_owner = registration.map(|registration| registration.identity.clone());
-        let access_supported = peer.as_ref().is_some_and(|peer| peer.session_access);
+        // A legacy permission panel cannot decode current server-scoped snapshots.
+        let access_supported =
+            !legacy_account_self && peer.as_ref().is_some_and(|peer| peer.session_access);
         let control_attribution = peer.as_ref().is_some_and(|peer| peer.control_attribution);
         let mut capabilities = Vec::new();
         if access_supported {
@@ -1308,6 +1325,8 @@ impl Broker {
                         // Capability negotiation grants no authority by itself.
                         let result = if access_supported {
                             session.access_command(&self, access_owner.as_ref(), command).await
+                        } else if legacy_account_self {
+                            Err("update the ssmcp client to manage server-scoped access controls; this legacy connection is restricted to its authenticated account".into())
                         } else {
                             Err("session access controls were not negotiated on this controlled connection".into())
                         };
