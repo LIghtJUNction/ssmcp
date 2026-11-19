@@ -1,5 +1,6 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
 mod access;
+mod allow;
 mod management;
 mod traffic;
 use crate::{
@@ -746,35 +747,23 @@ impl Broker {
             return Ok(());
         }
         let restricted = registration.is_some() || !metadata.allow.is_empty();
-        let allow = if let Some(registration) = &registration {
-            let principal = format!(
-                "{}@github",
-                registration.identity.login.to_ascii_lowercase()
-            );
-            if metadata.allow.iter().any(|allowed| allowed != &principal) {
-                wire::write_frame(
-                    &mut writer,
-                    &Frame::Reject {
-                        message: "account devices cannot grant access to another identity".into(),
-                    },
-                )
-                .await?;
+        let resolved = if let Some(registration) = &registration {
+            self.resolve_account_allow(registration, &metadata.allow)
+                .await
+        } else if restricted {
+            self.resolve_initial_allow(&metadata.allow).await
+        } else {
+            Ok(Vec::new())
+        };
+        let allow = match resolved {
+            Ok(identities) if !restricted || !identities.is_empty() => identities,
+            result => {
+                let message = result
+                    .err()
+                    .unwrap_or_else(|| "allow list resolved to no identities".into());
+                wire::write_frame(&mut writer, &Frame::Reject { message }).await?;
                 return Ok(());
             }
-            vec![registration.identity.clone()]
-        } else if restricted {
-            match self.identities.resolve_allow(&metadata.allow).await {
-                Ok(identities) if !identities.is_empty() => identities,
-                result => {
-                    let message = result
-                        .err()
-                        .unwrap_or_else(|| "allow list resolved to no identities".into());
-                    wire::write_frame(&mut writer, &Frame::Reject { message }).await?;
-                    return Ok(());
-                }
-            }
-        } else {
-            Vec::new()
         };
         let access_owner = registration
             .as_ref()

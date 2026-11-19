@@ -44,7 +44,7 @@ use crate::{
     runtime::Runtime,
     wire::{
         ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
-        canonical_github_principal, read_frame, validate_title, write_frame,
+        canonical_allow_principal, read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -77,6 +77,8 @@ Manage
 Options
   --name NAME   --title TEXT   --server URL   --context-root PATH
   --no-browser  --no-watchdog  --theme NAME   --no-color
+  --allow USER[,USER...]  Share with registered server usernames
+  --allow USER@github    Share with GitHub logins; mix or repeat both forms
 
 Use ssmcp COMMAND --help for command options; --help-full lists all connection flags.
 In a connected chat: /help, @file, $skill, !command; Left opens Agents.
@@ -97,7 +99,6 @@ Usage: ssmcp username@server [options]
                     [--no-bootstrap] [--json]
        ssmcp join [--server URL] --token INVITATION [options]
        ssmcp [options] [--server URL]
-       ssmcp --ssh [options] [user@]host
        ssmcp setup [--server URL] [--no-browser]
        ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
@@ -118,6 +119,9 @@ Usage: ssmcp username@server [options]
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
   --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
+  --allow USER|USER@github
+                       Allow a registered server username or GitHub login
+                       Repeat or comma-separate; at most 32 accounts including you
   --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
@@ -147,11 +151,14 @@ Examples:
   ssmcp invite
   ssmcp invite --shell powershell
   ssmcp --no-watchdog --name one-shot
+  ssmcp --allow alice owner@relay.example
+  ssmcp --allow alice,octocat@github owner@relay.example
   ssmcp sessions status workstation
   ssmcp sessions stop workstation
   ssmcp service install --system --user alice
   sudo systemctl enable --now ssmcp
   ssmcp sessions create workstation --watchdog alice@my-server.example
+  ssmcp sessions create shared --allow alice,octocat@github owner@relay.example
   ssmcp attach workstation
   ssmcp sessions close workstation
 
@@ -175,6 +182,14 @@ Redirected stdout (or jsonl mode) emits one connection JSON object.
 Interactive stdout shows the MCP URL and OAuth login instructions.
 Add url to your MCP client, then enter login_code on its OAuth login page.
 login_expires_in deducts local backend startup time.
+With --allow, bare USER is the username chosen when registering on this server;
+USER@github is a GitHub login. The two names can identify different accounts.
+Your signed-in account remains the owner and is always allowed. Each target
+binds to a stable GitHub account ID, even if its display login later changes.
+Sharing requires an updated relay with per-session access support; server
+usernames also require account storage. Unknown or banned server usernames
+are rejected. Invitation-enrolled devices cannot grant access to others.
+--allow cannot be combined with --list-tools.
 Live input, output and native tool events appear on stderr as readable blocks.
 Independent commands run concurrently and support status, output, wait and cancel.
 Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
@@ -460,7 +475,7 @@ impl Options {
                     title = Some(value["--title=".len()..].to_owned());
                 }
                 Some("--allow") => {
-                    let value = args.next().ok_or("--allow requires username@github")?;
+                    let value = args.next().ok_or("--allow requires USER or USER@github")?;
                     add_allowed_principals(
                         &mut allow,
                         value.to_str().ok_or("--allow must be UTF-8")?,
@@ -935,7 +950,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help-full for SSH options."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --allow USER|USER@github  Share with server usernames or GitHub logins\n  USER is a registered server username; USER@github is a GitHub login.\n  Repeat --allow or comma-separate targets; your signed-in account stays the owner."
         );
         return Ok(());
     }
@@ -1011,12 +1026,12 @@ fn connection_option_takes_value(option: &str) -> bool {
 
 fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
     for entry in value.split(',') {
-        let principal = canonical_github_principal(entry.trim())
-            .map_err(|error| format!("--allow: {error}"))?;
+        let principal =
+            canonical_allow_principal(entry.trim()).map_err(|error| format!("--allow: {error}"))?;
         if !allow.contains(&principal) {
             if allow.len() == MAX_ALLOWED_PRINCIPALS {
                 return Err(format!(
-                    "--allow accepts at most {MAX_ALLOWED_PRINCIPALS} distinct GitHub users"
+                    "--allow accepts at most {MAX_ALLOWED_PRINCIPALS} distinct allow targets"
                 ));
             }
             allow.push(principal);
@@ -1152,16 +1167,11 @@ async fn apply_account(
     if options.server.is_some() || options.destination.is_none() {
         let credential =
             credential.ok_or("connect with ssmcp username@server to authorize this device")?;
-        if options
-            .allow
-            .iter()
-            .any(|principal| principal != &credential.principal)
-        {
-            return Err("HTTPS account sessions belong to the logged-in account; --allow for additional users is supported on SSH connections".into());
-        }
         options.server = Some(credential.server.clone());
         options.username = credential.username.clone();
-        options.allow = vec![credential.principal.clone()];
+        if options.allow.is_empty() {
+            options.allow.push(credential.principal.clone());
+        }
         options.relay = Some(credential);
     } else if options.allow.is_empty() {
         // A cached, verified public principal selects the existing SSH ACL.
@@ -1560,6 +1570,22 @@ struct RegisteredSsh {
     access_supported: bool,
 }
 
+impl RegisteredSsh {
+    async fn require_allow_access(
+        &mut self,
+        allow: &[String],
+        owner_principal: &str,
+    ) -> crate::Result<()> {
+        if !self.access_supported && allow.iter().any(|target| target != owner_principal) {
+            stop_registration(&mut self.ssh, &mut self.stderr_pump).await?;
+            return Err(Box::new(relay::PermanentFailure(
+                "server did not acknowledge per-session sharing; update ssmcpd before using --allow for additional users".into()
+            )));
+        }
+        Ok(())
+    }
+}
+
 // A replacement transport must not start until the rejected SSH process and its
 // reader task are gone. No local backend or input binding exists at this stage.
 async fn stop_registration(
@@ -1809,17 +1835,20 @@ async fn connect(
         Duration::from_secs(120),
     )
     .await?;
-    let Some(RegisteredSsh {
+    let Some(mut registration) = registration else {
+        return Ok(ConnectionExit::Stopped);
+    };
+    registration
+        .require_allow_access(&metadata.allow, &credential.principal)
+        .await?;
+    let RegisteredSsh {
         mut ssh,
         stderr_pump: _stderr_pump,
         writer,
         reader,
         ready: (url, login_code, login_expires_in, client_id),
         access_supported,
-    }) = registration
-    else {
-        return Ok(ConnectionExit::Stopped);
-    };
+    } = registration;
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
     let display_session =
@@ -2780,11 +2809,12 @@ mod tests {
     fn github_allow_flags_combine_canonicalize_and_deduplicate() {
         let options = Options::parse(
             [
+                "--server",
+                "https://relay.example",
                 "--allow",
                 "OctoCat@GitHub, Alice-Dev@github",
                 "--allow",
                 "OCTOCAT@github,bob@github",
-                "my-server",
             ]
             .map(OsString::from),
         )
@@ -2795,57 +2825,107 @@ mod tests {
             ["octocat@github", "alice-dev@github", "bob@github"]
         );
         assert_eq!(options.metadata().unwrap().allow, options.allow);
-        assert_eq!(options.destination.as_deref(), Some("my-server"));
-        assert!(
-            !options
-                .command()
-                .as_std()
-                .get_args()
-                .any(|arg| arg.to_string_lossy().contains("@github"))
-        );
+        assert_eq!(options.server.as_deref(), Some("https://relay.example"));
+        assert!(options.destination.is_none());
     }
 
     #[test]
-    fn github_allow_limits_distinct_users_and_rejects_invalid_or_local_options() {
+    fn allow_server_usernames_and_github_logins_remain_distinct() {
+        let options = Options::parse(
+            [
+                "--server",
+                "https://relay.example",
+                "--name",
+                "allow-roundtrip",
+                "--allow",
+                "Alice, ALICE@GitHub, Alice_Dev",
+                "--allow",
+                "alice,alice@github",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.allow, ["alice", "alice@github", "alice_dev"]);
+        assert_eq!(options.metadata().unwrap().allow, options.allow);
+        let spec = options.session_spec().unwrap();
+        let restored = Options::parse_saved(&spec).unwrap().unwrap();
+        assert_eq!(restored.allow, options.allow);
+        assert_eq!(restored.server, options.server);
+        assert!(restored.destination.is_none());
+    }
+
+    #[test]
+    fn allow_limits_targets_and_rejects_invalid_or_local_options() {
         let all = (0..MAX_ALLOWED_PRINCIPALS)
-            .map(|i| format!("user-{i}@github"))
+            .map(|i| {
+                if i % 2 == 0 {
+                    format!("user-{i}")
+                } else {
+                    format!("user-{i}@github")
+                }
+            })
             .collect::<Vec<_>>()
             .join(",");
-        let options =
-            Options::parse(["--allow", &all, "--allow", &all, "my-server"].map(OsString::from))
-                .unwrap()
-                .unwrap();
+        let options = Options::parse(
+            [
+                "--server",
+                "https://relay.example",
+                "--allow",
+                &all,
+                "--allow",
+                &all,
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(options.allow.len(), MAX_ALLOWED_PRINCIPALS);
         let error = Options::parse(
-            ["--allow", &all, "--allow", "another@github", "my-server"].map(OsString::from),
+            [
+                "--server",
+                "https://relay.example",
+                "--allow",
+                &all,
+                "--allow",
+                "another@github",
+            ]
+            .map(OsString::from),
         )
         .err()
         .unwrap();
         assert!(error.contains("32 distinct"), "{error}");
         for value in [
             "",
-            "alice",
+            "ab",
+            "root",
+            "gh-123",
+            "first.last",
             "alice@example.com",
             "alice@github,",
             ",alice@github",
         ] {
-            let error = Options::parse(["--allow", value, "my-server"].map(OsString::from))
-                .err()
-                .unwrap();
+            let error = Options::parse(
+                ["--server", "https://relay.example", "--allow", value].map(OsString::from),
+            )
+            .err()
+            .unwrap();
             assert!(error.contains("--allow"), "{error}");
         }
         assert!(
             Options::parse(["--allow"].map(OsString::from))
                 .err()
                 .unwrap()
-                .contains("requires username@github")
+                .contains("requires USER or USER@github")
         );
-        assert!(
-            Options::parse(["--list-tools", "--allow", "alice@github"].map(OsString::from))
-                .err()
-                .unwrap()
-                .contains("cannot be used with --list-tools")
-        );
+        for value in ["alice", "alice@github"] {
+            assert!(
+                Options::parse(["--list-tools", "--allow", value].map(OsString::from))
+                    .err()
+                    .unwrap()
+                    .contains("cannot be used with --list-tools")
+            );
+        }
     }
 
     #[test]
