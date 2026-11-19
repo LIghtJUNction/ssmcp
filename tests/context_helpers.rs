@@ -90,6 +90,9 @@ impl Fixture {
                     HostRequest::Builtin { .. } => {
                         Err("fixture only exposes scoped native calls".into())
                     }
+                    HostRequest::WaitUser { .. } => {
+                        Err("context helper fixture does not support user waits".into())
+                    }
                 }
             })
         })
