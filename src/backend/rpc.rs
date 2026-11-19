@@ -48,6 +48,11 @@ struct CallObservation {
 pub(crate) struct HarnessCall(Arc<CallObservation>);
 
 impl HarnessCall {
+    /// Carry the same observation across a local plugin executor boundary.
+    pub(crate) fn current() -> Option<Self> {
+        HARNESS_CALL.try_with(Clone::clone).ok()
+    }
+
     pub(crate) fn current_id() -> Option<u64> {
         HARNESS_CALL.try_with(|call| call.0.id).ok()
     }
@@ -1363,3 +1368,4 @@ os._exit(0)
         assert!(read_json(&mut &b"{}"[..]).await.is_err());
     }
 }
+
