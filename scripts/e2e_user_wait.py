@@ -304,7 +304,11 @@ class UserWait(InputHistory):
         front.until(lambda shot: shot["size"] == [24, 48], "the narrow wait terminal")
         self.draft(front, "/wait")
         front.send(ENTER)
-        front.until(lambda shot: "本轮等待超时" in text(shot), "the real timeout in /wait details")
+        # Narrow rows may wrap the precise ID and its status across lines.
+        # Ignore screen spacing, while requiring both the same ID and outcome.
+        timeout_detail = "#" + receipt["wait_id"] + "·本轮等待超时"
+        front.until(lambda shot: timeout_detail in "".join(text(shot).split()),
+                    "the exact completed wait and its wrapped timeout status in /wait details")
         self.draft(front, unsent)
         self.save_shot("user-wait-timeout-48", front, cells=True)
 
