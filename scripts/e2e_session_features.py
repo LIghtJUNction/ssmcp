@@ -86,7 +86,7 @@ class SessionFeatures(Harness):
     def artifact_path(self, metadata):
         artifact_id = metadata.get("id", "")
         path = Path(metadata.get("path", ""))
-        expected = Path("/tmp/ssmcp") / str(os.geteuid()) / f"output-{artifact_id}.log"
+        expected = Path(f"/tmp/ssmcp-{os.geteuid()}") / f"output-{artifact_id}.log"
         if not re.fullmatch(r"[a-f0-9]{32}", artifact_id) or path != expected or path.is_symlink():
             raise AssertionError("output artifact is outside the private managed directory")
         stat = path.stat()

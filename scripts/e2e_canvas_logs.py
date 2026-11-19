@@ -224,10 +224,20 @@ def run(binary, decoder, output, checks):
             preview.send(b"\x01\x0b")
             preview.until(lambda shot: draft not in prompt_text(shot), "cleared fixture draft")
             preview.send(b"/new queue\r")
-            created = preview.until(lambda shot: view(shot, "queue") and "example-request" in body(shot),
+            created = preview.until(lambda shot: view(shot, "queue") and "#example-" in body(shot)
+                                    and "Keep the interface simple;" in body(shot),
                                     "new queue column inserted after conversation")
             check("To · Builder" in text(created) and column(created)[2] == initial_count + 1,
                   "new columns extend the canvas and share the selected recipient")
+            preview.send(b"i")
+            detail = preview.until(lambda shot: view(shot, "queue")
+                                   and "ID: example-request" in body(shot)
+                                   and "verify command output and source audit" in body(shot),
+                                   "Inspect retaining the complete request identity and text")
+            check(detail["hide_cursor"], "queue Inspect keeps content focus on the exact request")
+            preview.send(b"\x1b")
+            preview.until(lambda shot: view(shot, "queue") and "Esc back" not in body(shot)
+                          and "#example-" in body(shot), "return from Inspect to the request card")
             preview.send(ALT_RIGHT)
             preview.until(lambda shot: view(shot, "code audit"),
                           "the original audit column remaining after the inserted queue")

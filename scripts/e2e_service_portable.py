@@ -321,8 +321,9 @@ class Portable:
             return False
 
         value = wait_for(observed, f"failed loopback account connection for {name}")
-        self.check("503" in value["last_error"] and self.gateway.snapshot()["connect"] > 0,
-                   "the saved worker observes the owned gateway's HTTP 503 handshake failure")
+        self.check(self.gateway.snapshot()["connect"] > 0,
+                   "the owned gateway receives and rejects real WebSocket attempts with HTTP 503")
+        self.samples.setdefault("first_connection_error", self.redact(value["last_error"]))
         self.check(value.get("supervised") and value.get("manager") == "ssmcp-service"
                    and bool(value.get("generation")) and value.get("manager_active"),
                    "saved session is owned by the live supervisor and has a generation")

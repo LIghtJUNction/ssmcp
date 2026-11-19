@@ -226,7 +226,7 @@ fn native_limits() -> Value {
         },
         "client_output_guard":{
             "directory":"private client output storage; use artifact metadata for the actual path",
-            "linux_default_directory":"/tmp/ssmcp/<uid>",
+            "linux_default_directory":"/tmp/ssmcp-<uid>",
             "windows_default_directory":"%LOCALAPPDATA%\\ssmcp\\output",
             "inline_bytes":crate::output::INLINE_BYTES,
             "inline_lines":crate::output::INLINE_LINES,
@@ -536,11 +536,9 @@ display unknown. list reports controller_metadata; v4 clients require an update 
 Use await reload(clientId) after installing an updated client binary. The client acknowledges \
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
-must finish first. Call list again for the new ID. Account sessions reconnect using saved login \
-credentials; server-qualified --allow accounts are checked again after reconnect. \
-Temporary joined sessions cannot reload; create a new invitation. Both client and server must support reload.\n\n\
+must finish first. Call list again for the new ID. Connections reconnect using the same login or server-qualified --allow policy. Both client and server must support reload.\n\n\
 Long command output is streamed to the client's private ssmcp storage \
-(normally /tmp/ssmcp/<uid> on Unix or LOCALAPPDATA/ssmcp/output on Windows). Read the \
+(normally /tmp/ssmcp-<uid> on Unix or LOCALAPPDATA/ssmcp/output on Windows). Read the \
 returned artifact metadata, including SHA-256, bytes, lines, complete and expiry. Use \
 outputs.read(clientId,{id,offset,max_bytes}) for bounded chunks, outputs.stat(clientId,{id}) \
 for a fresh snapshot, and outputs.cleanup(clientId) for retention cleanup. Automatic cleanup \

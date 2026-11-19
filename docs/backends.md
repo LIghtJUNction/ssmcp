@@ -26,7 +26,7 @@ ssmcp --server https://relay.example --allow alice@relay.example --name dev --ti
 
 ### 从旧的后端选择参数迁移
 
-删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，保留 SSH、身份、名称和日志选项。客户端已移除这些选择入口；例如旧的 `ssmcp -t codex --name dev my-server` 改为 `ssmcp --ssh --name dev my-server`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。
+删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，并把旧 SSH 接入改为明确的 HTTPS 服务器与账号名单。例如使用 `ssmcp --server https://relay.example --name dev --allow alice@relay.example`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。[账号接入](client-accounts.md)
 
 ```sh
 # 不连接 SSH，先检查这台电脑实际发现了什么。
@@ -251,7 +251,7 @@ PTY 最近 1 MiB 输出保存在内存中。单次读取最多 32 KiB，写入�
 
 `--title` 随连接进入 `list`，供 agent 确认本轮任务。安装更新后可按[重载协议](#9-更新后的客户端重载)重启原入口；重载应答与新版本已经在线是两个状态，需要重新读取 `list` 确认。
 
-长输出超过 32 KiB 或 500 行时按来源转储，返回 ID、路径、摘要、字节数和行数。Unix 使用 `/tmp/ssmcp/<uid>`，Windows 默认使用 `%LOCALAPPDATA%\ssmcp\output`，未设置 LOCALAPPDATA 时使用用户临时目录下的 `ssmcp/output`；返回路径属于目标客户端机器。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，活动文件不参加自动淘汰。具体的 `complete`、范围及截断语义见[长输出护卫](session-control.md#长输出自动转储)与[实现](../src/output.rs)。
+长输出超过 32 KiB 或 500 行时按来源转储，返回 ID、路径、摘要、字节数和行数。Unix 使用 `/tmp/ssmcp-<uid>`，Windows 默认使用 `%LOCALAPPDATA%\ssmcp\output`，未设置 LOCALAPPDATA 时使用用户临时目录下的 `ssmcp/output`；返回路径属于目标客户端机器。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，活动文件不参加自动淘汰。具体的 `complete`、范围及截断语义见[长输出护卫](session-control.md#长输出自动转储)与[实现](../src/output.rs)。
 
 ## 5. Codex：App Server 与动态 MCP 工具
 
