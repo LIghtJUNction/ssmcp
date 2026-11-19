@@ -2931,7 +2931,8 @@ mod tests {
         let frame = physical(&state.frame(Instant::now()));
         let text = frame.screen().contents();
         assert!(text.contains("本地会话"), "{text}");
-        assert!(text.contains("一次性登录码"), "{text}");
+        assert!(text.contains("当前系统用户"), "{text}");
+        assert!(text.contains("/logs 查看 MCP 授权"), "{text}");
         assert!(text.contains("http://127.0.0.1:43123"), "{text}");
         assert!(
             !text.contains("本月剩余") && !text.contains("未登录"),
