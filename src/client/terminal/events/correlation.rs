@@ -156,6 +156,7 @@ pub(super) struct Meta {
     pub(super) skip: bool,
     pub(super) language: &'static str,
     pub(super) read: Option<super::read_activity::Read>,
+    pub(super) read_bookkeeping: bool,
 }
 
 impl Meta {
@@ -281,6 +282,12 @@ impl Meta {
             .map(language_for_path)
             .unwrap_or("");
         meta.read = super::read_activity::Read::from_event(label, event);
+        meta.read_bookkeeping = super::read_activity::bookkeeping(event)
+            && !meta.command
+            && !meta.diff
+            && meta
+                .status
+                .is_none_or(|status| !status.failed() && status != Status::Running);
         meta
     }
 
@@ -303,6 +310,7 @@ impl Meta {
         if self.read != other.read {
             self.read = None;
         }
+        self.read_bookkeeping &= other.read_bookkeeping;
         for key in other.keys {
             if self.keys.len() < MAX_KEYS && !self.keys.contains(&key) {
                 self.keys.push(key);

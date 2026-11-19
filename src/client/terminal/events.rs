@@ -728,7 +728,8 @@ impl EventView {
         } else {
             meta.read.as_mut()
         };
-        self.read_boundary.observe(event, read);
+        self.read_boundary
+            .observe(event, read, meta.read_bookkeeping);
         if meta.kind == Kind::Conversation
             && event["presentation"].is_null()
             && let Some(text) = event["text"].as_str()
@@ -1198,8 +1199,8 @@ impl EventView {
             "visible_events":self.events.iter().filter(|event| event.matches(&self.query,self.level,self.scope)).count(),
             "visible_cards":self.visible_ids().len(),
             "read_groups":groups.iter().map(|group|json!({
-                "id":group.head,"count":group.end-group.start,"expanded":group.expanded,
-                "members":self.events.range(group.start..group.end).map(|event|event.id).collect::<Vec<_>>()
+                "id":group.head,"count":group.members.len(),"expanded":group.expanded,
+                "members":group.members.iter().map(|index|self.events[*index].id).collect::<Vec<_>>()
             })).collect::<Vec<_>>(),
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
             "selected":self.selected,"scroll":self.scroll,
