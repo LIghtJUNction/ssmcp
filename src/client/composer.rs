@@ -66,6 +66,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "List session access; /allow USER grants, /allow remove USER revokes",
     },
     SlashCommand {
+        name: "/logout",
+        description: "Sign out of this connection\'s saved account and close this session",
+    },
+    SlashCommand {
         name: "/login",
         description: "Sign in with GitHub; open a browser, copy the link or show the link",
     },

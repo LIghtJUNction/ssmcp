@@ -78,6 +78,11 @@ impl Task {
         })
     }
 
+    pub(in crate::client) async fn cancel_and_wait(mut self) {
+        self.handle.abort();
+        let _ = (&mut self.handle).await;
+    }
+
     pub(in crate::client) fn request(&self, mode: Mode) -> Result<(), String> {
         self.actions
             .send(mode)
