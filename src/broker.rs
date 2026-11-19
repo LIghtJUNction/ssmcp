@@ -237,8 +237,6 @@ impl Session {
             Operation::CallTool { name, .. } => Some(name.clone()),
             _ => None,
         };
-        let ending_intent = matches!(&operation, Operation::CallTool { name, arguments }
-            if name == "ssmcp.ui.message" && arguments["kind"] == "answer");
         if audit_tool.is_some()
             && self
                 .audit_call(
@@ -327,9 +325,6 @@ impl Session {
             }
         }
         if let (Some(run), Ok(value)) = (audit_run.as_ref(), &result) {
-            if ending_intent {
-                run.native_ending_intent(self.client_id(), value);
-            }
             run.native_reply(
                 self.client_id(),
                 reply_agent.as_deref(),
@@ -415,6 +410,12 @@ impl Broker {
     }
 
     pub async fn authenticate(&self, user: &str, access_token: &str) -> Option<Authorization> {
+        self.authenticate_now(user, access_token)
+    }
+
+    /// Synchronous decision point for responses that must not await between
+    /// checking current OAuth/account state and committing a queue revision.
+    pub(crate) fn authenticate_now(&self, user: &str, access_token: &str) -> Option<Authorization> {
         if !valid_username(user) {
             return None;
         }
@@ -550,6 +551,17 @@ impl Broker {
             .entry(user.into())
             .or_default()
             .insert(id, session.clone());
+        session
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_register_identity(
+        &self,
+        user: &str,
+        identity: Identity,
+    ) -> Arc<Session> {
+        let session = self.test_register(user, &"a".repeat(64)).await;
+        session.allowed().push(identity);
         session
     }
 

@@ -368,7 +368,7 @@ mod tests {
         let mut changed = queue.subscribe();
         publish(&queue, "publish", "message", 0, "wakes waiter", "next");
         assert!(changed.has_changed().unwrap());
-        changed.borrow_and_update();
+        drop(changed.borrow_and_update());
         let mut reservation = queue.reserve("room", "waiting", None).unwrap().unwrap();
         queue.close();
         assert!(changed.has_changed().unwrap());

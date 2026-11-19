@@ -926,8 +926,31 @@ async fn execute(
         run: audit_run.clone(),
         delivered: false,
     };
-    let host_run = audit_run.clone();
-    let host: Host = Arc::new(move |request| {
+    let host = code_host(
+        broker,
+        user,
+        access_token,
+        audit_run.clone(),
+        controller,
+        request_id,
+    );
+    let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
+    audit_report.finish(&result).await;
+    let response =
+        append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
+    let response = finish_user_response(&audit_report, response).await;
+    Ok(user_wait::append(response, &audit_report.run))
+}
+
+fn code_host(
+    broker: Arc<Broker>,
+    user: String,
+    access_token: String,
+    host_run: code_mode::AuditRun,
+    controller: Option<Controller>,
+    request_id: String,
+) -> Host {
+    Arc::new(move |request| {
         let request_id = request_id.clone();
         let controller = controller.clone();
         let broker = broker.clone();
@@ -936,6 +959,8 @@ async fn execute(
         let audit_run = host_run.clone();
         Box::pin(code_mode::AUDIT_RUN.scope(audit_run, async move {
             let capture_memory = matches!(&request, HostRequest::Call { .. });
+            let ending_intent = matches!(&request, HostRequest::Call { name, arguments, .. }
+                if matches!(name.as_str(), "ssmcp.ui.message" | "ssmcp.ui.present") && arguments["kind"] == "answer");
             let (client_id, operation) = match request {
                 HostRequest::Builtin { name, arguments } => {
                     if name == "collab.receive"
@@ -1001,18 +1026,15 @@ async fn execute(
                 .await
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             broker.client(&user, &authorization, &client_id).await?;
+            if ending_intent {
+                let _ = code_mode::AUDIT_RUN.try_with(|run| run.native_ending_intent(&client_id, &result));
+            }
             if capture_memory {
                 let _ = code_mode::AUDIT_RUN.try_with(|run| run.capture_context(&client_id, &result));
             }
             Ok(result)
         }))
-    });
-    let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
-    audit_report.finish(&result).await;
-    let response =
-        append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
-    let response = finish_user_response(&audit_report, response).await;
-    Ok(user_wait::append(response, &audit_report.run))
+    })
 }
 
 fn context_memory_addition(memories: &[Value], deferred: bool) -> Value {
@@ -1120,7 +1142,15 @@ fn delivery_budget_with_reserve(response: &Value, reserve: usize) -> usize {
     .min(crate::steering::MAX_DELIVERY_BYTES)
 }
 
-async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
+struct EligibleUserResponse {
+    session: Arc<Session>,
+    owner: String,
+    binding: Option<code_mode::RunBinding>,
+    may_claim: bool,
+    waiting: bool,
+}
+
+async fn eligible_user_response(report: &CodeRunReport) -> Result<Vec<EligibleUserResponse>, ()> {
     let mut eligible = Vec::new();
     let steering_targets = report.run.steering_targets();
     // Finish every asynchronous authorization lookup before mutating a queue.
@@ -1138,7 +1168,7 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
                     "authorization_revoked_before_delivery",
                 );
             }
-            return response;
+            return Err(());
         };
         let Ok(session) = report
             .broker
@@ -1184,7 +1214,7 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
             || report.run.binding(&client_id),
             |recipient| recipient.binding.clone(),
         );
-        let agent_id = if let Some(binding) = binding {
+        if let Some(binding) = &binding {
             if owner != binding.owner
                 || session
                     .collaboration
@@ -1198,20 +1228,31 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
                 );
                 continue;
             }
-            Some(binding.agent_id)
-        } else {
-            None
-        };
+        }
         let may_claim = steering_targets.contains(&client_id);
-        eligible.push((
+        eligible.push(EligibleUserResponse {
             session,
             owner,
-            agent_id,
+            binding,
             may_claim,
-            authorization,
-            waiting.is_some(),
-        ));
+            waiting: waiting.is_some(),
+        });
     }
+    Ok(eligible)
+}
+
+async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
+    match eligible_user_response(report).await {
+        Ok(eligible) => commit_user_response(report, response, eligible),
+        Err(()) => response,
+    }
+}
+
+fn commit_user_response(
+    report: &CodeRunReport,
+    response: Value,
+    eligible: Vec<EligibleUserResponse>,
+) -> Value {
     let mut messages = Vec::new();
     let mut notices = Vec::new();
     let mut bytes = 0usize;
@@ -1222,9 +1263,18 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
         delivery_budget_with_reserve(&response, reserve)
     };
     let mut notice_budget = conversation_notice_budget(&response);
-    // No await after the first claim: each recipient's receipts, age and new
-    // delivery are finalized under the existing session Queue lock exactly once.
-    for (session, owner, agent_id, may_claim, authorization, waiting) in eligible {
+    // An eligibility snapshot is not authority. Refresh OAuth/account/ACL and
+    // the real agent binding at this synchronous decision point for each target.
+    // No await follows it. Queue revisions/receipts are atomic under their own
+    // lock; the distinct authorization stores are not one global transaction.
+    for EligibleUserResponse {
+        session,
+        owner,
+        binding,
+        may_claim,
+        waiting,
+    } in eligible
+    {
         if !session.is_alive() {
             report.run.finish_wait_state(
                 session.client_id(),
@@ -1233,7 +1283,21 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
             );
             continue;
         }
-        if !authorization.is_live() || !authorization.permits(&session) {
+        let Some(authorization) = report
+            .broker
+            .authenticate_now(&report.user, &report.access_token)
+        else {
+            report.run.finish_wait_state(
+                session.client_id(),
+                code_mode::user_wait::Outcome::AuthorizationRevoked,
+                "oauth_or_account_revoked_at_delivery_decision",
+            );
+            continue;
+        };
+        if !authorization.is_live()
+            || !authorization.permits(&session)
+            || crate::bridge::owner(&report.user, &authorization).as_deref() != Ok(owner.as_str())
+        {
             report.run.finish_wait_state(
                 session.client_id(),
                 code_mode::user_wait::Outcome::AuthorizationRevoked,
@@ -1241,12 +1305,27 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
             );
             continue;
         }
+        if let Some(binding) = &binding
+            && (binding.owner != owner
+                || session
+                    .collaboration
+                    .bind(&owner, &binding.agent_id, &binding.token)
+                    .is_err())
+        {
+            report.run.finish_wait_state(
+                session.client_id(),
+                code_mode::user_wait::Outcome::BindingInvalid,
+                "agent_binding_invalid_at_delivery_decision",
+            );
+            continue;
+        }
+        let agent_id = binding.as_ref().map(|binding| binding.agent_id.as_str());
         let replies = report.run.accepted_replies(session.client_id());
         let recipient_response = code_mode::reminders::Response {
             client_id: session.client_id(),
             run_id: &report.run.context.run_id,
             owner: &owner,
-            agent_id: agent_id.as_deref(),
+            agent_id,
             replies: &replies,
             notice_budget: if notices.len() < code_mode::reminders::MAX_NOTICES {
                 notice_budget
@@ -2132,7 +2211,11 @@ mod tests {
         http_server.abort();
     }
 
-    async fn cancellation_test_token(base: &str, resource: &str, login_code: &str) -> String {
+    pub(super) async fn cancellation_test_token(
+        base: &str,
+        resource: &str,
+        login_code: &str,
+    ) -> String {
         const CALLBACK: &str = "http://127.0.0.1:37401/callback";
         const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
