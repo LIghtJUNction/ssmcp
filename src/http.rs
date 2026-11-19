@@ -33,7 +33,12 @@ mod relay_composer_fixture;
 pub fn router(broker: Arc<Broker>) -> Router {
     Router::new()
         .merge(crate::oauth::routes())
-        .merge(crate::portal::routes())
+        .merge(
+            crate::portal::routes().layer(middleware::from_fn_with_state(
+                broker.clone(),
+                crate::portal::renew_browser_session,
+            )),
+        )
         .merge(crate::device::routes())
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/{user}", any(endpoint))
