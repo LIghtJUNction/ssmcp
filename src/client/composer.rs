@@ -54,6 +54,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show queued requests",
     },
     SlashCommand {
+        name: "/send",
+        description: "强制发送给当前监听程序：/send <正文>；无监听者时保留草稿",
+    },
+    SlashCommand {
         name: "/audit",
         description: "Open code audit",
     },
