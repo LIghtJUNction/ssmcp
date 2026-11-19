@@ -1,0 +1,1839 @@
+{
+  "schema_version": 1,
+  "observed_utc": "2026-11-19T14:12:10Z",
+  "repository": "LIghtJUNction/ssmcp",
+  "scope": {
+    "tag": "v0.10.10",
+    "version": "0.10.10",
+    "source_commit": "52a531a59e9ec9236a76eafc0f4f068799e44b15",
+    "tag_object_sha": "0ef1f4356e871d942faaf4b401b72d46f3960ffb",
+    "tag_target_commit": "52a531a59e9ec9236a76eafc0f4f068799e44b15",
+    "limits": [
+      "This observation describes the published v0.10.10 release and its deployed server, not later main commits.",
+      "This tagged workflow used the release gates present at its source commit. Later restored account daemon, unified, portable and agents gates are outside this release evidence.",
+      "Later terminal Requests/read-summary changes and the separately tested 182-assertion daemon migration are not claimed as part of this deployed version.",
+      "Homepage HTML differs between the direct and public surfaces; identical fingerprinted asset bytes were verified.",
+      "All production actions in this observation were read-only; no deployment, restart, configuration change or workflow rerun was performed."
+    ]
+  },
+  "workflow": {
+    "id": 44524004670,
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670",
+    "name": "Release",
+    "tag": "v0.10.10",
+    "source_commit": "52a531a59e9ec9236a76eafc0f4f068799e44b15",
+    "attempt": 4,
+    "status": "completed",
+    "conclusion": "success",
+    "created_at": "2026-11-19T12:27:11Z",
+    "updated_at": "2026-11-19T12:51:45Z",
+    "total_jobs": 19,
+    "failed_or_incomplete_jobs": [],
+    "jobs": [
+      {
+        "id": 135572799049,
+        "name": "validate",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572799049",
+        "started_at": "2026-11-19T12:27:15Z",
+        "completed_at": "2026-11-19T12:27:38Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Validate the tag, versions, main ancestry and pinned submodules",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test publication safeguards",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test deployment identity, artifact and rollback safeguards",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo fmt --all -- --check",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572799883,
+        "name": "Build x86_64-pc-windows-msvc",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572799883",
+        "started_at": "2026-11-19T12:27:41Z",
+        "completed_at": "2026-11-19T12:32:50Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build optimized executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Smoke test and package executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify native installation, update and failed-download handling",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test native Windows browser bootstrap safeguards",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Smoke test real native Windows browser dependencies",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Retain real Windows browser dependency evidence",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Retain Windows browser bootstrap evidence",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572800057,
+        "name": "Build x86_64-apple-darwin",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572800057",
+        "started_at": "2026-11-19T12:27:42Z",
+        "completed_at": "2026-11-19T12:33:39Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build optimized executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Smoke test and package executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify native installation, update and failed-download handling",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test native Windows browser bootstrap safeguards",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Smoke test real native Windows browser dependencies",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain real Windows browser dependency evidence",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain Windows browser bootstrap evidence",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572800126,
+        "name": "checks / linux (ubuntu-24.04)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572800126",
+        "started_at": "2026-11-19T12:37:13Z",
+        "completed_at": "2026-11-19T12:44:27Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install test dependencies",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Select and identify the installed system Node",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo fmt --all -- --check",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check release tooling and installer",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check JavaScript orchestration helpers",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --workspace --locked --all-targets -- -D warnings",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Render terminal transcript fixture",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Save terminal transcript for visual review",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo test --workspace --locked",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build the explicit native plugin fixture",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise the native plugin through Runtime",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise system Node.js and bubblewrap",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise runtime under installed service restrictions",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --bins --example vt_snapshot",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Preserve DCR through a real daemon restart",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify the installed daemon rejects legacy SSH attachment",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise OAuth account login and relay lifecycle",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise OAuth router and conversation through a real PTY",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --release",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check staged Linux installation",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572800376,
+        "name": "Build x86_64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572800376",
+        "started_at": "2026-11-19T12:27:41Z",
+        "completed_at": "2026-11-19T12:31:12Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build optimized executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Smoke test and package executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify native installation, update and failed-download handling",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test native Windows browser bootstrap safeguards",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Smoke test real native Windows browser dependencies",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain real Windows browser dependency evidence",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain Windows browser bootstrap evidence",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572800629,
+        "name": "checks / Client (windows-2025)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572800629",
+        "started_at": "2026-11-19T12:27:41Z",
+        "completed_at": "2026-11-19T12:31:00Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build the explicit native plugin fixture",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise the native plugin through Runtime",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check and test the zero-dependency TUI primitives",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --bin ssmcp",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check client startup",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Save validated native development client",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Parse PowerShell installer",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check Unix streaming download bounds",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572800641,
+        "name": "checks / linux (ubuntu-24.04-arm)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572800641",
+        "started_at": "2026-11-19T12:27:43Z",
+        "completed_at": "2026-11-19T12:35:40Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install test dependencies",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Select and identify the installed system Node",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo fmt --all -- --check",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check release tooling and installer",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check JavaScript orchestration helpers",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --workspace --locked --all-targets -- -D warnings",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Render terminal transcript fixture",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Save terminal transcript for visual review",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run cargo test --workspace --locked",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build the explicit native plugin fixture",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise the native plugin through Runtime",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise system Node.js and bubblewrap",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise runtime under installed service restrictions",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --bins --example vt_snapshot",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Preserve DCR through a real daemon restart",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify the installed daemon rejects legacy SSH attachment",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise OAuth account login and relay lifecycle",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise OAuth router and conversation through a real PTY",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --release",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check staged Linux installation",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572800680,
+        "name": "Build aarch64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572800680",
+        "started_at": "2026-11-19T12:27:43Z",
+        "completed_at": "2026-11-19T12:31:01Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build optimized executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Smoke test and package executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify native installation, update and failed-download handling",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test native Windows browser bootstrap safeguards",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Smoke test real native Windows browser dependencies",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain real Windows browser dependency evidence",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain Windows browser bootstrap evidence",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572800917,
+        "name": "checks / Client (macos-15-intel)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572800917",
+        "started_at": "2026-11-19T12:27:44Z",
+        "completed_at": "2026-11-19T12:36:20Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build the explicit native plugin fixture",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise the native plugin through Runtime",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check and test the zero-dependency TUI primitives",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --bin ssmcp",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check client startup",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Save validated native development client",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Parse PowerShell installer",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Check Unix streaming download bounds",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572800953,
+        "name": "Build aarch64-apple-darwin",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572800953",
+        "started_at": "2026-11-19T12:27:43Z",
+        "completed_at": "2026-11-19T12:32:45Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build optimized executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Smoke test and package executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify native installation, update and failed-download handling",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test native Windows browser bootstrap safeguards",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Smoke test real native Windows browser dependencies",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain real Windows browser dependency evidence",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Retain Windows browser bootstrap evidence",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572801010,
+        "name": "checks / Client (macos-15)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572801010",
+        "started_at": "2026-11-19T12:27:43Z",
+        "completed_at": "2026-11-19T12:31:45Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build the explicit native plugin fixture",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise the native plugin through Runtime",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check and test the zero-dependency TUI primitives",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --bin ssmcp",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check client startup",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Save validated native development client",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Parse PowerShell installer",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Check Unix streaming download bounds",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572801767,
+        "name": "checks / Client (windows-11-arm)",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572801767",
+        "started_at": "2026-11-19T12:27:41Z",
+        "completed_at": "2026-11-19T12:34:13Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build the explicit native plugin fixture",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise the native plugin through Runtime",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check and test the zero-dependency TUI primitives",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --bin ssmcp",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check client startup",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Save validated native development client",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Parse PowerShell installer",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Check Unix streaming download bounds",
+            "status": "completed",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572801919,
+        "name": "Verify installed server x86_64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572801919",
+        "started_at": "2026-11-19T12:34:22Z",
+        "completed_at": "2026-11-19T12:35:23Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install system runtime dependencies",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify release installation under service restrictions",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572802006,
+        "name": "Build aarch64-pc-windows-msvc",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572802006",
+        "started_at": "2026-11-19T12:27:41Z",
+        "completed_at": "2026-11-19T12:34:19Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Build optimized executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Smoke test and package executables",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify native installation, update and failed-download handling",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Test native Windows browser bootstrap safeguards",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Smoke test real native Windows browser dependencies",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Retain real Windows browser dependency evidence",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Retain Windows browser bootstrap evidence",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572802814,
+        "name": "Verify installed server aarch64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572802814",
+        "started_at": "2026-11-19T12:34:24Z",
+        "completed_at": "2026-11-19T12:34:43Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Install system runtime dependencies",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify release installation under service restrictions",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572803360,
+        "name": "deploy_server / deploy",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572803360",
+        "started_at": "2026-11-19T12:51:30Z",
+        "completed_at": "2026-11-19T12:51:44Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Deploy the verified frontend and server release",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Preserve the deployment receipt",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572803877,
+        "name": "finalize",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572803877",
+        "started_at": "2026-11-19T12:44:31Z",
+        "completed_at": "2026-11-19T12:45:54Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Recheck the source, submodules and existing release tag",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Require every verified target archive",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify all workspace source packages",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Retain the verified workspace crates for ordered publishing",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572803885,
+        "name": "publish_crates",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572803885",
+        "started_at": "2026-11-19T12:45:57Z",
+        "completed_at": "2026-11-19T12:46:36Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Recheck release tag identity",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Publish ztui-core before ssmcp and verify both checksums",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 135572804541,
+        "name": "publish_release",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44524004670/job/135572804541",
+        "started_at": "2026-11-19T12:45:58Z",
+        "completed_at": "2026-11-19T12:46:51Z",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Recheck tag identity and every target archive",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Publish GitHub Release after uploading all verified assets",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      }
+    ]
+  },
+  "release": {
+    "id": 451335066,
+    "url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.10",
+    "tag": "v0.10.10",
+    "draft": false,
+    "prerelease": false,
+    "published_at": "2026-11-19T12:46:47Z",
+    "assets": [
+      {
+        "name": "install.ps1",
+        "bytes": 29653,
+        "digest": "sha256:24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/install.ps1"
+      },
+      {
+        "name": "install.sh",
+        "bytes": 6783,
+        "digest": "sha256:25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/install.sh"
+      },
+      {
+        "name": "release-manifest.json",
+        "bytes": 1798,
+        "digest": "sha256:b6e4a14bf019bdc3be4d440864fcdef00302696e73c430c928384fd7ccfab15d",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/release-manifest.json"
+      },
+      {
+        "name": "SHA256SUMS",
+        "bytes": 762,
+        "digest": "sha256:89598bca6b7ded78d506f8494650a13e3b9b5ea5a7db0de33e9636999ebc8abf",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/SHA256SUMS"
+      },
+      {
+        "name": "ssmcp-aarch64-apple-darwin.tar.gz",
+        "bytes": 4244908,
+        "digest": "sha256:8f0d448dc01810e6f5d09a580991b890bf39a01424614b658872dfcae6490c17",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-aarch64-apple-darwin.tar.gz"
+      },
+      {
+        "name": "ssmcp-aarch64-apple-darwin.tar.gz.sha256",
+        "bytes": 100,
+        "digest": "sha256:276e85ca6c85741ea1b33766961e87f4966fcf7bdf88b36482a29adc75d00f2f",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-aarch64-apple-darwin.tar.gz.sha256"
+      },
+      {
+        "name": "ssmcp-aarch64-pc-windows-msvc.zip",
+        "bytes": 4603107,
+        "digest": "sha256:1ad4346c459564dab1b3371c3bf00fab39b56411c22e526b8af9f989d74a503b",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-aarch64-pc-windows-msvc.zip"
+      },
+      {
+        "name": "ssmcp-aarch64-pc-windows-msvc.zip.sha256",
+        "bytes": 101,
+        "digest": "sha256:3d90aadc3b676b9d6b9be8ffdf8e1eb7a580c37d8ca4f10f525018d2a27fec49",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-aarch64-pc-windows-msvc.zip.sha256"
+      },
+      {
+        "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+        "bytes": 7835073,
+        "digest": "sha256:4065ded7d71f5d7cb1ee33f32c5f306402f3825825aa68fa549bf9c998c080ce",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-aarch64-unknown-linux-gnu.tar.gz"
+      },
+      {
+        "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256",
+        "bytes": 105,
+        "digest": "sha256:6a4043db788b617fa5a2e7d5ac5b2e290aca82a095b180821de272b4e304e41c",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256"
+      },
+      {
+        "name": "ssmcp-x86_64-apple-darwin.tar.gz",
+        "bytes": 4501284,
+        "digest": "sha256:b439920738211a902b3e667b6b762070740590da936fe096c668632693f7b413",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-x86_64-apple-darwin.tar.gz"
+      },
+      {
+        "name": "ssmcp-x86_64-apple-darwin.tar.gz.sha256",
+        "bytes": 99,
+        "digest": "sha256:57086590b973b7c00e9703203fbf56099a04797e69836c9836d28fd969439cad",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-x86_64-apple-darwin.tar.gz.sha256"
+      },
+      {
+        "name": "ssmcp-x86_64-pc-windows-msvc.zip",
+        "bytes": 4852583,
+        "digest": "sha256:54e5c63225f8f70bdb4ec16b631d10eee8ca097644256e08f5dc6a19cd510e80",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-x86_64-pc-windows-msvc.zip"
+      },
+      {
+        "name": "ssmcp-x86_64-pc-windows-msvc.zip.sha256",
+        "bytes": 100,
+        "digest": "sha256:e41fa5ab6cb9fe4e35232163c87cd74374b97449b489eadce39bd236401ac462",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-x86_64-pc-windows-msvc.zip.sha256"
+      },
+      {
+        "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+        "bytes": 8096043,
+        "digest": "sha256:42c22dabfe41d4fc2fecbabaaf222c9d35bb9b77b4550c4daccada4290530920",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-x86_64-unknown-linux-gnu.tar.gz"
+      },
+      {
+        "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256",
+        "bytes": 104,
+        "digest": "sha256:f735cb521c948f68e50da2cda93ef1b36998242d6b900706123ba37ca7d73a9e",
+        "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.10/ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256"
+      }
+    ]
+  },
+  "production": {
+    "service": {
+      "service_active": true,
+      "version": "ssmcpd 0.10.10",
+      "sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79"
+    },
+    "public_origin": "https://ssmcp.lmm.best",
+    "receipt_read_exit": 0,
+    "deployment_receipt": {
+      "status": "deployed",
+      "commit": "52a531a59e9ec9236a76eafc0f4f068799e44b15",
+      "version": "0.10.10",
+      "running_sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79",
+      "target_sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79",
+      "configuration_unchanged": true,
+      "original_units_preserved": true,
+      "proxy_unchanged": true,
+      "original_runners_preserved": true,
+      "started_utc": "2026-11-19T12:51:37Z",
+      "finished_utc": "2026-11-19T12:51:41Z"
+    },
+    "surfaces": {
+      "direct": {
+        "health": true,
+        "homepage_bytes": 10828,
+        "homepage_sha256": "2f79c48e07833c675226a7af68533975981b43a5b98fba054d7b2dfa9c4b873c",
+        "assets": [
+          {
+            "name": "copy-command.js",
+            "url": "/account/assets/391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558/copy-command.js",
+            "status": 200,
+            "bytes": 707,
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558",
+            "content_type": "text/javascript; charset=utf-8",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "brand-mark.png",
+            "url": "/account/assets/434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a/brand-mark.png",
+            "status": 200,
+            "bytes": 492111,
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a",
+            "content_type": "image/png",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "client-install-copy.js",
+            "url": "/account/assets/4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96/client-install-copy.js",
+            "status": 200,
+            "bytes": 681,
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96",
+            "content_type": "text/javascript; charset=utf-8",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "traffic-meter.js",
+            "url": "/account/assets/52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c/traffic-meter.js",
+            "status": 200,
+            "bytes": 1418,
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c",
+            "content_type": "text/javascript; charset=utf-8",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "portal.css",
+            "url": "/account/assets/860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26/portal.css",
+            "status": 200,
+            "bytes": 24806,
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26",
+            "content_type": "text/css; charset=utf-8",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "portal-refresh.css",
+            "url": "/account/assets/fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88/portal-refresh.css",
+            "status": 200,
+            "bytes": 26131,
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88",
+            "content_type": "text/css; charset=utf-8",
+            "cache_control": "no-store"
+          }
+        ],
+        "legacy_root_assets": []
+      },
+      "public": {
+        "health": true,
+        "homepage_bytes": 11575,
+        "homepage_sha256": "31097002eabdb6490f23871fd4cf3072f17f9f9be25abb68c733d7aa2040868b",
+        "assets": [
+          {
+            "name": "copy-command.js",
+            "url": "/account/assets/391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558/copy-command.js",
+            "status": 200,
+            "bytes": 707,
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558",
+            "content_type": "text/javascript; charset=utf-8",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "brand-mark.png",
+            "url": "/account/assets/434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a/brand-mark.png",
+            "status": 200,
+            "bytes": 492111,
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a",
+            "content_type": "image/png",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "client-install-copy.js",
+            "url": "/account/assets/4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96/client-install-copy.js",
+            "status": 200,
+            "bytes": 681,
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96",
+            "content_type": "text/javascript; charset=utf-8",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "traffic-meter.js",
+            "url": "/account/assets/52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c/traffic-meter.js",
+            "status": 200,
+            "bytes": 1418,
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c",
+            "content_type": "text/javascript; charset=utf-8",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "portal.css",
+            "url": "/account/assets/860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26/portal.css",
+            "status": 200,
+            "bytes": 24806,
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26",
+            "content_type": "text/css; charset=utf-8",
+            "cache_control": "no-store"
+          },
+          {
+            "name": "portal-refresh.css",
+            "url": "/account/assets/fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88/portal-refresh.css",
+            "status": 200,
+            "bytes": 26131,
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88",
+            "content_type": "text/css; charset=utf-8",
+            "cache_control": "no-store"
+          }
+        ],
+        "legacy_root_assets": []
+      }
+    },
+    "elapsed_seconds": 7.259
+  }
+}

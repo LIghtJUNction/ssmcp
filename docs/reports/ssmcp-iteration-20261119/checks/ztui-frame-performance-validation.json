@@ -1,0 +1,329 @@
+{
+  "status": "completed; PR ready for review",
+  "date": "2026-11-19",
+  "repository": "LIghtJUNction/ssmcp",
+  "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/72",
+  "branch": "perf/ztui-frame-diff-20261119",
+  "baseline_commit": "b45d2e3c9ee2690937604c1be27e7041f8a25022",
+  "implementation_commit": "f6158ee04cd20d8adbe4acf85f8e7f310f8a05d7",
+  "head": "570968560073e9dd567dfcbc8f84815735c89d82",
+  "merge_state_at_review": {
+    "base": "a76f9973d564fb74e11581a4329cfbab09ac09c4",
+    "mergeable": true,
+    "mergeable_state": "clean"
+  },
+  "request": {
+    "native_message_id": "cb756b08ec009b13fd089e4bdf5bbaed",
+    "finding": "The user's exact historical table is in crates/ztui/README.md and docs/benchmark-20261118.json. crates/ztui is a tracked tree in this repository, not a submodule or a separate ztty repository."
+  },
+  "native_worktree": "<private-path>/ztui-frame-perf-20261119",
+  "scope": [
+    "crates/ztui/src/frame.rs",
+    "crates/ztui/tests/contracts.rs",
+    "crates/ztui/benches/diff.rs",
+    "crates/ztui/README.md",
+    "crates/ztui/docs/benchmark-20261119.json"
+  ],
+  "primary_matches_github": {
+    "all_five_files_match_github_head": true,
+    "files": {
+      "crates/ztui/README.md": {
+        "git_blob": "c1aa50c9a135fd440b6c3b82443273c11aa24403",
+        "sha256": "a7a3b0b8522fe8a8c6b52e1691e7ac2367ac533bdf98102e4694fd18e40737dd"
+      },
+      "crates/ztui/benches/diff.rs": {
+        "git_blob": "f7199c998b562c63c613c9954e3f3a3187746456",
+        "sha256": "941a520769948fc2ba7facdab59b4f8efdbae2814876bddad7d1b34cf42859c5"
+      },
+      "crates/ztui/docs/benchmark-20261119.json": {
+        "git_blob": "d28b4c62ef7a9addc0bac9e6f7a4d1abefe57e72",
+        "sha256": "fa39e3d10d293ba7880ce0e57fdab881a3f2f1e1c8376225643cd1a188055b3e"
+      },
+      "crates/ztui/src/frame.rs": {
+        "git_blob": "cd759c2d64d9bae62d072776ee00ff183011a5a6",
+        "sha256": "9bd6a1a57b66de211d97f87caf89789654fe1bd73efe472f74737eb023488f21"
+      },
+      "crates/ztui/tests/contracts.rs": {
+        "git_blob": "80c14085ecedcc028ab46720212cbda2c8bb2343",
+        "sha256": "4237d4ec0524e99a9f6bda139e5bb5af89b77a359300b3cfe1c42265d370ea4d"
+      }
+    }
+  },
+  "native_final_state": {
+    "head": "570968560073e9dd567dfcbc8f84815735c89d82",
+    "status": "",
+    "files": {
+      "crates/ztui/src/frame.rs": {
+        "sha256": "9bd6a1a57b66de211d97f87caf89789654fe1bd73efe472f74737eb023488f21",
+        "git_blob": "cd759c2d64d9bae62d072776ee00ff183011a5a6"
+      },
+      "crates/ztui/tests/contracts.rs": {
+        "sha256": "4237d4ec0524e99a9f6bda139e5bb5af89b77a359300b3cfe1c42265d370ea4d",
+        "git_blob": "80c14085ecedcc028ab46720212cbda2c8bb2343"
+      },
+      "crates/ztui/benches/diff.rs": {
+        "sha256": "941a520769948fc2ba7facdab59b4f8efdbae2814876bddad7d1b34cf42859c5",
+        "git_blob": "f7199c998b562c63c613c9954e3f3a3187746456"
+      },
+      "crates/ztui/README.md": {
+        "sha256": "a7a3b0b8522fe8a8c6b52e1691e7ac2367ac533bdf98102e4694fd18e40737dd",
+        "git_blob": "c1aa50c9a135fd440b6c3b82443273c11aa24403"
+      },
+      "crates/ztui/docs/benchmark-20261119.json": {
+        "sha256": "fa39e3d10d293ba7880ce0e57fdab881a3f2f1e1c8376225643cd1a188055b3e",
+        "git_blob": "d28b4c62ef7a9addc0bac9e6f7a4d1abefe57e72"
+      }
+    }
+  },
+  "validation": {
+    "contract_tests_passed": 13,
+    "contract_tests_failed": 0,
+    "contract_output": "running 13 tests\ntest caller_fixed_buffers_receive_output_errors_without_allocation_or_panics ... ok\ntest equal_rows_in_distinct_allocations_emit_nothing ... ok\ntest cursor_and_mode_only_changes_do_not_repaint_rows ... ok\ntest first_frame_has_exact_ansi_mode_and_cursor_sequence ... ok\ntest geometry_change_and_layout_key_force_a_full_row_redraw ... ok\ntest one_row_change_uses_absolute_position_without_repainting_other_rows ... ok\ntest pane_splits_conserve_cells_and_never_overlap ... ok\ntest padding_crosses_chunk_boundaries_without_losing_spaces ... ok\ntest rectangles_reject_overflow_and_clip_hidden_panes ... ok\ntest unchanged_and_empty_frames_do_not_touch_caller_output ... ok\ntest unicode_and_sgr_rows_are_forwarded_without_hidden_width_guessing ... ok\ntest width_rejection_happens_before_any_output_and_keeps_utf8_intact ... ok\ntest all_coordinate_digit_boundaries_match_the_ansi_reference ... ok\n\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+    "rustfmt_exit_code": 0,
+    "byte_equivalence_cases": 8,
+    "byte_equivalence_runs": 12,
+    "baseline_and_candidate_match_legacy_reference": true,
+    "no_std_preserved": true,
+    "unsafe_forbidden": true,
+    "new_dependencies": 0
+  },
+  "measured_results": {
+    "first": {
+      "baseline": {
+        "median_ns": 2771.125,
+        "min_ns": 2615.94,
+        "max_ns": 6513.09
+      },
+      "candidate": {
+        "median_ns": 1774.8249999999998,
+        "min_ns": 1625.54,
+        "max_ns": 1964.14
+      },
+      "paired_ratio": {
+        "median": 0.6452329564346119,
+        "min": 0.26551913147215833,
+        "max": 0.6958492931795072
+      }
+    },
+    "unchanged": {
+      "baseline": {
+        "median_ns": 438.905,
+        "min_ns": 392.28,
+        "max_ns": 466.52
+      },
+      "candidate": {
+        "median_ns": 188.385,
+        "min_ns": 174.69,
+        "max_ns": 194.92
+      },
+      "paired_ratio": {
+        "median": 0.4256104649797088,
+        "min": 0.39836267445042417,
+        "max": 0.4856225145304375
+      }
+    },
+    "unchanged_clone": {
+      "baseline": {
+        "median_ns": 427.74,
+        "min_ns": 408.5,
+        "max_ns": 497.52
+      },
+      "candidate": {
+        "median_ns": 445.905,
+        "min_ns": 386.94,
+        "max_ns": 477.93
+      },
+      "paired_ratio": {
+        "median": 1.003772640981243,
+        "min": 0.8223667431777608,
+        "max": 1.1699632802937576
+      }
+    },
+    "one_row": {
+      "baseline": {
+        "median_ns": 553.325,
+        "min_ns": 514.87,
+        "max_ns": 687.49
+      },
+      "candidate": {
+        "median_ns": 525.98,
+        "min_ns": 461.14,
+        "max_ns": 783.48
+      },
+      "paired_ratio": {
+        "median": 0.9199981987718643,
+        "min": 0.8024229407520513,
+        "max": 1.4768152001809547
+      }
+    },
+    "all_rows": {
+      "baseline": {
+        "median_ns": 2901.435,
+        "min_ns": 2744.53,
+        "max_ns": 3092.97
+      },
+      "candidate": {
+        "median_ns": 2048.465,
+        "min_ns": 1937.87,
+        "max_ns": 4998.06
+      },
+      "paired_ratio": {
+        "median": 0.7014510846611977,
+        "min": 0.6730909126179692,
+        "max": 1.7018438122478168
+      }
+    },
+    "resize": {
+      "baseline": {
+        "median_ns": 2659.015,
+        "min_ns": 2361.88,
+        "max_ns": 2973.66
+      },
+      "candidate": {
+        "median_ns": 1727.21,
+        "min_ns": 1675.71,
+        "max_ns": 1919.65
+      },
+      "paired_ratio": {
+        "median": 0.6567563073181619,
+        "min": 0.6179575899604206,
+        "max": 0.7242620285535251
+      }
+    },
+    "cursor_only": {
+      "baseline": {
+        "median_ns": 498.92999999999995,
+        "min_ns": 465.91,
+        "max_ns": 633.78
+      },
+      "candidate": {
+        "median_ns": 434.855,
+        "min_ns": 408.07,
+        "max_ns": 491.66
+      },
+      "paired_ratio": {
+        "median": 0.8911310114035469,
+        "min": 0.6757549938464451,
+        "max": 0.9474576634972419
+      }
+    },
+    "mode_only": {
+      "baseline": {
+        "median_ns": 488.9,
+        "min_ns": 455.64,
+        "max_ns": 663.17
+      },
+      "candidate": {
+        "median_ns": 484.25,
+        "min_ns": 438.79,
+        "max_ns": 503.38
+      },
+      "paired_ratio": {
+        "median": 0.9717585378769273,
+        "min": 0.7590512236681395,
+        "max": 1.0526982739785886
+      }
+    }
+  },
+  "method": {
+    "iterations_per_round": 50000,
+    "rounds_per_case": 2,
+    "paired_runs": 6,
+    "harness": "benches/diff.rs",
+    "harness_sha256": "941a520769948fc2ba7facdab59b4f8efdbae2814876bddad7d1b34cf42859c5",
+    "scenarios": "The original seven scenarios plus unchanged_clone (identical content in distinct row allocations).",
+    "order": "baseline,candidate on even pair; candidate,baseline on odd pair",
+    "internal_order": "legacy, ztui, ztui, legacy; each measurement warms up for 200 frames.",
+    "summary": "Per-implementation median/minimum/maximum of six runs; paired_ratio is the median/minimum/maximum of candidate/baseline within each pair. A median of paired ratios can differ from the ratio of the two time medians.",
+    "outliers": "All runs retained. Baseline pair 2 first-frame and candidate pair 5 all-rows timings show large scheduler/load variation.",
+    "concurrency": "Other coordinated SSMCP compiler/test tasks paused during the timed comparison. No CPU governor or affinity changes; activity outside these tasks was not controlled.",
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "compiler": {
+      "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+      "opt_level": "z",
+      "additional_codegen_flags": [],
+      "rustc_serial_wrapper_sha256": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "cpu_model": "12th Gen Intel(R) Core(TM) i9-12900HX",
+    "system": "Linux-7.3.4-arch1-1-x86_64-with-glibc2.44",
+    "commands": {
+      "library": [
+        "$RUSTC_WRAPPER",
+        "$RUSTC",
+        "--edition=2024",
+        "--crate-name",
+        "ztui",
+        "--crate-type",
+        "rlib",
+        "-C",
+        "opt-level=z",
+        "src/lib.rs",
+        "-o",
+        "$OUTPUT/libztui_opt.rlib"
+      ],
+      "harness": [
+        "$RUSTC_WRAPPER",
+        "$RUSTC",
+        "--edition=2024",
+        "-C",
+        "opt-level=z",
+        "benches/diff.rs",
+        "--extern",
+        "ztui=$OUTPUT/libztui_opt.rlib",
+        "-o",
+        "$OUTPUT/diff-paired"
+      ],
+      "run": [
+        "$OUTPUT/diff-paired",
+        "50000"
+      ],
+      "notes": "Compile each revision's library separately, then compile the same harness source against each library. CARGO_PKG_VERSION=0.1.1; all Rust compilations used the workstation's existing rustc-serial wrapper."
+    }
+  },
+  "native_jobs": {
+    "frozen_baseline": "7febea320756f0494349ecc6dfe4ff2f-e",
+    "candidate_build": "f6b163accccd33dce223ef65fab39dea-39",
+    "paired_runs": "f6b163accccd33dce223ef65fab39dea-4c",
+    "native_alignment": "f6b163accccd33dce223ef65fab39dea-80"
+  },
+  "artifacts": {
+    "public_report": "<private-path>/benchmark-20261119.json",
+    "report_sha256": "fa39e3d10d293ba7880ce0e57fdab881a3f2f1e1c8376225643cd1a188055b3e",
+    "baseline_build": "<private-path>/baseline-metadata.json",
+    "candidate_build": "<private-path>/candidate-build-metadata.json",
+    "raw_comparison": "<private-path>/comparison-metadata.json",
+    "repeated_run_driver": "<private-path>/run_paired.py",
+    "source_directory": "<private-path>/ztui"
+  },
+  "limits": [
+    "All timing runs retained, including two large outliers.",
+    "Distinct-allocation unchanged frames did not show a stable gain.",
+    "This benchmark measures only ANSI diff generation and reused String writes, not terminal I/O, layout, network, or end-to-end latency.",
+    "No additional native benchmark or compiler jobs remain running for this task."
+  ]
+}

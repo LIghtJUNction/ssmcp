@@ -1,0 +1,73 @@
+{
+  "source": "68e52bdd3ea779ee65d32d50db77678e0a6d1dc7",
+  "fixture": "<private-path>/ssmcp-lib-tests",
+  "fixture_sha256": "a1e5d20cc43b24a2945e9ad459fb1d0ae3595a5370d62e01bc02aaf858527380",
+  "synthetic_fixture_data": true,
+  "images": [
+    {
+      "path": "images/queue-request-inspect-120.png",
+      "columns": 120,
+      "rows": 28,
+      "kind": "full terminal frame",
+      "source_ansi": "<private-path>/request-inspect-120.ansi",
+      "source_sha256": "42a7dc1a35173807f38de4e3eb39f2e0c8fd7c08a4d71a70c91cb9e38c9dfd24"
+    },
+    {
+      "path": "images/queue-request-inspect-48.png",
+      "columns": 48,
+      "rows": 28,
+      "kind": "full terminal frame",
+      "source_ansi": "<private-path>/request-inspect-48.ansi",
+      "source_sha256": "a8569e685cbd4f5eb1b21fc29454ff5e987081e0fbd31df73b54eeb337ca3d3f"
+    },
+    {
+      "path": "images/queue-requests-120.png",
+      "columns": 120,
+      "rows": 28,
+      "kind": "full terminal frame",
+      "source_ansi": "<private-path>/requests-120.ansi",
+      "source_sha256": "b70c8428ec8daf9186e79ddb75341b568e2957c0c0a36be576dd58098ba54960"
+    },
+    {
+      "path": "images/queue-requests-48.png",
+      "columns": 48,
+      "rows": 28,
+      "kind": "full terminal frame",
+      "source_ansi": "<private-path>/requests-48.ansi",
+      "source_sha256": "b22a2e1a97709534eecfc24e987f3101df31f5c42375aed929479159efbda3a9"
+    },
+    {
+      "path": "images/read-activity-collapsed-120.png",
+      "columns": 120,
+      "rows": 36,
+      "kind": "activity pane rows",
+      "source_ansi": "<private-path>/read-activity-120-collapsed.ansi",
+      "source_sha256": "710a0c5572ea5c9c0222f89227b37f8559af9def2a2a0186a8876de923544d8d"
+    },
+    {
+      "path": "images/read-activity-expanded-120.png",
+      "columns": 120,
+      "rows": 36,
+      "kind": "activity pane rows",
+      "source_ansi": "<private-path>/read-activity-120-expanded.ansi",
+      "source_sha256": "c31e7f4b795d921bafa36173750c1c109ce90f5efe4e1478f0248bda61b4eb45"
+    },
+    {
+      "path": "images/read-activity-collapsed-48.png",
+      "columns": 48,
+      "rows": 36,
+      "kind": "activity pane rows",
+      "source_ansi": "<private-path>/read-activity-48-collapsed.ansi",
+      "source_sha256": "bde088a10d46ee417c897140e40bc7bdb16eb26a79b93c85d89395689f5bf3ef"
+    },
+    {
+      "path": "images/read-activity-expanded-48.png",
+      "columns": 48,
+      "rows": 36,
+      "kind": "activity pane rows",
+      "source_ansi": "<private-path>/read-activity-48-expanded.ansi",
+      "source_sha256": "d3ba5cd6d724d027955194d6c95686da8ad79433fdf0e1d525d60cc4c2d19d08"
+    }
+  ],
+  "activity_pane_rendering": "Original ANSI row strings positioned at their corresponding terminal rows; no product text or styling changed."
+}

@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "status": "checkpoint; waiting and local mode still in progress",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "128d2ee4121bc725ba9e02634e2aeb35ab876524ca779e191dc152d30d06bd97",
+      "bytes": 16608
+    },
+    {
+      "path": "checks/at-reference-mouse-validation-20261119.json",
+      "sha256": "e8fe0ac133b19fbda5dd4cebe2209084a3717a08714890a1a6a4517a40225b4e",
+      "bytes": 7271
+    },
+    {
+      "path": "checks/cc-fixture-directory-validation-20261119.json",
+      "sha256": "aa8c712353f35de8bf9f86132e2ae1a02802a1c998cfcad6c527f8d02d7c42b4",
+      "bytes": 2161
+    },
+    {
+      "path": "checks/daemon-account-wss-validation-20261119.json",
+      "sha256": "0709b8dc67aef6a43c3cbf2aa427c99eacf7311854f9b96a2229b98da40e97b3",
+      "bytes": 3140
+    },
+    {
+      "path": "checks/event-cache-candidate-review-20261119.json",
+      "sha256": "ffeded571ce45042490e8941d6ed3ab4afc9f7aba485c7a6d53c469270af67e8",
+      "bytes": 5056
+    },
+    {
+      "path": "checks/event-cache-memory-driver-closeout-20261119.json",
+      "sha256": "b1fa9a1bc4c91882f53bf1f077e1595c4432a1da33e4eea2fc33d7493d31070b",
+      "bytes": 5853
+    },
+    {
+      "path": "checks/event-cache-real-pty-probe12-20261119.json",
+      "sha256": "54b4d9acfde667638783f6b49608b3b80688e8e1963dd9aa14399a6cf9014994",
+      "bytes": 121485
+    },
+    {
+      "path": "checks/final-account-acceptance-20261119.json",
+      "sha256": "4e08e197b52a466295e92b2529033dfe04cde9dc3e43d559b04460940e9c4755",
+      "bytes": 5799
+    },
+    {
+      "path": "checks/force-send-build-validation-20261119.json",
+      "sha256": "86eb7c6f0fce90f0f4219fb164cb7a2f76a359b0b9b44afb51f7245d079fdccf",
+      "bytes": 6645
+    },
+    {
+      "path": "checks/force-send-listener-source-review-20261119.json",
+      "sha256": "992c91f2c4acca96d4afb3fe601ec79f1f2db75138b57e5690a4bce512899d39",
+      "bytes": 6077
+    },
+    {
+      "path": "checks/force-send-pty-provenance-20261119.json",
+      "sha256": "fee719ec979d0bb60875dd490e666c17a6cb235e22a2c7d9ca27855ec0290e1b",
+      "bytes": 1233
+    },
+    {
+      "path": "checks/force-send-pty-report-20261119.json",
+      "sha256": "e443ce6c8e42b79f8293ac3370a9d1fa90499f42b4c73ed67bb11d9f25f4014f",
+      "bytes": 8356
+    },
+    {
+      "path": "checks/force-send-pty-result-20261119.json",
+      "sha256": "b3db4fbdf7a1ec528a3a7ac2dc38e0cf0eedf67c7ffc023c9f1de58d0ba27c4e",
+      "bytes": 159
+    },
+    {
+      "path": "checks/guardian-candidate-unit-validation.json",
+      "sha256": "3c8599bc577c182c6eca8670be16370f525b0f1d27573cc69ffcc6a3781ab8fc",
+      "bytes": 853
+    },
+    {
+      "path": "checks/guardian-independent-review-20261119.json",
+      "sha256": "561441f79062b8c540c94d62505a951c84b48650a1db8becf1a604c08861046d",
+      "bytes": 7597
+    },
+    {
+      "path": "checks/guardian-memory-interpretation-20261119.json",
+      "sha256": "e372805209c91f06af5cbf10bbd90e7604450050d4efe175d12bcae4b52aba1d",
+      "bytes": 4249
+    },
+    {
+      "path": "checks/guardian-same-profile-debug-validation-20261119.json",
+      "sha256": "29ac90173db6b6e7f3035e2136170e00dd861287be733e9b65a4ff766cb2f728",
+      "bytes": 271608
+    },
+    {
+      "path": "checks/native-plugin-source-review-20261119.json",
+      "sha256": "fd24219f1d4985b52203754d80ce7cc0548220154a0d7e2d9da667d0ebb9ff78",
+      "bytes": 5582
+    },
+    {
+      "path": "checks/native-plugin-validation-20261119.json",
+      "sha256": "f3e951e91ac2c671d42f15b13ae36c93117d0689c32710885599763da6ab5e42",
+      "bytes": 27619
+    },
+    {
+      "path": "checks/owner-unlimited-quota-validation-20261119.json",
+      "sha256": "8338e40cadbedf7c07c4a8d9085541c5631a2d666e7b441514d29da132c8a0a4",
+      "bytes": 3408
+    },
+    {
+      "path": "checks/per-user-runtime.json",
+      "sha256": "5ed74d3002ac73d04020512c8558c19152e91f05afde3ac5cf4af2ac792a6b43",
+      "bytes": 4901
+    },
+    {
+      "path": "checks/production-release-0.10.10.json",
+      "sha256": "f11270c3d5052f6b67a6782cf30c3414e5edbf485e9cf6a1eba84a4bf56c2923",
+      "bytes": 64912
+    },
+    {
+      "path": "checks/read-activity-projection-checkpoint-20261119.json",
+      "sha256": "0247cbe7492696bbf8c21deefd1b69f07d213d62f13371d453c28a7c6975fba6",
+      "bytes": 3425
+    },
+    {
+      "path": "checks/readability-runtime-provenance.json",
+      "sha256": "8231e1fa9f0917639847dbfeebbffa9494e592564e4ae6d0af3238486d1e2e8b",
+      "bytes": 31604
+    },
+    {
+      "path": "checks/release-0.10.11-failure-20261119.json",
+      "sha256": "11ede0da9fff0fca95e53cb794840ca69d8ff6c30f4b8783e472b8a1f1c63466",
+      "bytes": 6472
+    },
+    {
+      "path": "checks/stable-ui-validation-20261119.json",
+      "sha256": "f14f0b85f9bf925106424a15d892dfa7f5ce82bea004dcaf2b886c61fa504c2f",
+      "bytes": 3389
+    },
+    {
+      "path": "checks/terminal-acceptance-20261119.json",
+      "sha256": "3239792e593859ca70c9b216f7cda833b98838b46bdce542bb41b582658e51b6",
+      "bytes": 20368
+    },
+    {
+      "path": "checks/terminal-readability-preview-provenance.json",
+      "sha256": "a9f0ef61101dcc16205af4b6cf1331fddc43f1ae324c342fe354a525255c12c9",
+      "bytes": 2765
+    },
+    {
+      "path": "checks/ztui-frame-benchmark-20261119.json",
+      "sha256": "fa39e3d10d293ba7880ce0e57fdab881a3f2f1e1c8376225643cd1a188055b3e",
+      "bytes": 45995
+    },
+    {
+      "path": "checks/ztui-frame-performance-validation.json",
+      "sha256": "7666b250346938090f7afc49bee20ca436d22e464cea7cfccd0e1f8cc3f1419f",
+      "bytes": 11703
+    },
+    {
+      "path": "checks/ztui-publication-version-20261119.json",
+      "sha256": "dbc2d9f96a7477d5e1b90d8504cd1eb2b51e5d4fec837ca850d4ac199a8489a2",
+      "bytes": 1331
+    },
+    {
+      "path": "images/at-mouse-completed-narrow.png",
+      "sha256": "170a77bc542b7c7eb99b20f1e18cb7d3cedb297d295065ba33bf9c78109250a9",
+      "bytes": 39248
+    },
+    {
+      "path": "images/at-mouse-completed-wide.png",
+      "sha256": "7dde10786817f123afcd67194b64c79826c0cbc2c80676772f1c7d7eac78b59e",
+      "bytes": 43433
+    },
+    {
+      "path": "images/force-accepted-120.png",
+      "sha256": "bdbe65d3a0f4bc3570659e2e4f768eb7e57eab5d082f6db0607ee5b622e06ad1",
+      "bytes": 47244
+    },
+    {
+      "path": "images/force-no-listener-120.png",
+      "sha256": "e1c3d123a165a6b0c7acdf437a54db01d8da748066e930aa0aad4c4f46027e76",
+      "bytes": 30671
+    },
+    {
+      "path": "images/force-unknown-48.png",
+      "sha256": "b5dae2d2aea6b7ed112df20f57e57e22d9683df81a23ccc7b1a6df9b3614255e",
+      "bytes": 59571
+    },
+    {
+      "path": "images/portal-live-desktop.jpg",
+      "sha256": "8be2b843b6dd060b9a8ab326bcfee9fa1f821c4a1d75648cbd835c8fa2fd00d7",
+      "bytes": 66618
+    },
+    {
+      "path": "images/queue-request-inspect-120.png",
+      "sha256": "1af18f3846df37eeeb96964686a1f9549ba9048f59ab9d13783384f8cbe6b3b6",
+      "bytes": 35996
+    },
+    {
+      "path": "images/queue-request-inspect-48.png",
+      "sha256": "4870fffd08e27d83f72b2ca1b38647a7e929e4416afc68531294f5b08107480b",
+      "bytes": 30050
+    },
+    {
+      "path": "images/queue-requests-120.png",
+      "sha256": "4291149e8d0a85ed4f7eecd8f750cc1231477c9c13c430c5bedc7640bcde65b5",
+      "bytes": 47126
+    },
+    {
+      "path": "images/queue-requests-48.png",
+      "sha256": "1861a4bf63aaa46a0ea6a1ebfe542cf8c8271376c950bb247562409bf569f7ac",
+      "bytes": 41416
+    },
+    {
+      "path": "images/read-activity-collapsed-120.png",
+      "sha256": "ecb59cebb5c58e10fd4630aba029727afa31fc11d383b0638c71265a5e5d2a31",
+      "bytes": 33413
+    },
+    {
+      "path": "images/read-activity-collapsed-48.png",
+      "sha256": "39735f65f74464f07030db991b3c000207c4a28f1eb369096af2b9a03e5f5732",
+      "bytes": 30014
+    },
+    {
+      "path": "images/read-activity-expanded-120.png",
+      "sha256": "9e5d46210f0d349e863b3aa9110df1f045dbc55b6b6ccff92250624db6fe96b0",
+      "bytes": 131510
+    },
+    {
+      "path": "images/read-activity-expanded-48.png",
+      "sha256": "ad96d7f86192946b7f53afd553f5d8c11eee8bcfed8ef6b14ab02056064f4b97",
+      "bytes": 82641
+    },
+    {
+      "path": "multi-session-routing-design.md",
+      "sha256": "0d0270de3388bab82669ca164d51f320681207ad008298b27832c8a2ef0bb860",
+      "bytes": 13999
+    }
+  ]
+}

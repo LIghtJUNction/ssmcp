@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "review_kind": "read_only_integrated_source_review",
+  "source_head": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+  "native_worktree": ".worktrees/plugin-two-layer-20261119",
+  "blocking_findings": [],
+  "source_checks": [
+    {
+      "topic": "shared_ownership",
+      "evidence": [
+        "src/runtime.rs:301-318",
+        "src/runtime/native_host.rs:80-87",
+        "src/runtime/native_host/abi.rs:84-92"
+      ],
+      "conclusion": "Runtime retains the same Process/Files/Desktop Arc allocations used as each static ABI factory seed. The factory downcasts the seed; it does not construct duplicate native state."
+    },
+    {
+      "topic": "local_frontend_grants",
+      "evidence": [
+        "src/runtime/native_plugins/files.rs:20-65",
+        "src/runtime/capabilities.rs:410-417",
+        "src/runtime/native_plugins/desktop.rs:20-41"
+      ],
+      "conclusion": "Local reference expansion, attachment import, completion, resource reads and desktop handoff delegate to the same previously granted state. Constructor roots and context_roots are unchanged; no new remote bypass is registered."
+    },
+    {
+      "topic": "lazy_catalogs",
+      "evidence": [
+        "src/runtime/native_plugins/process.rs:575-600",
+        "src/runtime/native_host/abi.rs:130-154",
+        "src/registry.rs:134-230"
+      ],
+      "conclusion": "Process owns nine provider routes but emits only four default catalogs. The optional five are omitted, not replaced by empty catalogs. Registry replacement is provider-scoped and identical descriptors preserve generations. Existing optional registrations are not erased by Runtime construction."
+    },
+    {
+      "topic": "route_and_audit_boundary",
+      "evidence": [
+        "src/runtime.rs:444-508",
+        "src/runtime.rs:523-689",
+        "src/runtime/native_host.rs:145-169",
+        "src/runtime/native_host.rs:285-320",
+        "src/runtime/native_host.rs:400-426",
+        "src/runtime/native_host.rs:484-499",
+        "src/runtime/native_plugins/process.rs:365-425"
+      ],
+      "conclusion": "Core validation, before/after hook, audit and output guard remain in Runtime. Host rechecks the exact provider/native-name/generation route before admission, after the queue and immediately before ABI start; Process checks the same stamp. HarnessCall shares its original Arc and REQUEST_ID is restored on the local executor; no AUDIT_RUN binding is serialized."
+    },
+    {
+      "topic": "result_and_cleanup_errors",
+      "evidence": [
+        "src/runtime/native_host/abi.rs:180-193",
+        "src/runtime/native_host.rs:485-523",
+        "src/runtime.rs:691-724"
+      ],
+      "conclusion": "ABI Outcome retains Result<Value,String>; native MCP isError/images/opaque metadata are not rewrapped or silently truncated by the host. ABI and cleanup errors reach Runtime cleanup audit rather than successful tool results."
+    },
+    {
+      "topic": "cancellation_and_executor_shutdown",
+      "evidence": [
+        "src/runtime/native_host.rs:324-339",
+        "src/runtime/native_host.rs:429-477",
+        "src/runtime/native_host.rs:248-266",
+        "src/runtime/native_plugins/process.rs:428-444",
+        "src/runtime/native_plugins/process/lazy.rs:151-175"
+      ],
+      "conclusion": "Stop signal is independent of queue capacity. Queued calls are rejected, active ABI tasks are cancelled/dropped and drained, and real plugin shutdown runs before instance/LocalSet/runtime destruction and completion notification. Shared lazy initialization intentionally outlives a cancelled waiter, then aborts and drains during Process shutdown, matching the original contract."
+    }
+  ],
+  "limits": [
+    "This is source review; it does not substitute for the parent-owned focused tests or actual CLI lifecycle tests.",
+    "Parent reports cargo check --locked --lib --tests passed on this head without warnings; this review did not invoke Cargo.",
+    "Process Driver/Shell/Terminal shutdown return types and bounded shell wait were inherited. A successful Process cleanup value is not a new proof that every external tool reported an error-free shutdown.",
+    "The inherited Linux Managed Drop path requests guardian termination and uses an independent std-thread watchdog; the native host runtime is kept alive through explicit plugin cleanup."
+  ],
+  "file_sha256": {
+    "src/runtime.rs": "c03b200b37feda7a16dc7b5c3a7f7c8983cbe8f9e7f9bb62a5a9428625630925",
+    "src/runtime/native_plugins/process.rs": "99bcc41f19380bc208c56f078da2698dbab8dee09b390a4c764b7d1f747ed090",
+    "src/runtime/native_plugins/process/lazy.rs": "eeda9a45ce6e12fa419c15d468ad2ce421d640b90658bae76f0cfd90ee77bf43",
+    "src/runtime/native_plugins/files.rs": "7085a5c276156040f0c47fc77c191ad4ab512b8f131c0cdba450da09cba4b4fd",
+    "src/runtime/native_plugins/desktop.rs": "79da7437d700f1f413eed66023ff29c1d0f97c2984ce797e3c3e95f4fe21d7e0",
+    "src/runtime/capabilities.rs": "77a791bfe8ac837a473fb2f0fbbd746aab43c8eb29894bc044375ce36c7e2bc7",
+    "src/runtime/native_host.rs": "7c0102dea071488baead853a65dc60e9e144552e795b6455f1faa959f8aac49c",
+    "src/runtime/native_host/abi.rs": "aef331eba5ca0e14330b896365855e2e43ce68f896908caf13ccd11285da8784",
+    "src/registry.rs": "2dbd5830fe0b0517dcd3944d00e3b3239610619b9caf259b360ddbdfd524a553",
+    "src/backend.rs": "e1b8592dbaf8f7de082d30a1b015615579907cbe298ee2d448f60a92f2a4dc96",
+    "src/backend/rpc.rs": "0918a45cd077ee71da2e0f1120b41cfb9a679cd29d7bc425f521714d802bdce0",
+    "src/backend/shell.rs": "10101f19f75ed30c564068a90833ff4995a56c2bba4cf5209558a55cd2ba948a"
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "source": "24a4d502739bdc8707a686c6585e4ebeb9f69948",
+  "binary_source": "24a4d502739bdc8707a686c6585e4ebeb9f69948",
+  "input_heads": [
+    "24a4d502739bdc8707a686c6585e4ebeb9f69948"
+  ],
+  "steps": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.021,
+      "test_results": []
+    },
+    {
+      "name": "lib-build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 128.31,
+      "test_results": []
+    },
+    {
+      "name": "terminal-all",
+      "command": [
+        "ssmcp-lib-tests",
+        "client::terminal::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 16.421,
+      "test_results": [
+        "test result: ok. 222 passed; 0 failed; 1 ignored; 0 measured; 1070 filtered out; finished in 16.39s"
+      ]
+    },
+    {
+      "name": "composer-all",
+      "command": [
+        "ssmcp-lib-tests",
+        "client::composer::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.011,
+      "test_results": [
+        "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1279 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "name": "context-all",
+      "command": [
+        "ssmcp-lib-tests",
+        "context::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.094,
+      "test_results": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1285 filtered out; finished in 0.09s"
+      ]
+    },
+    {
+      "name": "output-all",
+      "command": [
+        "ssmcp-lib-tests",
+        "output::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.327,
+      "test_results": [
+        "test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 1263 filtered out; finished in 0.32s"
+      ]
+    },
+    {
+      "name": "client-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bins",
+        "--example",
+        "vt_snapshot"
+      ],
+      "exit_code": 0,
+      "seconds": 93.827,
+      "test_results": []
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 68.18,
+      "test_results": []
+    }
+  ],
+  "binaries": {
+    "ssmcp-lib-tests": {
+      "path": "ssmcp-lib-tests",
+      "sha256": "8f7a75ce6978543224dbc22f2cc7852bc2b84d7a92528c39db9a9923e4c8328a",
+      "size": 243868064
+    },
+    "bin/ssmcp": {
+      "path": "ssmcp",
+      "sha256": "dca924a390ed440afde776f419e357739e6f7cc27c30166e3af36c2f00697527",
+      "size": 152936208
+    },
+    "bin/ssmcpd": {
+      "path": "ssmcpd",
+      "sha256": "f4934396146ab054ccec3325fdac1c375c0383c9234b58df93301e6e588a186b",
+      "size": 127617488
+    },
+    "bin/examples/vt_snapshot": {
+      "path": "vt_snapshot",
+      "sha256": "c44c9227316af21adc6a4bb08f78880e9d8aca34d0973e4475886049fa286a97",
+      "size": 6472144
+    },
+    "bin/code-mode.js": {
+      "path": "code-mode.js",
+      "sha256": "9212d207e5441e2ba3d38e22ce1e15a09b6b143241e439d9e86b2e615250cf7f",
+      "size": 41337
+    }
+  }
+}

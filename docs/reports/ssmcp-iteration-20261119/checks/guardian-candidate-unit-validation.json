@@ -1,0 +1,35 @@
+{
+  "binary_source": "68cc1ffcd5524a055e486e2a9648696802497146",
+  "fixture_sha256": "e7be955b8af66b7bb57316c14c470b3a0b0c954e718e5c7f3eb4701da25d2053",
+  "note": "Initial narrower filters did not select nested tests. These full-module runs are the authoritative module gates.",
+  "results": [
+    {
+      "name": "terminal-full-module",
+      "scope": "client::terminal::",
+      "exit_code": 0,
+      "seconds": 16.31,
+      "passed": 222,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "name": "context-full-module",
+      "scope": "context::",
+      "exit_code": 0,
+      "seconds": 0.102,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "name": "output-full-module",
+      "scope": "output::",
+      "exit_code": 0,
+      "seconds": 0.35,
+      "passed": 29,
+      "failed": 0,
+      "ignored": 1
+    }
+  ]
+}
+

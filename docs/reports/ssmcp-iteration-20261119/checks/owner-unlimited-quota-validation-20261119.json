@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "scope": "Verified unlimited account quota displayed consistently in terminal and portal",
+  "base_commit": "6510c2a2624ca0a656c3d14cd46e6771620d5955",
+  "tested_commit": "db1113208176b512fafd59e0f14b711b1cd29165",
+  "merged_main_commit": "d60ef8d29f8aa949d8fc90063148f8a76caaf7ba",
+  "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/89",
+  "implementation": {
+    "terminal": "Server-supplied explicit null limit and remaining quota fields display ∞ only after the response identity matches the selected stored credential.",
+    "portal": "The server unlimited quota panel displays ∞ and retains the accessible label 无限 and actual used-byte count.",
+    "unknown_quota": "Missing, malformed, partial, unavailable, and unauthenticated states never display ∞.",
+    "quota_enforcement_changed": false,
+    "ordinary_account_allowance_changed": false,
+    "administrator_resolution_changed": false
+  },
+  "production_policy_check": {
+    "service_active": true,
+    "owner_identity_matches_registered_github_subject": true,
+    "owner_account_banned": false,
+    "management_enabled": true,
+    "owner_subject_explicitly_configured": true,
+    "owner_registered_username_configured": false,
+    "owner_github_login_configured": false,
+    "owner_policy_unlimited_from_config": true,
+    "config_predates_current_process": true,
+    "configuration_mutated": false
+  },
+  "validation": {
+    "rustfmt_check_exit_code": 0,
+    "git_diff_check_exit_code": 0,
+    "checks": [
+      {
+        "filter": "client::account::status::tests::",
+        "exit_code": 0,
+        "elapsed_seconds": 108.963,
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "log_sha256": "83132bfaeafcc3d727f4aff46898aed06611d765e89fc7e28745481a5bcbcfef"
+      },
+      {
+        "filter": "portal::view::tests::",
+        "exit_code": 0,
+        "elapsed_seconds": 0.242,
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "log_sha256": "3c7f80ec3aaa05fee4630f28fced89d2cd16fe7c65e1eab632891f4dfdd10ad9"
+      },
+      {
+        "filter": "portal::dashboard_view::tests::",
+        "exit_code": 0,
+        "elapsed_seconds": 0.149,
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "log_sha256": "92124a290dd9a64d310114ffd75b2185b509189f672a65bb12a594afffa1bc5f"
+      },
+      {
+        "filter": "broker::traffic::tests::quota_administrator_is_only_the_server_policy_subject",
+        "exit_code": 0,
+        "elapsed_seconds": 0.161,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "log_sha256": "7ace2e6a069c190ccc79924b4cb61cd1ec36d8e4331498677b0e02755b361937"
+      }
+    ],
+    "total_passed": 24,
+    "total_failed": 0
+  },
+  "source_sha256": {
+    "src/portal/view.rs": "6d1108fa3aff4bf37f606dbc120da3f43945aaee7fe2cbf9d1cea3bc37279046",
+    "src/portal/dashboard_view.rs": "505dac717c11f0d4d4286c371cf3a9eb78a1d62c79b7bd841a187a48c64c6114",
+    "src/client/account/status.rs": "b023a971d3fa584b28a0fc96cfc0d8fe495c4b9246ae1ad764fd09c7776a0922",
+    "src/client/account/status/tests.rs": "37d55de6ec071f5d611abe36139f307f0fbc7aa50d84f93134d3b63a448af65f"
+  },
+  "publication_status": "Merged source; official release and deployment are recorded separately.",
+  "prior_checkpoint_record": "owner-unlimited-quota-checkpoint-20261119.json",
+  "recorded_at": "2026-11-19T16:09:44.796029+00:00"
+}

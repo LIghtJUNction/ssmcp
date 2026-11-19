@@ -1,0 +1,87 @@
+{
+  "status": "passed",
+  "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/79",
+  "script_commit": "d8834d5db06c9f59c74b519dd6c34266e5e848fc",
+  "migration_pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/76",
+  "migration_merge": "89fff78da062002f03c84cc8f08e67f932f741a7",
+  "native_job": "2c81a59e55df069f61ca2a9654d502c8-57",
+  "native_artifacts": "<private-path>/validation-20261119-contract",
+  "runtime_source_revision": "f5a8e8ac71636ea8e7b72486479cef69f3dc7f40",
+  "compiled_rust_revision": "2f0886a3035b134bd9ccd961185d22caa165edd9",
+  "binaries_sha256": {
+    "ssmcp": "95612ae14e7e5162499adc5a395a93c9b2f6943ac761666dbea6d79ee2edca96",
+    "fixture": "8cb745692ea787fff0996de1a04d03196e7ba53c1c4b5c1cc78f3362fc1044ab"
+  },
+  "scripts_sha256": {
+    "e2e_daemon.py": "d2c6bfe0c6d8a8cc15f07b672a6655037346d4839f193724487242374bbf066b",
+    "e2e.py": "b372f43652ec4e41979074aaf80a1b05ced12ae9d6acc4afdb2cd9f3c14112bf",
+    "e2e_account_gateway.py": "1493a84ed4b5d6bbf2d2603034ad858064ef15ab135aec15c5df659a7276dfcf"
+  },
+  "checks_passed": 182,
+  "stages": [
+    "setup",
+    "D01",
+    "D02",
+    "D03",
+    "D08",
+    "D12",
+    "D07",
+    "D06",
+    "D04",
+    "D09",
+    "D04-crash",
+    "D05",
+    "D10",
+    "D11",
+    "D05-retry-stop",
+    "D08-logs",
+    "D07-remove"
+  ],
+  "metrics": {
+    "websocket_reconnect_seconds": 2.439,
+    "observed_watchdog_wait_seconds": 2.348,
+    "native_crash_reconnect_seconds": 5.357,
+    "manual_stop_windows": [
+      {
+        "seconds": 2.75,
+        "samples": 21
+      },
+      {
+        "seconds": 2.75,
+        "samples": 21
+      }
+    ],
+    "unavailable_manager_injection": {
+      "changed_environment_keys": [
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS"
+      ],
+      "native_probe_exit_code": 1
+    },
+    "journal_runner_records": 154
+  },
+  "cleanup": {
+    "confirmed": true,
+    "errors": [],
+    "test_pid_present": false,
+    "temporary_parent_exists": false,
+    "systemctl_exit": 0,
+    "owned_unit_rows": []
+  },
+  "duration_seconds": 46.062,
+  "report_sha256": "322e79c4934d88b9093f18b28761fa8accad7163f2c71912eb4114789032449e",
+  "first_run": {
+    "path": "<private-path>/validation-initial.json",
+    "checks_passed": 41,
+    "failure": "Obsolete two-tool assertion; the current contract is exactly list, code_mode, collab, invite.",
+    "cleanup_confirmed": true
+  },
+  "final_evidence": "<private-path>/validation-final.json",
+  "readonly_review": "authorization_review reviewed targeted disconnect, identity-grant continuity, stale IDs, isolated credential files and log redaction; no further blocking issue identified.",
+  "limits": [
+    "This is the real Linux systemd user-manager lifecycle; macOS launchd and Windows Task Scheduler were not exercised.",
+    "The account WebSocket/router uses owned loopback HTTP and a synthetic upstream identity provider; public TLS termination and the external GitHub service were not exercised.",
+    "The tested runtime binaries remain the frozen source shown above; later main changes are not implied to have been included."
+  ],
+  "no_additional_builds_or_tests": true
+}

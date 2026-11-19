@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "scope": "Follow-up validation of the fixture fix for the failed v0.10.11 release gate",
+  "failure_record": "release-0.10.11-failure-20261119.json",
+  "failure_record_sha256": "11ede0da9fff0fca95e53cb794840ca69d8ff6c30f4b8783e472b8a1f1c63466",
+  "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/92",
+  "fix_commit": "0060b69d7f7b6feec47124794b390e375bcc33ab",
+  "merged_main_commit": "7438e615e2a5f4d777a499adffbda275ac09067b",
+  "changed_files": [
+    "tests/cc_backend.rs"
+  ],
+  "source_sha256": "5fbd3d16cbb85bb65f0ec9c4f1a9c4ae5bb06366978b6650feb8379fce51c956",
+  "implementation": "A process-local AtomicU64 sequence separates fixture directories even when parallel calls observe the same clock tick; exclusive creation and owned cleanup remain in place.",
+  "regression": "Two directories use the same supplied clock value, preserve independent contents, and deleting the first leaves the second intact.",
+  "validation": {
+    "source": "23d091c72deb6dbe7457dd09fa4f6799af8d45c1",
+    "production_parent": "d312cfa8036e433d7861782b4d928cee2320bc85",
+    "fixture_fix": "0060b69d7f7b6feec47124794b390e375bcc33ab",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--test",
+      "cc_backend"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 209.564,
+    "test_results": [
+      "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.17s"
+    ],
+    "passed": 6,
+    "failed": 0,
+    "ignored": 1,
+    "ignored_case": "Existing real_claude_backend_smoke requires an explicitly supplied official Claude Code executable.",
+    "actual_test_seconds": 1.17,
+    "elapsed_seconds_includes_package_cache_wait": true,
+    "log_sha256": "6c4504a8a20397abed4f3f064fc7fbccb53523b917ab02403d83c2223ce9d2d0",
+    "rustfmt_check_exit_code": 0,
+    "git_diff_check_exit_code": 0
+  },
+  "release_boundary": {
+    "failed_tag": "v0.10.11",
+    "tag_moved": false,
+    "failed_run_retried": false,
+    "new_release_dispatched": false,
+    "status": "Merged fix; waiting for the next coordinated release candidate."
+  },
+  "recorded_at": "2026-11-19T16:36:28.144291+00:00"
+}

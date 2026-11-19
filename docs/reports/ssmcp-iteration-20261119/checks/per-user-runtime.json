@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "repository": "LIghtJUNction/ssmcp",
+  "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/84",
+  "source_checkpoint": "117c63d4af508bb4913258a2b33c026d3afcc753",
+  "regression_checkpoint": "a61014ab82c1424df9a38ead4077c3bf251162b9",
+  "execution": {
+    "source_commit": "68e52bdd3ea779ee65d32d50db77678e0a6d1dc7",
+    "script_commit": "a61014ab82c1424df9a38ead4077c3bf251162b9",
+    "fixture_sha256": "a1e5d20cc43b24a2945e9ad459fb1d0ae3595a5370d62e01bc02aaf858527380",
+    "script_sha256": "976845cd9439d2fd28045b9e859b9cf5c93e2b3e2c8d3e78c1fd41ea05bf2ee2",
+    "started_utc": "2026-11-19T14:46:33Z",
+    "exit_code": 0,
+    "elapsed_seconds": 1.118,
+    "fixture_unchanged": true
+  },
+  "regression": {
+    "schema_version": 1,
+    "fixture_sha256": "a1e5d20cc43b24a2945e9ad459fb1d0ae3595a5370d62e01bc02aaf858527380",
+    "uids": [
+      65534,
+      65533
+    ],
+    "tests": [
+      {
+        "name": "fixture binary copy has the source checksum",
+        "passed": true
+      },
+      {
+        "name": "first UID creates a private output artifact",
+        "passed": true
+      },
+      {
+        "name": "second UID starts despite the first user's shared legacy root",
+        "passed": true
+      },
+      {
+        "name": "neither UID can read the other's private output",
+        "passed": true
+      },
+      {
+        "name": "UID 65534 directory and artifact retain private ownership",
+        "passed": true
+      },
+      {
+        "name": "UID 65533 directory and artifact retain private ownership",
+        "passed": true
+      },
+      {
+        "name": "legacy parent and existing user data are unchanged",
+        "passed": true
+      },
+      {
+        "name": "precreated foreign-owned private root is rejected without permission changes",
+        "passed": true
+      },
+      {
+        "name": "same PTY preserves the parent's descriptor flags",
+        "passed": true
+      },
+      {
+        "name": "foreign-owned inherited PTY accepts independent display writes",
+        "passed": true
+      },
+      {
+        "name": "different PTY preserves the parent's descriptor flags",
+        "passed": true
+      },
+      {
+        "name": "different controlling PTY is rejected without display writes",
+        "passed": true
+      },
+      {
+        "name": "all owned temporary files and PTYs are cleaned up",
+        "passed": true
+      }
+    ],
+    "success": true,
+    "elapsed_seconds": 0.972
+  },
+  "source_files": {
+    "src/output.rs": "4bd54979c6a4376d38894472e237cbebdc87984835db15cddcb353aae352a707",
+    "src/client/terminal.rs": "2b56859bb79c609841a8d162c0bdb88c61d1dd546a3cb0ec7d618621d6c0d722",
+    "src/runtime/capabilities.rs": "6c9a7908df098dc8f66ba3cc7acc3c149657d054bd64e24040e961ea357ff24e",
+    "scripts/test_multi_user_runtime.py": "976845cd9439d2fd28045b9e859b9cf5c93e2b3e2c8d3e78c1fd41ea05bf2ee2"
+  },
+  "changes": {
+    "unix_output_default": "/tmp/ssmcp-<effective-uid>",
+    "directory_mode": "0700",
+    "artifact_mode": "0600",
+    "legacy_reload": "A private one-use reload grant may retain the validated legacy directory and advertised artifact paths; ordinary new connections use the per-user root.",
+    "terminal_reopen": "Only permission-denied device-node reopening tries /dev/tty. The new descriptor must identify the current controlling session and foreground group; Linux additionally requires equal TIOCGDEV identity.",
+    "descriptor_flags": "The reopened output descriptor is independently nonblocking and close-on-exec. Inherited descriptors are never changed."
+  },
+  "validation_scope": {
+    "runtime": "Actual Linux kernel UID changes and newly allocated PTYs; no account creation or authenticated service login.",
+    "identities": [
+      65534,
+      65533
+    ],
+    "total_checks": 13,
+    "passed_checks": 13,
+    "compiled_by": "Coordinated integrated build; this subtask did not start Cargo.",
+    "private_fixture_cleanup_complete": true,
+    "shared_system_directory_changed": false,
+    "published_or_deployed": false,
+    "limitations": [
+      "The complete integrated release gates are tracked separately by the parent workflow.",
+      "The isolated cross-UID PTY regression ran on Linux; other platforms retain their existing output defaults or portable terminal checks."
+    ]
+  },
+  "merge": {
+    "pull_request": 84,
+    "reviewed_head": "a61014ab82c1424df9a38ead4077c3bf251162b9",
+    "main_squash_commit": "24a3fd74e1777d5447664d2557784acc60e09e67",
+    "reported_by": "root"
+  },
+  "integrated_tests": {
+    "source_commit": "68e52bdd3ea779ee65d32d50db77678e0a6d1dc7",
+    "reported_by": "root",
+    "output": {
+      "passed": 29,
+      "ignored": 1
+    },
+    "context": {
+      "passed": 8
+    },
+    "physical_output_normal_test": "passed",
+    "ignored_cross_uid_entry_points": "Both exercised by the independently recorded 13-check multi-user regression."
+  }
+}
