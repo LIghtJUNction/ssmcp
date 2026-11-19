@@ -6,7 +6,7 @@ ssmcp 把终端绘制、原生扩展接口和动态库加载拆成三个独立 R
 |---|---|---|---|
 | `crates/ztui` | `ztui-core = 0.1.1`，Rust 库名 `ztui` | 现有终端布局、文本行和差分帧 | [ztui](https://github.com/LIghtJUNction/ztui) |
 | `crates/zharness` | `zharness = 0.5.0` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
-| `crates/zplugin` | `zplugin = 0.3.0` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
+| `crates/zplugin` | `zplugin = 0.3.0`（[源码候选](reports/zplugin-consumer-20261120/README.zh-CN.md)） | 经 zsys 0.1.1 加载显式指定的本机动态库，并校验 ABI | [zplugin](https://github.com/LIghtJUNction/zplugin) |
 
 zharness 和 zplugin 的 Git 提交由父仓库的 gitlink 固定；`.gitmodules` 只记录这两个公开仓库地址。ztui-core 保留父仓库中的普通源码目录及主线已有的 0.1.1 版本；当前独立 ztui 仓库仍为 0.1.0，因此本轮不把它改成会降版的子模块。两份终端运行时源码、测试、示例和基准一致，后续版本对齐后再迁移其源码来源。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
 

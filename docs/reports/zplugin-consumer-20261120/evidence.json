@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "status": "source-only; pending matching published zplugin and zharness",
+  "recorded_at_utc": "2026-11-19T21:59:30.561989+00:00",
+  "base_ssmcp_commit": "b43cf1f38bff28b04947fc82178bd7c26cbeb627",
+  "zplugin_source_commit": "a3b0ae802cb039c073194c1ddcf290f28bbbbea6",
+  "zplugin_source_version": "0.3.0",
+  "zharness_source_commit": "84e370450f1d047d43119bf81caf73f742ba6b0a",
+  "lock_packages": [
+    {
+      "name": "zharness",
+      "version": "0.5.0",
+      "dependencies": [
+        "zcall",
+        "zplugin"
+      ]
+    },
+    {
+      "name": "zplugin",
+      "version": "0.3.0",
+      "dependencies": [
+        "zplugin-macros",
+        "zsys"
+      ]
+    },
+    {
+      "name": "zplugin-macros",
+      "version": "0.3.0",
+      "dependencies": [
+        "proc-macro2",
+        "quote",
+        "syn 2.0.119"
+      ]
+    },
+    {
+      "name": "zsys",
+      "version": "0.1.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "929d282f08df7fbe2456414924e126a29dfde04e93eb2515721b596404610548"
+    }
+  ],
+  "cargo_lock_sha256": "33dfb5718a3d4fea7db94bad66648ea3bc5d04c0ba7a9cdb9440037996cbef33",
+  "checks": {
+    "cargo_resolve": {
+      "command": [
+        "cargo",
+        "update",
+        "--offline",
+        "-p",
+        "zplugin"
+      ],
+      "exit_code": 0,
+      "new_packages": [
+        "zsys 0.1.1"
+      ],
+      "metadata_only_wrapper_env": {
+        "RUSTC_WRAPPER": ""
+      },
+      "global_config_changed": false,
+      "crate_compilation": false
+    },
+    "python_release_tests": {
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_release.py"
+      ],
+      "passed": 70,
+      "exit_code": 0
+    },
+    "source_registry_dependencies": [
+      [
+        "zplugin",
+        "0.3.0"
+      ],
+      [
+        "zharness",
+        "0.5.0"
+      ]
+    ],
+    "rust_integration": "pending; this source-only candidate was not compiled"
+  },
+  "upstream_release": {
+    "url": "https://github.com/LIghtJUNction/zplugin/actions/runs/44621346286",
+    "head_sha": "a3b0ae802cb039c073194c1ddcf290f28bbbbea6",
+    "conclusion": "failure",
+    "completed_at_utc": "2026-11-19T21:44:09Z",
+    "publish": "skipped",
+    "failed_jobs": [
+      {
+        "id": 135903676934,
+        "step": 6,
+        "platform": "Wasm Rust 1.95 host / stable guest"
+      },
+      {
+        "id": 135903677285,
+        "step": 8,
+        "platform": "Ubuntu stable"
+      },
+      {
+        "id": 135903677006,
+        "step": 8,
+        "platform": "macOS stable"
+      },
+      {
+        "id": 135903677356,
+        "step": 8,
+        "platform": "Windows stable"
+      }
+    ],
+    "common_error": "error[E0463]: can't find crate for zplugin at examples/wasm/guest.rs:4:5; scripts/wasm.py:49"
+  },
+  "publication_blockers": [
+    "zplugin 0.3.1 official release was not published by the failed run",
+    "zharness 0.5.0 requires zplugin =0.3.0",
+    "updated path source remains version 0.3.0 and must not be treated as identical to the old registry package"
+  ]
+}
