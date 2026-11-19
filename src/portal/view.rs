@@ -45,7 +45,6 @@ pub(super) fn page(title: &str, body: &str) -> String {
   </nav>
 </header>
 <main class="container" id="content">{body}</main>
-<footer class="site-footer container"><p class="footer-brand">ssmcp<span>本机工具 · MCP 接入</span></p><p>HTTPS 接入 · GitHub 身份验证 · MCP 工具调用</p><a href="https://github.com/LIghtJUNction/ssmcp">开源代码 ↗</a></footer>
 </body>
 </html>"##,
         escape(title)
