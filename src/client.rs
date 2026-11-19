@@ -1665,7 +1665,7 @@ async fn register_ssh(
         None => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
             return Err(
-                "SSH disconnected before registration; check the SSH key, host key, server setup, and matching ssmcp/ssmcpd versions".into()
+                "Account relay disconnected before registration; check the server connection and preceding relay error".into()
             );
         }
         _ => {
@@ -2192,7 +2192,9 @@ async fn connect(
     let exit_message = terminal::take_exit_message().or(pending_logout_message);
     drop(display_session);
     if let Some(message) = exit_message {
-        render::status("account", "Result", &message);
+        // Print the complete safe outcome after restoring the terminal.
+        // Status rows clip long messages and can hide revocation failures.
+        eprintln!("{message}");
     }
     render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {

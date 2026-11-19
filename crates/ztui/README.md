@@ -8,7 +8,7 @@ ztui 是 Project Z 的文本 TUI 基础库。它只负责显示单元几何、�
 
 ~~~toml
 [dependencies]
-ztui = { package = "ztui-core", version = "=0.1.0" }
+ztui = { package = "ztui-core", version = "=0.1.2" }
 ~~~
 
 ## 接口与职责
