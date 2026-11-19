@@ -1051,6 +1051,7 @@ mod tests {
             "ssmcp.ui.questions",
             "ssmcp.ui.history",
             "ssmcp.ui.harness",
+            "ssmcp.ui.listener",
             "ssmcp.ui.messages",
             "ssmcp.client.capabilities",
             "ssmcp.resources.list",
