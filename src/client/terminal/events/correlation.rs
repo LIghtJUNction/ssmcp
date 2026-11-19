@@ -144,6 +144,7 @@ impl Kind {
 
 #[derive(Default)]
 pub(super) struct Meta {
+    pub(super) scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
     pub(super) kind: Kind,
     pub(super) user: bool,
     pub(super) author: String,
@@ -305,6 +306,14 @@ impl Meta {
         }
     }
 
+    pub(super) fn same_source(&self, other: &Self) -> bool {
+        match (&self.scope, &other.scope) {
+            (Some(left), Some(right)) => left.same_call(right),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     pub(super) fn merge(&mut self, other: Self) {
         // A correlated mixed operation is not a standalone read observation.
         if self.read != other.read {
@@ -343,6 +352,13 @@ impl Meta {
 
     pub(super) fn bytes(&self) -> usize {
         self.author.len()
+            + self.scope.as_ref().map_or(0, |scope| {
+                std::mem::size_of::<crate::runtime::call_scope::CallScope>()
+                    + scope.run_id().map_or(0, str::len)
+                    + scope
+                        .attribution()
+                        .map_or(0, crate::wire::ControlAttribution::bytes)
+            })
             + self.keys.iter().map(String::len).sum::<usize>()
             + self
                 .read
