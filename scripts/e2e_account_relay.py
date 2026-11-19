@@ -294,6 +294,10 @@ class Handler(BaseHTTPRequestHandler):
                 "expires_in": 600, "interval": 1})
         if self.path == "/api/client/login/poll":
             assert body["device_code"] == self.state.device_code
+            if self.state.logged_out:
+                # A foreground account client may offer one new authorization.
+                # The user declines it here; never mint the revoked token again.
+                return self.respond(200, {"status": "denied"})
             if self.state.pending_polls:
                 self.state.pending_polls -= 1
                 return self.respond(200, {"status": "pending"})
@@ -553,12 +557,15 @@ class Harness:
         self.connection("A logout")
         owned = descendants(live.pid)
         before = self.state.connect_attempts[self.state.account_token]
+        authorizations = self.state.requests.count(("POST", "/api/client/login/start"))
         self.cli("A", "logout", "--json")
         live.wait(timeout=8)
         wait_for(lambda: all(not process_running(pid) for pid in owned), "logout process cleanup")
         self.check(live.returncode != 0
                    and self.state.connect_attempts[self.state.account_token] == before,
-                   "logout revokes its live authenticated session without watchdog retries")
+                   "logout revokes its live session and declined authorization cannot reconnect it")
+        self.check(self.state.requests.count(("POST", "/api/client/login/start")) == authorizations + 1,
+                   "a foreground account session offers at most one fresh authorization after revocation")
         self.check(not credential_file.exists() and self.state.logged_out,
                    "logout revokes and removes the selected origin's account credential")
         self.check(not self.state.errors and not self.foreign.errors,
