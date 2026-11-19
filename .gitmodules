@@ -1,6 +1,3 @@
-[submodule "ztui"]
-	path = crates/ztui
-	url = https://github.com/LIghtJUNction/ztui.git
 [submodule "zharness"]
 	path = crates/zharness
 	url = https://github.com/LIghtJUNction/zharness.git

@@ -840,7 +840,7 @@ async fn effective_skills(
         .map_err(|error| error.to_string())?,
     );
     let result = json!({
-        "root":origin(&roots[0]),"roots":roots.iter().map(|root| origin(root)).collect::<Vec<_>>(),
+        "root":origin(roots[0]),"roots":roots.iter().map(|root| origin(root)).collect::<Vec<_>>(),
         "scope":"effective","sources":sources,"diagnostics":diagnostics,
         "total":effective.len(),"truncated":truncated,"snapshot":fingerprint,
         "boundary":boundary(),

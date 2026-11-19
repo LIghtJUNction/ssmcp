@@ -101,7 +101,10 @@ def registry_dependencies(root=None):
         with path.open("rb") as stream:
             local[name] = tomllib.load(stream)
         package = local[name]["package"]
-        if package["name"] != name or package["version"] != release_version:
+        source_version = package.get("version")
+        if source_version == {"workspace": True}:
+            source_version = local[name].get("workspace", {}).get("package", {}).get("version")
+        if package["name"] != name or source_version != release_version:
             raise ValueError(f"{name} source and exact dependency version differ")
         result.append((name, release_version))
     if "zharness" in local:

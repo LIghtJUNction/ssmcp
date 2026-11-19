@@ -149,7 +149,7 @@ ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行�
 
 ## 独立核心库
 
-[ztui](https://github.com/LIghtJUNction/ztui)、[zharness](https://github.com/LIghtJUNction/zharness) 和 [zplugin](https://github.com/LIghtJUNction/zplugin) 作为固定 Git 子模块和实际 Rust 依赖参与构建，分别承担终端帧、扩展接口和本机动态库加载。它们独立维护版本，不启动模型或外部 harness。源码构建请使用 `git clone --recurse-submodules`；已有 checkout 使用 `git submodule update --init --recursive`。[依赖与协同开发](docs/dependencies.md)
+[ztui](https://github.com/LIghtJUNction/ztui)、[zharness](https://github.com/LIghtJUNction/zharness) 和 [zplugin](https://github.com/LIghtJUNction/zplugin) 作为固定源码的 Rust 依赖参与构建，分别承担终端帧、扩展接口和本机动态库加载。ztui-core 保留本仓库的 0.1.1 源码目录；zharness 与 zplugin 使用固定 Git 子模块。它们独立维护版本，不启动模型或外部 harness。源码构建请使用 `git clone --recurse-submodules`；已有 checkout 使用 `git submodule update --init --recursive`。[依赖与协同开发](docs/dependencies.md)
 
 ## 客户端掌握能力，服务端负责连接
 
