@@ -223,6 +223,18 @@ struct Lease {
     attempt: Attempt,
 }
 
+impl Drop for Lease {
+    fn drop(&mut self) {
+        // A concurrent fork can retain the same open file description until
+        // exec. Release our lock explicitly before closing this descriptor.
+        while let Err(error) = self.file.unlock() {
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
+}
+
 impl Lease {
     fn save(&mut self) -> Result<(), Error> {
         let bytes = serde_json::to_vec(&self.attempt)
@@ -247,8 +259,9 @@ impl Lease {
     }
 }
 
-// The OS releases this lock on every exit path. The same file covers linked
-// worktrees and other ssmcp clients; no background network requests overlap.
+// The guard explicitly unlocks every exit after acquisition, including cache
+// read failures and not-yet-due returns. The common file coordinates linked
+// worktrees and other ssmcp clients so their background fetches do not overlap.
 fn acquire(
     common: &Path,
     target: &Target,
@@ -264,7 +277,7 @@ fn acquire(
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
     }
-    let mut file = options
+    let file = options
         .open(common.join("ssmcp-fetch.json"))
         .map_err(|_| Error::Failed("Git fetch coordination is unavailable"))?;
     if !file
@@ -278,8 +291,17 @@ fn acquire(
         Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
         Err(_) => return Err(Error::Failed("Git fetch coordination is unavailable")),
     }
+    let mut lease = Lease {
+        file,
+        attempt: Attempt {
+            target: target.clone(),
+            unix_seconds: now,
+            retry_seconds: interval,
+            failures: 0,
+        },
+    };
     let mut bytes = Vec::new();
-    (&mut file)
+    (&mut lease.file)
         .take(4097)
         .read_to_end(&mut bytes)
         .map_err(|_| Error::Failed("Git fetch schedule is unreadable"))?;
@@ -293,19 +315,10 @@ fn acquire(
     {
         return Ok(None);
     }
-    let failures = old
+    lease.attempt.failures = old
         .as_ref()
         .filter(|v| v.target == *target)
         .map_or(0, |v| v.failures);
-    let mut lease = Lease {
-        file,
-        attempt: Attempt {
-            target: target.clone(),
-            unix_seconds: now,
-            retry_seconds: interval,
-            failures,
-        },
-    };
     lease.save()?;
     Ok(Some(lease))
 }
@@ -673,6 +686,36 @@ mod tests {
         assert!(acquire(&directory.0, &target, 300, 1900).unwrap().is_some());
         std::fs::write(directory.0.join("ssmcp-fetch.json"), "{torn").unwrap();
         assert!(acquire(&directory.0, &target, 300, 2000).unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn periodic_fetch_unlocks_even_when_another_descriptor_survives() {
+        fn return_with_error(lease: Lease) -> Result<(), Error> {
+            let _held = lease;
+            Err(Error::Failed("fixture early return"))
+        }
+
+        for early_return in [false, true] {
+            let directory = Directory::new();
+            let target = Target {
+                remote: "origin".into(),
+                source: "refs/heads/main".into(),
+                destination: "refs/remotes/origin/main".into(),
+            };
+            let mut lease = acquire(&directory.0, &target, 300, 1000).unwrap().unwrap();
+            // try_clone retains the same Unix open file description, just as
+            // an inherited descriptor does before the child reaches exec.
+            let retained = lease.file.try_clone().unwrap();
+            if early_return {
+                assert!(return_with_error(lease).is_err());
+            } else {
+                lease.finish(true, 300).unwrap();
+                drop(lease);
+            }
+            assert!(acquire(&directory.0, &target, 300, 2000).unwrap().is_some());
+            drop(retained);
+        }
     }
 
     #[cfg(target_os = "linux")]

@@ -43,7 +43,7 @@ impl Default for GitSettings {
 }
 
 impl GitSettings {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.fetch_interval_seconds != 0 && !(60..=86_400).contains(&self.fetch_interval_seconds)
         {
             return Err("git fetch interval must be 0 (disabled) or 60..86400 seconds".into());
