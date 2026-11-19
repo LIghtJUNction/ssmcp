@@ -295,6 +295,7 @@ struct Document {
     ui: Ui,
     client: super::config::ClientSettings,
     browser: super::config::BrowserSettings,
+    git: super::config::GitSettings,
 }
 
 impl Ui {
@@ -304,6 +305,7 @@ impl Ui {
             toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
         doc.client.validate().map_err(|error| error.to_string())?;
         doc.browser.validate().map_err(|error| error.to_string())?;
+        doc.git.validate().map_err(|error| error.to_string())?;
         doc.ui.validate()?;
         Ok(doc.ui)
     }
@@ -581,11 +583,11 @@ mod tests {
         assert_eq!(old.colors.accent, "#123456");
     }
     #[test]
-    fn combined_ui_client_and_browser_config_loads_for_startup() {
+    fn combined_ui_client_browser_and_git_config_loads_for_startup() {
         let entry = std::env::temp_dir().join("ssmcp-ui-browser-fixture.js");
         let entry = serde_json::to_string(entry.to_str().unwrap()).unwrap();
         let text = format!(
-            "[ui]\ncolor = false\ntheme = 'nord'\n[client]\nserver = 'https://relay.example'\n[browser]\nplaywright_mcp = {entry}\nbackground = true\n"
+            "[ui]\ncolor = false\ntheme = 'nord'\n[client]\nserver = 'https://relay.example'\n[browser]\nplaywright_mcp = {entry}\nbackground = true\n[git]\nfetch_interval_seconds = 300\n"
         );
         let ui = Ui::parse(&text).unwrap();
         assert_eq!(ui.theme, Theme::Nord);
@@ -601,6 +603,22 @@ mod tests {
         let loaded = loaded.unwrap();
         assert_eq!(loaded.theme, Theme::Nord);
         assert!(!loaded.color);
+    }
+
+    #[test]
+    fn git_settings_keep_their_validation_in_ui_configuration() {
+        for seconds in [0, 60, 300, 86_400] {
+            let text =
+                format!("[ui]\nlog_format = 'jsonl'\n[git]\nfetch_interval_seconds = {seconds}\n");
+            assert_eq!(Ui::parse(&text).unwrap().log_format, LogFormat::Jsonl);
+        }
+        for value in ["1", "59", "86401", "'secret-value'", "true"] {
+            let text = format!("[git]\nfetch_interval_seconds = {value}\n");
+            let error = Ui::parse(&text).unwrap_err();
+            assert!(!error.contains("secret-value"), "{error}");
+        }
+        assert!(Ui::parse("[git]\nfetch_intervla = 'secret-value'\n").is_err());
+        Ui::parse(include_str!("../../packaging/ssmcp-client.toml.example")).unwrap();
     }
 
     #[test]

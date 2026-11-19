@@ -639,7 +639,7 @@ mod tests {
         let mut snapshot = quota_snapshot(Some(traffic));
         snapshot.is_admin = true;
         let html = sessions(&snapshot, "csrf");
-        assert!(html.contains("<dt>流量额度</dt><dd>无限</dd>"));
+        assert!(html.contains(r#"<dt>流量额度</dt><dd aria-label="无限">∞</dd>"#));
         assert!(html.contains(r#"title="2000000000 字节">2 GB</dd>"#));
         assert!(!html.contains("购买流量包"));
         assert!(!html.contains("本月流量已用完"));
@@ -656,6 +656,7 @@ mod tests {
         let unavailable = sessions(&quota_snapshot(None), "csrf");
         assert!(!unavailable.contains("<h2>账户流量</h2>"));
         assert!(!unavailable.contains("无限"));
+        assert!(!unavailable.contains('∞'));
         assert!(!unavailable.contains("购买流量包"));
     }
 }

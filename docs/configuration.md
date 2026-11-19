@@ -58,6 +58,33 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 | 命令执行与并行任务 | [命令指南](commands.md) |
 | 本机后台会话 | [会话](session-service.md) |
 
+<a id="background-git-fetch"></a>
+
+## 定时 Git fetch
+
+每条已建立的工作区连接都会启动 Git 观察与 fetch 调度，独立于界面。交互式 TUI、`--log-format jsonl`、重定向输出以及后台会话使用相同设置；结束连接时停止调度并回收本连接启动的 fetch 进程。
+
+```sh
+ssmcp config get git-fetch-interval
+ssmcp config set git-fetch-interval 300
+ssmcp config set git-fetch-interval 0
+```
+
+`git-fetch-interval` 的默认值为 **300 秒**，允许 **60–86400 秒**，**0** 关闭后台 fetch。也可在 `ssmcp config path` 指向的 TOML 文件中设置：
+
+```toml
+[git]
+fetch_interval_seconds = 300
+```
+
+客户端在**建立新连接时**读取此设置。已有连接继续使用启动时的值；重连或重新启动后采用新值，F5 的界面配置重载不会修改 fetch 间隔。`SSMCP_CLIENT_CONFIG` 可指定另一份配置文件。
+
+调度启动后先检查一次，再按所设间隔检查。每次读取当前分支的已配置 upstream，只获取该远端分支并更新其远端跟踪引用。分离 HEAD、未配置 upstream 或 upstream 指向本地分支时跳过。fetch 保留本地 HEAD、索引、工作区、标签及手动操作的 `FETCH_HEAD`。
+
+同一仓库及其 linked worktree 通过 Git 公共目录内的锁与时间记录协调，跳过同一目标尚未到期的重复请求。单次 fetch 最多 30 秒，失败后按次数增加等待时间；达到 `max(所设间隔, 1800 秒)` 后保持该等待上限。它使用已有的非交互式凭据，凭据失效或网络失败会结束本次尝试；交互界面的 Git 面板显示等待、获取中、已更新或失败状态。
+
+实现与本地回归：[连接生命周期](../src/client.rs) · [fetch 调度与锁](../src/client/git_status/fetch.rs) · [无终端账户连接测试](../scripts/e2e_periodic_git_fetch.py)。
+
 <a id="troubleshooting"></a>
 
 ## 常见问题
