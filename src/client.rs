@@ -21,6 +21,7 @@ mod handoff;
 mod highlight;
 pub(crate) mod input;
 pub(crate) mod interface;
+mod link_metrics;
 mod panel;
 pub(crate) mod presentation;
 #[cfg(test)]
@@ -1722,10 +1723,17 @@ async fn connect(
             _ = terminate.recv() => {},
         }
     };
+    let mut metric_channel = None;
     let registration = register_ssh(
         &metadata,
         registered,
-        || relay::command(&executable, server, credential),
+        || {
+            let mut command = relay::command(&executable, server, credential);
+            if ui.dashboard && ui.log_format != render::LogFormat::Jsonl {
+                metric_channel = link_metrics::prepare(&mut command);
+            }
+            command
+        },
         cancelled,
         Duration::from_secs(120),
     )
@@ -1765,6 +1773,9 @@ async fn connect(
             .map(|credential| (credential.server.as_str(), credential.token.as_str()))
     });
     let mut incoming = Incoming::start(reader);
+    let _link_metrics = display_session
+        .as_ref()
+        .and_then(|_| link_metrics::observe(metric_channel, &client_id, incoming.closed.clone()));
     render::status(
         "shell",
         "Progress",
