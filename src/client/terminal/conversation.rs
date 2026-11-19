@@ -2443,6 +2443,34 @@ impl State {
         }
     }
 
+    /// Derive the caption from the same state used by keyboard routing.
+    /// It is not a separate mode that can drift away from the active editor.
+    fn chat_mode_label(&self, width: u16) -> &'static str {
+        let (full, compact) = if self.selection {
+            ("Select · F7/Esc back", "Select")
+        } else if self.help
+            || self.conversation.content_focus
+            || (self.conversation.view == View::Questions && !self.conversation.detail)
+        {
+            ("Browse", "Browse")
+        } else if self.conversation.view == View::Questions {
+            ("Edit answer", "Answer")
+        } else if self.conversation.recalling.is_some() {
+            ("Edit · recall pending", "Edit · recall")
+        } else if self.conversation.editing.is_some() {
+            ("Edit queue · Enter sends", "Edit queue")
+        } else if self.conversation.submitting.is_some() {
+            ("Edit next · queue pending", "Edit · pending")
+        } else {
+            ("Edit", "Edit")
+        };
+        if full.width() <= usize::from(width) {
+            full
+        } else {
+            compact
+        }
+    }
+
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
@@ -2639,18 +2667,25 @@ impl State {
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g) && g.input_rows > 0 {
-                let title = if self.conversation.view == View::Questions {
-                    format!(" Answer · {label} ")
-                } else if self.conversation.editing.is_some() {
-                    format!(" Editing · {label} ")
+                let width = g.left.saturating_sub(4);
+                let mode = self.chat_mode_label(width);
+                let context = if self.conversation.view == View::Questions
+                    || self.conversation.editing.is_some()
+                {
+                    label.clone()
                 } else if self.conversation.target.is_some() {
-                    format!(" To · {label} ")
+                    format!("To {label}")
                 } else if pending > 0 {
-                    format!(" {pending} queued · /queue ")
+                    format!("{pending} queued · /queue")
                 } else {
                     String::new()
                 };
-                let title = fit(title.trim(), g.left.saturating_sub(4));
+                let title = if context.is_empty() {
+                    mode.to_owned()
+                } else {
+                    format!("{mode} · {context}")
+                };
+                let title = fit(&title, width);
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
                 let detail = if g.left == g.cols {
                     let [account, remaining] = self.account.rows();
@@ -2822,6 +2857,121 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
+    }
+
+    fn mode_divider(state: &mut State) -> String {
+        let row = usize::from(prompt_top(state.geometry));
+        display(state)
+            .screen()
+            .contents()
+            .lines()
+            .nth(row)
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
+    fn composer_mode_follows_focus_selection_and_help_keys() {
+        for width in [24, 96] {
+            let mut state = preview(18, width);
+            input(&mut state, "draft 界".as_bytes());
+            input(&mut state, b"\x1b[D");
+            let saved = state.chat_saved_draft();
+            assert!(mode_divider(&mut state).trim_start().starts_with("Edit"));
+            input(&mut state, b"\t");
+            assert!(state.conversation.content_focus);
+            assert!(mode_divider(&mut state).trim_start().starts_with("Browse"));
+            input(&mut state, b"\x1b[18~");
+            assert!(state.selection);
+            assert!(!state.chat_frame(Instant::now()).mouse_capture);
+            assert!(mode_divider(&mut state).trim_start().starts_with("Select"));
+            input(&mut state, b"ignored");
+            assert_eq!(state.chat_saved_draft(), saved);
+            state.chat_key(Key::Escape);
+            assert!(!state.selection);
+            assert!(state.conversation.content_focus);
+            assert!(mode_divider(&mut state).trim_start().starts_with("Browse"));
+            state.chat_key(Key::Escape);
+            assert!(!state.conversation.content_focus);
+            assert!(mode_divider(&mut state).trim_start().starts_with("Edit"));
+            assert_eq!(state.chat_saved_draft(), saved);
+            input(&mut state, b"x");
+            assert_eq!(state.conversation.composer.text(), "draft x界");
+            state.chat_key(Key::Help);
+            assert!(mode_divider(&mut state).trim_start().starts_with("Browse"));
+            input(&mut state, b"y");
+            assert!(!state.help && !state.conversation.content_focus);
+            assert_eq!(state.conversation.composer.text(), "draft xy界");
+            assert!(mode_divider(&mut state).trim_start().starts_with("Edit"));
+            input(&mut state, b"\x1b[18~");
+            state.chat_key(Key::Escape);
+            assert!(!state.conversation.content_focus);
+            assert!(mode_divider(&mut state).trim_start().starts_with("Edit"));
+        }
+    }
+
+    #[test]
+    fn composer_mode_tracks_recall_ack_edit_and_publish_ack() {
+        let mut state = preview(20, 100);
+        state.chat_recall_started("held".into());
+        assert!(mode_divider(&mut state).contains("Edit · recall pending"));
+        input(&mut state, b"next draft");
+        state.chat_editable("held".into(), "original".into(), None);
+        assert!(mode_divider(&mut state).contains("Edit queue · Enter sends"));
+        assert!(!state.conversation.content_focus);
+        assert!(state.conversation.recalling.is_none());
+        assert_eq!(
+            state.conversation.parked.as_ref().unwrap().text,
+            "next draft"
+        );
+        input(&mut state, b"\x03amended");
+        assert_eq!(state.conversation.editing.as_deref(), Some("held"));
+        assert_eq!(state.conversation.composer.text(), "amended");
+        state.chat_enqueued("held".into(), "amended".into());
+        assert!(mode_divider(&mut state).contains("Edit next · queue pending"));
+        assert_eq!(state.conversation.composer.text(), "next draft");
+        input(&mut state, b" stays");
+        let next = state.chat_saved_draft();
+        state.chat_accepted("held".into(), "amended".into());
+        assert_eq!(state.chat_saved_draft(), next);
+        assert!(state.conversation.submitting.is_none());
+        let divider = mode_divider(&mut state);
+        assert!(divider.trim_start().starts_with("Edit"));
+        assert!(!divider.contains("pending") && !divider.contains("Enter sends"));
+    }
+
+    #[test]
+    fn composer_mode_stays_visible_in_narrow_question_and_unicode_frames() {
+        for width in [12, 24, 48] {
+            let mut state = preview(8, width);
+            state.conversation.composer.set_text("保留草稿与光标");
+            state.conversation.composer.left();
+            state.conversation.target = Some("界".repeat(80));
+            let saved = state.chat_saved_draft();
+            state.conversation.editing = Some("held".into());
+            let divider = mode_divider(&mut state);
+            assert!(divider.trim_start().starts_with("Edit"));
+            assert!(divider.width() <= usize::from(width));
+            assert_eq!(state.chat_saved_draft(), saved);
+            let frame = state.chat_frame(Instant::now());
+            assert_eq!(frame.rows.len(), 8);
+            assert!(frame.cursor.0 > prompt_top(state.geometry) && frame.cursor.0 < 7);
+            state.conversation.view = View::Questions;
+            state.conversation.detail = false;
+            state.conversation.content_focus = false;
+            assert!(mode_divider(&mut state).trim_start().starts_with("Browse"));
+            state.conversation.detail = true;
+            state.conversation.question_id = Some("answer".into());
+            let mut answer = Composer::default();
+            answer.set_text("回答");
+            state.conversation.answers.insert("answer".into(), answer);
+            assert!(mode_divider(&mut state).contains(if width < 16 {
+                "Answer"
+            } else {
+                "Edit answer"
+            }));
+            assert_eq!(state.chat_saved_draft(), saved);
+        }
     }
 
     fn command_panel_fixture(rows: u16, cols: u16) -> State {
