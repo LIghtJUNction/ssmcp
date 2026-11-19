@@ -140,6 +140,8 @@ include = [
     "/docs/commerce.md",
     "/docs/deployment.md",
     "/docs/oauth-durability.md",
+    "/docs/public-frontend.md",
+    "/packaging/ssmcp-frontend.service",
     "/docs/validation.md",
     "/docs/validation-portal.md",
     "/docs/portal-console.md",

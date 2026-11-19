@@ -3,6 +3,7 @@ mod assets;
 mod commerce;
 mod dashboard;
 mod dashboard_view;
+pub mod frontend;
 mod guide;
 mod sessions;
 mod setup;
@@ -47,6 +48,7 @@ type DigestKey = [u8; 32];
 
 #[derive(Default)]
 pub struct Portal {
+    frontend: Option<frontend::Endpoint>,
     browser: Mutex<BrowserState>,
     setup: Mutex<setup::SetupState>,
     store: Option<Arc<Mutex<Store>>>,
@@ -276,12 +278,19 @@ fn set_cookie(response: &mut Response, value: &str, ttl: u64) {
 }
 
 impl Portal {
+    /// Optional public renderer. Account state and all mutating routes remain here.
+    pub fn configure_public_frontend(&mut self, socket: PathBuf) -> crate::Result<()> {
+        self.frontend = Some(frontend::Endpoint::new(socket)?);
+        Ok(())
+    }
+
     /// Opt-in durable portal storage. Startup fails if permissions, format or locking are unsafe.
     pub fn open(path: &Path) -> crate::Result<Self> {
         let store = Store::open(path)?;
         let persisted = sessions::Sessions::open(path)?;
         let active = persisted.restore(crate::management::now());
         Ok(Self {
+            frontend: None,
             browser: Mutex::new(BrowserState {
                 sessions: active,
                 persisted: Some(persisted),

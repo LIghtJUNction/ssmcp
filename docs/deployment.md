@@ -2,9 +2,13 @@
 
 服务器部署 OpenSSH、`ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp`，需要调用某个 Harness 时再安装和配置它。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
 
-服务器已经部署好时，可直接阅读 [配置、SSH 公钥与登录](configuration.md)：复用 `~/.ssh/config`、添加和轮换公钥、完成 OAuth 登录，以及处理重新打开后的授权状态。
+当前客户端通过 HTTPS/WSS 接入核心；受控端可以使用 `--allow 用户名@服务器` 明确授权，控制端仍须完成账户 OAuth 与访问控制检查。已登录的受控端省略 `--allow` 时只允许自己。接入步骤见[配置与登录](configuration.md)。
 
-当前实现使用内部 wire v7，对外提供 `list`、`code_mode`、`collab` 和 `invite` 四个 MCP 工具。客户端始终提供 shell 和独立命令，并自动发现 PATH 中的编程 harness。客户端与服务端须支持同一 wire v7；登录码仍可用于原有连接路径；`--allow 用户名@github` 需要两端支持，并在服务端配置 GitHub OAuth。核心进程重启仍会中断当前传输连接。配置 OAuth 持久目录后，DCR 登记和有效账户授权保留原来的到期时间及撤销状态；参见[授权持久化](oauth-durability.md)。
+客户端始终提供 shell 和独立命令，并发现已配置的执行 harness。当前用户接入流程已移除 invite/join 命令；本文早期版本的 SSH 与登录码部署小节仅作历史迁移参考，不是当前客户端启动方式。核心进程重启仍会中断当前传输连接。配置 OAuth 持久目录后，DCR 登记和有效账户授权保留原来的到期时间及撤销状态；参见[授权持久化](oauth-durability.md)。
+
+## 稳定核心与可替换公共前端
+
+当前提供独立 `ssmcp-frontend` 进程处理公开指南和已知静态资产；OAuth、动态账户逻辑、计费和设备 WebSocket 留在核心。首次配置需要核心加载一次新设置，之后公共前端更新可只替换 worker。具体边界、权限、故障回退和维护步骤见[公共前端](public-frontend.md)。
 
 ## 标准账号部署与旧配置迁移
 
