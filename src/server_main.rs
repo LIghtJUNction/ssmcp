@@ -103,6 +103,8 @@ struct PortalConfig {
     admin_github_users: Vec<String>,
     admin_usernames: Vec<String>,
     default_rate_limit_bps: u64,
+    free_user_monthly_traffic_bytes: u64,
+    paid_user_monthly_traffic_bytes: u64,
     owner_mappings: HashMap<String, String>,
     audit_dir: Option<PathBuf>,
     audit_retention_days: u32,
@@ -119,6 +121,8 @@ impl Default for PortalConfig {
             admin_github_users: Vec::new(),
             admin_usernames: Vec::new(),
             default_rate_limit_bps: ssmcp::user_policy::DEFAULT_RATE_LIMIT_BPS,
+            free_user_monthly_traffic_bytes: ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES,
+            paid_user_monthly_traffic_bytes: ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES,
             owner_mappings: HashMap::new(),
             audit_dir: None,
             audit_retention_days: audit.retention_days,
@@ -445,6 +449,12 @@ fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
             "portal.default_rate_limit_bps must be in 1..=1073741824 bytes per second".into(),
         );
     }
+    if portal.state_dir.is_none()
+        && (portal.free_user_monthly_traffic_bytes != ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES
+            || portal.paid_user_monthly_traffic_bytes != ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES)
+    {
+        return Err("custom monthly traffic allowances require portal.state_dir".into());
+    }
     if !portal.admin_usernames.is_empty() && portal.state_dir.is_none() {
         return Err(
             "portal.admin_usernames requires portal.state_dir and registered usernames".into(),
@@ -595,6 +605,10 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
             return Err("portal.state_dir requires the existing auth.github configuration".into());
         }
         broker.portal = ssmcp::portal::Portal::open(path)?;
+        broker.portal.configure_monthly_allowances(ssmcp::user_policy::MonthlyTrafficAllowances {
+            free_user_bytes: config.portal.free_user_monthly_traffic_bytes,
+            paid_user_bytes: config.portal.paid_user_monthly_traffic_bytes,
+        })?;
         if let Some(socket) = &config.portal.gateway_socket {
             broker.portal.configure_management(socket.clone());
         }
@@ -985,4 +999,28 @@ client_secret = "example-test-secret"
             assert!(normalize_origin(bad).is_err(), "{bad}");
         }
     }
+
+    #[test]
+    fn monthly_tier_configuration_is_optional_explicit_and_requires_accounts() {
+        let old = parse_file_config("[portal]\n").unwrap();
+        assert_eq!(old.portal.free_user_monthly_traffic_bytes, 1_000_000_000);
+        assert_eq!(old.portal.paid_user_monthly_traffic_bytes, 1_000_000_000);
+        let file = parse_file_config("[portal]\nfree_user_monthly_traffic_bytes = 0\npaid_user_monthly_traffic_bytes = 10000000000\n").unwrap();
+        assert_eq!(file.portal.free_user_monthly_traffic_bytes, 0);
+        assert_eq!(file.portal.paid_user_monthly_traffic_bytes, 10_000_000_000);
+        let mut config = portal_config_fixture();
+        config.portal = file.portal;
+        assert!(validate_portal_config(&config).unwrap_err().to_string().contains("portal.state_dir"));
+        config.portal.state_dir = Some("/tmp/accounts".into());
+        validate_portal_config(&config).unwrap();
+        for bad in [
+            "[portal]\nfree_user_monthly_traffic_bytes = -1\n",
+            "[portal]\npaid_user_monthly_traffic_bytes = 1.5\n",
+            "[portal]\npaid_user_monthly_traffic_bytes = 'unlimited'\n",
+            "[portal]\npaid_user_monthly_traffic_byte = 123\n",
+        ] {
+            assert!(parse_file_config(bad).is_err());
+        }
+    }
+
 }

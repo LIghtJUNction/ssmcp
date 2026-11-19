@@ -66,6 +66,8 @@ ChatGPT 等 MCP 应用使用该服务器的 `/mcp` OAuth 入口。CLI 登录和 
 
 额度拒绝发生在请求发送前时，提示本次未执行；结果发送受限时，提示工具可能已经执行但结果未送达。补充流量后可以发起新请求，本次请求不会自动重放，不要求其他控制者重连。[方向账本](../src/portal/traffic.rs) · [错误状态](../src/user_policy.rs)
 
+免费、付费账户的每月赠送额度可由服务器分别配置；付费身份来自已有的成功生产充值记录。改变赠送上限保留本月已用量，单账户的管理员调整优先。额度详情和下月恢复时间来自真实登录账号的服务端快照，见[月度额度配置](configuration.md#服务端月度赠送额度)。
+
 ## 安装、服务器与验收
 
 客户端平台和安装位置见[版本与安装](releases.md)，HTTPS 公钥固定见[服务器信任](client-server.md)。服务端必须启用 GitHub OAuth 与持久账号存储，并正确设置公开 HTTPS origin；反向代理需要转发 `/mcp`、账号 API、OAuth 回调和 `/api/client/connect` 的 WebSocket Upgrade。[部署说明](deployment.md)

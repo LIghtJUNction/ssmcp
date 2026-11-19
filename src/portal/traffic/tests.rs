@@ -77,7 +77,14 @@ fn setting_remaining_preserves_usage_and_purchases_through_restart_and_rollover(
             .unwrap()
     );
     ledger
-        .set_remaining(&directory, SUBJECT, PERIOD, OFFSET, 0)
+        .set_remaining(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            0,
+            FREE_MONTHLY_TRAFFIC_BYTES,
+        )
         .unwrap();
     assert_eq!(
         ledger.reserve(&directory, SUBJECT, PERIOD, OFFSET, 1, false),
@@ -87,7 +94,14 @@ fn setting_remaining_preserves_usage_and_purchases_through_restart_and_rollover(
     let mut ledger = TrafficLedger::open(&directory).unwrap();
     assert_eq!(quota(&ledger, PERIOD).remaining_bytes, Some(0));
     ledger
-        .set_remaining(&directory, SUBJECT, PERIOD, OFFSET, 500)
+        .set_remaining(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            500,
+            FREE_MONTHLY_TRAFFIC_BYTES,
+        )
         .unwrap();
     assert!(
         !ledger
@@ -692,7 +706,14 @@ fn directional_quota_accepts_the_other_direction_up_to_the_same_limit() {
     let directory = temp.directory();
     let mut ledger = TrafficLedger::open(&directory).unwrap();
     ledger
-        .set_remaining(&directory, SUBJECT, PERIOD, OFFSET, 100)
+        .set_remaining(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            100,
+            FREE_MONTHLY_TRAFFIC_BYTES,
+        )
         .unwrap();
     for uploaded in [true, false] {
         ledger

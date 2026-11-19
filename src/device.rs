@@ -2201,4 +2201,131 @@ mod tests {
         server.abort();
         let _ = server.await;
     }
+
+    #[tokio::test]
+    async fn traffic_whoami_reports_configured_tier_and_server_reset_for_the_real_account() {
+        let (_directory, broker, login, admin, _device) = traffic_http_fixture().await;
+        broker
+            .portal
+            .configure_monthly_allowances(crate::user_policy::MonthlyTrafficAllowances {
+                free_user_bytes: 120,
+                paid_user_bytes: 350,
+            })
+            .unwrap();
+        let period = broker.traffic_period();
+        let current_period = period.clone();
+        broker
+            .portal
+            .storage(move |store| {
+                store.reserve_traffic_frame(
+                    "123",
+                    &current_period,
+                    480,
+                    crate::user_policy::TrafficFrame {
+                        uploaded: true,
+                        bytes: 20,
+                    },
+                    false,
+                )?;
+                store.reserve_traffic_frame(
+                    "123",
+                    &current_period,
+                    480,
+                    crate::user_policy::TrafficFrame {
+                        uploaded: false,
+                        bytes: 15,
+                    },
+                    false,
+                )
+            })
+            .await
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/client/whoami",
+            listener.local_addr().unwrap()
+        );
+        let app = crate::http::router(broker.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        let before: Value = client
+            .get(&url)
+            .bearer_auth(&login)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(before["identity"]["subject"], "123");
+        assert_eq!(before["traffic"]["free_bytes"], 120);
+        assert_eq!(before["traffic"]["used_bytes"], 20);
+        assert_eq!(before["traffic"]["limit_bytes"], 120);
+        assert_eq!(before["traffic"]["remaining_bytes"], 100);
+        assert_eq!(
+            before["traffic"]["reset_at"],
+            crate::user_policy::traffic_reset_at(&period, 480).unwrap()
+        );
+        let current_period = period.clone();
+        broker
+            .portal
+            .storage(move |store| {
+                store.record_recharge("123")?;
+                store.grant_paid_traffic(
+                    "123",
+                    &current_period,
+                    &current_period,
+                    "http-monthly-pack",
+                    60,
+                )
+            })
+            .await
+            .unwrap();
+        let after: Value = client
+            .get(&url)
+            .bearer_auth(&login)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(after["traffic"]["free_bytes"], 350);
+        assert_eq!(after["traffic"]["paid_bytes"], 60);
+        assert_eq!(after["traffic"]["limit_bytes"], 410);
+        assert_eq!(after["traffic"]["remaining_bytes"], 390);
+        assert_eq!(after["traffic"]["uploaded_bytes"], 20);
+        assert_eq!(after["traffic"]["downloaded_bytes"], 15);
+        assert_eq!(after["traffic"]["reset_at"], before["traffic"]["reset_at"]);
+        let unlimited: Value = client
+            .get(&url)
+            .bearer_auth(&admin)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(unlimited["identity"]["subject"], "999");
+        assert!(unlimited["traffic"]["limit_bytes"].is_null());
+        assert!(unlimited["traffic"]["remaining_bytes"].is_null());
+        assert_eq!(
+            client
+                .get(format!("{url}?paid_user=true"))
+                .bearer_auth(&login)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        server.abort();
+        let _ = server.await;
+    }
 }
