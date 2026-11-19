@@ -37,12 +37,35 @@ struct Event {
     lines: usize,
     expanded: bool,
     chat_expanded: bool,
+    panel: CommandPanel,
     truncated: bool,
     tone: &'static str,
     cache: Option<(usize, String, Vec<String>)>,
     meta: Meta,
     image: Option<images::Preview>,
     diagnostic: Option<(u64, u64)>,
+}
+
+/// Each command keeps its own viewport. None follows newly arriving output.
+#[derive(Default)]
+struct CommandPanel {
+    scroll: Option<usize>,
+    rows: usize,
+    page: usize,
+}
+
+impl CommandPanel {
+    fn offset(&self) -> usize {
+        self.scroll
+            .unwrap_or_else(|| self.rows.saturating_sub(self.page))
+            .min(self.rows.saturating_sub(self.page))
+    }
+
+    fn scroll_by(&mut self, delta: isize) {
+        let end = self.rows.saturating_sub(self.page);
+        let offset = self.offset().saturating_add_signed(delta).min(end);
+        self.scroll = (offset != end).then_some(offset);
+    }
 }
 
 impl Event {
@@ -255,6 +278,42 @@ impl Event {
         rows
     }
 
+    /// Keep command output intact while removing the renderer's lifecycle labels.
+    /// The original redacted transcript remains available in Logs and search.
+    fn command_output(&self) -> String {
+        let mut rows = Vec::new();
+        let mut result = false;
+        let mut script = false;
+        for raw in self.text.lines() {
+            let plain = unstyled(raw);
+            let text = heading(&plain);
+            if let Some((tag, detail)) = text.strip_prefix('[').and_then(|text| text.split_once(']')) {
+                match tag.trim() {
+                    "STDOUT" | "STDERR" | "RES" | "OUT" | "RESULT" => {
+                        result = true;
+                        script = false;
+                        continue;
+                    }
+                    "RUN" | "REQ" | "OK" | "SAVE" | "READ" | "WRITE" | "EDIT" => continue,
+                    "ERR" | "WARN" if detail.split_whitespace().any(|word|
+                        word.starts_with("exit=") || word.starts_with("signal=")
+                        || matches!(word, "completed" | "cancelled" | "timed_out")) => continue,
+                    _ => {}
+                }
+            }
+            if !result {
+                script |= text.starts_with("script · ");
+                if script || text.is_empty() || text.starts_with("cwd ") || text.starts_with("cmd=") {
+                    continue;
+                }
+            }
+            result = true;
+            rows.push(raw);
+        }
+        while rows.last().is_some_and(|row| row.trim().is_empty()) { rows.pop(); }
+        rows.join("\n")
+    }
+
     fn append(&mut self, text: String, truncated: bool) {
         if !text.is_empty() {
             self.text.push_str(&text);
@@ -296,6 +355,7 @@ pub(super) struct EventPosition {
     reveal: bool,
     new_image: Option<u64>,
     chat_expanded: Vec<u64>,
+    panel_scroll: Vec<(u64, Option<usize>)>,
 }
 
 impl Default for EventPosition {
@@ -307,6 +367,7 @@ impl Default for EventPosition {
             reveal: false,
             new_image: None,
             chat_expanded: Vec::new(),
+            panel_scroll: Vec::new(),
         }
     }
 }
@@ -322,6 +383,7 @@ pub(crate) struct EventView {
     reveal: bool,
     dropped: usize,
     hit_rows: Vec<Option<u64>>,
+    panel_hit_rows: Vec<Option<u64>>,
     total_rows: usize,
     page_rows: usize,
     image_cells: Option<images::CellSize>,
@@ -356,6 +418,7 @@ impl EventView {
             }
         }
         self.hit_rows.clear();
+        self.panel_hit_rows.clear();
         self.placements.clear();
         self.reveal = !self.follow;
     }
@@ -374,6 +437,7 @@ impl EventView {
         self.scope = scope;
         self.new_image = None;
         self.hit_rows.clear();
+        self.panel_hit_rows.clear();
         self.placements.clear();
         self.total_rows = 0;
         self.page_rows = 0;
@@ -422,6 +486,7 @@ impl EventView {
             follow: self.follow,
             reveal: self.reveal,
             new_image: self.new_image,
+            panel_scroll: self.events.iter().map(|event| (event.id, event.panel.scroll)).collect(),
             chat_expanded: self
                 .events
                 .iter()
@@ -438,6 +503,7 @@ impl EventView {
         self.reveal = position.reveal;
         for event in &mut self.events {
             event.chat_expanded = position.chat_expanded.contains(&event.id);
+            event.panel.scroll = position.panel_scroll.iter().find(|(id, _)| *id == event.id).and_then(|(_, scroll)| *scroll);
         }
         // The deferred first-image anchor belongs to this column's reading
         // position. Switching columns is not an explicit request for latest.
@@ -453,6 +519,7 @@ impl EventView {
                 })
         });
         self.hit_rows.clear();
+        self.panel_hit_rows.clear();
         self.placements.clear();
         if !self.events.iter().any(|event| {
             Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
@@ -639,6 +706,9 @@ impl EventView {
                     }
                     self.events[index].expanded |= previous.expanded;
                     self.events[index].chat_expanded |= previous.chat_expanded;
+                    if self.events[index].panel.scroll.is_none() {
+                        self.events[index].panel.scroll = previous.panel.scroll;
+                    }
                     self.events[index].append(previous.text, previous.truncated);
                     self.events[index].meta.merge(previous.meta);
                 }
@@ -671,6 +741,7 @@ impl EventView {
                 lines,
                 expanded,
                 chat_expanded: false,
+                panel: CommandPanel::default(),
                 truncated,
                 tone,
                 meta,
@@ -843,6 +914,35 @@ impl EventView {
         self.follow = self.scroll == self.total_rows.saturating_sub(self.page_rows);
     }
 
+    /// Consume wheel input only inside a command window from the last frame.
+    /// Reaching an edge does not send the wheel to the conversation underneath.
+    pub(crate) fn scroll_panel_at(&mut self, row: u16, delta: isize) -> bool {
+        let Some(id) = self.panel_hit_rows.get(usize::from(row)).copied().flatten() else {
+            return false;
+        };
+        self.scroll_panel(id, delta)
+    }
+
+    pub(crate) fn scroll_selected_panel(&mut self, delta: isize) -> bool {
+        self.selected.is_some_and(|id| self.scroll_panel(id, delta))
+    }
+
+    fn scroll_panel(&mut self, id: u64, delta: isize) -> bool {
+        if self.scope != EventScope::Conversation || !self.query.is_empty() {
+            return false;
+        }
+        let Some(event) = self.events.iter_mut().find(|event| event.id == id
+            && event.meta.command && !event.meta.diff && event.panel.rows > 0
+            && event.matches(&self.query, self.level, self.scope)) else {
+            return false;
+        };
+        event.panel.scroll_by(delta);
+        self.new_image = None;
+        self.follow = false;
+        self.reveal = false;
+        true
+    }
+
     pub(crate) fn latest(&mut self) {
         self.new_image = None;
         self.follow = true;
@@ -943,6 +1043,7 @@ impl EventView {
         self.reveal = false;
         self.dropped = 0;
         self.hit_rows.clear();
+        self.panel_hit_rows.clear();
         self.total_rows = 0;
         self.page_rows = 0;
         self.placements.clear();
@@ -959,6 +1060,7 @@ impl EventView {
                 "selected":Some(event.id)==self.selected,
                 "status":event.meta.status.map(Status::label),"command":event.meta.command,
                 "kind":event.meta.kind.label(),
+                "panel":event.meta.command.then(|| json!({"scroll":event.panel.offset(),"rows":event.panel.rows,"visible_rows":event.panel.page,"following":event.panel.scroll.is_none()})),
                 "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count)
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
@@ -980,6 +1082,7 @@ impl EventView {
         focused: bool,
     ) -> Vec<String> {
         self.hit_rows.clear();
+        self.panel_hit_rows.clear();
         self.placements.clear();
         if width == 0 || height == 0 {
             self.page_rows = 0;
@@ -995,6 +1098,7 @@ impl EventView {
         let mut visible_events = 0;
         let mut selected_row = None;
         let mut image_spans = Vec::new();
+        let mut panel_spans = Vec::new();
         let new_image = self.new_image.take();
         let mut new_images = false;
         let mut image_anchor = None;
@@ -1095,6 +1199,44 @@ impl EventView {
             } else {
                 event.meta.status.map_or(event.tone, Status::tone)
             };
+            if chat && event.meta.command && !event.meta.diff && event.image.is_none() && self.query.is_empty() {
+                let start = rows.len();
+                rows.push((event.id, format!("{}{}",
+                    paint(&prefix, tone, ui, selected && focused),
+                    paint(&clip_plain(&title, body_width), tone, ui, false))));
+                let inset = 2.min(body_width.saturating_sub(1));
+                let panel_width = body_width.saturating_sub(inset).max(1);
+                let panel_palette = format!("{palette}:command:{expanded}");
+                if event.cache.as_ref().is_none_or(|(cached_width, cached_palette, _)|
+                    *cached_width != panel_width || *cached_palette != panel_palette) {
+                    let body = if expanded { conversation_body(&event.text).to_owned() } else { event.command_output() };
+                    let lines = if body.is_empty() { Vec::new() } else {
+                        styled_rows(&semantic_text(&body, ui, event.meta.language), panel_width, ui.color)
+                    };
+                    event.cache = Some((panel_width, panel_palette, lines));
+                }
+                let content = &event.cache.as_ref().unwrap().2;
+                event.panel.rows = content.len();
+                let limit = if expanded { (page / 2).clamp(3, 12) } else { 3 };
+                event.panel.page = limit.min(content.len());
+                let offset = event.panel.offset();
+                if event.panel.scroll.is_some() { event.panel.scroll = Some(offset); }
+                for row in content.iter().skip(offset).take(event.panel.page) {
+                    let gutter = paint(&clip_plain("│ ", inset), "muted", ui, false);
+                    rows.push((event.id, format!("{}{gutter}{row}", " ".repeat(indent))));
+                }
+                if !content.is_empty() {
+                    previous_compact_tool = false;
+                    let action = if expanded { "fold" } else { "expand" };
+                    let range = format!("{}–{}/{}", offset + 1, offset + event.panel.page, content.len());
+                    let detail = if width >= 70 {
+                        format!("{range} · wheel / PgUp/PgDn · Enter {action}{}", if event.truncated { " · partial" } else { "" })
+                    } else { format!("{range} · {action}{}", if event.truncated { " · partial" } else { "" }) };
+                    rows.push((event.id, paint(&clip_plain(&format!("{}└ {detail}", " ".repeat(indent)), width), "muted", ui, false)));
+                    panel_spans.push((event.id, start, rows.len()));
+                }
+                continue;
+            }
             if expanded || !self.query.is_empty() {
                 if let Some(image) = &event.image {
                     let image_start = rows.len();
@@ -1346,6 +1488,12 @@ impl EventView {
                 )
             {
                 self.placements.push(placement);
+            }
+        }
+        self.panel_hit_rows.resize(page, None);
+        for (id, start, end) in panel_spans {
+            for row in start.max(self.scroll)..end.min(self.scroll + page) {
+                self.panel_hit_rows[row - self.scroll] = Some(id);
             }
         }
         let mut result = rows
@@ -1902,10 +2050,9 @@ mod tests {
         let done = view.render(100, 12, &plain_ui(), false).join("\n");
         assert!(done.contains("bash -lc · 2 lines · done"), "{done}");
         assert!(done.contains("first-result") && done.contains("second-result"));
-        assert!(done.contains("Click expand"));
+        assert!(done.contains("1–3/3") && done.contains("Enter expand"));
         for hidden in [
             "exit=0",
-            "third-result",
             "cwd /example",
             "[RUN",
             "[STDOUT",
@@ -2017,7 +2164,6 @@ mod tests {
             );
             for hidden in [
                 "warming up",
-                "warning: cache unavailable",
                 "[STDERR]",
                 "[ERR",
             ] {
@@ -2089,10 +2235,10 @@ mod tests {
         assert_eq!(view.hit_rows[result_row], Some(view.events[2].id));
         assert_eq!(view.hit_rows[result_row + 1], Some(view.events[2].id));
         assert_eq!(view.hit_rows[result_row + 2], Some(view.events[2].id));
-        assert!(rows[result_row + 2].contains("Click expand"), "{rows:?}");
+        assert!(rows[result_row + 3].contains("1–3/3"), "{rows:?}");
         let collapsed = rows.join("\n");
         assert!(collapsed.contains("first-result") && collapsed.contains("second-context"));
-        assert!(!collapsed.contains("first-tail") && !collapsed.contains("second-tail"));
+        assert!(collapsed.contains("first-tail") && collapsed.contains("second-tail"));
         assert!(view.mouse_select((result_row + 2) as u16));
         assert_eq!(view.selected, Some(view.events[2].id));
         assert!(view.open());
@@ -2101,8 +2247,83 @@ mod tests {
             expanded.contains("second-result") && expanded.contains("second-tail"),
             "{expanded}"
         );
-        assert!(!expanded.contains("first-tail"), "{expanded}");
+        assert!(expanded.contains("first-tail"), "{expanded}");
         assert_eq!(view.events.len(), 4);
+    }
+
+    #[test]
+    fn command_panels_keep_independent_positions_while_streams_append() {
+        let mut view = EventView::new();
+        for id in ["build", "test"] {
+            view.ingest_event("shell", &json!({"type":"exec.started","job_id":id}),
+                format!("[RUN] shell {id} cargo {id} started\n").as_bytes());
+            view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":id}),
+                (0..30).map(|n| format!("{id}-{n:02}\n")).collect::<String>().as_bytes());
+        }
+        view.set_scope(EventScope::Conversation);
+        let rows = view.render(100, 24, &plain_ui(), false);
+        assert_eq!(view.events.len(), 2);
+        assert_eq!(view.total_rows, 11, "two bounded windows and one paragraph gap");
+        let first = rows.iter().position(|row| row.contains("build-27")).unwrap();
+        let second = rows.iter().position(|row| row.contains("test-27")).unwrap();
+        let before = view.scroll;
+        assert!(view.scroll_panel_at(first as u16, -9));
+        assert_eq!(view.events[0].panel.offset(), 18);
+        assert_eq!(view.events[1].panel.offset(), 27);
+        assert_eq!(view.scroll, before);
+        assert!(view.scroll_panel_at(second as u16, -3));
+        assert_eq!(view.events[0].panel.offset(), 18);
+        assert_eq!(view.events[1].panel.offset(), 24);
+        for id in ["build", "test"] {
+            view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":id}),
+                format!("{id}-30\n").as_bytes());
+        }
+        let rows = view.render(100, 24, &plain_ui(), false);
+        assert_eq!(view.events.len(), 2, "each stream remains in its original command");
+        assert_eq!(view.events[0].panel.offset(), 18);
+        assert_eq!(view.events[1].panel.offset(), 24);
+        assert!(rows.iter().any(|row| row.contains("build-18")));
+        assert!(!rows.iter().any(|row| row.contains("build-30")));
+        assert!(view.scroll_panel_at(first as u16, isize::MAX));
+        assert!(view.events[0].panel.scroll.is_none());
+        view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":"build"}), b"build-31\n");
+        let rows = view.render(100, 24, &plain_ui(), false);
+        assert!(rows.iter().any(|row| row.contains("build-31")));
+        assert_eq!(view.events[1].panel.offset(), 24);
+        assert!(!view.scroll_panel_at(5, -3), "the paragraph gap is outside either window");
+    }
+
+    #[test]
+    fn expanded_command_panels_reveal_retained_content_without_growing_unbounded() {
+        let mut view = EventView::new();
+        let text = format!("[RUN] cargo test started\n{}", (0..80).map(|n| format!("case-{n:02}\n")).collect::<String>());
+        view.ingest_event("shell", &json!({"type":"exec.started","job_id":"test"}), text.as_bytes());
+        view.set_scope(EventScope::Conversation);
+        view.render(80, 24, &plain_ui(), true);
+        assert!(view.open());
+        view.render(80, 24, &plain_ui(), true);
+        assert_eq!(view.events[0].panel.page, 12);
+        assert_eq!(view.total_rows, 14);
+        assert!(view.scroll_selected_panel(isize::MIN));
+        let head = view.render(80, 24, &plain_ui(), true).join("\n");
+        assert!(head.contains("case-00") && head.contains("case-11"));
+        let position = view.position();
+        assert!(view.scroll_selected_panel(isize::MAX));
+        let tail = view.render(80, 24, &plain_ui(), true).join("\n");
+        assert!(tail.contains("case-79"));
+        view.restore_position(&position);
+        assert_eq!(view.events[0].panel.offset(), 0);
+        assert!(view.back());
+        for width in [1, 24, 48, 100] {
+            for row in view.render(width, 24, &plain_ui(), true) {
+                assert!(unstyled(&row).width() <= usize::from(width), "{width}: {row}");
+            }
+        }
+        view.filter("case-40", 0);
+        assert!(!view.scroll_selected_panel(3), "search retains its existing navigation");
+        let found = view.render(80, 90, &plain_ui(), false).join("\n");
+        assert!(found.contains("case-40"));
+        assert_eq!(view.events[0].text, text, "folding and scrolling never discard the retained source");
     }
 
     #[test]
