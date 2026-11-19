@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Exercise Linux background sessions using an existing user systemd manager.
 
-Uses e2e.py's isolated loopback SSH/Broker fixture and real OAuth requests.
+Uses e2e.py's isolated real account/router fixture and real OAuth requests.
 No user manager is installed or started, no machine configuration is changed,
 and no coding Harness or model is invoked. Only randomly named test sessions
 and a private temporary state directory are created. Missing prerequisites
 produce status=blocked and exit 2, never a passing or silently skipped run.
+Set SSMCP_E2E_FIXTURE_BINARY to the existing real-router library test executable.
 
 Example: python3 scripts/e2e_daemon.py --bin-dir target/debug \
     --report target/acceptance/daemon.json --revision <tested-commit>
@@ -16,7 +17,6 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -30,13 +30,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from urllib.parse import parse_qs, urlencode, urlsplit
 
 if sys.platform == "linux":
-    from e2e import Harness, PUBLIC_URL, wait_for
+    from e2e import Harness, wait_for
+    from e2e_account_gateway import FIXTURE_ENV
 else:
     Harness = object
-    PUBLIC_URL = "https://ssmcp.example"
+    FIXTURE_ENV = "SSMCP_E2E_FIXTURE_BINARY"
 
 
 class PrerequisiteUnavailable(RuntimeError):
@@ -63,28 +63,6 @@ def process_identity(pid):
         return None
 
 
-def descendants(pid):
-    result, pending = set(), [int(pid)]
-    while pending:
-        current = pending.pop()
-        try:
-            threads = list(Path(f"/proc/{current}/task").iterdir())
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        children = []
-        for thread in threads:
-            try:
-                children.extend((thread / "children").read_text().split())
-            except (FileNotFoundError, ProcessLookupError):
-                continue
-        for value in children:
-            child = int(value)
-            if child not in result:
-                result.add(child)
-                pending.append(child)
-    return result
-
-
 def send_owned_signal(identity, number):
     if identity is None or identity[0] <= 1 or identity[0] == os.getpid():
         raise AssertionError("refusing to signal an unverified process")
@@ -104,14 +82,14 @@ def preflight(binary_dir):
         raise PrerequisiteUnavailable("this actual user-systemd test requires Linux")
     if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
         raise PrerequisiteUnavailable("Python/Linux pidfd support is required for owned-process fault injection")
-    required = ("systemctl", "systemd-run", "journalctl", "ssh", "ssh-keygen", "stty", "tty", "sleep", "head", "tr")
+    required = ("systemctl", "systemd-run", "journalctl", "stty", "tty", "sleep", "head", "tr")
     programs = {name: shutil.which(name) for name in required}
     missing = [name for name, path in programs.items() if path is None]
-    sshd = shutil.which("sshd") or "/usr/sbin/sshd"
-    if not Path(sshd).is_file():
-        missing.append("sshd")
-    missing += [str(binary_dir / name) for name in ("ssmcp", "ssmcpd")
-                if not (binary_dir / name).is_file()]
+    if not (binary_dir / "ssmcp").is_file():
+        missing.append(str(binary_dir / "ssmcp"))
+    fixture = os.environ.get(FIXTURE_ENV)
+    if not fixture or not Path(fixture).is_file() or not os.access(fixture, os.X_OK):
+        missing.append(FIXTURE_ENV + " (existing executable real-router library fixture)")
     if missing:
         raise PrerequisiteUnavailable("required existing programs are unavailable: " + ", ".join(missing))
     result = subprocess.run(
@@ -124,17 +102,6 @@ def preflight(binary_dir):
     descriptor = os.pidfd_open(os.getpid())
     os.close(descriptor)
     return programs
-
-
-class LoginForm(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.fields = {}
-
-    def handle_starttag(self, tag, attributes):
-        attributes = dict(attributes)
-        if tag == "input" and attributes.get("name") and attributes.get("type") == "hidden":
-            self.fields[attributes["name"]] = attributes.get("value", "")
 
 
 class Daemon(Harness):
@@ -279,33 +246,17 @@ class Daemon(Harness):
             raise AssertionError("runner image does not match the tested executable")
         return identity
 
-    def ssh_identity(self, runner):
-        found = []
-        expected = Path(self.programs["ssh"]).resolve()
-        for pid in descendants(runner[0]):
-            identity = process_identity(pid)
-            if not identity or identity[2] != os.getuid():
-                continue
-            try:
-                image = Path(os.readlink(f"/proc/{pid}/exe"))
-                argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
-            except (FileNotFoundError, ProcessLookupError):
-                continue
-            if image == expected and str(self.directory / "ssh_config").encode() in argv:
-                found.append(identity)
-        if len(found) > 1:
-            raise AssertionError("the owned runner has overlapping fixture SSH clients")
-        return found[0] if found else None
-
-    def create(self, name, *, watchdog, executable=None, environment=None):
-        arguments = ["--daemon", "--ssh", "--name", name, "--title", "daemon lifecycle validation",
-                     "-F", str(self.directory / "ssh_config"), "-i", str(self.directory / "client"),
-                     "--shell", "/bin/sh"]
+    def daemon_arguments(self, name, *, watchdog):
+        arguments = ["--daemon", "--server", self.origin, "--no-setup", "--name", name,
+                     "--title", "daemon lifecycle validation", "--shell", "/bin/sh"]
         if watchdog:
             arguments += ["--watchdog", "--reconnect-delay", str(self.delay)]
         else:
             arguments += ["--no-watchdog"]
-        arguments.append(f"{self.user}@ssmcp-e2e")
+        return arguments
+
+    def create(self, name, *, watchdog, executable=None, environment=None):
+        arguments = self.daemon_arguments(name, watchdog=watchdog)
         self.managed.add(name)
         _, output, _ = self.command(arguments, executable=executable, environment=environment)
         value = json.loads(output)
@@ -313,61 +264,15 @@ class Daemon(Harness):
         return value
 
     def authenticate(self, name, status):
-        """Consume only the explicit auth response; no invented TTL field."""
-        auth = self.cli("auth", name, private=True)
-        code = auth.get("login_code", "")
-        self.check(auth.get("name") == name and bool(re.fullmatch(r"[0-9a-f]{64}", code)),
-                   "explicit sessions auth returns the actual private login code")
-        self.client_id = status["connection"]["client_id"]
-        resource = f"{PUBLIC_URL}/{self.user}"
-        self.check(self.request(body={}, secret=code)[0] == 401,
-                   "a managed-session login code is not accepted as a bearer token")
-        http, server, _ = self.oauth_request("/.well-known/oauth-authorization-server")
-        self.check(http == 200 and server.get("issuer") == PUBLIC_URL,
-                   "managed-session authentication uses the real fixture OAuth issuer")
-        if self.oauth_client is None:
-            http, registration, _ = self.oauth_request(urlsplit(server["registration_endpoint"]).path,
-                "POST", {"client_name": "ssmcp daemon end-to-end",
-                         "redirect_uris": ["http://127.0.0.1:37401/callback"],
-                         "token_endpoint_auth_method": "none",
-                         "grant_types": ["authorization_code", "refresh_token"],
-                         "response_types": ["code"], "application_type": "native"})
-            self.check(http == 201 and registration.get("client_id"), "daemon test registers a real OAuth client")
-            self.oauth_client = registration
-        verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
-        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-        nonce = base64.urlsafe_b64encode(os.urandom(18)).decode()
-        redirect = self.oauth_client["redirect_uris"][0]
-        authorize = urlsplit(server["authorization_endpoint"]).path
-        fields = {"client_id": self.oauth_client["client_id"], "redirect_uri": redirect,
-                  "response_type": "code", "scope": "mcp", "resource": resource, "state": nonce,
-                  "code_challenge": challenge, "code_challenge_method": "S256"}
-        http, html, headers = self.oauth_request(authorize + "?" + urlencode(fields), headers={"Accept": "text/html"})
-        self.check(http == 200 and isinstance(html, str), "OAuth presents the managed-session login form")
-        form = LoginForm()
-        form.feed(html)
-        self.check(bool(form.fields.get("transaction_id")), "OAuth login retains the CSRF-bound transaction")
-        cookie = headers.get("set-cookie", "").split(";", 1)[0]
-        http, _, headers = self.oauth_request(authorize, "POST", {**form.fields, "login_code": code},
-            cookie=cookie, headers={"Origin": PUBLIC_URL, "Accept": "text/html"}, form=True)
-        self.check(http == 303, "the actual managed-session code completes OAuth authorization")
-        callback = urlsplit(headers["location"])
-        query = parse_qs(callback.query)
-        self.check(callback._replace(query="").geturl() == redirect and query.get("state") == [nonce]
-                   and query.get("iss") == [PUBLIC_URL], "OAuth preserves callback, state and issuer binding")
-        exchange_code = query["code"][0]
-        self.sensitive.append(exchange_code)
-        http, tokens, headers = self.oauth_request(urlsplit(server["token_endpoint"]).path, "POST", {
-            "grant_type": "authorization_code", "client_id": self.oauth_client["client_id"],
-            "code": exchange_code, "code_verifier": verifier, "redirect_uri": redirect, "resource": resource,
-        }, form=True)
-        if isinstance(tokens, dict):
-            self.sensitive.extend(value for key in ("access_token", "refresh_token")
-                                  if isinstance(value := tokens.get(key), str))
-        self.check(http == 200 and tokens.get("token_type", "").lower() == "bearer"
-                   and bool(tokens.get("access_token")), "OAuth exchanges the code for a real access token")
-        self.secret = tokens["access_token"]
-        self.check("no-store" in headers.get("cache-control", ""), "managed OAuth tokens remain non-cacheable")
+        """Authorize the observed account connection through real provider OAuth."""
+        connection = self.validate_connection_record(status["connection"])
+        self.client_id = connection["client_id"]
+        self.check(not status["auth_available"]
+                   and not (Path(status["state_directory"]) / "auth.json").exists(),
+                   "an account-managed session exposes no legacy login code or auth file")
+        self.command(["sessions", "auth", name, "--json"], expected="failure", private=True)
+        self.check(True, "sessions auth cannot mint a legacy connection code for an account relay")
+        self.oauth_login(connection)
         inventory = self.public_call("list")["clients"]
         selected = [client for client in inventory if client["id"] == self.client_id]
         self.check(len(selected) == 1 and selected[0]["name"] == name
@@ -378,19 +283,25 @@ class Daemon(Harness):
     def verify_private_state(self, name):
         status = self.cli("status", name)
         directory = Path(status["state_directory"])
+        auth_home = Path(self.environment["SSMCP_AUTH_HOME"])
+        account = auth_home / (hashlib.sha256(self.origin.encode()).hexdigest() + ".json")
         paths = [self.state_home, directory, directory / "manifest.json", directory / "state.json",
-                 directory / "auth.json", directory / "lifecycle.jsonl", directory / "ssmcp"]
+                 directory / "lifecycle.jsonl", directory / "ssmcp",
+                 auth_home, account, auth_home / "default"]
         self.check(all(path.lstat().st_uid == os.getuid() and not path.is_symlink()
                        and not stat.S_IMODE(path.stat().st_mode) & 0o077 for path in paths),
-                   "saved executable, state, lifecycle logs and auth file are owned and private")
+                   "saved executable, state, lifecycle logs and account login are owned and private")
+        saved = json.loads(account.read_text())
+        self.check(saved.get("server") == self.origin and saved.get("token") == self.account_token,
+                   "the daemon uses only the owned fixture account credential")
         self.check(status["executable_sha256"] == self.image_sha
                    and sha256(directory / "ssmcp") == self.image_sha,
                    "saved executable SHA-256 matches the tested source image")
 
     def probe_tools(self):
         http, value, _ = self.rpc("tools/list", modern=True)
-        self.check(http == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode"],
-                   "daemon mode still publishes exactly list and code_mode")
+        self.check(http == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
+                   "daemon mode publishes exactly list, code_mode, collab and invite")
         catalog = self.public_call("list", {"client_id": self.client_id})
         self.check(all(not tool["name"].startswith(("codex.", "claude.", "pi.", "opencode."))
                        for tool in catalog["tools"]), "the fixture discovers no installed coding Harness")
@@ -489,7 +400,7 @@ class Daemon(Harness):
         self.check(True, "actual background runner journal records retain JSONL formatting")
         self.check(all(secret.encode() not in content for secret in self.sensitive if secret
                        for content in self.command_output),
-                   "login codes and OAuth credentials are absent from ordinary status, CLI output and logs")
+                   "account and OAuth credentials are absent from ordinary status, CLI output and logs")
         self.metrics["journal_runner_records"] = len(messages)
 
     def watch_stopped(self, name):
@@ -512,17 +423,24 @@ class Daemon(Harness):
         self.prepare()
         primary, peer = self.names
         self.case = "D01"
-        for arguments in (["--reconnect-delay", "2", "ssmcp-e2e"],
-                          ["--watchdog", "--reconnect-delay", "0", "ssmcp-e2e"],
-                          ["--watchdog", "--reconnect-delay", "3601", "ssmcp-e2e"],
-                          ["--daemon", "--list-tools"]):
-            self.command(arguments, expected="failure")
-            self.check(True, "the real CLI rejects an invalid daemon/watchdog argument combination")
+        for arguments, diagnostic in (
+            (["--no-watchdog", "--reconnect-delay", "2", "--server", self.origin],
+             "--reconnect-delay cannot be combined with --no-watchdog"),
+            (["--watchdog", "--reconnect-delay", "0", "--server", self.origin],
+             "--reconnect-delay must be in 1..=3600 seconds"),
+            (["--watchdog", "--reconnect-delay", "3601", "--server", self.origin],
+             "--reconnect-delay must be in 1..=3600 seconds"),
+            (["--daemon", "--list-tools"],
+             "--list-tools cannot be combined with --daemon"),
+        ):
+            _, _, error = self.command(arguments, expected="failure")
+            self.check(diagnostic in error.decode(errors="replace"),
+                       "the real CLI rejects the specific invalid daemon/watchdog combination")
         self.check(self.cli("list") == [], "the owned session home starts empty")
 
         self.case = "D02"
         foreground, credentials = self.start_client("daemon-foreground-control", cwd=self.workspace)
-        self.sensitive.append(credentials["login_code"])
+        self.validate_connection_record(credentials)
         self.oauth_login(credentials)
         self.client_id = credentials["client_id"]
         self.check(self.call("terminal.status")["running"], "the default foreground client still starts a real PTY")
@@ -562,8 +480,7 @@ class Daemon(Harness):
         self.check(process_identity(original_runner[0]) == original_runner,
                    "the daemon keeps running after its owned disposable source image is removed")
         before = sha256(Path(first["state_directory"]) / "manifest.json")
-        self.command(["--daemon", "--ssh", "--name", primary, "-F", str(self.directory / "ssh_config"),
-                      "--shell", "/bin/sh", f"{self.user}@ssmcp-e2e"], expected="failure")
+        self.command(self.daemon_arguments(primary, watchdog=False), expected="failure")
         self.check(sha256(Path(first["state_directory"]) / "manifest.json") == before,
                    "duplicate daemon creation cannot overwrite a saved session definition")
 
@@ -591,10 +508,10 @@ class Daemon(Harness):
         self.check(not self.public_call("code_mode", {"code": code})["result"]["accepted"],
                    "a sibling daemon cannot read another connection's task state")
         old_client, old_token = self.client_id, self.secret
-        ssh = self.ssh_identity(original_runner)
-        self.check(ssh is not None, "fault injection identifies exactly the owned fixture SSH process")
-        killed_at = time.monotonic()
-        send_owned_signal(ssh, signal.SIGKILL)
+        disconnected_at = time.monotonic()
+        acknowledgement = self.account_gateway.disconnect_client(old_client)
+        self.check(acknowledgement["client_id"] == old_client and acknowledgement["accepted"] is True,
+                   "fault injection requests closure of exactly the owned account WebSocket connection")
 
         self.case = "D04"
         reconnecting = wait_for(lambda: (value if (value := self.cli("status", primary))["phase"] == "reconnecting" else False),
@@ -603,29 +520,33 @@ class Daemon(Harness):
         self.check(reconnecting["connection_state"] != "connected" and not reconnecting["auth_available"]
                    and reconnecting["retry_after_secs"] == self.delay
                    and not (Path(first["state_directory"]) / "auth.json").exists(),
-                   "disconnect clears the old connected state and private code before retrying")
-        retry_ssh = wait_for(lambda: self.ssh_identity(original_runner), timeout=self.delay + 15,
-                            description="a delayed replacement SSH process")
-        retry_elapsed = time.monotonic() - killed_at
+                   "disconnect clears the old account connection state before retrying")
+        second = self.connected(primary, old_id=old_client, timeout=self.delay + 15)
+        retry_elapsed = time.monotonic() - disconnected_at
         retry_wait = time.monotonic() - delay_observed_at
-        self.check(retry_ssh != ssh and retry_wait >= self.delay - 0.2,
-                   "connection watchdog waits the configured delay before a new SSH process")
-        second = self.connected(primary, old_id=old_client)
+        self.check(second["connection"]["client_id"] != old_client and retry_wait >= self.delay - 0.2,
+                   "connection watchdog waits the configured delay before a replacement account connection")
         self.check(self.runner_identity(primary) == original_runner
                    and int(self.native_status(primary).get("NRestarts", "0")) == original_restarts,
-                   "an SSH disconnect reconnects within the same service process")
-        self.metrics["ssh_reconnect_seconds"] = round(retry_elapsed, 3)
+                   "a WebSocket disconnect reconnects within the same service process")
+        self.metrics["websocket_reconnect_seconds"] = round(retry_elapsed, 3)
         self.metrics["observed_watchdog_wait_seconds"] = round(retry_wait, 3)
         wait_for(lambda: all(process_identity(identity[0]) != identity for identity in alpha_pids + beta_pids + pty_pids),
                  timeout=10, description="old connection task/PTY descendants to exit")
-        self.check(True, "SSH disconnect removes both old commands, their children and the owned PTY task")
+        self.check(True, "WebSocket disconnect removes both old commands, their children and the owned PTY task")
         self.check(process_identity(peer_runner[0]) == peer_runner
                    and self.cli("status", peer)["connection_state"] == "connected",
                    "another background session survives the first session's disconnect")
 
         self.case = "D09"
-        self.check(self.request(body={}, secret=old_token)[0] == 401,
-                   "disconnect revokes the old connection's login-code OAuth grant")
+        self.check(self.rpc("ping", modern=True, secret=old_token)[0] == 200,
+                   "a transport disconnect preserves the account identity OAuth grant")
+        self.client_id = sibling_id
+        try:
+            self.check(self.call("terminal.status")["running"],
+                       "the existing account grant still calls the unaffected sibling connection")
+        finally:
+            self.client_id = old_client
         self.authenticate(primary, second)
         self.check(self.call("ssmcp.exec.list")["jobs"] == [], "the replacement connection does not inherit old command state")
         stale = self.public_call("code_mode", {"code":
@@ -719,16 +640,16 @@ class Daemon(Harness):
         }
         missing_name = self.names[0] + "-unavailable"
         self.managed.add(missing_name)
-        self.command(["--daemon", "--ssh", "--name", missing_name, "-F", str(self.directory / "ssh_config"),
-                      "--shell", "/bin/sh", f"{self.user}@ssmcp-e2e"],
+        self.command(self.daemon_arguments(missing_name, watchdog=False),
                      environment=missing_bus, expected="failure")
         self.check({entry["name"] for entry in self.cli("list")} == set(self.names),
                    "an unavailable user bus leaves no half-created background session")
         self.managed.discard(missing_name)
 
         self.case = "D05-retry-stop"
-        runner = self.runner_identity(primary)
-        send_owned_signal(self.ssh_identity(runner), signal.SIGKILL)
+        self.runner_identity(primary)
+        current = self.cli("status", primary)
+        self.account_gateway.disconnect_client(current["connection"]["client_id"])
         wait_for(lambda: self.cli("status", primary)["phase"] == "reconnecting",
                  timeout=15, description="retry-wait phase before manual stop")
         self.cli("stop", primary)
@@ -786,18 +707,23 @@ def main():
     started = time.monotonic()
     report = {"status": "blocked", "platform": platform.system(), "manager": "systemd-user",
               "source_revision": arguments.revision, "checks": [],
-              "scope": "actual Linux user-manager lifecycle + loopback SSH public keys + OAuth PKCE + MCP; no Harness/model request or installation",
+              "scope": "actual Linux user-manager lifecycle + real account WebSocket router over loopback HTTP + OAuth PKCE + MCP; no Harness/model request or installation",
               "not_covered": ["macOS launchd actual lifecycle", "Windows Task Scheduler actual lifecycle",
-                              "cross-platform CI", "GitHub identity-provider login", "logout/reboot startup"],
+                              "cross-platform CI", "external GitHub service and public TLS termination", "logout/reboot startup"],
               "configured_reconnect_delay_seconds": arguments.reconnect_delay}
     harness, directory, exit_code = None, None, 1
     try:
         binary_dir = arguments.bin_dir.resolve()
         programs = preflight(binary_dir)
-        report["binaries"] = {name: sha256(binary_dir / name) for name in ("ssmcp", "ssmcpd")}
-        report["sources"] = {path.name: sha256(path) for path in (Path(__file__), Path(__file__).with_name("e2e.py"))}
+        report["binaries"] = {"ssmcp": sha256(binary_dir / "ssmcp"),
+                              "account_router_fixture": sha256(Path(os.environ[FIXTURE_ENV]).resolve())}
+        report["sources"] = {path.name: sha256(path) for path in (
+            Path(__file__), Path(__file__).with_name("e2e.py"),
+            Path(__file__).with_name("e2e_account_gateway.py"))}
         directory = Path(tempfile.mkdtemp(prefix="ssmcp-daemon-e2e-")).resolve()
         harness = Daemon(directory, binary_dir, programs, arguments.reconnect_delay)
+        harness.fixture_timeout_seconds = min(arguments.timeout + 15, 1800)
+        report["fixture_timeout_seconds"] = harness.fixture_timeout_seconds
 
         def interrupted(_number, _frame):
             raise TimeoutError("daemon E2E interrupted; stopping owned sessions")

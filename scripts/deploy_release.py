@@ -575,11 +575,14 @@ def select_release(tag, commit, release, manifest, machine):
             manifest.get("commit") == commit, "release_source_mismatch")
     target = {"x86_64": "x86_64-unknown-linux-gnu", "aarch64": "aarch64-unknown-linux-gnu"}.get(machine)
     require(target is not None, "unsupported_server_architecture")
-    name = "ssmcp-" + tag[1:] + "-" + target + ".tar.gz"
-    records = [item for item in manifest["artifacts"] if item.get("name") == name]
-    assets = [item for item in release["assets"] if item.get("name") == name]
+    prefix = "ssmcp-" + tag[1:] + "-" + target
+    names = {f"ssmcp-{target}.tar.gz", prefix + ".tar.gz"}
+    records = [item for item in manifest["artifacts"] if item.get("name") in names]
+    assets = [item for item in release["assets"] if item.get("name") in names]
     require(len(records) == len(assets) == 1, "one_server_archive_required")
     record, asset = records[0], assets[0]
+    name = record["name"]
+    require(asset["name"] == name, "archive_metadata_mismatch")
     require(re.fullmatch(r"[0-9a-f]{64}", record.get("sha256", "")) and
             type(record.get("bytes")) is int and 0 < record["bytes"] <= 134_217_728, "archive_manifest_invalid")
     url = "https://github.com/" + REPOSITORY + "/releases/download/" + tag + "/" + name
@@ -587,20 +590,20 @@ def select_release(tag, commit, release, manifest, machine):
     if asset.get("digest"):
         require(asset["digest"] == "sha256:" + record["sha256"], "github_archive_digest_mismatch")
     return {"repository": REPOSITORY, "tag": tag, "commit": commit, "archive": name,
-            "archive_sha256": record["sha256"], "archive_bytes": record["bytes"], "archive_url": url}
+            "archive_prefix": prefix + "/" if name == prefix + ".tar.gz" else "", "archive_sha256": record["sha256"], "archive_bytes": record["bytes"], "archive_url": url}
 
 
 def extract_runtime(archive, folder, record):
     require(archive.stat().st_size == record["archive_bytes"] and sha(archive) == record["archive_sha256"],
             "downloaded_archive_mismatch")
-    prefix = record["archive"].removesuffix(".tar.gz")
-    wanted = {prefix + "/ssmcpd": ("candidate", 0o755, 134_217_728),
-              prefix + "/code-mode.js": ("runner.js", 0o644, 2_097_152)}
+    prefix = record["archive_prefix"]
+    wanted = {prefix + "ssmcpd": ("candidate", 0o755, 134_217_728),
+              prefix + "code-mode.js": ("runner.js", 0o644, 2_097_152)}
     with tarfile.open(archive, "r:gz") as package:
         entries = package.getmembers()
         require(len(entries) <= 1000 and len({entry.name for entry in entries}) == len(entries), "archive_member_set")
         require(all(not entry.name.startswith("/") and ".." not in Path(entry.name).parts and
-                    Path(entry.name).parts[0] == prefix and (entry.isfile() or entry.isdir())
+                    entry.name.startswith(prefix) and (entry.isfile() or entry.isdir())
                     for entry in entries), "unsafe_archive_member")
         for name, (destination, mode, maximum) in wanted.items():
             member = package.getmember(name)

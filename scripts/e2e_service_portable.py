@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Portable client service acceptance without native installation or a broker.
 
-Runs a real foreground supervisor in a fresh SSMCP_SESSION_HOME. Every SSH
-attempt is restricted to 127.0.0.1:9, with an explicit config disabling private
-keys, agents, proxies and host-key writes. The handshake never reaches backend
-discovery. No installed service, existing session or model account is changed.
+Runs a real foreground supervisor in a fresh SSMCP_SESSION_HOME. An owned
+loopback HTTP fixture supplies a synthetic account and rejects every WebSocket
+handshake with retryable HTTP 503. The real CLI stores the fixture login using
+its platform-private credential writer. No browser, external OAuth service,
+installed service, existing session or model account is used.
 
 Usage:
     python scripts/e2e_service_portable.py --bin-dir target/debug \
@@ -16,11 +17,13 @@ import argparse
 import base64
 import concurrent.futures
 import configparser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -28,6 +31,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 
@@ -41,6 +45,101 @@ def wait_for(predicate, description, timeout=15):
     raise AssertionError(f"timed out waiting for {description}")
 
 
+IDENTITY = {"provider": "github", "subject": "123", "login": "fixture",
+            "principal": "fixture@github", "username": "portablefixture"}
+
+
+class GatewayHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *_):
+        pass
+
+    def reply(self, status, value):
+        encoded = json.dumps(value).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            self.wfile.write(encoded)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_GET(self):
+        fixture = self.server.fixture
+        if self.headers.get("Authorization") != "Bearer " + fixture.token:
+            fixture.record("unexpected_requests")
+            return self.reply(403, {"error": "invalid_fixture_credential"})
+        if self.path == "/api/client/whoami":
+            fixture.record("whoami")
+            return self.reply(200, {"identity": IDENTITY})
+        if self.path == "/api/client/connect":
+            fixture.record("connect")
+            return self.reply(503, {"error": "portable_fixture_unavailable"})
+        fixture.record("unexpected_requests")
+        self.reply(404, {"error": "fixture_route_not_found"})
+
+    def do_POST(self):
+        fixture = self.server.fixture
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 <= size <= 4096:
+                raise ValueError("invalid fixture request size")
+            body = json.loads(self.rfile.read(size) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("invalid fixture request object")
+        except ValueError:
+            fixture.record("unexpected_requests")
+            return self.reply(400, {"error": "invalid_fixture_request"})
+        if self.path == "/api/client/login/start":
+            fixture.record("login_start")
+            return self.reply(200, {
+                "device_code": fixture.device_code, "user_code": "PORT-ABLE",
+                "verification_uri": fixture.origin + "/device",
+                "verification_uri_complete": fixture.origin + "/device?user_code=PORT-ABLE",
+                "expires_in": 600, "interval": 1,
+            })
+        if self.path == "/api/client/login/poll" and body.get("device_code") == fixture.device_code:
+            fixture.record("login_poll")
+            return self.reply(200, {"status": "authorized", "access_token": fixture.token,
+                                    "identity": IDENTITY, "expires_in": 3600})
+        fixture.record("unexpected_requests")
+        self.reply(404, {"error": "fixture_route_not_found"})
+
+
+class UnavailableGateway:
+    def __init__(self):
+        self.token = secrets.token_hex(32)
+        self.device_code = secrets.token_hex(32)
+        self.lock = threading.Lock()
+        self.counts = {key: 0 for key in
+                       ("login_start", "login_poll", "whoami", "connect", "unexpected_requests")}
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
+        self.server.daemon_threads = True
+        self.server.fixture = self
+        self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def record(self, key):
+        with self.lock:
+            self.counts[key] += 1
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.counts)
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            raise AssertionError("owned loopback gateway did not stop")
+
+
 class Portable:
     def __init__(self, binary: Path, root: Path, artifacts: Path):
         self.binary = binary.resolve()
@@ -50,8 +149,10 @@ class Portable:
         self.home = root / "sessions"
         # The supervisor creates its state root with the platform-private ACL.
         self.artifacts = artifacts
-        self.environment = dict(os.environ)
+        self.environment = {key: value for key, value in os.environ.items()
+                            if key.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
         self.environment.update(SSMCP_SESSION_HOME=str(self.home), NO_COLOR="1",
+                                NO_PROXY="127.0.0.1,localhost,::1",
                                 SSMCP_AUTH_HOME=str((root / "auth").resolve()),
                                 SSMCP_CLIENT_CONFIG=str((root / "client.toml").resolve()))
         (root / "client.toml").touch(exist_ok=True)
@@ -64,33 +165,19 @@ class Portable:
         self.secrets = []
         self.checks = []
         self.samples = {}
-        self.config = root / "fixture-ssh.conf"
-        hosts = root / "empty-known-hosts"
-        hosts.write_text("", encoding="utf-8")
-        host_path = str(hosts).replace("\\", "/").replace('"', '\\"')
-        self.config.write_text(
-            "Host *\n"
-            "    HostName 127.0.0.1\n"
-            "    Port 9\n"
-            "    User ssmcp-portable-fixture\n"
-            "    BatchMode yes\n"
-            "    StrictHostKeyChecking yes\n"
-            f'    UserKnownHostsFile "{host_path}"\n'
-            f'    GlobalKnownHostsFile "{host_path}"\n'
-            "    IdentityFile none\n"
-            "    IdentityAgent none\n"
-            "    IdentitiesOnly yes\n"
-            "    PKCS11Provider none\n"
-            "    ProxyCommand none\n"
-            "    ProxyJump none\n"
-            "    CanonicalizeHostname no\n"
-            "    ForwardAgent no\n"
-            "    ForwardX11 no\n"
-            "    ClearAllForwardings yes\n"
-            "    ControlMaster no\n"
-            "    ControlPath none\n",
-            encoding="utf-8",
-        )
+        self.gateway = None
+
+    def prepare_gateway(self):
+        self.gateway = UnavailableGateway()
+        self.secrets.extend((self.gateway.token, self.gateway.device_code))
+        # Let the real account writer apply private Unix permissions or Windows
+        # ACLs. Both device-flow endpoints belong to this synthetic local server.
+        login = self.cli(["login", "--server", self.gateway.origin, "--no-browser", "--json"])
+        value = json.loads(login.stdout)
+        self.check(value.get("server") == self.gateway.origin and value.get("identity") == IDENTITY,
+                   "explicit local fixture login stores the synthetic account using the real credential writer")
+        self.check(all(secret not in login.stdout + login.stderr for secret in self.secrets),
+                   "fixture login output excludes account and polling credentials")
 
     def check(self, condition, description):
         if not condition:
@@ -214,11 +301,10 @@ class Portable:
 
     def create_args(self, name):
         return [
-            "sessions", "create", name, "--json", "--ssh", "--watchdog",
+            "sessions", "create", name, "--json", "--server", self.gateway.origin, "--watchdog",
             "--reconnect-delay", "1", "--no-setup", "--title",
-            "portable lifecycle fixture; closed loopback SSH",
-            "--cwd", str(self.workspace), "-F", str(self.config),
-            "-p", "9", "ssmcp-portable-fixture@127.0.0.1",
+            "portable lifecycle fixture; unavailable account gateway",
+            "--cwd", str(self.workspace),
         ]
 
     def create(self, name, *, expected=0):
@@ -229,12 +315,15 @@ class Portable:
         def observed():
             value = self.action("status", name)
             if value.get("connection_state") == "connected":
-                raise AssertionError("closed-loopback fixture unexpectedly connected")
+                raise AssertionError("unavailable-gateway fixture unexpectedly connected")
             if value.get("attempt", 0) > 0 and value.get("last_error"):
                 return value
             return False
 
-        value = wait_for(observed, f"failed loopback SSH observation for {name}")
+        value = wait_for(observed, f"failed loopback account connection for {name}")
+        self.check(self.gateway.snapshot()["connect"] > 0,
+                   "the owned gateway receives and rejects real WebSocket attempts with HTTP 503")
+        self.samples.setdefault("first_connection_error", self.redact(value["last_error"]))
         self.check(value.get("supervised") and value.get("manager") == "ssmcp-service"
                    and bool(value.get("generation")) and value.get("manager_active"),
                    "saved session is owned by the live supervisor and has a generation")
@@ -323,13 +412,7 @@ class Portable:
                    "installation previews did not start a manager")
 
     def run(self):
-        # Refuse to interact even with an unrelated local listener on this port.
-        with socket.socket() as probe:
-            probe.settimeout(0.3)
-            if probe.connect_ex(("127.0.0.1", 9)) == 0:
-                raise RuntimeError("127.0.0.1:9 is in use; closed-loopback fixture is unavailable")
-        if shutil.which("ssh") is None and os.name != "nt":
-            raise RuntimeError("OpenSSH ssh is required for the failing transport fixture")
+        self.prepare_gateway()
         self.definition_checks()
         self.launch()
         self.check(json.loads(self.cli(["attach", "--json"]).stdout) == [],
@@ -341,6 +424,14 @@ class Portable:
         self.create("portable-restored")
         restored = self.failed_connection("portable-restored")
         self.samples["initial_generation"] = original["generation"]
+
+        def retried_connection():
+            value = self.action("status", "portable-restored")
+            return value if value.get("attempt", 0) > restored["attempt"] else False
+
+        retried = wait_for(retried_connection, "ordinary account outage retry")
+        self.check(retried["generation"] == restored["generation"],
+                   "a retryable account gateway outage retains the same supervised worker generation")
 
         listings = [
             json.loads(self.cli(args).stdout)
@@ -414,6 +505,12 @@ class Portable:
         self.check(json.loads(self.cli(["attach", "--json"]).stdout) == [],
                    "remove clears only the disposable fixture sessions")
         self.stop()
+        observed = self.gateway.snapshot()
+        self.samples["gateway_requests"] = observed
+        self.check(observed["login_start"] == observed["login_poll"] == 1
+                   and observed["whoami"] > 0 and observed["connect"] > 1
+                   and observed["unexpected_requests"] == 0,
+                   "session retries and supervisor restoration reuse the local login without new authorization")
 
     def diagnostics(self):
         for index, log in enumerate(self.manager_logs):
@@ -422,6 +519,15 @@ class Portable:
                 (self.artifacts / f"portable-manager-{index}.log").write_text(value, encoding="utf-8")
 
     def cleanup(self):
+        try:
+            self.cleanup_manager()
+        finally:
+            if self.gateway is not None:
+                self.samples["gateway_requests"] = self.gateway.snapshot()
+                self.gateway.close()
+                self.gateway = None
+
+    def cleanup_manager(self):
         if self.manager is None or self.manager.poll() is not None:
             return
         for name in sorted(self.names):
@@ -454,6 +560,9 @@ def main():
     report = {
         "revision": args.revision, "platform": sys.platform, "status": "failed",
         "scope": "isolated foreground supervisor; installation previews only",
+        "transport": "owned loopback account gateway; HTTP 503 before WebSocket upgrade",
+        "account": "synthetic local login saved by the real client",
+        "external_oauth": False, "models_started": False,
         "checks": [], "samples": {},
     }
     if sys.platform not in ("linux", "darwin", "win32") or (

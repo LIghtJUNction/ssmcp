@@ -16,12 +16,13 @@ use base64::{
     Engine,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -211,11 +212,88 @@ fn private_directory(path: &Path) -> crate::Result<()> {
     Ok(())
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisconnectRequest {
+    schema_version: u32,
+    nonce: String,
+    client_id: String,
+}
+
+async fn disconnect_requested(directory: &Path, broker: &Broker) -> crate::Result<()> {
+    let request_path = directory.join("disconnect.json");
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(&request_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    // SAFETY: geteuid has no preconditions.
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.len() > 4096
+    {
+        return Err(
+            "disconnect request must be an owned private regular file of at most 4096 bytes".into(),
+        );
+    }
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file).take(4097).read_to_end(&mut bytes)?;
+    if bytes.len() > 4096 {
+        return Err("disconnect request exceeded 4096 bytes".into());
+    }
+    let request: DisconnectRequest = serde_json::from_slice(&bytes)?;
+    if request.schema_version != 1
+        || request.nonce.len() != 32
+        || !request.nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || request.client_id.len() != 64
+        || !request
+            .client_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("invalid disconnect request schema, nonce or client id".into());
+    }
+    fs::remove_file(request_path)?;
+    let accepted = broker.test_disconnect_client(&request.client_id).await;
+    let temporary = directory.join("disconnect-ack.tmp");
+    let mut acknowledgement = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&temporary)?;
+    acknowledgement.write_all(&serde_json::to_vec(&json!({
+        "schema_version": 1,
+        "nonce": request.nonce,
+        "client_id": request.client_id,
+        "accepted": accepted
+    }))?)?;
+    acknowledgement.sync_all()?;
+    drop(acknowledgement);
+    fs::rename(temporary, directory.join("disconnect-ack.json"))?;
+    Ok(())
+}
+
 async fn run(directory: PathBuf) -> crate::Result<()> {
     private_directory(&directory)?;
     let ready = directory.join("ready.json");
-    if ready.exists() || directory.join("stop").exists() {
-        return Err("relay fixture requires fresh ready and stop paths".into());
+    if [
+        "ready.json",
+        "stop",
+        "disconnect.json",
+        "disconnect-ack.json",
+        "disconnect-ack.tmp",
+    ]
+    .iter()
+    .any(|name| directory.join(name).exists())
+    {
+        return Err("relay fixture requires fresh ready, stop and control paths".into());
     }
     let mut running = Running {
         tasks: Vec::new(),
@@ -301,6 +379,7 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
         if running.tasks.iter().any(JoinHandle::is_finished) {
             return Err("isolated relay fixture listener exited early".into());
         }
+        disconnect_requested(&directory, &broker).await?;
         match fs::symlink_metadata(directory.join("stop")) {
             Ok(metadata) => {
                 // SAFETY: geteuid has no preconditions.
@@ -323,7 +402,17 @@ async fn relay_composer_server_fixture() -> crate::Result<()> {
     let directory = std::env::var_os("SSMCP_RELAY_COMPOSER_FIXTURE")
         .map(PathBuf::from)
         .ok_or("SSMCP_RELAY_COMPOSER_FIXTURE must name a caller-created private directory")?;
-    tokio::time::timeout(Duration::from_secs(120), run(directory))
+    let timeout_secs = match std::env::var_os("SSMCP_RELAY_COMPOSER_FIXTURE_TIMEOUT_SECS") {
+        Some(value) => value
+            .to_str()
+            .ok_or("relay fixture timeout must be valid UTF-8")?
+            .parse::<u64>()?,
+        None => 120,
+    };
+    if !(30..=1800).contains(&timeout_secs) {
+        return Err("relay fixture timeout must be 30..1800 seconds".into());
+    }
+    tokio::time::timeout(Duration::from_secs(timeout_secs), run(directory))
         .await
-        .map_err(|_| "isolated relay composer fixture exceeded 120 seconds")?
+        .map_err(|_| format!("isolated relay composer fixture exceeded {timeout_secs} seconds"))?
 }
