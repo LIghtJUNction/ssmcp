@@ -25,12 +25,18 @@ class ForceSend(InputHistory):
         return self.observe("ssmcp.ui.listener", {"op": op, **arguments})
 
     def listener_error(self, op, **arguments):
-        result = self.response("return await call(%s, 'ssmcp.ui.listener', %s);" % (
+        code = "return await call(%s, 'ssmcp.ui.listener', %s);" % (
             json.dumps(self.client_id), json.dumps({"op": op, **arguments}),
-        ))
+        )
+        status, envelope, _ = self.rpc(
+            "tools/call", {"name": "code_mode", "arguments": {"code": code}}, modern=True,
+        )
+        self.check(status == 200 and isinstance(envelope, dict) and "error" not in envelope,
+                   "an expected listener rejection remains a valid MCP tool response")
+        result = envelope["result"]
         self.check(not self.messages(result),
                    "a rejected listener operation does not collect the ordinary queue")
-        native = result["structuredContent"]["result"]
+        native = result if result.get("isError") else result["structuredContent"]["result"]
         self.check(native.get("isError") is True,
                    "invalid listener operations return a real native error")
         return " ".join(item.get("text", "") for item in native.get("content", [])
