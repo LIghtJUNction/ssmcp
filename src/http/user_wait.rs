@@ -493,7 +493,6 @@ mod tests {
                 .unwrap()
                 .messages[0]
                 .state
-                .clone()
         }
 
         async fn close(mut self) {
