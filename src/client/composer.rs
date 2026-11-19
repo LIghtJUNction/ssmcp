@@ -122,6 +122,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Reference a workspace file or import selected local files",
     },
     SlashCommand {
+        name: "/select",
+        description: "Freeze display for terminal mouse selection; F7/Esc returns",
+    },
+    SlashCommand {
         name: "/copy",
         description: "Copy the latest agent reply",
     },

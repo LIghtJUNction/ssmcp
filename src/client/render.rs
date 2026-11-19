@@ -254,7 +254,7 @@ fn agent_message(
         }
         let _ = writeln!(bytes);
     }
-    publish_event("agent", &event, &bytes, None);
+    publish_event("agent", &event, &bytes, None, None);
     // No terminal or history lock is held while the /copy cache is updated.
     super::interface::messages::remember_last(text);
     saved
@@ -276,7 +276,7 @@ pub(crate) fn event(label: &str, value: &Value) {
     if reserved_control_event(value) {
         return;
     }
-    emit_event(label, value, false);
+    emit_event(label, value, false, None);
 }
 
 pub(crate) fn reserved_control_event(value: &Value) -> bool {
@@ -286,10 +286,26 @@ pub(crate) fn reserved_control_event(value: &Value) -> bool {
 }
 
 pub(crate) fn trusted_event(label: &str, value: &Value) {
-    emit_event(label, value, true);
+    emit_event(label, value, true, None);
 }
 
-fn emit_event(label: &str, value: &Value, trusted_control: bool) {
+/// The metadata is supplied by native code, never recovered from event JSON.
+pub(crate) fn scoped_event(
+    label: &str,
+    value: &Value,
+    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+) {
+    if !reserved_control_event(value) {
+        emit_event(label, value, false, scope);
+    }
+}
+
+fn emit_event(
+    label: &str,
+    value: &Value,
+    trusted_control: bool,
+    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+) {
     if value["type"] == "ssmcp.code_mode" {
         super::terminal::audit(value);
     }
@@ -308,7 +324,7 @@ fn emit_event(label: &str, value: &Value, trusted_control: bool) {
             .then(|| renderer.panel_snapshot(Instant::now()));
         (snapshot, renderer.auth_diagnostics.take_updates())
     };
-    publish_event(label, value, &bytes, snapshot);
+    publish_event(label, value, &bytes, snapshot, scope);
     super::terminal::diagnostics(&diagnostics);
 }
 
@@ -371,8 +387,14 @@ pub(super) fn set_git_status(snapshot: Arc<GitSnapshot>) {
     }
 }
 
-fn publish_event(label: &str, value: &Value, bytes: &[u8], snapshot: Option<PanelSnapshot>) {
-    if !super::terminal::log_event(label, value, bytes) && !bytes.is_empty() {
+fn publish_event(
+    label: &str,
+    value: &Value,
+    bytes: &[u8],
+    snapshot: Option<PanelSnapshot>,
+    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+) {
+    if !super::terminal::log_event(label, value, bytes, scope) && !bytes.is_empty() {
         let mut out = io::stderr().lock();
         let _ = out.write_all(bytes);
         let _ = out.flush();

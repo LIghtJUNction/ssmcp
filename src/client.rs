@@ -21,6 +21,7 @@ mod handoff;
 mod highlight;
 pub(crate) mod input;
 pub(crate) mod interface;
+mod link_metrics;
 mod panel;
 pub(crate) mod presentation;
 #[cfg(test)]
@@ -1722,10 +1723,17 @@ async fn connect(
             _ = terminate.recv() => {},
         }
     };
+    let mut metric_channel = None;
     let registration = register_ssh(
         &metadata,
         registered,
-        || relay::command(&executable, server, credential),
+        || {
+            let mut command = relay::command(&executable, server, credential);
+            if ui.dashboard && ui.log_format != render::LogFormat::Jsonl {
+                metric_channel = link_metrics::prepare(&mut command);
+            }
+            command
+        },
         cancelled,
         Duration::from_secs(120),
     )
@@ -1765,6 +1773,9 @@ async fn connect(
             .map(|credential| (credential.server.as_str(), credential.token.as_str()))
     });
     let mut incoming = Incoming::start(reader);
+    let _link_metrics = display_session
+        .as_ref()
+        .and_then(|_| link_metrics::observe(metric_channel, &client_id, incoming.closed.clone()));
     render::status(
         "shell",
         "Progress",
@@ -1984,6 +1995,10 @@ async fn connect(
                             Err(error) => break 'connected Err(error.into()),
                         }
                     }
+                    let call_scope = match backend.call_scope(id, attribution.as_deref(), code_context.as_ref()) {
+                        Ok(scope) => scope,
+                        Err(error) => break Err(error.into()),
+                    };
                     let mut code_call = match backend.begin_code_call(&operation, id, controller.as_ref(), attribution.as_deref(), code_context) {
                         Ok(call) => call,
                         Err(error) => break Err(error.into()),
@@ -2054,7 +2069,7 @@ async fn connect(
                         let _controller = (!matches!(&operation, crate::wire::Operation::ListTools { .. }))
                             .then(|| render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation));
                         let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
-                        let mut result = backend.perform(operation).await;
+                        let mut result = call_scope.scope(backend.perform(operation)).await;
                         if let Some(call) = &mut code_call { call.finish(&result); }
                         // A large native response must not corrupt/disconnect the SSH stream.
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {

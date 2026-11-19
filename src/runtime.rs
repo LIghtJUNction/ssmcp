@@ -1,4 +1,5 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
+pub(crate) mod call_scope;
 mod capabilities;
 pub mod hooks;
 pub(crate) mod native_host;
@@ -272,6 +273,7 @@ pub struct Runtime {
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
     code_audit: CodeAudit,
+    call_connection: u64,
     next_call: AtomicU64,
     tool_call_hook: Mutex<Option<Arc<dyn hooks::ToolCallHook>>>,
     catalog: Catalog,
@@ -341,6 +343,7 @@ impl Runtime {
             desktop,
             plugins,
             code_audit: CodeAudit::new(audit.clone()),
+            call_connection: call_scope::connection(),
             audit,
             output,
             next_call: AtomicU64::new(1),
@@ -403,6 +406,17 @@ impl Runtime {
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         self.registry.catalog()
     }
+    /// Accept only metadata supplied by the authenticated relay frame, before
+    /// entering a provider. Tool arguments cannot create this scope.
+    pub(crate) fn call_scope(
+        &self,
+        request_id: u64,
+        attribution: Option<&crate::wire::ControlAttribution>,
+        context: Option<&crate::wire::CodeContext>,
+    ) -> Result<Arc<call_scope::CallScope>, String> {
+        call_scope::CallScope::from_relay(self.call_connection, request_id, attribution, context)
+    }
+
     pub(crate) fn begin_code_call(
         &self,
         operation: &Operation,

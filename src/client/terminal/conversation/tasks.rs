@@ -22,7 +22,7 @@ pub(crate) struct TaskPosition {
     detail_scroll: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Job {
     id: String,
     data: Value,
@@ -207,19 +207,30 @@ impl TaskPanel {
                 if !self.loading {
                     return false;
                 }
+                let visible_loading = self.loading && !self.loaded && self.error.is_none();
                 self.loading = false;
-                self.error = Some("Task refresh ended before returning a snapshot".into());
-                return true;
+                let error = "Task refresh ended before returning a snapshot";
+                let changed = self.error.as_deref() != Some(error);
+                self.error = Some(error.into());
+                if changed {
+                    self.mouse_rows.clear();
+                }
+                return visible_loading || changed;
             }
         };
+        let visible_loading = self.loading && !self.loaded && self.error.is_none();
         self.loading = false;
         // Keep the deadline set when the read started. Moving it here could put
         // it after the worker's only wake and leave an idle panel stale.
-        self.apply_refresh(result);
-        true
+        self.apply_refresh(result) || visible_loading
     }
 
-    fn apply_refresh(&mut self, result: RefreshResult) {
+    fn apply_refresh(&mut self, result: RefreshResult) -> bool {
+        let old_mouse_rows = std::mem::take(&mut self.mouse_rows);
+        let old_jobs = self.jobs.clone();
+        let old_loaded = self.loaded;
+        let old_error = self.error.clone();
+        let old_detail_error = self.detail_error.clone();
         if let Err(error) = result.list.and_then(|value| self.ingest(&value)) {
             self.error = Some(error);
         }
@@ -243,7 +254,16 @@ impl TaskPanel {
                 Err(error) => self.detail_error = Some((id, error)),
             }
         }
-        self.mouse_rows.clear();
+        let changed = self.jobs != old_jobs
+            || self.loaded != old_loaded
+            || self.error != old_error
+            || self.detail_error != old_detail_error;
+        if changed {
+            self.mouse_rows.clear();
+        } else {
+            self.mouse_rows = old_mouse_rows;
+        }
+        changed
     }
 
     /// Accept the actual exec.list shape, directly or inside its MCP result envelope.
@@ -277,16 +297,27 @@ impl TaskPanel {
         })();
         match result {
             Ok(jobs) => {
+                let changed = self.jobs != jobs || !self.loaded || self.error.is_some();
+                let anchor = self.jobs.get(self.position.list_scroll).map(|job| &job.id);
+                if let Some(index) = anchor.and_then(|id| jobs.iter().position(|job| &job.id == id))
+                {
+                    self.position.list_scroll = index;
+                }
                 self.jobs = jobs;
                 self.loaded = true;
                 self.error = None;
                 if self.position.selected_id.is_none() {
                     self.position.selected_id = self.jobs.first().map(|job| job.id.clone());
                 }
-                self.mouse_rows.clear();
+                if changed {
+                    self.mouse_rows.clear();
+                }
                 Ok(())
             }
             Err(error) => {
+                if self.error.as_ref() != Some(&error) {
+                    self.mouse_rows.clear();
+                }
                 self.error = Some(error.clone());
                 Err(error)
             }
@@ -411,8 +442,8 @@ impl TaskPanel {
             format!(
                 " Tasks · {} jobs{}",
                 self.jobs.len(),
-                if self.loading {
-                    " · refreshing…"
+                if self.loading && !self.loaded && self.error.is_none() {
+                    " · loading…"
                 } else {
                     ""
                 }
@@ -461,7 +492,7 @@ impl TaskPanel {
                 rows.push((
                     if self.loaded {
                         " No local command jobs."
-                    } else if self.loading {
+                    } else if self.loading && self.error.is_none() {
                         " Loading local command jobs…"
                     } else {
                         " No task snapshot is available."
@@ -697,6 +728,155 @@ mod tests {
             color: false,
             ..Ui::default()
         }
+    }
+
+    #[test]
+    fn background_refresh_keeps_unchanged_rows_and_mouse_targets() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let mut panel = TaskPanel::default();
+        let snapshot = json!({"jobs":[job("a", false), job("b", false)]});
+        panel.ingest(&snapshot).unwrap();
+        let rows = panel.render(80, 10, &ui());
+        let mouse_rows = panel.mouse_rows.clone();
+        let position = panel.position();
+        let (sender, receiver) = mpsc::channel();
+        panel.pending = Some(Pending {
+            receiver,
+            task: runtime.spawn(std::future::pending::<()>()),
+        });
+        panel.loading = true;
+        assert_eq!(panel.render(80, 10, &ui()), rows);
+        sender
+            .send(RefreshResult {
+                list: Ok(snapshot),
+                detail: None,
+            })
+            .unwrap();
+        drop(sender);
+        assert!(!panel.poll());
+        assert!(!panel.loading);
+        assert_eq!(panel.position(), position);
+        assert_eq!(panel.mouse_rows, mouse_rows);
+        assert!(
+            panel.mouse_select(5),
+            "unchanged refresh must keep live click targets"
+        );
+        assert_eq!(panel.snapshot()["selected_id"], "b");
+    }
+
+    #[test]
+    fn background_refresh_repeated_errors_do_not_flash_loading() {
+        let mut panel = TaskPanel::default();
+        assert!(panel.apply_refresh(RefreshResult {
+            list: Err("local task source is unavailable".into()),
+            detail: None,
+        }));
+        let rows = panel.render(80, 10, &ui());
+        panel.loading = true;
+        assert_eq!(panel.render(80, 10, &ui()), rows);
+        assert!(!panel.apply_refresh(RefreshResult {
+            list: Err("local task source is unavailable".into()),
+            detail: None,
+        }));
+        panel.loading = false;
+        assert_eq!(panel.render(80, 10, &ui()), rows);
+        assert!(panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":[]})),
+            detail: None,
+        }));
+        assert!(panel.loaded);
+        assert!(panel.error.is_none());
+        assert_ne!(panel.render(80, 10, &ui()), rows);
+    }
+
+    #[test]
+    fn background_refresh_reports_real_duration_state_and_output_changes() {
+        let mut panel = TaskPanel::default();
+        let mut current = job("a", true);
+        panel.ingest(&json!({"jobs":[current.clone()]})).unwrap();
+        current["duration_ms"] = json!(2000);
+        assert!(panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":[current.clone()]})),
+            detail: None,
+        }));
+        assert!(panel.render(80, 10, &ui()).join("\n").contains("2.000s"));
+        assert!(!panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":[current.clone()]})),
+            detail: None,
+        }));
+        let mut detail = current.clone();
+        detail["stdout"]["next_cursor"] = json!(42);
+        assert!(panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":[current]})),
+            detail: Some(("a".into(), Ok(detail.clone()))),
+        }));
+        assert_eq!(
+            panel.snapshot()["selected_job"]["stdout"]["next_cursor"],
+            42
+        );
+        assert!(!panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":[detail.clone()]})),
+            detail: Some(("a".into(), Ok(detail))),
+        }));
+        let mut completed = job("a", false);
+        completed["exit_code"] = json!(7);
+        assert!(panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":[completed]})),
+            detail: None,
+        }));
+        let rows = panel.render(80, 10, &ui()).join("\n");
+        assert!(rows.contains("completed") && rows.contains("exit 7"));
+    }
+
+    #[test]
+    fn background_refresh_preserves_visible_anchor_and_selection_when_jobs_reorder() {
+        let mut panel = TaskPanel::default();
+        let jobs: Vec<_> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+            .into_iter()
+            .map(|id| job(id, false))
+            .collect();
+        panel.ingest(&json!({"jobs":jobs})).unwrap();
+        panel.position.list_scroll = 2;
+        panel.position.selected_id = Some("d".into());
+        panel.position.detail_scroll = 7;
+        panel.render(80, 8, &ui());
+        assert_eq!(panel.mouse_rows[2].as_deref(), Some("c"));
+        let jobs: Vec<_> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+            .into_iter()
+            .map(|id| job(id, id == "h"))
+            .collect();
+        assert!(panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":jobs})),
+            detail: None,
+        }));
+        panel.render(80, 8, &ui());
+        assert_eq!(panel.mouse_rows[2].as_deref(), Some("c"));
+        assert_eq!(panel.position.list_scroll, 3);
+        assert_eq!(panel.position.selected_id.as_deref(), Some("d"));
+        assert_eq!(panel.position.detail_scroll, 7);
+    }
+
+    #[test]
+    fn background_refresh_equal_final_detail_preserves_mouse_targets() {
+        let mut panel = TaskPanel::default();
+        let listed = job("a", true);
+        let mut detailed = listed.clone();
+        detailed["stdout"]["next_cursor"] = json!(42);
+        assert!(panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":[listed.clone()]})),
+            detail: Some(("a".into(), Ok(detailed.clone()))),
+        }));
+        panel.render(80, 10, &ui());
+        let mouse_rows = panel.mouse_rows.clone();
+        assert!(!panel.apply_refresh(RefreshResult {
+            list: Ok(json!({"jobs":[listed]})),
+            detail: Some(("a".into(), Ok(detailed))),
+        }));
+        assert_eq!(panel.mouse_rows, mouse_rows);
+        assert!(panel.mouse_select(2));
     }
 
     #[test]

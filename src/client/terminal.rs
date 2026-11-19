@@ -37,6 +37,7 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
+const COPY_HINT: &str = "Copy mode · drag to select · terminal Copy · F7/Esc back";
 const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
@@ -233,6 +234,32 @@ pub(crate) fn exit_requested() -> bool {
 }
 
 /// Keep the account actually used by this connection private to its local UI.
+pub(super) fn begin_link_metrics(
+    generation: u64,
+    client_id: &str,
+    status: super::link_metrics::Status,
+) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.link_metrics.begin(generation, client_id, status);
+        state.dirty = true;
+    }
+}
+
+pub(super) fn update_link_metrics(generation: u64, status: super::link_metrics::Status) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let changed = state.link_metrics.update(generation, status);
+        state.dirty |= changed;
+    }
+}
+
 pub(super) fn set_logout_target(target: Option<(&str, &str)>) {
     if let Some(shared) = shared() {
         shared
@@ -319,7 +346,12 @@ pub(super) fn log(bytes: &[u8]) -> bool {
 }
 
 /// Keep correlated activity and the original transcript in the same update.
-pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) -> bool {
+pub(super) fn log_event(
+    label: &str,
+    value: &serde_json::Value,
+    bytes: &[u8],
+    scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+) -> bool {
     let Some(shared) = shared() else {
         return false;
     };
@@ -327,7 +359,7 @@ pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) ->
         return false;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.log_event(label, value, bytes);
+    state.log_scoped_event(label, value, bytes, scope);
     true
 }
 
@@ -575,10 +607,10 @@ pub(crate) fn snapshot() -> serde_json::Value {
     let conversation = state.conversation.snapshot();
     serde_json::json!({
         "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
-        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.log_rows},"cols":g.left,"visible":!chat || state.conversation.logs_open},
-            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
-            "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":conversation::body_rows(g.rows),"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
-            "input":{"row":conversation::prompt_top(g.rows)+1,"col":0,"rows":conversation::prompt_rows(g.rows),"cols":g.left,"visible":chat && conversation::prompt_rows(g.rows)>0}},
+        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.logs_open},
+            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {g.log_rows} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+            "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
+            "input":{"row":conversation::prompt_top(g)+1,"col":0,"rows":g.input_rows,"cols":g.left,"visible":chat && g.input_rows>0}},
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
@@ -595,7 +627,10 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     state.account = AccountStatus::Ready {
         login: "example".into(),
         username: None,
-        traffic: account_status::Traffic::Remaining(750_000_000),
+        traffic: account_status::Traffic::from_reply(&serde_json::json!({"traffic":{
+            "used_bytes":250_000_000,"limit_bytes":1_000_000_000,
+            "remaining_bytes":750_000_000,"reset_at":1_796_054_400u64,"utc_offset_minutes":480
+        }})),
     };
     state.log_message("user", "Improve the client experience\nKeep commands, results and the original code easy to inspect.", "\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
     state.log_message(
@@ -735,12 +770,13 @@ struct Geometry {
     cols: u16,
     left: u16,
     log_rows: u16,
+    input_rows: u16,
     pty_top: u16,
     pty_rows: u16,
 }
 
 impl Geometry {
-    fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
+    fn new(rows: u16, cols: u16, ui: &Ui, preferred_input_rows: Option<u16>) -> Self {
         let rows = rows.clamp(1, 1000);
         let cols = cols.clamp(1, 1000);
         let layout = PanelLayout::configured(
@@ -749,9 +785,14 @@ impl Geometry {
             ui.sidebar && !ui.panels.is_empty(),
             ui.sidebar_width,
         );
+        let input_rows = if ui.layout == Layout::Chat {
+            conversation::prompt_rows(rows, preferred_input_rows)
+        } else {
+            0
+        };
         let available = if rows >= 3 { rows - 1 } else { rows };
         let log_rows = match ui.layout {
-            Layout::Chat => conversation::body_rows(rows),
+            Layout::Chat => conversation::body_rows(rows, input_rows),
             Layout::Logs => available,
             Layout::Split if rows >= 5 => {
                 ((u32::from(available - 1) * u32::from(ui.log_height_percent) / 100) as u16)
@@ -774,18 +815,24 @@ impl Geometry {
             cols,
             left: layout.log_cols.max(1),
             log_rows,
+            input_rows,
             pty_top,
             pty_rows,
         }
     }
 }
 
-fn request_interrupt() {
+fn request_interrupt(_state: &mut State) {
     crate::client::interface::computer::local_input();
     #[cfg(unix)]
     // SAFETY: this targets only the current process, whose normal signal handler
     // owns graceful shutdown and restoration of the original terminal mode.
     let _ = unsafe { libc::kill(libc::getpid(), libc::SIGINT) };
+    #[cfg(not(unix))]
+    {
+        _state.conversation.exit_requested = true;
+        _state.dirty = true;
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -817,6 +864,8 @@ enum Key {
     HistoryEnd,
     CanvasLeft,
     CanvasRight,
+    InputGrow,
+    InputShrink,
     Mouse {
         button: u16,
         x: u16,
@@ -827,6 +876,10 @@ enum Key {
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[1;3A", Key::InputGrow),
+    (b"\x1b[1;3B", Key::InputShrink),
+    (b"\x1b[57352;3u", Key::InputGrow),
+    (b"\x1b[57353;3u", Key::InputShrink),
     (b"\x1b[1;3D", Key::CanvasLeft),
     (b"\x1b[1;3C", Key::CanvasRight),
     (b"\x1b[57350;3u", Key::CanvasLeft),
@@ -933,6 +986,8 @@ impl Keyboard {
             | Key::HistoryEnd
             | Key::CanvasLeft
             | Key::CanvasRight
+            | Key::InputGrow
+            | Key::InputShrink
             | Key::Mouse { .. } => true,
             Key::Toggle => allow_logs,
             Key::Up | Key::Down | Key::Home | Key::End => true,
@@ -1154,6 +1209,7 @@ struct State {
     logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
+    link_metrics: super::link_metrics::View,
     graphics: images::Graphics,
     media: Vec<images::Placement>,
     geometry: Geometry,
@@ -1185,7 +1241,7 @@ struct State {
 }
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
-        let geometry = Geometry::new(rows, cols, ui);
+        let geometry = Geometry::new(rows, cols, ui, None);
         let conversation = conversation::Conversation::default();
         let mut state = Self {
             events: events::EventView::new(),
@@ -1194,6 +1250,7 @@ impl State {
             logout_target: None,
             guide: None,
             account: AccountStatus::Unavailable,
+            link_metrics: super::link_metrics::View::default(),
             graphics: images::Graphics::default(),
             media: Vec::new(),
             logs: vt100::Parser::new(
@@ -1351,6 +1408,16 @@ impl State {
         self.events.ingest_event(label, value, bytes);
         self.log_raw(bytes);
     }
+    fn log_scoped_event(
+        &mut self,
+        label: &str,
+        value: &serde_json::Value,
+        bytes: &[u8],
+        scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+    ) {
+        self.events.ingest_scoped_event(label, value, bytes, scope);
+        self.log_raw(bytes);
+    }
     fn log_raw(&mut self, bytes: &[u8]) {
         let mut normalized = Vec::with_capacity(bytes.len());
         for &byte in bytes {
@@ -1364,7 +1431,7 @@ impl State {
         self.dirty = true;
     }
     fn resize(&mut self, rows: u16, cols: u16) {
-        let geometry = Geometry::new(rows, cols, &self.ui);
+        let geometry = Geometry::new(rows, cols, &self.ui, self.conversation.preferred_input_rows);
         if self.geometry != geometry {
             self.logs
                 .set_size(nonzero(geometry.log_rows), nonzero(geometry.left));
@@ -1559,11 +1626,20 @@ impl State {
         if !self.preview && (!output.is_empty() || !actions.is_empty()) {
             crate::client::interface::computer::local_input();
         }
+        let selection_input =
+            self.selection || actions.iter().any(|action| matches!(action, Key::Select));
         let mut layout_changed = false;
         for action in actions {
             if matches!(action, Key::Interrupt) {
-                request_interrupt();
+                request_interrupt(self);
                 return Vec::new();
+            }
+            if matches!(action, Key::Select) || (self.selection && matches!(action, Key::Escape)) {
+                self.set_selection_mode(!self.selection);
+                continue;
+            }
+            if self.selection {
+                continue;
             }
             if matches!(action, Key::Escape) && showing_help {
                 self.help = false;
@@ -1694,6 +1770,13 @@ impl State {
             self.dirty = true;
         }
 
+        if selection_input {
+            self.keyboard.logs = old_focus;
+            if self.selection && output == b"\x1b" {
+                self.set_selection_mode(false);
+            }
+            return Vec::new();
+        }
         if old_focus != self.keyboard.logs {
             self.dirty = true;
         }
@@ -1745,6 +1828,19 @@ impl State {
             }
         }
         Vec::new()
+    }
+
+    fn set_selection_mode(&mut self, enabled: bool) {
+        if self.selection == enabled {
+            return;
+        }
+        self.selection = enabled;
+        if enabled {
+            self.notice = Some(COPY_HINT.into());
+        } else if self.notice.as_deref() == Some(COPY_HINT) {
+            self.notice = None;
+        }
+        self.dirty = true;
     }
 
     fn should_redraw(
@@ -1812,7 +1908,9 @@ impl State {
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
                 let level = ["all", "commands", "errors"][usize::from(self.log_level)];
-                let hint = if self.filter_editing {
+                let hint = if self.selection {
+                    COPY_HINT.into()
+                } else if self.filter_editing {
                     format!(" / {}_   Enter Apply · Esc Cancel ", self.filter_draft)
                 } else if let Some(notice) = &self.notice {
                     format!(" {notice} · F1 Help ")
@@ -1822,9 +1920,9 @@ impl State {
                         self.log_query
                     )
                 } else if g.cols < 100 {
-                    " Wheel Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F1 Help ".into()
+                    " F7 Copy · Wheel Logs · ↑↓ Audit · Enter/→ Open · / Filter · F1 Help ".into()
                 } else {
-                    " Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help · F4 Theme ".into()
+                    " F7 Copy · Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help ".into()
                 };
                 let connection = footer::Connection::from_snapshot(self.preview, &self.chat_data());
                 let text = footer::render(
@@ -1891,6 +1989,8 @@ impl State {
                 "F3         Show or hide the sidebar".into(),
                 "F4         Cycle color themes".into(),
                 "F5         Reload your configuration".into(),
+                "F7         Freeze display for terminal mouse selection; F7/Esc returns".into(),
+                "Copy       Use your terminal copy shortcut after selecting text".into(),
                 "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
                 "Up / Down  Select a code_mode call; Enter / Right opens".into(),
                 "Left       Return to the audit list".into(),
@@ -1916,11 +2016,15 @@ impl State {
                 lines.splice(2..2, links);
             }
             for (row, line) in rows.iter_mut().enumerate() {
-                let content = lines
-                    .get(row.saturating_sub(1))
-                    .filter(|_| row > 0)
-                    .map(String::as_str)
-                    .unwrap_or("");
+                let content = if self.selection && g.rows >= 3 && row + 1 == usize::from(g.rows) {
+                    COPY_HINT
+                } else {
+                    lines
+                        .get(row.saturating_sub(1))
+                        .filter(|_| row > 0)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                };
                 let text = fit(&format!("  {content}"), g.cols);
                 let padded = format!(
                     "{text}{}",
@@ -1951,9 +2055,9 @@ impl State {
     }
     fn guide_rows(&mut self, width: u16, height: u16, _row: u16, _col: u16) -> Vec<String> {
         let mut rows = Vec::new();
-        // Keep eight rows for the configured panels before reserving account space.
+        // The account, quota and reset share the existing guide footer space.
         if height >= 10 && width >= 20 {
-            for text in self.account.rows() {
+            for text in self.account.rows(width) {
                 let text = fit(&text, width);
                 let padded = format!(
                     "{text}{}",
@@ -1962,11 +2066,19 @@ impl State {
                 rows.push(self.tone(PanelTone::Muted, &padded));
             }
         }
-        rows.extend(guide::pet_rows(
-            width,
-            height.saturating_sub(rows.len() as u16),
-            &self.ui,
-        ));
+        for text in self
+            .link_metrics
+            .rows()
+            .into_iter()
+            .take(usize::from(height).saturating_sub(rows.len()))
+        {
+            let text = fit(&text, width);
+            let padded = format!(
+                "{text}{}",
+                " ".repeat(usize::from(width).saturating_sub(text.width()))
+            );
+            rows.push(self.tone(PanelTone::Muted, &padded));
+        }
         rows
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
@@ -2633,7 +2745,7 @@ mod tests {
     }
 
     #[test]
-    fn account_preview_uses_the_shared_sidebar_and_preserves_the_ascii_pet() {
+    fn account_quota_preview_shares_sidebar_with_connection_metrics() {
         for layout in [Layout::Chat, Layout::Split, Layout::Logs] {
             let mut ui = Ui {
                 color: false,
@@ -2644,23 +2756,104 @@ mod tests {
             let mut screen = vt100::Parser::new(nonzero(30), nonzero(120), 0);
             screen.process(&preview_bytes(&ui, 30, 120));
             let contents = screen.screen().contents();
-            assert!(contents.contains("账号  example"), "{layout:?}: {contents}");
+            assert!(contents.contains("Local example"), "{layout:?}: {contents}");
+            assert!(contents.contains("Max 1 GB"), "{layout:?}: {contents}");
             assert!(
-                contents.contains("本月剩余  0.75 GB"),
+                contents.contains("Reset 2026-12-01"),
                 "{layout:?}: {contents}"
             );
-            assert!(contents.contains("( o.o )"), "{layout:?}: {contents}");
+            assert!(contents.contains('█'), "{layout:?}: {contents}");
+            assert!(contents.contains("App data #"), "{layout:?}: {contents}");
+            assert!(
+                contents.contains("Speed unavailable"),
+                "{layout:?}: {contents}"
+            );
+            assert!(!contents.contains("( o.o )"), "{layout:?}: {contents}");
             ui.sidebar = false;
             let mut hidden = vt100::Parser::new(nonzero(30), nonzero(120), 0);
             hidden.process(&preview_bytes(&ui, 30, 120));
             let contents = hidden.screen().contents();
             if layout == Layout::Chat {
-                assert!(contents.contains("账号  example"), "{contents}");
-                assert!(contents.contains("本月剩余  0.75 GB"), "{contents}");
+                assert!(contents.contains("Local example"), "{contents}");
+                assert!(contents.contains("Max 1 GB"), "{contents}");
+                assert!(contents.contains("Reset 12-01"), "{contents}");
             } else {
-                assert!(!contents.contains("账号"));
+                assert!(!contents.contains("Local example"));
             }
-            assert!(!contents.contains("( o.o )"));
+            assert!(!contents.contains("App data #"));
+        }
+    }
+
+    #[test]
+    fn account_quota_narrow_sidebar_keeps_capacity_reset_and_local_identity() {
+        for width in [20, 24, 30] {
+            let ui = Ui {
+                color: false,
+                layout: Layout::Chat,
+                sidebar: true,
+                sidebar_width: width,
+                ..Ui::default()
+            };
+            let mut screen = vt100::Parser::new(nonzero(30), nonzero(100), 0);
+            screen.process(&preview_bytes(&ui, 30, 100));
+            let contents = screen.screen().contents();
+            assert!(contents.contains("Local example"), "{width}: {contents}");
+            assert!(contents.contains("Max 1 GB"), "{width}: {contents}");
+            assert!(contents.contains("Reset 2026-12-01"), "{width}: {contents}");
+            assert!(contents.contains('█'), "{width}: {contents}");
+            assert!(!contents.contains("本月剩余") && !contents.contains("无限"));
+        }
+    }
+
+    #[test]
+    fn link_metrics_sidebar_shows_sample_identity_and_disconnect_at_narrow_widths() {
+        for width in [20, 24, 30] {
+            let ui = Ui {
+                color: false,
+                layout: Layout::Chat,
+                sidebar: true,
+                sidebar_width: width,
+                ..Ui::default()
+            };
+            let mut state = State::new(30, 100, &ui);
+            state.link_metrics.begin(
+                7,
+                "abc01234ffff",
+                super::super::link_metrics::Status::Ready {
+                    uploaded: 1500,
+                    downloaded: 2_500_000,
+                },
+            );
+            let frame = state.frame(Instant::now());
+            let screen = physical(&frame);
+            let contents = screen.screen().contents();
+            assert!(
+                contents.contains("App data #abc01234"),
+                "{width}: {contents}"
+            );
+            assert!(
+                contents.contains("↑ 1.5 KB/s") && contents.contains("↓ 2.5 MB/s"),
+                "{width}: {contents}"
+            );
+            assert!(!contents.contains("( o.o )"), "{contents}");
+            assert!(
+                !state
+                    .link_metrics
+                    .update(6, super::super::link_metrics::Status::Disconnected)
+            );
+            assert!(
+                state
+                    .link_metrics
+                    .update(7, super::super::link_metrics::Status::Disconnected)
+            );
+            let frame = state.frame(Instant::now());
+            let screen = physical(&frame);
+            let contents = screen.screen().contents();
+            assert!(contents.contains("Disconnected"), "{width}: {contents}");
+            assert!(
+                !contents.contains("1.5 KB/s") && !contents.contains("0 B/s"),
+                "{contents}"
+            );
         }
     }
 
@@ -2769,6 +2962,99 @@ mod tests {
         );
         assert!(upload.contains(&format!("a=t,t=d,f=100,i={next_id},")));
         assert!(!upload.contains(&format!("a=t,t=d,f=100,i={rejected_id},")));
+    }
+
+    #[test]
+    fn copy_mode_releases_mouse_and_freezes_all_dashboard_layouts() {
+        for layout in [Layout::Chat, Layout::Split, Layout::Audit, Layout::Logs] {
+            let ui = Ui {
+                layout,
+                ..Ui::default()
+            };
+            let mut state = State::new(24, 100, &ui);
+            state.preview = true;
+            state.filter_editing = true;
+            state.keyboard.logs = true;
+            state.filter_draft = "keep this filter".into();
+            state.conversation.composer.set_text("keep this draft");
+            let now = Instant::now();
+            let before = state.frame(now);
+            assert!(before.mouse_capture);
+            assert!(state.keyboard(b"\x1b[18~", now, false).is_empty());
+            assert!(state.selection);
+            let selected = state.frame(now);
+            assert!(!selected.mouse_capture);
+            let diff = String::from_utf8(selected.diff(Some(&before))).unwrap();
+            assert!(diff.contains("\x1b[?1000l") && diff.contains("\x1b[?1006l"));
+            assert!(
+                physical(&selected)
+                    .screen()
+                    .contents()
+                    .contains("Copy mode")
+            );
+            state.keyboard(b"/changed\r\x1b[<65;1;1M", now, false);
+            assert_eq!(state.filter_draft, "keep this filter");
+            assert!(state.filter_editing);
+            if layout != Layout::Chat {
+                assert!(state.keyboard.logs);
+            }
+            assert_eq!(state.conversation.composer.text(), "keep this draft");
+            state.log_message("assistant", "background update", b"background update\n");
+            assert!(!state.should_redraw(Some(&selected), state.graphics.cell()));
+            state.notice = Some("A background operation failed".into());
+            state.keyboard(b"\x1b[18~", now, false);
+            assert!(!state.selection);
+            assert_eq!(
+                state.notice.as_deref(),
+                Some("A background operation failed")
+            );
+            assert!(state.should_redraw(Some(&selected), state.graphics.cell()));
+            let resumed = state.frame(now);
+            assert!(resumed.mouse_capture);
+            let diff = String::from_utf8(resumed.diff(Some(&selected))).unwrap();
+            assert!(diff.contains("\x1b[?1000h") && diff.contains("\x1b[?1006h"));
+        }
+    }
+
+    #[test]
+    fn copy_mode_escape_returns_without_changing_the_filter_or_draft() {
+        for layout in [Layout::Chat, Layout::Split, Layout::Audit, Layout::Logs] {
+            let mut state = State::new(
+                24,
+                100,
+                &Ui {
+                    layout,
+                    ..Ui::default()
+                },
+            );
+            state.preview = true;
+            state.log_query = "keep query".into();
+            state.conversation.composer.set_text("keep draft");
+            let now = Instant::now();
+            state.keyboard(b"\x1b[18~", now, false);
+            state.keyboard(b"\x1b", now, false);
+            state.keyboard(&[], now + Duration::from_millis(100), true);
+            assert!(!state.selection);
+            assert_eq!(state.log_query, "keep query");
+            assert_eq!(state.conversation.composer.text(), "keep draft");
+            assert!(state.keyboard.pending.is_empty());
+            assert!(state.frame(now).mouse_capture);
+        }
+    }
+
+    #[test]
+    fn copy_mode_resize_refreshes_once_without_recapturing_the_mouse() {
+        let mut state = State::new(24, 100, &split_ui());
+        state.preview = true;
+        let now = Instant::now();
+        state.keyboard(b"\x1b[18~", now, false);
+        let before = state.frame(now);
+        state.resize(18, 72);
+        assert!(state.should_redraw(Some(&before), state.graphics.cell()));
+        let resized = state.frame(now);
+        assert!(!resized.mouse_capture);
+        assert_eq!(resized.rows.len(), 18);
+        assert!(!state.should_redraw(Some(&resized), state.graphics.cell()));
     }
 
     #[test]
