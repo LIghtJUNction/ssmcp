@@ -185,7 +185,7 @@ async fn purchase_requires_verified_session_origin_and_csrf() {
     let url = format!("{}/account/traffic/orders", app.base);
     let form = [
         ("csrf", app.csrf.clone()),
-        ("quantity_gb", "1".into()),
+        ("amount", "1.00".into()),
         ("request_nonce", format!("{:032x}", 1)),
         ("acknowledge_month", "yes".into()),
         ("period", app.broker.traffic_period()),
@@ -221,6 +221,39 @@ async fn purchase_requires_verified_session_origin_and_csrf() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    for amount in [
+        "0.00",
+        "-1.00",
+        "1.001",
+        "1.01",
+        "1e0",
+        "18446744073709551616.00",
+    ] {
+        let mut invalid = form.clone();
+        invalid[1].1 = amount.into();
+        let response = app
+            .client
+            .post(&url)
+            .header("cookie", app.cookie(&app.alice))
+            .header("origin", "https://ssmcp.test")
+            .form(&invalid)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{amount}");
+    }
+    let mut mixed = form.to_vec();
+    mixed.push(("quantity_gb", "1".into()));
+    let response = app
+        .client
+        .post(&url)
+        .header("cookie", app.cookie(&app.alice))
+        .header("origin", "https://ssmcp.test")
+        .form(&mixed)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(
         app.broker
             .portal
@@ -282,6 +315,42 @@ async fn signed_wrong_amount_or_identity_never_grants_and_duplicate_success_gran
         Some(FREE_MONTHLY_TRAFFIC_BYTES + commerce::GB)
     );
     assert_eq!(app.broker.traffic_quota("456").await.unwrap().paid_bytes, 0);
+    // A settled local fixture makes valid retries stop before any provider request.
+    // Both the deployed amount form and previously rendered GB forms remain valid.
+    for (field, value) in [("amount", "1.00"), ("amount", "1.0"), ("quantity_gb", "1")] {
+        let response = app
+            .client
+            .post(format!("{}/account/traffic/orders", app.base))
+            .header("cookie", app.cookie(&app.alice))
+            .header("origin", "https://ssmcp.test")
+            .form(&[
+                ("csrf", app.csrf.as_str()),
+                (field, value),
+                ("request_nonce", order.request_nonce.as_str()),
+                ("acknowledge_month", "yes"),
+                ("period", order.period.as_str()),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{field}={value}");
+        assert!(response.text().await.unwrap().contains("订单状态已变化"));
+    }
+    let orders = app
+        .broker
+        .portal
+        .commerce
+        .as_ref()
+        .unwrap()
+        .storage(|store| store.list("123"))
+        .await
+        .unwrap();
+    assert_eq!(orders.len(), 1);
+    assert_eq!(orders[0].quantity_gb, 1);
+    assert_eq!(
+        app.broker.traffic_quota("123").await.unwrap().paid_bytes,
+        commerce::GB
+    );
 }
 #[tokio::test]
 async fn recovery_finishes_durable_paid_intent_without_repeating_a_grant() {
@@ -354,6 +423,22 @@ async fn checkout_page_never_caches_bearer_link_and_discloses_month_end() {
     let body = response.text().await.unwrap();
     assert!(body.contains(&expires));
     assert!(body.contains("上下行合计"));
+    assert!(body.contains("税前金额（CNY）"));
+    assert!(body.contains(
+        "<input type=number name=amount value=1.00 min=1.00 max=9.00 step=1.00 required>"
+    ));
+    assert!(!body.contains("name=quantity_gb"));
+    assert!(body.contains("<input type=checkbox name=acknowledge_month value=yes required>"));
+    if let Some(directory) = std::env::var_os("SSMCP_COMMERCE_PREVIEW_DIR") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("traffic-purchase.html"), &body).unwrap();
+        for (path, content) in crate::portal::assets::preview_files() {
+            let path = directory.join(path.trim_start_matches('/'));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, content).unwrap();
+        }
+    }
     // Exercise the exact response renderer and the same middleware applied to the merged routes.
     let response = super::super::security_headers(checkout_page(
         &order,
