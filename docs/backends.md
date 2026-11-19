@@ -388,3 +388,7 @@ JavaScript 提供 `clients`、`call`、`tools`、日志函数，以及 `exec`、
 超时、断线或结果过大时，已发送的原生命令可能仍在运行或已经完成；应先查询其状态，避免盲目重发写入、启动任务等操作。上表约束来自[运行时实现](../src/code_mode.rs)。
 
 后端 fixture 验证协议映射与响应处理；跨平台发布测试另外执行真实文件与原生进程操作。它们不证明每个已安装 harness、插件、MCP 服务器或模型都可用。实际任务依赖本机原生 CLI、账户和服务，新增能力仍需由 `list` 与原生 schema 确认。[跨平台原语测试](../tests/release_client.rs)
+
+## ztty through native MCP
+
+On Linux with X11, `--shell ztty` uses the zmcpio MCP client to open a normal ztty window and share its real PTY with `terminal.*`. Native `ztty.*` schemas and result envelopes come from the discovered server catalog. Requires a ztty build with lossless `output_base64`; unsupported builds fail explicitly. See [implementation and validation](ztty-mcp-2026-11-19.zh-CN.md).

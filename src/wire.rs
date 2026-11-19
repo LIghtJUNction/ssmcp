@@ -416,6 +416,10 @@ pub enum Operation {
         name: String,
         arguments: Value,
     },
+    /// Relay-only candidate delivery. Never accepted as a native public tool.
+    PeerMessages {
+        request: crate::messaging::NativeRequest,
+    },
 }
 
 fn default_max_bytes() -> usize {
@@ -432,11 +436,13 @@ impl Operation {
             Self::Write { .. } => "terminal.write",
             Self::Resize { .. } => "terminal.resize",
             Self::Status {} => "terminal.status",
+            Self::PeerMessages { .. } => "messages",
         }
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
         match self {
+            Self::PeerMessages { request } => request.validate(),
             Self::Read {
                 max_bytes, wait_ms, ..
             } if *max_bytes == 0 || *max_bytes > MAX_READ || *wait_ms > MAX_WAIT_MS => Err(

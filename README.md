@@ -187,7 +187,7 @@ ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行�
 
 ## 独立核心库
 
-[ztui](https://github.com/LIghtJUNction/ztui)、[zharness](https://github.com/LIghtJUNction/zharness) 和 [zplugin](https://github.com/LIghtJUNction/zplugin) 作为固定源码的 Rust 依赖参与构建，分别承担终端帧、扩展接口和本机动态库加载。ztui-core 保留本仓库的 0.1.1 源码目录；zharness 与 zplugin 使用固定 Git 子模块。它们独立维护版本，不启动模型或外部 harness。源码构建请使用 `git clone --recurse-submodules`；已有 checkout 使用 `git submodule update --init --recursive`。[依赖与协同开发](docs/dependencies.md)
+[ztuio](https://github.com/LIghtJUNction/ztuio)、[zharness](https://github.com/LIghtJUNction/zharness) 和 [zplugin](https://github.com/LIghtJUNction/zplugin) 作为固定源码的 Rust 依赖参与构建，分别承担终端帧、扩展接口和本机动态库加载。三个库均使用固定 Git 子模块，ztuio 的包名与 Rust 导入名均为 `ztuio`，精确版本为 `0.1.0`。它们独立维护版本，不启动模型或外部 harness。源码构建请使用 `git clone --recurse-submodules`；已有 checkout 使用 `git submodule update --init --recursive`。[依赖与协同开发](docs/dependencies.md)
 
 ## 客户端掌握能力，服务端负责连接
 
@@ -205,9 +205,9 @@ ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行�
 
 hook 默认关闭，不内置额外审核流程，也不改变工具原生权限。自定义策略由客户端开发者接入。当前连接统一使用 **wire v7**，旧协议会明确拒绝。[扩展接口与最小客户端](docs/client-extension.md) · [上下文边界](docs/context.md)
 
-### Project Z：ztui
+### Project Z：ztuio
 
-终端帧差分、几何边界和定宽行已接入工作区内的 [ztui](crates/ztui/README.md)。这个小库使用 `no_std`，禁止 `unsafe`，没有第三方依赖；缓冲区由调用方提供，Unicode 宽度规则由宿主决定。它只计算该写哪些终端字节，图片协议、终端输入、主题和会话状态仍由客户端管理。
+终端帧差分、几何边界和定宽行已接入固定源码子模块 [ztuio](crates/ztuio/README.md)。这个小库使用 `no_std`，禁止 `unsafe`，没有第三方依赖；缓冲区由调用方提供，Unicode 宽度规则由宿主决定。它只计算该写哪些终端字节，图片协议、终端输入、主题和会话状态仍由客户端管理。
 
 ## 运行边界
 

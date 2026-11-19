@@ -1,0 +1,351 @@
+{
+  "schema_version": 1,
+  "source_commit": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "package_version": "0.10.14",
+  "started_at_utc": "2026-11-19T22:33:48.052816+00:00",
+  "platform": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "kernel": "7.3.4-arch1-1"
+  },
+  "execution_mode": "prebuilt libtest and cdylib only; no Cargo or compiler command invoked",
+  "source_gitlinks": [
+    {
+      "path": "crates/zharness",
+      "commit": "84e370450f1d047d43119bf81caf73f742ba6b0a"
+    },
+    {
+      "path": "crates/zplugin",
+      "commit": "3e758b5c21af1bad1cfaf10264b43fe15440e69c"
+    },
+    {
+      "path": "crates/ztuio",
+      "commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+    },
+    {
+      "path": "crates/zuse",
+      "commit": "c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41"
+    }
+  ],
+  "selected_lock_packages": [
+    {
+      "name": "zharness",
+      "version": "0.5.0",
+      "dependencies": [
+        "zcall",
+        "zplugin"
+      ]
+    },
+    {
+      "name": "zplugin",
+      "version": "0.3.0",
+      "dependencies": [
+        "zplugin-macros"
+      ]
+    },
+    {
+      "name": "zplugin-macros",
+      "version": "0.3.0",
+      "dependencies": [
+        "proc-macro2",
+        "quote",
+        "syn 2.0.119"
+      ]
+    },
+    {
+      "name": "ztuio",
+      "version": "0.1.0"
+    }
+  ],
+  "cargo_lock_sha256": "bd582371e936ba4c59e05060c827f2fb30ab51cadb4953943dab38d0073f7c81",
+  "frozen_manifest_sha256": "bbae51a977e8196b40e1fe4df1734fedc5b239820539cb1976eb90d67df4d14b",
+  "artifacts": {
+    "libtest": {
+      "name": "ssmcp-da29c9e7034e9a42",
+      "bytes": 282396976,
+      "sha256": "b74d457c9934557a6588107c4478e68804f238a71e7e677c998d57b143a54793"
+    },
+    "fixture": {
+      "name": "libnative_plugin_fixture.so",
+      "bytes": 5450784,
+      "sha256": "f432324f95b5a3de32bf5c82e81a6fadd017fd97071ceab6c9e81f7202b6858a"
+    }
+  },
+  "suites": [
+    {
+      "name": "native_host",
+      "argv": [
+        "<frozen-libtest>",
+        "runtime::native_host::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.045,
+      "timed_out": false,
+      "stdout_sha256": "276a50b49f85fd2c4a5b633740d1fd5ac4926e86aa38ce23869da734a476ef6a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_results": [
+        {
+          "name": "runtime::native_host::tests::native_plugin_abi_consumes_results_once_and_releases_unpolled_tasks",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_host::tests::native_plugin_cancellation_drops_the_real_future_inside_its_audit_scope",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_host::tests::native_plugin_catalog_is_lazy_and_calls_keep_the_exact_result",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_host::tests::native_plugin_pending_tasks_do_not_serialize_calls_or_lose_audit_scope",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_host::tests::native_plugin_preserves_large_native_images_and_business_result_fields",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_host::tests::native_plugin_queued_route_rechecks_the_registration_generation",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_host::tests::native_plugin_registry_denials_happen_before_plugin_execution",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_host::tests::native_plugin_shutdown_cancels_calls_before_cleanup_and_rejects_new_work",
+          "outcome": "ok"
+        }
+      ],
+      "summary": {
+        "status": "ok",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered_out": 1508
+      }
+    },
+    {
+      "name": "dynamic_plugin_units",
+      "argv": [
+        "<frozen-libtest>",
+        "runtime::plugins::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.013,
+      "timed_out": false,
+      "stdout_sha256": "bba1dbecfadbc711c6ce48e9782d9ffa9b966f72fd2bef32c281c57075dc6666",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_results": [
+        {
+          "name": "runtime::plugins::tests::cancelled_load_lease_stops_its_owned_worker_without_a_native_call",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::plugins::tests::catalog_preserves_native_schema_and_rejects_invalid_or_duplicate_routes",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::plugins::tests::exhausted_library_budget_releases_unstarted_worker_reservation",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::plugins::tests::native_plugin_default_is_empty_without_even_resolving_a_path",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::plugins::tests::native_plugin_fixture_supports_cargo_artifact_layouts",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::plugins::tests::native_plugin_runtime_contract",
+          "outcome": "ignored, requires cargo build --example native_plugin_fixture"
+        },
+        {
+          "name": "runtime::plugins::tests::pinned_library_attempt_budget_remains_bounded_after_workers_stop",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::plugins::tests::plugin_result_preserves_business_errors_and_rejects_bad_envelopes",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::plugins::tests::process_worker_permits_outlive_all_manager_handles",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::plugins::tests::rejected_plugin_catalog_preserves_old_handles_and_other_providers",
+          "outcome": "ok"
+        }
+      ],
+      "summary": {
+        "status": "ok",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 1,
+        "measured": 0,
+        "filtered_out": 1506
+      }
+    },
+    {
+      "name": "packaged_plugin_units",
+      "argv": [
+        "<frozen-libtest>",
+        "runtime::native_plugins::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.159,
+      "timed_out": false,
+      "stdout_sha256": "6b5776c4809cdf329c0417efde74ab717d1a9136d68fbad4d16d2b6c93660dc3",
+      "stderr_sha256": "52acb2663438eaf30557d0ad97a6e9550bbf8389470347ce6ca1b6cda97b8e81",
+      "test_results": [
+        {
+          "name": "runtime::native_plugins::files::tests::native_files_cancellation_and_shutdown_release_owned_listener",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::files::tests::native_files_frontends_share_state_without_extending_context_grants",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::files::tests::native_files_host_preserves_large_results_images_and_catalogs",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::process::lazy::tests::cancelled_waiter_does_not_cancel_the_shared_initialization",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::process::lazy::tests::concurrent_requests_and_refresh_share_one_running_initialization",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::process::lazy::tests::failed_attempt_is_cached_until_an_explicit_refresh",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::process::lazy::tests::load_request_rejects_unknown_providers_and_extra_arguments",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::process::lazy::tests::observation_wait_does_not_start_any_optional_provider",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::process::lazy::tests::shutdown_cancels_loading_and_rejects_new_provider_work",
+          "outcome": "ok"
+        },
+        {
+          "name": "runtime::native_plugins::process::lazy::tests::untouched_providers_have_no_invented_installation_metadata",
+          "outcome": "ok"
+        }
+      ],
+      "summary": {
+        "status": "ok",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered_out": 1506
+      }
+    },
+    {
+      "name": "real_cdylib_contract",
+      "argv": [
+        "<frozen-libtest>",
+        "--exact",
+        "runtime::plugins::tests::native_plugin_runtime_contract",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 1.402,
+      "timed_out": false,
+      "stdout_sha256": "218ce9a21dbd3b982ca9e7c4b61113977bb1b7d707250916b7d36e47fc5dbb02",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_results": [
+        {
+          "name": "runtime::plugins::tests::native_plugin_runtime_contract",
+          "outcome": "ok"
+        }
+      ],
+      "summary": {
+        "status": "ok",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered_out": 1515
+      }
+    }
+  ],
+  "selected_test_inventory": {
+    "native_host": [
+      "runtime::native_host::tests::native_plugin_abi_consumes_results_once_and_releases_unpolled_tasks",
+      "runtime::native_host::tests::native_plugin_cancellation_drops_the_real_future_inside_its_audit_scope",
+      "runtime::native_host::tests::native_plugin_catalog_is_lazy_and_calls_keep_the_exact_result",
+      "runtime::native_host::tests::native_plugin_pending_tasks_do_not_serialize_calls_or_lose_audit_scope",
+      "runtime::native_host::tests::native_plugin_preserves_large_native_images_and_business_result_fields",
+      "runtime::native_host::tests::native_plugin_queued_route_rechecks_the_registration_generation",
+      "runtime::native_host::tests::native_plugin_registry_denials_happen_before_plugin_execution",
+      "runtime::native_host::tests::native_plugin_shutdown_cancels_calls_before_cleanup_and_rejects_new_work"
+    ],
+    "dynamic_plugins": [
+      "runtime::plugins::tests::cancelled_load_lease_stops_its_owned_worker_without_a_native_call",
+      "runtime::plugins::tests::catalog_preserves_native_schema_and_rejects_invalid_or_duplicate_routes",
+      "runtime::plugins::tests::exhausted_library_budget_releases_unstarted_worker_reservation",
+      "runtime::plugins::tests::native_plugin_default_is_empty_without_even_resolving_a_path",
+      "runtime::plugins::tests::native_plugin_fixture_supports_cargo_artifact_layouts",
+      "runtime::plugins::tests::native_plugin_runtime_contract",
+      "runtime::plugins::tests::pinned_library_attempt_budget_remains_bounded_after_workers_stop",
+      "runtime::plugins::tests::plugin_result_preserves_business_errors_and_rejects_bad_envelopes",
+      "runtime::plugins::tests::process_worker_permits_outlive_all_manager_handles",
+      "runtime::plugins::tests::rejected_plugin_catalog_preserves_old_handles_and_other_providers"
+    ],
+    "packaged_plugins": [
+      "runtime::native_plugins::files::tests::native_files_cancellation_and_shutdown_release_owned_listener",
+      "runtime::native_plugins::files::tests::native_files_frontends_share_state_without_extending_context_grants",
+      "runtime::native_plugins::files::tests::native_files_host_preserves_large_results_images_and_catalogs",
+      "runtime::native_plugins::process::lazy::tests::cancelled_waiter_does_not_cancel_the_shared_initialization",
+      "runtime::native_plugins::process::lazy::tests::concurrent_requests_and_refresh_share_one_running_initialization",
+      "runtime::native_plugins::process::lazy::tests::failed_attempt_is_cached_until_an_explicit_refresh",
+      "runtime::native_plugins::process::lazy::tests::load_request_rejects_unknown_providers_and_extra_arguments",
+      "runtime::native_plugins::process::lazy::tests::observation_wait_does_not_start_any_optional_provider",
+      "runtime::native_plugins::process::lazy::tests::shutdown_cancels_loading_and_rejects_new_provider_work",
+      "runtime::native_plugins::process::lazy::tests::untouched_providers_have_no_invented_installation_metadata"
+    ],
+    "other_runtime_native_plugins": []
+  },
+  "artifact_checksums_after": {
+    "libtest": "b74d457c9934557a6588107c4478e68804f238a71e7e677c998d57b143a54793",
+    "fixture": "f432324f95b5a3de32bf5c82e81a6fadd017fd97071ceab6c9e81f7202b6858a"
+  },
+  "frozen_artifacts_unchanged": true,
+  "finished_at_utc": "2026-11-19T22:33:49.977009+00:00",
+  "passed": true,
+  "total_passed": 28,
+  "default_ignored_contract_executed_explicitly": true,
+  "scope": {
+    "test_selection": "native_host, dynamic plugins, packaged native plugins, and the real cdylib contract",
+    "full_default_library_suite": "not executed by this validation",
+    "other_operating_systems": "not executed",
+    "artifact_provenance": "frozen build handoff verified before execution",
+    "later_test_only_changes": "outside this frozen b49 run"
+  },
+  "method": {
+    "test_threads_per_invocation": 1,
+    "outer_fixture_selector_variables_removed": [
+      "SSMCP_NATIVE_PLUGIN_CONTRACT_ROOT",
+      "SSMCP_NATIVE_PLUGIN_FIXTURE_LIBRARY"
+    ],
+    "real_contract_isolation": "the existing contract creates its own temporary workspace, home, state, config, cache and fixture library copy"
+  }
+}

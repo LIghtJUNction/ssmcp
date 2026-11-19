@@ -2,12 +2,11 @@
 //! Owns provider state, registration, native dispatch and cleanup.
 mod lazy;
 use super::super::native_host::{Call, NativePlugin, PluginFuture};
-use crate::backend::{cc, codex, opencode, pi, playwright, process, result, shell};
+use crate::backend::{cc, codex, opencode, pi, playwright, process, result, shell, ztty};
 use crate::{
     output::OutputStore,
-    pty::Terminal,
     registry::{Provider, RegisteredTool, Registry},
-    terminals::Terminals,
+    terminals::{Session as Terminal, Terminals},
     wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE, Operation},
 };
 use serde_json::{Value, json};
@@ -123,7 +122,11 @@ impl Process {
         if let Some(observer) = &observer {
             output.set_observer(observer);
         }
-        let terminal = Terminals::new(shell_path, root.clone(), output.clone())?;
+        let terminal = if ztty::selected(shell_path) {
+            Terminals::new_ztty(shell_path, root.clone(), output.clone()).await?
+        } else {
+            Terminals::new(shell_path, root.clone(), output.clone())?
+        };
         let shell = shell::Shell::with_workspace(root, output.clone())?;
         let registry = Registry::new();
         registry.replace(
@@ -133,6 +136,10 @@ impl Process {
         registry.replace(Provider::Exec, shell::Shell::tools())?;
         registry.replace(Provider::Ui, crate::client::interface::tools())?;
         registry.replace(Provider::Harnesses, lazy::tools())?;
+        if let Some(host) = terminal.ztty() {
+            registry.replace(Provider::Ztty, host.tools())?;
+            host.bind_registry(&registry);
+        }
         let backend = Arc::new(Self {
             terminal,
             observer,
@@ -152,6 +159,10 @@ impl Process {
         &self,
     ) -> std::sync::mpsc::Receiver<crate::backend::events::ProjectedEvent> {
         self.shell.observe_projection()
+    }
+
+    pub(crate) fn recovery_jobs(&self, limit: usize) -> Value {
+        self.shell.recovery_index(limit)
     }
 
     pub fn output(&self) -> Arc<OutputStore> {
@@ -395,6 +406,13 @@ impl Process {
                 )
                 .await
                 .map(result),
+            Provider::Ztty => {
+                let host = self
+                    .terminal
+                    .ztty()
+                    .ok_or("ztty is not active; connect with --shell ztty")?;
+                host.call(&native_name, arguments).await
+            }
             Provider::Harnesses => match native_name.as_str() {
                 "ssmcp.harnesses.list" => {
                     if !arguments.as_object().is_some_and(|a| a.is_empty()) {
@@ -600,11 +618,12 @@ impl NativePlugin for Process {
             Provider::Pi,
             Provider::OpenCode,
             Provider::Playwright,
+            Provider::Ztty,
         ]
     }
 
     fn catalog(&self) -> Vec<(Provider, Vec<Value>)> {
-        vec![
+        let mut catalog = vec![
             (
                 Provider::Terminal,
                 terminal_tools().as_array().unwrap().clone(),
@@ -612,7 +631,11 @@ impl NativePlugin for Process {
             (Provider::Exec, shell::Shell::tools()),
             (Provider::Ui, crate::client::interface::tools()),
             (Provider::Harnesses, lazy::tools()),
-        ]
+        ];
+        if let Some(host) = self.terminal.ztty() {
+            catalog.push((Provider::Ztty, host.tools()));
+        }
+        catalog
     }
 
     fn call(self: Arc<Self>, call: Call) -> PluginFuture {

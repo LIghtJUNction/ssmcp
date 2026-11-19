@@ -1,4 +1,6 @@
 //! JavaScript orchestration through system Node.js inside mandatory bubblewrap isolation.
+#[cfg(test)]
+mod messaging_tests;
 pub(crate) mod reminders;
 pub(crate) mod user_wait;
 use crate::backend::process::Managed;
@@ -149,6 +151,7 @@ impl AuditRun {
                 && !matches!(
                     name,
                     "ssmcp.client.capabilities"
+                        | "ssmcp.client.recover"
                         | "ssmcp.resources.list"
                         | "ssmcp.resources.templates"
                         | "ssmcp.resources.read"
@@ -354,6 +357,17 @@ impl AuditRun {
         // if this program only checks messages and makes no native tool call.
         self.interacted(client_id);
         Ok(())
+    }
+
+    /// Select a unique current participant, never a display name or historical conversation.
+    pub(crate) fn peer_source_client(&self) -> Result<Option<String>, String> {
+        let bindings = self.bindings.lock().unwrap_or_else(|e| e.into_inner());
+        if bindings.len() > 1 {
+            return Err(
+                "Select from_client_id when this run has several participant bindings".into(),
+            );
+        }
+        Ok(bindings.keys().next().cloned())
     }
 
     pub(crate) fn binding(&self, client_id: &str) -> Option<RunBinding> {
@@ -1094,6 +1108,7 @@ mod tests {
             "ssmcp.ui.wait",
             "ssmcp.ui.messages",
             "ssmcp.client.capabilities",
+            "ssmcp.client.recover",
             "ssmcp.resources.list",
             "ssmcp.resources.templates",
             "ssmcp.resources.read",
@@ -1577,8 +1592,9 @@ mod tests {
             const restarted = await reload('one');
             const artifact = await outputs.read('one',{id:'abc',offset:42,max_bytes:128});
             const metadata = await outputs.stat('one',{id:'abc'});
+            const matches = await outputs.search('one',{id:'abc',query:'needle',offset:64,max_matches:3});
             const cleaned = await outputs.cleanup('one');
-            return {transfer,resource,file,mapping,job,restarted,artifact,metadata,cleaned,alias:sync === rsync,
+            return {transfer,resource,file,mapping,job,restarted,artifact,metadata,matches,cleaned,alias:sync === rsync,
                 frozen:[fs,jobs,ports,resources,outputs].every(Object.isFrozen)};
         "#).await.unwrap();
         assert_eq!(output["result"]["transfer"]["name"], "sync");
@@ -1593,10 +1609,76 @@ mod tests {
         assert_eq!(output["result"]["restarted"]["arguments"], json!({}));
         assert_eq!(output["result"]["artifact"]["arguments"]["offset"], 42);
         assert_eq!(output["result"]["metadata"]["arguments"]["id"], "abc");
+        assert_eq!(output["result"]["matches"]["name"], "ssmcp.output.search");
+        assert_eq!(output["result"]["matches"]["arguments"]["query"], "needle");
+        assert_eq!(output["result"]["matches"]["arguments"]["offset"], 64);
         assert_eq!(output["result"]["cleaned"]["arguments"], json!({}));
         assert_eq!(output["result"]["alias"], true);
         assert_eq!(output["result"]["frozen"], true);
         assert!(run_code("return await rsync([]);").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn real_javascript_searches_and_reads_a_spilled_native_result_without_a_model() {
+        let _guard = TESTS.lock().await;
+        struct PrivateDirectory(std::path::PathBuf);
+        impl Drop for PrivateDirectory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let mut random = [0u8; 16];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let suffix = random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let directory =
+            PrivateDirectory(std::env::temp_dir().join(format!("ssmcp-output-code-mode-{suffix}")));
+        let store = crate::output::OutputStore::test_connection(directory.0.clone()).unwrap();
+        let native = json!({"isError":false,"content":[{"type":"text","text":format!("{}critical marker 中\nend", "ordinary log line\n".repeat(4000))}]});
+        let expected_bytes = serde_json::to_vec(&native).unwrap().len();
+        let host: Host = Arc::new(move |request| {
+            let store = store.clone();
+            let native = native.clone();
+            Box::pin(async move {
+                let HostRequest::Call {
+                    client_id,
+                    name,
+                    arguments,
+                } = request
+                else {
+                    return Err("unexpected resource workflow host operation".into());
+                };
+                assert_eq!(client_id, "one");
+                if name == "fixture.large" {
+                    return Ok(store.guard_result(native));
+                }
+                if !name.starts_with("ssmcp.output.") {
+                    return Err("unexpected resource workflow tool".into());
+                }
+                let value = store.perform(&name, arguments).await?;
+                Ok(json!({"isError":false,"content":[],"structuredContent":value}))
+            })
+        });
+        let output = trusted_execute(r#"
+            const native = await call('one','fixture.large',{});
+            const saved = native.structuredContent;
+            const matches = await outputs.search('one',{id:saved.artifact.id,query:'critical marker 中'});
+            const first = matches.matches[0];
+            const chunk = await outputs.read('one',{id:saved.artifact.id,offset:first.offset,max_bytes:32});
+            const stat = await outputs.stat('one',{id:saved.artifact.id});
+            return {automatic:saved.analysis_hint.automatic_model_invocation,
+                count:matches.match_count, scan_complete:matches.scan_complete,
+                exact_prefix:chunk.text.startsWith('critical marker 中'),
+                saved_bytes:stat.bytes, complete:stat.complete,
+                same_resource:saved.analysis_hint.resource_id === matches.id};
+        "#.into(), 5_000, json!([{"id":"one"}]), host).await.unwrap();
+        assert_eq!(
+            output["result"],
+            json!({"automatic":false,"count":1,"scan_complete":true,"exact_prefix":true,
+            "saved_bytes":expected_bytes,"complete":true,"same_resource":true})
+        );
     }
 
     #[tokio::test]
@@ -1657,6 +1739,7 @@ mod tests {
     async fn history_helpers_route_metadata_search_and_reject_action_overrides() {
         let _guard = TESTS.lock().await;
         let output = run_code(r#"
+            const recovered = await history.recover('work',{recent_limit:0,job_limit:2});
             const list = await history.list('work',{limit:8});
             const metadata = await history.metadata('work',{id:'conversation_fixture'});
             const read = await history.read('work',{id:'conversation_fixture',offset:4,limit:1});
@@ -1666,9 +1749,15 @@ mod tests {
                 try { await history.search('work',args); }
                 catch (error) { rejected.push(error.message); }
             }
-            return {list,metadata,read,search,rejected,frozen:Object.isFrozen(history)};
+            return {recovered,list,metadata,read,search,rejected,frozen:Object.isFrozen(history)};
         "#).await.unwrap();
         let result = &output["result"];
+        assert_eq!(result["recovered"]["name"], "ssmcp.client.recover");
+        assert_eq!(result["recovered"]["id"], "work");
+        assert_eq!(
+            result["recovered"]["arguments"],
+            json!({"recent_limit":0,"job_limit":2})
+        );
         for action in ["list", "metadata", "read", "search"] {
             assert_eq!(result[action]["name"], "ssmcp.ui.history");
             assert_eq!(result[action]["id"], "work");

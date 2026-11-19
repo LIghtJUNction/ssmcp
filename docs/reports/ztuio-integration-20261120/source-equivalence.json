@@ -1,0 +1,49 @@
+{
+  "canonical_commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+  "consumer_base": "714a8c91ade938a43592bffc5e7db57dff0c8429",
+  "files": [
+    {
+      "file": "src/frame.rs",
+      "old_sha256": "9bd6a1a57b66de211d97f87caf89789654fe1bd73efe472f74737eb023488f21",
+      "canonical_sha256": "9bd6a1a57b66de211d97f87caf89789654fe1bd73efe472f74737eb023488f21",
+      "equal_after_name_only_replacement": true
+    },
+    {
+      "file": "src/geometry.rs",
+      "old_sha256": "32ae624ec2130b64277c683b49a21502726159ee8e0af42b787e2028e61954bc",
+      "canonical_sha256": "32ae624ec2130b64277c683b49a21502726159ee8e0af42b787e2028e61954bc",
+      "equal_after_name_only_replacement": true
+    },
+    {
+      "file": "src/lib.rs",
+      "old_sha256": "2fa4790d424e860733677886ab3e99ef3a955f8bbb01df2c9d472050a3fc81a0",
+      "canonical_sha256": "2fa4790d424e860733677886ab3e99ef3a955f8bbb01df2c9d472050a3fc81a0",
+      "equal_after_name_only_replacement": true
+    },
+    {
+      "file": "src/row.rs",
+      "old_sha256": "64b9603c87a8960c8aa3edc8eda999958421b09bcdbd283d0d8639da8c9103ab",
+      "canonical_sha256": "3d3e3ca370157750d3d9d46f51d10a2e10f36427825485a595757bb3fdb5efea",
+      "equal_after_name_only_replacement": true
+    },
+    {
+      "file": "tests/contracts.rs",
+      "old_sha256": "4237d4ec0524e99a9f6bda139e5bb5af89b77a359300b3cfe1c42265d370ea4d",
+      "canonical_sha256": "7bc1f0b4733192afb68609bbf63ef410b4df0122d557818dfa9eb865559c157e",
+      "equal_after_name_only_replacement": true
+    },
+    {
+      "file": "examples/fixed_buffer.rs",
+      "old_sha256": "0a986c3bfbf50b32b17a67b7cec7320a87ec1479457f8a4ca712dad6a2ca70aa",
+      "canonical_sha256": "327acb4b523b2d765e411d63e203bdbdaa4c23e1dec4bd2acfb5222938f8371a",
+      "equal_after_name_only_replacement": true
+    },
+    {
+      "file": "benches/diff.rs",
+      "old_sha256": "941a520769948fc2ba7facdab59b4f8efdbae2814876bddad7d1b34cf42859c5",
+      "canonical_sha256": "08137de33efb9f333127a9982c54007c5801bba5cf2a3f02b10b3c464ad25347",
+      "equal_after_name_only_replacement": false,
+      "additional_difference": "canonical benchmark omits the unchanged_clone timing case and retains two historical ztui JSON metric keys; the distinct-allocation equal-row contract test remains"
+    }
+  ]
+}

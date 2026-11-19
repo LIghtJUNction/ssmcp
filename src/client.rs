@@ -19,6 +19,7 @@ pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
 mod git_status;
 mod handoff;
 mod highlight;
+pub mod inbox;
 pub(crate) mod input;
 pub(crate) mod interface;
 pub(crate) mod language;
@@ -2261,7 +2262,12 @@ async fn connect_inner(
                         let _controller = (!matches!(&operation, crate::wire::Operation::ListTools { .. }))
                             .then(|| render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation));
                         let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
-                        let mut result = call_scope.scope(backend.perform(operation)).await;
+                        let mut result = call_scope.scope(async {
+                            match operation {
+                                crate::wire::Operation::PeerMessages { request } => backend.peer_message(request).await,
+                                operation => backend.perform(operation).await,
+                            }
+                        }).await;
                         if let Some(call) = &mut code_call { call.finish(&result); }
                         // A large native response must not corrupt/disconnect the SSH stream.
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
@@ -2444,10 +2450,9 @@ mod tests {
                 "--reconnect-delay",
                 "20",
                 "--allow",
-                "octocat@github",
-                "-F",
-                "relative-ssh-config",
-                "work-server",
+                "octocat@relay.example",
+                "--server",
+                "https://relay.example",
             ]
             .map(OsString::from),
         )
@@ -2469,9 +2474,9 @@ mod tests {
             .unwrap();
         assert_eq!(parsed.allow, parent.allow);
         assert_eq!(parsed.destination, parent.destination);
+        assert_eq!(parsed.server, parent.server);
         assert_eq!(parsed.title.as_deref(), Some("--help"));
         assert_eq!(parsed.name.as_deref(), Some("worker"));
-        assert!(PathBuf::from(parsed.config.unwrap()).is_absolute());
         assert!(!parsed.session_control);
         assert!(!parsed.daemon);
         assert_eq!(parsed.reconnect_delay_secs, 2);
@@ -2661,62 +2666,84 @@ mod tests {
 
     #[test]
     fn background_manifest_retains_native_connection_arguments_without_recursing() {
-        let options = Options::parse(
-            [
-                "--daemon",
-                "--watchdog",
-                "--reconnect-delay",
-                "7",
-                "--name",
-                "workstation",
-                "--title",
-                "--daemon",
-                "--allow",
-                "OctoCat@GitHub",
-                "-i",
-                "key with spaces",
-                "-F",
-                "config with spaces",
-                "-p",
-                "2222",
-                "--theme",
-                "nord",
-                "user@host",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        let spec = options.session_spec().unwrap();
-        assert_eq!(spec.name, "workstation");
-        assert!(spec.cwd.is_absolute());
-        assert!(spec.watchdog);
-        assert_eq!(spec.reconnect_delay_secs, 7);
-        assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
-        let restored = Options::parse(spec.args.into_iter().map(OsString::from))
-            .unwrap()
-            .unwrap();
-        assert!(!restored.daemon);
-        assert_eq!(restored.title.as_deref(), Some("--daemon"));
-        assert_eq!(restored.allow, ["octocat@github"]);
-        assert_eq!(
-            restored.identity,
-            options
-                .identity
-                .as_ref()
-                .map(|path| spec.cwd.join(path).into_os_string())
-        );
-        assert_eq!(
-            restored.config,
-            options
-                .config
-                .as_ref()
-                .map(|path| spec.cwd.join(path).into_os_string())
-        );
-        assert_eq!(restored.port, options.port);
-        assert_eq!(restored.destination, options.destination);
-        assert_eq!(restored.shell, options.shell);
-        assert!(restored.theme.is_none());
+        for (args, expected_allow) in [
+            (
+                vec![
+                    "--daemon",
+                    "--watchdog",
+                    "--reconnect-delay",
+                    "7",
+                    "--name",
+                    "workstation",
+                    "--title",
+                    "--daemon",
+                    "--server",
+                    "https://relay.example",
+                    "--allow",
+                    "OctoCat@Relay.Example",
+                    "--theme",
+                    "nord",
+                ],
+                vec!["octocat@relay.example"],
+            ),
+            (
+                vec![
+                    "--daemon",
+                    "--watchdog",
+                    "--reconnect-delay",
+                    "7",
+                    "--name",
+                    "workstation",
+                    "--title",
+                    "--daemon",
+                    "-i",
+                    "key with spaces",
+                    "-F",
+                    "config with spaces",
+                    "-p",
+                    "2222",
+                    "--theme",
+                    "nord",
+                    "user@host",
+                ],
+                vec![],
+            ),
+        ] {
+            let options = Options::parse(args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            let spec = options.session_spec().unwrap();
+            assert_eq!(spec.name, "workstation");
+            assert!(spec.cwd.is_absolute());
+            assert!(spec.watchdog);
+            assert_eq!(spec.reconnect_delay_secs, 7);
+            assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
+            let restored = Options::parse(spec.args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            assert!(!restored.daemon);
+            assert_eq!(restored.title.as_deref(), Some("--daemon"));
+            assert_eq!(restored.allow, expected_allow);
+            assert_eq!(
+                restored.identity,
+                options
+                    .identity
+                    .as_ref()
+                    .map(|path| spec.cwd.join(path).into_os_string())
+            );
+            assert_eq!(
+                restored.config,
+                options
+                    .config
+                    .as_ref()
+                    .map(|path| spec.cwd.join(path).into_os_string())
+            );
+            assert_eq!(restored.port, options.port);
+            assert_eq!(restored.destination, options.destination);
+            assert_eq!(restored.server, options.server);
+            assert_eq!(restored.shell, options.shell);
+            assert!(restored.theme.is_none());
+        }
     }
 
     #[test]

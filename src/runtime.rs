@@ -5,6 +5,7 @@ pub mod hooks;
 pub(crate) mod native_host;
 pub(crate) mod native_plugins;
 mod plugins;
+mod recovery;
 use crate::catalog::{self, ToolDescriptor};
 use crate::{
     backend::{self, Backend, events::EventLog},
@@ -278,6 +279,7 @@ pub struct Runtime {
     tool_call_hook: Mutex<Option<Arc<dyn hooks::ToolCallHook>>>,
     catalog: Catalog,
     sessions: Option<crate::session::control::Control>,
+    peer_inbox: Arc<crate::messaging::queue::Inbox>,
 }
 impl Runtime {
     pub fn new(backend: Arc<Backend>, root: PathBuf) -> Result<Arc<Self>, String> {
@@ -350,9 +352,11 @@ impl Runtime {
             tool_call_hook: Mutex::new(None),
             catalog: Catalog::default(),
             sessions,
+            peer_inbox: crate::messaging::queue::Inbox::new()?,
         });
         crate::client::interface::harness::bind(&runtime);
         crate::client::completion::bind(&runtime);
+        crate::client::inbox::bind(&runtime.peer_inbox);
         Ok(runtime)
     }
 
@@ -387,7 +391,7 @@ impl Runtime {
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }
-    pub fn terminal(&self) -> Arc<crate::pty::Terminal> {
+    pub fn terminal(&self) -> Arc<crate::terminals::Session> {
         self.backend.terminal()
     }
     pub fn terminals(&self) -> Arc<crate::terminals::Terminals> {
@@ -457,6 +461,16 @@ impl Runtime {
         self.files.import_input(source).await
     }
 
+    /// Only the authenticated relay Frame::Call path may invoke this operation.
+    /// Public native tools and local Operation deserializers use perform(), which rejects it.
+    pub(crate) async fn peer_message(
+        &self,
+        request: crate::messaging::NativeRequest,
+    ) -> Result<Value, String> {
+        self.registry.ensure_open()?;
+        self.peer_inbox.perform(request).await
+    }
+
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         self.registry.ensure_open()?;
@@ -485,6 +499,9 @@ impl Runtime {
                 ("terminal.resize".into(), json!({"rows":rows,"cols":cols}))
             }
             Operation::Status {} => ("terminal.status".into(), json!({})),
+            Operation::PeerMessages { .. } => {
+                return Err("peer messages require the authenticated relay messages API".into());
+            }
         };
         let tool = self.registry.lookup(&name)?;
         self.registry.validate(&tool)?;
@@ -689,7 +706,7 @@ impl Runtime {
         let value = if matches!(tool.provider, Provider::Context | Provider::Client)
             || matches!(
                 name.as_str(),
-                "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
+                "ssmcp.output.read" | "ssmcp.output.search" | "terminal.read" | "ssmcp.exec.read"
             ) {
             value
         } else {
@@ -705,6 +722,7 @@ impl Runtime {
         Ok(attach_context_metadata(value, context))
     }
     pub async fn shutdown(&self) {
+        self.peer_inbox.close();
         self.registry.close();
         self.catalog
             .snapshots

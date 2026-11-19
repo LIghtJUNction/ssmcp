@@ -184,7 +184,7 @@ fn object_name(handle: HANDLE) -> Result<String, String> {
     Ok(String::from_utf16_lossy(&text[..count]))
 }
 
-fn interactive_desktop() -> Result<String, String> {
+pub(super) fn interactive_desktop() -> Result<String, String> {
     let station = object_name(unsafe { GetProcessWindowStation() })?;
     if !station.eq_ignore_ascii_case("WinSta0") {
         return Err(format!(

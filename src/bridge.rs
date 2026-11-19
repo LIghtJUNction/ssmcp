@@ -1,4 +1,5 @@
 //! Authenticated, bounded background transfers and TCP mappings between clients.
+pub(crate) mod messages;
 use crate::{
     broker::{Authorization, Broker, Session},
     wire::Operation,
@@ -645,6 +646,9 @@ pub async fn dispatch(
     let (_, authorization) = access.authorized().await?;
     let owner = owner(&access.user, &authorization)?;
     match name.as_str() {
+        name if name.starts_with("messages.") => {
+            messages::dispatch(access, &name["messages.".len()..], arguments).await
+        }
         name if name.starts_with("collab.") => {
             let mut args = arguments
                 .as_object()

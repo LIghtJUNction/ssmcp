@@ -335,6 +335,42 @@ impl Shell {
             ),
         ]
     }
+    /// Only metadata and existing output references; command/output bodies are not copied.
+    pub(crate) fn recovery_index(&self, limit: usize) -> Value {
+        let mut jobs: Vec<_> = self
+            .registry()
+            .jobs
+            .values()
+            .cloned()
+            .map(|job| {
+                let running = job.state().running;
+                (running, job.started, job)
+            })
+            .collect();
+        jobs.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| b.1.cmp(&a.1))
+                .then_with(|| a.2.id.cmp(&b.2.id))
+        });
+        let total = jobs.len();
+        let running = jobs.iter().filter(|job| job.0).count();
+        let rows: Vec<_> = jobs.into_iter().take(limit).map(|(_, _, job)| {
+            let state = job.state();
+            let stream = |output: &Output| json!({"start_cursor":output.start,"next_cursor":output.end,
+                "eof":output.eof,"archive_error":output.capture.error().is_some(),
+                "artifact":output.capture.metadata().map(|metadata| json!({"id":metadata.id,
+                    "bytes":metadata.bytes,"complete":metadata.complete,"expires_at_unix":metadata.expires_at_unix}))});
+            json!({"job_id":job.id,"title":job.title,
+                "state":if state.running {"running"} else if state.cancelled {"cancelled"} else if state.timed_out {"timed_out"} else if state.error.is_some() {"failed"} else {"completed"},
+                "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,
+                "duration_ms":state.finished.unwrap_or_else(Instant::now).duration_since(job.started).as_millis() as u64,
+                "stdout":stream(&state.stdout),"stderr":stream(&state.stderr)})
+        }).collect();
+        json!({"total":total,"running":running,"shown":rows.len(),"truncated":rows.len()<total,
+            "jobs":rows,"order":"running_first_then_started_desc","list_tool":"ssmcp.exec.list",
+            "scope":"jobs retained by this native command manager; not historical or model tasks"})
+    }
+
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         self.call_scoped(name, args, None).await
     }

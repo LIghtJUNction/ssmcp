@@ -68,3 +68,7 @@ Linux 默认状态位置为 `$XDG_STATE_HOME/ssmcp/context-memory/<工作区哈�
 [记忆实现与模块回归](../src/client/context_memory.rs) · [隔离端到端夹具](../scripts/e2e_context_memory.py) · [输入与本地沟通](client-input.md)
 
 夹具使用临时工作区与新建的测试 relay；源码和夹具的存在不等于已安装或已运行通过。具体测试、安装与 reload 状态以本轮验证报告为准。
+
+## 跨工作区总量
+
+新建检查点工作区目录现有 256 个名额，在私有根目录文件锁内检查。每工作区仍是 256 KiB 上限。达到名额后保留已有内容和已有工作区的更新能力，明确拒绝新增；不会自动删除旧工作区或用户附件。详见 [主动恢复与容量边界](session-recovery.zh-CN.md)。

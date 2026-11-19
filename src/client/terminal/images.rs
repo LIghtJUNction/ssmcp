@@ -1,5 +1,4 @@
 //! Bounded native previews; unsupported terminals retain clean attachment metadata.
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
 use serde_json::Value;
 use std::{io::Cursor, sync::Arc};
@@ -21,7 +20,7 @@ pub(crate) struct Preview {
 /// Source paths are never opened here. The full decoded buffer is temporary;
 /// only the optional native PNG cache survives decoding; fallback cards keep metadata.
 pub(crate) fn decode(block: &Value, native: bool) -> Result<Preview, String> {
-    crate::output::validate_image_content(block)?;
+    let bytes = crate::output::decode_image_content(block)?;
     let format = match block["mimeType"].as_str() {
         Some("image/png") => ImageFormat::Png,
         Some("image/jpeg") => ImageFormat::Jpeg,
@@ -29,16 +28,13 @@ pub(crate) fn decode(block: &Value, native: bool) -> Result<Preview, String> {
         Some("image/webp") => ImageFormat::WebP,
         _ => return Err("unsupported preview image format".into()),
     };
-    let bytes = STANDARD
-        .decode(block["data"].as_str().ok_or("image data must be base64")?)
-        .map_err(|_| "image data must be canonical base64")?;
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_DIMENSION);
     limits.max_image_height = Some(MAX_DIMENSION);
     // Decoder allocation accounting is best effort. Dimensions and the exact
     // output-buffer size are checked separately before pixels are allocated.
     limits.max_alloc = Some(MAX_DECODED_BYTES);
-    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut reader = ImageReader::with_format(Cursor::new(bytes.as_slice()), format);
     reader.limits(limits);
     let decoder = reader
         .into_decoder()
@@ -52,7 +48,16 @@ pub(crate) fn decode(block: &Value, native: bool) -> Result<Preview, String> {
     }
     let decoded =
         DynamicImage::from_decoder(decoder).map_err(|error| format!("image preview: {error}"))?;
-    let native = native.then(|| Native::prepare(&decoded)).flatten();
+    let native = if native {
+        let original = if format == ImageFormat::Png {
+            Native::from_png(&decoded, &bytes, block["data"].as_str().unwrap())
+        } else {
+            None
+        };
+        original.or_else(|| Native::prepare(&decoded))
+    } else {
+        None
+    };
     Ok(Preview {
         width,
         height,
@@ -63,6 +68,7 @@ pub(crate) fn decode(block: &Value, native: bool) -> Result<Preview, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use image::RgbaImage;
     use serde_json::json;
 

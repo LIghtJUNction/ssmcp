@@ -1,6 +1,6 @@
 # Linux 服务端部署
 
-服务器部署 OpenSSH、`ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp`，需要调用某个 Harness 时再安装和配置它。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
+服务器部署 `ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp`，需要调用某个 Harness 时再安装和配置它。服务器管理和旧部署迁移可继续使用 OpenSSH，当前设备连接使用 HTTPS/WSS。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
 
 当前客户端通过 HTTPS/WSS 接入核心；受控端可以使用 `--allow 用户名@服务器` 明确授权，控制端仍须完成账户 OAuth 与访问控制检查。已登录的受控端省略 `--allow` 时只允许自己。接入步骤见[配置与登录](configuration.md)。
 
@@ -12,7 +12,7 @@
 
 ## 标准账号部署与旧配置迁移
 
-`ssmcp login`、设备邀请、SSH 会话和 MCP 必须由同一个 `ssmcpd` 进程处理。新部署使用单进程 Nginx 模板；旧的独立 Portal 部署可通过同一个设置命令迁移。该命令默认仅检查，`--apply` 才写入配置并重载服务。
+CLI 账号登录、设备 WebSocket 和 MCP 由同一个 `ssmcpd` 核心进程处理。新部署使用单进程 Nginx 模板；旧的独立 Portal 部署可通过同一个设置命令迁移。该命令默认仅检查，`--apply` 才写入配置并重载服务。
 
 安装下文的依赖与服务、填写私有 TOML 中的 GitHub OAuth 和公网域名，并准备 TLS 证书后执行（`PREFIX=/usr` 的安装将路径改为 `/usr/libexec/ssmcp/setup-server`）：
 
@@ -300,13 +300,17 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 ## 6. 检查与升级
 
-`http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 或 `/alice` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 包含 `list`、`code_mode`、`collab` 和 `invite`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
+`http://127.0.0.1:8080/healthz` 只检查守护进程健康，不列出用户名或凭据。未授权访问 `/mcp` 会得到 OAuth 发现信息；完成登录后，每次 MCP 请求都需携带 access token。完成 discovery/initialize，确认 `tools/list` 包含 `list`、`code_mode` 和 `collab`，再用 `list` 枚举有权操作的在线客户端。`cwd_kind: "startup"` 表示目录是注册时快照。
 
 在 `code_mode` 中通过 `await exec.run(clientId, {command:["git","status","--short"],wait_ms:5000})` 验证命令执行；检查 `running` 和 `exit_code`，长任务沿用返回的 `job_id` 等待或读取；`wait_timed_out` 只表示本次等待到期，不会停止命令，不应重新启动同一工作。[独立命令与等待](commands.md)。交互式 Shell 使用 `terminal.write/read`。Harness 链路使用实时目录中确认无模型的状态接口，例如已注册 `pi.rpc` 时传入 `{type:"get_state",arguments:{}}`。先通过 `list({client_id})` 查看 Schema；工具真实调用与原生审批传播分别保留证据，不为开发或测试提交模型任务。Claude Code 前台 Bash 的输出在调用结束时返回，后台增量观察只跟随原生结果明确返回的输出路径。
 
-验证 GitHub 模式时，为两个客户端设置不同 `--allow`，确认当前身份只看到并能调用匹配的客户端；未匹配的 `client_id` 也必须被拒绝。关闭一个客户端后，它应从列表消失；已有 GitHub 授权可以继续访问其他匹配客户端。重连时按新的允许列表重新判断。
+验证账号授权时，为两个客户端设置不同的 `--allow 用户名@服务器`，确认当前登录账号只看到并能调用匹配的客户端；未匹配的 `client_id` 也必须被拒绝。关闭一个客户端后，它应从列表消失；有效账号授权可继续访问其他匹配设备。重连时按当前名单重新判断。
 
-验证登录码模式时，签发连接退出后，其旧 access token 应得到 `401`，refresh token 也不能继续刷新。确认该授权无法列出或调用任何设置了 `--allow` 的连接；同一账号的其他独立登录码授权保持各自生命周期。
+### 历史迁移记录：旧 SSH 与登录码
+
+以下保留旧版本部署的验证背景，当前版本不再使用 SSH 设备接入、登录码或 `@github` 名单。当前新部署和升级应使用文首的标准账号流程与[首次连接](onboarding.md)。
+
+旧版本验证登录码模式时，签发连接退出后，其旧 access token 应得到 `401`，refresh token 也不能继续刷新。确认该授权无法列出或调用任何设置了 `--allow` 的连接；同一账号的其他独立登录码授权保持各自生命周期。
 
 从 0.2 系列或更早版本升级时，更新两端二进制与安装脚本，重启 `ssmcpd`，再重新连接、登录并刷新 MCP 工具表。原有直接调用原生工具的代码改为经 `code_mode` 的 `call` 调用。内部 wire 版本不匹配会被拒绝；旧事件游标不可用于新连接。
 

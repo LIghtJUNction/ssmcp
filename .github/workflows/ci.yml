@@ -82,6 +82,11 @@ jobs:
       - name: Check JavaScript orchestration helpers
         run: make test-code-mode
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: Verify the independent ztuio source contracts
+        run: |
+          cargo fmt --manifest-path crates/ztuio/Cargo.toml -- --check
+          cargo clippy --manifest-path crates/ztuio/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path crates/ztuio/Cargo.toml --locked
       - name: Render terminal transcript fixture
         if: matrix.runner == 'ubuntu-24.04'
         env:
@@ -251,8 +256,8 @@ jobs:
         run: cargo test --lib --locked runtime::plugins::tests::native_plugin_runtime_contract -- --ignored --exact
       - name: Check and test the zero-dependency TUI primitives
         run: |
-          cargo clippy --locked -p ztui-core --all-targets -- -D warnings
-          cargo test --locked -p ztui-core
+          cargo clippy --manifest-path crates/ztuio/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path crates/ztuio/Cargo.toml --locked
       - run: cargo build --locked --bin ssmcp
       - name: Check client startup
         shell: bash

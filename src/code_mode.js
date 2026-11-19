@@ -475,6 +475,12 @@ const bootstrap = `(() => {
   freeze(tools);
 
   const builtin = (name, args = {}) => dispatch('builtin', '_', name, args);
+  const messages = freeze(Object.fromEntries(
+    ['key','list','send','read','receive','wait','ack','status'].map(action => [action, (args = {}) => {
+      if (!args || typeof args !== 'object' || isArray(args)) throw new Failure('messages arguments must be an object');
+      return builtin('messages.' + action, args);
+    }])
+  ));
   const collab = freeze(Object.fromEntries(
     ['join', 'list', 'update', 'send', 'receive', 'ack', 'leave', 'bind'].map(action => [
       action, (clientId, args = {}) => {
@@ -509,7 +515,9 @@ const bootstrap = `(() => {
     ['list', 'status', 'create', 'restart', 'close'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.session.' + name, args)])
   ));
-  const history = freeze(Object.fromEntries(
+  const history = freeze({
+    recover: (id, args = {}) => workspaceResult(id, 'ssmcp.client.recover', args),
+    ...Object.fromEntries(
     ['list', 'metadata', 'read', 'search'].map(action =>
       [action, (id, args = {}) => {
         if (!args || typeof args !== 'object' || isArray(args) || Object.hasOwn(args, 'action')) {
@@ -517,8 +525,10 @@ const bootstrap = `(() => {
         }
         return workspaceResult(id, 'ssmcp.ui.history', {...args, action});
       }])
-  ));
+    ),
+  });
   const outputs = freeze({
+    search: (id, args) => workspaceResult(id, 'ssmcp.output.search', args),
     read: (id, args) => workspaceResult(id, 'ssmcp.output.read', args),
     stat: (id, args) => workspaceResult(id, 'ssmcp.output.stat', args),
     cleanup: id => workspaceResult(id, 'ssmcp.output.cleanup'),
@@ -792,6 +802,7 @@ const bootstrap = `(() => {
     sessions: { value: sessions, enumerable: true },
     history: { value: history, enumerable: true },
     collab: { value: collab, enumerable: true },
+    messages: { value: messages, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
     context: { value: context, enumerable: true },

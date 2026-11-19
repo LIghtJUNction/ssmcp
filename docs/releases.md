@@ -6,7 +6,7 @@
 
 ## 平台和下载内容
 
-六个目标分别在对应架构的 GitHub runner 上构建。Linux 归档包含客户端 `ssmcp` 和网关 `ssmcpd`；macOS、Windows 归档只包含客户端。网关的 OpenSSH 接入、Unix socket 与代码隔离仍运行在 Linux。[平台入口](../src/bin/ssmcpd.rs)
+六个目标分别在对应架构的 GitHub runner 上构建。Linux 归档包含客户端 `ssmcp` 和网关 `ssmcpd`；macOS、Windows 归档只包含客户端。网关的 HTTPS/WSS 设备接入、Unix socket 与代码隔离运行在 Linux。[平台入口](../src/bin/ssmcpd.rs)
 
 | 平台 | Rust target | 工作流 runner | 归档 | 可执行文件 |
 | --- | --- | --- | --- | --- |
@@ -62,24 +62,11 @@ irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 
 & ([scriptblock]::Create((irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1))) -Version vX.Y.Z -InstallDir "$env:LOCALAPPDATA\ssmcp\bin" -NoModifyPath
 ```
 
-两套脚本也接受 `SSMCP_VERSION` 和 `SSMCP_INSTALL_DIR` 环境变量。Windows 更新时会先保留旧可执行文件；系统暂时不允许删除正在使用的旧程序时，脚本会显示保留位置。安装器更新磁盘上的程序，不改变已经连接的进程；在原入口更新后可按[会话控制](session-control.md)调用 `reload(clientId)`，或退出并重启。连接前仍需系统 OpenSSH Client，Windows 的安装方法见下一节。
+两套脚本也接受 `SSMCP_VERSION` 和 `SSMCP_INSTALL_DIR` 环境变量。Windows 更新时会先保留旧可执行文件；系统暂时不允许删除正在使用的旧程序时，脚本会显示保留位置。安装器更新磁盘上的程序，不改变已经连接的进程；在原入口更新后可按[会话控制](session-control.md)调用 `reload(clientId)`，或退出并重启。连接通过 HTTPS/WSS；账号与设备授权步骤见[首次连接](onboarding.md)。
 
 ## Windows：PowerShell 安装预编译客户端
 
-Windows 客户端直接使用本机 OpenSSH Client，不要求运行 WSL 或安装 Windows SSH Server。先在 PowerShell 检查：
-
-```powershell
-Get-Command ssh.exe
-ssh -V
-```
-
-如果未安装 OpenSSH Client，在管理员 PowerShell 中安装这个 Windows 可选功能，然后重新打开终端：
-
-```powershell
-Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
-```
-
-OpenSSH 由 Windows 系统维护；安装方式及可用系统条件见 [Microsoft OpenSSH 文档](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse)。
+Windows 客户端通过 HTTPS/WSS 连接中继，可直接在 PowerShell 使用。
 
 下面从实际最新稳定 Release 中选择本机架构的归档，核验发布的 SHA-256 后解压。若最新 Release 尚未提供该架构文件，脚本会停止，不会把其他架构当作替代品。
 
@@ -113,10 +100,10 @@ $installRoot = Join-Path $env:LOCALAPPDATA "ssmcp\$version"
 Expand-Archive -LiteralPath $download -DestinationPath $installRoot -Force
 $client = Join-Path $installRoot 'ssmcp.exe'
 & $client --version
-& $client --name windows-dev --title '维护当前项目' --allow octocat@github my-ssmcp
+& $client --server https://relay.example --name windows-dev --title '维护当前项目' --allow alice@relay.example
 ```
 
-把最后一行的身份和 SSH 目标替换为实际值，并先进入要共享的项目目录。程序按版本保存在 `%LOCALAPPDATA%\ssmcp`，可以把包含 `ssmcp.exe` 的目录加入用户 `Path` 后使用短命令。Windows 的 OpenSSH 用户配置通常位于 `%USERPROFILE%\.ssh\config`，认证仍使用原有私钥与公钥。[连接配置](configuration.md) · [PowerShell 解压文档](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.archive/expand-archive)
+把最后一行的服务器和已注册账号替换为实际值，并先进入要共享的项目目录。程序按版本保存在 `%LOCALAPPDATA%\ssmcp`，可以把包含 `ssmcp.exe` 的目录加入用户 `Path` 后使用短命令。设备可不登录，但控制者必须完成该服务器的账号登录。[连接配置](configuration.md) · [PowerShell 解压文档](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.archive/expand-archive)
 
 从 PowerShell 启动客户端不意味着内部 shell 一定是 PowerShell：默认使用 `COMSPEC` 对应的 shell，通常为 `cmd.exe`。需要其他 shell 时，用 `--shell` 指定其绝对路径。切换安装版本时停止旧客户端，再启动新版本目录中的程序；`reload` 会重启原入口，本身不切换目录或安装更新。
 
@@ -139,7 +126,7 @@ install -m 0755 "$ssmcp_unpack_dir/ssmcp" "$HOME/.local/bin/ssmcp"
 rm -rf "$ssmcp_unpack_dir"
 ```
 
-核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --ssh --name dev --title "维护当前项目" --allow octocat@github my-ssmcp`。安装网关还需要配置 OpenSSH、HTTPS 与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
+核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --server https://relay.example --name dev --title "维护当前项目" --allow alice@relay.example`，替换为实际服务器和已注册账号。安装网关还需要配置 HTTPS、OAuth、账号存储与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
 
 ## 维护者：固定源码后正式发布
 
@@ -192,7 +179,7 @@ gh workflow run bump.yml --ref main -f level=patch -f publish=false
 python3 scripts/release.py bump custom --custom-version 0.10.0 --dry-run
 ```
 
-Bump **只更新 ssmcp 的版本**。ztui-core、zharness、zplugin 的 manifest、版本与固定 gitlink 不随应用递增；独立库有实际改动时先在自己的仓库处理版本与发布，再更新 SSMCP 的精确依赖和锁文件。脚本在任何写入前检查应用、本地库和 lockfile 的一致性。
+Bump **只更新 ssmcp 的版本**。ztuio、zharness、zplugin 的 manifest、版本与固定 gitlink 不随应用递增；独立库有实际改动时先在自己的仓库处理版本与发布，再更新 SSMCP 的精确依赖和锁文件。脚本在任何写入前检查应用、本地库和 lockfile 的一致性。
 
 GitHub Token 推送的 tag 不会自行触发另一个 push 工作流，因此 Bump 的 dispatch_release job 显式传入刚创建的 tag。失败后重跑已有 tag 的 Release，或只重跑失败的 dispatch_release job；不要重复点击 Bump 递增出第二个版本。[Bump 工作流](../.github/workflows/bump.yml) · [GitHub 触发规则](https://docs.github.com/en/actions/concepts/security/github_token)
 
@@ -205,13 +192,13 @@ git submodule update --init --recursive
 python3 scripts/release.py validate --build-only
 ```
 
-ztui 保持 workspace member，包名 ztui-core、Rust 库名 ztui。zharness 和 zplugin 保留各自独立 workspace，从父 workspace 排除；应用使用 path 加精确 registry version，根级 patch.crates-io 将 zharness 的传递 zplugin 依赖统一到同一份本地源码。发布脚本核对这个关系，避免本地加载两份不兼容的 Rust 类型。
+ztuio 的包名和 Rust 导入名均为 ztuio。ztuio、zharness 和 zplugin 均作为固定 Git 子模块，从父 workspace 排除；应用使用 path 加精确 registry version，根级 patch.crates-io 将 zharness 的传递 zplugin 依赖统一到同一份本地源码。发布脚本核对这个关系，避免本地加载两份不兼容的 Rust 类型。
 
-源码包仍须实际通过 `cargo package --workspace --locked` 的验证。path 构建成功不等于发布后的 registry 依赖可用；独立依赖尚未发布、版本已撤回或打包字节不一致时必须停止，不能用本地 patch 掩盖。GitHub 自动生成的源码归档不展开 gitlink；需要完整源码时应递归 clone 固定 tag。
+源码包仍须实际通过 `cargo package --locked --package ssmcp` 的验证。path 构建成功不等于发布后的 registry 依赖可用；独立依赖尚未发布、版本已撤回或打包字节不一致时必须停止，不能用本地 patch 掩盖。GitHub 自动生成的源码归档不展开 gitlink；需要完整源码时应递归 clone 固定 tag。
 
 ### 正式发布顺序
 
-validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查和六个构建都成功后，重新核对身份、全部六个平台归档和两份安装脚本，打包验证 workspace，并保存 verified-crates artifact。
+validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查和六个构建都成功后，重新核对身份、全部六个平台归档和两份安装脚本，打包验证 ssmcp 应用，并保存 verified-crates artifact。
 
 checks 在各原生 runner 上先显式构建 native_plugin_fixture 动态库，再单独执行精确的 native_plugin_runtime_contract ignored 测试。测试本身不会启动 Cargo，缺少预构建制品不会被当作通过。
 
@@ -224,19 +211,19 @@ Windows 官方 build job 另运行 `scripts/test_windows_browser_bootstrap.ps1`�
 | 包 | 发布责任与校验 |
 | --- | --- |
 | zplugin-macros → zplugin → zharness | 独立仓库发布；SSMCP 的发布预检要求使用的 zplugin、zharness 精确版本已存在且未撤回 |
-| ztui-core → ssmcp | workspace 共同打包验证，按依赖顺序处理；已发布且摘要相同的包直接跳过 |
+| ztuio → ssmcp | ztuio 由独立仓库发布；应用预检要求精确版本存在且未撤回，应用工作流只上传 ssmcp |
 
-ztui-core 的首次独立发布应对应独立仓库的固定源码。父 workspace 复用其子模块；同版本的独立包和 workspace 验证包必须保持字节一致。若不同，摘要保护会停止发布，应核对源码、VCS 信息和打包锁文件，而不是跳过保护或无理由递增库版本。
+独立库的 registry 版本应对应其仓库的固定源码，SSMCP 不从消费方仓库重新发布依赖。应用源码包通过实际 registry 依赖打包验证；已发布应用的摘要必须与验证包一致，冲突时停止。
 
-publish_crates 在首次上传前核对整个已验证包集合，并先检查独立 registry 依赖。未发布的 workspace 包按依赖顺序上传；上传后再次查询 crates.io checksum。GitHub Release 与 crates.io job 在 finalize 后分别执行并报告结果；其中一个成功不会冒充另一个成功。
+publish_crates 在首次上传前核对整个已验证包集合，并先检查独立 registry 依赖。应用包尚未发布时上传 ssmcp；上传后再次查询 crates.io checksum。GitHub Release 与 crates.io job 在 finalize 后分别执行并报告结果；其中一个成功不会冒充另一个成功。
 
 GitHub Release 先创建或找回 draft，上传完整附件并检查大小、摘要后才公开。相同 tag 重跑会复用匹配资产，发现不同内容则停止，不覆盖已发布附件。release-manifest.json 记录应用 commit、递归子模块的 path/commit/tree，以及各归档和安装脚本的 SHA-256。[发布流程](../.github/workflows/release.yml) · [发布校验与回归](../scripts/test_release.py)
 
 ## crates.io 凭据与失败重跑
 
-仓库 Actions secret CARGO_REGISTRY_TOKEN 必须有权发布待上传的 workspace 包。工作流保留历史拼写 CARGO_REGISTY_TOKEN 的兼容，标准名称优先；凭据只传入 crates 发布步骤，不写入源码或发行附件。没有启用未经配置的 OIDC 凭据替代。
+仓库 Actions secret CARGO_REGISTRY_TOKEN 必须有权发布ssmcp 应用包。工作流保留历史拼写 CARGO_REGISTY_TOKEN 的兼容，标准名称优先；凭据只传入 crates 发布步骤，不写入源码或发行附件。没有启用未经配置的 OIDC 凭据替代。
 
-发布读取 finalize 留存的验证包，再以 `cargo publish --locked --no-verify --registry crates-io --package <包名>` 上传；no-verify 复用前一阶段完成的真实验证。相同版本只有在 registry checksum 与验证包完全一致时才跳过；版本已撤回或内容冲突则停止。zharness/zplugin 的新版本必须先从各自仓库发布，SSMCP 工作流不会替它们递增版本或创建 release。
+发布读取 finalize 留存的验证包，再以 `cargo publish --locked --no-verify --registry crates-io --package <包名>` 上传；no-verify 复用前一阶段完成的真实验证。相同版本只有在 registry checksum 与验证包完全一致时才跳过；版本已撤回或内容冲突则停止。ztuio、zharness、zplugin 的新版本必须先从各自仓库发布，SSMCP 工作流不会替它们递增版本或创建 release。
 
 已有 tag 的任务失败时，使用该 tag 重试，保持同一套源码、子模块和制品。修复源码或依赖后需要新 commit、新版本和新 tag，不移动旧 tag。固定归档时间戳用于减少非源码差异，不构成跨任意机器的可重复二进制构建承诺。
 

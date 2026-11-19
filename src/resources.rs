@@ -125,6 +125,12 @@ pub async fn list(
             "text/markdown",
         ),
         descriptor(
+            "ssmcp://messages".into(),
+            "Cross-session candidate messages".into(),
+            "Native peer candidates, exact live identities, frozen group sends, non-consuming wait/read and explicit acknowledgement.",
+            "text/markdown",
+        ),
+        descriptor(
             "ssmcp://skill".into(),
             "ssmcp skill".into(),
             "Relay discovery guidance; each client publishes its current usage skill through its resource directory.",
@@ -312,6 +318,8 @@ fn limits() -> Value {
             "caller_workspace_access":"requires an explicit connected bridge"
         },
         "collaboration":crate::collab::limits(),
+        "peer_messages":crate::messaging::limits(),
+        "peer_receipts":crate::bridge::messages::Router::limits(),
         "managed_workspaces":{
             "max_active_syncs":crate::bridge::MAX_ACTIVE_SYNCS,
             "max_active_ports":crate::bridge::MAX_ACTIVE_PORTS,
@@ -323,6 +331,7 @@ fn limits() -> Value {
                 "context.roots","skills.list","skills.read","skills.view",
                 "agents.list","agents.read","agents.resolve",
                 "collab.join","collab.list","collab.update","collab.send","collab.receive","collab.ack","collab.leave",
+                "messages.key","messages.list","messages.send","messages.read","messages.receive","messages.wait","messages.ack","messages.status",
                 "rsync","sync","jobs","ports","resources","reload","outputs",
                 "cua","cua.browser","terminal.open","terminal.list","terminal.select","terminal.close",
                 "terminal.read","terminal.write","terminal.status","terminal.resize",
@@ -364,7 +373,7 @@ fn limits() -> Value {
             "listChanged":false,
             "observation":"fresh snapshot per read"
         },
-        "public_tools":["list","code_mode","collab"]
+        "public_tools":["list","code_mode","collab","messages"]
     })
 }
 
@@ -721,6 +730,11 @@ pub async fn read(
             "text/markdown",
             include_str!("../docs/agent-collaboration.md").into(),
         ),
+        "ssmcp://messages" => content(
+            uri,
+            "text/markdown",
+            include_str!("../docs/session-messages.md").into(),
+        ),
         "ssmcp://skill" => content(uri, "text/markdown", GUIDE.into()),
         _ => Err(ResourceError::NotFound),
     }
@@ -817,7 +831,7 @@ mod tests {
                 .iter()
                 .map(|page| page["resources"].as_array().unwrap().len())
                 .collect::<Vec<_>>(),
-            [32, 32, 32, 32, 32, 32, 2]
+            [32, 32, 32, 32, 32, 32, 3]
         );
         let all: Vec<_> = pages
             .iter()
@@ -825,7 +839,7 @@ mod tests {
             .map(|r| r["uri"].as_str().unwrap())
             .collect();
         let unique: std::collections::HashSet<_> = all.iter().collect();
-        assert_eq!(all.len(), 194);
+        assert_eq!(all.len(), 195);
         assert_eq!(all.len(), unique.len());
         broker.test_register("alice", &"a".repeat(64)).await;
         assert!(matches!(
@@ -936,7 +950,7 @@ mod tests {
         assert_eq!(limits()["resources"]["subscribe"], false);
         assert_eq!(
             limits()["public_tools"],
-            json!(["list", "code_mode", "collab"])
+            json!(["list", "code_mode", "collab", "messages"])
         );
     }
 }

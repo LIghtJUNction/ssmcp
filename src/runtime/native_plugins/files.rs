@@ -32,6 +32,11 @@ impl Files {
 
     // The local composer uses the same granted roots and state as remote calls.
     // These crate-private methods do not add another remotely callable surface.
+    /// The same authorized root used by file operations and context references.
+    pub(crate) fn workspace_root(&self) -> &std::path::Path {
+        self.workspace.root()
+    }
+
     pub(crate) fn enable_default_skill_sources(&self) -> Result<(), String> {
         self.context.enable_default_skill_sources()
     }

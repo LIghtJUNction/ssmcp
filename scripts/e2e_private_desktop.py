@@ -89,7 +89,11 @@ class PrivateDesktop(ComputerUse):
                 if window["title"] == "ssmcp isolated fixture"),None)
         window = wait_for(visible,timeout=10,description="owned application window")
         self.computer("focus",window_id=window["window_id"])
-        self.computer("type",text="isolated input")
+        self.check(self.rejected("ssmcp.computer.key",{"key":"DefinitelyNotAKey"}),
+            "unsupported native keys return an ordinary input error")
+        typed = self.computer("type",text="isolated input")
+        self.check(typed["engine"]=="zuse" and typed["backend"]=="x11",
+            "Computer dispatch reaches the linked zuse library after a rejected key")
         wait_for(lambda: observed.exists() and observed.read_text()=="isolated input",
             timeout=5,description="private native typing")
         self.check(True,"native typing reaches the private application")
@@ -99,7 +103,7 @@ class PrivateDesktop(ComputerUse):
         self.check(True,"native click reaches the private button")
         image = self.screenshot("ssmcp.computer.screenshot",{"max_width":640},
             "private-desktop.jpg")
-        self.check(image["desktop"]=="isolated" and image["width"]==640,
+        self.check(image["desktop"]=="isolated" and image["width"]==640 and image["engine"]=="zuse",
             "private screenshot reports its own surface and coordinates")
         self.check(self.host_state()==baseline,"native input and screenshots preserve the test host cursor and focus")
         runtime = Path(runtime_path.read_text())
