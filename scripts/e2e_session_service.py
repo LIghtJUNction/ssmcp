@@ -77,9 +77,13 @@ class Sessions(Harness):
 
     def create(self, name, *, control=False, expected=0):
         self.names.add(name)
-        args = ["sessions", "create", name, "--json", *self.client_command(
+        connection = self.client_command(
             name=name, extra_args=("--watchdog", "--reconnect-delay", "1",
-                                   "--title", "session lifecycle acceptance"))[1:]]
+                                   "--title", "session lifecycle acceptance"))[1:]
+        # Managed sessions take their name positionally, before connection options.
+        name_option = connection.index("--name")
+        del connection[name_option:name_option + 2]
+        args = ["sessions", "create", name, "--json", *connection]
         if control:
             args.append("--session-control")
         return self.cli(args, expect=expected)
