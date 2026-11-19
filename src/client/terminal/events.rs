@@ -7,6 +7,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod correlation;
 mod diff;
 mod read_activity;
+#[cfg(all(test, unix))]
+mod source_tests;
 use correlation::{Kind, Meta, Status};
 pub(crate) use diff::DiffMode;
 
@@ -717,7 +719,18 @@ impl EventView {
 
     /// Correlate only registered event identities. Text is never an identity.
     pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
+        self.ingest_scoped_event(label, event, bytes, None);
+    }
+
+    pub(crate) fn ingest_scoped_event(
+        &mut self,
+        label: &str,
+        event: &Value,
+        bytes: &[u8],
+        scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+    ) {
         let mut meta = Meta::from_event(label, event);
+        meta.scope = scope;
         let read = if meta.command
             || meta.diff
             || meta
@@ -753,7 +766,8 @@ impl EventView {
         let mut matches = Vec::new();
         for key in &meta.keys {
             if let Some((index, _)) = self.events.iter().enumerate().rev().find(|(_, event)| {
-                event.meta.keys.contains(key)
+                event.meta.same_source(&meta)
+                    && event.meta.keys.contains(key)
                     && (!meta.started
                         || event
                             .meta

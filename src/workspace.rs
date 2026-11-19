@@ -291,6 +291,13 @@ impl Workspace {
         tools
     }
 
+    #[cfg(test)]
+    pub(crate) fn observe_projection(
+        &self,
+    ) -> std::sync::mpsc::Receiver<crate::backend::events::ProjectedEvent> {
+        self.events.observe_projection()
+    }
+
     /// Only local skill metadata discovery uses this presentation path. The
     /// ordinary rooted read and complete native file audit still apply.
     pub(crate) async fn read_metadata_for_completion(
@@ -318,9 +325,14 @@ impl Workspace {
         if name.starts_with("ssmcp.fs.") {
             let root = self.root.clone();
             let name = name.to_owned();
-            return tokio::task::spawn_blocking(move || root.perform_audited(&name, arguments))
-                .await
-                .map_err(|e| e.to_string())?;
+            let scope = crate::runtime::call_scope::current();
+            return tokio::task::spawn_blocking(move || {
+                crate::runtime::call_scope::blocking(scope, || {
+                    root.perform_audited(&name, arguments)
+                })
+            })
+            .await
+            .map_err(|e| e.to_string())?;
         }
         match name {
             "ssmcp.net.listen" => self.listen(parse(arguments)?).await,
