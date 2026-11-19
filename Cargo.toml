@@ -111,6 +111,7 @@ include = [
     "/scripts/e2e_session_features.py",
     "/scripts/e2e_agents.py",
     "/scripts/e2e_unified.py",
+    "/scripts/test_e2e_unified.py",
     "/scripts/e2e_daemon.py",
     "/scripts/e2e_dashboard.py",
     "/scripts/e2e_client_ui.py",
