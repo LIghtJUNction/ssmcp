@@ -46,6 +46,31 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 当前版本已退出旧 SSH 设备接入与登录码用法。旧的 `--ssh`、私钥参数和服务器 SSH 用户名不能代替 HTTPS 账号。已有脚本应改成上面的明确服务器和授权名单形式。
 
+## 服务端月度赠送额度
+
+服务器可以分别设置免费用户和付费用户的每月赠送流量，单位为字节。例如，下面给免费用户每月 1 GB、付费用户每月 10 GB：
+
+~~~toml
+[portal]
+state_dir = "/var/lib/ssmcpd/portal"
+free_user_monthly_traffic_bytes = 1000000000
+paid_user_monthly_traffic_bytes = 10000000000
+~~~
+
+这里的“付费用户”沿用已有账户标记：该账户至少有一次经过服务端核验、成功结算的生产环境充值。测试订单、客户端标签、用户名和当前剩余额度都不能获得这一身份；目前没有订阅到期或按月续费的档位。[可信标记的写入](../src/portal/commerce.rs) · [账户记录与额度选择](../src/portal/store.rs)
+
+两个字段都省略时，两类账户仍各赠送每月 1,000,000,000 字节，兼容旧配置。0 表示没有赠送流量，不表示无限。自定义额度需要 `portal.state_dir`。修改的是服务器策略，需由服务器加载配置后生效；本次代码改动不会自动部署或重启服务器。
+
+额度按以下优先级计算：
+
+1. 服务端明确配置的管理员不设月度上限。
+2. 管理员对单个账户、当月设置的剩余额度优先于档位默认值。即使设置与当时默认值相同，也会保存为显式调整；之后购买的流量包仍增加该上限。
+3. 其他账户使用所属档位的月度赠送额，加上当月购买的流量包。
+
+调整档位额度或发生首次充值时，本月已累计的上传、下载和迁移前用量全部保留；上限低于已用量时剩余为 0。赠送额、购买额和管理员当月调整在下一个自然月重新计算，旧月份的使用记录保留。计费继续是 `历史迁移用量 + max(累计上传, 累计下载)`，按服务端 `commerce.utc_offset_minutes` 的固定偏移划分月份。[额度策略](../src/user_policy.rs) · [持久账本与覆盖优先级](../src/portal/traffic.rs)
+
+`/api/client/whoami` 的 `traffic` 返回该真实登录账号的 `used_bytes`、`limit_bytes`、`remaining_bytes`，以及下一自然月开始时刻 `reset_at`（Unix 秒）。`free_bytes` 是该档位已选中的赠送额，`paid_bytes` 只表示当月另购的流量包。只有服务器明确授予的无限额度返回 `limit_bytes: null` 与 `remaining_bytes: null`；旧服务器没有 `reset_at` 时，客户端应显示时间未知。[实际 HTTP 回归](../src/device.rs)
+
 ## 配置入口
 
 | 需求 | 文档 |
