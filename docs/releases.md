@@ -6,7 +6,7 @@
 
 ## 平台和下载内容
 
-六个目标分别在对应架构的 GitHub runner 上构建。Linux 归档包含客户端 `ssmcp` 和网关 `ssmcpd`；macOS、Windows 归档只包含客户端。网关的 OpenSSH 接入、Unix socket 与代码隔离仍运行在 Linux。[平台入口](../src/bin/ssmcpd.rs)
+六个目标分别在对应架构的 GitHub runner 上构建。Linux 归档包含客户端 `ssmcp` 和网关 `ssmcpd`；macOS、Windows 归档只包含客户端。网关的 HTTPS/WSS 设备接入、Unix socket 与代码隔离运行在 Linux。[平台入口](../src/bin/ssmcpd.rs)
 
 | 平台 | Rust target | 工作流 runner | 归档 | 可执行文件 |
 | --- | --- | --- | --- | --- |
@@ -62,24 +62,11 @@ irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 
 & ([scriptblock]::Create((irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1))) -Version vX.Y.Z -InstallDir "$env:LOCALAPPDATA\ssmcp\bin" -NoModifyPath
 ```
 
-两套脚本也接受 `SSMCP_VERSION` 和 `SSMCP_INSTALL_DIR` 环境变量。Windows 更新时会先保留旧可执行文件；系统暂时不允许删除正在使用的旧程序时，脚本会显示保留位置。安装器更新磁盘上的程序，不改变已经连接的进程；在原入口更新后可按[会话控制](session-control.md)调用 `reload(clientId)`，或退出并重启。连接前仍需系统 OpenSSH Client，Windows 的安装方法见下一节。
+两套脚本也接受 `SSMCP_VERSION` 和 `SSMCP_INSTALL_DIR` 环境变量。Windows 更新时会先保留旧可执行文件；系统暂时不允许删除正在使用的旧程序时，脚本会显示保留位置。安装器更新磁盘上的程序，不改变已经连接的进程；在原入口更新后可按[会话控制](session-control.md)调用 `reload(clientId)`，或退出并重启。连接通过 HTTPS/WSS；账号与设备授权步骤见[首次连接](onboarding.md)。
 
 ## Windows：PowerShell 安装预编译客户端
 
-Windows 客户端直接使用本机 OpenSSH Client，不要求运行 WSL 或安装 Windows SSH Server。先在 PowerShell 检查：
-
-```powershell
-Get-Command ssh.exe
-ssh -V
-```
-
-如果未安装 OpenSSH Client，在管理员 PowerShell 中安装这个 Windows 可选功能，然后重新打开终端：
-
-```powershell
-Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
-```
-
-OpenSSH 由 Windows 系统维护；安装方式及可用系统条件见 [Microsoft OpenSSH 文档](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse)。
+Windows 客户端通过 HTTPS/WSS 连接中继，可直接在 PowerShell 使用。
 
 下面从实际最新稳定 Release 中选择本机架构的归档，核验发布的 SHA-256 后解压。若最新 Release 尚未提供该架构文件，脚本会停止，不会把其他架构当作替代品。
 
@@ -113,10 +100,10 @@ $installRoot = Join-Path $env:LOCALAPPDATA "ssmcp\$version"
 Expand-Archive -LiteralPath $download -DestinationPath $installRoot -Force
 $client = Join-Path $installRoot 'ssmcp.exe'
 & $client --version
-& $client --name windows-dev --title '维护当前项目' --allow octocat@github my-ssmcp
+& $client --server https://relay.example --name windows-dev --title '维护当前项目' --allow alice@relay.example
 ```
 
-把最后一行的身份和 SSH 目标替换为实际值，并先进入要共享的项目目录。程序按版本保存在 `%LOCALAPPDATA%\ssmcp`，可以把包含 `ssmcp.exe` 的目录加入用户 `Path` 后使用短命令。Windows 的 OpenSSH 用户配置通常位于 `%USERPROFILE%\.ssh\config`，认证仍使用原有私钥与公钥。[连接配置](configuration.md) · [PowerShell 解压文档](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.archive/expand-archive)
+把最后一行的服务器和已注册账号替换为实际值，并先进入要共享的项目目录。程序按版本保存在 `%LOCALAPPDATA%\ssmcp`，可以把包含 `ssmcp.exe` 的目录加入用户 `Path` 后使用短命令。设备可不登录，但控制者必须完成该服务器的账号登录。[连接配置](configuration.md) · [PowerShell 解压文档](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.archive/expand-archive)
 
 从 PowerShell 启动客户端不意味着内部 shell 一定是 PowerShell：默认使用 `COMSPEC` 对应的 shell，通常为 `cmd.exe`。需要其他 shell 时，用 `--shell` 指定其绝对路径。切换安装版本时停止旧客户端，再启动新版本目录中的程序；`reload` 会重启原入口，本身不切换目录或安装更新。
 
@@ -139,7 +126,7 @@ install -m 0755 "$ssmcp_unpack_dir/ssmcp" "$HOME/.local/bin/ssmcp"
 rm -rf "$ssmcp_unpack_dir"
 ```
 
-核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --ssh --name dev --title "维护当前项目" --allow octocat@github my-ssmcp`。安装网关还需要配置 OpenSSH、HTTPS 与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
+核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --server https://relay.example --name dev --title "维护当前项目" --allow alice@relay.example`，替换为实际服务器和已注册账号。安装网关还需要配置 HTTPS、OAuth、账号存储与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
 
 ## 维护者：固定源码后正式发布
 
