@@ -598,7 +598,12 @@ impl Renderer {
                 "stale":git.stale,
                 "changed_files":git.changed_files.iter().map(|entry|json!({"status":entry.status,"path":entry.path})).collect::<Vec<_>>(),
                 "history":git.history.commits.iter().map(|commit|json!({"hash":commit.full_hash,"subject":commit.subject,"committed_at_unix":commit.committed_at_unix})).collect::<Vec<_>>(),
-                "history_stale":git.history.stale,"error":git.last_error
+                "history_stale":git.history.stale,"error":git.last_error,
+                "fetch":{"state":git.fetch.state.name(),"interval_seconds":git.fetch.interval_seconds,
+                    "remote":git.fetch.remote,"error":git.fetch.last_error,
+                    "last_attempt_age_seconds":git.fetch.last_attempt_at.map(|at|now.saturating_duration_since(at).as_secs()),
+                    "last_success_age_seconds":git.fetch.last_success_at.map(|at|now.saturating_duration_since(at).as_secs())}
+
             })
         });
         crate::audit::event(json!({

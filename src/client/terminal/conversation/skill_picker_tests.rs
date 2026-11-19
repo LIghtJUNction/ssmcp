@@ -159,6 +159,19 @@ fn skill_picker_keys_only_deliver_the_explicitly_sent_selection() {
         state.keyboard(b"c", Instant::now(), false);
         assert!(state.chat_menu_visible());
         assert_eq!(state.conversation.composer.suggestions().len(), 1);
+        state.chat_frame(Instant::now());
+        let old_row = state.conversation.reference_rows[0].0;
+        let old_height = state.geometry.input_rows;
+        state.chat_resize_input(true);
+        assert!(state.geometry.input_rows > old_height);
+        assert!(
+            !state.chat_reference_mouse(2, old_row),
+            "a reference row drawn before composer resize is stale"
+        );
+        assert_eq!(state.conversation.composer.text(), "$c");
+        state.chat_resize_input(false);
+        state.chat_frame(Instant::now());
+        assert_empty_queue(&queue, &mut transport);
         state.keyboard(b"\r", Instant::now(), false);
         assert_eq!(state.conversation.composer.text(), "$chosen ");
         assert!(!state.chat_menu_visible());

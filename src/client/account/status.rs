@@ -26,7 +26,7 @@ impl Traffic {
     fn label(&self) -> String {
         match self {
             Self::Unknown => "未提供".into(),
-            Self::Unlimited => "无限".into(),
+            Self::Unlimited => "∞".into(),
             Self::Remaining(0) => "0 GB".into(),
             Self::Remaining(bytes) if *bytes < 10_000_000 => "<0.01 GB".into(),
             Self::Remaining(bytes) => {
