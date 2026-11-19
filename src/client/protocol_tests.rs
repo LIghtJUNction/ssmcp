@@ -68,7 +68,8 @@ elif scenario == "no-login":
 elif scenario == "no-expiry":
     code, ttl = "a" * 64, 0
 print(json.dumps({"type":"ready", "url":"https://fixture.invalid/mcp",
-                  "login_code":code, "login_expires_in":ttl, "client_id":"b"*64}), flush=True)
+                  "login_code":code, "login_expires_in":ttl, "client_id":"b"*64,
+                  **({"capabilities":[os.environ["SSMCP_PROTOCOL_ACCESS_CAPABILITY"]]} if scenario == "session-access" else {})}), flush=True)
 # Keep registration live until its test explicitly performs normal cleanup.
 sys.stdin.read()
 "#;
@@ -104,6 +105,10 @@ impl Fixture {
             .args(["-u", "-c", PEER])
             .env("SSMCP_PROTOCOL_FIXTURE", &self.directory)
             .env("SSMCP_PROTOCOL_SCENARIO", scenario)
+            .env(
+                "SSMCP_PROTOCOL_ACCESS_CAPABILITY",
+                crate::wire::SESSION_ACCESS_CAPABILITY,
+            )
             .env_remove("PYTHONHOME")
             .env_remove("PYTHONPATH")
             .stdin(Stdio::piped())
@@ -179,6 +184,45 @@ async fn close(mut registration: RegisteredSsh) {
 }
 
 const READY_LIMIT: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn initial_allow_requires_capability_and_reaps_an_unacknowledged_transport() {
+    let fixture = Fixture::new();
+    let metadata = metadata(true);
+    let mut registered = false;
+    let (result, _) = fixture
+        .register("current", &metadata, &mut registered, READY_LIMIT)
+        .await;
+    let mut registration = result.unwrap().unwrap();
+    registration
+        .require_allow_access(&metadata.allow, "octocat@github")
+        .await
+        .unwrap();
+    let error = registration
+        .require_allow_access(&["colleague".into()], "octocat@github")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("per-session sharing"));
+    assert!(error.downcast_ref::<relay::PermanentFailure>().is_some());
+    assert!(
+        registration.ssh.id().is_none(),
+        "the unsupported relay was not reaped"
+    );
+
+    let (result, _) = fixture
+        .register("session-access", &metadata, &mut registered, READY_LIMIT)
+        .await;
+    let mut registration = result.unwrap().unwrap();
+    assert!(registration.access_supported);
+    registration
+        .require_allow_access(
+            &["colleague".into(), "alice@github".into()],
+            "octocat@github",
+        )
+        .await
+        .unwrap();
+    close(registration).await;
+}
 
 #[tokio::test]
 async fn current_protocol_preserves_metadata_for_login_and_allow() {

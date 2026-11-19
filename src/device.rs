@@ -1563,10 +1563,11 @@ mod tests {
         assert!(
             matches!(tokio_tungstenite::connect_async(unauthorized).await, Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status() == StatusCode::UNAUTHORIZED)
         );
-        let mut forged_registration =
-            open_socket_with_access(&base, &device, vec!["bob@github".into()], true).await;
+        // Sharing is explicit and requires the controller capability negotiation.
+        let mut unnegotiated_registration =
+            open_socket_with_access(&base, &device, vec!["bob@github".into()], false).await;
         assert!(matches!(
-            receive(&mut forged_registration).await,
+            receive(&mut unnegotiated_registration).await,
             Some(wire::Frame::Reject { .. })
         ));
 
