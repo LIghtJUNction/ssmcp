@@ -188,7 +188,9 @@ is delivered to the selected terminal. A temporary invitation can be redeemed
 once (default 10 minutes) and creates a controlled session (default 1 hour).
 The generated bootstrap command downloads its client from this server only.
 Temporary credentials stay in memory; Ctrl-C on the controlled device stops it.
-ssmcp logout revokes this login and its derived invitations/devices.
+ssmcp logout clears this server's saved login and attempts to revoke it and
+its derived invitations/devices. Offline logout reports unconfirmed revocation;
+other servers and independent logins are preserved.
 
 Redirected stdout (or jsonl mode) emits one connection JSON object.
 Interactive stdout shows the MCP URL and OAuth login instructions.

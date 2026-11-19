@@ -1007,29 +1007,95 @@ async fn whoami(args: &Arguments) -> Result<()> {
     Ok(())
 }
 
-async fn logout(args: &Arguments) -> Result<()> {
-    let root = state_root()?;
-    let server = resolve_server(args.server.as_deref())?;
-    let Some(credential) = load_at(&root, Some(&server), true)? else {
-        println!("Not signed in.");
-        return Ok(());
-    };
-    let reply = Api::new(&credential.server)?
-        .request(
-            Method::POST,
-            "/api/client/logout",
-            Some(&credential.token),
-            Some(json!({})),
-        )
-        .await?;
-    if !reply.status.is_success() && reply.status != StatusCode::UNAUTHORIZED {
-        Api::checked(reply)?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum LogoutStatus {
+    NotSignedIn,
+    Revoked,
+    AlreadyInvalid,
+    LocalOnly,
+}
+
+#[derive(Debug)]
+pub(super) struct LogoutOutcome {
+    pub(super) server: String,
+    pub(super) status: LogoutStatus,
+}
+
+impl LogoutOutcome {
+    pub(super) fn message(&self) -> String {
+        match self.status {
+            LogoutStatus::NotSignedIn => format!("Not signed in to {}.", self.server),
+            LogoutStatus::Revoked => format!(
+                "Signed out of {}. This login and its derived invitations and devices were revoked.",
+                self.server
+            ),
+            LogoutStatus::AlreadyInvalid => format!(
+                "Signed out of {}. The saved login was already expired or revoked.",
+                self.server
+            ),
+            LogoutStatus::LocalOnly => format!(
+                "Signed out locally from {}. Remote revocation could not be confirmed; this login and its derived devices may remain valid until they expire.",
+                self.server
+            ),
+        }
     }
-    fs::remove_file(credential_path(&root, &credential.server))?;
+
+    fn json(&self) -> Value {
+        json!({"server":self.server,"logged_out":true,"status":self.status})
+    }
+}
+
+/// Clear only the selected origin's saved login, then try to revoke that login.
+/// An Ok result always means local logout completed; LocalOnly leaves remote
+/// revocation unconfirmed. Callers must also close their in-memory connection.
+pub(super) async fn logout(server: Option<&str>) -> Result<LogoutOutcome> {
+    let server = resolve_server(server)?;
+    logout_at(&state_root()?, &server).await
+}
+
+async fn logout_at(root: &Path, server: &str) -> Result<LogoutOutcome> {
+    let Some(credential) = load_at(root, Some(server), true)? else {
+        return Ok(LogoutOutcome {
+            server: server.into(),
+            status: LogoutStatus::NotSignedIn,
+        });
+    };
+    // Delete before the network await: cancellation or an offline server must
+    // not retain this login, nor remove a new login saved while revoking it.
+    match fs::remove_file(credential_path(root, &credential.server)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let status = match Api::new(&credential.server) {
+        Ok(api) => match api
+            .request(
+                Method::POST,
+                "/api/client/logout",
+                Some(&credential.token),
+                Some(json!({})),
+            )
+            .await
+        {
+            Ok(reply) if reply.status.is_success() => LogoutStatus::Revoked,
+            Ok(reply) if reply.status == StatusCode::UNAUTHORIZED => LogoutStatus::AlreadyInvalid,
+            _ => LogoutStatus::LocalOnly,
+        },
+        Err(_) => LogoutStatus::LocalOnly,
+    };
+    Ok(LogoutOutcome {
+        server: credential.server,
+        status,
+    })
+}
+
+async fn logout_command(args: &Arguments) -> Result<()> {
+    let outcome = logout(args.server.as_deref()).await?;
     if args.json {
-        println!("{}", json!({"server":credential.server,"logged_out":true}));
+        println!("{}", outcome.json());
     } else {
-        println!("Signed out of {}.", credential.server);
+        println!("{}", outcome.message());
     }
     Ok(())
 }
@@ -1509,7 +1575,7 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     };
     if rest.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "ssmcp login [--server URL] [--no-browser] [--name NAME]\nssmcp whoami|logout [--server URL] [--json]\nssmcp list [--server URL] [--json | -i] [--client ID] [--terminal ID]\nssmcp -i [--server URL] [--client ID] [--terminal ID]\nssmcp invite [--server URL] [--ttl SECONDS] [--session-ttl SECONDS] [--shell sh|powershell] [--no-bootstrap] [--json]"
+            "ssmcp login [--server URL] [--no-browser] [--name NAME]\nssmcp whoami [--server URL] [--json]\nssmcp logout [--server URL] [--json]\nssmcp list [--server URL] [--json | -i] [--client ID] [--terminal ID]\nssmcp -i [--server URL] [--client ID] [--terminal ID]\nssmcp invite [--server URL] [--ttl SECONDS] [--session-ttl SECONDS] [--shell sh|powershell] [--no-bootstrap] [--json]\n\nlogout clears the selected server\'s saved login, including when offline.\nIts result reports whether remote revocation was confirmed; other independent logins are preserved."
         );
         return Ok(true);
     }
@@ -1520,7 +1586,7 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     }
     match operation {
         "login" => login(&options).await?,
-        "logout" => logout(&options).await?,
+        "logout" => logout_command(&options).await?,
         "whoami" => whoami(&options).await?,
         "list" | "ls" => list(&options).await?,
         "invite" => invite(&options).await?,
@@ -1802,6 +1868,119 @@ mod tests {
         let powershell = command("https://example.com", &"c".repeat(64), true, true).unwrap();
         assert!(powershell.contains("/client/install.ps1"));
         assert!(powershell.contains("-MaximumRedirection 0"));
+    }
+
+    async fn logout_fixture(
+        root: &Path,
+        status: StatusCode,
+        renew_login: bool,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = origin.clone();
+        let root = root.to_owned();
+        let app = axum::Router::new().route(
+            "/api/client/logout",
+            axum::routing::post(move |headers: axum::http::HeaderMap| {
+                let root = root.clone();
+                let server = server.clone();
+                async move {
+                    assert_eq!(
+                        headers["authorization"].to_str().unwrap(),
+                        format!("Bearer {}", "a".repeat(64))
+                    );
+                    assert!(!credential_path(&root, &server).exists());
+                    if renew_login {
+                        let mut replacement = credential(&server);
+                        replacement.token = "b".repeat(64);
+                        save_at(&root, &replacement).unwrap();
+                    }
+                    // A server error may reflect a secret. Logout's output must not.
+                    (status, axum::Json(json!({"status":"logged_out","error":"a".repeat(64)})))
+                }
+            }),
+        );
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (origin, task)
+    }
+
+    #[tokio::test]
+    async fn logout_reports_remote_result_and_preserves_other_origins() {
+        for (http, expected) in [
+            (StatusCode::OK, LogoutStatus::Revoked),
+            (StatusCode::UNAUTHORIZED, LogoutStatus::AlreadyInvalid),
+            (StatusCode::FORBIDDEN, LogoutStatus::LocalOnly),
+            (StatusCode::SERVICE_UNAVAILABLE, LogoutStatus::LocalOnly),
+        ] {
+            let root = temporary();
+            let (server, task) = logout_fixture(&root, http, false).await;
+            let mut selected = credential(&server);
+            if http == StatusCode::UNAUTHORIZED {
+                selected.expires_at = now() - 1;
+            }
+            save_at(&root, &selected).unwrap();
+            let other = credential("https://other.example");
+            save_at(&root, &other).unwrap();
+
+            let outcome = logout_at(&root, &server).await.unwrap();
+            assert_eq!(outcome.server, server);
+            assert_eq!(outcome.status, expected);
+            assert_eq!(outcome.json()["logged_out"], true);
+            assert!(!outcome.message().contains(&selected.token));
+            assert!(!outcome.json().to_string().contains(&selected.token));
+            assert!(load_at(&root, Some(&server), true).unwrap().is_none());
+            assert_eq!(
+                load_at(&root, Some(&other.server), true).unwrap().unwrap().token,
+                other.token
+            );
+            assert_eq!(selected_server(&root, None).unwrap(), other.server);
+            task.abort();
+            let _ = task.await;
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn logout_offline_clears_local_login_and_is_idempotent() {
+        let root = temporary();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        save_at(&root, &credential(&server)).unwrap();
+        let outcome = logout_at(&root, &server).await.unwrap();
+        assert_eq!(outcome.status, LogoutStatus::LocalOnly);
+        assert!(outcome.message().contains("Remote revocation could not be confirmed"));
+        assert!(!credential_path(&root, &server).exists());
+        assert_eq!(selected_server(&root, None).unwrap(), server);
+        let repeated = logout_at(&root, &server).await.unwrap();
+        assert_eq!(repeated.status, LogoutStatus::NotSignedIn);
+        assert_eq!(repeated.json()["status"], "not_signed_in");
+        assert_eq!(repeated.json()["logged_out"], true);
+        let missing = root.join("missing");
+        assert_eq!(
+            logout_at(&missing, &server).await.unwrap().status,
+            LogoutStatus::NotSignedIn
+        );
+        assert!(!missing.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn logout_preserves_a_new_login_saved_during_revocation() {
+        let root = temporary();
+        let (server, task) = logout_fixture(&root, StatusCode::OK, true).await;
+        save_at(&root, &credential(&server)).unwrap();
+        assert_eq!(
+            logout_at(&root, &server).await.unwrap().status,
+            LogoutStatus::Revoked
+        );
+        assert_eq!(
+            load_at(&root, Some(&server), true).unwrap().unwrap().token,
+            "b".repeat(64)
+        );
+        task.abort();
+        let _ = task.await;
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
