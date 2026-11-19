@@ -2453,6 +2453,7 @@ mod tests {
             let mut ui = Ui {
                 color: false,
                 layout,
+                sidebar: true,
                 ..Ui::default()
             };
             let mut screen = vt100::Parser::new(nonzero(30), nonzero(120), 0);
@@ -2474,6 +2475,7 @@ mod tests {
     fn split_ui() -> Ui {
         Ui {
             layout: Layout::Split,
+            sidebar: true,
             sidebar_width: 30,
             ..Ui::default()
         }

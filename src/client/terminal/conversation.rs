@@ -2423,33 +2423,40 @@ impl State {
                 } else {
                     String::new()
                 };
-                let label = self.conversation.canvas.label(g.left);
-                let mut heading = format!("  ssmcp  /  {label}{}{suffix}", self.context_label);
-                if heading.width() > usize::from(g.left) {
-                    heading = format!(
-                        "  ssmcp  /  {}{}{suffix}",
-                        self.conversation.canvas.label(0),
-                        self.context_label,
+                let label = format!("{}{suffix}", self.conversation.canvas.label(g.left));
+                if g.left < 32 {
+                    self.chat_line(&format!("ssmcp · {label}"), PanelTone::Muted, g.left)
+                } else {
+                    let label = fit(&label, g.left.saturating_sub(11));
+                    let title = fit(
+                        &format!("  ssmcp{}", self.context_label),
+                        g.left.saturating_sub(label.width() as u16 + 4),
                     );
+                    let gap = usize::from(g.left).saturating_sub(title.width() + label.width() + 2);
+                    format!(
+                        "{}{}",
+                        self.tone(PanelTone::Heading, &title),
+                        self.tone(PanelTone::Muted, &format!("{}{label}  ", " ".repeat(gap))),
+                    )
                 }
-                self.chat_line(&heading, PanelTone::Heading, g.left)
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g.rows) && prompt_rows(g.rows) > 0 {
-                let title = format!(
-                    "─ {} · {} ",
-                    if self.conversation.view == View::Questions {
-                        "Answer"
-                    } else if self.conversation.editing.is_some() {
-                        "Editing"
-                    } else {
-                        "To"
-                    },
-                    label
-                );
-                let mut border = fit(&title, g.left);
-                border.push_str(&"─".repeat(usize::from(g.left).saturating_sub(border.width())));
-                self.chat_line(&border, PanelTone::Muted, g.left)
+                let title = if self.conversation.view == View::Questions {
+                    format!(" Answer · {label} ")
+                } else if self.conversation.editing.is_some() {
+                    format!(" Editing · {label} ")
+                } else if self.conversation.target.is_some() {
+                    format!(" To · {label} ")
+                } else if pending > 0 {
+                    format!(" {pending} queued · /queue ")
+                } else {
+                    String::new()
+                };
+                let width = g.left.saturating_sub(4);
+                let mut border = fit(&title, width);
+                border.push_str(&"─".repeat(usize::from(width).saturating_sub(border.width())));
+                self.chat_line(&format!("  {border}"), PanelTone::Muted, g.left)
             } else {
                 prompt
                     .lines
@@ -2824,33 +2831,27 @@ mod tests {
         };
         let mut state = super::super::preview_state(24, 100, &ui);
         for (cwd, title, expected) in [
-            (
-                "/workspace/alpha-project/",
-                None,
-                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›  /  alpha-project",
-            ),
+            ("/workspace/alpha-project/", None, "ssmcp  /  alpha-project"),
             (
                 "/workspace/终端",
                 Some("修复输入框"),
-                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›  /  终端  /  修复输入框",
+                "ssmcp  /  终端  /  修复输入框",
             ),
-            (
-                "",
-                None,
-                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›",
-            ),
+            ("", None, "ssmcp"),
         ] {
             state.set_context(cwd, title);
             let screen = display(&mut state).screen().contents();
-            assert_eq!(screen.lines().next().unwrap().trim_end(), expected);
+            let header = screen.lines().next().unwrap().trim();
+            assert!(header.starts_with(expected), "{header}");
+            assert!(header.ends_with("conversation  2/8"), "{header}");
+            assert!(!header.contains("agents") && !header.contains("code audit"));
         }
         state.set_context("/workspace/alpha-project", Some("Review uploads"));
         state.chat_change_view(View::Queue);
         let screen = display(&mut state).screen().contents();
-        assert_eq!(
-            screen.lines().next().unwrap().trim_end(),
-            "  ssmcp  /  ‹ code audit     queue  4/8     questions ›  /  alpha-project  /  Review uploads",
-        );
+        let header = screen.lines().next().unwrap().trim();
+        assert!(header.starts_with("ssmcp  /  alpha-project  /  Review uploads"));
+        assert!(header.ends_with("queue  4/8"));
     }
 
     #[test]
@@ -3892,7 +3893,14 @@ mod tests {
 
     #[test]
     fn sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results() {
-        let mut state = preview(36, 120);
+        let mut state = super::super::preview_state(
+            36,
+            120,
+            &Ui {
+                sidebar: true,
+                ..Ui::default()
+            },
+        );
         state.ui.panels = vec![crate::client::ui::Panel::Queue];
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("Queue · 1 pending"));

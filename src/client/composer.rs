@@ -635,7 +635,7 @@ impl Composer {
                 _ => "",
             };
             let (body, tone) = if self.text.is_empty() {
-                ("Message the agent · @file · $skill · / commands", "muted")
+                ("Message the agent", "muted")
             } else {
                 (body.as_str(), "foreground")
             };

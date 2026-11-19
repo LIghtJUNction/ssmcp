@@ -268,7 +268,7 @@ impl Default for Ui {
             pet: pet::Pet::default(),
             layout: Layout::default(),
             log_height_percent: 60,
-            sidebar: true,
+            sidebar: false,
             sidebar_width: 37,
             panels: vec![
                 Panel::Agents,
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn partial_patch_preserves_other_colors_and_rejects_invalid_data() {
         let old = Ui::default()
-            .merge_json(json!({"colors":{"accent":"#123456"}}))
+            .merge_json(json!({"colors":{"accent":"#123456"},"sidebar":true}))
             .unwrap();
         let new = old
             .merge_json(json!({"colors":{"background":"black"},"sidebar":false}))
