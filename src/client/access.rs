@@ -164,24 +164,20 @@ fn principal(user: &str) -> Result<String, String> {
     }
 }
 
-#[expect(dead_code, reason = "called by the terminal access UI once integrated")]
 pub(super) fn snapshot() -> Snapshot {
     state().view.clone()
 }
 
-#[expect(dead_code, reason = "called by the terminal access UI once integrated")]
 pub(super) fn refresh() -> Result<(), String> {
     state().request(AccessCommand::List {})
 }
 
-#[expect(dead_code, reason = "called by the terminal access UI once integrated")]
 pub(super) fn add(user: &str) -> Result<(), String> {
     state().request(AccessCommand::Add {
         principal: principal(user)?,
     })
 }
 
-#[expect(dead_code, reason = "called by the terminal access UI once integrated")]
 pub(super) fn remove(user: &str) -> Result<(), String> {
     state().request(AccessCommand::Remove {
         principal: principal(user)?,
