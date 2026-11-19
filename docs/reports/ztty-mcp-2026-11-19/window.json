@@ -1,0 +1,32 @@
+{
+  "binary": "out/zmcpio-ztty/candidate/bin/ztty",
+  "evicted_utf8_cursor": true,
+  "lossless_bytes": true,
+  "native_error_preserved": true,
+  "second_window_closed": true,
+  "session": {
+    "attached": true,
+    "attachment": 1,
+    "broker_pid": 3378143,
+    "cols": 100,
+    "created_at": 1795103668488,
+    "exit_code": null,
+    "id": 1,
+    "name": "main",
+    "origin": "mcp/stdio",
+    "output_eof": false,
+    "pid": 3378148,
+    "read_only": false,
+    "rows": 30,
+    "running": true,
+    "title": "ztty",
+    "uri": "ztty://mcp/stdio/main",
+    "visible": true,
+    "window_id": 2097155,
+    "workspace": null
+  },
+  "single_byte_cursor_reads": true,
+  "redacted_fields": [
+    "session.input_owner"
+  ]
+}

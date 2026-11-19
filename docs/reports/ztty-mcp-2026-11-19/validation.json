@@ -1,0 +1,136 @@
+{
+  "complete": true,
+  "active": null,
+  "steps": [
+    {
+      "name": "bridge-format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 2.876
+    },
+    {
+      "name": "bridge-protocol",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "backend::mcp_stdio::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 13.766
+    },
+    {
+      "name": "bridge-cursors",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "backend::ztty::tests::retained_utf8_prefix",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.365
+    },
+    {
+      "name": "bridge-input",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "client::input::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 3.043
+    },
+    {
+      "name": "bridge-real-window",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "backend::ztty::tests::real_ztty_native_tools_and_compatibility_share_the_visible_pty",
+        "--",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 2.569
+    },
+    {
+      "name": "bridge-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 18.711
+    }
+  ],
+  "source_before": {
+    "Cargo.toml": "e8a6678a5c73f0231de674eadeba1801a7afca8d8b47f65ee64cf14ae348cc46",
+    "Cargo.lock": "44c70107da0e639b078ff3b90cbb8d58afa22b6ed15a4557a1adf9a97866fa2e",
+    "src/backend.rs": "21223ef236c151b60aea3de0fd55f3feb6a8c5a7203a3e8dfd0d436d8ed6b34a",
+    "src/backend/mcp_stdio.rs": "e9c25eca3286be4aba55ede2f62c77e86912c134a9159ef5d45eb61019c8cb6d",
+    "src/backend/mcp_stdio/tests.rs": "f11e67c2507e9ebfa34403158cd6aebf0aaa05743294d3525cc4206eb107363d",
+    "src/backend/ztty.rs": "05c2c66b0fe24671bf6586b90e2712617113fd8c770b3a730bbae13735c58b22",
+    "src/backend/ztty/tests.rs": "473bbc763ce5ef3eb3d06e17ae40632122c837f2961780fc76a730eda86f4c47",
+    "src/client/input.rs": "a6ab2936717d2f100f937ffbb5db7bff93d153de3190efaa2b284b87398118ad",
+    "src/registry.rs": "457813d241b8e586e4f7b1cbc51d96c9fb12ee12f1a4cd6c5ff453b62e197384",
+    "src/runtime.rs": "1a4dfb4264bac2931cd3be580d770c151b1d255572f9deeeaeb83612432a49e0",
+    "src/terminals.rs": "f04ac564d5964eb755350951f020421b609933ef3bbd15e8c9a2938436006615"
+  },
+  "ztty": {
+    "commit": "f05dd2710c795412651f58839e28a345231445f6",
+    "sha256": "717487afce1e6c1588018654cbda70d1148fe7f5c22706220360d72678c5c39a",
+    "path": "out/zmcpio-ztty/candidate/bin/ztty"
+  },
+  "private_display": {
+    "xvfb_pid": 3377964,
+    "display": ":0",
+    "xvfb_exited": true
+  },
+  "source_after": {
+    "Cargo.toml": "e8a6678a5c73f0231de674eadeba1801a7afca8d8b47f65ee64cf14ae348cc46",
+    "Cargo.lock": "44c70107da0e639b078ff3b90cbb8d58afa22b6ed15a4557a1adf9a97866fa2e",
+    "src/backend.rs": "21223ef236c151b60aea3de0fd55f3feb6a8c5a7203a3e8dfd0d436d8ed6b34a",
+    "src/backend/mcp_stdio.rs": "e9c25eca3286be4aba55ede2f62c77e86912c134a9159ef5d45eb61019c8cb6d",
+    "src/backend/mcp_stdio/tests.rs": "f11e67c2507e9ebfa34403158cd6aebf0aaa05743294d3525cc4206eb107363d",
+    "src/backend/ztty.rs": "05c2c66b0fe24671bf6586b90e2712617113fd8c770b3a730bbae13735c58b22",
+    "src/backend/ztty/tests.rs": "473bbc763ce5ef3eb3d06e17ae40632122c837f2961780fc76a730eda86f4c47",
+    "src/client/input.rs": "a6ab2936717d2f100f937ffbb5db7bff93d153de3190efaa2b284b87398118ad",
+    "src/registry.rs": "457813d241b8e586e4f7b1cbc51d96c9fb12ee12f1a4cd6c5ff453b62e197384",
+    "src/runtime.rs": "1a4dfb4264bac2931cd3be580d770c151b1d255572f9deeeaeb83612432a49e0",
+    "src/terminals.rs": "f04ac564d5964eb755350951f020421b609933ef3bbd15e8c9a2938436006615"
+  },
+  "source_unchanged": true,
+  "unique_tests_passed": 19,
+  "test_counts": {
+    "mcp_protocol": 4,
+    "byte_cursor": 1,
+    "existing_input": 13,
+    "real_x11": 1
+  },
+  "post_validation_manifest_normalization": {
+    "file": "Cargo.toml",
+    "change": "remove one empty line at EOF; TOML parsed values unchanged",
+    "before_sha256": "e8a6678a5c73f0231de674eadeba1801a7afca8d8b47f65ee64cf14ae348cc46",
+    "after_sha256": "af70d58ac6208a73c5d8883fcd37b4e282af2a7bd2ba14f9f2080e93e716714a",
+    "same_parsed_toml": true
+  }
+}

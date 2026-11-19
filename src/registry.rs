@@ -31,6 +31,7 @@ pub enum Provider {
     Pi,
     OpenCode,
     Playwright,
+    Ztty,
 }
 impl Provider {
     pub fn label(self) -> &'static str {
@@ -56,6 +57,7 @@ impl Provider {
             Self::Pi => "pi",
             Self::OpenCode => "opencode",
             Self::Playwright => "playwright",
+            Self::Ztty => "ztty",
         }
     }
     pub fn is_harness(self) -> bool {
@@ -358,7 +360,9 @@ fn prepare(
         if native_name.is_empty() {
             return Err("native tool has no name".into());
         }
-        let id = if provider == Provider::Claude {
+        let id = if provider == Provider::Ztty {
+            format!("ztty.{native_name}")
+        } else if provider == Provider::Claude {
             if let Some(name) = native_name.strip_prefix("cc.") {
                 format!("claude.{}", component(name))
             } else if let Some(name) = native_name.strip_prefix("ssmcp.cc.") {
@@ -414,6 +418,7 @@ fn prepare(
             Provider::Playwright => {
                 id.starts_with("playwright.") || id.starts_with("ssmcp.playwright.")
             }
+            Provider::Ztty => id.starts_with("ztty."),
         };
         if !allowed
             || id.len() > 128

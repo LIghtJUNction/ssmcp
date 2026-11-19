@@ -1458,6 +1458,7 @@ dependencies = [
  "webpki-roots 1.0.12",
  "windows-sys 0.61.2",
  "zharness",
+ "zmcpio",
  "zplugin",
  "ztui-core",
 ]
@@ -2236,6 +2237,15 @@ name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
+
+[[package]]
+name = "zmcpio"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1530747e76256c89865b521c407c520766fc93badae9c8b573e5a4e0c4e820ad"
+dependencies = [
+ "zcall",
+]
 
 [[package]]
 name = "zmij"

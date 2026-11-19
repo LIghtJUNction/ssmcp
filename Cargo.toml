@@ -167,6 +167,7 @@ exclude = ["crates/zharness", "crates/zplugin"]
 resolver = "3"
 
 [dependencies]
+zmcpio = { version = "=0.4.0", default-features = false }
 ztui = { package = "ztui-core", version = "=0.1.2", path = "crates/ztui" }
 zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
 zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }

@@ -2,12 +2,14 @@
 pub mod cc;
 pub mod codex;
 pub mod events;
+mod mcp_stdio;
 pub mod opencode;
 pub mod pi;
 pub mod playwright;
 pub mod process;
 pub mod rpc;
 pub mod shell;
+pub(crate) mod ztty;
 
 // Keep the established public startup API while the implementation belongs to
 // the process capability plugin. Runtime dispatch crosses the zplugin ABI.

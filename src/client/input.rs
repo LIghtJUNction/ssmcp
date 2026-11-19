@@ -1,8 +1,7 @@
 //! Dashboard input belongs to its composer and navigation; fallback input uses the selected PTY.
 //! The dashboard owns editing keys; bracketed paste keeps binary bytes intact.
 use crate::{
-    pty::Terminal,
-    terminals::Terminals,
+    terminals::{Session as Terminal, Terminals},
     wire::{MAX_WRITE, Operation},
 };
 use std::{
