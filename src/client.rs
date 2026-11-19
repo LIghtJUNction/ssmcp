@@ -2049,7 +2049,11 @@ async fn connect(
                 }
             },
             frame = incoming.frames.recv() => match frame {
-                Some(Ok(Some(Frame::Call {id,operation,controller,code_context}))) => {
+                Some(Ok(Some(Frame::Call {id,operation,controller,attribution,code_context}))) => {
+                    if let Some(attribution) = &attribution
+                        && let Err(error) = attribution.validate() {
+                        break Err(error.into());
+                    }
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
                             Ok(Ok(was_tool)) => {
@@ -2059,12 +2063,12 @@ async fn connect(
                             Err(error) => break 'connected Err(error.into()),
                         }
                     }
-                    let mut code_call = match backend.begin_code_call(&operation, id, controller.as_ref(), code_context) {
+                    let mut code_call = match backend.begin_code_call(&operation, id, controller.as_ref(), attribution.as_deref(), code_context) {
                         Ok(call) => call,
                         Err(error) => break Err(error.into()),
                     };
                     if reload::is_reload(&operation) {
-                        let _controller = render::controller_started(id, controller.as_ref());
+                        let _controller = render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation);
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
                         let mut response = if options.temporary {
                             Err("temporary joined sessions keep their credential only in memory; stop this session and create a new invitation to restart it".into())
@@ -2127,7 +2131,7 @@ async fn connect(
                     let writer = writer.clone();
                     requests.spawn(async move {
                         let _controller = (!matches!(&operation, crate::wire::Operation::ListTools { .. }))
-                            .then(|| render::controller_started(id, controller.as_ref()));
+                            .then(|| render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation));
                         let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
                         let mut result = backend.perform(operation).await;
                         if let Some(call) = &mut code_call { call.finish(&result); }
