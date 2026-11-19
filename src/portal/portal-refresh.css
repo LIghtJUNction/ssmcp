@@ -156,8 +156,13 @@ small { font-size: 13px; line-height: 1.75; }
 .guide-help { margin-top: 34px; }
 .guide-help summary { font-size: 14px; }
 .guide-help p { font-size: 14px; line-height: 1.85; }
-#pricing { max-width: 1160px; margin-inline: auto; padding-block: 28px 36px; }
-#pricing > p { margin-top: 16px; max-width: 70em; color: #a2aeba; }
+/* The public proxy supplies pricing and policy links after the main content. */
+#pricing { max-width: 1160px; margin: 72px auto 0; padding-block: 36px 0; border-top: 1px solid var(--line); }
+#pricing h2 { font-size: 24px; font-weight: 500; letter-spacing: -.03em; }
+#pricing > p { margin-top: 18px; max-width: 72em; color: #a2aeba; font-size: 14px; line-height: 1.95; }
+#pricing + .site-footer { margin-top: 40px; padding-block: 24px 32px; }
+#pricing + .site-footer nav { color: #8d97a3; font-size: 13px; line-height: 2; }
+#pricing + .site-footer nav a { display: inline-flex; align-items: center; min-height: 44px; color: #a8b4bf; }
 
 /* Account management uses the same spacing and controls. */
 .console-nav { gap: 32px; padding-top: 18px; border-bottom-color: var(--line); }
@@ -270,6 +275,9 @@ small { font-size: 13px; line-height: 1.75; }
   .guide-step > :not(.step-number) { grid-column: 2; }
   .guide-step p { margin-top: 10px; }
   .site-footer { margin-top: 56px; gap: 12px; }
+  #pricing { margin-top: 48px; padding-top: 28px; }
+  #pricing h2 { font-size: 23px; }
+  #pricing + .site-footer { margin-top: 32px; }
   .console-nav { gap: 10px 22px; padding-top: 14px; }
   .console-nav a { min-height: 44px; padding-bottom: 12px; font-size: 13px; }
   .dashboard-head { gap: 24px; padding: 34px 0 30px; }

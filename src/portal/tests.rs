@@ -389,7 +389,7 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .text()
         .await
         .unwrap();
-    assert!(html.contains("<h2 id=\"account-title\">alice</h2>"));
+    assert!(html.contains("<dt>GitHub 账户</dt><dd>alice</dd>"));
     assert!(html.contains("尚未注册"));
     assert!(html.contains("action=\"/account/username\""));
     assert!(html.contains("复制命令"));
