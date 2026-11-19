@@ -1,4 +1,7 @@
 fn main() -> std::process::ExitCode {
+    if let Some(exit) = ssmcp::backend::process::initialize() {
+        return exit;
+    }
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     if std::env::var_os("MALLOC_MMAP_THRESHOLD_").is_none()
         && std::env::var_os("GLIBC_TUNABLES").is_none()
