@@ -119,8 +119,10 @@ impl State {
     pub(in crate::client::terminal) fn chat_finish_logout(&mut self, result: Completion) {
         match result {
             Ok(outcome) => {
-                let message = outcome.map(|outcome| outcome.message()).unwrap_or_else(||
-                    "Disconnected this temporary session. No saved account login was revoked.".into());
+                let message = outcome.map(|outcome| outcome.message()).unwrap_or_else(|| {
+                    "Disconnected this temporary session. No saved account login was revoked."
+                        .into()
+                });
                 self.conversation.exit_message = Some(message.clone());
                 self.conversation.exit_requested = true;
                 self.notice = Some(message);
