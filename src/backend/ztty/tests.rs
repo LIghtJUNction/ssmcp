@@ -1,8 +1,8 @@
 use super::*;
 use crate::backend::Backend;
 
-async fn tool(backend: &Arc<Backend>, name: &str, arguments: Value) -> Value {
-    backend
+async fn tool(runtime: &Arc<crate::runtime::Runtime>, name: &str, arguments: Value) -> Value {
+    runtime
         .perform(Operation::CallTool {
             name: name.into(),
             arguments,
@@ -74,6 +74,9 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
     )
     .await
     .unwrap();
+    // Exercise the production Runtime -> native plugin -> process -> MCP route.
+    // A direct Backend call would miss provider ownership and catalog replacement.
+    let runtime = crate::runtime::Runtime::new(backend.clone(), root.clone()).unwrap();
     let catalog = backend.tools().await.unwrap();
     assert_eq!(
         catalog
@@ -85,13 +88,13 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
     let registered = backend.registry.lookup("ztty.session_read").unwrap();
     assert_eq!(registered.native_name, "session_read");
     assert_eq!(registered.descriptor["annotations"]["readOnlyHint"], true);
-    let native = tool(&backend, "ztty.session_list", json!({})).await;
+    let native = tool(&runtime, "ztty.session_list", json!({})).await;
     let main = structured(&native)["sessions"][0].clone();
     assert_eq!(main["visible"], true);
     assert_eq!(main["read_only"], false);
     let window = main["window_id"].as_u64().unwrap();
     assert!(mapped(window).await);
-    let status = tool(&backend, "terminal.status", json!({})).await;
+    let status = tool(&runtime, "terminal.status", json!({})).await;
     assert_eq!(structured(&status)["pid"], main["pid"]);
     assert_eq!(
         structured(&status)["session_identity"],
@@ -99,14 +102,14 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
     );
 
     let first = tool(
-        &backend,
+        &runtime,
         "terminal.read",
         json!({"cursor":0,"max_bytes":32768}),
     )
     .await;
     let origin = structured(&first)["next_cursor"].as_u64().unwrap();
     let command = "printf '\\377\\000中文 e\\314\\201 __ZTTY_DONE__\\n'\n";
-    tool(&backend, "terminal.write", json!({"data":command})).await;
+    tool(&runtime, "terminal.write", json!({"data":command})).await;
     let mut cursor = origin;
     let mut output = Vec::new();
     let expected = [
@@ -120,7 +123,7 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
             .any(|bytes| bytes == expected)
         {
             let result = tool(
-                &backend,
+                &runtime,
                 "terminal.read",
                 json!({"cursor":cursor,"max_bytes":32768,"wait_ms":1000}),
             )
@@ -143,7 +146,7 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
         + origin;
     for (offset, expected) in [(0, 255), (1, 0), (2, 0xe4), (3, 0xb8), (4, 0xad)] {
         let result = tool(
-            &backend,
+            &runtime,
             "terminal.read",
             json!({"cursor":position+offset,"max_bytes":1}),
         )
@@ -160,7 +163,7 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
     let mut stale = identity(&main).unwrap();
     stale["id"] = json!(main["id"].as_u64().unwrap() + 1);
     let rejected = tool(
-        &backend,
+        &runtime,
         "ztty.session_write",
         json!({"session":main["uri"],"expected_session":stale,"data":"touch stale-wrote\n"}),
     )
@@ -172,7 +175,7 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
         "keep the original native error envelope"
     );
 
-    let opened = tool(&backend, "terminal.open", json!({"name":"second"})).await;
+    let opened = tool(&runtime, "terminal.open", json!({"name":"second"})).await;
     let second = structured(&opened).clone();
     assert_ne!(second["pid"], main["pid"]);
     let second_window = second["window_id"].as_u64().unwrap();
@@ -181,7 +184,7 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
     // boundary. exec leaves no trailing shell prompt that could shift it again.
     let flood = "stty -echo; exec python3 -c 'import sys; sys.stdout.buffer.write(b\"x\\xf0\\x9f\\x8c\\x8d\" + b\"y\" * (262144 - 2))'\n";
     tool(
-        &backend,
+        &runtime,
         "terminal.write",
         json!({"terminal_id":second["terminal_id"],"data":flood}),
     )
@@ -189,7 +192,7 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
     let second_identity = second["session_identity"].clone();
     let evicted = timeout(Duration::from_secs(5), async {
         loop {
-            let result = tool(&backend, "ztty.session_read", json!({"session":second["session"],"expected_session":second_identity,"cursor":0,"max_bytes":1,"wait_ms":0})).await;
+            let result = tool(&runtime, "ztty.session_read", json!({"session":second["session"],"expected_session":second_identity,"cursor":0,"max_bytes":1,"wait_ms":0})).await;
             let result = structured(&result);
             if result["output_eof"] == true { break result.clone(); }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -199,7 +202,7 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
     assert_eq!(retained.bytes, b"y");
     assert_eq!(retained.start, retained.first + 2);
     let compatibility = tool(
-        &backend,
+        &runtime,
         "terminal.read",
         json!({"terminal_id":second["terminal_id"],"cursor":0,"max_bytes":1}),
     )
@@ -209,20 +212,20 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
     assert_eq!(structured(&compatibility)["start_cursor"], retained.first);
     assert_eq!(structured(&compatibility)["truncated"], true);
     tool(
-        &backend,
+        &runtime,
         "terminal.close",
         json!({"terminal_id":second["terminal_id"]}),
     )
     .await;
     assert!(!mapped(second_window).await);
     assert_eq!(
-        structured(&tool(&backend, "terminal.status", json!({})).await)["running"],
+        structured(&tool(&runtime, "terminal.status", json!({})).await)["running"],
         true
     );
 
-    tool(&backend, "terminal.resize", json!({"rows":30,"cols":100})).await;
+    tool(&runtime, "terminal.resize", json!({"rows":30,"cols":100})).await;
     backend.terminals().resize_all(20, 60).await.unwrap();
-    let current = tool(&backend, "ztty.session_list", json!({})).await;
+    let current = tool(&runtime, "ztty.session_list", json!({})).await;
     let current = structured(&current)["sessions"][0].clone();
     assert_eq!(current["cols"], 100);
     assert_eq!(current["rows"], 30);
@@ -243,7 +246,7 @@ async fn real_ztty_native_tools_and_compatibility_share_the_visible_pty() {
             .unwrap();
         assert!(result.success());
     }
-    backend.shutdown().await;
+    runtime.shutdown().await;
     assert!(!mapped(window).await);
     for pid in [
         main["pid"].as_u64().unwrap(),
