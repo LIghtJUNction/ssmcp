@@ -1,7 +1,8 @@
 //! Process, terminal and optional-harness capability plugin.
 //! Owns provider state, registration, native dispatch and cleanup.
+mod lazy;
 use super::super::native_host::{Call, NativePlugin, PluginFuture};
-use crate::backend::{cc, codex, lazy, opencode, pi, playwright, process, result, shell};
+use crate::backend::{cc, codex, opencode, pi, playwright, process, result, shell};
 use crate::{
     output::OutputStore,
     pty::Terminal,
@@ -355,28 +356,30 @@ impl Process {
             provider: tool.provider,
             generation: tool.generation,
             arguments,
-        }).await
+        })
+        .await
     }
 
     async fn dispatch_call(self: &Arc<Self>, call: Call) -> Result<Value, String> {
-        let Call { id, native_name, provider, generation, arguments } = call;
-        self.registry.validate_route(&id, provider, generation, &native_name)?;
+        let Call {
+            id,
+            native_name,
+            provider,
+            generation,
+            arguments,
+        } = call;
+        self.registry
+            .validate_route(&id, provider, generation, &native_name)?;
         match provider {
-            Provider::Ui => {
-                crate::client::interface::call(&native_name, arguments, &self.terminal)
-                    .await
-                    .map(result)
-            }
+            Provider::Ui => crate::client::interface::call(&native_name, arguments, &self.terminal)
+                .await
+                .map(result),
             Provider::Terminal => self
                 .terminal
                 .call(&native_name, arguments)
                 .await
                 .map(result),
-            Provider::Exec => self
-                .shell
-                .call(&native_name, arguments)
-                .await
-                .map(result),
+            Provider::Exec => self.shell.call(&native_name, arguments).await.map(result),
             Provider::Harnesses => match native_name.as_str() {
                 "ssmcp.harnesses.list" => {
                     if !arguments.as_object().is_some_and(|a| a.is_empty()) {
@@ -405,7 +408,8 @@ impl Process {
                     .get(&provider)
                     .cloned()
                     .ok_or("provider is no longer connected; refresh tools")?;
-                self.registry.validate_route(&id, provider, generation, &native_name)?;
+                self.registry
+                    .validate_route(&id, provider, generation, &native_name)?;
                 let observation = match &self.observer {
                     Some(pool) => {
                         pool.native_begin(provider.label(), &native_name, &arguments)
@@ -567,21 +571,29 @@ fn terminal_tools() -> Value {
     tools
 }
 
-
 impl NativePlugin for Process {
     const ID: &'static str = "ssmcp.process";
 
     fn providers(&self) -> &'static [Provider] {
         &[
-            Provider::Terminal, Provider::Exec, Provider::Ui, Provider::Harnesses,
-            Provider::Codex, Provider::Claude, Provider::Pi, Provider::OpenCode,
+            Provider::Terminal,
+            Provider::Exec,
+            Provider::Ui,
+            Provider::Harnesses,
+            Provider::Codex,
+            Provider::Claude,
+            Provider::Pi,
+            Provider::OpenCode,
             Provider::Playwright,
         ]
     }
 
     fn catalog(&self) -> Vec<(Provider, Vec<Value>)> {
         vec![
-            (Provider::Terminal, terminal_tools().as_array().unwrap().clone()),
+            (
+                Provider::Terminal,
+                terminal_tools().as_array().unwrap().clone(),
+            ),
             (Provider::Exec, shell::Shell::tools()),
             (Provider::Ui, crate::client::interface::tools()),
             (Provider::Harnesses, lazy::tools()),
