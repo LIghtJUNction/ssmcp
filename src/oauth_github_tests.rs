@@ -240,6 +240,7 @@ impl Fixture {
             login_code,
             login_expires_in,
             client_id,
+            ..
         }) = frame
         else {
             panic!("wire registration did not return Ready");

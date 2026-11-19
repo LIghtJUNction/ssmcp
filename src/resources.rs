@@ -521,10 +521,14 @@ async fn native_view(
         ),)?);
     }
     let response = session
-        .call(Operation::CallTool {
-            name: name.into(),
-            arguments,
-        })
+        .call_with_authorization(
+            Operation::CallTool {
+                name: name.into(),
+                arguments,
+            },
+            None,
+            authorization,
+        )
         .await;
     // A native read may outlive its request's connection-bound authorization.
     broker
@@ -630,15 +634,15 @@ pub async fn read(
             }
             "info" => json_content(uri, client_info(&session)),
             "tools" => {
-                let mut page = session
-                    .call(Operation::ListTools { cursor })
-                    .await
-                    .map_err(|_| ResourceError::Unavailable)?;
+                let page = session
+                    .call_with_authorization(Operation::ListTools { cursor }, None, authorization)
+                    .await;
                 // Reading a slow native schema does not preserve authority after disconnect.
                 broker
                     .client(user, authorization, id)
                     .await
                     .map_err(|_| ResourceError::NotFound)?;
+                let mut page = page.map_err(|_| ResourceError::Unavailable)?;
                 if !page.is_object() || !page["tools"].is_array() {
                     return Err(ResourceError::Unavailable);
                 }

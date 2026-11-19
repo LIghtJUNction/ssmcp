@@ -786,9 +786,13 @@ async fn list(
     if let Some(id) = arguments.client_id {
         let session = broker.client(user, authorization, &id).await?;
         let mut page = session
-            .call(Operation::ListTools {
-                cursor: arguments.cursor,
-            })
+            .call_with_authorization(
+                Operation::ListTools {
+                    cursor: arguments.cursor,
+                },
+                None,
+                authorization,
+            )
             .await?;
         if !page.is_object() {
             return Err("client returned an invalid tool catalog".into());

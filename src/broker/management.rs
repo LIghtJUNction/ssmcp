@@ -62,7 +62,7 @@ impl Broker {
                 owner_subject: session.owner_subject.clone(),
                 connected_at: session.connected_at,
                 allowed_github: session
-                    .allow
+                    .allowed()
                     .iter()
                     .filter(|id| id.provider == "github")
                     .map(|id| AllowedIdentity {
