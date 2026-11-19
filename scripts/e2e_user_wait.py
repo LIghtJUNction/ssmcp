@@ -62,9 +62,9 @@ class UserWait(InputHistory):
         self.wait_state(front, lambda state: state["target"] == expected,
                         "the owned fixture did not select its exact recipient")
 
-    def begin(self, *, reason, intent="need_user", timeout_ms=20000, member=None):
+    def begin(self, *, reason, intent="need_user", timeout_ms=20000, member=None, notify=False):
         client_id = self.client_id
-        arguments = {"timeout_ms": timeout_ms, "intent": intent, "reason": reason, "notify": False}
+        arguments = {"timeout_ms": timeout_ms, "intent": intent, "reason": reason, "notify": notify}
         code = "return await ui.wait(%s, %s);" % (json.dumps(client_id), json.dumps(arguments))
         if member is not None:
             code = "await collab.bind(%s, %s); %s" % (

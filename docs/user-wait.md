@@ -76,7 +76,7 @@ return await ui.wait(client.id, {
 | `finish` | 精确 `wait_id` 与 `outcome` | `wait_id`、`finished`、已知最终 `status` 及可选 `notification`。未知编号的 `status` 为 `null`。 |
 | `status` | 无额外字段。 | 当前活动等待和有界的最近完成记录；只观察。 |
 
-`wait_id` 是最多 128 字节的可见 ASCII 编号。`episode_id` 是 64 位十六进制摘要，用于聚合与通知去重，不是访问令牌。`recipient` 是服务器已验证的精确 agent 编号或 `next`；本地仅展示它，不按显示名称授权。原生 `reason` 同时接受省略和 `null`。
+`wait_id` 是最多 128 字节的可见 ASCII 编号。`episode_id` 是 64 个十六进制字符的摘要（256 位），用于聚合与通知去重，不是访问令牌。`recipient` 是服务器已验证的精确 agent 编号或 `next`；本地仅展示它，不按显示名称授权。原生 `reason` 同时接受省略和 `null`。
 
 控制台提示可以提醒外部程序继续等待并请求结束确认，但 MCP 无法观察所有外部模型的最终回答。因此这套能力不会声称能硬性拦截任意外部 `final`，也不会从模型生成的参数推断用户同意。
 

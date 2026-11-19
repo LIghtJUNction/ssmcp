@@ -357,11 +357,20 @@ mod tests {
             );
             state.notice = None;
             state.conversation.composer.set_text("/wa");
+            let waiting = state.conversation.wait_fixture.take();
+            state.conversation.wait_fixture = Some(Snapshot::default());
+            let without_wait = screen(&mut state);
+            state.conversation.wait_fixture = waiting;
             let rendered = screen(&mut state);
-            assert!(
-                rendered.lines().last().unwrap().contains("Tab insert"),
-                "{rendered}"
-            );
+            // Narrow footers already prioritize connection status. A wait must
+            // preserve that existing layout rather than invent more space.
+            assert_eq!(rendered.lines().last(), without_wait.lines().last());
+            if width >= 80 {
+                assert!(
+                    rendered.lines().last().unwrap().contains("Tab insert"),
+                    "{rendered}"
+                );
+            }
             assert!(
                 !rendered
                     .lines()
@@ -371,11 +380,18 @@ mod tests {
             );
             state.conversation.composer.set_text(&original);
             state.conversation.content_focus = true;
+            let waiting = state.conversation.wait_fixture.take();
+            state.conversation.wait_fixture = Some(Snapshot::default());
+            let without_wait = screen(&mut state);
+            state.conversation.wait_fixture = waiting;
             let rendered = screen(&mut state);
-            assert!(
-                rendered.lines().last().unwrap().contains("Enter expand"),
-                "{rendered}"
-            );
+            assert_eq!(rendered.lines().last(), without_wait.lines().last());
+            if width >= 80 {
+                assert!(
+                    rendered.lines().last().unwrap().contains("Enter expand"),
+                    "{rendered}"
+                );
+            }
             assert_eq!(state.conversation.composer.text(), original);
         }
     }
