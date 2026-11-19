@@ -88,7 +88,7 @@ else:
             fetch.chmod(0o700)
             script = SOURCE.replace("@@ORIGIN@@", "'" + ORIGIN + "'").replace("@@WIRE@@", "7")
             secret = "ci_" + "a" * 64
-            args = ["--server", ORIGIN, "--token", secret, "--name", "B '$() spaces"]
+            args = ["--allow", "alice@" + ORIGIN.removeprefix("https://"), "--name", "B '$() spaces"]
             env = dict(os.environ, PATH=str(programs), HOME=str(home),
                        XDG_CONFIG_HOME=str(home / "config"), XDG_STATE_HOME=str(home / "state"),
                        XDG_DATA_HOME=str(home / "data"), XDG_CACHE_HOME=str(home / "cache"),
@@ -108,12 +108,12 @@ else:
             self.assertNotIn(secret, result.stdout.decode() + result.stderr.decode())
             self.assertNotIn(secret, json.dumps(requests))
             if result.returncode == 0:
-                self.assertEqual(joined["args"], ["join", *args])
-                self.assertEqual(joined["path"], str(installed), "join must use the absolute installed path")
+                self.assertEqual(joined["args"], ["--server", ORIGIN, *args])
+                self.assertEqual(joined["path"], str(installed), "connection must use the absolute installed path")
                 self.assertEqual(installed.read_bytes(), executable.read_bytes())
                 self.assertEqual(installed.stat().st_mode & 0o777, 0o700)
             else:
-                self.assertIsNone(joined, "a rejected release must not consume an invitation")
+                self.assertIsNone(joined, "a rejected release must not start a controlled connection")
                 self.assertEqual(installed.read_bytes(), previous, "failure changed the installed client")
             return result, joined, requests
 

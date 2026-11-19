@@ -34,6 +34,7 @@ pub mod pty;
 pub mod registry;
 #[cfg(target_os = "linux")]
 pub mod resources;
+pub(crate) mod server_endpoint;
 pub mod session;
 #[cfg(target_os = "linux")]
 mod steering;

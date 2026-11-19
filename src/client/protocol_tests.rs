@@ -162,7 +162,7 @@ fn metadata(allow: bool) -> ClientMetadata {
         cwd: std::env::current_dir().unwrap().to_str().unwrap().into(),
         hostname: "fixture".into(),
         allow: if allow {
-            vec!["octocat@github".into()]
+            vec!["octocat@ssmcp.test".into()]
         } else {
             Vec::new()
         },
@@ -194,15 +194,11 @@ async fn initial_allow_requires_capability_and_reaps_an_unacknowledged_transport
         .register("current", &metadata, &mut registered, READY_LIMIT)
         .await;
     let mut registration = result.unwrap().unwrap();
-    registration
-        .require_allow_access(&metadata.allow, "octocat@github")
-        .await
-        .unwrap();
     let error = registration
-        .require_allow_access(&["colleague".into()], "octocat@github")
+        .require_allow_access(&metadata.allow)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("per-session sharing"));
+    assert!(error.to_string().contains("account access controls"));
     assert!(error.downcast_ref::<relay::PermanentFailure>().is_some());
     assert!(
         registration.ssh.id().is_none(),
@@ -215,10 +211,7 @@ async fn initial_allow_requires_capability_and_reaps_an_unacknowledged_transport
     let mut registration = result.unwrap().unwrap();
     assert!(registration.access_supported);
     registration
-        .require_allow_access(
-            &["colleague".into(), "alice@github".into()],
-            "octocat@github",
-        )
+        .require_allow_access(&["colleague@ssmcp.test".into(), "alice@ssmcp.test".into()])
         .await
         .unwrap();
     close(registration).await;
@@ -318,10 +311,18 @@ async fn authentication_errors_and_untyped_failures_never_retry_registration() {
 #[tokio::test]
 async fn current_protocol_preserves_allow_checks_and_login_requirements() {
     for (scenario, allow, expected) in [
-        ("policy-login", true, "did not acknowledge the --allow"),
-        ("policy-ttl", true, "did not acknowledge the --allow"),
-        ("no-login", false, "returned no login code"),
-        ("no-expiry", false, "returned no login code"),
+        (
+            "policy-login",
+            true,
+            "did not acknowledge the explicit account allow policy",
+        ),
+        (
+            "policy-ttl",
+            true,
+            "did not acknowledge the explicit account allow policy",
+        ),
+        ("no-login", false, "returned no account access policy"),
+        ("no-expiry", false, "returned no account access policy"),
     ] {
         let fixture = Fixture::new();
         let metadata = metadata(allow);

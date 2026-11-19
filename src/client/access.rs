@@ -1,6 +1,6 @@
 //! Current-connection access controls. Only an acknowledged broker reply changes the list.
 pub(super) use crate::wire::AccessEntry as Entry;
-use crate::wire::{AccessCommand, AccessSnapshot, canonical_github_principal};
+use crate::wire::{AccessCommand, AccessSnapshot, canonical_allow_principal};
 use std::{
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
@@ -8,7 +8,7 @@ use std::{
 use tokio::sync::mpsc;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const UNSUPPORTED: &str = "当前连接不支持 /allow；请升级服务器，并使用 GitHub 账户的 HTTPS 连接";
+const UNSUPPORTED: &str = "当前连接不支持 /allow；请升级服务器，使用 --allow 用户名@中继服务器";
 static STATE: OnceLock<Mutex<Manager>> = OnceLock::new();
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -155,13 +155,7 @@ fn state() -> std::sync::MutexGuard<'static, Manager> {
 }
 
 fn principal(user: &str) -> Result<String, String> {
-    let user = user.trim();
-    let user = user.strip_prefix('@').unwrap_or(user);
-    if user.contains('@') {
-        canonical_github_principal(user)
-    } else {
-        canonical_github_principal(&format!("{user}@github"))
-    }
+    canonical_allow_principal(user.trim())
 }
 
 pub(super) fn snapshot() -> Snapshot {
@@ -217,8 +211,8 @@ mod tests {
     fn owner() -> AccessSnapshot {
         AccessSnapshot {
             entries: vec![Entry {
-                principal: "alice@github".into(),
-                login: "Alice".into(),
+                principal: "alice@ssmcp.test".into(),
+                login: "alice".into(),
                 subject: "42".into(),
                 owner: true,
             }],
@@ -256,12 +250,12 @@ mod tests {
         assert_eq!(manager.view.entries[0].subject, "42");
         manager
             .request(AccessCommand::Add {
-                principal: "bob@github".into(),
+                principal: "bob@ssmcp.test".into(),
             })
             .unwrap();
         let add = receiver.try_recv().unwrap();
         assert_eq!(manager.view.entries.len(), 1);
-        manager.reply(add.id, Err("GitHub 用户不存在".into()));
+        manager.reply(add.id, Err("服务器用户名不存在".into()));
         assert_eq!(manager.view.entries.len(), 1);
         assert!(manager.view.last_message.is_none());
         manager.disconnect();
@@ -291,15 +285,20 @@ mod tests {
 
     #[test]
     fn access_names_are_canonical_and_never_accept_controller_identity() {
-        for name in ["Alice", "@ALICE", "Alice@GitHub"] {
-            assert_eq!(principal(name).unwrap(), "alice@github");
+        for name in [
+            "Alice@ssmcp.test",
+            "ALICE@SSMCP.TEST",
+            "Alice@https://ssmcp.test/",
+        ] {
+            assert_eq!(principal(name).unwrap(), "alice@ssmcp.test");
         }
         for name in [
             "",
             "@",
             "a b",
             "a--b",
-            "a@other",
+            "alice@github",
+            "alice",
             "../../alice",
             "alice\nforged",
         ] {

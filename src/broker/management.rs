@@ -341,7 +341,9 @@ impl Broker {
                 .await
                 .values()
                 .flat_map(|clients| clients.values())
-                .filter(|session| session.owner_subject.as_deref() == Some(subject))
+                .filter(|session| {
+                    !session.locally_owned_peer && session.owner_subject.as_deref() == Some(subject)
+                })
                 .cloned()
                 .collect();
             for session in &active {
