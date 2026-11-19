@@ -155,6 +155,8 @@ pub(super) struct Meta {
     pub(super) started: bool,
     pub(super) skip: bool,
     pub(super) language: &'static str,
+    pub(super) read: Option<super::read_activity::Read>,
+    pub(super) read_bookkeeping: bool,
 }
 
 impl Meta {
@@ -279,6 +281,13 @@ impl Meta {
             .or_else(|| event["path"].as_str())
             .map(language_for_path)
             .unwrap_or("");
+        meta.read = super::read_activity::Read::from_event(label, event);
+        meta.read_bookkeeping = super::read_activity::bookkeeping(event)
+            && !meta.command
+            && !meta.diff
+            && meta
+                .status
+                .is_none_or(|status| !status.failed() && status != Status::Running);
         meta
     }
 
@@ -297,6 +306,11 @@ impl Meta {
     }
 
     pub(super) fn merge(&mut self, other: Self) {
+        // A correlated mixed operation is not a standalone read observation.
+        if self.read != other.read {
+            self.read = None;
+        }
+        self.read_bookkeeping &= other.read_bookkeeping;
         for key in other.keys {
             if self.keys.len() < MAX_KEYS && !self.keys.contains(&key) {
                 self.keys.push(key);
@@ -328,7 +342,12 @@ impl Meta {
     }
 
     pub(super) fn bytes(&self) -> usize {
-        self.author.len() + self.keys.iter().map(String::len).sum::<usize>()
+        self.author.len()
+            + self.keys.iter().map(String::len).sum::<usize>()
+            + self
+                .read
+                .as_ref()
+                .map_or(0, super::read_activity::Read::bytes)
     }
 }
 
