@@ -307,9 +307,9 @@ impl Terminal {
                 }
                 Ok(json!({"rows":rows,"cols":cols}))
             }
-            Operation::ListTools { .. } | Operation::CallTool { .. } => {
-                Err("not a terminal operation".into())
-            }
+            Operation::ListTools { .. }
+            | Operation::CallTool { .. }
+            | Operation::PeerMessages { .. } => Err("not a terminal operation".into()),
             Operation::Status {} => {
                 let running = self.running().await;
                 let output = self.output.lock().unwrap();

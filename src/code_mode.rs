@@ -1,4 +1,6 @@
 //! JavaScript orchestration through system Node.js inside mandatory bubblewrap isolation.
+#[cfg(test)]
+mod messaging_tests;
 pub(crate) mod reminders;
 pub(crate) mod user_wait;
 use crate::backend::process::Managed;
@@ -354,6 +356,17 @@ impl AuditRun {
         // if this program only checks messages and makes no native tool call.
         self.interacted(client_id);
         Ok(())
+    }
+
+    /// Select a unique current participant, never a display name or historical conversation.
+    pub(crate) fn peer_source_client(&self) -> Result<Option<String>, String> {
+        let bindings = self.bindings.lock().unwrap_or_else(|e| e.into_inner());
+        if bindings.len() > 1 {
+            return Err(
+                "Select from_client_id when this run has several participant bindings".into(),
+            );
+        }
+        Ok(bindings.keys().next().cloned())
     }
 
     pub(crate) fn binding(&self, client_id: &str) -> Option<RunBinding> {

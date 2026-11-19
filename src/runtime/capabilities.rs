@@ -325,6 +325,7 @@ impl Runtime {
             "transports":["authenticated_mcp_longpoll", "private_unix_socket_on_linux"],
             "delivery":"one shared lease, cursor and ACK state; no automatic replay"
         });
+        manifest["peer_messages"] = self.peer_inbox.capability();
         manifest["resources"] = json!({
             "list":"ssmcp.resources.list","templates":"ssmcp.resources.templates","read":"ssmcp.resources.read",
             "max_response_bytes":MAX_BYTES,"page_size":PAGE_SIZE,"guide":"ssmcp-client://guide","skill":"ssmcp-client://skill",

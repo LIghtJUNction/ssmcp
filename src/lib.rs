@@ -70,3 +70,5 @@ pub(crate) mod username;
 pub mod commerce;
 
 pub mod webhooks;
+
+pub mod messaging;

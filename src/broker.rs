@@ -5,6 +5,8 @@ mod attribution;
 #[cfg(test)]
 mod attribution_tests;
 mod management;
+#[cfg(test)]
+mod messages_tests;
 mod traffic;
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
@@ -38,6 +40,9 @@ fn request_timeout(operation: &Operation) -> Duration {
     match operation {
         Operation::CallTool { .. } => Duration::from_secs(910),
         Operation::ListTools { .. } => Duration::from_secs(120),
+        Operation::PeerMessages {
+            request: crate::messaging::NativeRequest::Wait { wait_ms, .. },
+        } => Duration::from_millis((*wait_ms).min(crate::messaging::MAX_WAIT_MS) + 10_000),
         _ => Duration::from_secs(10),
     }
 }
@@ -545,6 +550,7 @@ impl Session {
 pub struct Broker {
     pub public_url: String,
     pub bridges: Arc<crate::bridge::Bridges>,
+    pub(crate) messages: crate::bridge::messages::Router,
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
@@ -606,6 +612,7 @@ impl Broker {
             identities,
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
+            messages: crate::bridge::messages::Router::default(),
             portal: crate::portal::Portal::default(),
             client_downloads: None,
             code_mode_runner: None,

@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "source_commit": "13ea428eb0bcd02de0b3f02423009a12e1ba7f33",
+  "status": "passed",
+  "unique_tests": 29,
+  "gates": {
+    "fmt": true,
+    "strict_clippy": true
+  },
+  "source_binding": "Clippy and the first 24 tests passed before correcting only one resource-test expected total and one guide sentence. No production code changed. The resource and HTTP catalog groups then passed at the source commit.",
+  "groups": [
+    {
+      "group": "wire",
+      "passed": 8,
+      "tests": [
+        "broker::messages_tests::peer_messages_cancelled_send_is_unknown_and_never_replayed",
+        "broker::messages_tests::peer_messages_participant_tokens_and_immutable_run_source_are_required",
+        "broker::messages_tests::peer_messages_cancelled_native_wait_leaves_later_candidates_available",
+        "broker::messages_tests::peer_messages_global_snapshot_process_groups_and_old_clients_never_expand_on_retry",
+        "broker::messages_tests::peer_messages_two_real_connections_http_read_ack_and_trusted_source",
+        "broker::messages_tests::peer_messages_full_inbox_is_explicitly_rejected_and_not_retried_after_space_frees",
+        "broker::messages_tests::peer_messages_account_acl_is_rechecked_after_wait_and_disconnect",
+        "broker::messages_tests::peer_messages_real_code_mode_composes_send_wait_read_and_ack"
+      ],
+      "raw_log": "accept-wire.log",
+      "raw_sha256": "9397e2db28a99bbd019ebcec6a34286a2a183b7d501f5aafe01a898503f78914"
+    },
+    {
+      "group": "cache",
+      "passed": 6,
+      "tests": [
+        "bridge::messages::tests::keys_expire_across_clock_window_and_relay_generation_without_replay",
+        "bridge::messages::tests::cancellation_records_unknown_without_changing_confirmed_deliveries",
+        "bridge::messages::tests::duplicate_batch_preserves_first_run_content_and_recipient_snapshot",
+        "bridge::messages::tests::receipt_bytes_are_reserved_before_fanout_and_large_errors_are_bounded",
+        "bridge::messages::tests::public_request_types_reject_forged_sources_and_private_delivery_operations",
+        "bridge::messages::tests::valid_keys_are_not_evicted_to_admit_another_owner_batch"
+      ],
+      "raw_log": "accept-cache.log",
+      "raw_sha256": "a519d033899462ab04d59c689d12a61bb03e5a493cd0dbeee2b57f64238d8bca"
+    },
+    {
+      "group": "code_mode",
+      "passed": 1,
+      "tests": [
+        "code_mode::messaging_tests::messaging_helpers_preserve_explicit_selectors_waits_and_ack_without_native_tools"
+      ],
+      "raw_log": "accept-js.log",
+      "raw_sha256": "09bc9560bf32dc6b741e6f85b3edd616853b86c827b754a36eff344c53612232"
+    },
+    {
+      "group": "inbox",
+      "passed": 9,
+      "tests": [
+        "messaging::tests::typed_envelopes_cannot_supply_user_roles_or_private_agent_tokens",
+        "messaging::tests::native_process_and_runtime_generations_are_distinct_and_read_is_non_consuming",
+        "messaging::tests::mailbox_filters_and_atomic_ack_do_not_consume_another_participant",
+        "messaging::tests::duplicate_delivery_and_ack_never_reenqueue_changed_or_handled_content",
+        "messaging::tests::cancelled_wait_is_non_consuming_and_close_wakes_waiters",
+        "messaging::tests::byte_and_page_budgets_are_enforced_before_acceptance",
+        "messaging::tests::expiry_reclaims_payload_without_a_reader_or_periodic_poll",
+        "messaging::tests::active_candidate_dedup_survives_retired_receipt_pressure",
+        "messaging::tests::encoded_pages_include_envelope_bytes_in_the_public_read_budget"
+      ],
+      "raw_log": "accept-core.log",
+      "raw_sha256": "b669fef70cfdd9cf8dc083d5ad6dc93c57d1120d00b8c4b64bcbecfd954ddff7"
+    },
+    {
+      "group": "resources",
+      "passed": 4,
+      "tests": [
+        "resources::tests::unknown_and_ambiguous_uri_queries_are_rejected",
+        "resources::tests::every_resource_is_filtered_by_endpoint_and_connection_lifetime",
+        "resources::tests::inventory_pagination_and_metadata_are_live_without_credentials",
+        "resources::tests::list_pagination_is_bounded_and_rejects_changed_snapshots"
+      ],
+      "raw_log": "finish-resources.log",
+      "raw_sha256": "e7ef12ed43c6193f924f833039dbd73c2f9e8d1b0f7ec58f06d7d184e1c4c2ee"
+    },
+    {
+      "group": "http_catalog",
+      "passed": 1,
+      "tests": [
+        "http::tests::public_catalog_and_arguments_include_direct_collaboration"
+      ],
+      "raw_log": "finish-http.log",
+      "raw_sha256": "33eb66e0eae2b3a931403cd4cee074a2ee746152a2367b30244dfdb2a426e776"
+    }
+  ],
+  "fixtures": "Private local HTTP/OAuth relay and two actual Unix wire connections backed by the production Inbox. Includes an isolated Node code_mode run. No test message was sent to a user session; no model, production relay, installation or release was started.",
+  "independent_review": {
+    "scope": "Source provenance, actual-caller Authorization/ACL, immutable recipients, participant credentials and private-operation ingress",
+    "result": "No evidence-backed blocker; read-only review by auth-contract owner",
+    "reviewed_files_sha256": "e7bac034d8a0e7e1290a590316cfbc91e5b9c01c84a4c936d606fd26c47457c4"
+  },
+  "limits": {
+    "message_utf8_bytes": 16384,
+    "native_candidates": 128,
+    "native_inbox_accounted_bytes": 262144,
+    "read_bytes": 65536,
+    "read_messages": 32,
+    "waiters_per_runtime": 4,
+    "wait_ms": 30000,
+    "ttl_default_ms": 600000,
+    "ttl_max_ms": 3600000,
+    "relay_batches": 256,
+    "batches_per_principal": 64,
+    "active_batches": 8,
+    "receipt_reservation_bytes": 8388608,
+    "batch_targets": 128,
+    "fanout": 4,
+    "idempotency_window_ms": 300000
+  },
+  "scope_notes": [
+    "Shared-session access uses existing control ACL. Participant inboxes also require the exact current private credential or immutable run binding.",
+    "Read/wait never consume; ack is explicit. Candidate ACK does not claim human comprehension or model execution.",
+    "A dispatched wait can remain until its bounded native deadline after orchestration cancellation.",
+    "Relay receipts contain metadata, not text or history copies. Restart/expired keys reject retries; no automatic replay.",
+    "The typed local inbox facade is available. Frontend presentation is a separate integration."
+  ],
+  "raw_evidence_directory": "/home/lightjunction/Documents/GITHUB/ssmcp/artifacts/session-messages-20261119-evidence",
+  "raw_manifest_sha256": "6cd1ad1e71ea032213e68ca559a66b2d8fce90bfe186c00e0ba23b66ba3692e7"
+}
