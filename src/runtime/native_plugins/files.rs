@@ -120,3 +120,257 @@ impl NativePlugin for Files {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        output::OutputStore,
+        registry::Registry,
+        runtime::native_host::{Definition, NativeHost},
+    };
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use serde_json::json;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+        time::Duration,
+    };
+
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct Fixture {
+        host: NativeHost,
+        files: Arc<Files>,
+        registry: Arc<Registry>,
+        scratch: Scratch,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "ssmcp-native-files-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            let scratch = Scratch(path);
+            let root = scratch.0.join("workspace");
+            let extra = scratch.0.join("context");
+            std::fs::create_dir(&root).unwrap();
+            std::fs::create_dir(&extra).unwrap();
+            let registry = Registry::new();
+            let files = Files::new(&ConstructorContext {
+                root,
+                context_roots: vec![extra],
+                registry: registry.clone(),
+                output: OutputStore::at_for_test(scratch.0.join("output")).unwrap(),
+            })
+            .unwrap();
+            let host =
+                NativeHost::new(registry.clone(), vec![Definition::new(files.clone())]).unwrap();
+            for (provider, tools) in host.catalogs().unwrap() {
+                registry.replace(provider, tools).unwrap();
+            }
+            Self {
+                host,
+                files,
+                registry,
+                scratch,
+            }
+        }
+
+        async fn call(&self, name: &str, arguments: Value) -> Result<Value, String> {
+            self.host
+                .call(&self.registry.lookup(name)?, arguments)
+                .await
+        }
+
+        async fn shutdown(&self) {
+            let report = tokio::time::timeout(Duration::from_secs(3), self.host.shutdown())
+                .await
+                .expect("files cleanup must not wait for a pending operation's timeout");
+            assert_eq!(report, vec![("files".into(), Ok(Value::Null))]);
+        }
+    }
+
+    #[tokio::test]
+    async fn native_files_host_preserves_large_results_images_and_catalogs() {
+        let fixture = Fixture::new();
+        assert_eq!(
+            fixture.host.catalogs().unwrap(),
+            vec![
+                (Provider::Workspace, Workspace::tools()),
+                (Provider::Context, Context::tools()),
+                (Provider::Rsync, Rsync::tools()),
+            ]
+        );
+        // The real request exceeds the legacy extension's 64 KiB input limit;
+        // the MCP text + structured result exceeds its 256 KiB result limit.
+        let text = "native file payload\n".repeat(10_000);
+        fixture
+            .call(
+                "ssmcp.fs.write_text",
+                json!({"path":"large.txt","text":text}),
+            )
+            .await
+            .unwrap();
+        let read = fixture
+            .call(
+                "ssmcp.fs.read_text",
+                json!({"path":"large.txt","max_bytes":crate::workspace::MAX_FILE_BYTES}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read["structuredContent"]["text"], text);
+        assert!(read.to_string().len() > 256 * 1024);
+        assert_eq!(
+            serde_json::from_str::<Value>(read["content"][0]["text"].as_str().unwrap()).unwrap(),
+            read["structuredContent"]
+        );
+
+        let image_path = fixture.scratch.0.join("workspace/image.png");
+        image::RgbImage::new(2, 2)
+            .save_with_format(&image_path, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = std::fs::read(image_path).unwrap();
+        let image = fixture
+            .call("ssmcp.fs.read_image", json!({"path":"image.png"}))
+            .await
+            .unwrap();
+        assert_eq!(image["content"][0]["type"], "image");
+        assert_eq!(image["content"][0]["mimeType"], "image/png");
+        assert_eq!(
+            STANDARD
+                .decode(image["content"][0]["data"].as_str().unwrap())
+                .unwrap(),
+            bytes
+        );
+        assert_eq!(image["structuredContent"]["path"], "image.png");
+        assert_eq!(image["isError"], false);
+        fixture.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn native_files_frontends_share_state_without_extending_context_grants() {
+        let fixture = Fixture::new();
+        fixture
+            .call(
+                "ssmcp.fs.write_text",
+                json!({"path":"notes.txt","text":"shared workspace contents"}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            fixture
+                .files
+                .expand_references("@notes.txt")
+                .await
+                .unwrap()
+                .contains("shared workspace contents")
+        );
+        let imported = fixture
+            .files
+            .import_input(attachments::Source::Text(
+                "local attachment contents".into(),
+            ))
+            .await
+            .unwrap();
+        let attachments::Loaded::Reference { reference, .. } = imported else {
+            panic!("text import must retain its ordinary workspace reference");
+        };
+        assert!(
+            fixture
+                .files
+                .expand_references(&reference)
+                .await
+                .unwrap()
+                .contains("local attachment contents")
+        );
+        fixture
+            .files
+            .reference_completions(&completion::Key::Files(".".into()))
+            .await
+            .unwrap();
+
+        let skill = "---\nname: scoped-fixture\ndescription: Scoped fixture instructions\n---\nRead only the explicit source.\n";
+        std::fs::write(fixture.scratch.0.join("context/SKILL.md"), skill).unwrap();
+        let arguments = json!({"root":"context-1","path":"SKILL.md"});
+        let raw = fixture
+            .files
+            .context_resource("ssmcp.skills.read", arguments.clone())
+            .await
+            .unwrap();
+        assert_eq!(raw["content"], skill);
+        assert!(raw.get("structuredContent").is_none());
+        assert_eq!(
+            fixture.call("ssmcp.skills.read", arguments).await.unwrap()["structuredContent"],
+            raw
+        );
+        assert!(
+            fixture
+                .call("ssmcp.fs.read_text", json!({"path":"../context/SKILL.md"}),)
+                .await
+                .is_err()
+        );
+        assert!(
+            fixture
+                .files
+                .expand_references("@../context/SKILL.md")
+                .await
+                .is_err()
+        );
+        assert!(
+            fixture
+                .files
+                .reference_completions(&completion::Key::Files("../context".into()))
+                .await
+                .is_err()
+        );
+        fixture.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn native_files_cancellation_and_shutdown_release_owned_listener() {
+        let fixture = Fixture::new();
+        let listener = fixture.call("ssmcp.net.listen", json!({})).await.unwrap();
+        let listener = &listener["structuredContent"];
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(30),
+                fixture.call(
+                    "ssmcp.net.accept",
+                    json!({"id":listener["id"],"wait_ms":5000}),
+                ),
+            )
+            .await
+            .is_err()
+        );
+        fixture.shutdown().await;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::net::TcpStream::connect(listener["address"].as_str().unwrap()),
+            )
+            .await
+            .unwrap()
+            .is_err()
+        );
+        assert!(
+            fixture
+                .files
+                .reference_completions(&completion::Key::Files(".".into()))
+                .await
+                .unwrap_err()
+                .contains("workspace is closed")
+        );
+        assert!(fixture.call("ssmcp.net.list", json!({})).await.is_err());
+    }
+}
