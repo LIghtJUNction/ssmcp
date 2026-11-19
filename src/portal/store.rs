@@ -411,6 +411,26 @@ impl Store {
             .expect("finite quota"))
     }
 
+    pub(crate) fn reserve_traffic_frame(
+        &mut self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        frame: crate::user_policy::TrafficFrame,
+        unlimited: bool,
+    ) -> Result<(), Problem> {
+        self.account(subject)?;
+        self.traffic.reserve_frame(
+            &self.directory,
+            subject,
+            period,
+            utc_offset_minutes,
+            frame,
+            unlimited,
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn reserve_traffic(
         &mut self,
         subject: &str,
