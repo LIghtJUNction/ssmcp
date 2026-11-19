@@ -502,6 +502,20 @@ impl Computer {
                 parse::<Empty>(args)?;
                 return Ok(result(zuse_backend::status(self).await));
             }
+            if name == "ssmcp.computer.screenshot" {
+                let screenshot: Screenshot = parse(args.clone())?;
+                if screenshot.cursor {
+                    // Preserve explicit cursor capture where the older adapter
+                    // supports it; zuse 0.1.0 captures without cursor compositing.
+                    #[cfg(windows)]
+                    return windows::perform(&self.root, name, args).await;
+                    #[cfg(target_os = "macos")]
+                    return macos::perform(&self.root, name, args).await;
+                    if matches!(self.session, Session::Hyprland | Session::Wayland) {
+                        return self.screenshot(screenshot).await;
+                    }
+                }
+            }
             if name != "ssmcp.computer.monitors" {
                 return zuse_backend::perform(self, name, args).await;
             }

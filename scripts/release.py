@@ -82,13 +82,14 @@ def registry_dependencies(root=None):
     dependencies = manifest.get("dependencies", {})
     result = []
     local = {}
-    for name in ("zplugin", "zharness"):
+    for name, package_name in (("zplugin", "zplugin"), ("zharness", "zharness"),
+                               ("zuse", "zuse-computer")):
         dependency = dependencies.get(name)
         if dependency is None:
             continue
         expected_path = "crates/" + name
         if (not isinstance(dependency, dict)
-                or dependency.get("package", name) != name
+                or dependency.get("package", name) != package_name
                 or dependency.get("path") != expected_path
                 or not isinstance(dependency.get("version"), str)
                 or not dependency["version"].startswith("=")):
@@ -104,9 +105,9 @@ def registry_dependencies(root=None):
         source_version = package.get("version")
         if source_version == {"workspace": True}:
             source_version = local[name].get("workspace", {}).get("package", {}).get("version")
-        if package["name"] != name or source_version != release_version:
+        if package["name"] != package_name or source_version != release_version:
             raise ValueError(f"{name} source and exact dependency version differ")
-        result.append((name, release_version))
+        result.append((package_name, release_version))
     if "zharness" in local:
         if "zplugin" not in local:
             raise ValueError("the local zharness integration requires the same pinned zplugin source")

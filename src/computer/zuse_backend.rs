@@ -13,6 +13,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 const WORKER_FLAG: &str = "--internal-zuse-worker";
 const WORKER_READY: &[u8] = b"ssmcp-zuse-worker-v1\n";
+static WORKER_ENTRY_REGISTERED: AtomicBool = AtomicBool::new(false);
 const REQUEST_LIMIT: usize = 64 * 1024;
 const RESPONSE_LIMIT: usize = 768 * 1024;
 const CANCELLED: &str = "zuse operation cancelled";
@@ -38,6 +39,9 @@ struct Reply {
 /// Embedding binaries that construct `Computer` must forward this entry too.
 /// It is not an MCP tool and accepts no caller-selected executable or script.
 pub fn worker_entry() -> Option<Result<(), String>> {
+    // A library embedder must opt in before any Computer can respawn its
+    // executable. Missing integration must not duplicate the host application.
+    WORKER_ENTRY_REGISTERED.store(true, Ordering::Release);
     let mut args = std::env::args_os();
     args.next();
     if args.next().as_deref() != Some(std::ffi::OsStr::new(WORKER_FLAG)) {
@@ -132,6 +136,10 @@ impl Drop for WorkerGuard {
 }
 
 async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<Value, String> {
+    #[cfg(not(test))]
+    if !WORKER_ENTRY_REGISTERED.load(Ordering::Acquire) {
+        return Err("the embedding executable must call computer::worker_entry() before starting its runtime; no worker was started".into());
+    }
     let capture_directory = if operation == "capture" {
         Some(CaptureDirectory::new()?)
     } else {
@@ -863,12 +871,11 @@ fn with_button<T>(
         armed: true,
     };
     let down = release.desktop.button(button, "down");
-    if down
-        .as_ref()
-        .is_err_and(|error| input_error_precedes_effect(release.desktop.backend(), error, false))
-    {
-        release.armed = false;
-        return down.and_then(|_| unreachable!());
+    if let Err(error) = &down {
+        if input_error_precedes_effect(release.desktop.backend(), error, false) {
+            release.armed = false;
+            return Err(error.clone());
+        }
     }
     let outcome = down.and_then(|_| operation(release.desktop));
     let released = release.desktop.button(button, "up");

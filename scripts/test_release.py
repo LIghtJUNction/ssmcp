@@ -580,6 +580,24 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "source and exact dependency version differ"):
                     release.registry_dependencies(self.root)
 
+    def test_zuse_alias_requires_initialized_source_and_exact_registry_package(self):
+        manifest = self.root / "Cargo.toml"
+        original = manifest.read_text() + '\n[dependencies]\nzuse = { package = "zuse-computer", path = "crates/zuse", version = "=0.1.0" }\n'
+        manifest.write_text(original)
+        with self.assertRaisesRegex(ValueError, "source is missing"):
+            release.registry_dependencies(self.root)
+        source = self.root / "crates/zuse/Cargo.toml"
+        source.parent.mkdir(parents=True)
+        source.write_text('[package]\nname = "zuse-computer"\nversion = "0.1.0"\n')
+        self.assertEqual(release.registry_dependencies(self.root), [("zuse-computer", "0.1.0")])
+        for changed in (original.replace('package = "zuse-computer"', 'package = "zuse"'),
+                        original.replace('version = "=0.1.0"', 'version = "0.1.0"'),
+                        original.replace('version = "=0.1.0"', 'version = "=0.1.1"')):
+            with self.subTest(manifest=changed):
+                manifest.write_text(changed)
+                with self.assertRaises(ValueError):
+                    release.registry_dependencies(self.root)
+
     def submodule_fixture(self, nested=False):
         temporary = tempfile.TemporaryDirectory(prefix="ssmcp-source-module-")
         self.addCleanup(temporary.cleanup)
