@@ -182,7 +182,41 @@ class UserWait(InputHistory):
                    "starting concurrent waits preserves the complete unsent reference draft")
         front.until(lambda shot: "等待你确认是否结束" in text(shot),
                     "mixed-episode finish intent remains visible in the footer")
+        front.until(lambda shot: "Click or type to wake" in text(shot),
+                    "the authenticated user wait dims the production terminal")
+        self.check(self.ui("/display")["sleeping"],
+                   "the real terminal exposes its active visual sleep state")
         self.save_shot("user-wait-active-120", front, cells=True)
+        front.resize(24, 48)
+        front.until(lambda shot: shot["size"] == [24, 48]
+                    and "Click or type to wake" in text(shot),
+                    "the same pending wait renders a narrow sleep overlay")
+        self.save_shot("user-wait-sleep-48", front, cells=True)
+        front.resize(28, 120)
+        front.until(lambda shot: shot["size"] == [28, 120]
+                    and "Click or type to wake" in text(shot),
+                    "the pending wait survives a wide resize")
+        before_wake = self.ui("/display/conversation")
+        # Fragment SGR press at its final byte, then drag and release. The
+        # complete gesture wakes the overlay without reaching the conversation.
+        front.send(b"\x1b[<0;3;3")
+        front.pump(0.02)
+        front.send(b"M\x1b[<32;5;4M\x1b[<0;5;4m")
+        front.until(lambda shot: "Click or type to wake" not in text(shot),
+                    "the owned mouse gesture removes the visual sleep overlay")
+        self.check(not self.ui("/display")["sleeping"],
+                   "mouse down and up leave the terminal visually awake")
+        after_wake = self.ui("/display/conversation")
+        self.check(all(after_wake[key] == before_wake[key]
+                       for key in ("draft", "target", "view", "focus", "editing")),
+                   "waking preserves the exact draft, recipient, view and focus")
+        self.check(all(not future.done() for future in waits),
+                   "mouse waking does not complete any authenticated wait")
+        self.check({entry["wait_id"] for entry in self.state()["active"]}
+                   == {entry["wait_id"] for entry in active},
+                   "mouse waking leaves every native wait identity pending")
+        self.targeted_unchanged(ordinary)
+        self.save_shot("user-wait-mouse-awake-120", front, cells=True)
         # code_mode itself has four global workers. Keep three real external
         # waits, then exercise native slots four/five within the one remaining
         # worker. We do not confuse global code_mode busy with a wait receipt.
