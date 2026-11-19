@@ -1061,12 +1061,13 @@ mod tests {
         for tool in &catalog {
             assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        assert_eq!(names.len(), 11);
+        assert_eq!(names.len(), 12);
         assert!(names.contains("ssmcp.ui.harness"));
         assert!(names.contains("ssmcp.ui.history"));
         for name in [
             "ssmcp.ui.ask",
             "ssmcp.ui.questions",
+            "ssmcp.ui.listener",
             "ssmcp.ui.message",
             "ssmcp.ui.present",
         ] {
