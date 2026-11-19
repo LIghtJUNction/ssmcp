@@ -165,7 +165,14 @@ async fn admin(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<
     if !snapshot.is_admin {
         return Err(Problem::Forbidden);
     }
-    let users = broker.portal.storage(|store| store.summaries()).await?;
+    let balances = management(&broker.portal)?
+        .traffic_balances(&identity)
+        .await
+        .map_err(management_error)?;
+    let mut users = broker.portal.storage(|store| store.summaries()).await?;
+    for user in &mut users {
+        user.traffic_remaining = balances.remaining.get(&user.subject).copied();
+    }
     broker
         .portal
         .record_audit(
@@ -179,6 +186,7 @@ async fn admin(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<
         &users,
         &csrf,
         &identity.subject,
+        &balances.period,
     ))
     .into_response())
 }
@@ -275,16 +283,36 @@ async fn user_policy(
             .verify(&headers, &values, &broker.public_url)?;
         let (identity, _) = authenticate(&broker.portal, &headers).await?;
         checked_snapshot(&broker.portal, &identity, Scope::All).await?;
-        let change = policy_change(&values, &identity.subject)?;
-        management(&broker.portal)?
-            .set_user_policy(
-                &identity,
-                &change.subject,
-                change.banned,
-                change.rate_limit_bps,
-            )
-            .await
-            .map_err(management_error)?;
+        let management = management(&broker.portal)?;
+        if values.get("action").map(String::as_str) == Some("traffic") {
+            only(
+                &values,
+                &["csrf", "subject", "action", "period", "remaining_bytes"],
+            )?;
+            let remaining_bytes = values["remaining_bytes"]
+                .parse()
+                .map_err(|_| Problem::ManagementInvalid)?;
+            management
+                .set_traffic_remaining(
+                    &identity,
+                    &values["subject"],
+                    &values["period"],
+                    remaining_bytes,
+                )
+                .await
+                .map_err(management_error)?;
+        } else {
+            let change = policy_change(&values, &identity.subject)?;
+            management
+                .set_user_policy(
+                    &identity,
+                    &change.subject,
+                    change.banned,
+                    change.rate_limit_bps,
+                )
+                .await
+                .map_err(management_error)?;
+        }
         Ok(Redirect::to("/account/admin").into_response())
     }
     .await;

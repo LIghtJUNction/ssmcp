@@ -53,6 +53,7 @@ pub(crate) struct AccountSummary {
     pub banned: bool,
     pub rate_limit_bps: Option<u64>,
     pub has_recharged: bool,
+    pub traffic_remaining: Option<u64>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -215,6 +216,7 @@ impl Store {
                 banned: account.banned,
                 rate_limit_bps: account.rate_limit_bps,
                 has_recharged: account.has_recharged,
+                traffic_remaining: None,
             })
             .collect())
     }
@@ -375,6 +377,36 @@ impl Store {
         self.account(subject)?;
         self.traffic
             .snapshot(subject, period, utc_offset_minutes, unlimited)
+    }
+
+    pub(crate) fn set_traffic_remaining(
+        &mut self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        remaining_bytes: u64,
+    ) -> Result<(), Problem> {
+        self.account_record(subject)?;
+        self.traffic.set_remaining(
+            &self.directory,
+            subject,
+            period,
+            utc_offset_minutes,
+            remaining_bytes,
+        )
+    }
+
+    pub(crate) fn admin_traffic_remaining(
+        &self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+    ) -> Result<u64, Problem> {
+        Ok(self
+            .traffic
+            .snapshot(subject, period, utc_offset_minutes, false)?
+            .remaining_bytes
+            .expect("finite quota"))
     }
 
     pub(crate) fn reserve_traffic(

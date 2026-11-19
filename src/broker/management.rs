@@ -189,6 +189,80 @@ impl Broker {
         Ok(())
     }
 
+    pub(crate) async fn management_traffic_balances(
+        &self,
+        actor: &Identity,
+    ) -> Result<management::TrafficBalances, ManagementError> {
+        let state = self.management_access(actor, Scope::All)?;
+        let policy = state.policy.clone();
+        let offset = self.traffic_utc_offset_minutes.load(Ordering::Acquire);
+        self.portal
+            .storage(move |store| {
+                let period = crate::user_policy::traffic_period_at(management::now(), offset);
+                let remaining = store
+                    .summaries()?
+                    .into_iter()
+                    .filter(|account| !policy.is_admin_subject(&account.subject))
+                    .map(|account| {
+                        let bytes =
+                            store.admin_traffic_remaining(&account.subject, &period, offset)?;
+                        Ok((account.subject, bytes))
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(management::TrafficBalances { period, remaining })
+            })
+            .await
+            .map_err(policy_error)
+    }
+
+    pub(crate) async fn management_set_traffic_remaining(
+        &self,
+        actor: &Identity,
+        subject: &str,
+        period: &str,
+        remaining_bytes: u64,
+    ) -> Result<(), ManagementError> {
+        let _update = self.user_policy_updates.lock().await;
+        let state = self.management_access(actor, Scope::All)?;
+        if state.policy.is_admin_subject(subject) {
+            return Err(ManagementError::Forbidden);
+        }
+        if !management::valid_subject(subject) || !crate::user_policy::valid_traffic_period(period)
+        {
+            return Err(ManagementError::Invalid);
+        }
+        let mut event = AuditEvent::new(AuditAction::TrafficBalanceChanged, AuditOutcome::Pending);
+        event.actor_subject = Some(actor.subject.clone());
+        event.owner_subject = Some(subject.into());
+        let audit = state.audit.clone();
+        let subject = subject.to_owned();
+        let period = period.to_owned();
+        let offset = self.traffic_utc_offset_minutes.load(Ordering::Acquire);
+        self.portal
+            .storage(move |store| {
+                if period != crate::user_policy::traffic_period_at(management::now(), offset) {
+                    return Err(crate::portal::Problem::Invalid);
+                }
+                store.account_record(&subject)?;
+                audit
+                    .record(event.clone())
+                    .map_err(|_| crate::portal::Problem::Storage)?;
+                let result =
+                    store.set_traffic_remaining(&subject, &period, offset, remaining_bytes);
+                event.outcome = if result.is_ok() {
+                    AuditOutcome::Success
+                } else {
+                    AuditOutcome::Error
+                };
+                audit
+                    .record(event)
+                    .map_err(|_| crate::portal::Problem::Storage)?;
+                result
+            })
+            .await
+            .map_err(policy_error)
+    }
+
     /// Apply a partial account policy update under a single administrator
     /// mutation lock, then invalidate every live form of access on a ban.
     pub async fn management_set_user_policy(

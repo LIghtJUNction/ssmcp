@@ -27,6 +27,8 @@ const FILE_NAME: &str = "traffic.jsonl";
 struct Usage {
     used_bytes: u64,
     paid_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adjusted_limit_bytes: Option<u64>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +57,11 @@ enum Record {
         subject: String,
         period: String,
         used_bytes: u64,
+    },
+    Adjusted {
+        subject: String,
+        period: String,
+        limit_bytes: u64,
     },
     Paid {
         order_id: String,
@@ -142,6 +149,21 @@ impl LedgerState {
                 }
                 usage.used_bytes = used_bytes;
             }
+            Record::Adjusted {
+                subject,
+                period,
+                limit_bytes,
+            } => {
+                if !crate::management::valid_subject(&subject) || !valid_traffic_period(&period) {
+                    return Err(Problem::Storage);
+                }
+                self.periods
+                    .entry(period)
+                    .or_default()
+                    .entry(subject)
+                    .or_default()
+                    .adjusted_limit_bytes = Some(limit_bytes);
+            }
             Record::Paid { order_id, grant } => {
                 if !valid_order_id(&order_id)
                     || !crate::management::valid_subject(&grant.subject)
@@ -164,6 +186,9 @@ impl LedgerState {
                 total
                     .checked_add(FREE_MONTHLY_TRAFFIC_BYTES)
                     .ok_or(Problem::Storage)?;
+                if let Some(limit) = &mut usage.adjusted_limit_bytes {
+                    *limit = limit.checked_add(grant.bytes).ok_or(Problem::Storage)?;
+                }
                 usage.paid_bytes = total;
                 self.orders.insert(order_id, grant);
             }
@@ -274,13 +299,18 @@ impl TrafficLedger {
             return Err(Problem::Invalid);
         }
         let usage = self.state.usage(subject, period);
-        Ok(TrafficQuota::new(
+        let mut quota = TrafficQuota::new(
             period.to_owned(),
             utc_offset_minutes,
             usage.used_bytes,
             usage.paid_bytes,
             unlimited,
-        ))
+        );
+        if let Some(limit) = usage.adjusted_limit_bytes.filter(|_| !unlimited) {
+            quota.limit_bytes = Some(limit);
+            quota.remaining_bytes = Some(limit.saturating_sub(usage.used_bytes));
+        }
+        Ok(quota)
     }
 
     pub(super) fn reserve(
@@ -303,6 +333,45 @@ impl TrafficLedger {
             return Ok(());
         }
         let used_bytes = quota.used_bytes.checked_add(bytes).ok_or(Problem::Limit)?;
+        self.require_period_capacity(subject, period)?;
+        self.append(
+            directory,
+            Record::Used {
+                subject: subject.into(),
+                period: period.into(),
+                used_bytes,
+            },
+        )
+    }
+
+    pub(super) fn set_remaining(
+        &mut self,
+        directory: &File,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        remaining_bytes: u64,
+    ) -> Result<(), Problem> {
+        let quota = self.snapshot(subject, period, utc_offset_minutes, false)?;
+        let limit_bytes = quota
+            .used_bytes
+            .checked_add(remaining_bytes)
+            .ok_or(Problem::Invalid)?;
+        if quota.limit_bytes == Some(limit_bytes) {
+            return Ok(());
+        }
+        self.require_period_capacity(subject, period)?;
+        self.append(
+            directory,
+            Record::Adjusted {
+                subject: subject.into(),
+                period: period.into(),
+                limit_bytes,
+            },
+        )
+    }
+
+    fn require_period_capacity(&self, subject: &str, period: &str) -> Result<(), Problem> {
         if !self
             .state
             .periods
@@ -318,14 +387,7 @@ impl TrafficLedger {
         {
             return Err(Problem::Limit);
         }
-        self.append(
-            directory,
-            Record::Used {
-                subject: subject.into(),
-                period: period.into(),
-                used_bytes,
-            },
-        )
+        Ok(())
     }
 
     /// Returns false only for an identical, already durable grant. Late first-time
@@ -365,28 +427,19 @@ impl TrafficLedger {
         if period != current_period {
             return Err(Problem::TrafficPeriodMismatch);
         }
-        if self.state.orders.len() >= MAX_ORDERS
-            || (!self
-                .state
-                .periods
-                .get(period)
-                .is_some_and(|p| p.contains_key(subject))
-                && self
-                    .state
-                    .periods
-                    .values()
-                    .map(BTreeMap::len)
-                    .sum::<usize>()
-                    >= MAX_ACCOUNT_PERIODS)
-        {
+        if self.state.orders.len() >= MAX_ORDERS {
             return Err(Problem::Limit);
         }
-        self.state
-            .usage(subject, period)
+        self.require_period_capacity(subject, period)?;
+        let usage = self.state.usage(subject, period);
+        usage
             .paid_bytes
             .checked_add(bytes)
             .and_then(|total| total.checked_add(FREE_MONTHLY_TRAFFIC_BYTES))
             .ok_or(Problem::Limit)?;
+        if let Some(limit) = usage.adjusted_limit_bytes {
+            limit.checked_add(bytes).ok_or(Problem::Limit)?;
+        }
         self.append(
             directory,
             Record::Paid {
