@@ -1,5 +1,6 @@
 //! Display primitives shared by the built-in terminal and alternate frontends.
 use super::{
+    language::{Language, localized},
     render, terminal,
     ui::{Theme, Ui},
 };
@@ -24,6 +25,14 @@ static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static UPDATES: Mutex<()> = Mutex::new(());
 static RESIZES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PENDING_THEME: Mutex<Option<Theme>> = Mutex::new(None);
+static PENDING_LANGUAGE: Mutex<Option<Language>> = Mutex::new(None);
+
+/// Only enqueue here; persistence and repaint happen outside the terminal mutex.
+pub(super) fn queue_language(language: Language) {
+    *PENDING_LANGUAGE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(language);
+}
 
 /// Safe while a terminal frame/input lock is held: only enqueue the desired theme.
 pub(super) fn queue_theme(theme: Theme) {
@@ -84,8 +93,12 @@ fn document_with_ui(ui: &Ui, existing: Option<&str>) -> Result<String, String> {
 
 fn save(ui: &Ui) -> Result<(), String> {
     let path = config_path().ok_or("UI configuration path is unavailable; use --ui-config FILE")?;
+    save_at(ui, &path)
+}
+
+fn save_at(ui: &Ui, path: &Path) -> Result<(), String> {
     // A display command must not replace an unrelated or malformed document.
-    let existing = match std::fs::read_to_string(&path) {
+    let existing = match std::fs::read_to_string(path) {
         Ok(text) => Some(text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return Err("cannot read UI configuration".into()),
@@ -113,7 +126,7 @@ fn save(ui: &Ui) -> Result<(), String> {
         file.sync_all()
             .map_err(|_| "cannot flush UI configuration")?;
         drop(file);
-        std::fs::rename(&temporary, &path).map_err(|_| "cannot replace UI configuration")
+        std::fs::rename(&temporary, path).map_err(|_| "cannot replace UI configuration")
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
@@ -176,7 +189,11 @@ pub(crate) fn apply_pending() -> Result<Option<(u16, u16)>, String> {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .take();
-    if actions.is_empty() && theme.is_none() {
+    let language = PENDING_LANGUAGE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    if actions.is_empty() && theme.is_none() && language.is_none() {
         return Ok(None);
     }
     let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
@@ -200,6 +217,27 @@ pub(crate) fn apply_pending() -> Result<Option<(u16, u16)>, String> {
             Ok(Some(size)) => geometry = Some(size),
             Ok(None) => {}
             Err(error) => terminal::notice(&error),
+        }
+    }
+    if let Some(language) = language {
+        let mut ui = render::current_ui();
+        let previous = ui.language;
+        ui.language = language;
+        match apply(ui, true) {
+            Ok(size) => {
+                if size.is_some() {
+                    geometry = size;
+                }
+                terminal::notice(language.text(
+                    "Language: English · saved · /language zh switches to Chinese",
+                    "语言：中文 · 已保存 · /language en 切换英语",
+                ));
+            }
+            Err(error) => terminal::notice(&localized!(
+                previous,
+                "Language unchanged: could not save settings ({error})",
+                "语言未更改：无法保存设置（{error}）"
+            )),
         }
     }
     Ok(geometry)
@@ -575,6 +613,7 @@ pub(crate) async fn sync_terminal_sizes(
 pub(crate) fn tools() -> Vec<Value> {
     let color = json!({"type":"string","description":"#RRGGBB, ANSI color name, default (terminal color), or empty (inherit theme)."});
     let properties = json!({
+        "language":{"type":"string","enum":["en","zh"]},
         "pet":super::ui::pet::Pet::schema(),
         "theme":{"type":"string","enum":["dark","minimal","codex-dark","nord","solarized","light"]},
         "layout":{"type":"string","enum":["chat","split","audit","logs"]},
@@ -652,6 +691,49 @@ fn queue_tool() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_save_reloads_and_preserves_other_sections_and_private_permissions() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "ssmcp-language-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .join("config.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let initial = "[client]\nserver='https://relay.example.com'\n[git]\nfetch_interval_seconds=600\n[ui]\ntheme='nord'\n";
+        std::fs::write(&path, initial).unwrap();
+        let mut ui = Ui::load(Some(&path)).unwrap();
+        ui.language = Language::Chinese;
+        save_at(&ui, &path).unwrap();
+        assert_eq!(Ui::load(Some(&path)).unwrap(), ui);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let document: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(
+            document["client"]["server"].as_str(),
+            Some("https://relay.example.com")
+        );
+        assert_eq!(
+            document["git"]["fetch_interval_seconds"].as_integer(),
+            Some(600)
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        std::fs::write(&path, "malformed = [").unwrap();
+        assert!(save_at(&Ui::default(), &path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "malformed = [");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn saving_appearance_preserves_the_configured_relay() {
