@@ -410,7 +410,7 @@ impl Runtime {
         if kind == "agents" && !query.contains_key("path") {
             args.insert("path".into(), json!("."));
         }
-        let mut result = self.context.perform(name, Value::Object(args)).await?;
+        let mut result = self.files.context_resource(name, Value::Object(args)).await?;
         if let Some(next) = result["next_cursor"].as_str() {
             let mut query = query.clone();
             query.insert("cursor".into(), next.into());
@@ -647,3 +647,4 @@ mod tests {
         assert!(registry.capabilities().is_err());
     }
 }
+
