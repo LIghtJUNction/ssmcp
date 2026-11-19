@@ -2693,7 +2693,10 @@ mod tests {
             "Run both checks and keep their logs easy to inspect.",
             b"",
         );
-        for (id, command) in [("build", "python3 -c · 3 lines"), ("tests", "cargo test --lib")] {
+        for (id, command) in [
+            ("build", "python3 -c · 3 lines"),
+            ("tests", "cargo test --lib"),
+        ] {
             let details = if id == "build" {
                 "    cwd /workspace/demo\n    script · python3 · 3 lines\n    1 import pathlib\n    2 root = pathlib.Path.cwd()\n    3 print(root.name)\n"
             } else {

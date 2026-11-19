@@ -526,10 +526,13 @@ impl EventView {
                 .events
                 .iter()
                 .map(|event| {
-                    (event.id, CommandPosition {
-                        scroll: event.panel.scroll,
-                        folded_scroll: event.panel.folded_scroll,
-                    })
+                    (
+                        event.id,
+                        CommandPosition {
+                            scroll: event.panel.scroll,
+                            folded_scroll: event.panel.folded_scroll,
+                        },
+                    )
                 })
                 .collect(),
             chat_expanded: self
@@ -2505,7 +2508,10 @@ mod tests {
             assert_eq!(view.events[0].panel.offset(), 0);
             assert!(view.scroll_selected_panel(3));
             let scrolled = view.events[0].panel.scroll;
-            assert!(!view.open(), "opening an already-open panel keeps its position");
+            assert!(
+                !view.open(),
+                "opening an already-open panel keeps its position"
+            );
             assert_eq!(view.events[0].panel.scroll, scrolled);
             let column = view.position();
             assert!(view.scroll_selected_panel(isize::MAX));
