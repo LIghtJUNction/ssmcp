@@ -921,7 +921,11 @@ async fn connect(
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let mut registration = authenticate(&broker, &headers, false).await?;
-    registration.session_access = session_access_requested(&headers);
+    // Enrollment permits a controlled device, not delegation to other identities.
+    // The existing controller check accepts only a full login credential. Keep
+    // invited devices connected, but leave the broker's Access gate disabled.
+    registration.session_access = session_access_requested(&headers)
+        && authenticate(&broker, &headers, true).await.is_ok();
     let quota = broker
         .traffic_quota(&registration.identity.subject)
         .await
