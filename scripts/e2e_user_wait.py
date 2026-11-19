@@ -266,8 +266,18 @@ class UserWait(InputHistory):
                    "the final wait receipt and user_messages share the exact message identity")
         self.wait_state(front, lambda state: not state["draft"]["text"],
                         "the acknowledged Enter draft did not clear")
+        # The HTTP response commits delivery before the client receives its
+        # asynchronous queue snapshot. Observe that exact revision; do not
+        # infer delivery from a different request or resubmit anything.
+        deadline = time.monotonic() + 8
         current = self.record(self.queue(), message_id=messages[0]["message_id"])
-        self.check(current["status"] == "delivered", "the queue confirms the same committed delivery")
+        while not (current["status"] == "delivered"
+                   and current["revision"] == messages[0]["revision"]) and time.monotonic() < deadline:
+            front.pump(0.05)
+            current = self.record(self.queue(), message_id=messages[0]["message_id"])
+        self.check(current["status"] == "delivered"
+                   and current["revision"] == messages[0]["revision"],
+                   "the queue confirms the exact committed message ID and revision")
         self.targeted_unchanged(ordinary)
 
         self.draft(front, unsent)
