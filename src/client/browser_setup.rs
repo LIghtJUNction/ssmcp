@@ -169,12 +169,6 @@ async fn native_report() -> Result<Value> {
     }).await?)
 }
 
-/// SSH setup configures existing browser tools without installing dependencies.
-pub(super) async fn configure_existing() -> Result<()> {
-    print_report(&configure(&Options::default()).await?);
-    Ok(())
-}
-
 fn expanded_observed_path(value: &Value) -> Option<PathBuf> {
     let value = value.as_str()?;
     if let Some(suffix) = value.strip_prefix("~/") {

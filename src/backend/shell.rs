@@ -1058,6 +1058,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exec_title_rejection_precedes_job_creation() {
+        let shell = Shell::new();
+        for title in [
+            json!(""),
+            json!("   "),
+            json!(" leading newline\n"),
+            json!("title\twith tab"),
+            json!("title\u{1b}[2J"),
+            json!("title\u{7f}"),
+            json!("title\u{2028}second line"),
+            json!("title\u{2029}second paragraph"),
+            json!("x".repeat(MAX_TITLE_CHARS + 1)),
+            json!("界".repeat(MAX_TITLE_CHARS + 1)),
+        ] {
+            let error = shell
+                .call(
+                    "ssmcp.exec.start",
+                    json!({"command":[std::env::current_exe().unwrap(),"--exact",
+                        "backend::shell::tests::fixture_process","--nocapture"],
+                        "env":{"SSMCP_SHELL_TEST_FIXTURE":"next"},
+                        "title":title,"timeout_ms":1000}),
+                )
+                .await
+                .unwrap_err();
+            assert!(error.starts_with("title must contain"), "{error}");
+            assert!(shell.registry().jobs.is_empty());
+            assert_eq!(shell.slots.available_permits(), MAX_JOBS);
+        }
+        let events = shell
+            .call("ssmcp.exec.events", json!({"wait_ms":0}))
+            .await
+            .unwrap();
+        assert!(events["events"].as_array().unwrap().is_empty());
+        assert_eq!(job_title(None).unwrap(), None);
+        assert_eq!(
+            job_title(Some("界".repeat(MAX_TITLE_CHARS))).unwrap(),
+            Some("界".repeat(MAX_TITLE_CHARS))
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_title_is_metadata_through_the_job_lifecycle() {
+        let shell = Shell::new();
+        let command = json!([
+            std::env::current_exe().unwrap(),
+            "--exact",
+            "backend::shell::tests::fixture_process",
+            "--nocapture"
+        ]);
+        let started = shell
+            .call(
+                "ssmcp.exec.start",
+                json!({"command":command,"title":"  Read fixture output 中文  ",
+                    "env":{"SSMCP_SHELL_TEST_FIXTURE":"next"},"timeout_ms":5000}),
+            )
+            .await
+            .unwrap();
+        let id = started["job_id"].as_str().unwrap();
+        let finished = shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
+            .await
+            .unwrap();
+        let read = shell
+            .call("ssmcp.exec.read", json!({"job_id":id}))
+            .await
+            .unwrap();
+        let listed = shell.call("ssmcp.exec.list", json!({})).await.unwrap();
+        let listed = listed["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|job| job["job_id"] == id)
+            .unwrap();
+        for snapshot in [&started, &finished, &read["snapshot"], listed] {
+            assert_eq!(snapshot["title"], "Read fixture output 中文");
+            assert_eq!(snapshot["command"], command);
+            assert_eq!(snapshot["job_id"], id);
+            assert_eq!(snapshot["cwd"], started["cwd"]);
+        }
+        assert_eq!(finished["exit_code"], 0);
+        assert_eq!(output(&read), "next");
+        let events = shell
+            .call("ssmcp.exec.events", json!({"max_events":256,"wait_ms":0}))
+            .await
+            .unwrap();
+        let event = events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| &record["event"])
+            .find(|event| event["type"] == "exec.started")
+            .unwrap();
+        assert_eq!(event["title"], "Read fixture output 中文");
+        assert_eq!(event["job_id"], id);
+        assert_eq!(event["command"], command);
+    }
+
+    #[tokio::test]
     async fn failed_start_preserves_the_full_retained_history() {
         let shell = Shell::new();
         let store = OutputStore::global().unwrap();

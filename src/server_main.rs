@@ -10,29 +10,21 @@ use ssmcp::{
 use std::{
     collections::HashMap,
     ffi::OsString,
-    io::{self, Read, Write},
-    net::{Shutdown, SocketAddr},
-    os::unix::{
-        fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
-        net::UnixStream,
-    },
+    io::{self, Read},
+    net::SocketAddr,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
-use tokio::{
-    net::{TcpListener, UnixListener},
-    sync::{Semaphore, oneshot},
-    task::JoinSet,
-};
+use tokio::{net::TcpListener, sync::oneshot};
 
 const SOCKET: &str = "/run/ssmcpd/control.sock";
 const CONFIG_FILE: &str = "/etc/ssmcpd/ssmcpd.toml";
-const HELP: &str = r#"ssmcpd - SSH-authenticated terminal MCP gateway
+const HELP: &str = r#"ssmcpd - OAuth-authenticated HTTPS terminal MCP gateway
 
 Usage:
-  ssmcpd serve [--config PATH] [--public-url https://HOST] [--listen 127.0.0.1:8080] [--socket PATH] [--portal-only]
-  ssmcpd attach [--socket PATH]
+  ssmcpd serve [--config PATH] [--public-url https://HOST] [--listen 127.0.0.1:8080] [--portal-only]
   ssmcpd check-runtime
 
 Runtime check:
@@ -45,7 +37,7 @@ Configuration:
   Otherwise /etc/ssmcpd/ssmcpd.toml is read when present.
   Precedence: command line > environment > TOML > built-in defaults.
   Portal: --portal-state-dir PATH overrides [portal] state_dir (private persistent directory).
-  --portal-only runs the account HTTP portal without binding an SSH attachment socket.
+  --portal-only runs the account HTTP portal without running the gateway management service.
   --gateway-socket PATH overrides [portal] gateway_socket (private gateway management socket).
   Management: [portal] admin_usernames = ["your-ssmcp-username"] after registering that name.
   Relay bandwidth: [portal] default_rate_limit_bps = 8388608 (8 MiB/s in each direction per user).
@@ -74,7 +66,7 @@ Token lifetime options for serve (whole seconds; TOML keys are under [oauth]):
   Registrations survive restart; tokens and unfinished logins still require reauthorization.
   Login codes and authorization forms last 30 minutes.
 
-Run serve in the foreground under systemd. OpenSSH runs attach as the authenticated user.
+Run serve in the foreground under systemd.
 "#;
 
 struct Config {
@@ -277,7 +269,7 @@ fn run() -> ssmcp::Result<()> {
         println!(r#"{{"code_mode":"ok"}}"#);
         return Ok(());
     }
-    if mode != "serve" && mode != "attach" {
+    if mode != "serve" {
         return Err(format!("unknown command {mode}; see --help").into());
     }
     if remaining
@@ -373,9 +365,6 @@ fn run() -> ssmcp::Result<()> {
             }
             _ => return Err(format!("unknown option {arg}").into()),
         }
-    }
-    if mode == "attach" {
-        return attach(&config.socket);
     }
     if config.public_url.is_empty() {
         return Err(
@@ -579,106 +568,6 @@ fn normalize_origin(input: &str) -> ssmcp::Result<String> {
     ))
 }
 
-fn attach(path: &Path) -> ssmcp::Result<()> {
-    let mut output =
-        UnixStream::connect(path).map_err(|e| format!("connect {}: {e}", path.display()))?;
-    let mut input = output.try_clone()?;
-    // A pipe may remain blocked after the opposite direction closes. This helper has
-    // no runtime or thread join on exit: returning from main closes all descriptors.
-    std::thread::spawn(move || {
-        let _ = copy_live(&mut io::stdin().lock(), &mut input);
-        let _ = input.shutdown(Shutdown::Both);
-    });
-    let result = copy_live(&mut output, &mut io::stdout().lock());
-    let _ = output.shutdown(Shutdown::Both);
-    result?;
-    Ok(())
-}
-
-fn copy_live(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<()> {
-    let mut bytes = [0u8; 16 * 1024];
-    loop {
-        let count = match reader.read(&mut bytes) {
-            Ok(0) => return Ok(()),
-            Ok(count) => count,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        // SSH stdio may itself be a socket. Avoid whole-stream kernel-copy
-        // specializations: each protocol fragment must be visible immediately.
-        writer.write_all(&bytes[..count])?;
-        writer.flush()?;
-    }
-}
-
-struct SocketFile {
-    path: PathBuf,
-    dev: u64,
-    ino: u64,
-}
-impl Drop for SocketFile {
-    fn drop(&mut self) {
-        if let Ok(meta) = std::fs::symlink_metadata(&self.path)
-            && meta.dev() == self.dev
-            && meta.ino() == self.ino
-        {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
-
-async fn bind_socket(path: &Path) -> ssmcp::Result<(UnixListener, SocketFile)> {
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or("socket needs an absolute parent directory")?;
-    if !path.is_absolute() {
-        return Err("--socket must be an absolute path".into());
-    }
-    if !parent.exists() {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o750)
-            .create(parent)?;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o750))?;
-    }
-    let metadata = std::fs::symlink_metadata(parent)?;
-    // SAFETY: geteuid has no preconditions.
-    if !metadata.is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o022 != 0
-    {
-        return Err(
-            "socket directory must be owned by the daemon user and not group/world writable".into(),
-        );
-    }
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if !meta.file_type().is_socket() || meta.uid() != metadata.uid() {
-                return Err("refusing to replace non-owned socket path".into());
-            }
-            match tokio::net::UnixStream::connect(path).await {
-                Ok(_) => return Err("another ssmcpd is using this socket".into()),
-                Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
-                    std::fs::remove_file(path)?
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
-    }
-    let listener = UnixListener::bind(path)?;
-    let meta = std::fs::symlink_metadata(path)?;
-    let guard = SocketFile {
-        path: path.into(),
-        dev: meta.dev(),
-        ino: meta.ino(),
-    };
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
-    Ok((listener, guard))
-}
-
 async fn serve(config: Config) -> ssmcp::Result<()> {
     use std::future::IntoFuture;
     let (downloads, publication) = ssmcp::client_downloads::configured(
@@ -766,12 +655,6 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         None
     };
     broker.reconcile_commerce().await?;
-    let (unix, _socket_file) = if config.portal_only {
-        (None, None)
-    } else {
-        let (listener, guard) = bind_socket(&config.socket).await?;
-        (Some(listener), Some(guard))
-    };
     let tcp = TcpListener::bind(config.listen).await?;
     let broker = Arc::new(broker);
     let management_broker = broker.clone();
@@ -792,8 +675,6 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
-    let connections = Arc::new(Semaphore::new(128));
-    let mut tasks = JoinSet::new();
     let mut prune = tokio::time::interval(Duration::from_secs(60));
     prune.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ssmcp::observability::log(
@@ -818,36 +699,17 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         tokio::select! {
             result = &mut server => { server_finished = true; break result.map_err(Into::into); }
             result = &mut management_loop => { break result.map_err(Into::into); }
-            result = async {
-                match &unix {
-                    Some(listener) => listener.accept().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                let (stream,_) = match result { Ok(pair) => pair, Err(e) => break Err(e.into()) };
-                let Ok(permit) = connections.clone().try_acquire_owned() else { drop(stream); continue; };
-                let broker = broker.clone();
-                tasks.spawn(async move {
-                    let _permit = permit;
-                    if broker.attach(stream).await.is_err() { ssmcp::observability::log("warn","session",&[("event","attach_failed".into())]); }
-                });
-            }
             _ = prune.tick(), if audit.is_some() => {
                 let log = audit.as_ref().expect("guarded audit timer").clone();
                 if !matches!(tokio::task::spawn_blocking(move || log.prune()).await, Ok(Ok(_))) {
                     ssmcp::observability::log("error", "persistence", &[("event", "audit_prune_failed".into())]);
                 }
             }
-            Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                if result.is_err() { ssmcp::observability::log("error","session",&[("event","connection_task_failed".into())]); }
-            }
             result = &mut interrupt => { result?; break Ok(()); }
             _ = terminate.recv() => break Ok(()),
         }
     };
     broker.disconnect_all().await;
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
     let _ = stop_tx.send(());
     if !server_finished {
         let _ = tokio::time::timeout(Duration::from_secs(3), &mut server).await;
@@ -858,6 +720,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn commerce_defaults_keep_sales_closed_at_the_requested_rmb_price() {

@@ -55,7 +55,7 @@ ssmcp alice@relay.example.com --name dev --title "开发与测试"
 
 把服务器地址换成自己的服务地址。首次连接引导 GitHub 授权，并在该服务器绑定你选择的用户名。后续直接运行 `ssmcp`，即可复用最近的授权账号；没有图形浏览器时使用 `--no-browser`。
 
-客户端主动建立 HTTPS/WSS 连接，无需在设备上开放入站端口。保持终端或后台客户端运行，就能使用它的工作区和工具。已有 SSH 部署可以显式运行 `ssmcp --ssh my-server`。
+客户端主动建立 HTTPS/WSS 连接，无需在设备上开放入站端口。保持终端或后台客户端运行，就能使用它的工作区和工具。
 
 ```sh
 ssmcp list       # 查看已授权的在线设备
@@ -63,7 +63,7 @@ ssmcp -i         # 进入一台设备的交互终端
 ssmcp whoami    # 查看当前账号
 ```
 
-完整步骤见[账号与设备](docs/client-accounts.md)、[默认服务器与可信公钥](docs/client-server.md)和[SSH 配置](docs/configuration.md)。
+完整步骤见[账号与设备](docs/client-accounts.md)和[默认服务器与可信公钥](docs/client-server.md)。
 
 ### 3. 接入 MCP
 
