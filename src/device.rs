@@ -1132,15 +1132,25 @@ mod tests {
         let directory = Temporary::new();
         let mut store = Credentials::open(&directory.0).unwrap();
         let (alice, _) = store.login("123".into()).unwrap();
+        let (alice_other, _) = store.login("123".into()).unwrap();
         let (bob, _) = store.login("456".into()).unwrap();
+        let (other_invite, _) = store.invite(&alice_other, 600, 3600).unwrap();
         let (invite, _) = store.invite(&alice, 600, 3600).unwrap();
         store.records.get_mut(&hash(&invite)).unwrap().expires_at = now() - 1;
         assert!(store.enroll(&invite).is_err());
         let (invite, _) = store.invite(&alice, 600, 3600).unwrap();
         store.logout(&alice).unwrap();
         assert!(store.enroll(&invite).is_err());
+        assert!(store.authenticate(&alice_other, true).is_ok());
         assert!(store.authenticate(&bob, true).is_ok());
+        assert!(store.enroll(&other_invite).is_ok());
+        assert!(store.logout(&alice).is_err());
         drop(store);
+        let reopened = Credentials::open(&directory.0).unwrap();
+        assert!(reopened.authenticate(&alice, true).is_err());
+        assert!(reopened.authenticate(&alice_other, true).is_ok());
+        assert!(reopened.authenticate(&bob, true).is_ok());
+        drop(reopened);
         std::fs::set_permissions(
             directory.0.join("client-credentials.json"),
             std::fs::Permissions::from_mode(0o644),
