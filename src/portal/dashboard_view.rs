@@ -201,6 +201,7 @@ fn action_label(action: AuditAction) -> &'static str {
         AuditAction::ToolCall => "调用工具",
         AuditAction::AdminViewed => "查看管理员数据",
         AuditAction::UserPolicyChanged => "用户策略已更新",
+        AuditAction::TrafficBalanceChanged => "调整用户流量余额",
     }
 }
 
@@ -307,6 +308,7 @@ fn user_row(
     csrf: &str,
     actor_subject: &str,
     default_rate_limit_bps: u64,
+    period: &str,
 ) -> String {
     let username = escape(account.handle.as_deref().unwrap_or(&account.username));
     let subject = escape(&account.subject);
@@ -354,9 +356,19 @@ fn user_row(
         default_rate_limit_bps
     });
     html.push_str(&format!(
-        r#"</td><td data-label="状态"><span class="account-state {state_class}">{state}</span></td><td class="user-rate-cell" data-label="限速 · MiB/s"><form class="user-rate-form" method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="rate"><label class="visually-hidden" for="rate-{subject}">{username} 的限速，MiB/s</label><div class="rate-input"><input id="rate-{subject}" type="number" name="rate_mib" min="0.00000095367431640625" max="1024" step="any" inputmode="decimal" value="{value}" placeholder="默认 {default_rate}" aria-describedby="rate-help" autocomplete="off"><button class="secondary" type="submit">保存</button></div><small>{}</small></form></td><td class="user-actions" data-label="访问管理">"#,
+        r#"</td><td data-label="状态"><span class="account-state {state_class}">{state}</span></td><td class="user-rate-cell" data-label="限速 · MiB/s"><form class="user-rate-form" method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="rate"><label class="visually-hidden" for="rate-{subject}">{username} 的限速，MiB/s</label><div class="rate-input"><input id="rate-{subject}" type="number" name="rate_mib" min="0.00000095367431640625" max="1024" step="any" inputmode="decimal" value="{value}" placeholder="默认 {default_rate}" aria-describedby="rate-help" autocomplete="off"><button class="secondary" type="submit">保存</button></div><small>{}</small></form></td><td class="user-rate-cell" data-label="当月流量余额">"#,
         if account.rate_limit_bps.is_some() { "自定义 · 留空恢复默认" } else if account.has_recharged { "已充值 · 使用充值默认限速" } else { "使用服务器默认" },
     ));
+    if let Some(remaining) = account.traffic_remaining {
+        let period = escape(period);
+        html.push_str(&format!(
+            r#"<form class="user-rate-form" method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="traffic"><input type="hidden" name="period" value="{period}"><label class="visually-hidden" for="traffic-{subject}">{username} 当月剩余流量，字节</label><div class="rate-input"><input id="traffic-{subject}" type="text" inputmode="numeric" pattern="[0-9]+" maxlength="20" name="remaining_bytes" value="{remaining}" required><button class="secondary" type="submit">保存</button></div><small>{period} · {} · 输入单位为字节</small></form>"#,
+            super::view::traffic_bytes(remaining),
+        ));
+    } else {
+        html.push_str(r#"<span class="muted">不限量</span>"#);
+    }
+    html.push_str(r#"</td><td class="user-actions" data-label="访问管理">"#);
     html.push_str(&user_access_control(
         account,
         &username,
@@ -394,6 +406,7 @@ pub(super) fn admin(
     accounts: &[AccountSummary],
     csrf: &str,
     actor_subject: &str,
+    period: &str,
 ) -> String {
     let mut body = navigation("/account/admin", true);
     body.push_str(&heading(
@@ -425,7 +438,7 @@ pub(super) fn admin(
                 sessions.entry(subject).or_default().push(session);
             }
         }
-        body.push_str(r#"<div class="table-scroll" tabindex="0" role="region" aria-label="用户管理表"><table class="users-table user-management-table"><thead><tr><th scope="col">用户名</th><th scope="col">GitHub</th><th scope="col">连接</th><th scope="col">状态</th><th scope="col">限速 · MiB/s</th><th scope="col">访问管理</th></tr></thead><tbody>"#);
+        body.push_str(r#"<div class="table-scroll" tabindex="0" role="region" aria-label="用户管理表"><table class="users-table user-management-table"><thead><tr><th scope="col">用户名</th><th scope="col">GitHub</th><th scope="col">连接</th><th scope="col">状态</th><th scope="col">限速 · MiB/s</th><th scope="col">当月流量余额</th><th scope="col">访问管理</th></tr></thead><tbody>"#);
         for account in accounts {
             body.push_str(&user_row(
                 account,
@@ -436,6 +449,7 @@ pub(super) fn admin(
                 csrf,
                 actor_subject,
                 snapshot.default_rate_limit_bps,
+                period,
             ));
         }
         body.push_str("</tbody></table></div>");
@@ -468,6 +482,7 @@ mod tests {
             banned: false,
             rate_limit_bps: Some(524_288),
             has_recharged: false,
+            traffic_remaining: None,
         }
     }
 
@@ -488,22 +503,22 @@ mod tests {
     #[test]
     fn user_actions_are_independent_and_hide_self_ban() {
         let mut account = sample_account();
-        let row = user_row(&account, &[], "csrf", "999", 8 * 1_048_576);
+        let row = user_row(&account, &[], "csrf", "999", 8 * 1_048_576, "2026-11");
         assert!(row.contains(r#"value="0.5""#));
         assert!(row.contains(r#"name="action" value="rate""#));
         assert!(row.contains(r#"name="action" value="ban""#));
         assert!(!row.contains(r#"name="banned""#));
         account.banned = true;
-        let row = user_row(&account, &[], "csrf", "999", 8 * 1_048_576);
+        let row = user_row(&account, &[], "csrf", "999", 8 * 1_048_576, "2026-11");
         assert!(row.contains("已封禁"));
         assert!(row.contains(r#"name="action" value="unban""#));
         assert!(!row.contains(r#"name="action" value="ban""#));
-        let own = user_row(&account, &[], "csrf", "123", 8 * 1_048_576);
+        let own = user_row(&account, &[], "csrf", "123", 8 * 1_048_576, "2026-11");
         assert!(own.contains("当前账户"));
         assert!(!own.contains(r#"name="action" value="unban""#));
         assert!(!own.contains(r#"name="action" value="ban""#));
         account.rate_limit_bps = None;
-        let row = user_row(&account, &[], "csrf", "999", 4 * 1_048_576);
+        let row = user_row(&account, &[], "csrf", "999", 4 * 1_048_576, "2026-11");
         assert!(row.contains(r#"value="" placeholder="默认 4""#));
     }
 
@@ -520,6 +535,7 @@ mod tests {
             r#"csrf" injected="#,
             "999",
             8 * 1_048_576,
+            "2026-11",
         );
         for raw in ["<script>", "<img", "<svg", r#"value="csrf" injected="#] {
             assert!(!row.contains(raw), "{raw}");
@@ -560,7 +576,7 @@ mod tests {
             default_rate_limit_bps: 3 * 1_048_576,
             traffic: None,
         };
-        let html = admin(&snapshot, &[account], "csrf", "999");
+        let html = admin(&snapshot, &[account], "csrf", "999", "2026-11");
         assert!(html.contains("服务器默认 <strong>3 MiB/s</strong>"));
         assert!(html.contains("<summary>1 在线</summary>"));
         assert!(!html.contains("<summary>2 在线</summary>"));

@@ -64,6 +64,55 @@ fn quota(ledger: &TrafficLedger, period: &str) -> TrafficQuota {
 }
 
 #[test]
+fn setting_remaining_preserves_usage_and_purchases_through_restart_and_rollover() {
+    let temp = Temp::new();
+    let directory = temp.directory();
+    let mut ledger = TrafficLedger::open(&directory).unwrap();
+    ledger
+        .reserve(&directory, SUBJECT, PERIOD, OFFSET, 50, false)
+        .unwrap();
+    assert!(
+        ledger
+            .grant(&directory, SUBJECT, PERIOD, PERIOD, "first", 100)
+            .unwrap()
+    );
+    ledger
+        .set_remaining(&directory, SUBJECT, PERIOD, OFFSET, 0)
+        .unwrap();
+    assert_eq!(
+        ledger.reserve(&directory, SUBJECT, PERIOD, OFFSET, 1, false),
+        Err(Problem::TrafficQuotaExceeded)
+    );
+    drop(ledger);
+    let mut ledger = TrafficLedger::open(&directory).unwrap();
+    assert_eq!(quota(&ledger, PERIOD).remaining_bytes, Some(0));
+    ledger
+        .set_remaining(&directory, SUBJECT, PERIOD, OFFSET, 500)
+        .unwrap();
+    assert!(
+        !ledger
+            .grant(&directory, SUBJECT, PERIOD, PERIOD, "first", 100)
+            .unwrap()
+    );
+    assert!(
+        ledger
+            .grant(&directory, SUBJECT, PERIOD, PERIOD, "second", 200)
+            .unwrap()
+    );
+    ledger.compact(&directory).unwrap();
+    drop(ledger);
+    let ledger = TrafficLedger::open(&directory).unwrap();
+    let adjusted = quota(&ledger, PERIOD);
+    assert_eq!(adjusted.remaining_bytes, Some(700));
+    assert_eq!(adjusted.used_bytes, 50);
+    assert_eq!(adjusted.paid_bytes, 300);
+    assert_eq!(
+        quota(&ledger, NEXT_PERIOD).remaining_bytes,
+        Some(FREE_MONTHLY_TRAFFIC_BYTES)
+    );
+}
+
+#[test]
 fn exact_free_quota_boundary_rejects_without_charging_and_survives_reopen() {
     let temp = Temp::new();
     let directory = temp.directory();
