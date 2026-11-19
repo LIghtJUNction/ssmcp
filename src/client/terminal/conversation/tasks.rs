@@ -1090,8 +1090,10 @@ mod tests {
             .await
             .expect("native metadata refresh timed out")
             .expect("native metadata worker failed");
-            assert!(panel.poll());
-            assert!(!panel.loading);
+            // A completed refresh can carry the same snapshot (including the
+            // millisecond duration). poll() reports repaint need, not receipt.
+            panel.poll();
+            assert!(!panel.loading, "the real reply was consumed");
             assert!(panel.snapshot()["error"].is_null());
             assert!(panel.snapshot()["detail_error"].is_null());
         }

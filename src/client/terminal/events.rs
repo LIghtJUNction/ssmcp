@@ -2991,10 +2991,11 @@ mod tests {
         view.attach_image(image_preview(2, 2, false));
         assert!(!view.is_empty());
         assert_eq!(view.snapshot()["events"][0]["kind"], "tool");
-        assert!(
-            !view.open(),
-            "decoded images start expanded in Conversation"
-        );
+        assert_eq!(view.snapshot()["events"][0]["expanded"], false);
+        let thumbnail = view.render(80, 12, &plain_ui(), true).join("\n");
+        assert!(!thumbnail.contains("[IMAGE]"), "{thumbnail}");
+        assert!(view.open(), "explicitly open the decoded thumbnail");
+        assert_eq!(view.snapshot()["events"][0]["expanded"], true);
         assert!(
             !view
                 .render(80, 12, &plain_ui(), true)
