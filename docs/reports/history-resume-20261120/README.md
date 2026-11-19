@@ -56,10 +56,18 @@ zuse 的新可集成源码为 [c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41](https:/
 
 ztuio 的 canonical 源码为 [9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e](https://github.com/LIghtJUNction/ztuio/commit/9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e)。迁移要求是复用该子模块，保留从 ssmcp 内嵌 0.1.2 合入的公共接口和 ANSI 渲染改进，并同步当前 Cargo、导入、打包与发布脚本中的名称。
 
-05:41 左右的 registry 核对确认 zsys 0.1.1 已发布且未撤回；ztuio 0.1.0 和 zplugin 0.3.1 当时仍未发布。本节记录当时观察，后续完成迁移后会补充最终提交和 registry 状态。依赖源码已准备好与依赖已发布是两个不同的检查点。
+本轮第一次 registry 核对确认 zsys 0.1.1 已发布且未撤回；ztuio 0.1.0 和 zplugin 0.3.1 当时仍未发布。随后确认 ztuio 0.1.0、zplugin 0.3.1 与宏包均已发布。zharness 当前正式版本仍为 0.5.0，精确依赖 zplugin 0.3.0；新的 shared-loader 消费者候选保留在独立分支，待匹配的 zharness 来源完成后再升级，不阻挡本轮 v0.10.14 发布。
 
 ## 后续工作的边界
 
 zuse、ztuio 及后续 zplugin 依赖变动需要各自的冻结候选和本机验证；listener 的通过结果不会自动证明新依赖正确。更完整的跨会话生命周期与内存优化保留为后续独立任务。日常验证遵循项目的本地检查规则，没有为本轮触发或等待普通 CI。
 
 本报告会随本轮依赖接入完成补充最终结果。公开记录只保留源码、版本、测试和布局证据，不包含密钥、生产主机信息或私人会话内容。
+
+## v0.10.14 发布准备检查点
+
+用户在本轮明确要求及时正式发布。组合产品源码固定到 `b49da12ac890f4d2b00c42d9dcf05b97e2054bac`，已包含 zuse、ztuio 迁移和等待用户时的 ASCII 休眠界面。CLI、daemon 和可选 frontend 构建结果均为 0.10.14；格式、严格 all-target Clippy 和 73 项 Python 发布校验通过。
+
+原生插件 28 项定向验收已通过，包含显式执行的真实 cdylib 合约；每次执行前后都核对冻结 libtest 与插件摘要。休眠新增六项回归通过；实际 PTY、完整默认库测试和更严格的取消回执校验正在收尾。旧 local_frame 测试的宽侧栏文案被错误套用到 compact 布局，正在按当前实际显示修正测试预期，产品 ELF 不因测试夹具修改而改变。
+
+当前安装和首次连接文档已经通过 [PR #105](https://github.com/LIghtJUNction/ssmcp/pull/105) 合入主线，统一使用 HTTPS/WSS 和 `--allow 用户名@服务器`。正式发布前还会记录完成的真实桌面、终端和插件验收。此准备检查点尚不代表 tag、Release、crate 或生产部署已完成。
